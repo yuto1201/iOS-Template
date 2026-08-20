@@ -1,0 +1,13 @@
+.DS_Store
+xcuserdata/
+DerivedData/
+.artifacts/
+.worktrees/
+Config/Local.xcconfig
+*.p8
+*.mobileprovision
+.env
+.env.*
+!.env.example
+supabase/.temp/
+supabase/.branches/

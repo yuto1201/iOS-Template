@@ -1,0 +1,3 @@
+// Copy this file to Local.xcconfig for app-specific, non-secret local values.
+// Local.xcconfig is intentionally ignored by Git.
+// Never place service-role keys, private keys, passwords, or tokens here.

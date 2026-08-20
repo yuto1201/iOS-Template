@@ -1,0 +1,15 @@
+schemaVersion: 1
+
+github:
+  login: yuto1201
+
+supabase:
+  organization: YUTO1201
+  projectRef: null
+
+cloudflare:
+  accountId: null
+
+appStore:
+  teamId: null
+  bundleId: null
