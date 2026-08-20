@@ -3,11 +3,13 @@
 ## 1. 作業単位
 
 - 1 Issue = 1 Branch = 1 PR
-- Codex Branch: `codex/<issue-number>-<slug>`
-- Claude Branch: `claude/<issue-number>-<slug>`
-- Worktree: `.worktrees/<issue-number>-<slug>`
+- Codex Branch: `codex/${issueNumber}-${slug}`
+- Claude Branch: `claude/${issueNumber}-${slug}`
+- Worktree: `.worktrees/${issueNumber}-${slug}`
 - Base Branch: `main`
 - Merge method: Squash
+
+Primary implementerはCodexまたはClaudeです。Issue状態、GitHub remote、認証済み外部操作、マージを実行するExternal orchestratorは常にCodexです。Claude実装時は `docs/AUTHORITY.md` の固定transportでCodexへ委託します。
 
 BranchはIssue作成後に作ります。Issue番号を推測して先にBranchを作りません。
 
@@ -40,6 +42,24 @@ proposed
   -> done
 ```
 
+### 許可された遷移
+
+| From | To |
+| --- | --- |
+| `proposed` | `approved`, `blocked:user`, `superseded` |
+| `approved` | `claimed`, `blocked:dependency`, `paused`, `superseded` |
+| `claimed` | `in-progress`, `blocked:conflict`, `paused` |
+| `in-progress` | `verify-passed`, 任意の`blocked:*`, `paused` |
+| `verify-passed` | `review-requested`, `in-progress`, `blocked:review` |
+| `review-requested` | `changes-requested`, `approved-for-merge`, `blocked:review` |
+| `changes-requested` | `in-progress`, `blocked:user`, `paused` |
+| `approved-for-merge` | `merged`, `in-progress`, `blocked:conflict`, `blocked:ops` |
+| `merged` | `done` |
+| 任意の`blocked:*` | 直前の非blocked状態、`paused`, `superseded` |
+| `paused` | 停止前の状態、`superseded` |
+
+Head SHAが変わった場合、`verify-passed`、`review-requested`、`approved-for-merge` から `in-progress` へ戻し、検証とレビューをやり直します。`done` と `superseded` は終端状態です。
+
 中断状態:
 
 - `blocked:user`: 仕様または承認待ち
@@ -63,6 +83,8 @@ proposed
 3. Definition of Readyを満たさなければ作業を開始しない。
 4. Primary agentをIssueへ記録する。
 5. Branchとworktreeを作成する。
+
+ClaudeがPrimary implementerの場合も、1、4、5とGitHub上の状態変更はCodexへ委託します。
 
 ### 4.2 Implement
 
@@ -95,14 +117,16 @@ proposed
 
 1. Codexが個人GitHubアカウントを再確認する。
 2. BranchをPushする。
-3. PRを作成し、Issueを `Closes #<number>` で関連付ける。
+3. PRを作成し、Issueを `Closes #${ISSUE_NUMBER}` で関連付ける。
 4. `tools/premerge-gate.sh` を実行する。
 5. 現在のHead SHAと検証・レビューSHAが一致することを確認する。
-6. `gh pr merge --squash --match-head-commit <head-sha>` を実行する。
+6. `gh pr merge --squash --match-head-commit ${HEAD_SHA}` を実行する。
 7. PRのマージ状態とIssueのCloseを確認する。
 8. remote Branch、worktree、local Branchの順に対象を再確認して後片付けする。
 
 `gh pr merge --delete-branch` に後片付け全体を任せません。各対象を明示して、別worktreeやユーザーBranchを削除しないようにします。
+
+Squash Merge後は元Branch tipが`main`の祖先にならないため、`git branch --merged` を完了判定に使いません。Codexは対象PRの`state == MERGED`、`headRefOid`が記録済みHead SHAと一致すること、`mergeCommit`が存在することをGitHubから確認します。必要に応じてpatch-idでSquash commitとの差分同等性も確認します。
 
 ## 5. PR本文の必須項目
 
@@ -150,3 +174,10 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 - Xcodeまたは必要Runtimeがなく全Issueを検証できない
 - ユーザーが明示的に停止した
 
+ソース編集Issueは、依存がなく編集ファイルが重ならない場合に最大2件まで並行化できます。Simulator検証は排他的に1件ずつ実行します。
+
+## 8. Bootstrap
+
+FoundationとSimulator verificationの2件は、Issue自動化が未実装のためCodexが同じ手順を手動実行します。手動であってもIssue、Branch、PR、4条件Simulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。
+
+Bootstrap IssueのPRには、各受け入れ条件IDと証拠、GitHub account preflightのsanitized要約、Verify対象SHA、Review対象SHAを記載します。Simulator verificationが入った後は`verify.json`を使用し、Security and workflowが入った後は全Issueを自動状態機械へ移行します。

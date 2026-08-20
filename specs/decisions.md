@@ -128,3 +128,24 @@
 - Status: 確定
 - Decision: ユーザーの実機確認で問題が見つかった場合、元Issueを履歴上書きせずRegression Issueを作る。
 - Consequence: マージ時点の証拠と、その後の実機フィードバックを区別できる。
+
+## D-019: Claude実装時も外部オーケストレーションはCodexが担当する
+
+- Date: 2026-08-21
+- Status: 確定
+- Decision: ClaudeはPrimary implementerになれるが、Issue状態、GitHub remote、外部サービス、マージはCodexが実行する。Claudeからの委託は検証済みJSONと固定ラッパーだけを使う。
+- Consequence: Claudeから任意のCodex CLIプロンプトを実行することは禁止し、外部操作とread-onlyレビューを別経路にする。
+
+## D-020: 最初の2件をBootstrap Issueとして手動ゲートで進める
+
+- Date: 2026-08-21
+- Status: 確定
+- Decision: FoundationとSimulator verificationは、Codexが同じ検証・レビュー・SHA照合を手動実行する。自動化スクリプトが存在しないことだけを例外とする。
+- Consequence: 自動化を自動化自身の前提にする循環を避ける。
+
+## D-021: ソース編集Issueの並行上限は2件とする
+
+- Date: 2026-08-21
+- Status: 確定
+- Decision: 依存がなくファイルが重ならないソース編集Issueは最大2件まで並行化する。Simulator検証は常に直列化する。
+- Consequence: 停止時間を減らしつつ、Xcode共有ファイルと検証状態の競合を抑える。

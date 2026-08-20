@@ -19,8 +19,8 @@
   "verifySha": "0123456789abcdef0123456789abcdef01234567",
   "specAnchors": ["specs/features/settings.md#notification-time"],
   "acceptanceCriteria": [
-    "通知時刻を保存できる",
-    "日本語と英語で時刻が正しく表示される"
+    {"id": "AC-1", "text": "通知時刻を保存できる"},
+    {"id": "AC-2", "text": "日本語と英語で時刻が正しく表示される"}
   ],
   "diffFile": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/review.diff",
   "verifyFile": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify.json",
@@ -61,6 +61,10 @@
   "verifySha": "0123456789abcdef0123456789abcdef01234567",
   "verdict": "approved",
   "findings": [],
+  "acceptanceAssessment": [
+    {"id": "AC-1", "status": "supported", "evidence": ["verify.json#acceptanceEvidence/0"]},
+    {"id": "AC-2", "status": "supported", "evidence": ["verify.json#cases"]}
+  ],
   "reviewedAt": "2026-08-21T13:15:00+09:00"
 }
 ```
@@ -89,6 +93,8 @@ Severity:
 - `low`: 非Blockingの改善提案
 
 `critical`、`high`、未解決の`medium`があれば `changes-requested` とします。
+
+Reviewerは各 `AC-*` について `supported` または `unsupported` と証拠参照を返します。`unsupported` が一つでもあれば `approved` にできません。
 
 ## 5. 呼び出し
 

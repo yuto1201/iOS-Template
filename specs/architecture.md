@@ -27,6 +27,10 @@ iOS-Template/
 │   ├── agent-contracts/
 │   └── superpowers/plans/
 ├── tools/
+├── Config/
+│   ├── Public.xcconfig
+│   ├── Local.xcconfig.example
+│   └── ownership.yml
 ├── App Store/
 ├── .agents/skills/
 ├── .codex/agents/
@@ -56,7 +60,7 @@ TemplateApp/
 
 機能が生まれたら、機能単位で View、Model、Service、Repository を近くに置きます。次のディレクトリは必要になった時だけ追加します。
 
-- `Features/<FeatureName>/`: 複数ファイルを持つ独立機能
+- `Features/${FeatureName}/`: 複数ファイルを持つ独立機能
 - `Shared/`: アプリと Extension が共有するコード
 - `DesignSystem/`: 3画面以上で反復利用する視覚トークンや部品
 - `Data/`: 複数機能で共有する永続化・Repository実装
@@ -80,7 +84,7 @@ View から Supabase SDK、SwiftData の複雑な問い合わせ、外部生成A
 
 ## 5. スキル構成
 
-正本は `.agents/skills/<name>/SKILL.md` とします。`.claude/skills/<name>` は同じディレクトリへの相対シンボリックリンクにし、手作業による二重管理を避けます。
+正本は `.agents/skills/${name}/SKILL.md` とします。`.claude/skills/${name}` は同じディレクトリへの相対シンボリックリンクにし、手作業による二重管理を避けます。
 
 ### Core
 
@@ -149,3 +153,5 @@ supabase/
 ## 9. App Store構成
 
 `App Store/` のテキストと構造はコミットします。生成途中の秘密、認証セッション、未加工の個人データは置きません。スクリーンショットは、提出対象として採用された最終版だけを管理します。
+
+App Store用スクリーンショットの端末集合は、通常検証のiPhone Pro／iPad Airマトリクスとは別に、その時点の公式要件から解決します。提出要件が求める場合はiPhone Pro Maxも使用できます。

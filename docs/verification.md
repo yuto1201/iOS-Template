@@ -12,9 +12,9 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 2. Xcode versionとbuildを記録する。
 3. 利用可能かつ最新のiOS Runtimeを選ぶ。
 4. Runtime内の利用可能なDevice TypeからiPhone Proを選ぶ。`Pro Max` は除外する。
-5. 同じRuntimeから最新iPad Airを選ぶ。
+5. 同じRuntimeから最新世代のiPad Airを選ぶ。同世代に11-inchと13-inchがあれば13-inchを選ぶ。
 6. 英語と日本語を組み合わせ、4行のmatrixを作る。
-7. `.artifacts/batches/<batch-id>/simulator-matrix.json` へ保存する。
+7. `.artifacts/batches/${batchId}/simulator-matrix.json` へ保存する。
 
 名前に合う端末が見つからない場合、別端末へ自動フォールバックしません。`blocked:environment` として、利用可能な候補一覧を報告します。
 
@@ -94,15 +94,29 @@ AIはスクリーンショットごとに次を評価します。
 
 ### Stage E: Evidence
 
-`.artifacts/issues/<issue-number>/<head-sha>/verify.json` を生成します。
+`.artifacts/issues/${issueNumber}/${headSha}/verify.json` を生成します。
 
 ```json
 {
   "schemaVersion": 1,
+  "status": "passed",
+  "changeClassification": "application-code",
+  "reason": null,
   "issue": 42,
   "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
   "headSha": "0123456789abcdef0123456789abcdef01234567",
   "matrixFile": ".artifacts/batches/2026-08-21-settings/simulator-matrix.json",
+  "matrixDigest": "sha256:490d32bf9174b57fb9b05a00e0231d22082e4a9576b0377f0df2641d96349d0b",
+  "executionRoute": "xcodebuild-simctl",
+  "xcode": {
+    "path": "/Applications/Xcode.app/Contents/Developer",
+    "version": "26.5",
+    "build": "17F42"
+  },
+  "accountPreflight": {
+    "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/github-preflight.json",
+    "digest": "sha256:f9ed6f998e47405fc0d00df7ef529bf1648f07fedc57e9f00ad5caf82a70f494"
+  },
   "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0},
   "tests": {"status": "passed", "passed": 24, "failed": 0, "skipped": 0},
   "cases": [
@@ -112,9 +126,20 @@ AIはスクリーンショットごとに次を評価します。
     {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/settings.png"}
   ],
   "visualEvaluation": {"status": "passed", "findings": []},
+  "acceptanceEvidence": [
+    {
+      "id": "AC-1",
+      "status": "passed",
+      "evidence": ["tests:TemplateAppTests/NotificationSettingsTests", "cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]
+    }
+  ],
   "completedAt": "2026-08-21T13:00:00+09:00"
 }
 ```
+
+`schemaVersion: 1` の必須fieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、matrix path/digest、execution route、Xcode、account preflight、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。
+
+文書だけの変更では `status`、Build、Tests、visual evaluationを`not-applicable`、`changeClassification`を`documentation-only`、`reason`を空でない説明、`cases`を空配列にします。アプリコード、Xcode project、Asset、Localization、Entitlement、Configurationの変更が一つでもあれば文書例外は使えません。
 
 PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。
 
@@ -140,7 +165,8 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 - review verdict = approved
 - 重大Finding = 0
 - Acceptance criteriaの証拠欠落 = 0
-- 外部操作がある場合、Codexのaccount preflight記録が存在
+- Issue本文の全 `AC-*` が `acceptanceEvidence` に一度ずつ存在
+- CodexのGitHub account preflight artifactとdigestが存在
+- Provider外部操作がある場合、各provider preflight artifactとdigestが存在
 
 一つでも不一致ならマージしません。
-

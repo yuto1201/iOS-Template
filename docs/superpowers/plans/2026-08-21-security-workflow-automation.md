@@ -28,6 +28,8 @@
 | `.claude/settings.json` | Project hooks for instructions and external-operation enforcement |
 | `.claude/hooks/guard-external-ops.sh` | Deny Claude external and secret operations |
 | `.claude/hooks/load-agents-md.sh` | Add `AGENTS.md` to Claude session context without `CLAUDE.md` |
+| `tools/request-codex-op.sh` | Fixed Claude-to-Codex transport for authenticated operations |
+| `tools/request-codex-review.sh` | Fixed read-only Claude-to-Codex review transport |
 | `tools/github-account-preflight.sh` | Verify personal GitHub account and repository |
 | `tools/issue-state.sh` | Read and transition durable Issue labels |
 | `tools/claim-issue.sh` | Create deterministic Branch/worktree after Issue readiness checks |
@@ -54,7 +56,7 @@
 
 - [ ] **Step 1: Write table-driven failing guard tests**
 
-Create fixtures for allowed `git status`, `git diff`, `git add`, `git commit`, Xcode Build, and public `curl` without credentials. Create denied fixtures for `gh`, `git push`, `git fetch`, `git pull`, `supabase`, `wrangler`, `elevenlabs`, `fastlane`, `security find-generic-password`, the dedicated secret path, and tool names containing GitHub, Supabase, or Cloudflare MCP identifiers.
+Create fixtures for allowed `git status`, `git diff`, `git add`, `git commit`, Xcode Build, public `curl` without credentials, and the two fixed Codex request wrappers with schema-valid paths. Create denied fixtures for `gh`, `git push`, `git -C /tmp/repo push`, `git --git-dir=/tmp/repo/.git fetch`, `git pull`, direct `codex`, `supabase`, `wrangler`, `elevenlabs`, `fastlane`, `security find-generic-password`, the dedicated secret path, an unapproved shell script containing an external command, and tool names containing GitHub, Supabase, or Cloudflare MCP identifiers.
 
 The test pipes each fixture to the guard, parses its output with `plutil`, and asserts the decision. It also asserts that a denied response contains `Codexへ委託`.
 
@@ -65,7 +67,7 @@ Expected: non-zero because the hook does not exist.
 
 - [ ] **Step 3: Implement the guard**
 
-Use `/usr/bin/plutil -extract tool_name raw -o - -` and the same command for `tool_input.command`. Normalize only for matching; never print the original command. Deny exact external CLI command positions, authenticated API patterns, MCP tool-name prefixes, Keychain reads, and `~/Library/Application Support/iOS-Template/secrets/` access.
+Read stdin into a private temporary file. Extract `tool_name` first; any missing or malformed tool name fails closed with a deny response. Extract `tool_input.command` only for shell tools and treat a missing command as empty for non-shell tools. Do not use `set -e` around optional `plutil -extract` calls. Normalize only for matching; never print the original command. Deny exact and option-prefixed remote Git forms, authenticated API patterns, MCP tool-name prefixes, Keychain reads, direct `codex`, and `~/Library/Application Support/iOS-Template/secrets/` access. When a shell command invokes a repository script, scan the resolved tracked script for the same forbidden operations before allowing it. Only the exact validated argv shapes of `tools/request-codex-op.sh` and `tools/request-codex-review.sh` bypass the direct-Codex denial.
 
 Return this shape on denial:
 
@@ -81,7 +83,7 @@ Return this shape on denial:
 
 - [ ] **Step 4: Implement AGENTS.md session loading**
 
-`load-agents-md.sh` reads `${CLAUDE_PROJECT_DIR}/AGENTS.md`, rejects files larger than 32768 bytes, and returns it as SessionStart `additionalContext`. It does not read secret paths or call external commands.
+`load-agents-md.sh` reads `${CLAUDE_PROJECT_DIR}/AGENTS.md` and returns it as SessionStart `additionalContext`. If it is larger than 32768 bytes, return visible additional context that instructs Claude to stop with `blocked:environment`; never silently omit the contract. It does not read secret paths or call external commands.
 
 - [ ] **Step 5: Configure hooks**
 
@@ -102,18 +104,21 @@ git commit -m "feat: enforce Codex-only external operations"
 **Files:**
 - Create: `tools/github-account-preflight.sh`
 - Create: `tools/issue-state.sh`
+- Create: `tools/request-codex-op.sh`
+- Create: `tools/validate-codex-op-request.sh`
 - Create: `tools/lib/workflow.sh`
 - Create: `tools/tests/test-workflow-state.sh`
 - Create: `tools/tests/fixtures/gh`
 
 **Interfaces:**
-- `github-account-preflight.sh --repo yuto1201/iOS-Template` outputs sanitized JSON
+- `github-account-preflight.sh --repo yuto1201/iOS-Template` reads the expected login from `Config/ownership.yml` and outputs sanitized JSON
 - `issue-state.sh get --repo OWNER/REPO --issue 42`
 - `issue-state.sh transition --repo OWNER/REPO --issue 42 --from approved --to claimed`
+- `request-codex-op.sh --request .artifacts/ops-requests/issue-42-create-pr-1.json --result .artifacts/ops-results/issue-42-create-pr-1.json`
 
 - [ ] **Step 1: Write failing fake-gh tests**
 
-Put a fixture `gh` executable first on `PATH`. Test personal account success, company account rejection, repository-owner mismatch, missing Issue, invalid transition, and successful compare-and-set transition.
+Put a fixture `gh` executable first on `PATH`. Test configured personal account success, company account rejection, repository-owner mismatch, missing Issue, invalid transition, successful compare-and-set transition, malformed operation request, path escape, request-selected approval, and a sanitized Codex result.
 
 - [ ] **Step 2: Run tests**
 
@@ -122,19 +127,23 @@ Expected: non-zero because the tools are absent.
 
 - [ ] **Step 3: Implement sanitized account preflight**
 
-Call `gh auth status --active` and `gh repo view --json nameWithOwner,defaultBranchRef,url`. Require active account `yuto1201`. Output account, repository, default Branch, URL, and checked timestamp; never output Token or scopes.
+Call `gh auth status --active` and `gh repo view --json nameWithOwner,defaultBranchRef,url`. Require the active login from `Config/ownership.yml`. Write account, repository, default Branch, URL, checked timestamp, and a digest to the Issue Head-SHA artifact directory; never output Token or scopes.
 
 - [ ] **Step 4: Implement explicit transitions**
 
-Define the state transition table from `docs/workflow.md` in `tools/lib/workflow.sh`. `issue-state.sh transition` reads current `state:*` labels, rejects multiple current states, removes exactly the old label, adds exactly the new label, and posts a concise comment containing executor and timestamp.
+Define the complete state transition table from `docs/workflow.md` in `tools/lib/workflow.sh`. `issue-state.sh transition` reads current `state:*` labels, rejects multiple current states, removes exactly the old label, adds exactly the new label, and posts a concise comment containing executor and timestamp.
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **Step 5: Implement the fixed external-operation transport**
+
+Validate request version, request ID, Issue, allowlisted operation, target, environment, inputs, reason, and containment under `.artifacts/ops-requests/`. Reject any approval field supplied by the requester. Invoke Codex with a fixed instruction file that independently reads `docs/AUTHORITY.md`, derives approval requirements, performs provider preflight, executes exactly the allowlisted operation, and writes only the sanitized result path. The caller cannot supply free-form instructions, model settings, tool permissions, or an alternate output path.
+
+- [ ] **Step 6: Run tests and commit**
 
 Run: `bash tools/tests/test-workflow-state.sh`  
 Expected: all fixture cases pass.
 
 ```bash
-git add tools/github-account-preflight.sh tools/issue-state.sh tools/lib tools/tests
+git add tools/github-account-preflight.sh tools/issue-state.sh tools/request-codex-op.sh tools/validate-codex-op-request.sh tools/lib tools/tests
 git commit -m "feat: add GitHub identity and Issue state controls"
 ```
 
@@ -146,6 +155,7 @@ git commit -m "feat: add GitHub identity and Issue state controls"
 - Create: `.github/pull_request_template.md`
 - Create: `.github/labels.yml`
 - Create: `tools/validate-issue-body.sh`
+- Create: `tools/sync-github-labels.sh`
 - Test: `tools/tests/test-issue-contract.sh`
 
 **Interfaces:**
@@ -154,7 +164,7 @@ git commit -m "feat: add GitHub identity and Issue state controls"
 
 - [ ] **Step 1: Write failing Issue-contract tests**
 
-Test a complete Feature Issue, missing Acceptance criteria, missing Spec anchors, unresolved user approval, and a Regression Issue with original PR and reproduction steps.
+Test a complete Feature Issue with `AC-1` and `AC-2`, missing Acceptance criteria, duplicate AC ID, missing Spec anchors, unresolved user approval, and a Regression Issue with original PR and reproduction steps.
 
 - [ ] **Step 2: Add forms and label manifest**
 
@@ -162,19 +172,23 @@ Define labels for every workflow and blocked state in `docs/workflow.md`, plus `
 
 - [ ] **Step 3: Implement validation**
 
-The validator requires every heading and at least one unchecked acceptance item. It rejects `Status: 未決` in referenced specification text and rejects an approval-required operation without an approval reference.
+The validator requires every heading and at least one acceptance item with a unique `AC-*` ID. It calls `.agents/skills/spec-workflow/scripts/check-spec-state.sh` rather than implementing a second 未決 checker. It rejects an approval-required operation without an approval reference.
 
 - [ ] **Step 4: Add the PR template**
 
 Use the exact sections from `docs/workflow.md`: Summary, Specification, Verification, Opposite-model review, and Remaining work. Include `Closes #` as an explicit field.
 
-- [ ] **Step 5: Run tests and commit**
+- [ ] **Step 5: Implement and apply labels**
+
+`sync-github-labels.sh` compares `.github/labels.yml` with the target Repository and creates or updates exact names, colors, and descriptions. Only Codex runs it after GitHub account preflight. Apply the manifest before any automated Issue transition is attempted.
+
+- [ ] **Step 6: Run tests and commit**
 
 Run: `bash tools/tests/test-issue-contract.sh`  
 Expected: all cases pass.
 
 ```bash
-git add .github tools/validate-issue-body.sh tools/tests
+git add .github tools/validate-issue-body.sh tools/sync-github-labels.sh tools/tests
 git commit -m "feat: define GitHub workflow contracts"
 ```
 
@@ -201,7 +215,7 @@ Expected: non-zero because Claim tools are absent.
 
 - [ ] **Step 3: Implement Claim**
 
-Run account preflight, fetch Issue JSON through `gh`, validate the body, normalize the title to lowercase ASCII hyphen form, transition `approved -> claimed`, create the Branch from current `origin/main`, add the worktree, and write `.artifacts/issues/42/state.json` with Issue, Branch, worktree, Base SHA, and primary agent.
+Run account preflight, fetch Issue JSON through `gh`, validate the body, normalize the title to lowercase ASCII hyphen form, transition `approved -> claimed`, create the Branch from current `origin/main`, add the worktree, and write `.artifacts/issues/42/state.json` with Issue, Branch, worktree, Base SHA, and primary implementer. Codex executes this tool even when `--agent claude`; Claude requests it through `request-codex-op.sh`.
 
 - [ ] **Step 4: Implement resume**
 
@@ -221,6 +235,7 @@ git commit -m "feat: add resumable Issue worktrees"
 
 **Files:**
 - Create: `tools/cross-model-review.sh`
+- Create: `tools/request-codex-review.sh`
 - Create: `tools/validate-review-result.sh`
 - Create: `tools/tests/test-cross-model-review.sh`
 - Create: `.agents/skills/cross-model-review/SKILL.md`
@@ -241,7 +256,7 @@ Require every field in `docs/agent-contracts/review-packet.md`, require `headSha
 
 - [ ] **Step 3: Implement reviewer invocation**
 
-For Codex primary, invoke Claude non-interactively with read-only tools and JSON output. For Claude primary, invoke Codex with `--sandbox read-only`, an ephemeral session, closed stdin, and final output redirected to the requested file. Run both with a 600-second timeout and no authenticated external tools.
+For Codex primary, invoke Claude non-interactively with read-only tools and JSON output. For Claude primary, allow only `request-codex-review.sh --packet packet.json --output review.json`; the fixed wrapper invokes Codex with `--sandbox read-only`, an ephemeral session, closed stdin, and no caller-supplied prompt or settings. Run both with a 600-second timeout and no authenticated external tools.
 
 - [ ] **Step 4: Validate output and transition state**
 
@@ -278,15 +293,15 @@ git commit -m "feat: automate opposite-model review"
 
 - [ ] **Step 1: Write failing gate tests**
 
-Test matching evidence, stale Verify SHA, stale Review SHA, changes-requested verdict, failed matrix case, missing acceptance evidence, and absent account preflight.
+Test matching evidence, stale Verify SHA, stale Review SHA, changes-requested verdict, failed matrix case, missing or duplicate `AC-*` evidence, absent or digest-mismatched account preflight, changed matrix digest, and a valid documentation-only exception.
 
 - [ ] **Step 2: Implement the gate**
 
-Read current Git Head, `verify.json`, `review.json`, Issue body, and account preflight. Require SHA equality, passed verification, approved review, zero unresolved blocking findings, and evidence for every acceptance checkbox.
+Read current Git Head, the complete schema-version-1 `verify.json` from `docs/verification.md`, `review.json`, Issue body, and GitHub/provider preflight artifacts. Require SHA equality, passed verification, matching matrix and preflight digests, approved review, zero unresolved blocking findings, and exactly one evidence entry for every `AC-*` ID.
 
 - [ ] **Step 3: Write cleanup safety tests**
 
-Test successful removal of a merged Issue worktree, refusal to remove an unmerged Branch, refusal when the worktree is dirty, and preservation of unrelated worktrees and Branches.
+Test successful removal after the exact PR reports `MERGED`, refusal for an open or closed-unmerged PR, refusal when `headRefOid` differs from the recorded Head SHA, refusal when the worktree is dirty, and preservation of unrelated worktrees and Branches. Do not use Git ancestry as the Squash-merge signal.
 
 - [ ] **Step 4: Implement merge**
 
@@ -294,7 +309,7 @@ Run GitHub preflight, Push the exact Issue Branch, create or find its PR, render
 
 - [ ] **Step 5: Implement cleanup**
 
-Resolve exact targets from Issue state. Refuse dirty or unmerged targets. Remove the remote Issue Branch, then the worktree, then the local Branch. Do not use broad globs or recursive deletion.
+Resolve exact targets from Issue state and PR JSON. Require `state == MERGED`, matching `headRefOid`, and a non-null `mergeCommit`; optionally compare patch IDs for additional sanity. Refuse dirty or unmerged targets. Remove the remote Issue Branch, then the worktree, then the local Branch. Do not use `git branch --merged`, broad globs, or recursive deletion.
 
 - [ ] **Step 6: Run tests and commit**
 
@@ -330,7 +345,7 @@ Define Issue granularity, dependency-graph output, file-conflict serialization, 
 
 - [ ] **Step 3: Write `ship-issue`**
 
-Call Claim, implementation, verification, opposite review, PR, pre-merge gate, merge, and cleanup in the state-machine order. Resume from durable GitHub state and never mark success from a skipped stage.
+Call Claim, implementation, verification, opposite review, PR, pre-merge gate, merge, and cleanup in the state-machine order. Resume from durable GitHub state and never mark success from a skipped stage. In a Claude-primary session, every GitHub or provider state change is a fixed Codex operation request; Claude performs only local implementation and local verification.
 
 - [ ] **Step 4: Write `ship-issue-batch`**
 
@@ -338,7 +353,7 @@ Start only dependency-free Issues, cap concurrent source-editing Issues at two, 
 
 - [ ] **Step 5: Write `codex-external-ops`**
 
-Validate the request schema in `docs/AUTHORITY.md`, verify provider identity, execute exactly one operation, redact output, and return the response schema. In Claude sessions, the skill delegates to Codex rather than executing the provider CLI.
+Validate the request schema in `docs/AUTHORITY.md`, reject requester-selected approval state, verify provider identity from `Config/ownership.yml`, execute exactly one operation, redact output, and return the response schema. In Claude sessions, the skill uses only `request-codex-op.sh` rather than executing a provider or Codex CLI directly.
 
 - [ ] **Step 6: Run policy tests and commit**
 
@@ -362,7 +377,7 @@ git commit -m "feat: add autonomous Issue shipping skills"
 
 - [ ] **Step 1: Write the end-to-end fixture**
 
-Create a complete fake Issue with two acceptance checks, Claim it, create a commit, attach passed Verify and approved Review files with the same SHA, render a PR body, invoke fake merge, and cleanup.
+Create a complete fake Issue with `AC-1` and `AC-2`, Claim it, create a commit, attach passed Verify and approved Review files with the same SHA and criterion mappings, render a PR body, invoke fake merge, and cleanup.
 
 - [ ] **Step 2: Add a stale-review regression case**
 

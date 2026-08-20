@@ -53,11 +53,11 @@
 
 - [ ] **Step 1: Create JSON fixtures**
 
-Include two available iOS Runtimes with different semantic versions, one unavailable newer Runtime, iPhone standard, iPhone Pro, iPhone Pro Max, iPad, and two iPad Air generations. Include names whose lexical order differs from version order to force semantic comparison.
+Include two available iOS Runtimes with different semantic versions, one unavailable newer Runtime, iPhone standard, iPhone Pro, iPhone Pro Max, iPad, two iPad Air generations, and 11-inch plus 13-inch variants of the newest Air generation. Include names whose lexical order differs from version order to force semantic comparison.
 
 - [ ] **Step 2: Write failing resolver tests**
 
-Assert selection of the highest available Runtime, highest iPhone Pro excluding Pro Max, and highest iPad Air. Add failure cases for no Pro and no Air. Assert four cases with exact locale/language pairs and stable order `iphone-en`, `iphone-ja`, `ipad-en`, `ipad-ja`.
+Assert selection of the highest available Runtime, highest iPhone Pro excluding Pro Max, and 13-inch iPad Air from the highest generation. Add failure cases for no Pro and no Air. Assert four cases with exact locale/language pairs and stable order `iphone-en`, `iphone-ja`, `ipad-en`, `ipad-ja`.
 
 - [ ] **Step 3: Run tests**
 
@@ -66,7 +66,7 @@ Expected: non-zero because the Swift resolver is absent.
 
 - [ ] **Step 4: Implement Codable input and semantic ordering**
 
-Define `Runtime`, `DeviceType`, `Device`, `Matrix`, and `MatrixCase` Codable structs. Parse version components as integers, ignore unavailable entries, match `iPhone .* Pro` while excluding `Pro Max`, and match names beginning with `iPad Air`.
+Define `Runtime`, `DeviceType`, `Device`, `Matrix`, and `MatrixCase` Codable structs. Parse version components as integers, ignore unavailable entries, match `iPhone .* Pro` while excluding `Pro Max`, and match names beginning with `iPad Air`. Rank Air by generation first and screen size second, preferring 13-inch over 11-inch within the same generation.
 
 - [ ] **Step 5: Emit stable JSON**
 
@@ -136,7 +136,7 @@ git commit -m "feat: manage batch-scoped Simulators"
 
 - [ ] **Step 1: Write fixture tests**
 
-Test passed evidence, one failed matrix case, missing screenshot, stale Head SHA, skipped test, added warning, duplicate case ID, and an allowed documentation-only `not-applicable` with a non-empty reason.
+Test the complete schema-version-1 passed evidence, one failed matrix case, missing screenshot, stale Head SHA, skipped test, added warning, duplicate case ID, missing execution route, missing Xcode, missing matrix digest, missing or duplicate acceptance evidence, missing account preflight, and an allowed documentation-only `not-applicable` with a non-empty reason.
 
 - [ ] **Step 2: Run tests**
 
@@ -145,7 +145,7 @@ Expected: non-zero because the validator is absent.
 
 - [ ] **Step 3: Implement strict decoding**
 
-Decode the schema from `docs/verification.md`. Require exact Issue and SHA, Build passed, zero added warnings, Tests passed with zero failed and zero skipped, the exact four case IDs, passed visual evaluation, and existing relative screenshot paths contained under the evidence directory.
+Decode every required schema-version-1 field from `docs/verification.md`. Require exact Issue and SHA, Build passed, zero added warnings, Tests passed with zero failed and zero skipped, the exact four case IDs, execution route, Xcode identity, matching matrix and account-preflight digests, one evidence entry per `AC-*`, passed visual evaluation, and existing relative screenshot paths contained under the evidence directory.
 
 - [ ] **Step 4: Implement documentation-only exception**
 
@@ -174,7 +174,7 @@ git commit -m "feat: validate iOS verification evidence"
 
 - [ ] **Step 1: Write fake-xcodebuild and fake-simctl tests**
 
-Assert one Build/Test invocation per Head SHA, a unique DerivedData path containing Issue and SHA, four serialized locale launches, Screenshot paths under each case ID, failure propagation, and atomic verify.json creation.
+Assert one Build and one unit-test invocation per Head SHA, one UI-test or smoke invocation for each of the four locale cases, a unique DerivedData path containing Issue and SHA, four serialized locale launches, Screenshot paths under each case ID, failure propagation, and atomic verify.json creation.
 
 - [ ] **Step 2: Run tests**
 
@@ -195,7 +195,7 @@ For each recorded UDID: boot, wait for boot status, install the built app, launc
 
 - [ ] **Step 6: Write evidence atomically**
 
-Write to `verify.json.tmp`, validate it, then rename to `verify.json`. On any failure, preserve a failed evidence file with stage and sanitized error; return non-zero.
+Write to `verify.json.tmp`, including matrix digest, execution route, Xcode identity, GitHub preflight path/digest, and `AC-*` evidence mappings; validate it, then rename to `verify.json`. On any failure, preserve a failed evidence file with stage and sanitized error; return non-zero.
 
 - [ ] **Step 7: Run tests and commit**
 
@@ -240,41 +240,38 @@ git add tools/visual-review-packet.sh docs/agent-contracts/visual-reviewer.md to
 git commit -m "feat: package Simulator screenshots for AI evaluation"
 ```
 
-### Task 6: Shared ios-verify skill and gate integration
+### Task 6: Shared ios-verify skill
 
 **Files:**
 - Create: `.agents/skills/ios-verify/SKILL.md`
 - Create: `.claude/skills/ios-verify` as a relative symlink
-- Modify: `tools/premerge-gate.sh`
-- Modify: `tools/tests/test-premerge-gate.sh`
 - Modify: `tools/tests/test-foundation.sh`
 
 **Interfaces:**
 - Skill orchestrates matrix reuse, runner, visual evaluation, evidence validation, and review packet creation
-- Pre-merge gate consumes validated verify.json for the current Head SHA
 
 - [ ] **Step 1: Add failing integration tests**
 
-Require the shared skill and symlink. Add pre-merge cases for missing matrix, matrix modified after verification, failed visual evaluation, and a valid documentation-only exception.
+Require the shared skill and symlink. Add evidence cases for a missing matrix, matrix modified after verification, failed visual evaluation, and a valid documentation-only exception.
 
 - [ ] **Step 2: Write the skill**
 
 The skill first checks XcodeBuildMCP session defaults when available, otherwise uses the deterministic scripts. It resolves or reuses the batch matrix, executes verification exclusively, requests AI visual evaluation, validates final evidence, and returns the exact artifact path and digest.
 
-- [ ] **Step 3: Extend the gate**
+- [ ] **Step 3: Complete evidence generation**
 
-Hash the matrix file during verification and store the digest in verify.json. Require the same digest and current Head SHA at merge time.
+Hash the matrix and GitHub preflight files during verification and store both digests in verify.json. Record the execution route and Xcode identity required by the canonical schema.
 
 - [ ] **Step 4: Run the relevant suites**
 
-Run: `bash tools/tests/test-foundation.sh && bash tools/tests/test-premerge-gate.sh && bash tools/tests/test-ios-evidence.sh`  
+Run: `bash tools/tests/test-foundation.sh && bash tools/tests/test-ios-evidence.sh`
 Expected: all pass.
 
 - [ ] **Step 5: Commit integration**
 
 ```bash
 git add .agents/skills/ios-verify .claude/skills/ios-verify tools
-git commit -m "feat: integrate iOS verification with merge gates"
+git commit -m "feat: add shared iOS verification workflow"
 ```
 
 ### Task 7: Live template verification
@@ -318,3 +315,7 @@ Add exact live Xcode, Runtime, Device Type, test count, and commands to README w
 git add README.md
 git commit -m "docs: record live Simulator verification"
 ```
+
+- [ ] **Step 7: Complete the final Bootstrap gate manually**
+
+Codex records GitHub account preflight, all `AC-*` mappings, final verify.json digest, opposite-model approval, and matching Head SHA in the PR. Codex uses `gh pr merge --squash --match-head-commit` and removes only this Issue's Branch and worktree. All later Issues use the verification tools created here.

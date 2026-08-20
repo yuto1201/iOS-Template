@@ -29,21 +29,21 @@ Publishable Keyは公開クライアント用ですが、テンプレートで�
 秘密はmacOS Keychainのgeneric passwordを基本とします。Service名は次の形式です。
 
 ```text
-ios-template/<app-slug>/<service>/<environment>/<key-name>
+ios-template/${appSlug}/${service}/${environment}/${keyName}
 ```
 
 例:
 
 ```text
-ios-template/caflog/app-store-connect/production/private-key
-ios-template/caflog/cloudflare/production/api-token
-ios-template/caflog/elevenlabs/production/api-key
+ios-template/template-app/app-store-connect/production/key-id
+ios-template/template-app/cloudflare/production/api-token
+ios-template/template-app/elevenlabs/production/api-key
 ```
 
 ファイル形式が必須の場合だけ、次へ保存します。
 
 ```text
-~/Library/Application Support/iOS-Template/secrets/<app-slug>/
+~/Library/Application Support/iOS-Template/secrets/${appSlug}/
 ```
 
 - ディレクトリ権限: `0700`
@@ -60,12 +60,14 @@ ios-template/caflog/elevenlabs/production/api-key
 - 一時ファイルは `mktemp -d` で作り、終了trapで削除する。
 - 秘密を含む一時ファイルへ `0600` を設定する。
 - 結果にはアカウント名、対象、成功可否、外部参照IDだけを残す。
+- 環境変数は子processを`exec`する直前にshellからexportし、秘密値を`env NAME=value`のargvへ置かない。
 
 ## 4. iOS設定
 
 - `Config/Public.xcconfig`: 秘密ではない値。Git管理可。
 - `Config/Local.xcconfig`: ローカル生成。Git管理外。
 - `Config/Local.xcconfig.example`: Key名と説明だけ。Git管理可。
+- `Config/ownership.yml`: 期待する個人アカウントとアプリ固有の公開identifier。Git管理可。
 - iOSアプリにSecret Keyを入れない。
 - 管理権限が必要な操作はサーバー側またはCodexの運用処理で行う。
 
@@ -95,6 +97,8 @@ Claudeはmigrationファイルを作成し、ローカルDBで検証できます
 
 Hookは誤操作の防止策で、同一OSユーザー上の暗号学的な分離ではありません。
 
+App Store Connectのmulti-line `.p8` private keyはKeychainの1行secret interfaceへ入れません。リポジトリ外の専用ディレクトリへ`0600`で保存し、Codexが必要な子processへ渡す間だけ使用します。Key IDとIssuer IDはKeychainまたは公開ownership設定へ分けます。
+
 ## 7. 漏えい時
 
 1. 進行中の外部操作を止める。
@@ -102,4 +106,3 @@ Hookは誤操作の防止策で、同一OSユーザー上の暗号学的な分�
 3. Git履歴、Issue、PR、ログ、Artifactへの混入範囲を確認する。
 4. 公開済みの場合は、削除だけで済ませず失効を確認する。
 5. 原因と再発防止をSecurity Regression Issueへ記録する。秘密値そのものは記録しない。
-

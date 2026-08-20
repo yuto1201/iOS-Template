@@ -2,7 +2,7 @@
 
 Codex を中心に、Claude を実装担当または反対モデルの評価者として併用する個人向け iOS 開発テンプレートです。仕様、Issue、ブランチ、検証、反対モデルレビュー、PR、Squash Merge までを一貫したワークフローとして扱います。
 
-現在は設計確定段階です。テンプレート本体の自動化は [実装計画](./docs/superpowers/plans/2026-08-21-ios-template-foundation.md) に従って段階的に追加します。
+現在は設計確定段階です。テンプレート本体の自動化は [実装計画索引](./docs/superpowers/plans/README.md) に従って段階的に追加します。
 
 ## 最初に読む文書
 

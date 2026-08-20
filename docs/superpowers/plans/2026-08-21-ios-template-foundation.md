@@ -26,6 +26,7 @@
 | Path | Responsibility |
 | --- | --- |
 | `.gitignore` | Ignore local artifacts, worktrees, local configuration, and Supabase runtime state |
+| `Config/` | Public build configuration, local example, and centralized ownership expectations |
 | `TemplateApp.xcodeproj/` | Vanilla Xcode project with app, unit-test, and UI-test targets |
 | `TemplateApp/` | Minimal localized SwiftUI application |
 | `TemplateAppTests/` | Swift Testing unit tests |
@@ -36,12 +37,17 @@
 | `.claude/agents/*.md` | Claude evaluator definitions |
 | `docs/agent-contracts/*.md` | Shared evaluator criteria |
 | `tools/tests/test-foundation.sh` | Repository policy and layout test |
+| `tools/check-markdown-links.swift` | Validate local Markdown links across repository guidance |
 
 ### Task 1: Repository policy test
 
 **Files:**
 - Create: `.gitignore`
 - Create: `tools/tests/test-foundation.sh`
+- Create: `tools/check-markdown-links.swift`
+- Create: `Config/Public.xcconfig`
+- Create: `Config/Local.xcconfig.example`
+- Create: `Config/ownership.yml`
 
 **Interfaces:**
 - Consumes: `specs/architecture.md`
@@ -99,10 +105,18 @@ supabase/.temp/
 supabase/.branches/
 ```
 
-- [ ] **Step 4: Commit the policy test**
+- [ ] **Step 4: Add public configuration and ownership**
+
+Create `Config/Public.xcconfig` with optional inclusion `#include? "Local.xcconfig"` and no provider values. Create `Config/Local.xcconfig.example` with comments explaining local non-secret client configuration. Create `Config/ownership.yml` with schema version 1, GitHub login `yuto1201`, Supabase Organization `YUTO1201`, and null app-specific Supabase Project Ref, Cloudflare Account ID, App Store Team ID, and Bundle ID. Provider preflight must later reject null required values.
+
+- [ ] **Step 5: Add the Markdown link checker**
+
+Write a Swift script that scans `README.md`, `AGENTS.md`, `specs/**/*.md`, and `docs/**/*.md`; extracts local Markdown destinations; decodes `%20`; ignores HTTP(S) and same-document anchors; and exits non-zero with source file and destination when a local target does not exist. Add it to `test-foundation.sh`.
+
+- [ ] **Step 6: Commit the policy test**
 
 ```bash
-git add .gitignore tools/tests/test-foundation.sh
+git add .gitignore Config tools/check-markdown-links.swift tools/tests/test-foundation.sh
 git commit -m "test: define template foundation policy"
 ```
 
@@ -123,11 +137,11 @@ git commit -m "test: define template foundation policy"
 
 - [ ] **Step 1: Create the project through Xcode's iOS App template**
 
-Use Xcode's iOS App template with these exact selections: Product Name `TemplateApp`, Interface `SwiftUI`, Language `Swift`, Testing System `Swift Testing with UI Tests`, Storage `None`, Include Tests enabled. Save the project at the repository root and do not initialize another Git repository.
+Use the `computer-use` capability to drive Xcode's iOS App template with these exact selections: Product Name `TemplateApp`, Interface `SwiftUI`, Language `Swift`, Testing System `Swift Testing with UI Tests`, Storage `None`, Include Tests enabled. Save the project at the repository root and do not initialize another Git repository. If Xcode UI control is unavailable, set `blocked:environment`; do not hand-author `project.pbxproj` or silently introduce XcodeGen.
 
 - [ ] **Step 2: Configure supported destinations and signing-neutral defaults**
 
-Set the app target's Supported Destinations to iPhone and iPad. Keep automatic signing off for Simulator-only template verification. Set the generated shared scheme name to `TemplateApp` and verify `xcuserdata` is not tracked.
+Set the app target's Supported Destinations to iPhone and iPad. Keep the generated signing settings unchanged and pass `CODE_SIGNING_ALLOWED=NO` only to Simulator build commands. Set the generated shared scheme name to `TemplateApp` and verify `xcuserdata` is not tracked.
 
 - [ ] **Step 3: Replace the generated view with a deterministic launch screen**
 
@@ -179,6 +193,7 @@ git commit -m "feat: add minimal SwiftUI template app"
 - Create: `TemplateApp/Localizable.xcstrings`
 - Modify: `TemplateAppTests/TemplateAppTests.swift`
 - Modify: `TemplateAppUITests/TemplateAppUITests.swift`
+- Modify: `TemplateApp.xcodeproj/project.pbxproj`
 
 **Interfaces:**
 - Produces: localization key `template.welcome` with English `Ready to build` and Japanese `開発を始められます`
@@ -192,12 +207,16 @@ Create `Localizable.xcstrings` with source language `en`, key `template.welcome`
 
 Make the unit test load both `en` and `ja` localizations and assert the exact two values. Add two UI test methods that launch with `-AppleLanguages (en) -AppleLocale en_US` and `-AppleLanguages (ja) -AppleLocale ja_JP`, then assert the localized label.
 
-- [ ] **Step 3: Run all tests**
+- [ ] **Step 3: Wire the public build configuration**
+
+Set Debug and Release Base Configuration to `Config/Public.xcconfig`, which optionally includes the Git-ignored `Local.xcconfig`. Run `xcodebuild -list -project TemplateApp.xcodeproj` and confirm all three targets and shared scheme are present.
+
+- [ ] **Step 4: Run all tests**
 
 Run the `TemplateApp` scheme tests on an available iPhone Pro.  
 Expected: all unit and UI tests pass without skipped tests.
 
-- [ ] **Step 4: Commit localization**
+- [ ] **Step 5: Commit localization**
 
 ```bash
 git add TemplateApp/Localizable.xcstrings TemplateAppTests TemplateAppUITests
@@ -328,3 +347,7 @@ Update README status from design-only to foundation-ready and include exact Buil
 git add README.md
 git commit -m "docs: record template foundation verification"
 ```
+
+- [ ] **Step 6: Complete the Bootstrap gate manually**
+
+Codex records all `AC-*` evidence, GitHub account preflight, Build/Test results, the four standard Simulator cases, opposite-model review, and matching Head SHA in the PR. Codex then uses `gh pr merge --squash --match-head-commit` and explicitly removes only this Issue's Branch and worktree.

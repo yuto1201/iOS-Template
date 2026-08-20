@@ -8,8 +8,10 @@
 2. 担当 Issue が参照する `specs/` 文書
 3. `specs/decisions.md`
 4. `docs/AUTHORITY.md`
-5. `docs/workflow.md`
-6. `docs/verification.md`
+5. `docs/security.md`
+6. `docs/workflow.md`
+7. `docs/verification.md`
+8. 反対モデルレビュー時は `docs/agent-contracts/review-packet.md`
 
 確定仕様と矛盾する実装をしないでください。未決事項が受け入れ条件を変える場合は `blocked:user` とし、実装を始めません。
 
@@ -33,10 +35,9 @@ Codex は外部操作の直前に、アクティブな個人アカウントと�
 
 Issue バッチ開始時に最新の利用可能な iOS Runtime を解決し、そのバッチ内で固定します。
 
-- 最新 iPhone Pro、英語
-- 最新 iPhone Pro、日本語
+- 最新 iPhone Pro（Pro Max を除く）、英語
+- 最新 iPhone Pro（Pro Max を除く）、日本語
 - 最新 iPad Air、英語
 - 最新 iPad Air、日本語
 
 ユーザーの実機確認は AI の完了条件に含めません。詳細は `docs/verification.md` を参照してください。
-

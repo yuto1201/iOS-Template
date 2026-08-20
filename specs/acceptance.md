@@ -29,6 +29,7 @@ Date: 2026-08-21
 - 対象内と対象外が分かれている。
 - 検証可能な受け入れ条件がある。
 - 関連仕様のパスと節が記載されている。
+- 各受け入れ条件に `AC-1` から始まる安定したIDがある。
 - 依存IssueとBlockerが記載されている。
 - UI変更の場合、対象画面・状態・日英の期待が記載されている。
 - 外部サービスを使う場合、サービス、環境、Codex実行が指定されている。
@@ -84,3 +85,13 @@ Date: 2026-08-21
 
 Pre-mergeの失敗は同じIssueで修正します。マージ後に判明した不具合だけ、新しいRegression Issueを作ります。
 
+## 7. Bootstrap Issue
+
+自動化ツール自身を作る最初の2件だけは、まだ存在しないツールを完了条件にできません。Foundation IssueとSimulator verification IssueをBootstrap Issueとし、Codexが次を手動で実行します。
+
+- 個人GitHubアカウント確認、Issue、Branch、Push、PR、Squash Merge、後片付け
+- Head SHAを明記したBuild・Test・4条件Simulator結果のPR記録
+- 反対モデルのread-onlyレビューと、対象Head SHAのPR記録
+- `--match-head-commit` によるSquash Merge
+
+Bootstrapで免除されるのは、未実装の自動スクリプトを通すことだけです。Build、Test、標準Simulatorマトリクス、反対モデルレビュー、SHA一致は免除しません。Simulator verification Issueがマージされた後は検証ツールを使い、Security and workflow Issueがマージされた後は全自動ゲートを使います。

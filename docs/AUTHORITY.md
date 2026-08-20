@@ -28,6 +28,9 @@
 | App Store Connect、TestFlight、提出 | 不可 | 可 |
 | Keychainからの個人用秘密取得 | 不可 | 可 |
 | テンプレート専用秘密ディレクトリの読取 | 不可 | 可 |
+| `codex` CLIの任意プロンプト実行 | 不可 | 可 |
+| 固定ラッパーによるCodexへの外部操作委託 | 可 | 実行・判定 |
+| 固定ラッパーによるCodex read-onlyレビュー | 可 | 評価 |
 | 反対モデルレビュー | 可。Codex実装時 | 可。Claude実装時 |
 | PRのSquash MergeとリモートBranch削除 | 不可 | 可 |
 
@@ -35,10 +38,23 @@
 
 ## 3. ClaudeからCodexへの委託
 
-Claudeは認証済み外部操作が必要になったら、操作を試行せず `codex-external-ops` を使います。依頼には次を含めます。
+Claudeは認証済み外部操作が必要になったら、操作を試行せず `codex-external-ops` を使います。ClaudeはPrimary implementerになれますが、GitHub Issue状態と外部操作の実行者は常にCodexです。
+
+委託のtransportは次に固定します。
+
+1. Claudeが `.artifacts/ops-requests/${requestId}.json` を作る。
+2. Claudeは `tools/request-codex-op.sh --request ${requestFile} --result ${resultFile}` だけを呼べる。
+3. ラッパーがschemaとパスを検証し、固定された指示でCodexを起動する。
+4. Codexが権限、承認要否、個人アカウント、対象を独立判定する。
+5. Codexが操作して `.artifacts/ops-results/${requestId}.json` へsanitized resultを書く。
+
+Claudeによる直接の `codex` CLI、自由文prompt、別ラッパー、外部CLIは拒否します。read-only反対モデルレビューは別の `tools/request-codex-review.sh` を使い、外部操作権限を与えません。
+
+依頼には次を含めます。
 
 ```yaml
 request_version: 1
+request_id: issue-42-create-pr-1
 issue: 42
 operation: github.create_pr
 repository: yuto1201/example-ios-app
@@ -48,8 +64,9 @@ inputs:
   base: main
   head: claude/42-settings-screen
 reason: Issue 42 の検証と反対モデルレビューが完了したため
-approval_required: false
 ```
+
+依頼者は承認要否を指定できません。Codexがこの文書の規則から導出し、必要な承認記録がなければ操作を止めます。
 
 Codexは実行結果を、秘密値を含まない次の形式で返します。
 
@@ -67,16 +84,18 @@ Codexが期待アカウントと実際のアカウントの不一致を検出し
 
 ## 4. Codexの外部操作前チェック
 
+Identityの期待値は `Config/ownership.yml` を正本とします。GitHub login以外のアプリ固有Project Ref、Account ID、Team ID、Bundle IDが未設定なら、対象操作を始めません。
+
 ### GitHub
 
-- アクティブアカウントが個人用 `yuto1201` であること
+- アクティブアカウントが `Config/ownership.yml` の個人用loginであること
 - 対象Repositoryのowner/nameと既定Branch
 - Push対象BranchとHead SHA
 - PR作成・マージ時のIssue番号
 
 ### Supabase
 
-- 個人用Organization。表示名の期待値は `YUTO1201`
+- `Config/ownership.yml` に記録された個人用Organization
 - Project name、Project Ref、region、health
 - local、preview、staging、productionのどの環境か
 - 適用対象migrationとdry-run結果
@@ -116,3 +135,4 @@ Codexが期待アカウントと実際のアカウントの不一致を検出し
 
 このガードは同一macOSユーザー内の誤操作防止であり、OSレベルの完全な分離ではありません。完全分離が必要になった場合はClaude専用OSユーザーまたは隔離実行環境へ移行します。
 
+公開資料調査のため、認証情報を伴わないWebアクセスは許可します。したがってこのガードはネットワーク隔離や情報流出防止境界ではありません。秘密値と会社／個人アカウントの混同防止が目的です。
