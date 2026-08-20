@@ -1,0 +1,42 @@
+# iOS-Template agent contract
+
+このファイルは Codex と Claude に共通する、短く変更頻度の低いルールだけを定めます。詳細はリンク先を正とします。`CLAUDE.md` は作成しません。
+
+## 読む順番
+
+1. `specs/README.md`
+2. 担当 Issue が参照する `specs/` 文書
+3. `specs/decisions.md`
+4. `docs/AUTHORITY.md`
+5. `docs/workflow.md`
+6. `docs/verification.md`
+
+確定仕様と矛盾する実装をしないでください。未決事項が受け入れ条件を変える場合は `blocked:user` とし、実装を始めません。
+
+## 絶対ルール
+
+- 1 Issue = 1 Branch = 1 PR。
+- `main` へ直接コミットまたは直接 Push しない。
+- Issue の受け入れ条件外へ機能を広げない。
+- 実行していない Build、Test、Simulator 操作を成功として報告しない。
+- 反対モデルの承認と、現在の Head SHA に一致する検証証拠がなければマージしない。
+- マージは Codex が `--squash` と Head SHA 照合を使って実行する。
+- ユーザーの既存変更、認証情報、生成物を上書きまたは削除しない。
+
+## 外部操作の権限
+
+Claude はローカルの実装、修正、ローカル Git、Xcode、Simulator、公開資料の調査だけを行えます。GitHub、Supabase、Cloudflare、ElevenLabs、App Store Connect、その他の認証済み外部操作は、必ず Codex へ委託します。
+
+Codex は外部操作の直前に、アクティブな個人アカウントと対象リソースを確認します。詳細と例外のない境界は `docs/AUTHORITY.md` を参照してください。
+
+## 標準検証
+
+Issue バッチ開始時に最新の利用可能な iOS Runtime を解決し、そのバッチ内で固定します。
+
+- 最新 iPhone Pro、英語
+- 最新 iPhone Pro、日本語
+- 最新 iPad Air、英語
+- 最新 iPad Air、日本語
+
+ユーザーの実機確認は AI の完了条件に含めません。詳細は `docs/verification.md` を参照してください。
+
