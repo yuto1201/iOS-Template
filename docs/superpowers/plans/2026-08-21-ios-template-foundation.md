@@ -329,21 +329,26 @@ git commit -m "feat: add cross-model evaluator agents"
 Run: `bash tools/tests/test-foundation.sh`  
 Expected: zero.
 
-- [ ] **Step 2: Run Xcode tests on iPhone**
+- [ ] **Step 2: Run Build and unit tests once**
 
-Build and test `TemplateApp` on an available iPhone Pro.  
-Expected: all unit and UI tests pass.
+Build `TemplateApp` and run unit tests once on the batch-selected iPhone Pro.
+Expected: Build and all unit tests pass.
 
-- [ ] **Step 3: Run Xcode tests on iPad**
+- [ ] **Step 3: Run the four standard UI cases**
 
-Build and test `TemplateApp` on an available iPad Air.  
-Expected: all unit and UI tests pass.
+Run UI tests and capture screenshots on the batch-selected iPhone Pro and iPad Air in English and Japanese.
+Expected: all four standard cases pass with screenshot evidence.
 
-- [ ] **Step 4: Verify tracked files**
+- [ ] **Step 4: Perform visual and acceptance evaluation**
+
+Codex evaluates every screenshot against the Issue contract, records one evidence entry per `AC-*`, and includes the screenshots in the opposite-model review packet.
+Expected: visual evaluation passes and no Acceptance criterion lacks evidence.
+
+- [ ] **Step 5: Verify tracked files**
 
 Run `git ls-files` and confirm it contains no `xcuserdata`, `.artifacts`, `DerivedData`, `.env`, `.p8`, or `CLAUDE.md`.
 
-- [ ] **Step 5: Update README and commit**
+- [ ] **Step 6: Update README and commit**
 
 Update README status from design-only to foundation-ready and include exact Build/Test commands used.
 
@@ -352,6 +357,6 @@ git add README.md
 git commit -m "docs: record template foundation verification"
 ```
 
-- [ ] **Step 6: Complete the Bootstrap gate manually**
+- [ ] **Step 7: Complete the Bootstrap gate manually**
 
 Codex records all `AC-*` evidence, GitHub account preflight, Build/Test results, the four standard Simulator cases, opposite-model review, and matching Head SHA in the PR. Codex then uses `gh pr merge --squash --match-head-commit` and explicitly removes only this Issue's Branch and worktree.

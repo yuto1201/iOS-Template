@@ -146,7 +146,7 @@ AIはスクリーンショットごとに次を評価します。
 
 文書だけの変更では `status`、Build、Tests、visual evaluationを`not-applicable`、`changeClassification`を`documentation-only`、`reason`を空でない説明、`matrixFile`と`matrixDigest`と`xcode`をnull、`executionRoute`を`none`、`cases`を空配列にします。`AC-*`にはリンク検査や文書整合性検査の証拠を対応させます。アプリコード、Xcode project、Asset、Localization、Entitlement、Configurationの変更が一つでもあれば文書例外は使えません。文書例外はSimulatorやiOS Runtimeを必要としません。
 
-PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。
+PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。反対モデルレビューの正本は `.artifacts/issues/${issueNumber}/${headSha}/review.json` です。
 
 ## 5. 実行手段
 
@@ -170,8 +170,8 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 - review verdict = approved
 - 重大Finding = 0
 - Acceptance criteriaの証拠欠落 = 0
-- Issue本文の全 `AC-*` が `acceptanceEvidence` に一度ずつ存在
-- Codexがmerge直前に更新した `.artifacts/issues/${issueNumber}/github-preflight.json` とそのdigestが存在
+- `issue-contract.json` の全 `AC-*` が `acceptanceEvidence` に一度ずつ存在し、Codexが再取得したIssue本文から計算したcontract digestとも一致
+- Codexがmerge直前に更新した `.artifacts/issues/${issueNumber}/github-preflight.json` が `intendedOperation: github.merge_pr` と現在のHead SHAを持ち、そのcanonical payload digestとfreshness条件を満たす
 - Provider外部操作がある場合、`.artifacts/issues/${issueNumber}/provider-preflights/${provider}.json` とそのdigestが存在
 
 一つでも不一致ならマージしません。

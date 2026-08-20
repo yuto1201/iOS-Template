@@ -149,7 +149,7 @@ Decode every required schema-version-1 field from `docs/verification.md`. Requir
 
 - [ ] **Step 4: Implement documentation-only exception**
 
-Allow `status: not-applicable` only when `changeClassification` is `documentation-only`, `reason` is non-empty, matrix path/digest and Xcode are null, execution route is `none`, cases are empty, Build/Tests/visual status are `not-applicable`, and `git diff --name-only` contains no Swift, Xcode project, asset, localization, entitlement, or configuration files. This path must not resolve, create, boot, or require any Simulator.
+Allow `status: not-applicable` only when `changeClassification` is `documentation-only`, `reason` is non-empty, matrix path/digest and Xcode are null, execution route is `none`, cases are empty, Build/Tests/visual status are `not-applicable`, and `git diff --name-only "${baseSha}" "${headSha}"` contains no Swift, Xcode project, asset, localization, entitlement, or configuration files. Resolve both SHAs from verify.json and require them to exist before classification. This path must not resolve, create, boot, or require any Simulator.
 
 - [ ] **Step 5: Run tests and commit**
 

@@ -56,7 +56,7 @@
 
 - [ ] **Step 1: Write table-driven failing guard tests**
 
-Create fixtures for allowed `git status`, `git diff`, `git add`, `git commit`, Xcode Build, public `curl` without credentials, and the two fixed Codex request wrappers with schema-valid paths. Create denied fixtures for `gh`, `git push`, `git -C /tmp/repo push`, `git --git-dir=/tmp/repo/.git fetch`, `git pull`, direct `codex`, `supabase`, `wrangler`, `elevenlabs`, `fastlane`, `security find-generic-password`, the dedicated secret path, an unapproved shell script containing an external command, and tool names containing GitHub, Supabase, or Cloudflare MCP identifiers.
+Create fixtures for allowed `git status`, `git diff`, `git add`, `git commit`, Xcode Build, local Xcode new-project and Simulator Computer Use, public `curl` without credentials, and the two fixed Codex request wrappers with schema-valid paths. Create denied fixtures for `gh`, `git push`, `git -C /tmp/repo push`, `git --git-dir=/tmp/repo/.git fetch`, `git pull`, direct `codex`, `supabase`, `wrangler`, `elevenlabs`, `fastlane`, `security find-generic-password`, the dedicated secret path, an unapproved shell script containing an external command, tool names containing GitHub, Supabase, or Cloudflare MCP identifiers, and Computer Use targeting Xcode Accounts, Organizer, signing teams, Archive upload, or App Store Connect.
 
 The test pipes each fixture to the guard, parses its output with `plutil`, and asserts the decision. It also asserts that a denied response contains `Codexへ委託`.
 
@@ -67,7 +67,7 @@ Expected: non-zero because the hook does not exist.
 
 - [ ] **Step 3: Implement the guard**
 
-Read stdin into a private temporary file. Extract `tool_name` first; any missing or malformed tool name fails closed with a deny response. Extract `tool_input.command` only for shell tools and treat a missing command as empty for non-shell tools. Do not use `set -e` around optional `plutil -extract` calls. Normalize only for matching; never print the original command. Deny exact and option-prefixed remote Git forms, authenticated API patterns, MCP tool-name prefixes, Keychain reads, direct `codex`, and `~/Library/Application Support/iOS-Template/secrets/` access. When a shell command invokes a repository script, scan the resolved tracked script for the same forbidden operations before allowing it. Only the exact validated argv shapes of `tools/request-codex-op.sh` and `tools/request-codex-review.sh` bypass the direct-Codex denial.
+Read stdin into a private temporary file. Extract `tool_name` first; any missing or malformed tool name fails closed with a deny response. Extract `tool_input.command` only for shell tools and treat a missing command as empty for non-shell tools. Do not use `set -e` around optional `plutil -extract` calls. Normalize only for matching; never print the original command. Deny exact and option-prefixed remote Git forms, authenticated API patterns, MCP tool-name prefixes, Keychain reads, direct `codex`, restricted Xcode Computer Use destinations/actions from `docs/AUTHORITY.md`, and `~/Library/Application Support/iOS-Template/secrets/` access. When a shell command invokes a repository script, scan the resolved tracked script for the same forbidden operations before allowing it. Only the exact validated argv shapes of `tools/request-codex-op.sh` and `tools/request-codex-review.sh` bypass the direct-Codex denial.
 
 Return this shape on denial:
 
@@ -127,7 +127,7 @@ Expected: non-zero because the tools are absent.
 
 - [ ] **Step 3: Implement sanitized account preflight**
 
-Call `gh auth status --active` and `gh repo view --json nameWithOwner,defaultBranchRef,url`. Require the active login from `Config/ownership.yml`. Write account, repository, default Branch, URL, checked timestamp, and a digest to `.artifacts/issues/42/github-preflight.json`; never output Token or scopes. Refresh this artifact immediately before Push, PR creation, and merge rather than coupling it to a code Head SHA.
+Call `gh auth status --active` and `gh repo view --json nameWithOwner,defaultBranchRef,url`. Require the active login from `Config/ownership.yml`. Write account, repository, default Branch, URL, `intendedOperation`, local Head SHA, checked timestamp, and `digest` to `.artifacts/issues/42/github-preflight.json`; never output Token or scopes. Compute `digest` as SHA-256 over UTF-8 JSON with object keys recursively sorted, insignificant whitespace removed, and the top-level `digest` field excluded. Refresh this artifact immediately before Push, PR creation, and merge rather than coupling it to a verification artifact path. For the merge gate, require `intendedOperation: github.merge_pr`, local Head SHA equality, and `checkedAt` later than both verify.json `completedAt` and review.json `reviewedAt`.
 
 - [ ] **Step 4: Implement explicit transitions**
 
@@ -135,7 +135,7 @@ Define the complete state transition table from `docs/workflow.md` in `tools/lib
 
 - [ ] **Step 5: Implement the fixed external-operation transport**
 
-Validate request version, request ID, Issue, allowlisted operation, target, environment, inputs, reason, and containment under `.artifacts/ops-requests/`. Reject any approval field supplied by the requester. Invoke Codex with a fixed instruction file that independently reads `docs/AUTHORITY.md`, derives approval requirements, performs provider preflight, executes exactly the allowlisted operation, and writes only the sanitized result path. The caller cannot supply free-form instructions, model settings, tool permissions, or an alternate output path.
+Validate request version, request ID, Issue, an exact allowlisted operation from `docs/AUTHORITY.md`, the common `target.kind` and `target.identifier`, environment, operation-specific inputs, reason, and containment under `.artifacts/ops-requests/`. Reject unknown fields and any approval field supplied by the requester. Invoke Codex with a fixed instruction file that independently reads `docs/AUTHORITY.md`, derives approval requirements, performs provider preflight, executes exactly the allowlisted operation, and writes only the sanitized result path. The caller cannot supply free-form instructions, model settings, tool permissions, or an alternate output path.
 
 - [ ] **Step 6: Run tests and commit**
 
@@ -242,7 +242,7 @@ git commit -m "feat: add resumable Issue worktrees"
 - Create: `.claude/skills/cross-model-review` as a relative symlink
 
 **Interfaces:**
-- `cross-model-review.sh --primary codex --packet packet.json --output review.json`
+- `cross-model-review.sh --primary codex --packet packet.json --output .artifacts/issues/${issueNumber}/${headSha}/review.json`
 - Reviewer mapping: `codex -> claude`, `claude -> codex`
 - Timeout: 600 seconds
 
@@ -260,7 +260,7 @@ For Codex primary, invoke Claude non-interactively with read-only tools and JSON
 
 - [ ] **Step 4: Validate output and transition state**
 
-Reject non-schema output and SHA mismatch. Save valid `review.json`; transition to `approved-for-merge` only for `approved`, otherwise to `changes-requested`. Timeout becomes `blocked:review`.
+Reject non-schema output and SHA mismatch. Save valid output only at `.artifacts/issues/${issueNumber}/${headSha}/review.json`; transition to `approved-for-merge` only for `approved`, otherwise to `changes-requested`. Timeout becomes `blocked:review`.
 
 - [ ] **Step 5: Add the shared skill and symlink**
 
@@ -297,7 +297,7 @@ Test matching evidence, stale Verify SHA, stale Review SHA, changes-requested ve
 
 - [ ] **Step 2: Implement the gate**
 
-Read current Git Head, the complete schema-version-1 `verify.json` from `docs/verification.md`, `review.json`, Issue body, and GitHub/provider preflight artifacts. Require SHA equality, passed verification, matching matrix and preflight digests, approved review, zero unresolved blocking findings, and exactly one evidence entry for every `AC-*` ID.
+Read current Git Head, the complete schema-version-1 `verify.json` and canonical Head-scoped `review.json` from `docs/verification.md`, `issue-contract.json`, the freshly fetched Issue body, and GitHub/provider preflight artifacts. Rebuild the Issue contract from the live body only to detect staleness, then use the canonical snapshot as the sole `AC-*` input. Require contract digest equality, SHA equality, passed verification, matching matrix and canonical preflight digests, the merge-preflight freshness rule, approved review, zero unresolved blocking findings, and exactly one evidence entry for every `AC-*` ID.
 
 - [ ] **Step 3: Write cleanup safety tests**
 

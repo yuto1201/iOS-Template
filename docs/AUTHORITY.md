@@ -19,7 +19,7 @@
 | ローカル `git status`、`diff`、`add`、`commit` | 可 | 可 |
 | ローカルBranchとworktree操作 | 可 | 可 |
 | Xcode Build、Test、Simulator | 可 | 可 |
-| Xcode UIのComputer Use | 可。利用可能な場合 | 可。利用可能な場合 |
+| Xcode UIのComputer Use | ローカルProject作成とSimulator操作に限り可 | 可。利用可能な場合 |
 | 公開ドキュメントの調査 | 可 | 可 |
 | `gh` とGitHub MCP・プラグイン | 不可 | 可 |
 | `git push`、`fetch`、`pull`、remote変更 | 不可 | 可 |
@@ -36,6 +36,8 @@
 | PRのSquash MergeとリモートBranch削除 | 不可 | 可 |
 
 公開Webページの閲覧は外部操作に含めません。ログイン、Token、Cookie、MCP、CLI認証、変更を伴うAPIを使う時点で認証済み外部操作です。
+
+ClaudeはXcodeのAccounts、Organizer、Signing team変更、Archive upload、App Store Connect操作をComputer Useで開いてはいけません。これらはCodexだけが実行します。
 
 ## 3. ClaudeからCodexへの委託
 
@@ -59,7 +61,10 @@ Claudeによる直接の `codex` CLI、自由文prompt、別ラッパー、外�
   "requestId": "issue-42-create-pr-1",
   "issue": 42,
   "operation": "github.create_pr",
-  "repository": "yuto1201/example-ios-app",
+  "target": {
+    "kind": "repository",
+    "identifier": "yuto1201/example-ios-app"
+  },
   "environment": "production",
   "expectedAccount": "yuto1201",
   "inputs": {
@@ -87,6 +92,16 @@ Codexは実行結果を、秘密値を含まない次の形式で返します。
 ```
 
 Codexが期待アカウントと実際のアカウントの不一致を検出した場合、操作せず `blocked:ops` を返します。
+
+`operation` は次の完全一致allowlistから選びます。各操作の `target.kind` と `inputs` は実装時のJSON Schemaでさらに制限し、未知のfieldを拒否します。
+
+- GitHub: `github.read_issue`、`github.create_issue`、`github.update_issue`、`github.push_branch`、`github.create_pr`、`github.merge_pr`、`github.delete_branch`、`github.sync_labels`
+- Supabase: `supabase.inspect_project`、`supabase.apply_migrations`
+- Cloudflare: `cloudflare.inspect_account`、`cloudflare.deploy`
+- ElevenLabs: `elevenlabs.generate_audio`
+- App Store Connect: `appstore.inspect_app`、`appstore.upload_build`、`appstore.update_metadata`、`appstore.submit_review`
+
+共通の `target` は `kind` と、秘密でない一意な `identifier` を持ちます。結果の `target` は同じidentifierです。
 
 ## 4. Codexの外部操作前チェック
 
