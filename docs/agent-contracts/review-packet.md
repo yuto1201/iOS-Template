@@ -6,7 +6,7 @@
 
 ## 2. Review packet
 
-`cross-model-review` は次の情報を一つのpacketへまとめます。
+`cross-model-review` は次の情報を一つのpacketへまとめます。Acceptance criteriaとspec anchorsは、同じpacket内のIssue contractから読み、digest一致を検証します。
 
 ```json
 {
@@ -17,6 +17,10 @@
   "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
   "headSha": "0123456789abcdef0123456789abcdef01234567",
   "verifySha": "0123456789abcdef0123456789abcdef01234567",
+  "issueContract": {
+    "path": ".artifacts/issues/42/issue-contract.json",
+    "digest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e"
+  },
   "specAnchors": ["specs/features/settings.md#notification-time"],
   "acceptanceCriteria": [
     {"id": "AC-1", "text": "通知時刻を保存できる"},
@@ -59,6 +63,7 @@
   "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
   "headSha": "0123456789abcdef0123456789abcdef01234567",
   "verifySha": "0123456789abcdef0123456789abcdef01234567",
+  "issueContractDigest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e",
   "verdict": "approved",
   "findings": [],
   "acceptanceAssessment": [

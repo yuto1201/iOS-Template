@@ -136,7 +136,7 @@ git commit -m "feat: manage batch-scoped Simulators"
 
 - [ ] **Step 1: Write fixture tests**
 
-Test the complete schema-version-1 passed evidence, one failed matrix case, missing screenshot, stale Head SHA, skipped test, added warning, duplicate case ID, missing execution route, missing Xcode, missing matrix digest, missing or duplicate acceptance evidence, missing account preflight, and an allowed documentation-only `not-applicable` with a non-empty reason.
+Test the complete schema-version-1 passed evidence, one failed matrix case, missing screenshot, stale Head SHA, skipped test, added warning, duplicate case ID, missing or changed Issue-contract digest, missing execution route, missing Xcode, missing matrix digest, missing or duplicate acceptance evidence, and an allowed documentation-only `not-applicable` with null matrix/Xcode fields and a non-empty reason.
 
 - [ ] **Step 2: Run tests**
 
@@ -145,11 +145,11 @@ Expected: non-zero because the validator is absent.
 
 - [ ] **Step 3: Implement strict decoding**
 
-Decode every required schema-version-1 field from `docs/verification.md`. Require exact Issue and SHA, Build passed, zero added warnings, Tests passed with zero failed and zero skipped, the exact four case IDs, execution route, Xcode identity, matching matrix and account-preflight digests, one evidence entry per `AC-*`, passed visual evaluation, and existing relative screenshot paths contained under the evidence directory.
+Decode every required schema-version-1 field from `docs/verification.md`. Require the Issue contract to match the requested Issue and digest and use its `AC-*` list as the only acceptance input. For application changes, require exact SHA, Build passed, zero added warnings, Tests passed with zero failed and zero skipped, the exact four case IDs, execution route, Xcode identity, matching matrix digest, one evidence entry per contract `AC-*`, passed visual evaluation, and existing relative screenshot paths contained under the evidence directory.
 
 - [ ] **Step 4: Implement documentation-only exception**
 
-Allow `status: not-applicable` only when `changeClassification` is `documentation-only`, `reason` is non-empty, and `git diff --name-only` contains no Swift, Xcode project, asset, localization, entitlement, or configuration files.
+Allow `status: not-applicable` only when `changeClassification` is `documentation-only`, `reason` is non-empty, matrix path/digest and Xcode are null, execution route is `none`, cases are empty, Build/Tests/visual status are `not-applicable`, and `git diff --name-only` contains no Swift, Xcode project, asset, localization, entitlement, or configuration files. This path must not resolve, create, boot, or require any Simulator.
 
 - [ ] **Step 5: Run tests and commit**
 
@@ -169,7 +169,7 @@ git commit -m "feat: validate iOS verification evidence"
 - Create: `tools/tests/test-ios-runner.sh`
 
 **Interfaces:**
-- `verify-ios-issue.sh --issue 42 --matrix .artifacts/batches/settings-2026-08-21/simulator-matrix.json --project TemplateApp.xcodeproj --scheme TemplateApp`
+- `verify-ios-issue.sh --issue 42 --issue-contract .artifacts/issues/42/issue-contract.json --matrix .artifacts/batches/settings-2026-08-21/simulator-matrix.json --project TemplateApp.xcodeproj --scheme TemplateApp`
 - With `HEAD_SHA` set from `git rev-parse HEAD`, produces `.artifacts/issues/42/${HEAD_SHA}/verify.json`
 
 - [ ] **Step 1: Write fake-xcodebuild and fake-simctl tests**
@@ -195,7 +195,7 @@ For each recorded UDID: boot, wait for boot status, install the built app, launc
 
 - [ ] **Step 6: Write evidence atomically**
 
-Write to `verify.json.tmp`, including matrix digest, execution route, Xcode identity, GitHub preflight path/digest, and `AC-*` evidence mappings; validate it, then rename to `verify.json`. On any failure, preserve a failed evidence file with stage and sanitized error; return non-zero.
+Write to `verify.json.tmp`, including Issue-contract path/digest, matrix digest, execution route, Xcode identity, and `AC-*` evidence mappings; validate it, then rename to `verify.json`. On any failure, preserve a failed evidence file with stage and sanitized error; return non-zero.
 
 - [ ] **Step 7: Run tests and commit**
 
@@ -224,7 +224,7 @@ Test exact four cases, missing image, image outside the Issue artifact directory
 
 - [ ] **Step 2: Implement packet creation**
 
-Read acceptance criteria from the local Issue snapshot, include device, locale, state label, image dimensions, and relative path, and reject symlinks or paths outside the evidence root.
+Read acceptance criteria from the explicit `issueContract.path` and verify its digest, include device, locale, state label, image dimensions, and relative path, and reject symlinks or paths outside the evidence root.
 
 - [ ] **Step 3: Write the visual evaluator contract**
 
@@ -260,7 +260,7 @@ The skill first checks XcodeBuildMCP session defaults when available, otherwise 
 
 - [ ] **Step 3: Complete evidence generation**
 
-Hash the matrix and GitHub preflight files during verification and store both digests in verify.json. Record the execution route and Xcode identity required by the canonical schema.
+Hash the matrix during verification and store its digest in verify.json. Record the execution route and Xcode identity required by the canonical schema. External account preflights remain separate merge-time artifacts.
 
 - [ ] **Step 4: Run the relevant suites**
 
@@ -290,7 +290,7 @@ Expected: four dedicated Simulators on one latest installed Runtime.
 
 - [ ] **Step 2: Verify the app**
 
-Run `verify-ios-issue.sh` for the implementation Issue, `TemplateApp.xcodeproj`, and scheme `TemplateApp`.  
+Codex first reads the Bootstrap Issue and writes the canonical `issue-contract.json` with unique `AC-*` entries. Run `verify-ios-issue.sh` with that contract, `TemplateApp.xcodeproj`, and scheme `TemplateApp`.
 Expected: Build and tests pass; four locale cases and screenshots pass.
 
 - [ ] **Step 3: Inspect all four screenshots**

@@ -127,11 +127,11 @@ Expected: non-zero because the tools are absent.
 
 - [ ] **Step 3: Implement sanitized account preflight**
 
-Call `gh auth status --active` and `gh repo view --json nameWithOwner,defaultBranchRef,url`. Require the active login from `Config/ownership.yml`. Write account, repository, default Branch, URL, checked timestamp, and a digest to the Issue Head-SHA artifact directory; never output Token or scopes.
+Call `gh auth status --active` and `gh repo view --json nameWithOwner,defaultBranchRef,url`. Require the active login from `Config/ownership.yml`. Write account, repository, default Branch, URL, checked timestamp, and a digest to `.artifacts/issues/42/github-preflight.json`; never output Token or scopes. Refresh this artifact immediately before Push, PR creation, and merge rather than coupling it to a code Head SHA.
 
 - [ ] **Step 4: Implement explicit transitions**
 
-Define the complete state transition table from `docs/workflow.md` in `tools/lib/workflow.sh`. `issue-state.sh transition` reads current `state:*` labels, rejects multiple current states, removes exactly the old label, adds exactly the new label, and posts a concise comment containing executor and timestamp.
+Define the complete state transition table from `docs/workflow.md` in `tools/lib/workflow.sh`. `issue-state.sh transition` reads current `state:*` labels, rejects multiple current states, removes exactly the old label, adds exactly the new label, and posts a concise comment plus machine-readable JSON marker containing `from`, `to`, `resumeState`, executor, and timestamp. Blocked and paused recovery must read `resumeState`; missing history becomes `blocked:conflict` rather than a guessed transition.
 
 - [ ] **Step 5: Implement the fixed external-operation transport**
 
@@ -215,11 +215,11 @@ Expected: non-zero because Claim tools are absent.
 
 - [ ] **Step 3: Implement Claim**
 
-Run account preflight, fetch Issue JSON through `gh`, validate the body, normalize the title to lowercase ASCII hyphen form, transition `approved -> claimed`, create the Branch from current `origin/main`, add the worktree, and write `.artifacts/issues/42/state.json` with Issue, Branch, worktree, Base SHA, and primary implementer. Codex executes this tool even when `--agent claude`; Claude requests it through `request-codex-op.sh`.
+Run account preflight, fetch Issue JSON through `gh`, validate the body, create the canonical `.artifacts/issues/42/issue-contract.json` from Goal, spec anchors, unique `AC-*`, dependencies, and external operations, normalize the title to lowercase ASCII hyphen form, transition `approved -> claimed`, create the Branch from current `origin/main`, add the worktree, and write `.artifacts/issues/42/state.json` with Issue, Branch, worktree, Base SHA, primary implementer, Issue-contract path/digest, current state, previous state, and resume state. Codex executes this tool even when `--agent claude`; Claude requests it through `request-codex-op.sh`.
 
 - [ ] **Step 4: Implement resume**
 
-Reconstruct state from GitHub labels, `git worktree list --porcelain`, local Branches, and remote Branches. If more than one candidate exists, return `blocked:conflict` without modifying Git state.
+Reconstruct state from GitHub labels, the latest machine-readable state-transition comment, `git worktree list --porcelain`, local Branches, and remote Branches. Restore previous/resume state only from the comment marker. If the marker is absent when required or more than one candidate exists, return `blocked:conflict` without modifying Git state.
 
 - [ ] **Step 5: Run tests and commit**
 
@@ -252,7 +252,7 @@ Test approved result, changes requested, malformed JSON, mismatched Head SHA, ti
 
 - [ ] **Step 2: Implement packet validation**
 
-Require every field in `docs/agent-contracts/review-packet.md`, require `headSha == verifySha`, and require all referenced local files to stay inside the Issue artifact directory.
+Require every field in `docs/agent-contracts/review-packet.md`, require `headSha == verifySha`, require the packet, verify.json, and review result to share the same Issue-contract digest, and require all referenced local files to stay inside the Issue artifact directory.
 
 - [ ] **Step 3: Implement reviewer invocation**
 

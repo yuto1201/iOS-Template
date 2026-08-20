@@ -105,6 +105,10 @@ AIはスクリーンショットごとに次を評価します。
   "issue": 42,
   "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
   "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "issueContract": {
+    "path": ".artifacts/issues/42/issue-contract.json",
+    "digest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e"
+  },
   "matrixFile": ".artifacts/batches/2026-08-21-settings/simulator-matrix.json",
   "matrixDigest": "sha256:490d32bf9174b57fb9b05a00e0231d22082e4a9576b0377f0df2641d96349d0b",
   "executionRoute": "xcodebuild-simctl",
@@ -112,10 +116,6 @@ AIはスクリーンショットごとに次を評価します。
     "path": "/Applications/Xcode.app/Contents/Developer",
     "version": "26.5",
     "build": "17F42"
-  },
-  "accountPreflight": {
-    "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/github-preflight.json",
-    "digest": "sha256:f9ed6f998e47405fc0d00df7ef529bf1648f07fedc57e9f00ad5caf82a70f494"
   },
   "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0},
   "tests": {"status": "passed", "passed": 24, "failed": 0, "skipped": 0},
@@ -131,15 +131,20 @@ AIはスクリーンショットごとに次を評価します。
       "id": "AC-1",
       "status": "passed",
       "evidence": ["tests:TemplateAppTests/NotificationSettingsTests", "cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]
+    },
+    {
+      "id": "AC-2",
+      "status": "passed",
+      "evidence": ["cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]
     }
   ],
   "completedAt": "2026-08-21T13:00:00+09:00"
 }
 ```
 
-`schemaVersion: 1` の必須fieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、matrix path/digest、execution route、Xcode、account preflight、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。
+`schemaVersion: 1` のapplication変更で必須となるfieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、Issue contract path/digest、matrix path/digest、execution route、Xcode、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。GitHubとproviderのpreflightは外部操作直前の証拠なのでverify.jsonへ含めず、pre-merge gateが別artifactとして検査します。
 
-文書だけの変更では `status`、Build、Tests、visual evaluationを`not-applicable`、`changeClassification`を`documentation-only`、`reason`を空でない説明、`cases`を空配列にします。アプリコード、Xcode project、Asset、Localization、Entitlement、Configurationの変更が一つでもあれば文書例外は使えません。
+文書だけの変更では `status`、Build、Tests、visual evaluationを`not-applicable`、`changeClassification`を`documentation-only`、`reason`を空でない説明、`matrixFile`と`matrixDigest`と`xcode`をnull、`executionRoute`を`none`、`cases`を空配列にします。`AC-*`にはリンク検査や文書整合性検査の証拠を対応させます。アプリコード、Xcode project、Asset、Localization、Entitlement、Configurationの変更が一つでもあれば文書例外は使えません。文書例外はSimulatorやiOS Runtimeを必要としません。
 
 PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。
 
@@ -166,7 +171,7 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 - 重大Finding = 0
 - Acceptance criteriaの証拠欠落 = 0
 - Issue本文の全 `AC-*` が `acceptanceEvidence` に一度ずつ存在
-- CodexのGitHub account preflight artifactとdigestが存在
-- Provider外部操作がある場合、各provider preflight artifactとdigestが存在
+- Codexがmerge直前に更新した `.artifacts/issues/${issueNumber}/github-preflight.json` とそのdigestが存在
+- Provider外部操作がある場合、`.artifacts/issues/${issueNumber}/provider-preflights/${provider}.json` とそのdigestが存在
 
 一つでも不一致ならマージしません。

@@ -19,6 +19,7 @@
 | ローカル `git status`、`diff`、`add`、`commit` | 可 | 可 |
 | ローカルBranchとworktree操作 | 可 | 可 |
 | Xcode Build、Test、Simulator | 可 | 可 |
+| Xcode UIのComputer Use | 可。利用可能な場合 | 可。利用可能な場合 |
 | 公開ドキュメントの調査 | 可 | 可 |
 | `gh` とGitHub MCP・プラグイン | 不可 | 可 |
 | `git push`、`fetch`、`pull`、remote変更 | 不可 | 可 |
@@ -52,32 +53,37 @@ Claudeによる直接の `codex` CLI、自由文prompt、別ラッパー、外�
 
 依頼には次を含めます。
 
-```yaml
-request_version: 1
-request_id: issue-42-create-pr-1
-issue: 42
-operation: github.create_pr
-repository: yuto1201/example-ios-app
-environment: production
-expected_account: yuto1201
-inputs:
-  base: main
-  head: claude/42-settings-screen
-reason: Issue 42 の検証と反対モデルレビューが完了したため
+```json
+{
+  "requestVersion": 1,
+  "requestId": "issue-42-create-pr-1",
+  "issue": 42,
+  "operation": "github.create_pr",
+  "repository": "yuto1201/example-ios-app",
+  "environment": "production",
+  "expectedAccount": "yuto1201",
+  "inputs": {
+    "base": "main",
+    "head": "claude/42-settings-screen"
+  },
+  "reason": "Issue 42 の検証と反対モデルレビューが完了したため"
+}
 ```
 
 依頼者は承認要否を指定できません。Codexがこの文書の規則から導出し、必要な承認記録がなければ操作を止めます。
 
 Codexは実行結果を、秘密値を含まない次の形式で返します。
 
-```yaml
-status: succeeded
-executor: codex
-verified_account: yuto1201
-target: yuto1201/example-ios-app
-operation: github.create_pr
-result_reference: https://github.com/yuto1201/example-ios-app/pull/57
-executed_at: 2026-08-21T12:00:00+09:00
+```json
+{
+  "status": "succeeded",
+  "executor": "codex",
+  "verifiedAccount": "yuto1201",
+  "target": "yuto1201/example-ios-app",
+  "operation": "github.create_pr",
+  "resultReference": "https://github.com/yuto1201/example-ios-app/pull/57",
+  "executedAt": "2026-08-21T12:00:00+09:00"
+}
 ```
 
 Codexが期待アカウントと実際のアカウントの不一致を検出した場合、操作せず `blocked:ops` を返します。

@@ -39,6 +39,10 @@
 | `tools/tests/test-foundation.sh` | Repository policy and layout test |
 | `tools/check-markdown-links.swift` | Validate local Markdown links across repository guidance |
 
+## Bootstrap prerequisite
+
+Before creating the Foundation Issue, Codex must verify that the Xcode application is installed and that its local `computer-use` capability is callable. This capability is required only to drive Apple's new-project UI; it does not contact an authenticated external service. Record the successful capability check in the Issue. If it is unavailable, do not create or claim the Issue until the capability is enabled; no downstream plan starts. XcodeBuildMCP is used for Build, Test, and Simulator work, but this plan does not assume it exposes project scaffolding unless that callable tool is actually present at execution time.
+
 ### Task 1: Repository policy test
 
 **Files:**
@@ -137,7 +141,7 @@ git commit -m "test: define template foundation policy"
 
 - [ ] **Step 1: Create the project through Xcode's iOS App template**
 
-Use the `computer-use` capability to drive Xcode's iOS App template with these exact selections: Product Name `TemplateApp`, Interface `SwiftUI`, Language `Swift`, Testing System `Swift Testing with UI Tests`, Storage `None`, Include Tests enabled. Save the project at the repository root and do not initialize another Git repository. If Xcode UI control is unavailable, set `blocked:environment`; do not hand-author `project.pbxproj` or silently introduce XcodeGen.
+Codex uses the prerequisite-verified `computer-use` capability to drive Xcode's iOS App template with these exact selections: Product Name `TemplateApp`, Interface `SwiftUI`, Language `Swift`, Testing System `Swift Testing with UI Tests`, Storage `None`, Include Tests enabled. Save the project at the repository root and do not initialize another Git repository. If the verified capability becomes unavailable during the Issue, set `blocked:environment`; do not hand-author `project.pbxproj` or silently introduce XcodeGen.
 
 - [ ] **Step 2: Configure supported destinations and signing-neutral defaults**
 

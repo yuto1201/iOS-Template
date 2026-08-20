@@ -27,7 +27,30 @@ BranchはIssue作成後に作ります。Issue番号を推測して先にBranch�
 
 Issue数を増やすこと自体を目的にしません。セットアップとその成果物が独立して価値を持たない場合、同じIssueへ含めます。
 
-## 3. 状態機械
+## 3. Issue contract snapshot
+
+CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/issue-contract.json` へ次のsanitized snapshotを保存します。Bootstrap IssueではCodexが同じ形式を手動生成します。
+
+```json
+{
+  "schemaVersion": 1,
+  "issue": 42,
+  "repository": "yuto1201/example-ios-app",
+  "goal": "通知時刻を変更できるようにする",
+  "specAnchors": ["specs/features/settings.md#notification-time"],
+  "acceptanceCriteria": [
+    {"id": "AC-1", "text": "通知時刻を保存できる"},
+    {"id": "AC-2", "text": "日本語と英語で時刻が表示される"}
+  ],
+  "dependencies": [],
+  "externalOperations": ["github.push", "github.create_pr", "github.merge_pr"],
+  "fetchedAt": "2026-08-21T12:00:00+09:00"
+}
+```
+
+検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。ClaudeはGitHubから取得せず、このCodex生成snapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用でき、Issue本文が変わった場合はCodexが再取得してdigestを更新します。
+
+## 4. 状態機械
 
 ```text
 proposed
@@ -60,6 +83,8 @@ proposed
 
 Head SHAが変わった場合、`verify-passed`、`review-requested`、`approved-for-merge` から `in-progress` へ戻し、検証とレビューをやり直します。`done` と `superseded` は終端状態です。
 
+各遷移commentには機械可読markerとして `from`、`to`、`resumeState`、executor、timestampを保存します。`blocked:*` または`paused`へ入るときの`resumeState`は遷移前状態です。復帰時は最新markerの`resumeState`だけを使用し、存在しない場合は推測せず`blocked:conflict`にします。ローカル`state.json`にも同じfieldsを保存し、失われた場合はGitHub commentから再構築します。
+
 中断状態:
 
 - `blocked:user`: 仕様または承認待ち
@@ -74,19 +99,20 @@ Head SHAが変わった場合、`verify-passed`、`review-requested`、`approved
 
 状態はGitHub Issueのlabelとcommentを正本とします。ローカルの状態ファイルは再開を補助しますが、GitHubと矛盾する場合はCodexがGitHubを再確認します。
 
-## 4. Issue実行フロー
+## 5. Issue実行フロー
 
-### 4.1 Claim
+### 5.1 Claim
 
 1. Codexがアクティブな個人GitHubアカウントとRepositoryを確認する。
 2. IssueのGoal、Scope、Acceptance criteria、Dependenciesを読む。
 3. Definition of Readyを満たさなければ作業を開始しない。
-4. Primary agentをIssueへ記録する。
-5. Branchとworktreeを作成する。
+4. `issue-contract.json` を作成し、digestを記録する。
+5. Primary agentをIssueへ記録する。
+6. Branchとworktreeを作成する。
 
-ClaudeがPrimary implementerの場合も、1、4、5とGitHub上の状態変更はCodexへ委託します。
+ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変更はCodexへ委託します。
 
-### 4.2 Implement
+### 5.2 Implement
 
 1. 受け入れ条件に対応する失敗テストを作る。
 2. 失敗を確認する。
@@ -95,7 +121,7 @@ ClaudeがPrimary implementerの場合も、1、4、5とGitHub上の状態変更�
 5. 小さな意味単位でcommitする。
 6. Scope外の必要作業を発見したら、勝手に含めず追跡Issue候補へ記録する。
 
-### 4.3 Verify
+### 5.3 Verify
 
 1. `ios-verify` がバッチ固定済みSimulatorマトリクスを読む。
 2. Buildと対象Testを実行する。
@@ -104,7 +130,7 @@ ClaudeがPrimary implementerの場合も、1、4、5とGitHub上の状態変更�
 5. AIが見た目と受け入れ条件を評価する。
 6. `verify.json` にHead SHAを記録する。
 
-### 4.4 Opposite-model review
+### 5.4 Opposite-model review
 
 - Codex実装: Claudeへread-onlyレビューを依頼
 - Claude実装: Codexへread-onlyレビューを依頼
@@ -113,7 +139,7 @@ ClaudeがPrimary implementerの場合も、1、4、5とGitHub上の状態変更�
 
 レビューのタイムアウトは10分です。利用不能時は `blocked:review` とし、独立Issueを進めます。自己承認はしません。
 
-### 4.5 PR and merge
+### 5.5 PR and merge
 
 1. Codexが個人GitHubアカウントを再確認する。
 2. BranchをPushする。
@@ -128,7 +154,7 @@ ClaudeがPrimary implementerの場合も、1、4、5とGitHub上の状態変更�
 
 Squash Merge後は元Branch tipが`main`の祖先にならないため、`git branch --merged` を完了判定に使いません。Codexは対象PRの`state == MERGED`、`headRefOid`が記録済みHead SHAと一致すること、`mergeCommit`が存在することをGitHubから確認します。必要に応じてpatch-idでSquash commitとの差分同等性も確認します。
 
-## 5. PR本文の必須項目
+## 6. PR本文の必須項目
 
 ```markdown
 Closes #42
@@ -156,7 +182,7 @@ Closes #42
 
 PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼りません。
 
-## 6. 再試行とRegression
+## 7. 再試行とRegression
 
 - Pre-mergeで見つかった問題: 元Issueで修正
 - Merge後または実機確認で見つかった問題: Regression Issue
@@ -164,7 +190,7 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 - Regression IssueからさらにRegression Issueを自動連鎖させない
 - 同じ原因の失敗が3回続いたら状態をblockedへ移す
 
-## 7. 止まらず進める範囲
+## 8. 止まらず進める範囲
 
 一つのIssueがblockedでも、依存しないIssueは継続します。次の場合だけバッチ全体を止めます。
 
@@ -176,7 +202,7 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 
 ソース編集Issueは、依存がなく編集ファイルが重ならない場合に最大2件まで並行化できます。Simulator検証は排他的に1件ずつ実行します。
 
-## 8. Bootstrap
+## 9. Bootstrap
 
 FoundationとSimulator verificationの2件は、Issue自動化が未実装のためCodexが同じ手順を手動実行します。手動であってもIssue、Branch、PR、4条件Simulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。
 

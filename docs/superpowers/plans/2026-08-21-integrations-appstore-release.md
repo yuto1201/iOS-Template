@@ -94,12 +94,12 @@ git commit -m "feat: add non-printing Keychain secret execution"
 - Create: `tools/tests/fixtures/providers/`
 
 **Interfaces:**
-- `provider-preflight.sh github --target yuto1201/iOS-Template`
-- `provider-preflight.sh supabase --environment production`
-- `provider-preflight.sh cloudflare --target example.com`
-- `provider-preflight.sh elevenlabs --operation sound-effect`
-- `provider-preflight.sh app-store --version 1.0`
-- Outputs sanitized account and target JSON only
+- `provider-preflight.sh --issue 42 github --target yuto1201/iOS-Template`
+- `provider-preflight.sh --issue 42 supabase --environment production`
+- `provider-preflight.sh --issue 42 cloudflare --target example.com`
+- `provider-preflight.sh --issue 42 elevenlabs --operation sound-effect`
+- `provider-preflight.sh --issue 42 app-store --version 1.0`
+- Writes sanitized account and target JSON to `.artifacts/issues/42/provider-preflights/${provider}.json` and reports its digest
 
 - [ ] **Step 1: Write fake-provider tests**
 
@@ -107,7 +107,7 @@ Test correct personal identity, company identity rejection, target mismatch, unh
 
 - [ ] **Step 2: Implement explicit provider adapters**
 
-Use one case branch per provider. Parse real responses into account, target identifiers, health, environment, operation, and timestamp. Never pass through raw provider output.
+Use one case branch per provider. Parse real responses into account, target identifiers, health, environment, operation, timestamp, and Issue. Write atomically to the canonical provider-preflight path and report its digest. Never pass through raw provider output.
 
 - [ ] **Step 3: Enforce expected personal ownership**
 
