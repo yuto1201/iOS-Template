@@ -43,7 +43,7 @@ CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/iss
     {"id": "AC-2", "text": "日本語と英語で時刻が表示される"}
   ],
   "dependencies": [],
-  "externalOperations": ["github.push", "github.create_pr", "github.merge_pr"],
+  "externalOperations": ["github.push_branch", "github.create_pr", "github.merge_pr"],
   "fetchedAt": "2026-08-21T12:00:00+09:00"
 }
 ```

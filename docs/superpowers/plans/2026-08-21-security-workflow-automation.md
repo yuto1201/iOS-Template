@@ -256,7 +256,7 @@ Require every field in `docs/agent-contracts/review-packet.md`, require `headSha
 
 - [ ] **Step 3: Implement reviewer invocation**
 
-For Codex primary, invoke Claude non-interactively with read-only tools and JSON output. For Claude primary, allow only `request-codex-review.sh --packet packet.json --output review.json`; the fixed wrapper invokes Codex with `--sandbox read-only`, an ephemeral session, closed stdin, and no caller-supplied prompt or settings. Run both with a 600-second timeout and no authenticated external tools.
+For Codex primary, invoke Claude non-interactively with read-only tools and JSON output. For Claude primary, allow only `request-codex-review.sh --packet packet.json --output .artifacts/issues/${issueNumber}/${headSha}/review.json`; the fixed wrapper invokes Codex with `--sandbox read-only`, an ephemeral session, closed stdin, and no caller-supplied prompt or settings. Run both with a 600-second timeout and no authenticated external tools.
 
 - [ ] **Step 4: Validate output and transition state**
 
@@ -305,7 +305,7 @@ Test successful removal after the exact PR reports `MERGED`, refusal for an open
 
 - [ ] **Step 4: Implement merge**
 
-Run GitHub preflight, Push the exact Issue Branch, create or find its PR, render the PR body, rerun the gate, and call `gh pr merge --squash --match-head-commit` with the exact Head SHA. Confirm the PR is merged and the Issue closed before cleanup.
+Run GitHub preflight for Push, Push the exact Issue Branch, create or find its PR, and render the PR body. Refresh GitHub preflight with `intendedOperation: github.merge_pr` immediately before rerunning the gate, then call `gh pr merge --squash --match-head-commit` with the exact Head SHA. Confirm the PR is merged and the Issue closed before cleanup.
 
 - [ ] **Step 5: Implement cleanup**
 
