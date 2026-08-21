@@ -19,106 +19,56 @@ output="$4"
   exit 1
 }
 
-matrix_path="$(ruby - "$repo_root" "$batch_id" "$output" <<'RUBY'
-require "fileutils"
-
-repo, batch_id, output = ARGV
-repo = File.realpath(repo)
-batches = File.join(repo, ".artifacts", "batches")
-expected = File.join(batches, batch_id, "simulator-matrix.json")
-actual = File.expand_path(output, Dir.pwd)
-abort "blocked:environment: output must be #{expected}" unless actual == expected
-
-current = repo
-[".artifacts", "batches", batch_id].each do |component|
-  current = File.join(current, component)
-  if File.exist?(current) || File.symlink?(current)
-    abort "blocked:environment: artifact path contains a symlink" if File.symlink?(current)
-    abort "blocked:environment: artifact path is not a directory" unless File.directory?(current)
-  else
-    Dir.mkdir(current)
-  end
-end
-
-abort "blocked:environment: artifact directory escaped repository" unless File.realpath(File.dirname(expected)) == File.dirname(expected)
-abort "blocked:environment: matrix path is a symlink" if File.symlink?(expected)
-puts expected
-RUBY
-)"
-matrix_dir="$(dirname "$matrix_path")"
-
-if [[ -e "$matrix_path" || -L "$matrix_path" ]]; then
-  ruby -rjson - "$matrix_path" "$batch_id" <<'RUBY'
-matrix_path, batch_id = ARGV
-matrix = JSON.parse(File.read(matrix_path))
-expected = {
-  "iphone-en" => ["iPhone", "en_US", "en"],
-  "iphone-ja" => ["iPhone", "ja_JP", "ja"],
-  "ipad-en" => ["iPad", "en_US", "en"],
-  "ipad-ja" => ["iPad", "ja_JP", "ja"]
+expected_output="$repo_root/.artifacts/batches/$batch_id/simulator-matrix.json"
+[[ "$(ruby -e 'puts File.expand_path(ARGV[0], Dir.pwd)' "$output")" == "$expected_output" ]] || {
+  echo "blocked:environment: output must be $expected_output" >&2
+  exit 1
 }
-abort "blocked:environment: matrix is not a complete frozen batch matrix" unless matrix.keys.sort == ["batchId", "cases", "resolvedAt", "runtime", "schemaVersion"]
-abort "blocked:environment: matrix is not a complete frozen batch matrix" unless matrix["schemaVersion"] == 1 && matrix["batchId"] == batch_id
-runtime = matrix["runtime"]
-abort "blocked:environment: matrix is not a complete frozen batch matrix" unless runtime.is_a?(Hash) && runtime.keys.sort == ["identifier", "version"] && runtime.values.all? { |value| value.is_a?(String) && !value.empty? }
-cases = matrix["cases"]
-abort "blocked:environment: matrix is not a complete frozen batch matrix" unless cases.is_a?(Array) && cases.length == 4
-abort "blocked:environment: matrix is not a complete frozen batch matrix" unless cases.map { |entry| entry.is_a?(Hash) ? entry["id"] : nil } == %w[iphone-en iphone-ja ipad-en ipad-ja]
-actual = {}
-cases.each do |entry|
-  abort "blocked:environment: matrix is not a complete frozen batch matrix" unless entry.is_a?(Hash) && entry.keys.sort == ["deviceType", "family", "id", "language", "locale", "udid"]
-  type = entry["deviceType"]
-  abort "blocked:environment: matrix is not a complete frozen batch matrix" unless type.is_a?(Hash) && type.keys.sort == ["identifier", "name"] && type.values.all? { |value| value.is_a?(String) && !value.empty? }
-  abort "blocked:environment: matrix is not a complete frozen batch matrix" unless entry["udid"].is_a?(String) && entry["udid"].match?(/\A[0-9A-Fa-f-]+\z/)
-  actual[entry["id"]] = [entry["family"], entry["locale"], entry["language"]]
-end
-abort "blocked:environment: matrix is not a complete frozen batch matrix" unless actual == expected && cases.map { |entry| entry["udid"] }.uniq.length == 4
-RUBY
-
-  devices_path="$matrix_dir/devices.json"
-  temporary_devices="$(mktemp "$matrix_dir/.devices.XXXXXX")"
-  trap 'rm -f "$temporary_devices"' EXIT
-  "$xcrun_bin" simctl list devices -j >"$temporary_devices"
-  mv "$temporary_devices" "$devices_path"
+matrix_state="$(swift tools/simulator-matrix-io.swift --operation exists --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json)"
+if [[ "$matrix_state" == "present" ]]; then
+  reuse_matrix="$(mktemp /tmp/ios-template-reuse-matrix.XXXXXX)"
+  reuse_devices="$(mktemp /tmp/ios-template-reuse-devices.XXXXXX)"
+  trap 'rm -f "$reuse_matrix" "$reuse_devices"' EXIT
+  swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$reuse_matrix"
+  ruby tools/validate-simulator-matrix.rb "$reuse_matrix" "$batch_id"
+  "$xcrun_bin" simctl list devices -j >"$reuse_devices"
+  swift tools/simulator-matrix-io.swift --operation replace --repo "$repo_root" --batch "$batch_id" --source "$reuse_devices" --name devices.json
+  ruby tools/validate-simulator-matrix.rb "$reuse_matrix" "$batch_id" "$reuse_devices"
   trap - EXIT
-  ruby -rjson - "$matrix_path" "$devices_path" "$batch_id" <<'RUBY'
-matrix_path, devices_path, batch_id = ARGV
-matrix = JSON.parse(File.read(matrix_path))
-runtime = matrix.fetch("runtime").fetch("identifier")
-device_buckets = JSON.parse(File.read(devices_path)).fetch("devices")
-devices = device_buckets.values.flatten
-matrix.fetch("cases").each do |entry|
-  expected_name = "iOS-Template-#{batch_id}-#{entry.fetch("id")}"
-  live = Array(device_buckets[runtime]).select { |device| device["udid"] == entry.fetch("udid") && device["name"] == expected_name && device["deviceTypeIdentifier"] == entry.fetch("deviceType").fetch("identifier") }
-  abort "blocked:environment: recorded Simulator no longer matches its batch matrix" unless live.length == 1 && devices.count { |device| device["name"] == expected_name } == 1
-end
-RUBY
-  echo "$matrix_path"
+  echo "$expected_output"
   exit 0
 fi
 
 capture_list() {
   local subject="$1"
-  local destination="$matrix_dir/$subject.json"
   local temporary
-  temporary="$(mktemp "$matrix_dir/.${subject}.XXXXXX")"
+  temporary="$(mktemp "/tmp/ios-template-${subject}.XXXXXX")"
   "$xcrun_bin" simctl list "$subject" -j >"$temporary"
-  mv "$temporary" "$destination"
+  swift tools/simulator-matrix-io.swift \
+    --operation replace --repo "$repo_root" --batch "$batch_id" \
+    --source "$temporary" --name "$subject.json"
+  rm -f "$temporary"
 }
 
 capture_list runtimes
 capture_list devicetypes
 capture_list devices
 
-working_matrix="$(mktemp "$matrix_dir/.simulator-matrix.XXXXXX")"
-plan_file="$(mktemp "$matrix_dir/.creation-plan.XXXXXX")"
-created_file="$(mktemp "$matrix_dir/.created-simulators.XXXXXX")"
-trap 'rm -f "$working_matrix" "$plan_file" "$created_file"' EXIT
+working_matrix="$(mktemp "/tmp/ios-template-matrix.XXXXXX")"
+plan_file="$(mktemp "/tmp/ios-template-plan.XXXXXX")"
+created_file="$(mktemp "/tmp/ios-template-created.XXXXXX")"
+runtimes_input="$(mktemp "/tmp/ios-template-runtimes.XXXXXX")"
+types_input="$(mktemp "/tmp/ios-template-types.XXXXXX")"
+devices_input="$(mktemp "/tmp/ios-template-devices.XXXXXX")"
+trap 'rm -f "$working_matrix" "$plan_file" "$created_file" "$runtimes_input" "$types_input" "$devices_input"' EXIT
+swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --batch "$batch_id" --name runtimes.json >"$runtimes_input"
+swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --batch "$batch_id" --name devicetypes.json >"$types_input"
+swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --batch "$batch_id" --name devices.json >"$devices_input"
 
 "$resolver_bin" tools/resolve-simulator-matrix.swift \
-  --runtimes "$matrix_dir/runtimes.json" \
-  --device-types "$matrix_dir/devicetypes.json" \
-  --devices "$matrix_dir/devices.json" \
+  --runtimes "$runtimes_input" \
+  --device-types "$types_input" \
+  --devices "$devices_input" \
   --batch-id "$batch_id" >"$working_matrix"
 
 ruby -rjson - "$working_matrix" "$batch_id" >"$plan_file" <<'RUBY'
@@ -141,7 +91,9 @@ RUBY
 record_failure() {
   local failed_case="$1"
   local failed_name="$2"
-  ruby -rjson - "$created_file" "$matrix_dir/creation-failure.json" "$failed_case" "$failed_name" <<'RUBY'
+  local report_file
+  report_file="$(mktemp "/tmp/ios-template-creation-failure.XXXXXX")"
+  ruby -rjson - "$created_file" "$report_file" "$failed_case" "$failed_name" <<'RUBY'
 created_path, report_path, failed_case, failed_name = ARGV
 created = File.readlines(created_path, chomp: true).map do |line|
   case_id, name, type, runtime, udid = line.split("\t", 5)
@@ -149,23 +101,25 @@ created = File.readlines(created_path, chomp: true).map do |line|
 end
 File.write(report_path, JSON.pretty_generate({"status" => "blocked:environment", "failedCase" => failed_case, "failedName" => failed_name, "possibleDedicatedSimulators" => created}) + "\n")
 RUBY
+  swift tools/simulator-matrix-io.swift --operation write-unique --repo "$repo_root" --batch "$batch_id" --source "$report_file" --prefix creation-failure >/dev/null
+  rm -f "$report_file"
 }
 
 while IFS=$'\t' read -r case_id simulator_name device_type runtime; do
   if ! udid="$("$xcrun_bin" simctl create "$simulator_name" "$device_type" "$runtime")"; then
     record_failure "$case_id" "$simulator_name"
-    echo "blocked:environment: Simulator creation failed; preserved possible dedicated Simulators in $matrix_dir/creation-failure.json" >&2
+    echo "blocked:environment: Simulator creation failed; preserved possible dedicated Simulators in an exclusive batch failure report" >&2
     exit 1
   fi
   [[ "$udid" =~ ^[0-9A-Fa-f-]+$ ]] || {
     record_failure "$case_id" "$simulator_name"
-    echo "blocked:environment: simctl returned an invalid Simulator UDID; preserved possible dedicated Simulators in $matrix_dir/creation-failure.json" >&2
+    echo "blocked:environment: simctl returned an invalid Simulator UDID; preserved possible dedicated Simulators in an exclusive batch failure report" >&2
     exit 1
   }
   printf '%s\t%s\t%s\t%s\t%s\n' "$case_id" "$simulator_name" "$device_type" "$runtime" "$udid" >>"$created_file"
 done <"$plan_file"
 
-post_devices="$(mktemp "$matrix_dir/.post-devices.XXXXXX")"
+post_devices="$(mktemp "/tmp/ios-template-post-devices.XXXXXX")"
 trap 'rm -f "$working_matrix" "$plan_file" "$created_file" "$post_devices" "$working_matrix.next"' EXIT
 "$xcrun_bin" simctl list devices -j >"$post_devices"
 ruby -rjson - "$working_matrix" "$plan_file" "$created_file" "$post_devices" "$batch_id" >"$working_matrix.next" <<'RUBY'
@@ -189,13 +143,16 @@ end
 cases.each { |entry| entry["udid"] = created.find { |row| row[0] == entry["id"] }[4] }
 puts JSON.pretty_generate(matrix)
 RUBY
+ ruby tools/validate-simulator-matrix.rb "$working_matrix.next" "$batch_id" "$post_devices"
 mv "$working_matrix.next" "$working_matrix"
-mv "$post_devices" "$matrix_dir/devices.json"
+swift tools/simulator-matrix-io.swift --operation replace --repo "$repo_root" --batch "$batch_id" --source "$post_devices" --name devices.json
 
 swift tools/simulator-matrix-io.swift \
-  --directory "$matrix_dir" \
-  --source "$(basename "$working_matrix")" \
-  --destination "simulator-matrix.json"
+  --operation publish \
+  --repo "$repo_root" \
+  --batch "$batch_id" \
+  --source "$working_matrix" \
+  --name "simulator-matrix.json"
 rm -f "$working_matrix"
 trap - EXIT
-echo "$matrix_path"
+echo "$expected_output"

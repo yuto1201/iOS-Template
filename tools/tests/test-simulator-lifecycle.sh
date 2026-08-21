@@ -67,6 +67,7 @@ when "create"
 when "delete"
   udid = ARGV.fetch(0)
   abort "expected one delete argument" unless ARGV.length == 1
+  abort "configured delete failure" if ENV["FAKE_DELETE_MODE"] == "fail-first"
   state = JSON.parse(File.read(state_path))
   state.fetch("devices").each_value { |devices| devices.reject! { |device| device["udid"] == udid } }
   File.write(state_path, JSON.generate(state))
@@ -89,6 +90,15 @@ run_with_create_mode() {
   shift
   XCRUN_BIN="$fake_bin/xcrun" \
   FAKE_CREATE_MODE="$mode" \
+  FAKE_SIMCTL_LOG="$log" \
+  FAKE_SIMCTL_STATE="$state" \
+  FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
+  "$@"
+}
+
+run_with_delete_mode() {
+  XCRUN_BIN="$fake_bin/xcrun" \
+  FAKE_DELETE_MODE="fail-first" \
   FAKE_SIMCTL_LOG="$log" \
   FAKE_SIMCTL_STATE="$state" \
   FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
@@ -148,6 +158,38 @@ simctl	delete	00000000-0000-0000-0000-000000000004
 EOF
 cmp -s "$expected_delete_log" "$log" || { diff -u "$expected_delete_log" "$log"; exit 1; }
 
+delete_failure_batch="delete-failure-$RANDOM-$RANDOM"
+delete_failure_matrix=".artifacts/batches/$delete_failure_batch/simulator-matrix.json"
+run bash tools/resolve-simulator-matrix.sh --batch-id "$delete_failure_batch" --output "$delete_failure_matrix"
+: >"$log"
+if run_with_delete_mode bash tools/destroy-simulator-matrix.sh --matrix "$delete_failure_matrix"; then
+  echo "destroy succeeded after configured delete failure" >&2
+  exit 1
+fi
+[[ "$(wc -l <"$log")" -eq 2 ]] || { echo "destroy did not stop on first delete failure" >&2; exit 1; }
+
+mismatch_batch="mismatch-$RANDOM-$RANDOM"
+mismatch_matrix=".artifacts/batches/$mismatch_batch/simulator-matrix.json"
+run bash tools/resolve-simulator-matrix.sh --batch-id "$mismatch_batch" --output "$mismatch_matrix"
+ruby -rjson - "$state" <<'RUBY'
+path = ARGV.fetch(0)
+state = JSON.parse(File.read(path))
+state.fetch("devices").each_value do |devices|
+  device = devices.find { |entry| entry["name"].start_with?("iOS-Template-mismatch-") }
+  if device
+    device["name"] = "tampered"
+    break
+  end
+end
+File.write(path, JSON.generate(state))
+RUBY
+: >"$log"
+if run bash tools/destroy-simulator-matrix.sh --matrix "$mismatch_matrix"; then
+  echo "destroy accepted a mismatched live Simulator" >&2
+  exit 1
+fi
+[[ "$(wc -l <"$log")" -eq 1 ]] || { echo "destroy deleted before validating all targets" >&2; exit 1; }
+
 for create_mode in repeat-udid duplicate-name wrong-type wrong-runtime; do
   mode_batch="mode-$create_mode-$RANDOM-$RANDOM"
   mode_matrix=".artifacts/batches/$mode_batch/simulator-matrix.json"
@@ -175,6 +217,10 @@ fi
 [[ ! -e "$failed_matrix" ]] || { echo "resolver published an incomplete matrix" >&2; exit 1; }
 if rg -q $'\tsimctl\tdelete\t|\tsimctl\tdelete$|^simctl\tdelete\t' "$log"; then
   echo "resolver deleted an unvalidated UDID after create failure" >&2
+  exit 1
+fi
+if find .artifacts/batches -type f -name '.*' -print -quit | rg -q .; then
+  echo "lifecycle left a hidden batch temporary file" >&2
   exit 1
 fi
 
