@@ -800,6 +800,9 @@ if [[ "$mode" == "transform" ]]; then
   rm -rf "$fixture"
   git clone --no-local "$root" "$fixture" >/dev/null
   git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
+  cp "$root/README.md" "$fixture/README.md"
+  cp "$root/tools/tests/test-foundation.sh" "$fixture/tools/tests/test-foundation.sh"
+  cp "$root/.agents/skills/app-bootstrap/SKILL.md" "$fixture/.agents/skills/app-bootstrap/SKILL.md"
   historical_plan="$fixture/docs/superpowers/plans/2026-08-22-app-bootstrap.md"
   historical_plan_hash_before="$(shasum "$historical_plan" | awk '{print $1}')"
   pbx_uuid_hash_before="$(rg -o '[A-F0-9]{24}' "$fixture/TemplateApp.xcodeproj/project.pbxproj" | LC_ALL=C sort -u | shasum | awk '{print $1}')"
@@ -902,6 +905,13 @@ appStore:
 if actual != expected:
     raise SystemExit(f"unexpected ownership content: {actual!r}")
 PY
+  if ! (
+    cd "$fixture"
+    bash tools/tests/test-foundation.sh
+  ) >"$output" 2>"$errors"; then
+    echo "Foundation failed after disposable bootstrap: $(<"$errors")" >&2
+    exit 1
+  fi
   [[ "$historical_plan_hash_before" == "$(shasum "$historical_plan" | awk '{print $1}')" ]] || {
     echo 'historical plan changed during transform' >&2
     exit 1

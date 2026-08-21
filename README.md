@@ -17,12 +17,16 @@ Build と Test は、インストール済み Xcode から [標準 Simulator マ
 ```sh
 TEMPLATE_IPHONE_UDID="<resolved-iPhone-Pro-UDID>"
 TEMPLATE_IPAD_UDID="<resolved-iPad-Air-13-inch-UDID>"
+TEMPLATE_DERIVED_DATA=$(mktemp -d /tmp/ios-template-derived-data.XXXXXX)
+TEMPLATE_RESULT_BUNDLES=$(mktemp -d /tmp/ios-template-result-bundles.XXXXXX)
+trap 'rm -rf "$TEMPLATE_DERIVED_DATA" "$TEMPLATE_RESULT_BUNDLES"' EXIT
 
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPHONE_UDID}" \
-  -derivedDataPath .artifacts/DerivedData \
+  -derivedDataPath "${TEMPLATE_DERIVED_DATA}" \
+  -resultBundlePath "${TEMPLATE_RESULT_BUNDLES}/unit-tests.xcresult" \
   CODE_SIGNING_ALLOWED=NO \
   test -only-testing:TemplateAppTests
 
@@ -30,7 +34,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPHONE_UDID}" \
-  -derivedDataPath .artifacts/DerivedData \
+  -derivedDataPath "${TEMPLATE_DERIVED_DATA}" \
+  -resultBundlePath "${TEMPLATE_RESULT_BUNDLES}/iphone-english.xcresult" \
   CODE_SIGNING_ALLOWED=NO \
   test-without-building \
   -only-testing:TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle
@@ -39,7 +44,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPHONE_UDID}" \
-  -derivedDataPath .artifacts/DerivedData \
+  -derivedDataPath "${TEMPLATE_DERIVED_DATA}" \
+  -resultBundlePath "${TEMPLATE_RESULT_BUNDLES}/iphone-japanese.xcresult" \
   CODE_SIGNING_ALLOWED=NO \
   test-without-building \
   -only-testing:TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle
@@ -48,7 +54,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPAD_UDID}" \
-  -derivedDataPath .artifacts/DerivedData \
+  -derivedDataPath "${TEMPLATE_DERIVED_DATA}" \
+  -resultBundlePath "${TEMPLATE_RESULT_BUNDLES}/ipad-english.xcresult" \
   CODE_SIGNING_ALLOWED=NO \
   test-without-building \
   -only-testing:TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle
@@ -57,7 +64,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPAD_UDID}" \
-  -derivedDataPath .artifacts/DerivedData \
+  -derivedDataPath "${TEMPLATE_DERIVED_DATA}" \
+  -resultBundlePath "${TEMPLATE_RESULT_BUNDLES}/ipad-japanese.xcresult" \
   CODE_SIGNING_ALLOWED=NO \
   test-without-building \
   -only-testing:TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle
@@ -83,7 +91,22 @@ tools/bootstrap-app.sh \
   --bundle-id com.yuto.GardenNotes
 ```
 
-コマンドは、Xcode project、Target、Scheme、Swift Module、Test、Bundle ID、設定、現行文書を一つのIdentityへ変換し、確認用の変更をunstagedで残します。標準出力は`applied`と結果パスを含むsanitized JSONで、非秘密の完全な結果は`Config/app-identity.json`へschema version 1として保存されます。`git diff`を確認してからFoundation、Xcode、4条件Simulator、反対モデルレビューを実行してください。共通の手順は[App Bootstrap skill](./.agents/skills/app-bootstrap/SKILL.md)を正とします。
+コマンドは、Xcode project、Target、Scheme、Swift Module、Test、Bundle ID、設定、現行文書を一つのIdentityへ変換し、確認用の変更をunstagedで残します。標準出力は`applied`と結果パスを含むsanitized JSONで、非秘密の完全な結果は`Config/app-identity.json`へschema version 1として保存されます。
+
+通常の`git diff`だけでは新しいuntracked fileを表示しないため、次のread-only手順でstatus、tracked diff、untracked fileをすべて確認します。`git diff --no-index`の終了値`1`は差分を表示した正常結果として扱い、それ以外の非zeroだけを失敗にします。この確認ではbootstrap出力をstageせず、indexを変更しません。
+
+```sh
+git status --short --untracked-files=all
+git diff --
+while IFS= read -r -d '' path; do
+  git diff --no-index -- /dev/null "$path" || {
+    status=$?
+    [[ "$status" -eq 1 ]] || exit "$status"
+  }
+done < <(git ls-files --others --exclude-standard -z)
+```
+
+すべての差分と結果recordを確認してからFoundation、Xcode、4条件Simulator、反対モデルレビューを実行してください。共通の手順は[App Bootstrap skill](./.agents/skills/app-bootstrap/SKILL.md)を正とします。
 
 同じ4入力で再実行すると`already-complete`を返して何も変更しません。1値でも異なる再実行は、既存結果と競合するため変更前に失敗します。GitHub上のリポジトリ名変更とApple側のBundle ID登録はこのコマンドに含まれず、それぞれCodexが個人アカウントを確認して別操作として行います。
 

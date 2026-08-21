@@ -27,7 +27,20 @@ tools/bootstrap-app.sh \
   --bundle-id com.yuto.GardenNotes
 ```
 
-4. Inspect the complete unstaged `git diff`, the `Config/app-identity.json` result, and the unchanged Head SHA. Reject unrelated edits or any Identity mismatch.
+4. Inspect all tracked and untracked output without staging or changing the index. Start with the complete status, inspect the tracked diff, then render every untracked file individually. A `git diff --no-index` exit status of `1` means a difference was displayed; any other nonzero status is an error.
+
+```sh
+git status --short --untracked-files=all
+git diff --
+while IFS= read -r -d '' path; do
+  git diff --no-index -- /dev/null "$path" || {
+    status=$?
+    [[ "$status" -eq 1 ]] || exit "$status"
+  }
+done < <(git ls-files --others --exclude-standard -z)
+```
+
+Also inspect `Config/app-identity.json` and confirm the Head SHA is unchanged. Reject unrelated edits or any Identity mismatch. Do not stage any bootstrap output during this inspection.
 5. Run `bash tools/tests/test-foundation.sh` and `bash tools/tests/test-app-bootstrap.sh all`. Run Xcode project listing, build, Unit Test, and UI Test with DerivedData and result bundles under `/tmp`, outside File Provider-managed repository paths. Verify that all targets and configurations retain the separately specified Deployment Target.
 6. Resolve the latest installed iOS Runtime as described in [`docs/verification.md`](../../../docs/verification.md). Run and visually evaluate the four fixed Simulator cases: latest iPhone Pro in English and Japanese, and latest iPad Air in English and Japanese. Preserve Head-SHA-bound evidence.
 7. Request the required opposite-model read-only review for the same Head SHA. Address blocking findings and repeat every affected verification before proceeding.
