@@ -23,6 +23,7 @@ struct AppIdentity: Codable {
 enum Command {
     case validate(manifestPath: String, identity: AppIdentity)
     case apply(rootPath: String, manifestPath: String, identity: AppIdentity)
+    case changedPaths(rootPath: String, manifestPath: String)
 }
 
 enum BootstrapError: Error {
@@ -86,20 +87,34 @@ func matches(_ value: String, pattern: String) -> Bool {
 
 func parseCommand(arguments: [String]) throws -> Command {
     guard let action = arguments.first,
-          action == "validate" || action == "apply" else {
+          action == "validate" || action == "apply" || action == "changed-paths" else {
         throw BootstrapError.usage
     }
 
     let values = Array(arguments.dropFirst())
-    let expectedCount = action == "apply" ? 12 : 10
+    let expectedCount: Int
+    switch action {
+    case "apply":
+        expectedCount = 12
+    case "changed-paths":
+        expectedCount = 4
+    default:
+        expectedCount = 10
+    }
     guard values.count == expectedCount else {
         throw BootstrapError.usage
     }
 
     var options: [String: String] = [:]
-    let allowedFlags = action == "apply"
-        ? ["--root", "--manifest", "--display-name", "--module-name", "--app-slug", "--bundle-id"]
-        : ["--manifest", "--display-name", "--module-name", "--app-slug", "--bundle-id"]
+    let allowedFlags: [String]
+    switch action {
+    case "apply":
+        allowedFlags = ["--root", "--manifest", "--display-name", "--module-name", "--app-slug", "--bundle-id"]
+    case "changed-paths":
+        allowedFlags = ["--root", "--manifest"]
+    default:
+        allowedFlags = ["--manifest", "--display-name", "--module-name", "--app-slug", "--bundle-id"]
+    }
     var index = 0
     while index < values.count {
         let flag = values[index]
@@ -112,8 +127,18 @@ func parseCommand(arguments: [String]) throws -> Command {
         index += 2
     }
 
-    guard let manifestPath = options["--manifest"],
-          let displayName = options["--display-name"],
+    guard let manifestPath = options["--manifest"] else {
+        throw BootstrapError.usage
+    }
+
+    if action == "changed-paths" {
+        guard let rootPath = options["--root"] else {
+            throw BootstrapError.usage
+        }
+        return .changedPaths(rootPath: rootPath, manifestPath: manifestPath)
+    }
+
+    guard let displayName = options["--display-name"],
           let moduleName = options["--module-name"],
           let appSlug = options["--app-slug"],
           let bundleId = options["--bundle-id"] else {
@@ -489,6 +514,58 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
     }
 }
 
+func changedPaths(rootPath: String, manifestPath: String) throws -> [String] {
+    guard rootPath.hasPrefix("/") else {
+        throw BootstrapError.invalidRoot
+    }
+    let root = URL(fileURLWithPath: rootPath).standardizedFileURL
+    guard !isSymbolicLink(root),
+          FileManager.default.fileExists(atPath: root.path) else {
+        throw BootstrapError.invalidRoot
+    }
+
+    let manifestURL = URL(fileURLWithPath: manifestPath).standardizedFileURL
+    let normalizedRootPath = root.path.hasSuffix("/") ? String(root.path.dropLast()) : root.path
+    guard manifestURL.path.hasPrefix(normalizedRootPath + "/"),
+          !isSymbolicLink(manifestURL) else {
+        throw BootstrapError.invalidPath
+    }
+
+    let manifest = try readManifest(at: manifestURL.path)
+    let identityURL = try safePath("Config/app-identity.json", under: root)
+    guard !isSymbolicLink(identityURL),
+          let data = FileManager.default.contents(atPath: identityURL.path),
+          let record = try? JSONDecoder().decode(ResultIdentity.self, from: data),
+          record.schemaVersion == 1,
+          record.sourceIdentityVersion == 1 else {
+        throw BootstrapError.invalidPath
+    }
+    let identity = try validatedIdentity(
+        AppIdentity(
+            displayName: record.displayName,
+            moduleName: record.moduleName,
+            appSlug: record.appSlug,
+            bundleId: record.bundleId
+        ),
+        manifest: manifest
+    )
+    let renames = try resolvedPathRenames(manifest: manifest, identity: identity)
+    let paths = Set(
+        manifest.liveContentPaths
+            + manifest.liveContentPaths.map { transformedLivePath($0, manifest: manifest, identity: identity) }
+            + renames.flatMap { [$0.source, $0.destination] }
+            + ["Config/app-identity.json"]
+    )
+    for path in paths {
+        guard !path.contains("\n"),
+              !path.contains("\r") else {
+            throw BootstrapError.invalidPath
+        }
+        _ = try safePath(path, under: root)
+    }
+    return paths.sorted()
+}
+
 func apply(rootPath: String, manifestPath: String, identity: AppIdentity) throws -> ApplyResult {
     guard rootPath.hasPrefix("/") else {
         throw BootstrapError.invalidRoot
@@ -538,6 +615,10 @@ func main() throws {
         let output = try encoder.encode(result)
         FileHandle.standardOutput.write(output)
         FileHandle.standardOutput.write(Data("\n".utf8))
+    case let .changedPaths(rootPath, manifestPath):
+        for path in try changedPaths(rootPath: rootPath, manifestPath: manifestPath) {
+            FileHandle.standardOutput.write(Data("\(path)\n".utf8))
+        }
     }
 }
 

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 mode="${1:-}"
-if [[ "$mode" != "validation" && "$mode" != "transform" ]]; then
-  echo "usage: $0 validation|transform" >&2
+if [[ "$mode" != "validation" && "$mode" != "transform" && "$mode" != "transaction" ]]; then
+  echo "usage: $0 validation|transform|transaction" >&2
   exit 64
 fi
 
@@ -24,6 +24,16 @@ fixture_hash() {
     printf '%s\n' AGENTS.md README.md
   } | LC_ALL=C sort | while IFS= read -r path; do
     shasum "$path"
+  done | shasum | awk '{print $1}'
+}
+
+source_tree_digest() {
+  git ls-files -z | while IFS= read -r -d '' path; do
+    if [[ -L "$path" ]]; then
+      printf 'symlink %s %s\n' "$path" "$(readlink "$path")"
+    else
+      shasum "$path"
+    fi
   done | shasum | awk '{print $1}'
 }
 
@@ -80,6 +90,77 @@ expect_invalid() {
     exit 1
   }
 }
+
+if [[ "$mode" == "transaction" ]]; then
+  source_hash_before="$(source_tree_digest)"
+  fixture="$(mktemp -d -t app-bootstrap-transaction.XXXXXX)"
+  rm -rf "$fixture"
+  git clone --no-local "$root" "$fixture" >/dev/null
+  git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
+  cp "$root/tools/bootstrap-app.swift" "$fixture/tools/bootstrap-app.swift"
+  if ! git -C "$fixture" diff --quiet -- tools/bootstrap-app.swift; then
+    git -C "$fixture" add -- tools/bootstrap-app.swift
+    git -C "$fixture" -c user.name='Bootstrap Test' -c user.email='bootstrap-test@example.invalid' \
+      commit -m 'test: add transactional bootstrap helper' >/dev/null
+  fi
+
+  caller_head_before="$(git -C "$fixture" rev-parse HEAD)"
+  caller_status_before="$(git -C "$fixture" status --porcelain=v1)"
+  caller_tree_before="$(git -C "$fixture" ls-files -s | shasum | awk '{print $1}')"
+  worktrees_before="$(git -C "$fixture" worktree list --porcelain)"
+
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" \
+      --display-name 'Garden Notes' \
+      --module-name 'GardenNotes' \
+      --app-slug 'garden-notes' \
+      --bundle-id 'com.yuto.GardenNotes'
+  ) >"$output" 2>"$errors"; then
+    echo "transaction failed: $(<"$errors")" >&2
+    exit 1
+  fi
+
+  [[ "$caller_head_before" == "$(git -C "$fixture" rev-parse HEAD)" ]] || {
+    echo 'transaction changed caller HEAD' >&2
+    exit 1
+  }
+  [[ -z "$caller_status_before" ]] || {
+    echo 'transaction fixture was unexpectedly dirty before apply' >&2
+    exit 1
+  }
+  [[ -n "$(git -C "$fixture" status --porcelain=v1)" ]] || {
+    echo 'transaction left no reviewable changes' >&2
+    exit 1
+  }
+  [[ -z "$(git -C "$fixture" diff --cached --name-only)" ]] || {
+    echo 'transaction left changes staged' >&2
+    exit 1
+  }
+  [[ -e "$fixture/GardenNotes/GardenNotesApp.swift" ]] || {
+    echo 'transaction did not apply renamed app source' >&2
+    exit 1
+  }
+  [[ -e "$fixture/Config/app-identity.json" ]] || {
+    echo 'transaction did not apply app identity' >&2
+    exit 1
+  }
+  [[ "$worktrees_before" == "$(git -C "$fixture" worktree list --porcelain)" ]] || {
+    echo 'transaction left a temporary worktree registered' >&2
+    exit 1
+  }
+  [[ "$source_hash_before" == "$(source_tree_digest)" ]] || {
+    echo 'transaction changed the original test-runner repository' >&2
+    exit 1
+  }
+  [[ "$caller_tree_before" == "$(git -C "$fixture" ls-files -s | shasum | awk '{print $1}')" ]] || {
+    echo 'transaction changed the caller index' >&2
+    exit 1
+  }
+
+  echo 'transaction tests passed'
+  exit 0
+fi
 
 if [[ "$mode" == "transform" ]]; then
   source_hash_before="$(fixture_hash)"
