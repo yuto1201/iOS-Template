@@ -20,6 +20,12 @@ let digestPattern = try! NSRegularExpression(pattern: "^sha256:[0-9a-f]{64}$")
 let acceptancePattern = try! NSRegularExpression(pattern: "^AC-[1-9][0-9]*$")
 let batchPattern = try! NSRegularExpression(pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
 let udidPattern = try! NSRegularExpression(pattern: "^[0-9A-Fa-f-]+$")
+let bundleIdentifierPattern = try! NSRegularExpression(
+    pattern: "^[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+$"
+)
+let testIdentifierPattern = try! NSRegularExpression(
+    pattern: "^[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*$"
+)
 let iso8601Pattern = try! NSRegularExpression(
     pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
 )
@@ -359,6 +365,49 @@ struct IssueContract {
     let fetchedAt: Date
 }
 
+func validateOptionalVerification(_ value: Any) throws {
+    let verification = try requireObject(value, at: "issueContract.verification")
+    try requireExactKeys(
+        verification, ["bundleIdentifier", "cases"], at: "issueContract.verification"
+    )
+    let bundleIdentifier = try requireString(
+        verification["bundleIdentifier"]!, at: "issueContract.verification.bundleIdentifier"
+    )
+    guard matches(bundleIdentifier, regex: bundleIdentifierPattern) else {
+        throw ValidationFailure("issueContract.verification.bundleIdentifier is invalid")
+    }
+    let expectedIDs = ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
+    let cases = try requireArray(verification["cases"]!, at: "issueContract.verification.cases")
+    guard cases.count == expectedIDs.count else {
+        throw ValidationFailure("issueContract.verification.cases must contain the exact four ordered case IDs")
+    }
+    for (index, rawCase) in cases.enumerated() {
+        let path = "issueContract.verification.cases[\(index)]"
+        let entry = try requireObject(rawCase, at: path)
+        let keys = Set(entry.keys)
+        let testKeys: Set<String> = ["id", "testIdentifier"]
+        let assertionKeys: Set<String> = ["id", "assertion"]
+        guard keys == testKeys || keys == assertionKeys else {
+            throw ValidationFailure("\(path) must contain exactly one of testIdentifier or assertion")
+        }
+        guard try requireString(entry["id"]!, at: "\(path).id") == expectedIDs[index] else {
+            throw ValidationFailure("issueContract.verification.cases must contain the exact four ordered case IDs")
+        }
+        if keys == testKeys {
+            let identifier = try requireString(entry["testIdentifier"]!, at: "\(path).testIdentifier")
+            guard matches(identifier, regex: testIdentifierPattern) else {
+                throw ValidationFailure("\(path).testIdentifier must be Target/Class/testMethod")
+            }
+        } else {
+            let assertion = try requireObject(entry["assertion"]!, at: "\(path).assertion")
+            try requireExactKeys(assertion, ["kind"], at: "\(path).assertion")
+            guard try requireString(assertion["kind"]!, at: "\(path).assertion.kind") == "launch-succeeded" else {
+                throw ValidationFailure("\(path).assertion.kind is not supported")
+            }
+        }
+    }
+}
+
 func validateIssueContract(
     reference: JSONObject,
     issue: Int,
@@ -377,11 +426,24 @@ func validateIssueContract(
     )
     try validateDigest(reference["digest"]!, data: data, at: "issueContract.digest")
     let contract = try readJSONObject(data: data, at: "issueContract file")
-    try requireExactKeys(
-        contract,
-        ["schemaVersion", "issue", "repository", "goal", "specAnchors", "acceptanceCriteria", "dependencies", "externalOperations", "fetchedAt"],
-        at: "issueContract file"
-    )
+    let requiredContractKeys: Set<String> = [
+        "schemaVersion", "issue", "repository", "goal", "specAnchors", "acceptanceCriteria",
+        "dependencies", "externalOperations", "fetchedAt"
+    ]
+    let allowedContractKeys = requiredContractKeys.union(["verification"])
+    let actualContractKeys = Set(contract.keys)
+    let missingContractKeys = requiredContractKeys.subtracting(actualContractKeys).sorted()
+    let unknownContractKeys = actualContractKeys.subtracting(allowedContractKeys).sorted()
+    guard missingContractKeys.isEmpty, unknownContractKeys.isEmpty else {
+        var parts: [String] = []
+        if !missingContractKeys.isEmpty {
+            parts.append("missing keys \(missingContractKeys.joined(separator: ", "))")
+        }
+        if !unknownContractKeys.isEmpty {
+            parts.append("unknown keys \(unknownContractKeys.joined(separator: ", "))")
+        }
+        throw ValidationFailure("issueContract file: \(parts.joined(separator: "; "))")
+    }
     guard try requireInteger(contract["schemaVersion"]!, at: "issueContract.schemaVersion") == 1 else {
         throw ValidationFailure("issueContract.schemaVersion must be 1")
     }
@@ -409,6 +471,9 @@ func validateIssueContract(
     _ = try requireStringArray(
         contract["externalOperations"]!, at: "issueContract.externalOperations", unique: true
     )
+    if let verification = contract["verification"] {
+        try validateOptionalVerification(verification)
+    }
 
     let rawCriteria = try requireArray(contract["acceptanceCriteria"]!, at: "issueContract.acceptanceCriteria")
     guard !rawCriteria.isEmpty else {

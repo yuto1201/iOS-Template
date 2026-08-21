@@ -50,6 +50,24 @@ CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/iss
 
 検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。ClaudeはGitHubから取得せず、このCodex生成snapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用でき、Issue本文が変わった場合はCodexが再取得してdigestを更新します。
 
+application検証を実行するIssue contractだけ、上の必須fieldに加えて次のexact `verification` objectを持てます。`bundleIdentifier` と固定順4件の `cases` 以外は許可しません。各caseは `id` に加え、`testIdentifier` または `assertion` のちょうど一方を持ちます。`testIdentifier` は `Target/Class/testMethod`、Task 4で許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}` です。application実行時にこのobjectがない、不完全、順序違い、両actionを持つ場合は、Build前に失敗します。
+
+```json
+{
+  "verification": {
+    "bundleIdentifier": "com.example.ExampleApp",
+    "cases": [
+      {"id": "iphone-en", "testIdentifier": "ExampleAppUITests/SmokeTests/testLaunch"},
+      {"id": "iphone-ja", "assertion": {"kind": "launch-succeeded"}},
+      {"id": "ipad-en", "testIdentifier": "ExampleAppUITests/SmokeTests/testLaunch"},
+      {"id": "ipad-ja", "assertion": {"kind": "launch-succeeded"}}
+    ]
+  }
+}
+```
+
+このobjectはIssue contractのdigestへ含まれます。runnerは開始時にbytesを安定snapshotへ固定し、完了直前にcanonical fileのdigestを再照合します。CLI引数や環境変数でBundle ID、test identifier、assertionを差し替えません。
+
 ## 4. 状態機械
 
 ```text

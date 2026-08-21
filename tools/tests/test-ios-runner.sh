@@ -1,0 +1,458 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+runner="$source_repo/tools/verify-ios-issue.sh"
+scratch="$(mktemp -d -t ios-runner.XXXXXX)"
+scratch="$(cd "$scratch" && pwd -P)"
+trap 'rm -rf "$scratch"' EXIT
+
+fake_bin="$scratch/bin"
+fake_log="$scratch/commands.log"
+mkdir -p "$fake_bin"
+
+cat >"$fake_bin/xcode-select" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'xcode-select\tDEVELOPER_DIR=%s\t%s\n' "${DEVELOPER_DIR-}" "$*" >>"$FAKE_COMMAND_LOG"
+[[ "$#" -eq 1 && "$1" == "-p" ]]
+printf '%s\n' "$FAKE_FALLBACK_DEVELOPER_DIR"
+SH
+chmod +x "$fake_bin/xcode-select"
+
+cat >"$fake_bin/xcodebuild" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+{
+  printf 'xcodebuild\tDEVELOPER_DIR=%s' "${DEVELOPER_DIR-}"
+  printf '\t%s' "$@"
+  printf '\n'
+} >>"$FAKE_COMMAND_LOG"
+if [[ "$#" -eq 1 && "$1" == "-version" ]]; then
+  if [[ "${FAKE_PREFERRED_XCODE_INVALID-}" == 1 && "${DEVELOPER_DIR-}" == "/Applications/Xcode.app/Contents/Developer" ]]; then
+    echo "configured preferred Xcode failure" >&2
+    exit 1
+  fi
+  printf '%s\n' 'Xcode 26.5' 'Build version 17F42'
+  exit 0
+fi
+mode=""
+for argument in "$@"; do
+  case "$argument" in
+    build) mode="build" ;;
+    test) mode="unit-test" ;;
+    test-without-building) mode="ui-test" ;;
+  esac
+done
+if [[ "$mode" == build ]]; then
+  [[ "${FAKE_BUILD_MODE-}" != fail ]] || { echo "configured build failure TOKEN-super-secret" >&2; exit 1; }
+  derived="" result="" previous=""
+  for argument in "$@"; do
+    [[ "$previous" != -derivedDataPath ]] || derived="$argument"
+    [[ "$previous" != -resultBundlePath ]] || result="$argument"
+    previous="$argument"
+  done
+  app="$derived/Build/Products/Debug-iphonesimulator/TemplateApp.app"
+  mkdir -p "$app" "$result"
+  printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.TemplateApp</string></dict></plist>' >"$app/Info.plist"
+  [[ "${FAKE_BUILD_MODE-}" != warning ]] || echo 'fixture.swift:1: warning: configured warning'
+  [[ "${FAKE_MUTATE_INPUT-}" != contract ]] || printf '\n' >>"$FAKE_CONTRACT_PATH"
+  [[ "${FAKE_MUTATE_INPUT-}" != matrix ]] || printf '\n' >>"$FAKE_MATRIX_PATH"
+  exit 0
+fi
+if [[ "$mode" == unit-test ]]; then
+  result="" previous=""
+  for argument in "$@"; do
+    [[ "$previous" != -resultBundlePath ]] || result="$argument"
+    previous="$argument"
+  done
+  mkdir -p "$result"
+  [[ "${FAKE_TEST_MODE-}" != command-fail ]] || { echo 'configured unit test command failure' >&2; exit 1; }
+  [[ "${FAKE_TEST_MODE-}" != warning ]] || echo 'fixture.swift:2: warning: configured unit-test warning'
+  echo "Test Suite 'All tests' passed"
+  exit 0
+fi
+[[ "$mode" == ui-test ]] || { echo 'unexpected xcodebuild arguments' >&2; exit 1; }
+[[ "${FAKE_UI_MODE-}" != fail ]] || { echo 'configured UI test failure' >&2; exit 1; }
+echo "Test Suite 'Selected tests' passed"
+SH
+chmod +x "$fake_bin/xcodebuild"
+
+cat >"$fake_bin/xcrun" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+{
+  printf 'xcrun\tDEVELOPER_DIR=%s' "${DEVELOPER_DIR-}"
+  printf '\t%s' "$@"
+  printf '\n'
+} >>"$FAKE_COMMAND_LOG"
+if [[ "${1-}" == xcresulttool ]]; then
+  case "${FAKE_TEST_MODE-}" in
+    failed) echo '{"passedTests":23,"failedTests":1,"skippedTests":0,"totalTestCount":24}' ;;
+    skipped) echo '{"passedTests":23,"failedTests":0,"skippedTests":1,"totalTestCount":24}' ;;
+    zero) echo '{"passedTests":0,"failedTests":0,"skippedTests":0,"totalTestCount":0}' ;;
+    *) echo '{"passedTests":24,"failedTests":0,"skippedTests":0,"totalTestCount":24}' ;;
+  esac
+  exit 0
+fi
+[[ "${1-}" == simctl ]] || { echo 'expected simctl' >&2; exit 1; }
+command="${2-}"
+case "$command" in
+  boot|bootstatus|install|terminate) exit 0 ;;
+  launch)
+    [[ "${FAKE_CASE_MODE-}" != launch-fail || "${3-}" != "00000000-0000-0000-0000-000000000002" ]] || { echo 'configured launch failure' >&2; exit 1; }
+    printf '%s: 4321\n' "${4-}"
+    ;;
+  io)
+    [[ "${4-}" == screenshot ]] || { echo 'expected screenshot' >&2; exit 1; }
+    mkdir -p "$(dirname "${5-}")"
+    printf 'fixture-png' >"${5-}"
+    ;;
+  *) echo "unexpected simctl command: $command" >&2; exit 1 ;;
+esac
+SH
+chmod +x "$fake_bin/xcrun"
+
+repo="" base_sha="" head_sha="" contract="" matrix="" draft="" visual="" final=""
+
+write_contract() {
+  /usr/bin/ruby -rjson -rtime - "$1" "${2:-valid}" <<'RUBY'
+path, mode = ARGV
+cases = [
+  {"id" => "iphone-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
+  {"id" => "iphone-ja", "assertion" => {"kind" => "launch-succeeded"}},
+  {"id" => "ipad-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
+  {"id" => "ipad-ja", "assertion" => {"kind" => "launch-succeeded"}}
+]
+cases.pop if mode == "missing-case"
+cases[1] = {"id" => "iphone-ja"} if mode == "missing-action"
+cases[1]["testIdentifier"] = "TemplateAppUITests/SmokeTests/testLaunch" if mode == "both-actions"
+document = {
+  "schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template",
+  "goal" => "Run reproducible iOS verification",
+  "specAnchors" => ["docs/verification.md#4-execution-draft"],
+  "acceptanceCriteria" => [
+    {"id" => "AC-1", "text" => "Build and tests pass once"},
+    {"id" => "AC-2", "text" => "Four localized cases pass mechanically"}
+  ],
+  "dependencies" => [], "externalOperations" => [], "fetchedAt" => Time.now.iso8601,
+  "verification" => {"bundleIdentifier" => "com.example.TemplateApp", "cases" => cases}
+}
+document.delete("verification") if mode == "absent"
+File.write(path, JSON.pretty_generate(document) + "\n")
+RUBY
+}
+
+write_matrix() {
+  /usr/bin/ruby -rjson -rtime - "$1" <<'RUBY'
+path = ARGV.fetch(0)
+rows = [
+  ["iphone-en", "iPhone", "en_US", "en", "00000000-0000-0000-0000-000000000001"],
+  ["iphone-ja", "iPhone", "ja_JP", "ja", "00000000-0000-0000-0000-000000000002"],
+  ["ipad-en", "iPad", "en_US", "en", "00000000-0000-0000-0000-000000000003"],
+  ["ipad-ja", "iPad", "ja_JP", "ja", "00000000-0000-0000-0000-000000000004"]
+]
+document = {
+  "schemaVersion" => 1, "batchId" => "runner-fixture", "resolvedAt" => Time.now.iso8601,
+  "xcode" => {"path" => "/Applications/Xcode.app/Contents/Developer", "version" => "26.5", "build" => "17F42"},
+  "runtime" => {"identifier" => "com.apple.CoreSimulator.SimRuntime.iOS-26-5", "version" => "26.5"},
+  "cases" => rows.map do |id, family, locale, language, udid|
+    type = family == "iPhone" ? ["com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "iPhone 17 Pro"] : ["com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "iPad Air 13-inch (M3)"]
+    {"id" => id, "family" => family, "deviceType" => {"identifier" => type[0], "name" => type[1]}, "locale" => locale, "language" => language, "udid" => udid}
+  end
+}
+File.write(path, JSON.pretty_generate(document) + "\n")
+RUBY
+}
+
+prepare_repo() {
+  local label="$1" contract_mode="${2:-valid}"
+  repo="$scratch/$label/repository"
+  mkdir -p "$repo/TemplateApp.xcodeproj" "$repo/docs"
+  repo="$(cd "$repo" && pwd -P)"
+  git -C "$repo" init -q
+  git -C "$repo" config user.name 'Runner Test'
+  git -C "$repo" config user.email 'runner@example.invalid'
+  printf '%s\n' '.artifacts/' >"$repo/.gitignore"
+  printf '%s\n' '{}' >"$repo/TemplateApp.xcodeproj/project.pbxproj"
+  printf '%s\n' '# Base' >"$repo/docs/base.md"
+  git -C "$repo" add -- .gitignore TemplateApp.xcodeproj docs/base.md
+  git -C "$repo" commit -q -m base
+  base_sha="$(git -C "$repo" rev-parse HEAD)"
+  printf '%s\n' '# Head' >"$repo/docs/head.md"
+  git -C "$repo" add -- docs/head.md
+  git -C "$repo" commit -q -m head
+  head_sha="$(git -C "$repo" rev-parse HEAD)"
+  contract="$repo/.artifacts/issues/42/issue-contract.json"
+  matrix="$repo/.artifacts/batches/runner-fixture/simulator-matrix.json"
+  draft="$repo/.artifacts/issues/42/$head_sha/verify-draft.json"
+  visual="$repo/.artifacts/issues/42/$head_sha/visual-result.json"
+  final="$repo/.artifacts/issues/42/$head_sha/verify.json"
+  mkdir -p "$(dirname "$contract")" "$(dirname "$matrix")" "$(dirname "$draft")"
+  write_contract "$contract" "$contract_mode"
+  write_matrix "$matrix"
+  : >"$fake_log"
+}
+
+run_execute() {
+  (cd "$repo" && PATH="$fake_bin:$PATH" FAKE_COMMAND_LOG="$fake_log" \
+    FAKE_FALLBACK_DEVELOPER_DIR="$scratch/FakeXcode/Contents/Developer" \
+    FAKE_CONTRACT_PATH="$contract" FAKE_MATRIX_PATH="$matrix" \
+    "$runner" --issue 42 --expected-base "$base_sha" \
+      --issue-contract .artifacts/issues/42/issue-contract.json \
+      --matrix .artifacts/batches/runner-fixture/simulator-matrix.json \
+      --project TemplateApp.xcodeproj --scheme TemplateApp)
+}
+
+run_finalize() {
+  (cd "$repo" && PATH="$fake_bin:$PATH" FAKE_COMMAND_LOG="$fake_log" \
+    "$runner" --finalize --issue 42 --expected-base "$base_sha" \
+      --draft ".artifacts/issues/42/$head_sha/verify-draft.json" \
+      --visual-result ".artifacts/issues/42/$head_sha/visual-result.json")
+}
+
+expect_execute_failure() {
+  local label="$1" diagnostic="$2"
+  if run_execute >"$scratch/$label.stdout" 2>"$scratch/$label.stderr"; then
+    echo "runner unexpectedly accepted $label" >&2; exit 1
+  fi
+  grep -Fq -- "$diagnostic" "$scratch/$label.stderr" || {
+    echo "runner rejected $label for the wrong reason; expected $diagnostic" >&2
+    cat "$scratch/$label.stderr" >&2; exit 1
+  }
+}
+
+expect_finalize_failure() {
+  local label="$1" diagnostic="$2"
+  if run_finalize >"$scratch/$label.finalize.stdout" 2>"$scratch/$label.finalize.stderr"; then
+    echo "finalizer unexpectedly accepted $label" >&2; exit 1
+  fi
+  grep -Fq -- "$diagnostic" "$scratch/$label.finalize.stderr" || {
+    echo "finalizer rejected $label for the wrong reason; expected $diagnostic" >&2
+    cat "$scratch/$label.finalize.stderr" >&2; exit 1
+  }
+  [[ ! -e "$final" ]] || { echo "failed finalization left verify.json" >&2; exit 1; }
+}
+
+write_visual() {
+  /usr/bin/ruby -rjson -rtime -rdigest - "$draft" "$visual" "${1:-approved}" <<'RUBY'
+draft_path, visual_path, mode = ARGV
+draft = JSON.parse(File.read(draft_path))
+document = {
+  "schemaVersion" => 1, "status" => "approved", "issue" => draft.fetch("issue"),
+  "headSha" => draft.fetch("headSha"),
+  "draft" => {"path" => ".artifacts/issues/42/#{draft.fetch("headSha")}/verify-draft.json", "digest" => "sha256:#{Digest::SHA256.file(draft_path).hexdigest}"},
+  "cases" => draft.fetch("cases").map { |entry| {"id" => entry.fetch("id"), "status" => "approved", "screenshot" => entry.fetch("screenshot"), "findings" => []} },
+  "findings" => [], "reviewedAt" => Time.now.iso8601
+}
+case mode
+when "rejected" then document["status"] = "rejected"; document["findings"] = ["layout overlap"]
+when "wrong-digest" then document.fetch("draft")["digest"] = "sha256:" + "0" * 64
+when "wrong-head" then document["headSha"] = "0" * 40
+when "missing-case" then document.fetch("cases").pop
+when "case-finding" then document.fetch("cases").fetch(0)["findings"] = ["clipped"]
+end
+File.write(visual_path, JSON.pretty_generate(document) + "\n")
+RUBY
+}
+
+# Initial RED: the complete behavioral suite is enabled after this missing-runner assertion passes.
+if [[ ! -e "$runner" ]]; then
+  prepare_repo red-runner
+  expect_execute_failure absent-runner "No such file or directory"
+  echo "iOS runner RED tests are ready"
+  exit 1
+fi
+
+prepare_repo valid
+run_execute
+[[ -f "$draft" && ! -e "$final" ]] || { echo "execution did not publish only the draft" >&2; exit 1; }
+/usr/bin/ruby -rjson - "$draft" "$head_sha" <<'RUBY'
+draft, head = ARGV
+document = JSON.parse(File.read(draft))
+abort "wrong draft status" unless document["status"] == "awaiting-visual-review"
+abort "draft claimed visual approval" if document.key?("visualEvaluation")
+abort "wrong Head" unless document["headSha"] == head
+abort "wrong cases" unless document["cases"].map { |entry| entry["id"] } == %w[iphone-en iphone-ja ipad-en ipad-ja]
+abort "missing AC mappings" unless document["acceptanceEvidence"].map { |entry| entry["id"] } == %w[AC-1 AC-2]
+abort "empty AC evidence" unless document["acceptanceEvidence"].all? { |entry| entry["evidence"].is_a?(Array) && !entry["evidence"].empty? }
+paths = document.fetch("workspaceArtifacts")
+prefix = "/tmp/ios-template-verify/"
+abort "DerivedData escaped /tmp" unless paths.fetch("derivedDataPath").start_with?(prefix) && paths.fetch("derivedDataPath").end_with?("/#{head}/DerivedData")
+abort "result bundles escaped /tmp" unless %w[buildResultBundlePath testResultBundlePath].all? { |key| paths.fetch(key).start_with?(prefix) && paths.fetch(key).include?("/#{head}/") }
+RUBY
+
+build_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\tbuild$/ {count++} END {print count+0}' "$fake_log")"
+unit_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\ttest$/ {count++} END {print count+0}' "$fake_log")"
+ui_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\ttest-without-building$/ {count++} END {print count+0}' "$fake_log")"
+[[ "$build_count" == 1 && "$unit_count" == 1 && "$ui_count" == 2 ]] || { echo "wrong Build/Test invocation counts" >&2; cat "$fake_log" >&2; exit 1; }
+/usr/bin/ruby - "$fake_log" <<'RUBY'
+path = ARGV.fetch(0)
+case_for = {
+  "00000000-0000-0000-0000-000000000001" => "iphone-en",
+  "00000000-0000-0000-0000-000000000002" => "iphone-ja",
+  "00000000-0000-0000-0000-000000000003" => "ipad-en",
+  "00000000-0000-0000-0000-000000000004" => "ipad-ja"
+}
+actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequence|
+  fields = line.split("\t")
+  next unless fields[1] == "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer"
+  if fields[0] == "xcodebuild"
+    if fields[2..] == ["-version"]
+      sequence << "xcode-version"
+      next
+    elsif fields.last == "build"
+      sequence << "build"
+      next
+    elsif fields.last == "test"
+      sequence << "unit-test"
+      next
+    end
+    if fields.last == "test-without-building"
+      udid = fields.fetch(fields.index("-destination") + 1).split("id=", 2).last
+      sequence << "#{case_for.fetch(udid)}-ui-test"
+      next
+    end
+  elsif fields[0] == "xcrun" && fields[2] == "xcresulttool"
+    sequence << "test-summary"
+    next
+  elsif fields[0] == "xcrun" && fields[2] == "simctl"
+    command = fields.fetch(3)
+    udid = fields.fetch(4)
+    label = command == "io" ? "screenshot" : command
+    sequence << "#{case_for.fetch(udid)}-#{label}"
+    next
+  end
+end
+expected = %w[
+  xcode-version build unit-test test-summary
+  iphone-en-boot iphone-en-bootstatus iphone-en-install iphone-en-launch iphone-en-ui-test iphone-en-screenshot iphone-en-terminate
+  iphone-ja-boot iphone-ja-bootstatus iphone-ja-install iphone-ja-launch iphone-ja-screenshot iphone-ja-terminate
+  ipad-en-boot ipad-en-bootstatus ipad-en-install ipad-en-launch ipad-en-ui-test ipad-en-screenshot ipad-en-terminate
+  ipad-ja-boot ipad-ja-bootstatus ipad-ja-install ipad-ja-launch ipad-ja-screenshot ipad-ja-terminate
+]
+abort "unexpected Xcode/Simulator command order:\n#{actual.join("\n")}" unless actual == expected
+RUBY
+[[ "$(grep -c $'^xcrun\t.*\tsimctl\tlaunch\t' "$fake_log")" == 4 ]] || { echo "wrong locale launch count" >&2; exit 1; }
+grep -q -- $'-AppleLanguages\t(en)' "$fake_log"
+grep -q -- $'-AppleLanguages\t(ja)' "$fake_log"
+grep -q -- $'-AppleLocale\ten_US' "$fake_log"
+grep -q -- $'-AppleLocale\tja_JP' "$fake_log"
+if rg -n '/\.artifacts/.*DerivedData|-derivedDataPath[[:space:]]+\.artifacts' "$fake_log"; then
+  echo "runner used repository-local DerivedData" >&2; exit 1
+fi
+if ! awk -F '\t' '($1 == "xcodebuild" || $1 == "xcrun") && $2 != "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer" {bad=1} END {exit bad}' "$fake_log"; then
+  echo "an Xcode command lacked command-scoped DEVELOPER_DIR" >&2
+  cat "$fake_log" >&2
+  exit 1
+fi
+
+write_visual approved
+run_finalize
+[[ -f "$final" ]] || { echo "finalizer did not publish verify.json" >&2; exit 1; }
+(cd "$repo" && swift "$source_repo/tools/validate-verify-json.swift" --file "$final" --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha")
+
+for mode in absent missing-case missing-action both-actions; do
+  prepare_repo "contract-$mode" "$mode"
+  expect_execute_failure "contract-$mode" "verification"
+  [[ ! -s "$fake_log" ]] || { echo "invalid contract reached Xcode for $mode" >&2; cat "$fake_log" >&2; exit 1; }
+done
+
+prepare_repo dirty-range
+printf '%s\n' dirty >>"$repo/docs/head.md"
+expect_execute_failure dirty-range "working tree must be clean"
+[[ ! -s "$fake_log" ]] || { echo "dirty range reached Xcode" >&2; exit 1; }
+
+prepare_repo warning
+FAKE_BUILD_MODE=warning expect_execute_failure warning "build warnings are not allowed"
+[[ ! -e "$draft" ]] || { echo "warning failure published draft" >&2; exit 1; }
+
+for mode in failed skipped zero command-fail; do
+  prepare_repo "tests-$mode"
+  FAKE_TEST_MODE="$mode" expect_execute_failure "tests-$mode" "unit tests"
+  [[ ! -e "$draft" ]] || { echo "test failure published draft" >&2; exit 1; }
+done
+
+prepare_repo tests-warning
+FAKE_TEST_MODE=warning expect_execute_failure tests-warning "unit test warnings are not allowed"
+[[ ! -e "$draft" ]] || { echo "unit-test warning published draft" >&2; exit 1; }
+
+prepare_repo build-failure
+printf '%s\n' sentinel >"$draft"
+FAKE_BUILD_MODE=fail expect_execute_failure build-failure "build command failed"
+grep -Fq sentinel "$draft" || { echo "failed execution replaced existing draft" >&2; exit 1; }
+failure_count="$(find "$(dirname "$draft")/failures" -type f -name '*.json' | wc -l | tr -d ' ')"
+FAKE_BUILD_MODE=fail expect_execute_failure build-failure-repeat "build command failed"
+new_failure_count="$(find "$(dirname "$draft")/failures" -type f -name '*.json' | wc -l | tr -d ' ')"
+[[ "$new_failure_count" -gt "$failure_count" ]] || { echo "failure records are not unique" >&2; exit 1; }
+if rg -n 'TOKEN-super-secret|configured build failure' "$(dirname "$draft")/failures"; then
+  echo "failure record leaked command output" >&2; exit 1
+fi
+
+for source in contract matrix; do
+  prepare_repo "mutated-$source"
+  FAKE_MUTATE_INPUT="$source" expect_execute_failure "mutated-$source" "$source changed during verification"
+  [[ ! -e "$draft" ]] || { echo "mutated input published draft" >&2; exit 1; }
+done
+
+prepare_repo case-failure
+FAKE_CASE_MODE=launch-fail expect_execute_failure case-failure "case iphone-ja failed"
+[[ ! -e "$draft" ]] || { echo "case failure published draft" >&2; exit 1; }
+
+prepare_repo fallback
+mkdir -p "$scratch/FakeXcode/Contents/Developer"
+/usr/bin/ruby -rjson - "$matrix" "$scratch/FakeXcode/Contents/Developer" <<'RUBY'
+path, developer = ARGV
+document = JSON.parse(File.read(path))
+document.fetch("xcode")["path"] = developer
+File.write(path, JSON.pretty_generate(document) + "\n")
+RUBY
+FAKE_PREFERRED_XCODE_INVALID=1 run_execute
+grep -Fq $'xcode-select\tDEVELOPER_DIR=\t-p' "$fake_log"
+awk -F '\t' -v expected="DEVELOPER_DIR=$scratch/FakeXcode/Contents/Developer" '$1 == "xcodebuild" || $1 == "xcrun" {last=$2} END {exit last == expected ? 0 : 1}' "$fake_log"
+
+for mode in rejected wrong-digest wrong-head missing-case case-finding; do
+  prepare_repo "final-$mode"
+  run_execute
+  write_visual "$mode"
+  expect_finalize_failure "final-$mode" "visual"
+done
+
+prepare_repo draft-mutation
+run_execute
+write_visual approved
+printf '\n' >>"$draft"
+expect_finalize_failure draft-mutation "draft digest"
+
+prepare_repo draft-nested-schema-mutation
+run_execute
+/usr/bin/ruby -rjson - "$draft" <<'RUBY'
+path = ARGV.fetch(0)
+document = JSON.parse(File.read(path))
+document.fetch("build")["unexpected"] = true
+File.write(path, JSON.pretty_generate(document) + "\n")
+RUBY
+write_visual approved
+expect_finalize_failure draft-nested-schema-mutation "visual"
+
+prepare_repo stale-head
+run_execute
+write_visual approved
+printf '%s\n' '# New head' >"$repo/docs/new-head.md"
+git -C "$repo" add -- docs/new-head.md
+git -C "$repo" commit -q -m new-head
+expect_finalize_failure stale-head "current Git Head"
+
+prepare_repo canonical-paths
+run_execute
+write_visual approved
+if (cd "$repo" && "$runner" --finalize --issue 42 --expected-base "$base_sha" --draft "$draft" --visual-result "$visual") >"$scratch/path.stdout" 2>"$scratch/path.stderr"; then
+  echo "finalizer accepted absolute non-interface paths" >&2; exit 1
+fi
+grep -Fq "canonical" "$scratch/path.stderr"
+
+if find "$scratch" -name '*.tmp' -o -name '.verify-*' | rg -q .; then
+  echo "runner left publication temporary files" >&2; exit 1
+fi
+
+echo "all iOS runner tests passed"

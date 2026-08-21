@@ -92,6 +92,101 @@ AIはスクリーンショットごとに次を評価します。
 
 主開発モデルが一次評価し、反対モデルレビューへ画像を含めます。見た目の好みだけで仕様を増やしません。
 
+### Stage D.1: 二段階の証拠公開
+
+application検証は、実行と視覚承認を分けます。最初のcommandは現在のGit Head、信頼済みBase、canonical Issue contract、完全な固定matrixをXcode commandより先に検証します。Buildを1回、unit testを1回だけ実行し、その後4caseを直列実行します。
+
+```bash
+tools/verify-ios-issue.sh \
+  --issue 42 \
+  --expected-base "${BASE_SHA}" \
+  --issue-contract .artifacts/issues/42/issue-contract.json \
+  --matrix .artifacts/batches/settings-2026-08-21/simulator-matrix.json \
+  --project ExampleApp.xcodeproj \
+  --scheme ExampleApp
+```
+
+runnerは `/tmp/ios-template-verify/${worktreeId}/issue-42/${headSha}/` の `DerivedData`、`Build.xcresult`、`Tests.xcresult` だけを使い、Repository内へDerivedDataやresult bundleを作りません。`/Applications/Xcode.app/Contents/Developer` が有効なら優先し、それ以外は `xcode-select -p` のpathで `xcodebuild -version` が成功した場合だけ使います。解決は1回だけ行い、すべての `xcodebuild` と `xcrun` へcommand-scoped `DEVELOPER_DIR` を渡します。callerが実行binaryを環境変数で差し替えるinterfaceは持ちません。
+
+実行成功時はfinal結果ではなく、canonical `.artifacts/issues/42/${headSha}/verify-draft.json` をatomic publishします。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceは空でない実在stage/case参照です。
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "awaiting-visual-review",
+  "issue": 42,
+  "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "issueContract": {"path": ".artifacts/issues/42/issue-contract.json", "digest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e"},
+  "matrixFile": ".artifacts/batches/settings-2026-08-21/simulator-matrix.json",
+  "matrixDigest": "sha256:490d32bf9174b57fb9b05a00e0231d22082e4a9576b0377f0df2641d96349d0b",
+  "executionRoute": "xcodebuild-simctl",
+  "xcode": {"path": "/Applications/Xcode.app/Contents/Developer", "version": "26.5", "build": "17F42"},
+  "build": {"status": "passed", "scheme": "ExampleApp", "warningsAdded": 0},
+  "tests": {"status": "passed", "passed": 24, "failed": 0, "skipped": 0},
+  "cases": [
+    {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/screenshot.png", "mechanicalCheck": "test:ExampleAppUITests/SmokeTests/testLaunch"},
+    {"id": "iphone-ja", "status": "passed", "screenshot": "iphone-ja/screenshot.png", "mechanicalCheck": "assertion:launch-succeeded"},
+    {"id": "ipad-en", "status": "passed", "screenshot": "ipad-en/screenshot.png", "mechanicalCheck": "test:ExampleAppUITests/SmokeTests/testLaunch"},
+    {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/screenshot.png", "mechanicalCheck": "assertion:launch-succeeded"}
+  ],
+  "acceptanceEvidence": [
+    {"id": "AC-1", "evidence": ["stage:build", "stage:unit-tests", "cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]}
+  ],
+  "workspaceArtifacts": {
+    "derivedDataPath": "/tmp/ios-template-verify/worktree-id/issue-42/0123456789abcdef0123456789abcdef01234567/DerivedData",
+    "buildResultBundlePath": "/tmp/ios-template-verify/worktree-id/issue-42/0123456789abcdef0123456789abcdef01234567/Build.xcresult",
+    "testResultBundlePath": "/tmp/ios-template-verify/worktree-id/issue-42/0123456789abcdef0123456789abcdef01234567/Tests.xcresult"
+  },
+  "executionCompletedAt": "2026-08-21T12:55:00+09:00"
+}
+```
+
+Task 5のAI評価はcanonical `.artifacts/issues/42/${headSha}/visual-result.json` を次のexact schemaで書きます。`draft.path` は同じIssue/Headのcanonical path、`draft.digest` はdraftのexact bytesです。4件すべての `id` と `screenshot` はdraftに一致し、承認時はtop-levelと各caseの `findings` が空です。
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "approved",
+  "issue": 42,
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "draft": {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify-draft.json", "digest": "sha256:4ae755fb899a15125dfe7db017761abe901e1de00bf266894157826c827a3f2f"},
+  "cases": [
+    {"id": "iphone-en", "status": "approved", "screenshot": "iphone-en/screenshot.png", "findings": []},
+    {"id": "iphone-ja", "status": "approved", "screenshot": "iphone-ja/screenshot.png", "findings": []},
+    {"id": "ipad-en", "status": "approved", "screenshot": "ipad-en/screenshot.png", "findings": []},
+    {"id": "ipad-ja", "status": "approved", "screenshot": "ipad-ja/screenshot.png", "findings": []}
+  ],
+  "findings": [],
+  "reviewedAt": "2026-08-21T13:00:00+09:00"
+}
+```
+
+次のfinalize commandはcurrent Head、canonical path、draft digest、Issue、4case、Screenshot path、承認状態、時刻順序を再検証します。strict Task 3 schemaのcandidateを完成させてatomic renameし、exact Base/Issue/Headを引数に `tools/validate-verify-json.swift` を呼びます。失敗時にpartial `verify.json` を残しません。
+
+```bash
+tools/verify-ios-issue.sh --finalize \
+  --issue 42 \
+  --expected-base "${BASE_SHA}" \
+  --draft ".artifacts/issues/42/${HEAD_SHA}/verify-draft.json" \
+  --visual-result ".artifacts/issues/42/${HEAD_SHA}/visual-result.json"
+```
+
+各失敗は既存結果を上書きせず、`.artifacts/issues/42/${headSha}/failures/failure-${timestamp}-${unique}.json` へ次のexact sanitized schemaでexclusive作成します。`stage` と `error` はrunnerが定める非秘密の分類だけで、command output、Token、個人pathは保存しません。
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "failed",
+  "issue": 42,
+  "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "stage": "unit-tests",
+  "error": "unit tests failed, were skipped, or reported invalid counts",
+  "recordedAt": "2026-08-21T12:50:00+09:00"
+}
+```
+
 ### Stage E: Evidence
 
 `.artifacts/issues/${issueNumber}/${headSha}/verify.json` を生成します。

@@ -325,6 +325,46 @@ mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" 'document.f
 refresh_contract_digest
 expect_failure duplicate-contract-ac "acceptance IDs must be stable, ordered, and start at AC-1"
 
+prepare_fixture optional-verification-contract
+mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
+  document["verification"] = {
+    "bundleIdentifier" => "com.example.TemplateApp",
+    "cases" => [
+      {"id" => "iphone-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
+      {"id" => "iphone-ja", "assertion" => {"kind" => "launch-succeeded"}},
+      {"id" => "ipad-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
+      {"id" => "ipad-ja", "assertion" => {"kind" => "launch-succeeded"}}
+    ]
+  }
+'
+refresh_contract_digest
+run_validator
+
+prepare_fixture incomplete-verification-contract
+mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
+  document["verification"] = {
+    "bundleIdentifier" => "com.example.TemplateApp",
+    "cases" => [{"id" => "iphone-en", "assertion" => {"kind" => "launch-succeeded"}}]
+  }
+'
+refresh_contract_digest
+expect_failure incomplete-verification-contract "verification.cases must contain the exact four ordered case IDs"
+
+prepare_fixture ambiguous-verification-action
+mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
+  document["verification"] = {
+    "bundleIdentifier" => "com.example.TemplateApp",
+    "cases" => [
+      {"id" => "iphone-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch", "assertion" => {"kind" => "launch-succeeded"}},
+      {"id" => "iphone-ja", "assertion" => {"kind" => "launch-succeeded"}},
+      {"id" => "ipad-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
+      {"id" => "ipad-ja", "assertion" => {"kind" => "launch-succeeded"}}
+    ]
+  }
+'
+refresh_contract_digest
+expect_failure ambiguous-verification-action "must contain exactly one of testIdentifier or assertion"
+
 prepare_fixture missing-execution-route
 mutate_json "$evidence_file" 'document.delete("executionRoute")'
 expect_failure missing-execution-route "missing keys executionRoute"
