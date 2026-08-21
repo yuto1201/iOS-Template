@@ -3,13 +3,26 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
-xcrun_bin="${XCRUN_BIN:-xcrun}"
+
+cleanup_paths=()
+cleanup() {
+  local path
+  for path in "${cleanup_paths[@]-}"; do
+    [[ -n "$path" ]] && rm -f -- "$path"
+  done
+}
+make_temp() {
+  local variable="$1"
+  local label="$2"
+  local path
+  path="$(mktemp "${TMPDIR:-/tmp}/ios-template-${label}.XXXXXX")"
+  cleanup_paths+=("$path")
+  printf -v "$variable" '%s' "$path"
+}
+trap cleanup EXIT
+
 matrix_io() {
-  if [[ "${SIMULATOR_MATRIX_TESTING:-}" == "1" && "${SIMULATOR_MATRIX_IO_TEST_BIN:-}" == /tmp/ios-template-* && -x "${SIMULATOR_MATRIX_IO_TEST_BIN:-}" ]]; then
-    "$SIMULATOR_MATRIX_IO_TEST_BIN" "$@"
-  else
-    swift tools/simulator-matrix-io.swift "$@"
-  fi
+  swift tools/simulator-matrix-io.swift "$@"
 }
 
 [[ $# -eq 2 && $1 == "--matrix" ]] || {
@@ -30,19 +43,18 @@ batch_id="${relative%/simulator-matrix.json}"
   exit 1
 }
 
-matrix_copy="$(mktemp /tmp/ios-template-destroy-matrix.XXXXXX)"
-devices_copy="$(mktemp /tmp/ios-template-destroy-devices.XXXXXX)"
-udids="$(mktemp /tmp/ios-template-destroy-udids.XXXXXX)"
-trap 'rm -f "$matrix_copy" "$devices_copy" "$udids"' EXIT
+make_temp matrix_copy destroy-matrix
+make_temp devices_copy destroy-devices
+make_temp udids destroy-udids
 matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$matrix_copy"
-"$xcrun_bin" simctl list devices -j >"$devices_copy"
+xcrun simctl list devices -j >"$devices_copy"
 matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$devices_copy" --name devices.json
-ruby tools/validate-simulator-matrix.rb "$matrix_copy" "$batch_id" "$devices_copy"
+ruby tools/validate-simulator-matrix.rb complete "$matrix_copy" "$batch_id" "$devices_copy"
 ruby -rjson - "$matrix_copy" >"$udids" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
 puts matrix.fetch("cases").map { |entry| entry.fetch("udid") }
 RUBY
 
 while IFS= read -r udid; do
-  "$xcrun_bin" simctl delete "$udid"
+  xcrun simctl delete "$udid"
 done <"$udids"

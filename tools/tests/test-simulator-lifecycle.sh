@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 cd "$repo_root"
 
 scratch="$(mktemp -d -t simulator-lifecycle.XXXXXX)"
+mkdir -p "$scratch/tmp"
 batch_id="lifecycle-$RANDOM-$RANDOM"
 partial_batch="partial-$RANDOM-$RANDOM"
 matrix=".artifacts/batches/$batch_id/simulator-matrix.json"
@@ -13,17 +14,18 @@ partial_matrix=".artifacts/batches/$partial_batch/simulator-matrix.json"
   echo "test batch artifact unexpectedly already exists" >&2
   exit 1
 }
-trap 'rm -rf "$scratch" "$io_helper" "$(dirname "$matrix")" "$(dirname "$partial_matrix")"' EXIT
+trap 'rm -rf "$scratch" "$(dirname "$matrix")" "$(dirname "$partial_matrix")"' EXIT
 
 fake_bin="$scratch/bin"
-io_helper="/tmp/ios-template-lifecycle-helper-$$"
+io_helper="$scratch/simulator-matrix-io"
 state="$scratch/devices.json"
 log="$scratch/xcrun.log"
+xcode_log="$scratch/xcode.log"
 mkdir -p "$fake_bin"
 cp tools/tests/fixtures/simctl/devices.json "$state"
 
 cat >"$fake_bin/xcrun" <<'RUBY'
-#!/usr/bin/env ruby
+#!/usr/bin/ruby --disable-gems
 require "json"
 
 log = ENV.fetch("FAKE_SIMCTL_LOG")
@@ -37,6 +39,7 @@ case command
 when "list"
   subject, format = ARGV
   abort "expected JSON list" unless format == "-j"
+  abort "configured list failure" if ENV["FAKE_LIST_MODE"] == "fail-devicetypes" && subject == "devicetypes"
   path = subject == "devices" ? state_path : File.join(fixtures, "#{subject}.json")
   print File.read(path)
 when "create"
@@ -77,13 +80,99 @@ else
 end
 RUBY
 chmod +x "$fake_bin/xcrun"
-swiftc tools/simulator-matrix-io.swift -o "$io_helper"
+cat >"$fake_bin/xcode-select" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'xcode-select\t%s\n' "$*" >>"$FAKE_XCODE_LOG"
+[[ "$#" -eq 1 && "$1" == "-p" ]]
+printf '%s\n' '/Applications/Fake Xcode.app/Contents/Developer'
+SH
+chmod +x "$fake_bin/xcode-select"
+
+cat >"$fake_bin/xcodebuild" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'xcodebuild\t%s\n' "$*" >>"$FAKE_XCODE_LOG"
+[[ "$#" -eq 1 && "$1" == "-version" ]]
+printf '%s\n' 'Xcode 26.5' 'Build version 17F42'
+SH
+chmod +x "$fake_bin/xcodebuild"
+
+real_swift="$(command -v swift)"
+swiftc -D MATRIX_IO_TESTING tools/simulator-matrix-io.swift -o "$io_helper"
+cat >"$fake_bin/swift" <<'RUBY'
+#!/usr/bin/ruby --disable-gems
+require "json"
+
+arguments = ARGV.dup
+if arguments.first == "tools/simulator-matrix-io.swift"
+  arguments.shift
+  exec ENV.fetch("MATRIX_IO_HELPER"), *arguments
+end
+
+unless arguments.first == "tools/resolve-simulator-matrix.swift"
+  exec ENV.fetch("REAL_SWIFT"), *arguments
+end
+
+batch_index = arguments.index("--batch-id")
+abort "missing batch ID" unless batch_index
+matrix = {
+  "schemaVersion" => 1,
+  "batchId" => arguments.fetch(batch_index + 1),
+  "resolvedAt" => "2026-08-21T12:00:00+09:00",
+  "runtime" => {
+    "identifier" => "com.apple.CoreSimulator.SimRuntime.iOS-10-3",
+    "version" => "10.3"
+  },
+  "cases" => [
+    ["iphone-en", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro", "iPhone 10 Pro", "en_US", "en"],
+    ["iphone-ja", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro", "iPhone 10 Pro", "ja_JP", "ja"],
+    ["ipad-en", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "iPad Air 13-inch (M3)", "en_US", "en"],
+    ["ipad-ja", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "iPad Air 13-inch (M3)", "ja_JP", "ja"]
+  ].map do |id, family, identifier, name, locale, language|
+    {"id" => id, "family" => family, "deviceType" => {"identifier" => identifier, "name" => name}, "locale" => locale, "language" => language}
+  end
+}
+case ENV["FAKE_RESOLVER_MODE"]
+when "wrong-batch"
+  matrix["batchId"] = "otherwise-valid-wrong-batch"
+when "split-family-types"
+  matrix.fetch("cases").fetch(1)["deviceType"] = {
+    "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-Other-Pro",
+    "name" => "iPhone Other Pro"
+  }
+when "preexisting-udid"
+  matrix.fetch("cases").fetch(0)["udid"] = "00000000-0000-0000-0000-000000000999"
+when nil
+else
+  abort "unknown fake resolver mode"
+end
+puts JSON.pretty_generate(matrix)
+RUBY
+chmod +x "$fake_bin/swift"
+
+malicious_command="$scratch/malicious-command"
+cat >"$malicious_command" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' invoked >>"$MALICIOUS_OVERRIDE_LOG"
+exit 99
+SH
+chmod +x "$malicious_command"
+malicious_log="$scratch/malicious.log"
 
 run() {
-  XCRUN_BIN="$fake_bin/xcrun" \
+  PATH="$fake_bin:$PATH" \
+  TMPDIR="$scratch/tmp" \
+  RUBYOPT="--disable-gems" \
+  REAL_SWIFT="$real_swift" \
+  MATRIX_IO_HELPER="$io_helper" \
+  XCRUN_BIN="$malicious_command" \
   SIMULATOR_MATRIX_TESTING=1 \
-  SIMULATOR_MATRIX_IO_TEST_BIN="$io_helper" \
-  SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
+  SIMULATOR_MATRIX_IO_TEST_BIN="$malicious_command" \
+  SIMULATOR_MATRIX_RESOLVER="$malicious_command" \
+  SIMULATOR_MATRIX_XCODE_JSON='{"path":"/untrusted","version":"0","build":"evil"}' \
+  MALICIOUS_OVERRIDE_LOG="$malicious_log" \
+  FAKE_XCODE_LOG="$xcode_log" \
   FAKE_SIMCTL_LOG="$log" \
   FAKE_SIMCTL_STATE="$state" \
   FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
@@ -93,47 +182,43 @@ run() {
 run_with_create_mode() {
   local mode="$1"
   shift
-  XCRUN_BIN="$fake_bin/xcrun" \
-  SIMULATOR_MATRIX_TESTING=1 \
-  SIMULATOR_MATRIX_IO_TEST_BIN="$io_helper" \
-  SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_CREATE_MODE="$mode" \
-  FAKE_SIMCTL_LOG="$log" \
-  FAKE_SIMCTL_STATE="$state" \
-  FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
-  "$@"
+  run "$@"
 }
 
 run_with_delete_mode() {
-  XCRUN_BIN="$fake_bin/xcrun" \
-  SIMULATOR_MATRIX_TESTING=1 \
-  SIMULATOR_MATRIX_IO_TEST_BIN="$io_helper" \
-  SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_DELETE_MODE="fail-first" \
-  FAKE_SIMCTL_LOG="$log" \
-  FAKE_SIMCTL_STATE="$state" \
-  FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
-  "$@"
+  run "$@"
 }
 
-run_with_resolver() {
-  local resolver="$1"
+run_with_list_mode() {
+  FAKE_LIST_MODE="fail-devicetypes" \
+  run "$@"
+}
+
+run_with_resolver_mode() {
+  local mode="$1"
   shift
-  XCRUN_BIN="$fake_bin/xcrun" \
-  SIMULATOR_MATRIX_TESTING=1 \
-  SIMULATOR_MATRIX_IO_TEST_BIN="$io_helper" \
-  SIMULATOR_MATRIX_RESOLVER="$resolver" \
-  SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
-  FAKE_SIMCTL_LOG="$log" \
-  FAKE_SIMCTL_STATE="$state" \
-  FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
-  "$@"
+  FAKE_RESOLVER_MODE="$mode" run "$@"
+}
+
+assert_test_tmp_clean() {
+  if find "$scratch/tmp" -mindepth 1 -print -quit | rg -q .; then
+    echo "production lifecycle left a temporary file in test TMPDIR" >&2
+    find "$scratch/tmp" -mindepth 1 -maxdepth 1 -print >&2
+    exit 1
+  fi
 }
 
 run bash tools/resolve-simulator-matrix.sh --batch-id "$batch_id" --output "$matrix"
 ruby -rjson - "$matrix" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
 abort "expected exactly four cases" unless matrix.fetch("cases").length == 4
+abort "Xcode metadata did not come from trusted commands" unless matrix.fetch("xcode") == {
+  "path" => "/Applications/Fake Xcode.app/Contents/Developer",
+  "version" => "26.5",
+  "build" => "17F42"
+}
 expected = {
   "iphone-en" => "00000000-0000-0000-0000-000000000001",
   "iphone-ja" => "00000000-0000-0000-0000-000000000002",
@@ -143,6 +228,10 @@ expected = {
 actual = matrix.fetch("cases").to_h { |entry| [entry.fetch("id"), entry.fetch("udid")] }
 abort "unexpected created UDIDs: #{actual.inspect}" unless actual == expected
 RUBY
+[[ ! -e "$malicious_log" ]] || { echo "legacy executable/data override was invoked" >&2; exit 1; }
+printf '%s\n' $'xcode-select\t-p' $'xcodebuild\t-version' >"$scratch/expected-xcode.log"
+cmp -s "$scratch/expected-xcode.log" "$xcode_log" || { diff -u "$scratch/expected-xcode.log" "$xcode_log"; exit 1; }
+assert_test_tmp_clean
 
 expected_create_log="$scratch/expected-create.log"
 cat >"$expected_create_log" <<EOF
@@ -161,6 +250,7 @@ cmp -s "$expected_create_log" "$log" || { diff -u "$expected_create_log" "$log";
 run bash tools/resolve-simulator-matrix.sh --batch-id "$batch_id" --output "$matrix"
 printf 'simctl\tlist\tdevices\t-j\n' >"$scratch/expected-reuse.log"
 cmp -s "$scratch/expected-reuse.log" "$log" || { diff -u "$scratch/expected-reuse.log" "$log"; exit 1; }
+assert_test_tmp_clean
 
 mkdir -p "$(dirname "$partial_matrix")"
 printf '{"schemaVersion":1,"batchId":"%s","cases":[]}' "$partial_batch" >"$partial_matrix"
@@ -170,21 +260,22 @@ if run bash tools/resolve-simulator-matrix.sh --batch-id "$partial_batch" --outp
   exit 1
 fi
 [[ ! -s "$log" ]] || { echo "partial matrix invoked simctl" >&2; exit 1; }
+assert_test_tmp_clean
 
-malformed_resolver="$scratch/malformed-resolver"
-printf '%s\n' '#!/usr/bin/env bash' 'printf "{\"schemaVersion\":1,\"batchId\":\"bad\",\"resolvedAt\":\"x\",\"runtime\":{},\"cases\":[]}"' >"$malformed_resolver"
-chmod +x "$malformed_resolver"
-malformed_batch="malformed-$RANDOM-$RANDOM"
-: >"$log"
-if run_with_resolver "$malformed_resolver" bash tools/resolve-simulator-matrix.sh --batch-id "$malformed_batch" --output ".artifacts/batches/$malformed_batch/simulator-matrix.json"; then
-  echo "resolver accepted malformed pre-create matrix" >&2
-  exit 1
-fi
-rm -rf ".artifacts/batches/$malformed_batch"
-if rg -q '^simctl\tcreate\t' "$log"; then
-  echo "malformed pre-create matrix reached simctl create" >&2
-  exit 1
-fi
+for resolver_mode in wrong-batch split-family-types preexisting-udid; do
+  adversarial_batch="$resolver_mode-$RANDOM-$RANDOM"
+  : >"$log"
+  if run_with_resolver_mode "$resolver_mode" bash tools/resolve-simulator-matrix.sh --batch-id "$adversarial_batch" --output ".artifacts/batches/$adversarial_batch/simulator-matrix.json"; then
+    echo "resolver accepted otherwise-valid $resolver_mode pre-create matrix" >&2
+    exit 1
+  fi
+  if rg -q '^simctl\tcreate\t' "$log"; then
+    echo "$resolver_mode pre-create matrix reached simctl create" >&2
+    exit 1
+  fi
+  rm -rf ".artifacts/batches/$adversarial_batch"
+  assert_test_tmp_clean
+done
 
 : >"$log"
 run bash tools/destroy-simulator-matrix.sh --matrix "$matrix"
@@ -197,6 +288,7 @@ simctl	delete	00000000-0000-0000-0000-000000000003
 simctl	delete	00000000-0000-0000-0000-000000000004
 EOF
 cmp -s "$expected_delete_log" "$log" || { diff -u "$expected_delete_log" "$log"; exit 1; }
+assert_test_tmp_clean
 
 delete_failure_batch="delete-failure-$RANDOM-$RANDOM"
 delete_failure_matrix=".artifacts/batches/$delete_failure_batch/simulator-matrix.json"
@@ -207,6 +299,7 @@ if run_with_delete_mode bash tools/destroy-simulator-matrix.sh --matrix "$delete
   exit 1
 fi
 [[ "$(wc -l <"$log")" -eq 2 ]] || { echo "destroy did not stop on first delete failure" >&2; exit 1; }
+assert_test_tmp_clean
 rm -rf "$(dirname "$delete_failure_matrix")"
 
 mismatch_batch="mismatch-$RANDOM-$RANDOM"
@@ -230,6 +323,7 @@ if run bash tools/destroy-simulator-matrix.sh --matrix "$mismatch_matrix"; then
   exit 1
 fi
 [[ "$(wc -l <"$log")" -eq 1 ]] || { echo "destroy deleted before validating all targets" >&2; exit 1; }
+assert_test_tmp_clean
 rm -rf "$(dirname "$mismatch_matrix")"
 
 for create_mode in repeat-udid duplicate-name wrong-type wrong-runtime; do
@@ -246,6 +340,7 @@ for create_mode in repeat-udid duplicate-name wrong-type wrong-runtime; do
     echo "resolver deleted an unvalidated UDID after $create_mode" >&2
     exit 1
   fi
+  assert_test_tmp_clean
   rm -rf "$(dirname "$mode_matrix")"
 done
 
@@ -261,7 +356,23 @@ if rg -q $'\tsimctl\tdelete\t|\tsimctl\tdelete$|^simctl\tdelete\t' "$log"; then
   echo "resolver deleted an unvalidated UDID after create failure" >&2
   exit 1
 fi
+assert_test_tmp_clean
 rm -rf "$(dirname "$failed_matrix")"
+
+capture_failure_batch="capture-failure-$RANDOM-$RANDOM"
+capture_failure_matrix=".artifacts/batches/$capture_failure_batch/simulator-matrix.json"
+: >"$log"
+if run_with_list_mode bash tools/resolve-simulator-matrix.sh --batch-id "$capture_failure_batch" --output "$capture_failure_matrix"; then
+  echo "resolver succeeded after configured list capture failure" >&2
+  exit 1
+fi
+[[ ! -e "$capture_failure_matrix" ]] || { echo "resolver published after list capture failure" >&2; exit 1; }
+if rg -q '^simctl\tcreate\t' "$log"; then
+  echo "list capture failure reached simctl create" >&2
+  exit 1
+fi
+assert_test_tmp_clean
+rm -rf "$(dirname "$capture_failure_matrix")"
 
 symlink_batch="symlink-$RANDOM-$RANDOM"
 mkdir -p .artifacts/batches "$scratch/symlink-target"
@@ -299,6 +410,22 @@ fi
 published_copy="$scratch/published.json"
 "$io_helper" --operation read --repo "$repo_root" --batch "$io_batch" --name simulator-matrix.json >"$published_copy"
 [[ "$(cat "$published_copy")" == "first" ]] || { echo "publication collision changed final matrix" >&2; exit 1; }
+
+prelink_batch="prelink-$RANDOM-$RANDOM"
+if MATRIX_IO_TEST_PRELINK_FAILURE=1 "$io_helper" --operation publish --repo "$repo_root" --batch "$prelink_batch" --source "$io_source" --name simulator-matrix.json; then
+  echo "helper ignored configured pre-link failure" >&2
+  exit 1
+fi
+[[ ! -e ".artifacts/batches/$prelink_batch/simulator-matrix.json" ]] || {
+  echo "pre-link failure left a final matrix" >&2
+  exit 1
+}
+if find ".artifacts/batches/$prelink_batch" -type f -name '.*' -print -quit | rg -q .; then
+  echo "pre-link failure left a hidden publication temporary" >&2
+  exit 1
+fi
+rm -rf ".artifacts/batches/$prelink_batch"
+
 ln -s "$io_source" "$scratch/symlink-source.json"
 if "$io_helper" --operation write-unique --repo "$repo_root" --batch "$io_batch" --source "$scratch/symlink-source.json" --prefix creation-failure; then
   echo "helper accepted a symlinked failure-report source" >&2
@@ -313,5 +440,6 @@ if find .artifacts/batches -type f -name '.*' -print -quit | rg -q .; then
   echo "lifecycle left a hidden batch temporary file" >&2
   exit 1
 fi
+[[ ! -e "$malicious_log" ]] || { echo "legacy executable/data override was invoked" >&2; exit 1; }
 
 echo "all simulator lifecycle tests passed"

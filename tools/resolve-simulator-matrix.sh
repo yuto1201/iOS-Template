@@ -3,14 +3,26 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
-xcrun_bin="${XCRUN_BIN:-xcrun}"
-resolver_bin="${SIMULATOR_MATRIX_RESOLVER:-swift}"
+
+cleanup_paths=()
+cleanup() {
+  local path
+  for path in "${cleanup_paths[@]-}"; do
+    [[ -n "$path" ]] && rm -f -- "$path"
+  done
+}
+make_temp() {
+  local variable="$1"
+  local label="$2"
+  local path
+  path="$(mktemp "${TMPDIR:-/tmp}/ios-template-${label}.XXXXXX")"
+  cleanup_paths+=("$path")
+  printf -v "$variable" '%s' "$path"
+}
+trap cleanup EXIT
+
 matrix_io() {
-  if [[ "${SIMULATOR_MATRIX_TESTING:-}" == "1" && "${SIMULATOR_MATRIX_IO_TEST_BIN:-}" == /tmp/ios-template-* && -x "${SIMULATOR_MATRIX_IO_TEST_BIN:-}" ]]; then
-    "$SIMULATOR_MATRIX_IO_TEST_BIN" "$@"
-  else
-    swift tools/simulator-matrix-io.swift "$@"
-  fi
+  swift tools/simulator-matrix-io.swift "$@"
 }
 
 usage() {
@@ -33,15 +45,13 @@ expected_output="$repo_root/.artifacts/batches/$batch_id/simulator-matrix.json"
 }
 matrix_state="$(matrix_io --operation exists --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json)"
 if [[ "$matrix_state" == "present" ]]; then
-  reuse_matrix="$(mktemp /tmp/ios-template-reuse-matrix.XXXXXX)"
-  reuse_devices="$(mktemp /tmp/ios-template-reuse-devices.XXXXXX)"
-  trap 'rm -f "$reuse_matrix" "$reuse_devices"' EXIT
+  make_temp reuse_matrix reuse-matrix
+  make_temp reuse_devices reuse-devices
   matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$reuse_matrix"
-  ruby tools/validate-simulator-matrix.rb "$reuse_matrix" "$batch_id"
-  "$xcrun_bin" simctl list devices -j >"$reuse_devices"
+  ruby tools/validate-simulator-matrix.rb complete "$reuse_matrix" "$batch_id"
+  xcrun simctl list devices -j >"$reuse_devices"
   matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$reuse_devices" --name devices.json
-  ruby tools/validate-simulator-matrix.rb "$reuse_matrix" "$batch_id" "$reuse_devices"
-  trap - EXIT
+  ruby tools/validate-simulator-matrix.rb complete "$reuse_matrix" "$batch_id" "$reuse_devices"
   echo "$expected_output"
   exit 0
 fi
@@ -49,41 +59,42 @@ fi
 capture_list() {
   local subject="$1"
   local temporary
-  temporary="$(mktemp "/tmp/ios-template-${subject}.XXXXXX")"
-  "$xcrun_bin" simctl list "$subject" -j >"$temporary"
+  make_temp temporary "$subject"
+  xcrun simctl list "$subject" -j >"$temporary"
   matrix_io \
     --operation replace --repo "$repo_root" --batch "$batch_id" \
     --source "$temporary" --name "$subject.json"
-  rm -f "$temporary"
 }
 
 capture_list runtimes
 capture_list devicetypes
 capture_list devices
 
-working_matrix="$(mktemp "/tmp/ios-template-matrix.XXXXXX")"
-plan_file="$(mktemp "/tmp/ios-template-plan.XXXXXX")"
-created_file="$(mktemp "/tmp/ios-template-created.XXXXXX")"
-runtimes_input="$(mktemp "/tmp/ios-template-runtimes.XXXXXX")"
-types_input="$(mktemp "/tmp/ios-template-types.XXXXXX")"
-devices_input="$(mktemp "/tmp/ios-template-devices.XXXXXX")"
-trap 'rm -f "$working_matrix" "$plan_file" "$created_file" "$runtimes_input" "$types_input" "$devices_input"' EXIT
+make_temp working_matrix matrix
+make_temp plan_file plan
+make_temp created_file created
+make_temp runtimes_input runtimes
+make_temp types_input types
+make_temp devices_input devices
 matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name runtimes.json >"$runtimes_input"
 matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name devicetypes.json >"$types_input"
 matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name devices.json >"$devices_input"
 
-"$resolver_bin" tools/resolve-simulator-matrix.swift \
+swift tools/resolve-simulator-matrix.swift \
   --runtimes "$runtimes_input" \
   --device-types "$types_input" \
   --devices "$devices_input" \
   --batch-id "$batch_id" >"$working_matrix"
 
-if [[ -n "${SIMULATOR_MATRIX_XCODE_JSON:-}" ]]; then
-  xcode_json="$SIMULATOR_MATRIX_XCODE_JSON"
+ruby tools/validate-simulator-matrix.rb planned "$working_matrix" "$batch_id"
+
+if [[ -n "${DEVELOPER_DIR:-}" ]]; then
+  developer_path="$DEVELOPER_DIR"
 else
-  developer_path="${DEVELOPER_DIR:-$(xcode-select -p)}"
-  xcode_version="$(xcodebuild -version)"
-  xcode_json="$(ruby -rjson - "$developer_path" "$xcode_version" <<'RUBY'
+  developer_path="$(xcode-select -p)"
+fi
+xcode_version="$(xcodebuild -version)"
+xcode_json="$(ruby -rjson - "$developer_path" "$xcode_version" <<'RUBY'
 path, output = ARGV
 version = output[/Xcode\s+([^\n]+)/, 1]
 build = output[/Build version\s+([^\n]+)/, 1]
@@ -91,23 +102,15 @@ abort "blocked:environment: unable to resolve Xcode version/build" unless versio
 puts JSON.generate({"path" => path, "version" => version, "build" => build})
 RUBY
 )"
-fi
 ruby -rjson - "$working_matrix" "$xcode_json" <<'RUBY'
 path, xcode_json = ARGV
 matrix = JSON.parse(File.read(path))
-expected = [["iphone-en", "iPhone", "en_US", "en"], ["iphone-ja", "iPhone", "ja_JP", "ja"], ["ipad-en", "iPad", "en_US", "en"], ["ipad-ja", "iPad", "ja_JP", "ja"]]
-abort "blocked:environment: invalid pre-create matrix" unless matrix.keys.sort == %w[batchId cases resolvedAt runtime schemaVersion] && matrix["schemaVersion"] == 1 && matrix["cases"].map { |entry| [entry["id"], entry["family"], entry["locale"], entry["language"]] } == expected
-abort "blocked:environment: invalid pre-create matrix" unless matrix["resolvedAt"].is_a?(String) && !matrix["resolvedAt"].empty? && matrix["runtime"].is_a?(Hash) && matrix["runtime"].keys.sort == %w[identifier version] && matrix["runtime"].values.all? { |value| value.is_a?(String) && !value.empty? }
-matrix["cases"].each do |entry|
-  abort "blocked:environment: invalid pre-create matrix" unless entry.keys.sort == %w[deviceType family id language locale]
-  type = entry["deviceType"]
-  abort "blocked:environment: invalid pre-create matrix" unless type.is_a?(Hash) && type.keys.sort == %w[identifier name] && type.values.all? { |value| value.is_a?(String) && !value.empty? }
-end
 xcode = JSON.parse(xcode_json)
 abort "blocked:environment: invalid Xcode metadata" unless xcode.is_a?(Hash) && xcode.keys.sort == %w[build path version] && xcode.values.all? { |value| value.is_a?(String) && !value.empty? }
 matrix["xcode"] = xcode
 File.write(path, JSON.pretty_generate(matrix) + "\n")
 RUBY
+ruby tools/validate-simulator-matrix.rb planned-with-xcode "$working_matrix" "$batch_id"
 
 ruby -rjson - "$working_matrix" "$batch_id" >"$plan_file" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
@@ -130,7 +133,7 @@ record_failure() {
   local failed_case="$1"
   local failed_name="$2"
   local report_file
-  report_file="$(mktemp "/tmp/ios-template-creation-failure.XXXXXX")"
+  make_temp report_file creation-failure
   ruby -rjson - "$created_file" "$report_file" "$failed_case" "$failed_name" <<'RUBY'
 created_path, report_path, failed_case, failed_name = ARGV
 created = File.readlines(created_path, chomp: true).map do |line|
@@ -140,11 +143,10 @@ end
 File.write(report_path, JSON.pretty_generate({"status" => "blocked:environment", "failedCase" => failed_case, "failedName" => failed_name, "possibleDedicatedSimulators" => created}) + "\n")
 RUBY
   matrix_io --operation write-unique --repo "$repo_root" --batch "$batch_id" --source "$report_file" --prefix creation-failure >/dev/null
-  rm -f "$report_file"
 }
 
 while IFS=$'\t' read -r case_id simulator_name device_type runtime; do
-  if ! udid="$("$xcrun_bin" simctl create "$simulator_name" "$device_type" "$runtime")"; then
+  if ! udid="$(xcrun simctl create "$simulator_name" "$device_type" "$runtime")"; then
     record_failure "$case_id" "$simulator_name"
     echo "blocked:environment: Simulator creation failed; preserved possible dedicated Simulators in an exclusive batch failure report" >&2
     exit 1
@@ -157,10 +159,10 @@ while IFS=$'\t' read -r case_id simulator_name device_type runtime; do
   printf '%s\t%s\t%s\t%s\t%s\n' "$case_id" "$simulator_name" "$device_type" "$runtime" "$udid" >>"$created_file"
 done <"$plan_file"
 
-post_devices="$(mktemp "/tmp/ios-template-post-devices.XXXXXX")"
-trap 'rm -f "$working_matrix" "$plan_file" "$created_file" "$post_devices" "$working_matrix.next"' EXIT
-"$xcrun_bin" simctl list devices -j >"$post_devices"
-ruby -rjson - "$working_matrix" "$plan_file" "$created_file" "$post_devices" "$batch_id" >"$working_matrix.next" <<'RUBY'
+make_temp post_devices post-devices
+make_temp complete_matrix complete-matrix
+xcrun simctl list devices -j >"$post_devices"
+ruby -rjson - "$working_matrix" "$plan_file" "$created_file" "$post_devices" "$batch_id" >"$complete_matrix" <<'RUBY'
 matrix_path, plan_path, created_path, devices_path, batch_id = ARGV
 matrix = JSON.parse(File.read(matrix_path))
 expected_ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
@@ -181,16 +183,13 @@ end
 cases.each { |entry| entry["udid"] = created.find { |row| row[0] == entry["id"] }[4] }
 puts JSON.pretty_generate(matrix)
 RUBY
- ruby tools/validate-simulator-matrix.rb "$working_matrix.next" "$batch_id" "$post_devices"
-mv "$working_matrix.next" "$working_matrix"
+ruby tools/validate-simulator-matrix.rb complete "$complete_matrix" "$batch_id" "$post_devices"
 matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$post_devices" --name devices.json
 
 matrix_io \
   --operation publish \
   --repo "$repo_root" \
   --batch "$batch_id" \
-  --source "$working_matrix" \
+  --source "$complete_matrix" \
   --name "simulator-matrix.json"
-rm -f "$working_matrix"
-trap - EXIT
 echo "$expected_output"

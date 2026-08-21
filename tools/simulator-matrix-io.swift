@@ -59,6 +59,11 @@ func writeAll(_ fd: Int32, _ data: Data) {
     guard fsync(fd) == 0 else { fail("unable to fsync artifact") }
 }
 
+func removePublicationTemporary(_ dir: Int32, _ name: String) {
+    guard unlinkat(dir, name, 0) == 0 else { fail("unable to remove publication temporary") }
+    guard fsync(dir) == 0 else { fail("unable to fsync artifact directory after removing publication temporary") }
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 guard args.count >= 6, args[0] == "--operation", args[2] == "--repo", args[4] == "--batch" else { fail("invalid arguments") }
 let operation = args[1], repo = args[3], batch = args[5], rest = Array(args.dropFirst(6))
@@ -104,11 +109,25 @@ case "publish", "replace":
         let destination = openat(dir, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard destination >= 0 else { fail("exclusive artifact publication temporary creation failed") }
         writeAll(destination, data)
-        close(destination)
-        guard linkat(dir, temporary, dir, name, 0) == 0 else { unlinkat(dir, temporary, 0); fail("exclusive artifact publication failed") }
-        guard fsync(dir) == 0 else { unlinkat(dir, temporary, 0); fail("unable to fsync artifact directory") }
-        unlinkat(dir, temporary, 0)
-        _ = fsync(dir)
+        guard close(destination) == 0 else {
+            removePublicationTemporary(dir, temporary)
+            fail("unable to close publication temporary")
+        }
+        #if MATRIX_IO_TESTING
+        if ProcessInfo.processInfo.environment["MATRIX_IO_TEST_PRELINK_FAILURE"] == "1" {
+            removePublicationTemporary(dir, temporary)
+            fail("injected pre-link publication failure")
+        }
+        #endif
+        guard linkat(dir, temporary, dir, name, 0) == 0 else {
+            removePublicationTemporary(dir, temporary)
+            fail("exclusive artifact publication failed")
+        }
+        guard fsync(dir) == 0 else {
+            removePublicationTemporary(dir, temporary)
+            fail("unable to fsync artifact directory")
+        }
+        removePublicationTemporary(dir, temporary)
     } else {
         let temporary = ".replace-\(UUID().uuidString)"
         let destination = openat(dir, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
