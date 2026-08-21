@@ -5,6 +5,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=tools/lib/xcode.sh
 source "$script_dir/lib/xcode.sh"
 
+TRUSTED_GIT="/usr/bin/git"
+
+run_git() {
+  run_scrubbed GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 "$TRUSTED_GIT" "$@"
+}
+
 json_tool() {
   PATH=/bin /usr/bin/ruby --disable-gems -rjson -rdigest -rtime - "$@" <<'RUBY'
 def abort_with(message)
@@ -81,12 +88,14 @@ def atomic_write(path, bytes)
     file.flush
     file.fsync
   end
-  File.rename(temporary, path)
+  File.link(temporary, path)
   directory = File.open(File.dirname(path), File::RDONLY)
   directory.fsync
   directory.close
+  File.unlink(temporary)
+  temporary = nil
 ensure
-  File.unlink(temporary) if defined?(temporary) && File.exist?(temporary)
+  File.unlink(temporary) if defined?(temporary) && temporary && File.exist?(temporary)
 end
 
 EXPECTED_CASES = [
@@ -116,7 +125,7 @@ def validate_contract!(document, issue)
   end
 
   verification = document["verification"]
-  exact_keys!(verification, %w[bundleIdentifier cases], "verification")
+  exact_keys!(verification, %w[acceptanceMappings bundleIdentifier cases], "verification")
   bundle = nonempty_string!(verification["bundleIdentifier"], "verification bundleIdentifier")
   abort_with("verification bundleIdentifier is invalid") unless bundle.match?(/\A[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9][A-Za-z0-9-]*)+\z/)
   cases = verification["cases"]
@@ -138,58 +147,24 @@ def validate_contract!(document, issue)
       abort_with("verification case must contain exactly one testIdentifier or assertion")
     end
   end
-  [bundle, acceptance_ids, normalized]
-end
-
-def validate_matrix!(document)
-  exact_keys!(document, %w[batchId cases resolvedAt runtime schemaVersion xcode], "matrix")
-  abort_with("matrix schemaVersion must be 1") unless document["schemaVersion"] == 1
-  %w[batchId resolvedAt].each { |key| nonempty_string!(document[key], "matrix #{key}") }
-  exact_keys!(document["xcode"], %w[build path version], "matrix xcode")
-  document["xcode"].each { |key, value| nonempty_string!(value, "matrix xcode #{key}") }
-  exact_keys!(document["runtime"], %w[identifier version], "matrix runtime")
-  document["runtime"].each { |key, value| nonempty_string!(value, "matrix runtime #{key}") }
-  cases = document["cases"]
-  abort_with("matrix must contain exactly four cases") unless cases.is_a?(Array) && cases.length == 4
-  udids = []
-  family_types = {}
-  normalized = cases.each_with_index.map do |entry, index|
-    exact_keys!(entry, %w[deviceType family id language locale udid], "matrix case")
-    expected = EXPECTED_CASES[index]
-    abort_with("matrix cases must use the exact four ordered locale rows") unless [entry["id"], entry["family"], entry["locale"], entry["language"]] == expected
-    exact_keys!(entry["deviceType"], %w[identifier name], "matrix deviceType")
-    entry["deviceType"].each { |key, value| nonempty_string!(value, "matrix deviceType #{key}") }
-    family_types[entry["family"]] ||= entry["deviceType"]
-    abort_with("matrix must use one Device Type per family") unless family_types[entry["family"]] == entry["deviceType"]
-    udid = nonempty_string!(entry["udid"], "matrix udid")
-    abort_with("matrix udid is invalid") unless udid.match?(/\A[0-9A-Fa-f-]+\z/)
-    abort_with("matrix Simulator UDIDs must be unique") if udids.include?(udid)
-    udids << udid
-    {"id" => entry["id"], "locale" => entry["locale"], "language" => entry["language"], "udid" => udid}
+  allowed_checks = %w[stage:build stage:unit-tests case:iphone-en case:iphone-ja case:ipad-en case:ipad-ja visual:iphone-en visual:iphone-ja visual:ipad-en visual:ipad-ja]
+  mappings = verification["acceptanceMappings"]
+  abort_with("verification acceptanceMappings must map every AC exactly once") unless mappings.is_a?(Array) && mappings.length == acceptance_ids.length
+  normalized_mappings = mappings.each_with_index.map do |mapping, index|
+    exact_keys!(mapping, %w[checks id], "verification acceptanceMapping")
+    abort_with("verification acceptanceMappings must follow exact AC order") unless mapping["id"] == acceptance_ids[index]
+    checks = mapping["checks"]
+    abort_with("verification acceptance mapping checks must be non-empty and unique") unless checks.is_a?(Array) && !checks.empty? && checks.all? { |entry| entry.is_a?(String) } && checks.uniq.length == checks.length
+    abort_with("verification acceptance mapping contains an unknown check") unless checks.all? { |entry| allowed_checks.include?(entry) }
+    abort_with("verification acceptance mapping checks are out of order") unless checks == checks.sort_by { |entry| allowed_checks.index(entry) }
+    abort_with("verification acceptance mapping needs an execution check") unless checks.any? { |entry| entry.start_with?("stage:") || entry.start_with?("case:") }
+    {"id" => mapping["id"], "checks" => checks}
   end
-  [document["xcode"], normalized]
+  [bundle, acceptance_ids, normalized, normalized_mappings]
 end
 
 action = ARGV.shift
 case action
-when "snapshot"
-  root, contract_path, matrix_path, config_path, issue_text = ARGV
-  issue = Integer(issue_text, 10)
-  contract_bytes = read_bound_file(root, contract_path, "issue contract")
-  matrix_bytes = read_bound_file(root, matrix_path, "matrix")
-  contract = parse_json(contract_bytes, "issue contract")
-  matrix = parse_json(matrix_bytes, "matrix")
-  bundle, acceptance_ids, verification_cases = validate_contract!(contract, issue)
-  matrix_xcode, matrix_cases = validate_matrix!(matrix)
-  abort_with("verification cases do not match matrix") unless verification_cases.map { |entry| entry["id"] } == matrix_cases.map { |entry| entry["id"] }
-  cases = matrix_cases.each_with_index.map { |entry, index| entry.merge(verification_cases[index].reject { |key, _| key == "id" }) }
-  config = {
-    "contractPath" => contract_path, "contractDigest" => digest(contract_bytes),
-    "matrixPath" => matrix_path, "matrixDigest" => digest(matrix_bytes),
-    "bundleIdentifier" => bundle, "acceptanceIDs" => acceptance_ids,
-    "xcode" => matrix_xcode, "cases" => cases
-  }
-  File.write(config_path, JSON.generate(config), mode: "wb", perm: 0o600)
 when "verify-xcode"
   config = JSON.parse(File.read(ARGV.fetch(0)))
   actual = {"path" => ARGV.fetch(1), "version" => ARGV.fetch(2), "build" => ARGV.fetch(3)}
@@ -199,22 +174,46 @@ when "config-value"
   path = ARGV.fetch(1).split(".")
   value = path.reduce(config) { |memo, component| component.match?(/\A\d+\z/) ? memo.fetch(component.to_i) : memo.fetch(component) }
   puts value
-when "verify-inputs"
-  config_path, root = ARGV
-  config = JSON.parse(File.read(config_path))
-  contract = read_bound_file(root, config.fetch("contractPath"), "issue contract")
-  matrix = read_bound_file(root, config.fetch("matrixPath"), "matrix")
-  abort_with("contract changed during verification") unless digest(contract) == config.fetch("contractDigest")
-  abort_with("matrix changed during verification") unless digest(matrix) == config.fetch("matrixDigest")
+when "receipt"
+  receipt = JSON.parse(ARGV.fetch(0))
+  exact_keys!(receipt, %w[configPath lockToken workspaceRoot], "runner receipt")
+  %w[configPath lockToken workspaceRoot].each { |key| nonempty_string!(receipt[key], "runner receipt #{key}") }
+  puts [receipt["configPath"], receipt["workspaceRoot"], receipt["lockToken"]].join("\t")
 when "test-summary"
-  summary = JSON.parse(File.read(ARGV.fetch(0)))
+  summary_path, expected_kind, expected_udid = ARGV
+  summary = JSON.parse(File.read(summary_path))
   passed = integer!(summary["passedTests"], "passedTests", 0)
   failed = integer!(summary["failedTests"], "failedTests", 0)
   skipped = integer!(summary["skippedTests"], "skippedTests", 0)
   total = integer!(summary["totalTestCount"], "totalTestCount", 0)
+  expected_failures = integer!(summary["expectedFailures"], "expectedFailures", 0)
+  abort_with("test result status is not Passed") unless summary["result"] == "Passed"
   abort_with("unit tests did not report exact totals") unless total == passed + failed + skipped
-  abort_with("unit tests failed or were skipped") unless passed > 0 && failed == 0 && skipped == 0
+  expected_passed = expected_kind == "case" ? 1 : nil
+  abort_with("tests failed, were skipped, or selected the wrong count") unless passed > 0 && failed == 0 && skipped == 0 && expected_failures == 0 && (expected_passed.nil? || passed == expected_passed)
+  configuration = summary["devicesAndConfigurations"]
+  abort_with("devicesAndConfigurations must be an object") unless configuration.is_a?(Hash)
+  device = configuration["device"]
+  abort_with("test result device is invalid") unless device.is_a?(Hash) && device["deviceId"] == expected_udid
+  abort_with("device test totals mismatch") unless configuration["passedTests"] == passed && configuration["failedTests"] == failed && configuration["skippedTests"] == skipped && configuration["expectedFailures"] == expected_failures
   puts [passed, failed, skipped].join("\t")
+when "diagnostics"
+  diagnostics = JSON.parse(File.read(ARGV.fetch(0)))
+  warning_count = integer!(diagnostics["warningCount"], "warningCount", 0)
+  analyzer_count = integer!(diagnostics["analyzerWarningCount"], "analyzerWarningCount", 0)
+  error_count = integer!(diagnostics["errorCount"], "errorCount", 0)
+  abort_with("structured diagnostics status is not succeeded") unless diagnostics["status"] == "succeeded"
+  %w[warnings analyzerWarnings errors].each do |key|
+    abort_with("structured diagnostics #{key} must be empty") unless diagnostics[key].is_a?(Array) && diagnostics[key].empty?
+  end
+  abort_with("structured diagnostics contain warnings or errors") unless warning_count == 0 && analyzer_count == 0 && error_count == 0
+when "simulator-booted"
+  document = JSON.parse(File.read(ARGV.fetch(0)))
+  udid = ARGV.fetch(1)
+  devices = document["devices"]
+  abort_with("simulator state output is invalid") unless devices.is_a?(Hash)
+  matches = devices.values.flat_map { |entries| entries.is_a?(Array) ? entries : [] }.select { |entry| entry.is_a?(Hash) && entry["udid"] == udid }
+  abort_with("simulator is not uniquely Booted") unless matches.length == 1 && matches[0]["state"] == "Booted"
 when "draft"
   config_path, output, issue_text, base, head, scheme, derived, build_result, test_result, passed_text, failed_text, skipped_text = ARGV
   config = JSON.parse(File.read(config_path))
@@ -222,7 +221,9 @@ when "draft"
     mechanical = entry.fetch("action") == "testIdentifier" ? "test:#{entry.fetch("value")}" : "assertion:launch-succeeded"
     {"id" => entry.fetch("id"), "status" => "passed", "screenshot" => "#{entry.fetch("id")}/screenshot.png", "mechanicalCheck" => mechanical}
   end
-  case_reference = "cases:#{cases.map { |entry| entry.fetch("id") }.join(",")}"
+  execution_mappings = config.fetch("acceptanceMappings").map do |mapping|
+    {"id" => mapping.fetch("id"), "evidence" => mapping.fetch("checks").reject { |check| check.start_with?("visual:") }}
+  end
   draft = {
     "schemaVersion" => 1, "status" => "awaiting-visual-review", "issue" => Integer(issue_text, 10),
     "baseSha" => base, "headSha" => head,
@@ -232,7 +233,7 @@ when "draft"
     "build" => {"status" => "passed", "scheme" => scheme, "warningsAdded" => 0},
     "tests" => {"status" => "passed", "passed" => Integer(passed_text, 10), "failed" => Integer(failed_text, 10), "skipped" => Integer(skipped_text, 10)},
     "cases" => cases,
-    "acceptanceEvidence" => config.fetch("acceptanceIDs").map { |id| {"id" => id, "evidence" => ["stage:build", "stage:unit-tests", case_reference]} },
+    "acceptanceEvidence" => execution_mappings,
     "workspaceArtifacts" => {"derivedDataPath" => derived, "buildResultBundlePath" => build_result, "testResultBundlePath" => test_result},
     "executionCompletedAt" => Time.now.iso8601
   }
@@ -263,6 +264,10 @@ when "final"
   exact_keys!(draft["issueContract"], %w[digest path], "draft issueContract")
   nonempty_string!(draft["issueContract"]["path"], "draft issueContract path")
   abort_with("draft issueContract digest is invalid") unless draft["issueContract"]["digest"].is_a?(String) && draft["issueContract"]["digest"].match?(/\Asha256:[0-9a-f]{64}\z/)
+  contract_bytes = read_bound_file(root, draft["issueContract"]["path"], "issue contract")
+  abort_with("draft issueContract digest no longer matches canonical bytes") unless draft["issueContract"]["digest"] == digest(contract_bytes)
+  contract = parse_json(contract_bytes, "issue contract")
+  _bundle, contract_ids, contract_cases, contract_mappings = validate_contract!(contract, Integer(issue_text, 10))
   nonempty_string!(draft["matrixFile"], "draft matrixFile")
   abort_with("draft matrixDigest is invalid") unless draft["matrixDigest"].is_a?(String) && draft["matrixDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
   abort_with("draft executionRoute is invalid") unless draft["executionRoute"] == "xcodebuild-simctl"
@@ -277,10 +282,14 @@ when "final"
   skipped = integer!(draft["tests"]["skipped"], "draft tests skipped", 0)
   abort_with("draft tests are not passed") unless draft["tests"]["status"] == "passed" && passed > 0 && failed == 0 && skipped == 0
   exact_keys!(draft["workspaceArtifacts"], %w[buildResultBundlePath derivedDataPath testResultBundlePath], "draft workspaceArtifacts")
-  draft["workspaceArtifacts"].each do |key, value|
-    path = nonempty_string!(value, "draft workspaceArtifacts #{key}")
-    abort_with("draft workspaceArtifacts escaped /tmp") unless path.start_with?("/tmp/ios-template-verify/")
-  end
+  worktree_name = File.basename(root).gsub(/[^A-Za-z0-9_.-]/, "-")
+  workspace = "/tmp/ios-template-verify/#{worktree_name}-#{Digest::SHA256.hexdigest(root)}/issue-#{issue_text}/#{head}"
+  expected_artifacts = {
+    "derivedDataPath" => "#{workspace}/DerivedData",
+    "buildResultBundlePath" => "#{workspace}/Build.xcresult",
+    "testResultBundlePath" => "#{workspace}/Tests.xcresult"
+  }
+  abort_with("draft workspaceArtifacts do not match the current physical worktree") unless draft["workspaceArtifacts"] == expected_artifacts
   abort_with("draft must contain exact four cases") unless draft["cases"].is_a?(Array) && draft["cases"].length == 4
   screenshots = []
   draft["cases"].each_with_index do |entry, index|
@@ -292,15 +301,18 @@ when "final"
     abort_with("draft screenshots must be unique") if screenshots.include?(screenshot)
     screenshots << screenshot
     check = nonempty_string!(entry["mechanicalCheck"], "draft mechanicalCheck")
-    abort_with("draft mechanicalCheck is invalid") unless check == "assertion:launch-succeeded" || check.match?(/\Atest:[^\s]+\z/)
+    contract_case = contract_cases.fetch(index)
+    expected_check = contract_case.fetch("action") == "testIdentifier" ? "test:#{contract_case.fetch("value")}" : "assertion:launch-succeeded"
+    abort_with("draft mechanicalCheck does not match the canonical contract") unless check == expected_check
   end
   acceptance = draft["acceptanceEvidence"]
   abort_with("draft acceptanceEvidence must be non-empty") unless acceptance.is_a?(Array) && !acceptance.empty?
   acceptance.each_with_index do |entry, index|
     exact_keys!(entry, %w[evidence id], "draft acceptanceEvidence")
-    abort_with("draft acceptance IDs are not exact and ordered") unless entry["id"] == "AC-#{index + 1}"
+    abort_with("draft acceptance IDs are not exact and ordered") unless entry["id"] == contract_ids[index]
     evidence = entry["evidence"]
-    abort_with("draft acceptance evidence must be non-empty stage/case references") unless evidence.is_a?(Array) && !evidence.empty? && evidence.all? { |item| item.is_a?(String) && (item.start_with?("stage:") || item.start_with?("cases:")) && !item.split(":", 2).last.to_s.strip.empty? }
+    expected_execution = contract_mappings.fetch(index).fetch("checks").reject { |check| check.start_with?("visual:") }
+    abort_with("draft acceptance evidence does not match the canonical contract") unless evidence == expected_execution
   end
   exact_keys!(visual, %w[cases draft findings headSha issue reviewedAt schemaVersion status], "visual result")
   abort_with("visual result identity mismatch") unless visual["schemaVersion"] == 1 && visual["issue"] == Integer(issue_text, 10) && visual["headSha"] == head
@@ -328,7 +340,7 @@ when "final"
     "executionRoute" => draft["executionRoute"], "xcode" => draft["xcode"], "build" => draft["build"], "tests" => draft["tests"],
     "cases" => draft_cases.map { |entry| {"id" => entry["id"], "status" => "passed", "screenshot" => entry["screenshot"]} },
     "visualEvaluation" => {"status" => "passed", "findings" => []},
-    "acceptanceEvidence" => draft["acceptanceEvidence"].map { |entry| {"id" => entry["id"], "status" => "passed", "evidence" => entry["evidence"]} },
+    "acceptanceEvidence" => contract_mappings.map { |mapping| {"id" => mapping.fetch("id"), "status" => "passed", "evidence" => mapping.fetch("checks")} },
     "completedAt" => visual["reviewedAt"]
   }
   File.open(output, File::WRONLY | File::CREAT | File::EXCL, 0o600) do |file|
@@ -385,15 +397,15 @@ else
   [[ -n "$draft" && -n "$visual_result" && -z "$issue_contract" && -z "$matrix" && -z "$project" && -z "$scheme" ]] || usage
 fi
 
-repository_root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "iOS verification failed: Git repository unavailable" >&2; exit 1; }
+repository_root="$(run_git rev-parse --show-toplevel 2>/dev/null)" || { echo "iOS verification failed: Git repository unavailable" >&2; exit 1; }
 repository_root="$(cd "$repository_root" && pwd -P)"
 [[ "$(pwd -P)" == "$repository_root" ]] || { echo "iOS verification failed: run from the Git top-level" >&2; exit 1; }
-head_sha="$(git rev-parse HEAD 2>/dev/null)" || { echo "iOS verification failed: current Git Head unavailable" >&2; exit 1; }
+head_sha="$(run_git rev-parse HEAD 2>/dev/null)" || { echo "iOS verification failed: current Git Head unavailable" >&2; exit 1; }
 [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "iOS verification failed: current Git Head is invalid" >&2; exit 1; }
-git rev-parse --verify "${expected_base}^{commit}" >/dev/null 2>&1 || { echo "iOS verification failed: expected Base is not a commit" >&2; exit 1; }
+run_git rev-parse --verify "${expected_base}^{commit}" >/dev/null 2>&1 || { echo "iOS verification failed: expected Base is not a commit" >&2; exit 1; }
 [[ "$expected_base" != "$head_sha" ]] || { echo "iOS verification failed: Base and Head must differ" >&2; exit 1; }
-git merge-base --is-ancestor "$expected_base" "$head_sha" || { echo "iOS verification failed: expected Base is not an ancestor of current Git Head" >&2; exit 1; }
-[[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo "iOS verification failed: working tree must be clean" >&2; exit 1; }
+run_git merge-base --is-ancestor "$expected_base" "$head_sha" || { echo "iOS verification failed: expected Base is not an ancestor of current Git Head" >&2; exit 1; }
+[[ -z "$(run_git status --porcelain --untracked-files=all)" ]] || { echo "iOS verification failed: working tree must be clean" >&2; exit 1; }
 
 evidence_dir="$repository_root/.artifacts/issues/$issue/$head_sha"
 failure_dir="$evidence_dir/failures"
@@ -419,22 +431,22 @@ if [[ "$mode" == "finalize" ]]; then
   final_path="$evidence_dir/verify.json"
   [[ ! -e "$final_path" && ! -L "$final_path" ]] || fail "canonical verify.json already exists"
   candidate="$evidence_dir/.verify-candidate-$PPID-$$"
-  trap 'rm -f "$candidate"' EXIT
+  trap '/bin/rm -f "$candidate"' EXIT
   stage="visual-finalization"
   json_tool final "$repository_root" "$draft" "$visual_result" "$candidate" "$issue" "$expected_base" "$head_sha" 2>"$evidence_dir/.finalize-error-$$" || {
     diagnostic="$(<"$evidence_dir/.finalize-error-$$")"
-    rm -f "$evidence_dir/.finalize-error-$$"
+    /bin/rm -f "$evidence_dir/.finalize-error-$$"
     case "$diagnostic" in
       *"draft digest"*) fail "visual draft digest mismatch" ;;
       *"current Git range"*) fail "draft does not match current Git Head" ;;
       *) fail "visual result is invalid" ;;
     esac
   }
-  rm -f "$evidence_dir/.finalize-error-$$"
-  mv "$candidate" "$final_path" || fail "atomic verify.json publication failed"
+  /bin/rm -f "$evidence_dir/.finalize-error-$$"
+  /bin/chmod 0400 "$candidate" || fail "verify.json candidate could not be sealed"
   stage="final-schema-validation"
-  if ! swift "$script_dir/validate-verify-json.swift" --file "$final_path" --expected-issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha"; then
-    rm -f "$final_path"
+  resolve_xcode_environment || fail "Xcode could not be resolved for final validation"
+  if ! run_xcode_swift "$script_dir/validate-verify-json.swift" --file "$final_path" --candidate-file "$candidate" --expected-issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha"; then
     fail "final verify.json failed strict schema validation"
   fi
   trap - EXIT
@@ -448,26 +460,43 @@ expected_contract=".artifacts/issues/$issue/issue-contract.json"
 [[ "$project" != /* && "$project" != *".."* && -d "$repository_root/$project" && ! -L "$repository_root/$project" ]] || fail "project path is invalid"
 [[ "$scheme" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "scheme is invalid"
 
-worktree_name="$(basename "$repository_root")"
-root_digest="$(printf '%s' "$repository_root" | shasum -a 256 | awk '{print substr($1,1,12)}')"
-worktree_id="${worktree_name//[^A-Za-z0-9_.-]/-}-$root_digest"
-workspace_root="/tmp/ios-template-verify/$worktree_id/issue-$issue/$head_sha"
-run_state="$workspace_root/.run-$PPID-$$"
-mkdir -p "$run_state" "$evidence_dir" || fail "verification workspace could not be created"
-trap 'rm -rf "$run_state"' EXIT
-config="$run_state/config.json"
-
 stage="input-validation"
-if ! json_tool snapshot "$repository_root" "$issue_contract" "$matrix" "$config" "$issue" 2>"$run_state/input-error"; then
-  diagnostic="$(<"$run_state/input-error")"
+select_initial_xcode_environment || fail "Xcode tools could not be derived"
+if ! snapshot_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-snapshot \
+  --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
+  --issue-contract "$issue_contract" --matrix "$matrix" 2>&1)"; then
+  diagnostic="$snapshot_receipt"
   case "$diagnostic" in
+    *"lock"*) fail "verification lock is already held" ;;
     *"verification"*) fail "verification contract is absent or incomplete" ;;
     *) fail "contract or matrix validation failed" ;;
   esac
 fi
+if ! receipt_values="$(json_tool receipt "$snapshot_receipt" 2>/dev/null)"; then
+  fail "verification workspace receipt is invalid"
+fi
+IFS=$'\t' read -r config workspace_root lock_token <<<"$receipt_values"
+run_state="$(json_tool config-value "$config" runState)"
+[[ "$(json_tool config-value "$config" workspaceRoot)" == "$workspace_root" ]] || fail "verification workspace identity mismatch"
+active_udid=""
+active_bundle=""
+release_runner() {
+  local status="$?"
+  if [[ -n "$active_udid" && -n "$active_bundle" ]]; then
+    run_xcrun simctl terminate "$active_udid" "$active_bundle" >/dev/null 2>&1 || true
+  fi
+  run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-release --config "$config" --token "$lock_token" >/dev/null 2>&1 || true
+  return "$status"
+}
+trap release_runner EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 stage="xcode-resolution"
-resolve_xcode_environment || fail "Xcode could not be resolved"
+if ! probe_xcode_environment; then
+  select_fallback_xcode_environment || fail "Xcode could not be resolved"
+  probe_xcode_environment || fail "Xcode could not be resolved"
+fi
 json_tool verify-xcode "$config" "$XCODE_DEVELOPER_DIR" "$XCODE_VERSION" "$XCODE_BUILD" >/dev/null 2>&1 || fail "resolved Xcode does not match the frozen matrix"
 
 derived_data="$workspace_root/DerivedData"
@@ -483,8 +512,9 @@ if ! run_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
   -resultBundlePath "$build_result" build >"$build_log" 2>&1; then
   fail "build command failed"
 fi
-warning_count="$(grep -Eic '(^|[[:space:]])warning:' "$build_log" || true)"
-[[ "$warning_count" == 0 ]] || fail "build warnings are not allowed"
+build_diagnostics="$run_state/build-diagnostics.json"
+run_xcrun xcresulttool get build-results --schema-version 0.1.0 --path "$build_result" --compact >"$build_diagnostics" 2>"$run_state/build-diagnostics-error" || fail "build diagnostics failed"
+json_tool diagnostics "$build_diagnostics" 2>"$run_state/build-diagnostics-parse-error" || fail "build warnings are not allowed"
 
 stage="unit-tests"
 test_log="$run_state/tests.log"
@@ -493,27 +523,23 @@ if ! run_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
   -resultBundlePath "$test_result" test >"$test_log" 2>&1; then
   fail "unit tests command failed"
 fi
-test_warning_count="$(grep -Eic '(^|[[:space:]])warning:' "$test_log" || true)"
-[[ "$test_warning_count" == 0 ]] || fail "unit test warnings are not allowed"
+test_diagnostics="$run_state/test-diagnostics.json"
+run_xcrun xcresulttool get build-results --schema-version 0.1.0 --path "$test_result" --compact >"$test_diagnostics" 2>"$run_state/test-diagnostics-error" || fail "unit test diagnostics failed"
+json_tool diagnostics "$test_diagnostics" 2>"$run_state/test-diagnostics-parse-error" || fail "unit test warnings are not allowed"
 summary="$run_state/test-summary.json"
-if ! run_xcrun xcresulttool get test-results summary --path "$test_result" >"$summary" 2>"$run_state/xcresult-error"; then
+if ! run_xcrun xcresulttool get test-results summary --schema-version 0.1.0 --path "$test_result" --compact >"$summary" 2>"$run_state/xcresult-error"; then
   fail "unit tests summary failed"
 fi
-if ! counts="$(json_tool test-summary "$summary" 2>"$run_state/test-summary-error")"; then
+if ! counts="$(json_tool test-summary "$summary" unit "$first_udid" 2>"$run_state/test-summary-error")"; then
   fail "unit tests failed, were skipped, or reported invalid counts"
 fi
 IFS=$'\t' read -r passed failed skipped <<<"$counts"
 
 bundle_identifier="$(json_tool config-value "$config" bundleIdentifier)"
-app_path=""
-while IFS= read -r -d '' candidate_app; do
-  candidate_bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$candidate_app/Info.plist" 2>/dev/null || true)"
-  if [[ "$candidate_bundle" == "$bundle_identifier" ]]; then
-    [[ -z "$app_path" ]] || fail "multiple built applications match the verification bundle identifier"
-    app_path="$candidate_app"
-  fi
-done < <(find "$derived_data/Build/Products" -type d -name '*.app' -print0 2>/dev/null)
-[[ -n "$app_path" ]] || fail "built application matching the verification bundle identifier was not found"
+if ! app_path="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-find-app \
+  --derived-data "$derived_data" --bundle-identifier "$bundle_identifier" 2>"$run_state/app-lookup-error")"; then
+  fail "built application matching the verification bundle identifier was not found safely"
+fi
 
 for index in 0 1 2 3; do
   case_id="$(json_tool config-value "$config" cases.$index.id)"
@@ -524,41 +550,95 @@ for index in 0 1 2 3; do
   action_value="$(json_tool config-value "$config" cases.$index.value)"
   stage="case-$case_id"
   case_failed=""
-  run_xcrun simctl boot "$udid" >/dev/null 2>&1 || case_failed="boot"
+  if ! run_xcrun simctl boot "$udid" >/dev/null 2>&1; then
+    simulator_state="$run_state/$case_id-simulator-state.json"
+    run_xcrun simctl list devices --json >"$simulator_state" 2>/dev/null || case_failed="boot state"
+    [[ -n "$case_failed" ]] || json_tool simulator-booted "$simulator_state" "$udid" >/dev/null 2>&1 || case_failed="boot state"
+  fi
   [[ -n "$case_failed" ]] || run_xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || case_failed="bootstatus"
   [[ -n "$case_failed" ]] || run_xcrun simctl install "$udid" "$app_path" >/dev/null 2>&1 || case_failed="install"
-  [[ -n "$case_failed" ]] || run_xcrun simctl launch "$udid" "$bundle_identifier" -AppleLanguages "($language)" -AppleLocale "$locale" >/dev/null 2>&1 || case_failed="launch"
+  if [[ -z "$case_failed" ]]; then
+    run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1 || true
+    active_udid="$udid"
+    active_bundle="$bundle_identifier"
+  fi
+  launch_output=""
+  if [[ -z "$case_failed" ]]; then
+    launch_output="$(run_xcrun simctl launch "$udid" "$bundle_identifier" -AppleLanguages "($language)" -AppleLocale "$locale" 2>/dev/null)" || case_failed="launch"
+  fi
+  if [[ -z "$case_failed" ]]; then
+    launch_prefix="$bundle_identifier: "
+    launch_pid="${launch_output#"$launch_prefix"}"
+    [[ "$launch_output" == "$launch_prefix"* && "$launch_pid" =~ ^[1-9][0-9]*$ ]] || case_failed="launch PID"
+  fi
+  if [[ -z "$case_failed" ]]; then
+    run_xcrun simctl spawn "$udid" /bin/kill -0 "$launch_pid" >/dev/null 2>&1 || case_failed="process liveness"
+  fi
   if [[ -z "$case_failed" && "$action" == "testIdentifier" ]]; then
     region="${locale#*_}"
+    case_result="$workspace_root/Cases/$case_id.xcresult"
+    [[ ! -e "$case_result" ]] || case_failed="UI result collision"
+  fi
+  if [[ -z "$case_failed" && "$action" == "testIdentifier" ]]; then
     run_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived_data" \
+      -resultBundlePath "$case_result" \
       -only-testing:"$action_value" -testLanguage "$language" -testRegion "$region" \
       test-without-building >"$run_state/$case_id-ui-test.log" 2>&1 || case_failed="UI test"
+    if [[ -z "$case_failed" ]]; then
+      case_diagnostics="$run_state/$case_id-diagnostics.json"
+      run_xcrun xcresulttool get build-results --schema-version 0.1.0 --path "$case_result" --compact >"$case_diagnostics" 2>"$run_state/$case_id-diagnostics-error" || case_failed="UI diagnostics"
+    fi
+    if [[ -z "$case_failed" ]]; then
+      json_tool diagnostics "$case_diagnostics" 2>"$run_state/$case_id-diagnostics-parse-error" || case_failed="UI warnings"
+    fi
+    if [[ -z "$case_failed" ]]; then
+      case_summary="$run_state/$case_id-summary.json"
+      run_xcrun xcresulttool get test-results summary --schema-version 0.1.0 --path "$case_result" --compact >"$case_summary" 2>"$run_state/$case_id-summary-error" || case_failed="UI summary"
+    fi
+    if [[ -z "$case_failed" ]]; then
+      json_tool test-summary "$case_summary" case "$udid" >/dev/null 2>"$run_state/$case_id-summary-parse-error" || case_failed="UI selected test"
+    fi
   elif [[ -z "$case_failed" && "$action_value" != "launch-succeeded" ]]; then
     case_failed="mechanical assertion"
   fi
-  screenshot_dir="$evidence_dir/$case_id"
-  mkdir -p "$screenshot_dir" || case_failed="screenshot directory"
-  [[ -n "$case_failed" ]] || run_xcrun simctl io "$udid" screenshot "$screenshot_dir/screenshot.png" >/dev/null 2>&1 || case_failed="screenshot"
-  run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1 || [[ -n "$case_failed" ]] || case_failed="terminate"
+  screenshot_source="$workspace_root/Screenshots/$case_id.png"
+  [[ ! -e "$screenshot_source" ]] || case_failed="screenshot collision"
+  [[ -n "$case_failed" ]] || run_xcrun simctl io "$udid" screenshot "$screenshot_source" >/dev/null 2>&1 || case_failed="screenshot"
+  if [[ -z "$case_failed" ]]; then
+    run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-publish-screenshot \
+      --source "$screenshot_source" --issue "$issue" --head "$head_sha" --case "$case_id" \
+      >/dev/null 2>"$run_state/$case_id-screenshot-publication-error" || case_failed="screenshot publication"
+  fi
+  if run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1; then
+    active_udid=""
+    active_bundle=""
+  elif [[ -z "$case_failed" ]]; then
+    case_failed="terminate"
+  fi
   [[ -z "$case_failed" ]] || fail "case $case_id failed"
 done
 
 stage="input-stability"
-if ! input_diagnostic="$(json_tool verify-inputs "$config" "$repository_root" 2>&1)"; then
+contract_digest="$(json_tool config-value "$config" contractDigest)"
+matrix_digest="$(json_tool config-value "$config" matrixDigest)"
+if ! input_diagnostic="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-inputs \
+  --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
+  --issue-contract "$issue_contract" --matrix "$matrix" \
+  --contract-digest "$contract_digest" --matrix-digest "$matrix_digest" 2>&1)"; then
   case "$input_diagnostic" in
     *"contract changed"*) fail "contract changed during verification" ;;
     *"matrix changed"*) fail "matrix changed during verification" ;;
     *) fail "verification inputs changed during verification" ;;
   esac
 fi
-[[ "$(git rev-parse HEAD)" == "$head_sha" ]] || fail "current Git Head changed during verification"
-[[ -z "$(git status --porcelain --untracked-files=all)" ]] || fail "working tree changed during verification"
+[[ "$(run_git rev-parse HEAD)" == "$head_sha" ]] || fail "current Git Head changed during verification"
+[[ -z "$(run_git status --porcelain --untracked-files=all)" ]] || fail "working tree changed during verification"
 
 stage="draft-publication"
 draft_path="$evidence_dir/verify-draft.json"
 json_tool draft "$config" "$draft_path" "$issue" "$expected_base" "$head_sha" "$scheme" \
   "$derived_data" "$build_result" "$test_result" "$passed" "$failed" "$skipped" || fail "atomic draft publication failed"
 trap - EXIT
-rm -rf "$run_state"
+release_runner
 printf '%s\n' "$draft_path"

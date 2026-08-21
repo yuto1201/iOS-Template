@@ -57,7 +57,7 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 ### Stage B: Build and unit tests
 
 - 現在のHead SHAを取得
-- Cleanである必要はないが、ユーザーの未関連変更を含めない
+- current Headと信頼済みBaseのrangeを検証し、worktreeがcleanであることを確認する
 - Issueが影響するschemeをBuild
 - Unit Testを実行
 - 失敗、Skip、件数を記録
@@ -106,9 +106,15 @@ tools/verify-ios-issue.sh \
   --scheme ExampleApp
 ```
 
-runnerは `/tmp/ios-template-verify/${worktreeId}/issue-42/${headSha}/` の `DerivedData`、`Build.xcresult`、`Tests.xcresult` だけを使い、Repository内へDerivedDataやresult bundleを作りません。`/Applications/Xcode.app/Contents/Developer` が有効なら優先し、それ以外は `xcode-select -p` のpathで `xcodebuild -version` が成功した場合だけ使います。解決は1回だけ行い、すべての `xcodebuild` と `xcrun` へcommand-scoped `DEVELOPER_DIR` を渡します。callerが実行binaryを環境変数で差し替えるinterfaceは持ちません。
+runnerは `/tmp/ios-template-verify/${physicalWorktreeName}-${sha256OfPhysicalRoot}/issue-42/${headSha}/` の `DerivedData`、`Build.xcresult`、`Tests.xcresult`、`Cases/${caseId}.xcresult`、一時Screenshotだけを使い、Repository内へDerivedDataやresult bundleを作りません。`/tmp` の各directoryは現在のuid所有、mode `0700`、symlinkなしをdescriptor-boundに確認し、Issue/Head単位のexclusive lockを保持します。同じIssue/Headの同時実行は一方だけが進みます。
 
-実行成功時はfinal結果ではなく、canonical `.artifacts/issues/42/${headSha}/verify-draft.json` をatomic publishします。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceは空でない実在stage/case参照です。
+productionはabsolute `/usr/bin/git`、`/usr/bin/xcode-select`、`/usr/bin/xcrun` を使います。`/Applications/Xcode.app/Contents/Developer` が有効なら優先し、それ以外はtrusted `xcode-select -p` のphysical pathを使います。そこからnon-symlinkの `usr/bin/xcodebuild` と同じDeveloper directory内へ解決されるSwift toolchainを固定し、`xcodebuild -version` が成功した場合だけ採用します。すべてのXcode commandへ同じcommand-scoped `DEVELOPER_DIR` を渡し、Git/Xcodeの危険な環境変数を除去します。callerの `PATH`、shell function、環境変数でproduction executableを差し替えるinterfaceは持ちません。
+
+Build、unit test、`testIdentifier` caseのdiagnostics/test countsはhuman-readable logをgrepせず、trusted `xcrun xcresulttool` のstructured resultだけで判定します。Build/unit test/caseのwarning、analyzer warning、errorはすべて0でなければ失敗します。unit testは1件以上passed、`testIdentifier` caseは指定した1件だけがexact matrix UDIDとlocale/languageでpassedし、failed/skipped/expected failureが0でなければ失敗します。
+
+各caseはmatrixのexact UDIDをbootまたは既存Booted状態として確認し、bootstatus、built appのinstall、既存processのterminate、exact language/localeでlaunch、bounded process-liveness probe、contractの機械check、Screenshot、terminateの順に直列実行します。`testIdentifier` はunique case xcresultを使うexact `-only-testing` です。`launch-succeeded` はlaunchが返したPIDのlivenessまでを確認する狭いsmoke checkであり、UI内容の保証ではありません。runnerはSimulatorをcreate、erase、delete、または別deviceへ代替しません。途中終了時も現在activeなBundle IDをbest-effort terminateします。
+
+実行成功時はfinal結果ではなく、canonical `.artifacts/issues/42/${headSha}/verify-draft.json` をcandidate検証後にatomic no-replace publishし、fileとdirectoryをfsyncします。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceはcontractのmappingからvisual参照だけを除いたexactな実行済みstage/case参照です。canonical contract/matrixとGit Headはpublication直前にも再検証します。
 
 ```json
 {
@@ -131,12 +137,13 @@ runnerは `/tmp/ios-template-verify/${worktreeId}/issue-42/${headSha}/` の `Der
     {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/screenshot.png", "mechanicalCheck": "assertion:launch-succeeded"}
   ],
   "acceptanceEvidence": [
-    {"id": "AC-1", "evidence": ["stage:build", "stage:unit-tests", "cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]}
+    {"id": "AC-1", "evidence": ["stage:build", "stage:unit-tests", "case:iphone-en", "case:iphone-ja"]},
+    {"id": "AC-2", "evidence": ["case:ipad-en", "case:ipad-ja"]}
   ],
   "workspaceArtifacts": {
-    "derivedDataPath": "/tmp/ios-template-verify/worktree-id/issue-42/0123456789abcdef0123456789abcdef01234567/DerivedData",
-    "buildResultBundlePath": "/tmp/ios-template-verify/worktree-id/issue-42/0123456789abcdef0123456789abcdef01234567/Build.xcresult",
-    "testResultBundlePath": "/tmp/ios-template-verify/worktree-id/issue-42/0123456789abcdef0123456789abcdef01234567/Tests.xcresult"
+    "derivedDataPath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/DerivedData",
+    "buildResultBundlePath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Build.xcresult",
+    "testResultBundlePath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Tests.xcresult"
   },
   "executionCompletedAt": "2026-08-21T12:55:00+09:00"
 }
@@ -162,7 +169,7 @@ Task 5のAI評価はcanonical `.artifacts/issues/42/${headSha}/visual-result.jso
 }
 ```
 
-次のfinalize commandはcurrent Head、canonical path、draft digest、Issue、4case、Screenshot path、承認状態、時刻順序を再検証します。strict Task 3 schemaのcandidateを完成させてatomic renameし、exact Base/Issue/Headを引数に `tools/validate-verify-json.swift` を呼びます。失敗時にpartial `verify.json` を残しません。
+次のfinalize commandはcurrent Head、canonical path、draft digest、Issue、4case、Screenshot path、承認状態、時刻順序、各mechanical checkとAC mappingのcanonical contract一致を再検証します。strict Task 3 schemaのprivate candidateを完成させ、exact Base/Issue/Headを引数に `tools/validate-verify-json.swift` でcandidateを検証してからatomic no-replace publishし、directoryをfsyncします。衝突時は既存winnerを保持し、失敗時にpartial `verify.json` を露出しません。
 
 ```bash
 tools/verify-ios-issue.sh --finalize \
@@ -225,12 +232,12 @@ tools/verify-ios-issue.sh --finalize \
     {
       "id": "AC-1",
       "status": "passed",
-      "evidence": ["tests:TemplateAppTests/NotificationSettingsTests", "cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]
+      "evidence": ["stage:build", "stage:unit-tests", "case:iphone-en", "case:iphone-ja"]
     },
     {
       "id": "AC-2",
       "status": "passed",
-      "evidence": ["cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]
+      "evidence": ["case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]
     }
   ],
   "completedAt": "2026-08-21T13:00:00+09:00"

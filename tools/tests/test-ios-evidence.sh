@@ -334,17 +334,30 @@ mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
       {"id" => "iphone-ja", "assertion" => {"kind" => "launch-succeeded"}},
       {"id" => "ipad-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
       {"id" => "ipad-ja", "assertion" => {"kind" => "launch-succeeded"}}
+    ],
+    "acceptanceMappings" => [
+      {"id" => "AC-1", "checks" => ["stage:build", "stage:unit-tests"]},
+      {"id" => "AC-2", "checks" => ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
     ]
   }
 '
+mutate_json "$evidence_file" '
+  document["acceptanceEvidence"] = [
+    {"id" => "AC-1", "status" => "passed", "evidence" => ["stage:build", "stage:unit-tests"]},
+    {"id" => "AC-2", "status" => "passed", "evidence" => ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
+  ]
+'
 refresh_contract_digest
 run_validator
+mutate_json "$evidence_file" 'document.fetch("acceptanceEvidence").reverse!'
+expect_failure optional-verification-evidence-order "acceptanceEvidence must follow the exact Issue contract AC order"
 
 prepare_fixture incomplete-verification-contract
 mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
   document["verification"] = {
     "bundleIdentifier" => "com.example.TemplateApp",
-    "cases" => [{"id" => "iphone-en", "assertion" => {"kind" => "launch-succeeded"}}]
+    "cases" => [{"id" => "iphone-en", "assertion" => {"kind" => "launch-succeeded"}}],
+    "acceptanceMappings" => []
   }
 '
 refresh_contract_digest
@@ -359,6 +372,10 @@ mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
       {"id" => "iphone-ja", "assertion" => {"kind" => "launch-succeeded"}},
       {"id" => "ipad-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
       {"id" => "ipad-ja", "assertion" => {"kind" => "launch-succeeded"}}
+    ],
+    "acceptanceMappings" => [
+      {"id" => "AC-1", "checks" => ["stage:build"]},
+      {"id" => "AC-2", "checks" => ["case:iphone-en"]}
     ]
   }
 '
