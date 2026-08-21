@@ -252,6 +252,35 @@ PY
   commit_fixture_paths 'test: remove scheme source anchors' TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme
   expect_bootstrap_rejection_without_mutation 'missing Scheme anchor' "${garden_notes_arguments[@]}"
 
+  new_safety_fixture schema-drift
+  python3 - "$fixture/Config/template-identity.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+manifest = json.loads(path.read_text())
+manifest["schemaVersion"] = 2
+path.write_text(json.dumps(manifest, indent=2) + "\n")
+PY
+  commit_fixture_paths 'test: drift manifest schema version' Config/template-identity.json
+  expect_bootstrap_rejection_without_mutation 'manifest schemaVersion drift' "${garden_notes_arguments[@]}"
+
+  new_safety_fixture live-path-drift
+  python3 - "$fixture/Config/template-identity.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+manifest = json.loads(path.read_text())
+manifest["liveContentPaths"].remove("README.md")
+manifest["liveContentPaths"].append("docs/security.md")
+path.write_text(json.dumps(manifest, indent=2) + "\n")
+PY
+  commit_fixture_paths 'test: drift manifest live content allowlist' Config/template-identity.json
+  expect_bootstrap_rejection_without_mutation 'manifest liveContentPaths drift' "${garden_notes_arguments[@]}"
+
   new_safety_fixture case-collision
   mkdir "$fixture/gardennotes"
   printf 'case collision\n' >"$fixture/gardennotes/.keep"
@@ -267,6 +296,22 @@ PY
   expect_bootstrap_rejection_without_mutation 'symlink escape' "${garden_notes_arguments[@]}"
   rm -f "$outside_file"
 
+  new_safety_fixture security-substitution
+  python3 - "$fixture/docs/security.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+app_store = "ios-template/template-app/app-store-connect/production/key-id"
+cloudflare = "ios-template/template-app/cloudflare/production/api-token"
+if content.count(app_store) != 1 or content.count(cloudflare) != 1:
+    raise SystemExit("unexpected security fixture")
+path.write_text(content.replace(app_store, cloudflare))
+PY
+  commit_fixture_paths 'test: substitute one security service anchor' docs/security.md
+  expect_bootstrap_rejection_without_mutation 'security service substitution at constant total' "${garden_notes_arguments[@]}"
+
   new_safety_fixture security-drift
   printf 'ios-template/template-app/extra/production/key\n' >>"$fixture/docs/security.md"
   commit_fixture_paths 'test: add unexpected security source anchor' docs/security.md
@@ -280,6 +325,9 @@ PY
     'leading-digit-module|Garden Notes|1GardenNotes|garden-notes|com.yuto.GardenNotes'
     'swift-keyword|Garden Notes|class|garden-notes|com.yuto.GardenNotes'
     'source-name-no-op|Garden Notes|TemplateApp|garden-notes|com.yuto.GardenNotes'
+    'source-slug-no-op|Garden Notes|GardenNotes|template-app|com.yuto.GardenNotes'
+    'source-bundle-no-op|Garden Notes|GardenNotes|garden-notes|com.yuto.TemplateApp'
+    'exact-source-identity|TemplateApp|TemplateApp|template-app|com.yuto.TemplateApp'
   )
   for row in "${invalid_cases[@]}"; do
     IFS='|' read -r label invalid_display invalid_module invalid_slug invalid_bundle <<<"$row"
@@ -291,13 +339,59 @@ PY
       --bundle-id "$invalid_bundle"
   done
 
+  new_safety_fixture whitespace-rerun
+  whitespace_arguments=(
+    --display-name '  Garden Notes  '
+    --module-name 'GardenNotes'
+    --app-slug 'garden-notes'
+    --bundle-id 'com.yuto.GardenNotes'
+  )
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "${whitespace_arguments[@]}"
+  ) >"$output" 2>"$errors"; then
+    echo "normalized display-name first run failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  python3 - "$fixture/Config/app-identity.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as source:
+    identity = json.load(source)
+if identity["displayName"] != "Garden Notes":
+    raise SystemExit(f"display name was not normalized: {identity['displayName']!r}")
+PY
+  whitespace_status_before="$(git -C "$fixture" status --porcelain=v1)"
+  whitespace_head_before="$(git -C "$fixture" rev-parse HEAD)"
+  whitespace_digest_before="$(repository_content_digest "$fixture")"
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "${whitespace_arguments[@]}"
+  ) >"$output" 2>"$errors"; then
+    echo "normalized display-name second run failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  [[ "$(<"$output")" == '{"appSlug":"garden-notes","bundleId":"com.yuto.GardenNotes","moduleName":"GardenNotes","resultRecordPath":"Config/app-identity.json","status":"already-complete"}' ]] || {
+    echo "normalized display-name second run emitted unexpected result: $(<"$output")" >&2
+    exit 1
+  }
+  [[ "$whitespace_status_before" == "$(git -C "$fixture" status --porcelain=v1)" &&
+     "$whitespace_head_before" == "$(git -C "$fixture" rev-parse HEAD)" &&
+     "$whitespace_digest_before" == "$(repository_content_digest "$fixture")" ]] || {
+    echo 'normalized display-name second run mutated the repository' >&2
+    exit 1
+  }
+  rm -rf "$fixture"
+  fixture=''
+
   new_safety_fixture source-substring
   if ! (
     cd "$fixture"
     "$root/tools/bootstrap-app.sh" \
-      --display-name 'Template Application' \
+      --display-name 'TemplateApp Notes' \
       --module-name 'TemplateApplication' \
-      --app-slug 'app-template-notes' \
+      --app-slug 'template-app-notes' \
       --bundle-id 'com.yuto.TemplateApplication'
   ) >"$output" 2>"$errors"; then
     echo "valid identity containing the source name failed: $(<"$errors")" >&2
@@ -310,6 +404,18 @@ PY
     echo "audit rejected a valid identity containing the source name: $(<"$errors")" >&2
     exit 1
   fi
+  printf '\nTemplateApp\n' >>"$fixture/README.md"
+  set +e
+  swift "$root/tools/bootstrap-app.swift" audit \
+    --root "$fixture" \
+    --manifest "$fixture/Config/template-identity.json" \
+    --module-name TemplateApplication >"$output" 2>"$errors"
+  status=$?
+  set -e
+  [[ $status -ne 0 ]] || {
+    echo 'audit accepted an independent TemplateApp residual token' >&2
+    exit 1
+  }
   rm -rf "$fixture"
   fixture=''
 
@@ -381,6 +487,33 @@ PY
     echo "residual audit setup failed: $(<"$errors")" >&2
     exit 1
   fi
+  security_backup="$(mktemp -t app-bootstrap-security-backup.XXXXXX)"
+  cp "$fixture/docs/security.md" "$security_backup"
+  python3 - "$fixture/docs/security.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+app_store = "ios-template/garden-notes/app-store-connect/production/key-id"
+cloudflare = "ios-template/garden-notes/cloudflare/production/api-token"
+if content.count(app_store) != 1 or content.count(cloudflare) != 1:
+    raise SystemExit("unexpected transformed security fixture")
+path.write_text(content.replace(app_store, cloudflare))
+PY
+  set +e
+  swift "$root/tools/bootstrap-app.swift" audit \
+    --root "$fixture" \
+    --manifest "$fixture/Config/template-identity.json" \
+    --module-name GardenNotes >"$output" 2>"$errors"
+  status=$?
+  set -e
+  [[ $status -ne 0 ]] || {
+    echo 'audit accepted a transformed security service substitution at constant total' >&2
+    exit 1
+  }
+  cp "$security_backup" "$fixture/docs/security.md"
+  rm -f "$security_backup"
   python3 - "$fixture/docs/security.md" <<'PY'
 from pathlib import Path
 import sys
@@ -769,9 +902,13 @@ expect_invalid 'app slug at 51 characters' \
   --display-name 'Garden Notes' --module-name 'GardenNotes' --app-slug "$slug_51" --bundle-id 'com.yuto.GardenNotes'
 expect_valid_case 'bundle segment beginning with a digit' \
   --display-name 'Garden Notes' --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.3yuto.GardenNotes'
+expect_valid_case 'target values may contain the source prefix without being no-ops' \
+  --display-name 'TemplateApp Notes' --module-name 'TemplateApplication' --app-slug 'template-app-notes' --bundle-id 'com.yuto.TemplateApplication'
 
 expect_invalid 'empty display name' \
   --display-name '' --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.yuto.GardenNotes'
+expect_invalid 'display name equal to source identity' \
+  --display-name 'TemplateApp' --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.yuto.GardenNotes'
 expect_invalid 'display name containing slash' \
   --display-name 'Garden/Notes' --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.yuto.GardenNotes'
 expect_invalid 'module beginning with a digit' \
@@ -792,9 +929,13 @@ expect_invalid 'uppercase app slug' \
   --display-name 'Garden Notes' --module-name 'GardenNotes' --app-slug 'Garden-notes' --bundle-id 'com.yuto.GardenNotes'
 expect_invalid 'slug with adjacent hyphens' \
   --display-name 'Garden Notes' --module-name 'GardenNotes' --app-slug 'garden--notes' --bundle-id 'com.yuto.GardenNotes'
+expect_invalid 'app slug equal to source identity' \
+  --display-name 'Garden Notes' --module-name 'GardenNotes' --app-slug 'template-app' --bundle-id 'com.yuto.GardenNotes'
 expect_invalid 'bundle ID without a dot' \
   --display-name 'Garden Notes' --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'comyutoGardenNotes'
 expect_invalid 'bundle segment beginning with a hyphen' \
   --display-name 'Garden Notes' --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.yuto.-GardenNotes'
+expect_invalid 'Bundle ID equal to source identity' \
+  --display-name 'Garden Notes' --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.yuto.TemplateApp'
 
 echo 'validation tests passed'

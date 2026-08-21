@@ -60,12 +60,19 @@ identity_record="$caller_root/Config/app-identity.json"
 [[ -f "$manifest" && ! -L "$manifest" && -r "$manifest" ]] || die 'manifest must be a readable regular file'
 [[ -f "$caller_root/tools/bootstrap-app.swift" && ! -L "$caller_root/tools/bootstrap-app.swift" ]] || die 'bootstrap helper is missing'
 
-swift "$caller_root/tools/bootstrap-app.swift" validate \
+validated_identity="$(swift "$caller_root/tools/bootstrap-app.swift" validate \
   --manifest "$manifest" \
   --display-name "$display_name" \
   --module-name "$module_name" \
   --app-slug "$app_slug" \
-  --bundle-id "$bundle_id" >/dev/null
+  --bundle-id "$bundle_id")"
+display_name="$(python3 - "$validated_identity" <<'PY'
+import json
+import sys
+
+print(json.loads(sys.argv[1])["displayName"])
+PY
+)"
 
 if [[ -e "$identity_record" || -L "$identity_record" ]]; then
   [[ -f "$identity_record" && ! -L "$identity_record" ]] || die 'app identity must be a regular file'

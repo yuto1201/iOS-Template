@@ -189,6 +189,21 @@ func readManifest(at path: String) throws -> TemplateManifest {
     return manifest
 }
 
+func sourceAppSlug(for moduleName: String) -> String {
+    var result = ""
+    var previousWasLowercaseOrDigit = false
+    for scalar in moduleName.unicodeScalars {
+        let isUppercase = CharacterSet.uppercaseLetters.contains(scalar)
+        if isUppercase && previousWasLowercaseOrDigit {
+            result.append("-")
+        }
+        result.append(String(scalar).lowercased())
+        previousWasLowercaseOrDigit = CharacterSet.lowercaseLetters.contains(scalar)
+            || CharacterSet.decimalDigits.contains(scalar)
+    }
+    return result
+}
+
 func validatedIdentity(_ identity: AppIdentity, manifest: TemplateManifest) throws -> AppIdentity {
     guard !identity.displayName.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
         throw BootstrapError.invalidIdentity
@@ -203,13 +218,16 @@ func validatedIdentity(_ identity: AppIdentity, manifest: TemplateManifest) thro
 
     guard (1...30).contains(normalized.displayName.count),
           !normalized.displayName.contains("/"),
+          normalized.displayName != manifest.source.module,
           matches(normalized.moduleName, pattern: "^[A-Za-z][A-Za-z0-9]{1,49}$"),
           !swiftKeywords.contains(normalized.moduleName),
           normalized.moduleName != manifest.source.module,
           matches(normalized.appSlug, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"),
           normalized.appSlug.count <= 50,
+          normalized.appSlug != sourceAppSlug(for: manifest.source.module),
           matches(normalized.bundleId, pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,62}(?:\\.[A-Za-z0-9][A-Za-z0-9-]{0,62})+$"),
-          normalized.bundleId.count <= 255 else {
+          normalized.bundleId.count <= 255,
+          normalized.bundleId != manifest.source.bundleId else {
         throw BootstrapError.invalidIdentity
     }
 
@@ -528,11 +546,24 @@ func preflightSourceContract(root: URL, manifest: TemplateManifest) throws {
         equals: 1,
         in: safePath("\(source)UITests/\(source)UITests.swift", under: root)
     )
+    let sourceSlug = sourceAppSlug(for: source)
+    let sourceSecurityAnchors = [
+        "ios-template/\(sourceSlug)/app-store-connect/production/key-id",
+        "ios-template/\(sourceSlug)/cloudflare/production/api-token",
+        "ios-template/\(sourceSlug)/elevenlabs/production/api-key",
+    ]
     try requireOccurrenceCount(
-        "template-app",
-        equals: 3,
+        "ios-template/\(sourceSlug)/",
+        equals: sourceSecurityAnchors.count,
         in: safePath("docs/security.md", under: root)
     )
+    for anchor in sourceSecurityAnchors {
+        try requireOccurrenceCount(
+            anchor,
+            equals: 1,
+            in: safePath("docs/security.md", under: root)
+        )
+    }
     try requireOccurrenceCount(
         "# iOS-Template agent contract",
         equals: 1,
@@ -784,7 +815,13 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
         source,
     ]
     for sourcePath in strictSourceResidualPaths {
-        let transformedContent = try content(sourcePath)
+        var transformedContent = try content(sourcePath)
+        if sourcePath == pbxPath {
+            transformedContent = transformedContent
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.contains("INFOPLIST_KEY_CFBundleDisplayName =") }
+                .joined(separator: "\n")
+        }
         guard !sourceIdentifiers.contains(where: {
             identifierOccurrenceCount(of: $0, in: transformedContent) > 0
         }) else {
@@ -829,8 +866,15 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
     }
 
     let security = try content("docs/security.md")
-    guard countOccurrences(of: "ios-template/\(identity.appSlug)/", in: security) == 3,
-          countOccurrences(of: "ios-template/template-app/", in: security) == 0,
+    let transformedSecurityAnchors = [
+        "ios-template/\(identity.appSlug)/app-store-connect/production/key-id",
+        "ios-template/\(identity.appSlug)/cloudflare/production/api-token",
+        "ios-template/\(identity.appSlug)/elevenlabs/production/api-key",
+    ]
+    let sourceSecurityPrefix = "ios-template/\(sourceAppSlug(for: source))/"
+    guard transformedSecurityAnchors.allSatisfy({ countOccurrences(of: $0, in: security) == 1 }),
+          countOccurrences(of: "ios-template/\(identity.appSlug)/", in: security) == transformedSecurityAnchors.count,
+          countOccurrences(of: sourceSecurityPrefix, in: security) == 0,
           security.contains("~/Library/Application Support/iOS-Template/secrets/${appSlug}/") else {
         throw BootstrapError.missingAnchor
     }
