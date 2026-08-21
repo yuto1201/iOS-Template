@@ -2,8 +2,8 @@
 set -euo pipefail
 
 mode="${1:-}"
-if [[ "$mode" != "validation" && "$mode" != "transform" && "$mode" != "transaction" ]]; then
-  echo "usage: $0 validation|transform|transaction" >&2
+if [[ "$mode" != "validation" && "$mode" != "transform" && "$mode" != "transaction" && "$mode" != "trunk-default" && "$mode" != "cleanup-failure" ]]; then
+  echo "usage: $0 validation|transform|transaction|trunk-default|cleanup-failure" >&2
   exit 64
 fi
 
@@ -157,8 +157,102 @@ if [[ "$mode" == "transaction" ]]; then
     echo 'transaction changed the caller index' >&2
     exit 1
   }
+  expected_applied='{"appSlug":"garden-notes","bundleId":"com.yuto.GardenNotes","moduleName":"GardenNotes","resultRecordPath":"Config/app-identity.json","status":"applied"}'
+  [[ "$(<"$output")" == "$expected_applied" ]] || {
+    echo "transaction emitted unexpected result: $(<"$output")" >&2
+    exit 1
+  }
+
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" \
+      --display-name 'Garden Notes' \
+      --module-name 'GardenNotes' \
+      --app-slug 'garden-notes' \
+      --bundle-id 'com.yuto.GardenNotes'
+  ) >"$output" 2>"$errors"; then
+    echo "same-identity transaction failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  expected_complete='{"appSlug":"garden-notes","bundleId":"com.yuto.GardenNotes","moduleName":"GardenNotes","resultRecordPath":"Config/app-identity.json","status":"already-complete"}'
+  [[ "$(<"$output")" == "$expected_complete" ]] || {
+    echo "same-identity transaction emitted unexpected result: $(<"$output")" >&2
+    exit 1
+  }
 
   echo 'transaction tests passed'
+  exit 0
+fi
+
+if [[ "$mode" == "trunk-default" ]]; then
+  fixture="$(mktemp -d -t app-bootstrap-trunk.XXXXXX)"
+  rm -rf "$fixture"
+  git clone --no-local "$root" "$fixture" >/dev/null
+  git -C "$fixture" branch trunk
+  git -C "$fixture" update-ref refs/remotes/origin/trunk "$(git -C "$fixture" rev-parse HEAD)"
+  git -C "$fixture" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+  git -C "$fixture" checkout trunk >/dev/null
+
+  set +e
+  (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" \
+      --display-name 'Garden Notes' \
+      --module-name 'GardenNotes' \
+      --app-slug 'garden-notes' \
+      --bundle-id 'com.yuto.GardenNotes'
+  ) >"$output" 2>"$errors"
+  status=$?
+  set -e
+  [[ $status -ne 0 ]] || {
+    echo 'bootstrap allowed the caller default branch trunk' >&2
+    exit 1
+  }
+  grep -Fq 'default branch' "$errors" || {
+    echo "trunk rejection did not identify the default branch: $(<"$errors")" >&2
+    exit 1
+  }
+
+  echo 'trunk default tests passed'
+  exit 0
+fi
+
+if [[ "$mode" == "cleanup-failure" ]]; then
+  fixture="$(mktemp -d -t app-bootstrap-cleanup.XXXXXX)"
+  rm -rf "$fixture"
+  git clone --no-local "$root" "$fixture" >/dev/null
+  git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
+
+  set +e
+  (
+    export BOOTSTRAP_TEST_REAL_GIT="$(command -v git)"
+    export PATH="$root/tools/tests/fixtures/fail-worktree-remove:$PATH"
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" \
+      --display-name 'Garden Notes' \
+      --module-name 'GardenNotes' \
+      --app-slug 'garden-notes' \
+      --bundle-id 'com.yuto.GardenNotes'
+  ) >"$output" 2>"$errors"
+  status=$?
+  set -e
+  [[ $status -ne 0 ]] || {
+    echo 'bootstrap unexpectedly succeeded after worktree removal failed' >&2
+    exit 1
+  }
+  retained_path="$(sed -n 's/^bootstrap-app: cleanup failed; staging worktree retained: //p' "$errors")"
+  [[ ( "$retained_path" == /tmp/ios-template-bootstrap.*/worktree || "$retained_path" == /private/tmp/ios-template-bootstrap.*/worktree ) && -d "$retained_path" ]] || {
+    echo "cleanup did not retain the exact staging worktree: $(<"$errors")" >&2
+    exit 1
+  }
+  git -C "$fixture" worktree list --porcelain | grep -Fqx "worktree $retained_path" || {
+    echo "cleanup removed the retained worktree registration: $(<"$errors")" >&2
+    exit 1
+  }
+  git -C "$fixture" worktree remove --force "$retained_path"
+  rm -rf -- "${retained_path%/worktree}"
+
+  echo 'cleanup failure tests passed'
   exit 0
 fi
 
