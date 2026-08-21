@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 xcrun_bin="${XCRUN_BIN:-xcrun}"
+resolver_bin="${SIMULATOR_MATRIX_RESOLVER:-swift}"
 
 usage() {
   echo "usage: resolve-simulator-matrix.sh --batch-id <id> --output <path>" >&2
@@ -62,6 +63,7 @@ runtime = matrix["runtime"]
 abort "blocked:environment: matrix is not a complete frozen batch matrix" unless runtime.is_a?(Hash) && runtime.keys.sort == ["identifier", "version"] && runtime.values.all? { |value| value.is_a?(String) && !value.empty? }
 cases = matrix["cases"]
 abort "blocked:environment: matrix is not a complete frozen batch matrix" unless cases.is_a?(Array) && cases.length == 4
+abort "blocked:environment: matrix is not a complete frozen batch matrix" unless cases.map { |entry| entry.is_a?(Hash) ? entry["id"] : nil } == %w[iphone-en iphone-ja ipad-en ipad-ja]
 actual = {}
 cases.each do |entry|
   abort "blocked:environment: matrix is not a complete frozen batch matrix" unless entry.is_a?(Hash) && entry.keys.sort == ["deviceType", "family", "id", "language", "locale", "udid"]
@@ -70,7 +72,7 @@ cases.each do |entry|
   abort "blocked:environment: matrix is not a complete frozen batch matrix" unless entry["udid"].is_a?(String) && entry["udid"].match?(/\A[0-9A-Fa-f-]+\z/)
   actual[entry["id"]] = [entry["family"], entry["locale"], entry["language"]]
 end
-abort "blocked:environment: matrix is not a complete frozen batch matrix" unless actual == expected
+abort "blocked:environment: matrix is not a complete frozen batch matrix" unless actual == expected && cases.map { |entry| entry["udid"] }.uniq.length == 4
 RUBY
 
   devices_path="$matrix_dir/devices.json"
@@ -82,11 +84,13 @@ RUBY
   ruby -rjson - "$matrix_path" "$devices_path" "$batch_id" <<'RUBY'
 matrix_path, devices_path, batch_id = ARGV
 matrix = JSON.parse(File.read(matrix_path))
-devices = JSON.parse(File.read(devices_path)).fetch("devices").values.flatten
+runtime = matrix.fetch("runtime").fetch("identifier")
+device_buckets = JSON.parse(File.read(devices_path)).fetch("devices")
+devices = device_buckets.values.flatten
 matrix.fetch("cases").each do |entry|
   expected_name = "iOS-Template-#{batch_id}-#{entry.fetch("id")}"
-  live = devices.select { |device| device["udid"] == entry.fetch("udid") }
-  abort "blocked:environment: recorded Simulator no longer matches its batch matrix" unless live.length == 1 && live.first["name"] == expected_name
+  live = Array(device_buckets[runtime]).select { |device| device["udid"] == entry.fetch("udid") && device["name"] == expected_name && device["deviceTypeIdentifier"] == entry.fetch("deviceType").fetch("identifier") }
+  abort "blocked:environment: recorded Simulator no longer matches its batch matrix" unless live.length == 1 && devices.count { |device| device["name"] == expected_name } == 1
 end
 RUBY
   echo "$matrix_path"
@@ -107,52 +111,91 @@ capture_list devicetypes
 capture_list devices
 
 working_matrix="$(mktemp "$matrix_dir/.simulator-matrix.XXXXXX")"
-created_udids=()
-cleanup_created() {
-  local udid
-  for udid in "${created_udids[@]}"; do
-    "$xcrun_bin" simctl delete "$udid" || true
-  done
-  rm -f "$working_matrix"
-}
-trap cleanup_created ERR INT TERM
+plan_file="$(mktemp "$matrix_dir/.creation-plan.XXXXXX")"
+created_file="$(mktemp "$matrix_dir/.created-simulators.XXXXXX")"
+trap 'rm -f "$working_matrix" "$plan_file" "$created_file"' EXIT
 
-swift tools/resolve-simulator-matrix.swift \
+"$resolver_bin" tools/resolve-simulator-matrix.swift \
   --runtimes "$matrix_dir/runtimes.json" \
   --device-types "$matrix_dir/devicetypes.json" \
   --devices "$matrix_dir/devices.json" \
   --batch-id "$batch_id" >"$working_matrix"
 
-while IFS=$'\t' read -r case_id device_type runtime; do
-  simulator_name="iOS-Template-$batch_id-$case_id"
-  udid="$("$xcrun_bin" simctl create "$simulator_name" "$device_type" "$runtime")"
-  [[ "$udid" =~ ^[0-9A-Fa-f-]+$ ]] || {
-    echo "blocked:environment: simctl returned an invalid Simulator UDID" >&2
-    exit 1
-  }
-  created_udids+=("$udid")
-  ruby -rjson - "$working_matrix" "$case_id" "$udid" <<'RUBY'
-path, case_id, udid = ARGV
-matrix = JSON.parse(File.read(path))
-entry = matrix.fetch("cases").find { |candidate| candidate["id"] == case_id }
-abort "blocked:environment: resolver returned an unexpected matrix case" unless entry && !entry.key?("udid")
-entry["udid"] = udid
-temporary = "#{path}.next"
-File.write(temporary, JSON.pretty_generate(matrix) + "\n")
-File.rename(temporary, path)
-RUBY
-done < <(ruby -rjson - "$working_matrix" <<'RUBY'
+ruby -rjson - "$working_matrix" "$batch_id" >"$plan_file" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
+batch_id = ARGV.fetch(1)
 expected = %w[iphone-en iphone-ja ipad-en ipad-ja]
 abort "blocked:environment: resolver did not return exactly four stable cases" unless matrix.fetch("cases").map { |entry| entry["id"] } == expected
 matrix.fetch("cases").each do |entry|
   type = entry.fetch("deviceType")
-  puts [entry.fetch("id"), type.fetch("identifier"), matrix.fetch("runtime").fetch("identifier")].join("\t")
+  puts [entry.fetch("id"), "iOS-Template-#{batch_id}-#{entry.fetch("id")}", type.fetch("identifier"), matrix.fetch("runtime").fetch("identifier")].join("\t")
 end
 RUBY
-)
+ruby - "$plan_file" <<'RUBY'
+rows = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t", 4) }
+expected = %w[iphone-en iphone-ja ipad-en ipad-ja]
+abort "blocked:environment: invalid Simulator creation plan" unless rows.length == 4 && rows.map(&:first) == expected && rows.all? { |row| row.length == 4 && row.all? { |value| !value.empty? } }
+abort "blocked:environment: duplicate Simulator creation plan row" unless rows.map { |row| row[1] }.uniq.length == 4
+RUBY
 
-ln "$working_matrix" "$matrix_path"
+record_failure() {
+  local failed_case="$1"
+  local failed_name="$2"
+  ruby -rjson - "$created_file" "$matrix_dir/creation-failure.json" "$failed_case" "$failed_name" <<'RUBY'
+created_path, report_path, failed_case, failed_name = ARGV
+created = File.readlines(created_path, chomp: true).map do |line|
+  case_id, name, type, runtime, udid = line.split("\t", 5)
+  {"id" => case_id, "name" => name, "deviceTypeIdentifier" => type, "runtimeIdentifier" => runtime, "udid" => udid}
+end
+File.write(report_path, JSON.pretty_generate({"status" => "blocked:environment", "failedCase" => failed_case, "failedName" => failed_name, "possibleDedicatedSimulators" => created}) + "\n")
+RUBY
+}
+
+while IFS=$'\t' read -r case_id simulator_name device_type runtime; do
+  if ! udid="$("$xcrun_bin" simctl create "$simulator_name" "$device_type" "$runtime")"; then
+    record_failure "$case_id" "$simulator_name"
+    echo "blocked:environment: Simulator creation failed; preserved possible dedicated Simulators in $matrix_dir/creation-failure.json" >&2
+    exit 1
+  fi
+  [[ "$udid" =~ ^[0-9A-Fa-f-]+$ ]] || {
+    record_failure "$case_id" "$simulator_name"
+    echo "blocked:environment: simctl returned an invalid Simulator UDID; preserved possible dedicated Simulators in $matrix_dir/creation-failure.json" >&2
+    exit 1
+  }
+  printf '%s\t%s\t%s\t%s\t%s\n' "$case_id" "$simulator_name" "$device_type" "$runtime" "$udid" >>"$created_file"
+done <"$plan_file"
+
+post_devices="$(mktemp "$matrix_dir/.post-devices.XXXXXX")"
+trap 'rm -f "$working_matrix" "$plan_file" "$created_file" "$post_devices" "$working_matrix.next"' EXIT
+"$xcrun_bin" simctl list devices -j >"$post_devices"
+ruby -rjson - "$working_matrix" "$plan_file" "$created_file" "$post_devices" "$batch_id" >"$working_matrix.next" <<'RUBY'
+matrix_path, plan_path, created_path, devices_path, batch_id = ARGV
+matrix = JSON.parse(File.read(matrix_path))
+expected_ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
+cases = matrix.fetch("cases")
+abort "blocked:environment: resolver did not return exactly four stable cases" unless cases.map { |entry| entry["id"] } == expected_ids
+plan = File.readlines(plan_path, chomp: true).map { |line| line.split("\t", 4) }
+created = File.readlines(created_path, chomp: true).map { |line| line.split("\t", 5) }
+abort "blocked:environment: incomplete Simulator creation set" unless created.length == 4 && created.map(&:first) == expected_ids && created.all? { |row| row.length == 5 && row[4].match?(/\A[0-9A-Fa-f-]+\z/) }
+abort "blocked:environment: duplicate created Simulator UDID or name" unless created.map { |row| row[1] }.uniq.length == 4 && created.map { |row| row[4] }.uniq.length == 4
+abort "blocked:environment: creation plan changed before validation" unless created.map { |row| row.take(4) } == plan
+devices = JSON.parse(File.read(devices_path)).fetch("devices")
+all_devices = devices.values.flatten
+created.each do |case_id, name, type, runtime, udid|
+  matches = Array(devices[runtime]).select { |device| device["udid"] == udid && device["name"] == name && device["deviceTypeIdentifier"] == type }
+  abort "blocked:environment: created Simulator does not match its validated plan" unless matches.length == 1
+  abort "blocked:environment: ambiguous live dedicated Simulator name" unless all_devices.count { |device| device["name"] == name } == 1
+end
+cases.each { |entry| entry["udid"] = created.find { |row| row[0] == entry["id"] }[4] }
+puts JSON.pretty_generate(matrix)
+RUBY
+mv "$working_matrix.next" "$working_matrix"
+mv "$post_devices" "$matrix_dir/devices.json"
+
+swift tools/simulator-matrix-io.swift \
+  --directory "$matrix_dir" \
+  --source "$(basename "$working_matrix")" \
+  --destination "simulator-matrix.json"
 rm -f "$working_matrix"
-trap - ERR INT TERM
+trap - EXIT
 echo "$matrix_path"

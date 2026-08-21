@@ -62,6 +62,7 @@ runtime = matrix["runtime"]
 abort "blocked:environment: matrix is not a complete frozen batch matrix" unless runtime.is_a?(Hash) && runtime.keys.sort == ["identifier", "version"] && runtime.values.all? { |value| value.is_a?(String) && !value.empty? }
 cases = matrix["cases"]
 abort "blocked:environment: matrix is not a complete frozen batch matrix" unless cases.is_a?(Array) && cases.length == 4
+abort "blocked:environment: matrix is not a complete frozen batch matrix" unless cases.map { |entry| entry.is_a?(Hash) ? entry["id"] : nil } == %w[iphone-en iphone-ja ipad-en ipad-ja]
 actual = {}
 udids = []
 cases.each do |entry|
@@ -75,11 +76,14 @@ cases.each do |entry|
 end
 abort "blocked:environment: matrix is not a complete frozen batch matrix" unless actual == expected && udids.map(&:last).uniq.length == 4
 
-devices = JSON.parse(File.read(devices_path)).fetch("devices").values.flatten
+runtime_id = matrix.fetch("runtime").fetch("identifier")
+buckets = JSON.parse(File.read(devices_path)).fetch("devices")
+devices = buckets.values.flatten
 udids.each do |case_id, udid|
   expected_name = "iOS-Template-#{batch_id}-#{case_id}"
-  live = devices.select { |device| device["udid"] == udid }
-  abort "blocked:environment: recorded Simulator no longer matches its batch matrix" unless live.length == 1 && live.first["name"] == expected_name
+  case_entry = cases.find { |entry| entry["id"] == case_id }
+  live = Array(buckets[runtime_id]).select { |device| device["udid"] == udid && device["name"] == expected_name && device["deviceTypeIdentifier"] == case_entry.fetch("deviceType").fetch("identifier") }
+  abort "blocked:environment: recorded Simulator no longer matches its batch matrix" unless live.length == 1 && devices.count { |device| device["name"] == expected_name } == 1
 end
 File.write(validated_udids_path, udids.map(&:last).join("\n") + "\n")
 RUBY
