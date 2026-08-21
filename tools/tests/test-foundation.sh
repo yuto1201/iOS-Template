@@ -17,6 +17,9 @@ required_files=(
   Config/Local.xcconfig.example
   Config/ownership.yml
   tools/check-markdown-links.swift
+  .agents/skills/spec-workflow/SKILL.md
+  .agents/skills/spec-workflow/templates/decision.md
+  .agents/skills/spec-workflow/scripts/check-spec-state.sh
 )
 
 for file in "${required_files[@]}"; do
@@ -71,8 +74,30 @@ if [[ ! -x tools/check-markdown-links.swift ]]; then
   exit 1
 fi
 
+spec_checker=.agents/skills/spec-workflow/scripts/check-spec-state.sh
+if [[ ! -x "$spec_checker" ]]; then
+  echo "Specification state checker must be executable" >&2
+  exit 1
+fi
+
+claude_skill=.claude/skills/spec-workflow
+expected_skill_target=../../.agents/skills/spec-workflow
+if [[ ! -L "$claude_skill" ]]; then
+  echo "Claude specification skill must be a symbolic link" >&2
+  exit 1
+fi
+if [[ $(readlink "$claude_skill") != "$expected_skill_target" ]]; then
+  echo "Claude specification skill must use the portable relative target" >&2
+  exit 1
+fi
+if [[ ! -f "$claude_skill/SKILL.md" ]]; then
+  echo "Claude specification skill link does not resolve" >&2
+  exit 1
+fi
+
 fixture_dir=$(mktemp -d)
-trap 'rm -rf "$fixture_dir"' EXIT
+spec_fixture_dir="$repo_root/.artifacts/spec-workflow-test-$$"
+trap 'rm -rf "$fixture_dir" "$spec_fixture_dir"' EXIT
 printf '%s\n' '# Target' > "$fixture_dir/target.md"
 printf '%s\n' '[Target](target.md)' > "$fixture_dir/valid.md"
 printf '%s\n' '[Missing](missing.md)' > "$fixture_dir/invalid.md"
@@ -80,6 +105,49 @@ printf '%s\n' '[Missing](missing.md)' > "$fixture_dir/invalid.md"
 swift tools/check-markdown-links.swift "$fixture_dir/valid.md"
 if swift tools/check-markdown-links.swift "$fixture_dir/invalid.md" >/dev/null 2>&1; then
   echo "Markdown link checker accepted a missing local target" >&2
+  exit 1
+fi
+
+mkdir -p "$spec_fixture_dir"
+cat > "$spec_fixture_dir/spec.md" <<'EOF'
+# Decisions
+
+## Confirmed choice
+
+Status: 確定
+
+Implementation may rely on this choice.
+
+## Pending choice
+
+Status: 未決
+
+Implementation acceptance depends on this choice.
+
+## Proposed choice
+
+Status: 提案
+
+Implementation acceptance may not rely on this choice yet.
+EOF
+
+relative_spec_path=${spec_fixture_dir#"$repo_root/"}/spec.md
+printf '[Confirmed](%s#confirmed-choice)\n' "$relative_spec_path" > "$spec_fixture_dir/confirmed-issue.md"
+printf '[Pending](%s#pending-choice)\n' "$relative_spec_path" > "$spec_fixture_dir/pending-issue.md"
+printf '[Proposed](%s#proposed-choice)\n' "$relative_spec_path" > "$spec_fixture_dir/proposed-issue.md"
+printf '%s\n' 'No specification reference.' > "$spec_fixture_dir/unlinked-issue.md"
+
+"$spec_checker" "$spec_fixture_dir/confirmed-issue.md"
+if "$spec_checker" "$spec_fixture_dir/pending-issue.md" >/dev/null 2>&1; then
+  echo "Specification state checker accepted an unresolved referenced section" >&2
+  exit 1
+fi
+if "$spec_checker" "$spec_fixture_dir/proposed-issue.md" >/dev/null 2>&1; then
+  echo "Specification state checker accepted a proposed referenced section" >&2
+  exit 1
+fi
+if "$spec_checker" "$spec_fixture_dir/unlinked-issue.md" >/dev/null 2>&1; then
+  echo "Specification state checker accepted an Issue without specification references" >&2
   exit 1
 fi
 
