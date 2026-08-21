@@ -285,6 +285,16 @@ func replaceExactly(_ old: String, with new: String, in path: URL, minimumCount:
     }
 }
 
+func escapedPBXString(_ value: String) -> String {
+    value
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+}
+
+func pbxDisplayNameSetting(_ displayName: String) -> String {
+    "INFOPLIST_KEY_CFBundleDisplayName = \"\(escapedPBXString(displayName))\";"
+}
+
 func insertDisplayName(_ displayName: String, bundleID: String, inPBXProj path: URL) throws {
     guard let content = try? String(contentsOf: path, encoding: .utf8) else {
         throw BootstrapError.missingAnchor
@@ -295,10 +305,7 @@ func insertDisplayName(_ displayName: String, bundleID: String, inPBXProj path: 
         throw BootstrapError.malformedProject
     }
 
-    let escapedDisplayName = displayName
-        .replacingOccurrences(of: "\\", with: "\\\\")
-        .replacingOccurrences(of: "\"", with: "\\\"")
-    let replacement = "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \(bundleID);\n\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = \"\(escapedDisplayName)\";\n\t\t\t\tPRODUCT_NAME"
+    let replacement = "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \(bundleID);\n\t\t\t\t\(pbxDisplayNameSetting(displayName))\n\t\t\t\tPRODUCT_NAME"
     do {
         try content.replacingOccurrences(of: anchor, with: replacement).write(to: path, atomically: true, encoding: .utf8)
     } catch {
@@ -814,13 +821,16 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
         "\(source)App",
         source,
     ]
+    let expectedDisplayNameSetting = pbxDisplayNameSetting(identity.displayName)
     for sourcePath in strictSourceResidualPaths {
         var transformedContent = try content(sourcePath)
         if sourcePath == pbxPath {
             transformedContent = transformedContent
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .filter { !$0.contains("INFOPLIST_KEY_CFBundleDisplayName =") }
-                .joined(separator: "\n")
+                .replacingOccurrences(of: identity.bundleId, with: "__AUDITED_TARGET_BUNDLE__")
+                .replacingOccurrences(
+                    of: expectedDisplayNameSetting,
+                    with: "INFOPLIST_KEY_CFBundleDisplayName = \"__AUDITED_TARGET_DISPLAY__\";"
+                )
         }
         guard !sourceIdentifiers.contains(where: {
             identifierOccurrenceCount(of: $0, in: transformedContent) > 0
@@ -835,6 +845,7 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
     try require("PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId);", count: 0, in: pbxPath)
     try require("PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId)Tests;", count: 0, in: pbxPath)
     try require("PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId)UITests;", count: 0, in: pbxPath)
+    try require(expectedDisplayNameSetting, count: 2, in: pbxPath)
     try require("BlueprintName = \"\(identity.moduleName)\"", count: 3, in: schemePath)
     try require("struct \(identity.moduleName)App: App", count: 1, in: appPath)
     try require("\"\(identity.appSlug).welcome\"", count: 1, in: contentViewPath)

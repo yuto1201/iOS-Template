@@ -339,6 +339,52 @@ PY
       --bundle-id "$invalid_bundle"
   done
 
+  new_safety_fixture independent-bundle-segment
+  independent_bundle_arguments=(
+    --display-name 'Garden Notes'
+    --module-name 'GardenNotes'
+    --app-slug 'garden-notes'
+    --bundle-id 'com.example.TemplateApp'
+  )
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "${independent_bundle_arguments[@]}"
+  ) >"$output" 2>"$errors"; then
+    echo "valid independent TemplateApp Bundle segment failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  if ! swift "$root/tools/bootstrap-app.swift" audit \
+    --root "$fixture" \
+    --manifest "$fixture/Config/template-identity.json" \
+    --module-name GardenNotes >"$output" 2>"$errors"; then
+    echo "audit rejected a valid independent TemplateApp Bundle segment: $(<"$errors")" >&2
+    exit 1
+  fi
+  python3 - "$fixture/GardenNotes.xcodeproj/project.pbxproj" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+anchor = "remoteInfo = GardenNotes;"
+if content.count(anchor) < 1:
+    raise SystemExit("missing transformed PBX residual fixture anchor")
+path.write_text(content.replace(anchor, "remoteInfo = TemplateApp;", 1))
+PY
+  set +e
+  swift "$root/tools/bootstrap-app.swift" audit \
+    --root "$fixture" \
+    --manifest "$fixture/Config/template-identity.json" \
+    --module-name GardenNotes >"$output" 2>"$errors"
+  status=$?
+  set -e
+  [[ $status -ne 0 ]] || {
+    echo 'audit accepted a true TemplateApp PBX residual' >&2
+    exit 1
+  }
+  rm -rf "$fixture"
+  fixture=''
+
   new_safety_fixture whitespace-rerun
   whitespace_arguments=(
     --display-name '  Garden Notes  '
@@ -478,6 +524,50 @@ PY
     --module-name 'OtherGarden' \
     --app-slug 'other-garden' \
     --bundle-id 'com.yuto.OtherGarden'
+
+  new_safety_fixture display-tamper
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "${garden_notes_arguments[@]}"
+  ) >"$output" 2>"$errors"; then
+    echo "display-name tamper setup failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  python3 - "$fixture/GardenNotes.xcodeproj/project.pbxproj" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+expected = 'INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";'
+if content.count(expected) != 2:
+    raise SystemExit("unexpected display-name setting fixture")
+path.write_text(content.replace(expected, 'INFOPLIST_KEY_CFBundleDisplayName = "Tampered";', 1))
+PY
+  expect_bootstrap_rejection_without_mutation 'tampered display-name setting on same second run' \
+    "${garden_notes_arguments[@]}"
+
+  new_safety_fixture display-delete
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "${garden_notes_arguments[@]}"
+  ) >"$output" 2>"$errors"; then
+    echo "display-name deletion setup failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  python3 - "$fixture/GardenNotes.xcodeproj/project.pbxproj" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+expected = '\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";\n'
+if content.count(expected) != 2:
+    raise SystemExit("unexpected display-name setting fixture")
+path.write_text(content.replace(expected, "", 1))
+PY
+  expect_bootstrap_rejection_without_mutation 'deleted display-name setting on same second run' \
+    "${garden_notes_arguments[@]}"
 
   new_safety_fixture audit-residual
   if ! (
