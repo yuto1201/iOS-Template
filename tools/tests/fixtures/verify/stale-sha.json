@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "changeClassification": "application-code",
+  "reason": null,
+  "issue": 42,
+  "baseSha": "BASE_SHA",
+  "headSha": "STALE_SHA",
+  "issueContract": {
+    "path": ".artifacts/issues/42/issue-contract.json",
+    "digest": "sha256:CONTRACT_DIGEST"
+  },
+  "matrixFile": ".artifacts/batches/evidence-fixture/simulator-matrix.json",
+  "matrixDigest": "sha256:MATRIX_DIGEST",
+  "executionRoute": "xcodebuild-simctl",
+  "xcode": {
+    "path": "/Applications/Xcode.app/Contents/Developer",
+    "version": "26.5",
+    "build": "17F42"
+  },
+  "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0},
+  "tests": {"status": "passed", "passed": 24, "failed": 0, "skipped": 0},
+  "cases": [
+    {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/settings.png"},
+    {"id": "iphone-ja", "status": "passed", "screenshot": "iphone-ja/settings.png"},
+    {"id": "ipad-en", "status": "passed", "screenshot": "ipad-en/settings.png"},
+    {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/settings.png"}
+  ],
+  "visualEvaluation": {"status": "passed", "findings": []},
+  "acceptanceEvidence": [
+    {"id": "AC-1", "status": "passed", "evidence": ["tests:TemplateAppTests/EvidenceTests"]},
+    {"id": "AC-2", "status": "passed", "evidence": ["cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]}
+  ],
+  "completedAt": "2026-08-21T13:00:00+09:00"
+}
