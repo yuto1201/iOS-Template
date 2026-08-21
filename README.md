@@ -2,7 +2,74 @@
 
 Codex を中心に、Claude を実装担当または反対モデルの評価者として併用する個人向け iOS 開発テンプレートです。仕様、Issue、ブランチ、検証、反対モデルレビュー、PR、Squash Merge までを一貫したワークフローとして扱います。
 
-現在は設計確定段階です。テンプレート本体の自動化は [実装計画索引](./docs/superpowers/plans/README.md) に従って段階的に追加します。
+Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、英語・日本語、iPhone・iPad、共有仕様スキル、Codex/Claude 共通責務の read-only 評価エージェントを含みます。運用自動化は [実装計画索引](./docs/superpowers/plans/README.md) に従って段階的に追加します。
+
+## Foundation の検証
+
+リポジトリ方針は次で検証します。
+
+```sh
+tools/tests/test-foundation.sh
+```
+
+Build と Test は、インストール済み Xcode から [標準 Simulator マトリクス](./docs/verification.md#3-固定されるmatrix)を解決し、Issue バッチ内で固定して実行します。次は Foundation 検証で使うコマンド形です。`TEMPLATE_IPHONE_UDID` と `TEMPLATE_IPAD_UDID` には、同じ最新 iOS Runtime の iPhone Pro（Pro Max を除く）と13-inch iPad Airを指定します。
+
+```sh
+TEMPLATE_IPHONE_UDID="<resolved-iPhone-Pro-UDID>"
+TEMPLATE_IPAD_UDID="<resolved-iPad-Air-13-inch-UDID>"
+
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project TemplateApp.xcodeproj \
+  -scheme TemplateApp \
+  -destination "platform=iOS Simulator,id=${TEMPLATE_IPHONE_UDID}" \
+  -derivedDataPath .artifacts/DerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  test -only-testing:TemplateAppTests
+
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project TemplateApp.xcodeproj \
+  -scheme TemplateApp \
+  -destination "platform=iOS Simulator,id=${TEMPLATE_IPHONE_UDID}" \
+  -derivedDataPath .artifacts/DerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  test-without-building \
+  -only-testing:TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle
+
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project TemplateApp.xcodeproj \
+  -scheme TemplateApp \
+  -destination "platform=iOS Simulator,id=${TEMPLATE_IPHONE_UDID}" \
+  -derivedDataPath .artifacts/DerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  test-without-building \
+  -only-testing:TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle
+
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project TemplateApp.xcodeproj \
+  -scheme TemplateApp \
+  -destination "platform=iOS Simulator,id=${TEMPLATE_IPAD_UDID}" \
+  -derivedDataPath .artifacts/DerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  test-without-building \
+  -only-testing:TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle
+
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project TemplateApp.xcodeproj \
+  -scheme TemplateApp \
+  -destination "platform=iOS Simulator,id=${TEMPLATE_IPAD_UDID}" \
+  -derivedDataPath .artifacts/DerivedData \
+  CODE_SIGNING_ALLOWED=NO \
+  test-without-building \
+  -only-testing:TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle
+```
+
+証拠の形式、画像評価、Head SHA 一致条件は [iOS verification](./docs/verification.md) を正とします。Simulator のUDIDと結果ファイルは環境固有なのでGitへ追加しません。
+
+## 新しいアプリとして使い始めるとき
+
+- Xcodeが生成した個人のSigning Teamは初期値として残しています。別の所有者が利用する場合は、XcodeのSigning & Capabilitiesで自分のTeamへ変更します。`Config/ownership.yml` のApp Store Team IDとBundle IDは、アプリ固有の提出先が決まるまで`null`のままにします。
+- Deployment Targetはテンプレート生成時のXcode既定値です。対象ユーザーと必要APIを決め、実装Issueを始める前にアプリ固有の最小OSを仕様とXcode設定へ固定します。
+- ローカル設定は `Config/Local.xcconfig.example` を参考に、Git管理外の `Config/Local.xcconfig` へ置きます。秘密値はxcconfigへも保存せず、Keychainまたは各サービスの秘密管理を使います。
 
 ## 最初に読む文書
 
