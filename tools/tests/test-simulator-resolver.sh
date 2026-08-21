@@ -40,6 +40,7 @@ expected_cases = [
 ]
 actual_cases = matrix.fetch("cases").map do |entry|
   type = entry.fetch("deviceType")
+  abort "Device Type must be an identifier/name object" unless type.keys.sort == ["identifier", "name"]
   [entry.fetch("id"), entry.fetch("family"), type.fetch("identifier"), type.fetch("name"), entry.fetch("locale"), entry.fetch("language")]
 end
 abort "unexpected matrix cases: #{actual_cases.inspect}" unless actual_cases == expected_cases
@@ -67,6 +68,40 @@ expect_failure() {
 run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json"
 assert_matrix
 
+tie_runtimes="$scratch/tie-runtimes.json"
+ruby -rjson - "$fixtures/runtimes.json" "$tie_runtimes" <<'RUBY'
+source, destination = ARGV
+document = JSON.parse(File.read(source))
+document["runtimes"] << {
+  "identifier" => "com.apple.CoreSimulator.SimRuntime.iOS-10-3-z",
+  "version" => "10.3",
+  "isAvailable" => true,
+  "name" => "iOS 10.3 z"
+}
+File.write(destination, JSON.generate(document))
+RUBY
+run_resolver "$tie_runtimes" "$fixtures/devicetypes.json" "$fixtures/devices.json"
+assert_matrix
+
+tie_device_types="$scratch/tie-device-types.json"
+ruby -rjson - "$fixtures/devicetypes.json" "$tie_device_types" <<'RUBY'
+source, destination = ARGV
+document = JSON.parse(File.read(source))
+document["devicetypes"] << {
+  "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro-z",
+  "name" => "iPhone 10 Pro",
+  "productFamily" => "iPhone"
+}
+document["devicetypes"] << {
+  "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3-z",
+  "name" => "iPad Air 13-inch (M3)",
+  "productFamily" => "iPad"
+}
+File.write(destination, JSON.generate(document))
+RUBY
+run_resolver "$fixtures/runtimes.json" "$tie_device_types" "$fixtures/devices.json"
+assert_matrix
+
 no_pro="$scratch/no-pro.json"
 ruby -rjson - "$fixtures/devicetypes.json" "$no_pro" <<'RUBY'
 source, destination = ARGV
@@ -84,5 +119,30 @@ document["devicetypes"].reject! { |entry| entry["name"].start_with?("iPad Air") 
 File.write(destination, JSON.generate(document))
 RUBY
 expect_failure "no matching iPad Air Device Type" "$fixtures/runtimes.json" "$no_air" "$fixtures/devices.json"
+
+malformed_versions=(
+  '10..3'
+  '10.a'
+  '999999999999999999999999999999999999999999999999999999999999999999'
+  ''
+)
+for malformed_version in "${malformed_versions[@]}"; do
+  malformed_runtimes="$scratch/malformed-runtime.json"
+  ruby -rjson - "$fixtures/runtimes.json" "$malformed_runtimes" "$malformed_version" <<'RUBY'
+source, destination, version = ARGV
+document = JSON.parse(File.read(source))
+document["runtimes"].find { |entry| entry["identifier"] == "com.apple.CoreSimulator.SimRuntime.iOS-10-3" }["version"] = version
+File.write(destination, JSON.generate(document))
+RUBY
+  expect_failure "invalid available iOS Runtime version" "$malformed_runtimes" "$fixtures/devicetypes.json" "$fixtures/devices.json"
+done
+
+malformed_devices="$scratch/malformed-devices.json"
+printf '{not json}\n' >"$malformed_devices"
+expect_failure "unable to decode simctl JSON input" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$malformed_devices"
+
+empty_devices="$scratch/empty-devices.json"
+printf '{"devices":{}}\n' >"$empty_devices"
+expect_failure "devices.json has no provenance entry for selected Runtime" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$empty_devices"
 
 echo "all simulator resolver tests passed"

@@ -35,10 +35,10 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
     "version": "26.5"
   },
   "cases": [
-    {"id": "iphone-en", "family": "iPhone", "deviceType": "iPhone 17 Pro", "locale": "en_US", "language": "en"},
-    {"id": "iphone-ja", "family": "iPhone", "deviceType": "iPhone 17 Pro", "locale": "ja_JP", "language": "ja"},
-    {"id": "ipad-en", "family": "iPad", "deviceType": "iPad Air 13-inch (M3)", "locale": "en_US", "language": "en"},
-    {"id": "ipad-ja", "family": "iPad", "deviceType": "iPad Air 13-inch (M3)", "locale": "ja_JP", "language": "ja"}
+    {"id": "iphone-en", "family": "iPhone", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "name": "iPhone 17 Pro"}, "locale": "en_US", "language": "en"},
+    {"id": "iphone-ja", "family": "iPhone", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "name": "iPhone 17 Pro"}, "locale": "ja_JP", "language": "ja"},
+    {"id": "ipad-en", "family": "iPad", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "name": "iPad Air 13-inch (M3)"}, "locale": "en_US", "language": "en"},
+    {"id": "ipad-ja", "family": "iPad", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "name": "iPad Air 13-inch (M3)"}, "locale": "ja_JP", "language": "ja"}
   ]
 }
 ```

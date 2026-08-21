@@ -70,6 +70,7 @@ struct Arguments {
 enum ResolverError: Error {
     case usage
     case unreadableInput(String)
+    case noAvailableIOSRuntime
     case invalidRuntimeVersion(String)
     case missingRuntimeDevices(String)
     case noIPhonePro([String])
@@ -81,6 +82,8 @@ enum ResolverError: Error {
             return "usage: resolve-simulator-matrix.swift --runtimes <path> --device-types <path> --devices <path> --batch-id <id> [--resolved-at <ISO-8601 timestamp>]"
         case .unreadableInput(let path):
             return "blocked:environment: unable to decode simctl JSON input: \(path)"
+        case .noAvailableIOSRuntime:
+            return "blocked:environment: no available iOS Runtime"
         case .invalidRuntimeVersion(let version):
             return "blocked:environment: invalid available iOS Runtime version: \(version)"
         case .missingRuntimeDevices(let runtimeID):
@@ -137,16 +140,19 @@ func decode<T: Decodable>(_ type: T.Type, from path: String) throws -> T {
     return value
 }
 
-func versionComponents(in value: String) -> [Int] {
-    let pattern = #"\d+"#
+func numericDotVersionComponents(in value: String) -> [Int]? {
+    let pattern = #"^[0-9]+(?:\.[0-9]+)*$"#
     guard let expression = try? NSRegularExpression(pattern: pattern) else {
-        return []
+        return nil
     }
     let range = NSRange(value.startIndex..<value.endIndex, in: value)
-    return expression.matches(in: value, range: range).compactMap { match in
-        guard let range = Range(match.range, in: value) else { return nil }
-        return Int(value[range])
+    guard expression.firstMatch(in: value, range: range)?.range == range else {
+        return nil
     }
+    let components = value.split(separator: ".", omittingEmptySubsequences: false)
+    guard !components.isEmpty else { return nil }
+    let parsed = components.compactMap { Int($0) }
+    return parsed.count == components.count ? parsed : nil
 }
 
 func compareSemanticVersions(_ left: [Int], _ right: [Int]) -> ComparisonResult {
@@ -162,18 +168,25 @@ func compareSemanticVersions(_ left: [Int], _ right: [Int]) -> ComparisonResult 
 }
 
 func newestRuntime(from runtimes: [Runtime]) throws -> Runtime {
-    let available = runtimes.filter(\.isAvailable)
-    for runtime in available where versionComponents(in: runtime.version).isEmpty {
+    let iOSRuntimePrefix = "com.apple.CoreSimulator.SimRuntime.iOS-"
+    let available = runtimes.filter { $0.isAvailable && $0.identifier.hasPrefix(iOSRuntimePrefix) }
+    guard !available.isEmpty else {
+        throw ResolverError.noAvailableIOSRuntime
+    }
+    for runtime in available where numericDotVersionComponents(in: runtime.version) == nil {
         throw ResolverError.invalidRuntimeVersion(runtime.version)
     }
     guard let selected = available.sorted(by: { left, right in
-        let ordering = compareSemanticVersions(versionComponents(in: left.version), versionComponents(in: right.version))
+        let ordering = compareSemanticVersions(
+            numericDotVersionComponents(in: left.version)!,
+            numericDotVersionComponents(in: right.version)!
+        )
         if ordering == .orderedSame {
             return left.identifier < right.identifier
         }
         return ordering == .orderedDescending
     }).first else {
-        throw ResolverError.invalidRuntimeVersion("none available")
+        throw ResolverError.noAvailableIOSRuntime
     }
     return selected
 }
@@ -189,8 +202,7 @@ func iPhoneProRank(_ deviceType: DeviceType) -> [Int]? {
           let range = Range(match.range(at: 1), in: deviceType.name) else {
         return nil
     }
-    let rank = versionComponents(in: String(deviceType.name[range]))
-    return rank.isEmpty ? nil : rank
+    return numericDotVersionComponents(in: String(deviceType.name[range]))
 }
 
 func newestIPhonePro(from deviceTypes: [DeviceType]) throws -> DeviceType {
@@ -226,12 +238,15 @@ func iPadAirRank(_ deviceType: DeviceType) -> (generation: [Int], screen: Int)? 
     let generationSource = firstCapture(in: deviceType.name, pattern: #"\(M([0-9]+(?:\.[0-9]+)*)\)"#)
         ?? firstCapture(in: deviceType.name, pattern: #"\(([0-9]+)(?:st|nd|rd|th) generation\)"#)
     guard let generationSource,
-          !versionComponents(in: generationSource).isEmpty else {
+          let generation = numericDotVersionComponents(in: generationSource) else {
         return nil
     }
     let screenSource = firstCapture(in: deviceType.name, pattern: #"([0-9]+)-inch"#)
+    guard screenSource == nil || Int(screenSource!) != nil else {
+        return nil
+    }
     let screen = screenSource.flatMap(Int.init) ?? 0
-    return (versionComponents(in: generationSource), screen)
+    return (generation, screen)
 }
 
 func newestIPadAir(from deviceTypes: [DeviceType]) throws -> DeviceType {
