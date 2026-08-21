@@ -49,6 +49,21 @@ if [[ -e CLAUDE.md ]] || git ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1;
   exit 1
 fi
 
+while IFS= read -r -d '' tracked_file; do
+  case "/$tracked_file" in
+    */CLAUDE.md|*/xcuserdata/*|*/DerivedData/*|*/.artifacts/*|*/.worktrees/*|*/Config/Local.xcconfig|*.p8|*.mobileprovision|*/supabase/.temp/*|*/supabase/.branches/*)
+      echo "forbidden local or secret artifact is tracked: $tracked_file" >&2
+      exit 1
+      ;;
+    */.env|*/.env.*)
+      if [[ "$tracked_file" != ".env.example" ]]; then
+        echo "forbidden environment file is tracked: $tracked_file" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done < <(git ls-files -z)
+
 ignored_paths=(
   .artifacts/example.json
   .worktrees/example
