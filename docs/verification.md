@@ -144,7 +144,54 @@ AIはスクリーンショットごとに次を評価します。
 
 `schemaVersion: 1` のapplication変更で必須となるfieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、Issue contract path/digest、matrix path/digest、execution route、Xcode、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。GitHubとproviderのpreflightは外部操作直前の証拠なのでverify.jsonへ含めず、pre-merge gateが別artifactとして検査します。
 
-文書だけの変更では `status`、Build、Tests、visual evaluationを`not-applicable`、`changeClassification`を`documentation-only`、`reason`を空でない説明、`matrixFile`と`matrixDigest`と`xcode`をnull、`executionRoute`を`none`、`cases`を空配列にします。`AC-*`にはリンク検査や文書整合性検査の証拠を対応させます。アプリコード、Xcode project、Asset、Localization、Entitlement、Configurationの変更が一つでもあれば文書例外は使えません。文書例外はSimulatorやiOS Runtimeを必要としません。
+application変更が参照するmatrixは、batch lifecycleが完成させたexact schemaのファイルです。top-levelは `schemaVersion`、`batchId`、`resolvedAt`、`xcode`、`runtime`、`cases` だけを持ち、4つのcaseは固定順で、それぞれ `id`、`family`、`deviceType`、`locale`、`language`、`udid` だけを持ちます。Evidenceの4つのcase IDと順序はこのmatrixへ一致させ、各Screenshot pathはcase IDから始まる一意な相対pathにします。
+
+検証時はGit top-levelから、Issueの信頼済みBase/HeadをJSONとは別の引数で渡します。
+
+```bash
+swift tools/validate-verify-json.swift \
+  --file ".artifacts/issues/42/${HEAD_SHA}/verify.json" \
+  --expected-issue 42 \
+  --expected-base "${BASE_SHA}" \
+  --expected-head "${HEAD_SHA}"
+```
+
+validatorは `--expected-head` が現在のGit Headと一致し、BaseとHeadが異なるcommitで、BaseがHeadの祖先であることを先に確認します。その後、verify.jsonのBase/Headが両引数と完全一致することを確認します。verify.json自身からGit検査範囲を選びません。verify.jsonは `.artifacts/issues/${issueNumber}/${headSha}/verify.json`、Issue contractは `.artifacts/issues/${issueNumber}/issue-contract.json`、matrixは `.artifacts/batches/${batchId}/simulator-matrix.json` のcanonical pathだけを許可します。
+
+文書だけの変更では、次のexact representationを使います。省略したidentity、Issue contract、acceptance evidence、completed timeのfieldはapplication例と同じく必須です。
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "not-applicable",
+  "changeClassification": "documentation-only",
+  "reason": "Only allowlisted Markdown documentation changed",
+  "issue": 42,
+  "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "issueContract": {
+    "path": ".artifacts/issues/42/issue-contract.json",
+    "digest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e"
+  },
+  "matrixFile": null,
+  "matrixDigest": null,
+  "executionRoute": "none",
+  "xcode": null,
+  "build": {"status": "not-applicable", "scheme": null, "warningsAdded": null},
+  "tests": {"status": "not-applicable", "passed": null, "failed": null, "skipped": null},
+  "cases": [],
+  "visualEvaluation": {"status": "not-applicable", "findings": []},
+  "acceptanceEvidence": [
+    {"id": "AC-1", "status": "passed", "evidence": ["documents:spec consistency"]},
+    {"id": "AC-2", "status": "passed", "evidence": ["links:swift tools/check-markdown-links.swift"]}
+  ],
+  "completedAt": "2026-08-21T13:00:00+09:00"
+}
+```
+
+文書例外で許可する差分は、top-levelの `README.md` と `AGENTS.md`、`docs/` と `specs/` 以下のMarkdownだけです。NUL-safeなraw Git diffをrename検出なしで読み、追加・削除の両側を個別に検査します。Script、JSON、YAML、設定、asset、symlink、gitlink、実行bitを含むmode/type変更、allowlist外pathが一つでもあれば文書例外は使えません。文書例外はSimulatorやiOS Runtimeを必要としません。
+
+`issueContract.fetchedAt` と `completedAt` は有効なISO 8601で、どちらも検証時刻から5分を超えて未来であってはいけません。さらに、`completedAt` は `fetchedAt` 以後でなければなりません。
 
 PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。反対モデルレビューの正本は `.artifacts/issues/${issueNumber}/${headSha}/review.json` です。
 
@@ -153,6 +200,8 @@ PR本文にはverify.jsonの要約とdigestを記載します。巨大なログ�
 Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulatorのsession defaultsを確認したうえでBuild、Test、UI操作、Screenshotを行います。利用できない場合は `xcodebuild` と `xcrun simctl` の決定論的なtoolsスクリプトを使います。
 
 どちらの経路でも同じverify.jsonを生成し、実行経路を記録します。ツールが使えないことをTest成功へ読み替えません。
+
+`executionRoute` の列挙値は、XcodeBuildMCP経路の `xcodebuild-mcp`、決定論的CLI経路の `xcodebuild-simctl`、文書例外だけに使う `none` です。
 
 ## 6. 排他制御
 
