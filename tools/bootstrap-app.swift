@@ -133,13 +133,13 @@ func validatedIdentity(_ identity: AppIdentity, manifest: TemplateManifest) thro
         bundleId: identity.bundleId
     )
 
-    guard matches(normalized.displayName, pattern: "^[^/\\\\\\p{Cc}]{1,100}$"),
-          matches(normalized.moduleName, pattern: "^[A-Za-z_][A-Za-z0-9_]{0,63}$"),
+    guard matches(normalized.displayName, pattern: "^[^/\\\\\\p{Cc}]{1,30}$"),
+          matches(normalized.moduleName, pattern: "^[A-Za-z][A-Za-z0-9]{1,49}$"),
           !swiftKeywords.contains(normalized.moduleName),
           normalized.moduleName != manifest.source.module,
           matches(normalized.appSlug, pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"),
-          normalized.appSlug.count <= 63,
-          matches(normalized.bundleId, pattern: "^[A-Za-z][A-Za-z0-9-]{0,62}(?:\\.[A-Za-z][A-Za-z0-9-]{0,62})+$"),
+          normalized.appSlug.count <= 50,
+          matches(normalized.bundleId, pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,62}(?:\\.[A-Za-z0-9][A-Za-z0-9-]{0,62})+$"),
           normalized.bundleId.count <= 255 else {
         throw BootstrapError.invalidIdentity
     }
