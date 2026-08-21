@@ -27,7 +27,28 @@ Deployment TargetはIdentity入力と混同しない。bootstrap前にアプリ�
 
 ## 3. Source identity and result record
 
-`Config/template-identity.json`を変換元の唯一のmachine-readable正本とする。schema version、元Project/Target/Module/Bundle ID、変換対象path、変換後に`TemplateApp`が残ってはならないlive pathを記録する。
+`Config/template-identity.json`を変換元の唯一のmachine-readable正本とする。schema version、元Project/Target/Module/Bundle ID、変換対象path、変換後に`TemplateApp`が残ってはならないlive pathを記録する。`liveContentPaths`は変換とresidual auditの両方で使う完全列挙であり、実装は一覧外のcontent pathを推測・走査・変換してはならない。
+
+```json
+{
+  "liveContentPaths": [
+    "TemplateApp.xcodeproj/project.pbxproj",
+    "TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme",
+    "TemplateApp/TemplateAppApp.swift",
+    "TemplateApp/ContentView.swift",
+    "TemplateApp/Localizable.xcstrings",
+    "TemplateAppTests/TemplateAppTests.swift",
+    "TemplateAppUITests/TemplateAppUITests.swift",
+    "README.md",
+    "AGENTS.md",
+    "Config/ownership.yml",
+    "specs/architecture.md",
+    "docs/verification.md",
+    "docs/security.md",
+    "docs/agent-contracts/review-packet.md"
+  ]
+}
+```
 
 成功時に`Config/app-identity.json`を作成し、schema version、display name、module name、app slug、Bundle ID、元Template identity versionを記録する。秘密、GitHub Token、Signing Team、リモートprovider ID、timestampは含めない。同じ入力で再実行した場合は`already-complete`を返して変更しない。異なる入力で再実行した場合は失敗する。
 
@@ -35,19 +56,19 @@ Deployment TargetはIdentity入力と混同しない。bootstrap前にアプリ�
 
 変換する対象:
 
-- `TemplateApp.xcodeproj`と共有Scheme path
-- App、Unit Test、UI Testのsource directoryとSwift filename
-- `project.pbxproj`のProject、Target、Product、Module、Bundle ID、Test Host、Test Target
-- 共有SchemeのBuildable、Blueprint、Container
-- App entry type、Test type、`@testable import`
+- Manifestの`renamePaths`に列挙した`TemplateApp.xcodeproj`と共有Scheme path
+- Manifestの`renamePaths`に列挙したApp、Unit Test、UI Testのsource directoryとSwift filename
+- Manifestの`liveContentPaths`に列挙した`TemplateApp.xcodeproj/project.pbxproj`のProject、Target、Product、Module、Bundle ID、Test Host、Test Target
+- Manifestの`liveContentPaths`に列挙した共有SchemeのBuildable、Blueprint、Container
+- Manifestの`liveContentPaths`に列挙したApp/Test Swiftのentry type、Test type、`@testable import`
+- Manifestの`liveContentPaths`に列挙した`ContentView.swift`と`Localizable.xcstrings`のWelcome localization keyとaccessibility identifier
 - `CFBundleDisplayName` build setting
-- `README.md`のProject/Scheme/Test実行例
-- `AGENTS.md`のリポジトリ契約見出し
-- `specs/architecture.md`と`docs/verification.md`のlive project例
-- `docs/agent-contracts/review-packet.md`のlive source path例
-- `docs/security.md`の`template-app`例を入力app Slugへ変換
-- Welcome localization keyとaccessibility identifierの`template` prefixを入力app Slugへ変換
-- `Config/ownership.yml`のApp Store Bundle ID
+- Manifestの`liveContentPaths`に列挙した`README.md`のProject/Scheme/Test実行例
+- Manifestの`liveContentPaths`に列挙した`AGENTS.md`のリポジトリ契約見出し
+- Manifestの`liveContentPaths`に列挙した`specs/architecture.md`と`docs/verification.md`のlive project例
+- Manifestの`liveContentPaths`に列挙した`docs/agent-contracts/review-packet.md`のlive source path例
+- Manifestの`liveContentPaths`に列挙した`docs/security.md`の`template-app`例を入力app Slugへ変換
+- Manifestの`liveContentPaths`に列挙した`Config/ownership.yml`のApp Store Bundle ID
 
 意図的に変換しない対象:
 
@@ -127,6 +148,6 @@ Issue completion also uses one disposable transformed repository to run Build、
 
 ## 9. Shared skill and authority
 
-`.agents/skills/app-bootstrap/SKILL.md`を正本とし、`.claude/skills/app-bootstrap`は相対symlinkにする。Skillは最小Identity仕様、Issue/Branch、bootstrap command、検証、反対モデルレビューの順序を定める。
+`.agents/skills/app-bootstrap/SKILL.md`を正本とし、`.claude/skills/app-bootstrap`は相対symlinkにする。Skillは最小Identity仕様、Issue/Branch、bootstrap command、検証、反対モデルレビューの順序を定める。Feature Issueの実行前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**し、そのIssueの受け入れ条件と矛盾しないことを確認する実行ゲートを必須とする。満たさない場合はCodexが`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しない。
 
 Claudeはローカル変換とXcode検証を実行できる。GitHub Template repository作成、Issue、Push、PR、Merge、remote repository rename、Bundle ID登録などの認証済み外部操作はCodexだけが実行する。

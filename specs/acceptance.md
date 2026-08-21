@@ -35,6 +35,7 @@ Date: 2026-08-21
 - UI変更の場合、対象画面・状態・日英の期待が記載されている。
 - 外部サービスを使う場合、サービス、環境、Codex実行が指定されている。
 - 法的、課金、本番破壊操作を伴う場合、必要なユーザー承認が記載されている。
+- Feature Issueでは、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**しており、Issueの受け入れ条件と矛盾しない。満たさない場合は`blocked:user`とし、Branch/worktree作成や実装を開始しない。
 
 ## 3. Issue Definition of Done
 

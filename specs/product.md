@@ -41,11 +41,13 @@ Date: 2026-08-21
 
 テンプレートから新しいリポジトリを作成した後は、機能開発より先に次の順序を完了します。
 
-1. アプリの表示名、Swift モジュール名、アプリ Slug、Bundle ID、Deployment Targetを最小仕様として確定する。
+1. Identity入力として、アプリの表示名、Swift モジュール名、アプリ Slug、Bundle IDの4値を確定する。Deployment TargetはIdentity入力とは別のアプリ仕様として確定する。
 2. Identity Bootstrap Issue と専用 Branch/worktree を作成する。
 3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換する。
 4. Build、Test、標準Simulatorマトリクス、反対モデルレビュー、Squash Mergeを完了する。
 5. 変換済みIdentityを基準にFeature Issueを開始する。
+
+アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、CodexはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
 
 テンプレートリポジトリ自身には将来の実アプリ名を固定しません。GitHub上のリポジトリ名はテンプレートからリポジトリを作成するときに決め、bootstrapツールは認証済みリモート名変更を行いません。
 

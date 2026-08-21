@@ -137,7 +137,7 @@ Expected: failure because `Config/template-identity.json` and `tools/bootstrap-a
 
 - [ ] **Step 3: Add the versioned manifest**
 
-Use schema version 1 with these source values and exact path sets:
+Use schema version 1 with these source values and exact path sets. `liveContentPaths` is the complete allowlist for both content conversion and residual audit: do not infer, glob, or transform any unlisted content path.
 
 ```json
 {
@@ -158,6 +158,13 @@ Use schema version 1 with these source values and exact path sets:
     "TemplateAppUITests"
   ],
   "liveContentPaths": [
+    "TemplateApp.xcodeproj/project.pbxproj",
+    "TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme",
+    "TemplateApp/TemplateAppApp.swift",
+    "TemplateApp/ContentView.swift",
+    "TemplateApp/Localizable.xcstrings",
+    "TemplateAppTests/TemplateAppTests.swift",
+    "TemplateAppUITests/TemplateAppUITests.swift",
     "AGENTS.md",
     "README.md",
     "Config/ownership.yml",
@@ -169,7 +176,7 @@ Use schema version 1 with these source values and exact path sets:
 }
 ```
 
-The transformer additionally resolves renamed Xcode/Swift files from this source identity; no path is accepted from command-line input.
+The transformer additionally resolves only the `renamePaths` source/destination pairs from this Manifest; no path is accepted from command-line input. The content conversion and residual audit must visit every `liveContentPaths` entry above, including pbxproj, Scheme, App/Test Swift, `ContentView.swift`, and `Localizable.xcstrings`, and reject missing entries or residual source anchors according to that entry's declared rule.
 
 - [ ] **Step 4: Implement minimal Codable validation**
 
@@ -339,7 +346,7 @@ Expected: at least the residual, second-run, and Manifest-drift cases fail again
 
 - [ ] **Step 3: Implement residual and provenance audit**
 
-Audit the resolved Project/Scheme/App/Test paths and each Manifest-declared live rule. Reject `TemplateApp` only in Xcode/Swift paths and exact live examples that must be transformed; allow the source token in the explicit Identity Bootstrap explanation and historical plans. Confirm historical plan file hashes captured before transformation are identical afterward, and require literal transformed anchors in each live documentation/configuration path.
+Audit every Manifest `liveContentPaths` entry, not a derived or inferred subset: pbxproj, Scheme, App/Test Swift, `ContentView.swift`, `Localizable.xcstrings`, README, AGENTS, ownership configuration, and each listed live document. Reject `TemplateApp` only in these exact Xcode/Swift paths and live examples that must be transformed; allow the source token in the explicit Identity Bootstrap explanation and historical plans. Confirm historical plan file hashes captured before transformation are identical afterward, and require literal transformed anchors in every Manifest-listed documentation/configuration path.
 
 - [ ] **Step 4: Implement second-run and drift behavior**
 
@@ -379,7 +386,7 @@ Expected: failure because the skill and symlink are absent.
 
 - [ ] **Step 3: Write the shared skill**
 
-Require the fixed order: confirm Identity and Deployment Target in specs, create approved Issue, create nondefault Branch/worktree, invoke the command, inspect `git diff`, run Foundation and Xcode tests outside File Provider DerivedData, perform four Simulator cases, request opposite-model review, then let Codex perform PR/Squash Merge/cleanup. State that remote repository rename and Bundle ID registration are separate Codex operations.
+Require the fixed order: confirm the four Identity inputs and the separately specified Deployment Target, create approved Issue, create nondefault Branch/worktree, invoke the command, inspect `git diff`, run Foundation and Xcode tests outside File Provider DerivedData, perform four Simulator cases, request opposite-model review, then let Codex perform PR/Squash Merge/cleanup. Before any Feature Issue starts, require its app-specific `specs/product.md` and `specs/acceptance.md` to be **確定** and consistent with its acceptance criteria; otherwise transition the Feature Issue to `blocked:user` and do not create a Branch/worktree or implement. State that remote repository rename and Bundle ID registration are separate Codex operations.
 
 - [ ] **Step 4: Update README and create the symlink**
 
