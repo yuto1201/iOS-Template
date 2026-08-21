@@ -1,0 +1,49 @@
+{
+  "devicetypes": [
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17",
+      "name": "iPhone 17",
+      "productFamily": "iPhone"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro",
+      "name": "iPhone 10 Pro",
+      "productFamily": "iPhone"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-9-Pro",
+      "name": "iPhone 9 Pro",
+      "productFamily": "iPhone"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max",
+      "name": "iPhone 18 Pro Max",
+      "productFamily": "iPhone"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-10",
+      "name": "iPad (10th generation)",
+      "productFamily": "iPad"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M2",
+      "name": "iPad Air 11-inch (M2)",
+      "productFamily": "iPad"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M2",
+      "name": "iPad Air 13-inch (M2)",
+      "productFamily": "iPad"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M3",
+      "name": "iPad Air 11-inch (M3)",
+      "productFamily": "iPad"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3",
+      "name": "iPad Air 13-inch (M3)",
+      "productFamily": "iPad"
+    }
+  ]
+}
