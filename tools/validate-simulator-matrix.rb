@@ -10,10 +10,12 @@ expected = [
   ["ipad-en", "iPad", "en_US", "en"],
   ["ipad-ja", "iPad", "ja_JP", "ja"]
 ]
-abort "blocked:environment: invalid complete frozen batch matrix" unless matrix.keys.sort == %w[batchId cases resolvedAt runtime schemaVersion]
+abort "blocked:environment: invalid complete frozen batch matrix" unless matrix.keys.sort == %w[batchId cases resolvedAt runtime schemaVersion xcode]
 abort "blocked:environment: invalid complete frozen batch matrix" unless matrix["schemaVersion"] == 1 && matrix["batchId"] == batch_id && matrix["resolvedAt"].is_a?(String) && !matrix["resolvedAt"].empty?
 runtime = matrix["runtime"]
 abort "blocked:environment: invalid complete frozen batch matrix" unless runtime.is_a?(Hash) && runtime.keys.sort == %w[identifier version] && runtime.values.all? { |value| value.is_a?(String) && !value.empty? }
+xcode = matrix["xcode"]
+abort "blocked:environment: invalid complete frozen batch matrix" unless xcode.is_a?(Hash) && xcode.keys.sort == %w[build path version] && xcode.values.all? { |value| value.is_a?(String) && !value.empty? }
 cases = matrix["cases"]
 abort "blocked:environment: invalid complete frozen batch matrix" unless cases.is_a?(Array) && cases.length == 4
 abort "blocked:environment: invalid complete frozen batch matrix" unless cases.map { |entry| [entry["id"], entry["family"], entry["locale"], entry["language"]] } == expected

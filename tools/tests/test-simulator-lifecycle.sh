@@ -79,6 +79,7 @@ chmod +x "$fake_bin/xcrun"
 
 run() {
   XCRUN_BIN="$fake_bin/xcrun" \
+  SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_SIMCTL_LOG="$log" \
   FAKE_SIMCTL_STATE="$state" \
   FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
@@ -89,6 +90,7 @@ run_with_create_mode() {
   local mode="$1"
   shift
   XCRUN_BIN="$fake_bin/xcrun" \
+  SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_CREATE_MODE="$mode" \
   FAKE_SIMCTL_LOG="$log" \
   FAKE_SIMCTL_STATE="$state" \
@@ -98,7 +100,20 @@ run_with_create_mode() {
 
 run_with_delete_mode() {
   XCRUN_BIN="$fake_bin/xcrun" \
+  SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_DELETE_MODE="fail-first" \
+  FAKE_SIMCTL_LOG="$log" \
+  FAKE_SIMCTL_STATE="$state" \
+  FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
+  "$@"
+}
+
+run_with_resolver() {
+  local resolver="$1"
+  shift
+  XCRUN_BIN="$fake_bin/xcrun" \
+  SIMULATOR_MATRIX_RESOLVER="$resolver" \
+  SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_SIMCTL_LOG="$log" \
   FAKE_SIMCTL_STATE="$state" \
   FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
@@ -145,6 +160,20 @@ if run bash tools/resolve-simulator-matrix.sh --batch-id "$partial_batch" --outp
   exit 1
 fi
 [[ ! -s "$log" ]] || { echo "partial matrix invoked simctl" >&2; exit 1; }
+
+malformed_resolver="$scratch/malformed-resolver"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "{\"schemaVersion\":1,\"batchId\":\"bad\",\"resolvedAt\":\"x\",\"runtime\":{},\"cases\":[]}"' >"$malformed_resolver"
+chmod +x "$malformed_resolver"
+malformed_batch="malformed-$RANDOM-$RANDOM"
+: >"$log"
+if run_with_resolver "$malformed_resolver" bash tools/resolve-simulator-matrix.sh --batch-id "$malformed_batch" --output ".artifacts/batches/$malformed_batch/simulator-matrix.json"; then
+  echo "resolver accepted malformed pre-create matrix" >&2
+  exit 1
+fi
+if rg -q '^simctl\tcreate\t' "$log"; then
+  echo "malformed pre-create matrix reached simctl create" >&2
+  exit 1
+fi
 
 : >"$log"
 run bash tools/destroy-simulator-matrix.sh --matrix "$matrix"

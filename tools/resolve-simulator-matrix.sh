@@ -71,6 +71,37 @@ swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --bat
   --devices "$devices_input" \
   --batch-id "$batch_id" >"$working_matrix"
 
+if [[ -n "${SIMULATOR_MATRIX_XCODE_JSON:-}" ]]; then
+  xcode_json="$SIMULATOR_MATRIX_XCODE_JSON"
+else
+  developer_path="${DEVELOPER_DIR:-$(xcode-select -p)}"
+  xcode_version="$(xcodebuild -version)"
+  xcode_json="$(ruby -rjson - "$developer_path" "$xcode_version" <<'RUBY'
+path, output = ARGV
+version = output[/Xcode\s+([^\n]+)/, 1]
+build = output[/Build version\s+([^\n]+)/, 1]
+abort "blocked:environment: unable to resolve Xcode version/build" unless version && build
+puts JSON.generate({"path" => path, "version" => version, "build" => build})
+RUBY
+)"
+fi
+ruby -rjson - "$working_matrix" "$xcode_json" <<'RUBY'
+path, xcode_json = ARGV
+matrix = JSON.parse(File.read(path))
+expected = [["iphone-en", "iPhone", "en_US", "en"], ["iphone-ja", "iPhone", "ja_JP", "ja"], ["ipad-en", "iPad", "en_US", "en"], ["ipad-ja", "iPad", "ja_JP", "ja"]]
+abort "blocked:environment: invalid pre-create matrix" unless matrix.keys.sort == %w[batchId cases resolvedAt runtime schemaVersion] && matrix["schemaVersion"] == 1 && matrix["cases"].map { |entry| [entry["id"], entry["family"], entry["locale"], entry["language"]] } == expected
+abort "blocked:environment: invalid pre-create matrix" unless matrix["resolvedAt"].is_a?(String) && !matrix["resolvedAt"].empty? && matrix["runtime"].is_a?(Hash) && matrix["runtime"].keys.sort == %w[identifier version] && matrix["runtime"].values.all? { |value| value.is_a?(String) && !value.empty? }
+matrix["cases"].each do |entry|
+  abort "blocked:environment: invalid pre-create matrix" unless entry.keys.sort == %w[deviceType family id language locale]
+  type = entry["deviceType"]
+  abort "blocked:environment: invalid pre-create matrix" unless type.is_a?(Hash) && type.keys.sort == %w[identifier name] && type.values.all? { |value| value.is_a?(String) && !value.empty? }
+end
+xcode = JSON.parse(xcode_json)
+abort "blocked:environment: invalid Xcode metadata" unless xcode.is_a?(Hash) && xcode.keys.sort == %w[build path version] && xcode.values.all? { |value| value.is_a?(String) && !value.empty? }
+matrix["xcode"] = xcode
+File.write(path, JSON.pretty_generate(matrix) + "\n")
+RUBY
+
 ruby -rjson - "$working_matrix" "$batch_id" >"$plan_file" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
 batch_id = ARGV.fetch(1)

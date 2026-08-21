@@ -13,13 +13,14 @@ func safeName(_ value: String, batch: Bool = false) -> String {
 }
 
 func openRoot(_ path: String) -> Int32 {
-    var before = stat()
-    guard lstat(path, &before) == 0 else { fail("repository root is unavailable") }
-    let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-    guard fd >= 0 else { fail("repository root is unavailable or a symlink") }
-    var after = stat()
-    guard fstat(fd, &after) == 0, before.st_dev == after.st_dev, before.st_ino == after.st_ino else { fail("repository root changed while opening") }
-    return fd
+    let cwd = open(".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+    guard cwd >= 0 else { fail("working directory is unavailable") }
+    var cwdInfo = stat(), pathInfo = stat()
+    guard fstat(cwd, &cwdInfo) == 0, lstat(path, &pathInfo) == 0,
+          cwdInfo.st_dev == pathInfo.st_dev, cwdInfo.st_ino == pathInfo.st_ino else {
+        close(cwd); fail("helper must run from the verified repository root")
+    }
+    return cwd
 }
 
 func directory(_ parent: Int32, _ name: String, create: Bool) -> Int32 {
@@ -99,9 +100,15 @@ case "publish", "replace":
     let dir = batchDirectory(repo: repo, batch: batch, create: true); defer { close(dir) }
     let name = safeName(rest[3])
     if operation == "publish" {
-        let destination = openat(dir, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
-        guard destination >= 0 else { fail("exclusive artifact publication failed") }; defer { close(destination) }
+        let temporary = ".publish-\(UUID().uuidString)"
+        let destination = openat(dir, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard destination >= 0 else { fail("exclusive artifact publication temporary creation failed") }
         writeAll(destination, data)
+        close(destination)
+        guard linkat(dir, temporary, dir, name, 0) == 0 else { unlinkat(dir, temporary, 0); fail("exclusive artifact publication failed") }
+        guard fsync(dir) == 0 else { unlinkat(dir, temporary, 0); fail("unable to fsync artifact directory") }
+        unlinkat(dir, temporary, 0)
+        _ = fsync(dir)
     } else {
         let temporary = ".replace-\(UUID().uuidString)"
         let destination = openat(dir, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
