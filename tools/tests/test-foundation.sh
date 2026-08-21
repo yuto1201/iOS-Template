@@ -16,7 +16,12 @@ required_files=(
   Config/Public.xcconfig
   Config/Local.xcconfig.example
   Config/ownership.yml
+  Config/template-identity.json
+  tools/bootstrap-app.sh
+  tools/bootstrap-app.swift
+  tools/tests/test-app-bootstrap.sh
   tools/check-markdown-links.swift
+  .agents/skills/app-bootstrap/SKILL.md
   .agents/skills/spec-workflow/SKILL.md
   .agents/skills/spec-workflow/templates/decision.md
   .agents/skills/spec-workflow/scripts/check-spec-state.sh
@@ -98,6 +103,67 @@ ruby -ryaml -e '
   abort "App Store teamId must be null" unless data.dig("appStore", "teamId").nil?
   abort "App Store bundleId must be null" unless data.dig("appStore", "bundleId").nil?
 '
+
+ruby -rjson -e '
+  manifest = JSON.parse(File.read("Config/template-identity.json"))
+  abort "unexpected identity manifest schema version" unless manifest["schemaVersion"] == 1
+  abort "identity manifest source is missing" unless manifest["source"].is_a?(Hash)
+  abort "identity manifest rename paths are missing" unless manifest["renamePaths"].is_a?(Array) && !manifest["renamePaths"].empty?
+  abort "identity manifest live content paths are missing" unless manifest["liveContentPaths"].is_a?(Array) && !manifest["liveContentPaths"].empty?
+'
+
+if [[ ! -x tools/bootstrap-app.sh ]]; then
+  echo "App bootstrap command must be executable" >&2
+  exit 1
+fi
+
+if [[ ! -r tools/bootstrap-app.swift ]] || [[ ! -r tools/tests/test-app-bootstrap.sh ]]; then
+  echo "App bootstrap implementation and tests must be readable" >&2
+  exit 1
+fi
+
+app_bootstrap_skill=.agents/skills/app-bootstrap/SKILL.md
+ruby -ryaml - "$app_bootstrap_skill" <<'RUBY'
+path = ARGV.fetch(0)
+text = File.read(path)
+frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
+abort "missing app bootstrap skill frontmatter" unless frontmatter
+data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
+abort "unexpected app bootstrap skill name" unless data["name"] == "app-bootstrap"
+abort "missing app bootstrap skill description" unless data["description"].is_a?(String) && !data["description"].strip.empty?
+RUBY
+
+claude_app_bootstrap_skill=.claude/skills/app-bootstrap
+expected_app_bootstrap_target=../../.agents/skills/app-bootstrap
+if [[ ! -L "$claude_app_bootstrap_skill" ]]; then
+  echo "Claude app bootstrap skill must be a symbolic link" >&2
+  exit 1
+fi
+if [[ $(readlink "$claude_app_bootstrap_skill") != "$expected_app_bootstrap_target" ]]; then
+  echo "Claude app bootstrap skill must use the portable relative target" >&2
+  exit 1
+fi
+if [[ ! -f "$claude_app_bootstrap_skill/SKILL.md" ]]; then
+  echo "Claude app bootstrap skill link does not resolve" >&2
+  exit 1
+fi
+
+bootstrap_validation=$(swift tools/bootstrap-app.swift validate \
+  --manifest Config/template-identity.json \
+  --display-name 'Garden Notes' \
+  --module-name GardenNotes \
+  --app-slug garden-notes \
+  --bundle-id com.yuto.GardenNotes)
+ruby -rjson -e '
+  result = JSON.parse(ARGV.fetch(0))
+  expected = {
+    "appSlug" => "garden-notes",
+    "bundleId" => "com.yuto.GardenNotes",
+    "displayName" => "Garden Notes",
+    "moduleName" => "GardenNotes"
+  }
+  abort "unexpected bootstrap validation result" unless result == expected
+' "$bootstrap_validation"
 
 if [[ ! -x tools/check-markdown-links.swift ]]; then
   echo "Markdown link checker must be executable" >&2

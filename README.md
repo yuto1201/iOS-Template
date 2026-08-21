@@ -71,6 +71,26 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 - Deployment Targetはテンプレート生成時のXcode既定値です。対象ユーザーと必要APIを決め、実装Issueを始める前にアプリ固有の最小OSを仕様とXcode設定へ固定します。
 - ローカル設定は `Config/Local.xcconfig.example` を参考に、Git管理外の `Config/Local.xcconfig` へ置きます。秘密値はxcconfigへも保存せず、Keychainまたは各サービスの秘密管理を使います。
 
+### Identity bootstrap
+
+機能開発より先に、表示名、Swiftモジュール名、lowercase kebab-caseのアプリSlug、逆DNS形式のBundle IDという4つのIdentity入力を確定します。Deployment Targetはこれらと分けてアプリ仕様とXcode設定へ確定します。承認済みのIdentity Bootstrap Issueに対応するクリーンな非default Branch/worktreeで、リポジトリルートから次を実行します。
+
+```sh
+tools/bootstrap-app.sh \
+  --display-name 'Garden Notes' \
+  --module-name GardenNotes \
+  --app-slug garden-notes \
+  --bundle-id com.yuto.GardenNotes
+```
+
+コマンドは、Xcode project、Target、Scheme、Swift Module、Test、Bundle ID、設定、現行文書を一つのIdentityへ変換し、確認用の変更をunstagedで残します。標準出力は`applied`と結果パスを含むsanitized JSONで、非秘密の完全な結果は`Config/app-identity.json`へschema version 1として保存されます。`git diff`を確認してからFoundation、Xcode、4条件Simulator、反対モデルレビューを実行してください。共通の手順は[App Bootstrap skill](./.agents/skills/app-bootstrap/SKILL.md)を正とします。
+
+同じ4入力で再実行すると`already-complete`を返して何も変更しません。1値でも異なる再実行は、既存結果と競合するため変更前に失敗します。GitHub上のリポジトリ名変更とApple側のBundle ID登録はこのコマンドに含まれず、それぞれCodexが個人アカウントを確認して別操作として行います。
+
+### Feature開発開始ゲート
+
+Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに`Status: 確定`で、そのIssueの受け入れ条件と一致していることを確認します。未作成、確定前、または不一致なら、CodexがIssueを`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しません。
+
 ## 最初に読む文書
 
 1. [仕様索引](./specs/README.md)
