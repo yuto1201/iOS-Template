@@ -22,6 +22,21 @@ required_files=(
   .agents/skills/spec-workflow/scripts/check-spec-state.sh
 )
 
+evaluator_agents=(
+  spec-reviewer
+  ios-reviewer
+  acceptance-auditor
+  release-auditor
+)
+
+for agent in "${evaluator_agents[@]}"; do
+  required_files+=(
+    "docs/agent-contracts/$agent.md"
+    ".codex/agents/$agent.toml"
+    ".claude/agents/$agent.md"
+  )
+done
+
 for file in "${required_files[@]}"; do
   if [[ ! -f "$file" ]]; then
     echo "missing required foundation file: $file" >&2
@@ -94,6 +109,64 @@ if [[ ! -f "$claude_skill/SKILL.md" ]]; then
   echo "Claude specification skill link does not resolve" >&2
   exit 1
 fi
+
+for agent in "${evaluator_agents[@]}"; do
+  codex_agent=".codex/agents/$agent.toml"
+  claude_agent=".claude/agents/$agent.md"
+  contract="docs/agent-contracts/$agent.md"
+
+  if ! grep -Fqx "name = \"$agent\"" "$codex_agent"; then
+    echo "Codex evaluator has an unexpected name: $codex_agent" >&2
+    exit 1
+  fi
+  if ! grep -Fqx 'sandbox_mode = "read-only"' "$codex_agent"; then
+    echo "Codex evaluator must use a read-only sandbox: $codex_agent" >&2
+    exit 1
+  fi
+  if ! grep -Fq "docs/agent-contracts/$agent.md" "$codex_agent"; then
+    echo "Codex evaluator does not reference its shared contract: $codex_agent" >&2
+    exit 1
+  fi
+  python3 - "$codex_agent" "$agent" <<'PYTHON'
+import pathlib
+import sys
+import tomllib
+
+path = pathlib.Path(sys.argv[1])
+expected_name = sys.argv[2]
+with path.open("rb") as file:
+    data = tomllib.load(file)
+if data.get("name") != expected_name:
+    raise SystemExit(f"unexpected Codex evaluator name: {path}")
+if data.get("sandbox_mode") != "read-only":
+    raise SystemExit(f"Codex evaluator is not read-only: {path}")
+for field in ("description", "developer_instructions"):
+    if not isinstance(data.get(field), str) or not data[field].strip():
+        raise SystemExit(f"Codex evaluator lacks {field}: {path}")
+PYTHON
+
+  ruby -ryaml - "$claude_agent" "$agent" <<'RUBY'
+path, expected_name = ARGV
+text = File.read(path)
+frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
+abort "missing Claude evaluator frontmatter: #{path}" unless frontmatter
+data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
+abort "unexpected Claude evaluator name: #{path}" unless data["name"] == expected_name
+abort "Claude evaluator tools must be exactly Read, Glob, Grep: #{path}" unless data["tools"] == %w[Read Glob Grep]
+RUBY
+
+  if ! grep -Fq "docs/agent-contracts/$agent.md" "$claude_agent"; then
+    echo "Claude evaluator does not reference its shared contract: $claude_agent" >&2
+    exit 1
+  fi
+
+  for heading in '## Inputs' '## Ordered checks' '## Finding schema' '## Severity' '## Approval rule' '## Prohibited actions'; do
+    if ! grep -Fqx "$heading" "$contract"; then
+      echo "Shared evaluator contract lacks $heading: $contract" >&2
+      exit 1
+    fi
+  done
+done
 
 fixture_dir=$(mktemp -d)
 spec_fixture_dir="$repo_root/.artifacts/spec-workflow-test-$$"
