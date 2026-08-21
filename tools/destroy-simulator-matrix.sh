@@ -4,6 +4,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 xcrun_bin="${XCRUN_BIN:-xcrun}"
+matrix_io() {
+  if [[ "${SIMULATOR_MATRIX_TESTING:-}" == "1" && "${SIMULATOR_MATRIX_IO_TEST_BIN:-}" == /tmp/ios-template-* && -x "${SIMULATOR_MATRIX_IO_TEST_BIN:-}" ]]; then
+    "$SIMULATOR_MATRIX_IO_TEST_BIN" "$@"
+  else
+    swift tools/simulator-matrix-io.swift "$@"
+  fi
+}
 
 [[ $# -eq 2 && $1 == "--matrix" ]] || {
   echo "usage: destroy-simulator-matrix.sh --matrix <path>" >&2
@@ -27,9 +34,9 @@ matrix_copy="$(mktemp /tmp/ios-template-destroy-matrix.XXXXXX)"
 devices_copy="$(mktemp /tmp/ios-template-destroy-devices.XXXXXX)"
 udids="$(mktemp /tmp/ios-template-destroy-udids.XXXXXX)"
 trap 'rm -f "$matrix_copy" "$devices_copy" "$udids"' EXIT
-swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$matrix_copy"
+matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$matrix_copy"
 "$xcrun_bin" simctl list devices -j >"$devices_copy"
-swift tools/simulator-matrix-io.swift --operation replace --repo "$repo_root" --batch "$batch_id" --source "$devices_copy" --name devices.json
+matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$devices_copy" --name devices.json
 ruby tools/validate-simulator-matrix.rb "$matrix_copy" "$batch_id" "$devices_copy"
 ruby -rjson - "$matrix_copy" >"$udids" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))

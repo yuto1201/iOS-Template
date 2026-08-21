@@ -13,9 +13,10 @@ partial_matrix=".artifacts/batches/$partial_batch/simulator-matrix.json"
   echo "test batch artifact unexpectedly already exists" >&2
   exit 1
 }
-trap 'rm -rf "$scratch" "$(dirname "$matrix")" "$(dirname "$partial_matrix")"' EXIT
+trap 'rm -rf "$scratch" "$io_helper" "$(dirname "$matrix")" "$(dirname "$partial_matrix")"' EXIT
 
 fake_bin="$scratch/bin"
+io_helper="/tmp/ios-template-lifecycle-helper-$$"
 state="$scratch/devices.json"
 log="$scratch/xcrun.log"
 mkdir -p "$fake_bin"
@@ -76,9 +77,12 @@ else
 end
 RUBY
 chmod +x "$fake_bin/xcrun"
+swiftc tools/simulator-matrix-io.swift -o "$io_helper"
 
 run() {
   XCRUN_BIN="$fake_bin/xcrun" \
+  SIMULATOR_MATRIX_TESTING=1 \
+  SIMULATOR_MATRIX_IO_TEST_BIN="$io_helper" \
   SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_SIMCTL_LOG="$log" \
   FAKE_SIMCTL_STATE="$state" \
@@ -90,6 +94,8 @@ run_with_create_mode() {
   local mode="$1"
   shift
   XCRUN_BIN="$fake_bin/xcrun" \
+  SIMULATOR_MATRIX_TESTING=1 \
+  SIMULATOR_MATRIX_IO_TEST_BIN="$io_helper" \
   SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_CREATE_MODE="$mode" \
   FAKE_SIMCTL_LOG="$log" \
@@ -100,6 +106,8 @@ run_with_create_mode() {
 
 run_with_delete_mode() {
   XCRUN_BIN="$fake_bin/xcrun" \
+  SIMULATOR_MATRIX_TESTING=1 \
+  SIMULATOR_MATRIX_IO_TEST_BIN="$io_helper" \
   SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_DELETE_MODE="fail-first" \
   FAKE_SIMCTL_LOG="$log" \
@@ -112,6 +120,8 @@ run_with_resolver() {
   local resolver="$1"
   shift
   XCRUN_BIN="$fake_bin/xcrun" \
+  SIMULATOR_MATRIX_TESTING=1 \
+  SIMULATOR_MATRIX_IO_TEST_BIN="$io_helper" \
   SIMULATOR_MATRIX_RESOLVER="$resolver" \
   SIMULATOR_MATRIX_XCODE_JSON='{"path":"/Applications/Xcode.app/Contents/Developer","version":"26.5","build":"17F42"}' \
   FAKE_SIMCTL_LOG="$log" \
@@ -170,6 +180,7 @@ if run_with_resolver "$malformed_resolver" bash tools/resolve-simulator-matrix.s
   echo "resolver accepted malformed pre-create matrix" >&2
   exit 1
 fi
+rm -rf ".artifacts/batches/$malformed_batch"
 if rg -q '^simctl\tcreate\t' "$log"; then
   echo "malformed pre-create matrix reached simctl create" >&2
   exit 1
@@ -196,6 +207,7 @@ if run_with_delete_mode bash tools/destroy-simulator-matrix.sh --matrix "$delete
   exit 1
 fi
 [[ "$(wc -l <"$log")" -eq 2 ]] || { echo "destroy did not stop on first delete failure" >&2; exit 1; }
+rm -rf "$(dirname "$delete_failure_matrix")"
 
 mismatch_batch="mismatch-$RANDOM-$RANDOM"
 mismatch_matrix=".artifacts/batches/$mismatch_batch/simulator-matrix.json"
@@ -218,6 +230,7 @@ if run bash tools/destroy-simulator-matrix.sh --matrix "$mismatch_matrix"; then
   exit 1
 fi
 [[ "$(wc -l <"$log")" -eq 1 ]] || { echo "destroy deleted before validating all targets" >&2; exit 1; }
+rm -rf "$(dirname "$mismatch_matrix")"
 
 for create_mode in repeat-udid duplicate-name wrong-type wrong-runtime; do
   mode_batch="mode-$create_mode-$RANDOM-$RANDOM"
@@ -248,6 +261,54 @@ if rg -q $'\tsimctl\tdelete\t|\tsimctl\tdelete$|^simctl\tdelete\t' "$log"; then
   echo "resolver deleted an unvalidated UDID after create failure" >&2
   exit 1
 fi
+rm -rf "$(dirname "$failed_matrix")"
+
+symlink_batch="symlink-$RANDOM-$RANDOM"
+mkdir -p .artifacts/batches "$scratch/symlink-target"
+ln -s "$scratch/symlink-target" ".artifacts/batches/$symlink_batch"
+if run bash tools/resolve-simulator-matrix.sh --batch-id "$symlink_batch" --output ".artifacts/batches/$symlink_batch/simulator-matrix.json"; then
+  echo "resolver accepted a symlinked batch directory" >&2
+  exit 1
+fi
+rm ".artifacts/batches/$symlink_batch"
+
+for symlink_component in artifacts batches; do
+  symlink_repo="$scratch/symlink-repo-$symlink_component"
+  mkdir -p "$symlink_repo" "$scratch/symlink-$symlink_component-target"
+  if [[ "$symlink_component" == "artifacts" ]]; then
+    ln -s "$scratch/symlink-$symlink_component-target" "$symlink_repo/.artifacts"
+  else
+    mkdir "$symlink_repo/.artifacts"
+    ln -s "$scratch/symlink-$symlink_component-target" "$symlink_repo/.artifacts/batches"
+  fi
+  if (cd "$symlink_repo" && "$io_helper" --operation exists --repo "$symlink_repo" --batch test-batch --name simulator-matrix.json >/dev/null); then
+    echo "helper accepted a symlinked $symlink_component ancestor" >&2
+    exit 1
+  fi
+done
+
+io_batch="io-$RANDOM-$RANDOM"
+io_source="$scratch/source.json"
+printf 'first' >"$io_source"
+"$io_helper" --operation publish --repo "$repo_root" --batch "$io_batch" --source "$io_source" --name simulator-matrix.json
+printf 'second' >"$io_source"
+if "$io_helper" --operation publish --repo "$repo_root" --batch "$io_batch" --source "$io_source" --name simulator-matrix.json; then
+  echo "helper overwrote a published matrix" >&2
+  exit 1
+fi
+published_copy="$scratch/published.json"
+"$io_helper" --operation read --repo "$repo_root" --batch "$io_batch" --name simulator-matrix.json >"$published_copy"
+[[ "$(cat "$published_copy")" == "first" ]] || { echo "publication collision changed final matrix" >&2; exit 1; }
+ln -s "$io_source" "$scratch/symlink-source.json"
+if "$io_helper" --operation write-unique --repo "$repo_root" --batch "$io_batch" --source "$scratch/symlink-source.json" --prefix creation-failure; then
+  echo "helper accepted a symlinked failure-report source" >&2
+  exit 1
+fi
+if (cd "$scratch" && "$io_helper" --operation read --repo "$repo_root" --batch "$io_batch" --name simulator-matrix.json >/dev/null); then
+  echo "helper accepted a mismatched inherited repository root" >&2
+  exit 1
+fi
+rm -rf ".artifacts/batches/$io_batch"
 if find .artifacts/batches -type f -name '.*' -print -quit | rg -q .; then
   echo "lifecycle left a hidden batch temporary file" >&2
   exit 1

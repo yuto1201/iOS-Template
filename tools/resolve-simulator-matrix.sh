@@ -5,6 +5,13 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 xcrun_bin="${XCRUN_BIN:-xcrun}"
 resolver_bin="${SIMULATOR_MATRIX_RESOLVER:-swift}"
+matrix_io() {
+  if [[ "${SIMULATOR_MATRIX_TESTING:-}" == "1" && "${SIMULATOR_MATRIX_IO_TEST_BIN:-}" == /tmp/ios-template-* && -x "${SIMULATOR_MATRIX_IO_TEST_BIN:-}" ]]; then
+    "$SIMULATOR_MATRIX_IO_TEST_BIN" "$@"
+  else
+    swift tools/simulator-matrix-io.swift "$@"
+  fi
+}
 
 usage() {
   echo "usage: resolve-simulator-matrix.sh --batch-id <id> --output <path>" >&2
@@ -24,15 +31,15 @@ expected_output="$repo_root/.artifacts/batches/$batch_id/simulator-matrix.json"
   echo "blocked:environment: output must be $expected_output" >&2
   exit 1
 }
-matrix_state="$(swift tools/simulator-matrix-io.swift --operation exists --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json)"
+matrix_state="$(matrix_io --operation exists --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json)"
 if [[ "$matrix_state" == "present" ]]; then
   reuse_matrix="$(mktemp /tmp/ios-template-reuse-matrix.XXXXXX)"
   reuse_devices="$(mktemp /tmp/ios-template-reuse-devices.XXXXXX)"
   trap 'rm -f "$reuse_matrix" "$reuse_devices"' EXIT
-  swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$reuse_matrix"
+  matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$reuse_matrix"
   ruby tools/validate-simulator-matrix.rb "$reuse_matrix" "$batch_id"
   "$xcrun_bin" simctl list devices -j >"$reuse_devices"
-  swift tools/simulator-matrix-io.swift --operation replace --repo "$repo_root" --batch "$batch_id" --source "$reuse_devices" --name devices.json
+  matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$reuse_devices" --name devices.json
   ruby tools/validate-simulator-matrix.rb "$reuse_matrix" "$batch_id" "$reuse_devices"
   trap - EXIT
   echo "$expected_output"
@@ -44,7 +51,7 @@ capture_list() {
   local temporary
   temporary="$(mktemp "/tmp/ios-template-${subject}.XXXXXX")"
   "$xcrun_bin" simctl list "$subject" -j >"$temporary"
-  swift tools/simulator-matrix-io.swift \
+  matrix_io \
     --operation replace --repo "$repo_root" --batch "$batch_id" \
     --source "$temporary" --name "$subject.json"
   rm -f "$temporary"
@@ -61,9 +68,9 @@ runtimes_input="$(mktemp "/tmp/ios-template-runtimes.XXXXXX")"
 types_input="$(mktemp "/tmp/ios-template-types.XXXXXX")"
 devices_input="$(mktemp "/tmp/ios-template-devices.XXXXXX")"
 trap 'rm -f "$working_matrix" "$plan_file" "$created_file" "$runtimes_input" "$types_input" "$devices_input"' EXIT
-swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --batch "$batch_id" --name runtimes.json >"$runtimes_input"
-swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --batch "$batch_id" --name devicetypes.json >"$types_input"
-swift tools/simulator-matrix-io.swift --operation read --repo "$repo_root" --batch "$batch_id" --name devices.json >"$devices_input"
+matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name runtimes.json >"$runtimes_input"
+matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name devicetypes.json >"$types_input"
+matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name devices.json >"$devices_input"
 
 "$resolver_bin" tools/resolve-simulator-matrix.swift \
   --runtimes "$runtimes_input" \
@@ -132,7 +139,7 @@ created = File.readlines(created_path, chomp: true).map do |line|
 end
 File.write(report_path, JSON.pretty_generate({"status" => "blocked:environment", "failedCase" => failed_case, "failedName" => failed_name, "possibleDedicatedSimulators" => created}) + "\n")
 RUBY
-  swift tools/simulator-matrix-io.swift --operation write-unique --repo "$repo_root" --batch "$batch_id" --source "$report_file" --prefix creation-failure >/dev/null
+  matrix_io --operation write-unique --repo "$repo_root" --batch "$batch_id" --source "$report_file" --prefix creation-failure >/dev/null
   rm -f "$report_file"
 }
 
@@ -176,9 +183,9 @@ puts JSON.pretty_generate(matrix)
 RUBY
  ruby tools/validate-simulator-matrix.rb "$working_matrix.next" "$batch_id" "$post_devices"
 mv "$working_matrix.next" "$working_matrix"
-swift tools/simulator-matrix-io.swift --operation replace --repo "$repo_root" --batch "$batch_id" --source "$post_devices" --name devices.json
+matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$post_devices" --name devices.json
 
-swift tools/simulator-matrix-io.swift \
+matrix_io \
   --operation publish \
   --repo "$repo_root" \
   --batch "$batch_id" \
