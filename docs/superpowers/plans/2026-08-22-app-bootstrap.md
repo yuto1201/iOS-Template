@@ -291,15 +291,19 @@ stage_worktree="$stage_parent/worktree"
 patch_file="$stage_parent/bootstrap.patch"
 git worktree add --detach "$stage_worktree" "$start_head"
 swift "$stage_worktree/tools/bootstrap-app.swift" apply --root "$stage_worktree" ...
-git -C "$stage_worktree" add -A
+changed_paths=()
+while IFS= read -r path; do
+  changed_paths+=("$path")
+done < <(swift "$stage_worktree/tools/bootstrap-app.swift" changed-paths --root "$stage_worktree" --manifest Config/template-identity.json)
+git -C "$stage_worktree" add -- "${changed_paths[@]}"
 git -C "$stage_worktree" diff --cached --binary --full-index > "$patch_file"
 git apply --check --index "$patch_file"
 git apply --index "$patch_file"
-git reset HEAD --
+git reset HEAD -- "${changed_paths[@]}"
 git worktree remove "$stage_worktree"
 ```
 
-Before the first caller `git apply`, recheck caller Head and cleanliness. The cleanup trap calls `git worktree remove` only when the recorded path appears in `git worktree list` and never deletes a broad directory.
+The `changed-paths` command returns only Manifest-derived source/destination paths and `Config/app-identity.json`, rejecting every other changed path; controlled paths cannot contain line breaks. Before the first caller `git apply`, recheck caller Head and cleanliness. The cleanup trap calls `git worktree remove` only when the recorded path appears in `git worktree list`; it removes the exact `mktemp` parent only after validating the `/tmp/ios-template-bootstrap.` prefix and never deletes a broad directory.
 
 - [ ] **Step 5: Run transaction tests and commit**
 
@@ -335,7 +339,7 @@ Expected: at least the residual, second-run, and Manifest-drift cases fail again
 
 - [ ] **Step 3: Implement residual and provenance audit**
 
-Audit the resolved Project/Scheme/App/Test paths plus every Manifest `liveContentPaths` entry. Reject `TemplateApp` in those live locations after applying the allowed targeted transformations. Confirm historical plan file hashes captured before transformation are identical afterward.
+Audit the resolved Project/Scheme/App/Test paths and each Manifest-declared live rule. Reject `TemplateApp` only in Xcode/Swift paths and exact live examples that must be transformed; allow the source token in the explicit Identity Bootstrap explanation and historical plans. Confirm historical plan file hashes captured before transformation are identical afterward, and require literal transformed anchors in each live documentation/configuration path.
 
 - [ ] **Step 4: Implement second-run and drift behavior**
 
