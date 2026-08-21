@@ -16,7 +16,12 @@ required_files=(
   Config/Public.xcconfig
   Config/Local.xcconfig.example
   Config/ownership.yml
+  Config/template-identity.json
+  tools/bootstrap-app.sh
+  tools/bootstrap-app.swift
+  tools/tests/test-app-bootstrap.sh
   tools/check-markdown-links.swift
+  .agents/skills/app-bootstrap/SKILL.md
   .agents/skills/spec-workflow/SKILL.md
   .agents/skills/spec-workflow/templates/decision.md
   .agents/skills/spec-workflow/scripts/check-spec-state.sh
@@ -88,7 +93,7 @@ if git check-ignore -q -- .env.example; then
   exit 1
 fi
 
-ruby -ryaml -e '
+ruby -ryaml -rjson -e '
   data = YAML.safe_load(File.read("Config/ownership.yml"), permitted_classes: [], aliases: false)
   abort "unexpected schema version" unless data["schemaVersion"] == 1
   abort "unexpected GitHub login" unless data.dig("github", "login") == "yuto1201"
@@ -96,8 +101,114 @@ ruby -ryaml -e '
   %w[projectRef].each { |key| abort "#{key} must be null" unless data.dig("supabase", key).nil? }
   abort "Cloudflare accountId must be null" unless data.dig("cloudflare", "accountId").nil?
   abort "App Store teamId must be null" unless data.dig("appStore", "teamId").nil?
-  abort "App Store bundleId must be null" unless data.dig("appStore", "bundleId").nil?
+  if File.exist?("Config/app-identity.json")
+    identity = JSON.parse(File.read("Config/app-identity.json"))
+    abort "unexpected app identity schema version" unless identity["schemaVersion"] == 1
+    abort "app identity bundleId is missing" unless identity["bundleId"].is_a?(String) && !identity["bundleId"].empty?
+    abort "ownership and app identity bundleId differ" unless data.dig("appStore", "bundleId") == identity["bundleId"]
+  else
+    abort "App Store bundleId must be null before identity bootstrap" unless data.dig("appStore", "bundleId").nil?
+  end
 '
+
+ruby -rjson -e '
+  manifest = JSON.parse(File.read("Config/template-identity.json"))
+  abort "unexpected identity manifest schema version" unless manifest["schemaVersion"] == 1
+  abort "identity manifest source is missing" unless manifest["source"].is_a?(Hash)
+  abort "identity manifest rename paths are missing" unless manifest["renamePaths"].is_a?(Array) && !manifest["renamePaths"].empty?
+  abort "identity manifest live content paths are missing" unless manifest["liveContentPaths"].is_a?(Array) && !manifest["liveContentPaths"].empty?
+'
+
+if [[ ! -x tools/bootstrap-app.sh ]]; then
+  echo "App bootstrap command must be executable" >&2
+  exit 1
+fi
+
+if [[ ! -r tools/bootstrap-app.swift ]] || [[ ! -r tools/tests/test-app-bootstrap.sh ]]; then
+  echo "App bootstrap implementation and tests must be readable" >&2
+  exit 1
+fi
+
+app_bootstrap_skill=.agents/skills/app-bootstrap/SKILL.md
+ruby -ryaml - "$app_bootstrap_skill" <<'RUBY'
+path = ARGV.fetch(0)
+text = File.read(path)
+frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
+abort "missing app bootstrap skill frontmatter" unless frontmatter
+data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
+abort "unexpected app bootstrap skill name" unless data["name"] == "app-bootstrap"
+abort "missing app bootstrap skill description" unless data["description"].is_a?(String) && !data["description"].strip.empty?
+RUBY
+
+python3 - <<'PYTHON'
+from pathlib import Path
+
+for path in (Path(".agents/skills/app-bootstrap/SKILL.md"), Path("README.md")):
+    content = path.read_text()
+    lines = {line.strip() for line in content.splitlines()}
+    missing = []
+    if "git status --short --untracked-files=all" not in lines:
+        missing.append("complete status")
+    if "git diff --" not in lines:
+        missing.append("tracked diff")
+    if "git ls-files --others --exclude-standard -z" not in content:
+        missing.append("NUL-delimited untracked listing")
+    if not any(line.startswith('git diff --no-index -- /dev/null "$path"') for line in lines):
+        missing.append("per-untracked-file diff")
+    if missing:
+        raise SystemExit(f"{path} lacks complete read-only bootstrap inspection: {missing!r}")
+    if "git add" in content:
+        raise SystemExit(f"{path} must not stage bootstrap output during inspection")
+
+readme = Path("README.md").read_text()
+if ".artifacts/DerivedData" in readme:
+    raise SystemExit("README uses repository-local DerivedData")
+if "mktemp -d /tmp/ios-template-derived-data.XXXXXX" not in readme:
+    raise SystemExit("README does not create repository-external DerivedData")
+if "mktemp -d /tmp/ios-template-result-bundles.XXXXXX" not in readme:
+    raise SystemExit("README does not create repository-external result-bundle storage")
+
+derived_data_lines = [line for line in readme.splitlines() if "-derivedDataPath" in line]
+result_bundle_lines = [line for line in readme.splitlines() if "-resultBundlePath" in line]
+if not derived_data_lines or any('"${TEMPLATE_DERIVED_DATA}"' not in line for line in derived_data_lines):
+    raise SystemExit("README has a DerivedData path outside the external temporary directory")
+if len(result_bundle_lines) != len(derived_data_lines):
+    raise SystemExit("README must pair every Xcode test example with an external result bundle")
+if any('"${TEMPLATE_RESULT_BUNDLES}/' not in line for line in result_bundle_lines):
+    raise SystemExit("README has a result bundle outside the external temporary directory")
+PYTHON
+
+claude_app_bootstrap_skill=.claude/skills/app-bootstrap
+expected_app_bootstrap_target=../../.agents/skills/app-bootstrap
+if [[ ! -L "$claude_app_bootstrap_skill" ]]; then
+  echo "Claude app bootstrap skill must be a symbolic link" >&2
+  exit 1
+fi
+if [[ $(readlink "$claude_app_bootstrap_skill") != "$expected_app_bootstrap_target" ]]; then
+  echo "Claude app bootstrap skill must use the portable relative target" >&2
+  exit 1
+fi
+if [[ ! -f "$claude_app_bootstrap_skill/SKILL.md" ]]; then
+  echo "Claude app bootstrap skill link does not resolve" >&2
+  exit 1
+fi
+
+bootstrap_validation=$(swift tools/bootstrap-app.swift validate \
+  --manifest Config/template-identity.json \
+  --display-name 'Garden Notes' \
+  --module-name GardenNotes \
+  --app-slug garden-notes \
+  --bundle-id com.yuto.GardenNotes)
+ruby -rjson -e '
+  result = JSON.parse(ARGV.fetch(0))
+  expected = {
+    "appSlug" => "garden-notes",
+    "bundleId" => "com.yuto.GardenNotes",
+    "displayName" => "Garden Notes",
+    "moduleName" => "GardenNotes"
+  }
+  abort "unexpected bootstrap validation result" unless result == expected
+' "$bootstrap_validation"
 
 if [[ ! -x tools/check-markdown-links.swift ]]; then
   echo "Markdown link checker must be executable" >&2

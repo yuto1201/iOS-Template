@@ -47,6 +47,18 @@ iOS-Template/
 
 `TemplateApp` は最小の SwiftUI アプリ、Unit Test、UI Test だけを持ちます。サンプル機能、ダミー課金、ダミーAPI、使われないサービス層は含めません。
 
+### 2.1 Identity Bootstrap境界
+
+新しいアプリ用リポジトリでは、`TemplateApp`をFeature実装のまま残しません。共有bootstrapは、検証済みの入力と`Config/template-identity.json`を正本として、次のアプリ固有Identityだけを変換します。
+
+- `.xcodeproj`、Target、Product、共有Scheme
+- App、Unit Test、UI Testのディレクトリ、Swift型、Module import、Bundle ID
+- `README.md`の実行例、`AGENTS.md`のリポジトリ見出し、現行仕様のアプリ固有パス
+- `Config/ownership.yml`の将来のApp Store対象Bundle ID
+- 変換結果を固定する`Config/app-identity.json`
+
+履歴として残すFoundation実装計画、汎用スキル名、`iOS-Template`の秘密保存namespace、Simulator管理prefixなど、テンプレートの運用Identityは一括置換しません。変換はクリーンな非default Branchから開始し、隔離された一時worktreeで全変更を検証してから、検証済みpatchだけを呼び出し元へ適用します。
+
 ## 3. iOS ソースの初期構成
 
 ```text
@@ -97,6 +109,7 @@ View から Supabase SDK、SwiftData の複雑な問い合わせ、外部生成A
 | `ios-verify` | Build、Test、4条件のSimulator検証、証拠生成を行う |
 | `cross-model-review` | 反対モデルへレビューを依頼し、Head SHA付き結果を保存する |
 | `codex-external-ops` | ClaudeからCodexへ外部操作を委託し、アカウント確認結果を受け取る |
+| `app-bootstrap` | 新規リポジトリのXcode・Swift・設定Identityを機能開発前に安全に初期化する |
 
 ### 条件付き
 

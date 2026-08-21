@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+arguments=("$@")
+for ((index = 0; index + 1 < ${#arguments[@]}; index += 1)); do
+  if [[ "${arguments[index]}" == 'worktree' && "${arguments[index + 1]}" == 'remove' ]]; then
+    exit 1
+  fi
+done
+
+exec "$BOOTSTRAP_TEST_REAL_GIT" "$@"

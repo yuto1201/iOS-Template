@@ -37,6 +37,20 @@ Date: 2026-08-21
 
 テンプレート自体は特定の将来の Xcode や iOS バージョンを永続的に固定しません。バージョンはアプリごとの決定ログへ記録します。
 
+### 3.1 新しいアプリの開始順序
+
+テンプレートから新しいリポジトリを作成した後は、機能開発より先に次の順序を完了します。
+
+1. Identity入力として、アプリの表示名、Swift モジュール名、アプリ Slug、Bundle IDの4値を確定する。Deployment TargetはIdentity入力とは別のアプリ仕様として確定する。
+2. Identity Bootstrap Issue と専用 Branch/worktree を作成する。
+3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換する。
+4. Build、Test、標準Simulatorマトリクス、反対モデルレビュー、Squash Mergeを完了する。
+5. 変換済みIdentityを基準にFeature Issueを開始する。
+
+アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、CodexはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
+
+テンプレートリポジトリ自身には将来の実アプリ名を固定しません。GitHub上のリポジトリ名はテンプレートからリポジトリを作成するときに決め、bootstrapツールは認証済みリモート名変更を行いません。
+
 ## 4. データ方針
 
 データベースが不要なアプリに外部データベースを導入しません。
@@ -96,4 +110,3 @@ AI は、承認済み仕様を前提として次を止まらず進めます。
 - プロジェクト固有の Feature や Core ディレクトリを空のまま量産すること
 - 反対モデルが利用できない場合の自己承認
 - App Store の法的文面をアプリの実態確認なしで公開すること
-
