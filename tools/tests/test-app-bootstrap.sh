@@ -2,8 +2,8 @@
 set -euo pipefail
 
 mode="${1:-}"
-if [[ "$mode" != "validation" && "$mode" != "transform" && "$mode" != "transaction" && "$mode" != "trunk-default" && "$mode" != "cleanup-failure" ]]; then
-  echo "usage: $0 validation|transform|transaction|trunk-default|cleanup-failure" >&2
+if [[ "$mode" != "validation" && "$mode" != "transform" && "$mode" != "transaction" && "$mode" != "trunk-default" && "$mode" != "cleanup-failure" && "$mode" != "safety" && "$mode" != "all" ]]; then
+  echo "usage: $0 validation|transform|transaction|trunk-default|cleanup-failure|safety|all" >&2
   exit 64
 fi
 
@@ -17,6 +17,14 @@ errors="$(mktemp -t app-bootstrap-errors.XXXXXX)"
 fixture=""
 escaped_fixture=""
 trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"; [[ -z "$escaped_fixture" ]] || rm -rf "$escaped_fixture"' EXIT
+
+if [[ "$mode" == "all" ]]; then
+  for suite in validation transform transaction trunk-default cleanup-failure safety; do
+    bash "$0" "$suite"
+  done
+  echo 'all app bootstrap tests passed'
+  exit 0
+fi
 
 fixture_hash() {
   {
@@ -36,6 +44,114 @@ source_tree_digest() {
     fi
   done | shasum | awk '{print $1}'
 }
+
+repository_content_digest() {
+  python3 - "$1" <<'PY'
+import hashlib
+import os
+import sys
+
+root = os.path.abspath(sys.argv[1])
+digest = hashlib.sha256()
+for directory, names, files in os.walk(root, topdown=True, followlinks=False):
+    names[:] = sorted(name for name in names if not (directory == root and name == ".git"))
+    for name in sorted(files):
+        path = os.path.join(directory, name)
+        relative = os.path.relpath(path, root).encode()
+        digest.update(relative + b"\0")
+        if os.path.islink(path):
+            digest.update(b"symlink\0" + os.readlink(path).encode() + b"\0")
+        else:
+            with open(path, "rb") as source:
+                digest.update(source.read())
+print(digest.hexdigest())
+PY
+}
+
+historical_plan_digest() {
+  python3 - "$1/docs/superpowers/plans" <<'PY'
+import hashlib
+import os
+import sys
+
+root = os.path.abspath(sys.argv[1])
+digest = hashlib.sha256()
+for directory, _, files in os.walk(root):
+    for name in sorted(files):
+        path = os.path.join(directory, name)
+        digest.update(os.path.relpath(path, root).encode() + b"\0")
+        with open(path, "rb") as source:
+            digest.update(source.read())
+print(digest.hexdigest())
+PY
+}
+
+new_safety_fixture() {
+  local label="$1"
+  fixture="$(mktemp -d -t "app-bootstrap-${label}.XXXXXX")"
+  rm -rf "$fixture"
+  git clone --no-local "$root" "$fixture" >/dev/null
+  git -C "$fixture" checkout -b "codex/safety-${label}" >/dev/null
+  cp "$root/tools/bootstrap-app.swift" "$fixture/tools/bootstrap-app.swift"
+  if ! git -C "$fixture" diff --quiet -- tools/bootstrap-app.swift; then
+    git -C "$fixture" add -- tools/bootstrap-app.swift
+    git -C "$fixture" -c user.name='Bootstrap Test' -c user.email='bootstrap-test@example.invalid' \
+      commit -m 'test: install current bootstrap helper' >/dev/null
+  fi
+}
+
+commit_fixture_paths() {
+  local message="$1"
+  shift
+  git -C "$fixture" add -- "$@"
+  git -C "$fixture" -c user.name='Bootstrap Test' -c user.email='bootstrap-test@example.invalid' \
+    commit -m "$message" >/dev/null
+}
+
+expect_bootstrap_rejection_without_mutation() {
+  local label="$1"
+  shift
+  local before_status before_head before_digest after_status after_head after_digest status
+  before_status="$(git -C "$fixture" status --porcelain=v1)"
+  before_head="$(git -C "$fixture" rev-parse HEAD)"
+  before_digest="$(repository_content_digest "$fixture")"
+  set +e
+  (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "$@"
+  ) >"$output" 2>"$errors"
+  status=$?
+  set -e
+  after_status="$(git -C "$fixture" status --porcelain=v1)"
+  after_head="$(git -C "$fixture" rev-parse HEAD)"
+  after_digest="$(repository_content_digest "$fixture")"
+
+  [[ $status -ne 0 ]] || {
+    echo "rejected safety case unexpectedly succeeded: $label" >&2
+    exit 1
+  }
+  [[ "$before_status" == "$after_status" ]] || {
+    echo "rejected safety case changed git status: $label" >&2
+    exit 1
+  }
+  [[ "$before_head" == "$after_head" ]] || {
+    echo "rejected safety case changed HEAD: $label" >&2
+    exit 1
+  }
+  [[ "$before_digest" == "$after_digest" ]] || {
+    echo "rejected safety case changed repository content: $label" >&2
+    exit 1
+  }
+  rm -rf "$fixture"
+  fixture=''
+}
+
+garden_notes_arguments=(
+  --display-name 'Garden Notes'
+  --module-name 'GardenNotes'
+  --app-slug 'garden-notes'
+  --bundle-id 'com.yuto.GardenNotes'
+)
 
 validate() {
   swift "$bootstrap" validate --manifest "$manifest" "$@" >"$output" 2>"$errors"
@@ -90,6 +206,205 @@ expect_invalid() {
     exit 1
   }
 }
+
+if [[ "$mode" == "safety" ]]; then
+  new_safety_fixture dirty
+  printf 'caller-owned\n' >"$fixture/dirty.txt"
+  expect_bootstrap_rejection_without_mutation 'dirty worktree' "${garden_notes_arguments[@]}"
+
+  new_safety_fixture default
+  git -C "$fixture" branch trunk
+  git -C "$fixture" update-ref refs/remotes/origin/trunk "$(git -C "$fixture" rev-parse HEAD)"
+  git -C "$fixture" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+  git -C "$fixture" checkout trunk >/dev/null
+  expect_bootstrap_rejection_without_mutation 'default branch' "${garden_notes_arguments[@]}"
+
+  new_safety_fixture detached
+  git -C "$fixture" checkout --detach >/dev/null
+  expect_bootstrap_rejection_without_mutation 'detached caller' "${garden_notes_arguments[@]}"
+
+  new_safety_fixture destination
+  mkdir "$fixture/GardenNotes"
+  printf 'collision\n' >"$fixture/GardenNotes/.keep"
+  commit_fixture_paths 'test: add exact destination collision' GardenNotes/.keep
+  expect_bootstrap_rejection_without_mutation 'precreated GardenNotes directory' "${garden_notes_arguments[@]}"
+
+  new_safety_fixture bundle-drift
+  python3 - "$fixture/TemplateApp.xcodeproj/project.pbxproj" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+path.write_text(content.replace("PRODUCT_BUNDLE_IDENTIFIER = com.yuto.TemplateApp;", "PRODUCT_BUNDLE_IDENTIFIER = com.yuto.Drifted;", 1))
+PY
+  commit_fixture_paths 'test: drift source bundle anchor' TemplateApp.xcodeproj/project.pbxproj
+  expect_bootstrap_rejection_without_mutation 'changed source Bundle ID' "${garden_notes_arguments[@]}"
+
+  new_safety_fixture scheme-drift
+  python3 - "$fixture/TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(path.read_text().replace("TemplateApp", "BrokenScheme"))
+PY
+  commit_fixture_paths 'test: remove scheme source anchors' TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme
+  expect_bootstrap_rejection_without_mutation 'missing Scheme anchor' "${garden_notes_arguments[@]}"
+
+  new_safety_fixture case-collision
+  mkdir "$fixture/gardennotes"
+  printf 'case collision\n' >"$fixture/gardennotes/.keep"
+  commit_fixture_paths 'test: add case-insensitive destination collision' gardennotes/.keep
+  expect_bootstrap_rejection_without_mutation 'case-insensitive destination collision' "${garden_notes_arguments[@]}"
+
+  new_safety_fixture symlink
+  outside_file="$(mktemp -t app-bootstrap-symlink-target.XXXXXX)"
+  printf 'outside\n' >"$outside_file"
+  rm "$fixture/TemplateApp/ContentView.swift"
+  ln -s "$outside_file" "$fixture/TemplateApp/ContentView.swift"
+  commit_fixture_paths 'test: replace live source with escape symlink' TemplateApp/ContentView.swift
+  expect_bootstrap_rejection_without_mutation 'symlink escape' "${garden_notes_arguments[@]}"
+  rm -f "$outside_file"
+
+  new_safety_fixture security-drift
+  printf 'ios-template/template-app/extra/production/key\n' >>"$fixture/docs/security.md"
+  commit_fixture_paths 'test: add unexpected security source anchor' docs/security.md
+  expect_bootstrap_rejection_without_mutation 'security anchor count drift' "${garden_notes_arguments[@]}"
+
+  invalid_cases=(
+    'slash|Garden/Notes|GardenNotes|garden-notes|com.yuto.GardenNotes'
+    'dot-dot|Garden Notes|GardenNotes|garden..notes|com.yuto.GardenNotes'
+    $'newline|Garden\nNotes|GardenNotes|garden-notes|com.yuto.GardenNotes'
+    'shell-metacharacter|Garden Notes|GardenNotes|garden;touch-pwned|com.yuto.GardenNotes'
+    'leading-digit-module|Garden Notes|1GardenNotes|garden-notes|com.yuto.GardenNotes'
+    'swift-keyword|Garden Notes|class|garden-notes|com.yuto.GardenNotes'
+    'source-name-no-op|Garden Notes|TemplateApp|garden-notes|com.yuto.GardenNotes'
+  )
+  for row in "${invalid_cases[@]}"; do
+    IFS='|' read -r label invalid_display invalid_module invalid_slug invalid_bundle <<<"$row"
+    new_safety_fixture "input-${label}"
+    expect_bootstrap_rejection_without_mutation "$label input" \
+      --display-name "$invalid_display" \
+      --module-name "$invalid_module" \
+      --app-slug "$invalid_slug" \
+      --bundle-id "$invalid_bundle"
+  done
+
+  new_safety_fixture source-substring
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" \
+      --display-name 'Template Application' \
+      --module-name 'TemplateApplication' \
+      --app-slug 'app-template-notes' \
+      --bundle-id 'com.yuto.TemplateApplication'
+  ) >"$output" 2>"$errors"; then
+    echo "valid identity containing the source name failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  if ! swift "$root/tools/bootstrap-app.swift" audit \
+    --root "$fixture" \
+    --manifest "$fixture/Config/template-identity.json" \
+    --module-name TemplateApplication >"$output" 2>"$errors"; then
+    echo "audit rejected a valid identity containing the source name: $(<"$errors")" >&2
+    exit 1
+  fi
+  rm -rf "$fixture"
+  fixture=''
+
+  new_safety_fixture second-run
+  historical_before="$(historical_plan_digest "$fixture")"
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "${garden_notes_arguments[@]}"
+  ) >"$output" 2>"$errors"; then
+    echo "initial safety bootstrap failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  [[ "$historical_before" == "$(historical_plan_digest "$fixture")" ]] || {
+    echo 'bootstrap changed one or more historical plan files' >&2
+    exit 1
+  }
+  grep -Fqx '`TemplateApp` は最小の SwiftUI アプリ、Unit Test、UI Test だけを持ちます。サンプル機能、ダミー課金、ダミーAPI、使われないサービス層は含めません。' "$fixture/specs/architecture.md" || {
+    echo 'bootstrap removed the explicit source-provenance explanation' >&2
+    exit 1
+  }
+  grep -Fqx '新しいアプリ用リポジトリでは、`TemplateApp`をFeature実装のまま残しません。共有bootstrapは、検証済みの入力と`Config/template-identity.json`を正本として、次のアプリ固有Identityだけを変換します。' "$fixture/specs/architecture.md" || {
+    echo 'bootstrap removed the explicit Identity Bootstrap explanation' >&2
+    exit 1
+  }
+  grep -Fqx '├── GardenNotes/' "$fixture/specs/architecture.md"
+  grep -Fqx 'GardenNotes/' "$fixture/specs/architecture.md"
+
+  if ! swift "$root/tools/bootstrap-app.swift" audit \
+    --root "$fixture" \
+    --manifest "$fixture/Config/template-identity.json" \
+    --module-name GardenNotes >"$output" 2>"$errors"; then
+    echo "audit rejected a valid transformed repository: $(<"$errors")" >&2
+    exit 1
+  fi
+
+  same_status_before="$(git -C "$fixture" status --porcelain=v1)"
+  same_head_before="$(git -C "$fixture" rev-parse HEAD)"
+  same_digest_before="$(repository_content_digest "$fixture")"
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "${garden_notes_arguments[@]}"
+  ) >"$output" 2>"$errors"; then
+    echo "same second run failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  expected_complete='{"appSlug":"garden-notes","bundleId":"com.yuto.GardenNotes","moduleName":"GardenNotes","resultRecordPath":"Config/app-identity.json","status":"already-complete"}'
+  [[ "$(<"$output")" == "$expected_complete" ]] || {
+    echo "same second run emitted unexpected result: $(<"$output")" >&2
+    exit 1
+  }
+  [[ "$same_status_before" == "$(git -C "$fixture" status --porcelain=v1)" &&
+     "$same_head_before" == "$(git -C "$fixture" rev-parse HEAD)" &&
+     "$same_digest_before" == "$(repository_content_digest "$fixture")" ]] || {
+    echo 'same second run mutated the transformed repository' >&2
+    exit 1
+  }
+
+  expect_bootstrap_rejection_without_mutation 'conflicting second run' \
+    --display-name 'Other Garden' \
+    --module-name 'OtherGarden' \
+    --app-slug 'other-garden' \
+    --bundle-id 'com.yuto.OtherGarden'
+
+  new_safety_fixture audit-residual
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "${garden_notes_arguments[@]}"
+  ) >"$output" 2>"$errors"; then
+    echo "residual audit setup failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  python3 - "$fixture/docs/security.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(path.read_text().replace("garden-notes", "template-app", 1))
+PY
+  set +e
+  swift "$root/tools/bootstrap-app.swift" audit \
+    --root "$fixture" \
+    --manifest "$fixture/Config/template-identity.json" \
+    --module-name GardenNotes >"$output" 2>"$errors"
+  status=$?
+  set -e
+  [[ $status -ne 0 ]] || {
+    echo 'audit accepted a live source residual' >&2
+    exit 1
+  }
+  expect_bootstrap_rejection_without_mutation 'same second run with a live residual' \
+    "${garden_notes_arguments[@]}"
+
+  echo 'safety tests passed'
+  exit 0
+fi
 
 if [[ "$mode" == "transaction" ]]; then
   source_hash_before="$(source_tree_digest)"

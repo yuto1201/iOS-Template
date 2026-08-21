@@ -23,6 +23,7 @@ struct AppIdentity: Codable {
 enum Command {
     case validate(manifestPath: String, identity: AppIdentity)
     case apply(rootPath: String, manifestPath: String, identity: AppIdentity)
+    case audit(rootPath: String, manifestPath: String, moduleName: String)
     case changedPaths(rootPath: String, manifestPath: String)
 }
 
@@ -87,7 +88,7 @@ func matches(_ value: String, pattern: String) -> Bool {
 
 func parseCommand(arguments: [String]) throws -> Command {
     guard let action = arguments.first,
-          action == "validate" || action == "apply" || action == "changed-paths" else {
+          action == "validate" || action == "apply" || action == "audit" || action == "changed-paths" else {
         throw BootstrapError.usage
     }
 
@@ -96,6 +97,8 @@ func parseCommand(arguments: [String]) throws -> Command {
     switch action {
     case "apply":
         expectedCount = 12
+    case "audit":
+        expectedCount = 6
     case "changed-paths":
         expectedCount = 4
     default:
@@ -110,6 +113,8 @@ func parseCommand(arguments: [String]) throws -> Command {
     switch action {
     case "apply":
         allowedFlags = ["--root", "--manifest", "--display-name", "--module-name", "--app-slug", "--bundle-id"]
+    case "audit":
+        allowedFlags = ["--root", "--manifest", "--module-name"]
     case "changed-paths":
         allowedFlags = ["--root", "--manifest"]
     default:
@@ -136,6 +141,14 @@ func parseCommand(arguments: [String]) throws -> Command {
             throw BootstrapError.usage
         }
         return .changedPaths(rootPath: rootPath, manifestPath: manifestPath)
+    }
+
+    if action == "audit" {
+        guard let rootPath = options["--root"],
+              let moduleName = options["--module-name"] else {
+            throw BootstrapError.usage
+        }
+        return .audit(rootPath: rootPath, manifestPath: manifestPath, moduleName: moduleName)
     }
 
     guard let displayName = options["--display-name"],
@@ -229,6 +242,17 @@ struct PathRename {
 func countOccurrences(of needle: String, in text: String) -> Int {
     guard !needle.isEmpty else { return 0 }
     return text.components(separatedBy: needle).count - 1
+}
+
+func identifierOccurrenceCount(of identifier: String, in text: String) -> Int {
+    let escaped = NSRegularExpression.escapedPattern(for: identifier)
+    guard let expression = try? NSRegularExpression(
+        pattern: "(?<![A-Za-z0-9])\(escaped)(?![A-Za-z0-9])"
+    ) else {
+        return 0
+    }
+    let range = NSRange(text.startIndex..<text.endIndex, in: text)
+    return expression.numberOfMatches(in: text, range: range)
 }
 
 func replaceExactly(_ old: String, with new: String, in path: URL, minimumCount: Int) throws {
@@ -404,19 +428,36 @@ func replaceFirstAgentContractHeading(_ displayName: String, in path: URL) throw
     }
 }
 
-func transformContent(root: URL, manifest: TemplateManifest, identity: AppIdentity) throws {
+func expectedLiveContentPaths(manifest: TemplateManifest) -> Set<String> {
+    [
+        "\(manifest.source.project).xcodeproj/project.pbxproj",
+        "\(manifest.source.project).xcodeproj/xcshareddata/xcschemes/\(manifest.source.module).xcscheme",
+        "\(manifest.source.module)/\(manifest.source.module)App.swift",
+        "\(manifest.source.module)/ContentView.swift",
+        "\(manifest.source.module)/Localizable.xcstrings",
+        "\(manifest.source.module)Tests/\(manifest.source.module)Tests.swift",
+        "\(manifest.source.module)UITests/\(manifest.source.module)UITests.swift",
+        "AGENTS.md",
+        "README.md",
+        "Config/ownership.yml",
+        "specs/architecture.md",
+        "docs/verification.md",
+        "docs/security.md",
+        "docs/agent-contracts/review-packet.md",
+    ]
+}
+
+func requireOccurrenceCount(_ needle: String, equals expected: Int, in path: URL) throws {
+    guard let content = try? String(contentsOf: path, encoding: .utf8),
+          countOccurrences(of: needle, in: content) == expected else {
+        throw BootstrapError.missingAnchor
+    }
+}
+
+func preflightSourceContract(root: URL, manifest: TemplateManifest) throws {
     let livePaths = Set(manifest.liveContentPaths)
     guard livePaths.count == manifest.liveContentPaths.count,
-          livePaths.contains("\(manifest.source.project).xcodeproj/project.pbxproj"),
-          livePaths.contains("\(manifest.source.project).xcodeproj/xcshareddata/xcschemes/\(manifest.source.module).xcscheme"),
-          livePaths.contains("\(manifest.source.module)/\(manifest.source.module)App.swift"),
-          livePaths.contains("\(manifest.source.module)/ContentView.swift"),
-          livePaths.contains("\(manifest.source.module)/Localizable.xcstrings"),
-          livePaths.contains("\(manifest.source.module)Tests/\(manifest.source.module)Tests.swift"),
-          livePaths.contains("\(manifest.source.module)UITests/\(manifest.source.module)UITests.swift"),
-          livePaths.contains("AGENTS.md"),
-          livePaths.contains("Config/ownership.yml"),
-          livePaths.contains("docs/security.md") else {
+          livePaths == expectedLiveContentPaths(manifest: manifest) else {
         throw BootstrapError.unsupportedManifest
     }
 
@@ -424,20 +465,179 @@ func transformContent(root: URL, manifest: TemplateManifest, identity: AppIdenti
         try requireRegularItem(at: safePath(livePath, under: root), under: root)
     }
 
+    let source = manifest.source.module
+    let moduleAnchorCounts: [String: Int] = [
+        "\(manifest.source.project).xcodeproj/project.pbxproj": 60,
+        "\(manifest.source.project).xcodeproj/xcshareddata/xcschemes/\(source).xcscheme": 15,
+        "\(source)/\(source)App.swift": 3,
+        "\(source)/ContentView.swift": 1,
+        "\(source)Tests/\(source)Tests.swift": 4,
+        "\(source)UITests/\(source)UITests.swift": 3,
+        "README.md": 19,
+        "specs/architecture.md": 8,
+        "docs/verification.md": 2,
+        "docs/agent-contracts/review-packet.md": 1,
+    ]
+    for (relativePath, expectedCount) in moduleAnchorCounts {
+        try requireOccurrenceCount(
+            source,
+            equals: expectedCount,
+            in: safePath(relativePath, under: root)
+        )
+    }
+
     let pbxproj = try safePath("\(manifest.source.project).xcodeproj/project.pbxproj", under: root)
-    try replaceExactly("\(manifest.source.bundleId)UITests", with: "\(identity.bundleId)UITests", in: pbxproj, minimumCount: 2)
-    try replaceExactly("\(manifest.source.bundleId)Tests", with: "\(identity.bundleId)Tests", in: pbxproj, minimumCount: 2)
-    try replaceExactly(manifest.source.bundleId, with: identity.bundleId, in: pbxproj, minimumCount: 2)
+    try requireOccurrenceCount(
+        "PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId);",
+        equals: 2,
+        in: pbxproj
+    )
+    try requireOccurrenceCount(
+        "PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId)Tests;",
+        equals: 2,
+        in: pbxproj
+    )
+    try requireOccurrenceCount(
+        "PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId)UITests;",
+        equals: 2,
+        in: pbxproj
+    )
+
+    try requireOccurrenceCount(
+        "\"template.welcome\"",
+        equals: 1,
+        in: safePath("\(source)/ContentView.swift", under: root)
+    )
+    try requireOccurrenceCount(
+        "\"template.welcome-title\"",
+        equals: 1,
+        in: safePath("\(source)/ContentView.swift", under: root)
+    )
+    try requireOccurrenceCount(
+        "\"template.welcome\"",
+        equals: 1,
+        in: safePath("\(source)/Localizable.xcstrings", under: root)
+    )
+    try requireOccurrenceCount(
+        "\"template.welcome\"",
+        equals: 2,
+        in: safePath("\(source)Tests/\(source)Tests.swift", under: root)
+    )
+    try requireOccurrenceCount(
+        "\"template.welcome-title\"",
+        equals: 1,
+        in: safePath("\(source)UITests/\(source)UITests.swift", under: root)
+    )
+    try requireOccurrenceCount(
+        "template-app",
+        equals: 3,
+        in: safePath("docs/security.md", under: root)
+    )
+    try requireOccurrenceCount(
+        "# iOS-Template agent contract",
+        equals: 1,
+        in: safePath("AGENTS.md", under: root)
+    )
+    try requireOccurrenceCount(
+        "  bundleId: null",
+        equals: 1,
+        in: safePath("Config/ownership.yml", under: root)
+    )
+}
+
+func transformArchitecture(_ identity: AppIdentity, manifest: TemplateManifest, in path: URL) throws {
+    guard let content = try? String(contentsOf: path, encoding: .utf8) else {
+        throw BootstrapError.missingAnchor
+    }
+    let source = manifest.source.module
+    let sourceRootBlock = """
+├── \(source)/
+├── \(source)Tests/
+├── \(source)UITests/
+├── \(source).xcodeproj/
+"""
+    let destinationRootBlock = """
+├── \(identity.moduleName)/
+├── \(identity.moduleName)Tests/
+├── \(identity.moduleName)UITests/
+├── \(identity.moduleName).xcodeproj/
+"""
+    let sourceAppBlock = """
+\(source)/
+├── \(source)App.swift
+"""
+    let destinationAppBlock = """
+\(identity.moduleName)/
+├── \(identity.moduleName)App.swift
+"""
+    guard countOccurrences(of: sourceRootBlock, in: content) == 1,
+          countOccurrences(of: sourceAppBlock, in: content) == 1 else {
+        throw BootstrapError.missingAnchor
+    }
+    let transformed = content
+        .replacingOccurrences(of: sourceRootBlock, with: destinationRootBlock)
+        .replacingOccurrences(of: sourceAppBlock, with: destinationAppBlock)
+    do {
+        try transformed.write(to: path, atomically: true, encoding: .utf8)
+    } catch {
+        throw BootstrapError.writeFailed
+    }
+}
+
+func transformPBXProject(_ identity: AppIdentity, manifest: TemplateManifest, in path: URL) throws {
+    guard let content = try? String(contentsOf: path, encoding: .utf8) else {
+        throw BootstrapError.missingAnchor
+    }
+    let modulePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_MODULE__"
+    let appBundlePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_APP_BUNDLE__"
+    let unitBundlePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_UNIT_BUNDLE__"
+    let uiBundlePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_UI_BUNDLE__"
+    guard !content.contains(modulePlaceholder),
+          !content.contains(appBundlePlaceholder),
+          !content.contains(unitBundlePlaceholder),
+          !content.contains(uiBundlePlaceholder) else {
+        throw BootstrapError.malformedProject
+    }
+
+    let transformed = content
+        .replacingOccurrences(
+            of: "\(manifest.source.bundleId)UITests",
+            with: uiBundlePlaceholder
+        )
+        .replacingOccurrences(
+            of: "\(manifest.source.bundleId)Tests",
+            with: unitBundlePlaceholder
+        )
+        .replacingOccurrences(
+            of: "PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId);",
+            with: "PRODUCT_BUNDLE_IDENTIFIER = \(appBundlePlaceholder);"
+        )
+        .replacingOccurrences(of: manifest.source.module, with: modulePlaceholder)
+        .replacingOccurrences(of: modulePlaceholder, with: identity.moduleName)
+        .replacingOccurrences(of: appBundlePlaceholder, with: identity.bundleId)
+        .replacingOccurrences(of: unitBundlePlaceholder, with: "\(identity.bundleId)Tests")
+        .replacingOccurrences(of: uiBundlePlaceholder, with: "\(identity.bundleId)UITests")
+    do {
+        try transformed.write(to: path, atomically: true, encoding: .utf8)
+    } catch {
+        throw BootstrapError.writeFailed
+    }
+}
+
+func transformContent(root: URL, manifest: TemplateManifest, identity: AppIdentity) throws {
+    try preflightSourceContract(root: root, manifest: manifest)
+    let livePaths = Set(manifest.liveContentPaths)
+
+    let pbxproj = try safePath("\(manifest.source.project).xcodeproj/project.pbxproj", under: root)
+    try transformPBXProject(identity, manifest: manifest, in: pbxproj)
 
     let moduleContentPaths = [
-        "\(manifest.source.project).xcodeproj/project.pbxproj",
         "\(manifest.source.project).xcodeproj/xcshareddata/xcschemes/\(manifest.source.module).xcscheme",
         "\(manifest.source.module)/\(manifest.source.module)App.swift",
         "\(manifest.source.module)/ContentView.swift",
         "\(manifest.source.module)Tests/\(manifest.source.module)Tests.swift",
         "\(manifest.source.module)UITests/\(manifest.source.module)UITests.swift",
         "README.md",
-        "specs/architecture.md",
         "docs/verification.md",
         "docs/agent-contracts/review-packet.md",
     ]
@@ -447,6 +647,11 @@ func transformContent(root: URL, manifest: TemplateManifest, identity: AppIdenti
         }
         try replaceExactly(manifest.source.module, with: identity.moduleName, in: try safePath(livePath, under: root), minimumCount: 1)
     }
+    try transformArchitecture(
+        identity,
+        manifest: manifest,
+        in: safePath("specs/architecture.md", under: root)
+    )
 
     let appSource = try safePath("\(manifest.source.module)/ContentView.swift", under: root)
     let localization = try safePath("\(manifest.source.module)/Localizable.xcstrings", under: root)
@@ -472,8 +677,17 @@ func renamePaths(root: URL, manifest: TemplateManifest, identity: AppIdentity) t
         let source = try safePath(rename.source, under: root)
         let destination = try safePath(rename.destination, under: root)
         try requireRegularItem(at: source, under: root)
+        let destinationParent = destination.deletingLastPathComponent()
+        guard let siblingNames = try? FileManager.default.contentsOfDirectory(atPath: destinationParent.path) else {
+            throw BootstrapError.invalidPath
+        }
+        let destinationName = destination.lastPathComponent.lowercased()
+        let caseInsensitiveCollision = siblingNames.contains {
+            $0.lowercased() == destinationName
+        }
         guard destinations.insert(destination.path).inserted,
-              !FileManager.default.fileExists(atPath: destination.path) else {
+              !FileManager.default.fileExists(atPath: destination.path),
+              !caseInsensitiveCollision else {
             throw BootstrapError.destinationCollision
         }
     }
@@ -496,22 +710,168 @@ func renamePaths(root: URL, manifest: TemplateManifest, identity: AppIdentity) t
 }
 
 func transformedLivePath(_ path: String, manifest: TemplateManifest, identity: AppIdentity) -> String {
-    path
-        .replacingOccurrences(of: "\(manifest.source.module).xcodeproj", with: "\(identity.moduleName).xcodeproj")
-        .replacingOccurrences(of: "\(manifest.source.module)UITests", with: "\(identity.moduleName)UITests")
-        .replacingOccurrences(of: "\(manifest.source.module)Tests", with: "\(identity.moduleName)Tests")
-        .replacingOccurrences(of: manifest.source.module, with: identity.moduleName)
+    let modulePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_MODULE__"
+    let projectPlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_PROJECT__"
+    let unitPlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_UNIT__"
+    let uiPlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_UI__"
+    return path
+        .replacingOccurrences(of: "\(manifest.source.module).xcodeproj", with: projectPlaceholder)
+        .replacingOccurrences(of: "\(manifest.source.module)UITests", with: uiPlaceholder)
+        .replacingOccurrences(of: "\(manifest.source.module)Tests", with: unitPlaceholder)
+        .replacingOccurrences(of: manifest.source.module, with: modulePlaceholder)
+        .replacingOccurrences(of: projectPlaceholder, with: "\(identity.moduleName).xcodeproj")
+        .replacingOccurrences(of: uiPlaceholder, with: "\(identity.moduleName)UITests")
+        .replacingOccurrences(of: unitPlaceholder, with: "\(identity.moduleName)Tests")
+        .replacingOccurrences(of: modulePlaceholder, with: identity.moduleName)
 }
 
 func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity) throws {
-    for path in manifest.liveContentPaths {
-        let transformed = transformedLivePath(path, manifest: manifest, identity: identity)
-        let file = try safePath(transformed, under: root)
-        guard let content = try? String(contentsOf: file, encoding: .utf8),
-              !content.contains(manifest.source.module) else {
+    let livePaths = Set(manifest.liveContentPaths)
+    guard livePaths.count == manifest.liveContentPaths.count,
+          livePaths == expectedLiveContentPaths(manifest: manifest) else {
+        throw BootstrapError.unsupportedManifest
+    }
+
+    var contentBySourcePath: [String: String] = [:]
+    for sourcePath in manifest.liveContentPaths {
+        let transformedPath = transformedLivePath(sourcePath, manifest: manifest, identity: identity)
+        let file = try safePath(transformedPath, under: root)
+        try requireRegularItem(at: file, under: root)
+        guard let content = try? String(contentsOf: file, encoding: .utf8) else {
+            throw BootstrapError.missingAnchor
+        }
+        contentBySourcePath[sourcePath] = content
+    }
+
+    func content(_ sourcePath: String) throws -> String {
+        guard let value = contentBySourcePath[sourcePath] else {
+            throw BootstrapError.missingAnchor
+        }
+        return value
+    }
+
+    func require(_ needle: String, count expected: Int, in sourcePath: String) throws {
+        guard countOccurrences(of: needle, in: try content(sourcePath)) == expected else {
             throw BootstrapError.missingAnchor
         }
     }
+
+    let source = manifest.source.module
+    let pbxPath = "\(manifest.source.project).xcodeproj/project.pbxproj"
+    let schemePath = "\(manifest.source.project).xcodeproj/xcshareddata/xcschemes/\(source).xcscheme"
+    let appPath = "\(source)/\(source)App.swift"
+    let contentViewPath = "\(source)/ContentView.swift"
+    let localizationPath = "\(source)/Localizable.xcstrings"
+    let unitPath = "\(source)Tests/\(source)Tests.swift"
+    let uiPath = "\(source)UITests/\(source)UITests.swift"
+
+    let strictSourceResidualPaths = [
+        pbxPath,
+        schemePath,
+        appPath,
+        contentViewPath,
+        localizationPath,
+        unitPath,
+        uiPath,
+        "README.md",
+        "docs/verification.md",
+        "docs/agent-contracts/review-packet.md",
+    ]
+    let sourceIdentifiers = [
+        "\(source)UITests",
+        "\(source)Tests",
+        "\(source)App",
+        source,
+    ]
+    for sourcePath in strictSourceResidualPaths {
+        let transformedContent = try content(sourcePath)
+        guard !sourceIdentifiers.contains(where: {
+            identifierOccurrenceCount(of: $0, in: transformedContent) > 0
+        }) else {
+            throw BootstrapError.missingAnchor
+        }
+    }
+
+    try require("PRODUCT_BUNDLE_IDENTIFIER = \(identity.bundleId);", count: 2, in: pbxPath)
+    try require("PRODUCT_BUNDLE_IDENTIFIER = \(identity.bundleId)Tests;", count: 2, in: pbxPath)
+    try require("PRODUCT_BUNDLE_IDENTIFIER = \(identity.bundleId)UITests;", count: 2, in: pbxPath)
+    try require("PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId);", count: 0, in: pbxPath)
+    try require("PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId)Tests;", count: 0, in: pbxPath)
+    try require("PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId)UITests;", count: 0, in: pbxPath)
+    try require("BlueprintName = \"\(identity.moduleName)\"", count: 3, in: schemePath)
+    try require("struct \(identity.moduleName)App: App", count: 1, in: appPath)
+    try require("\"\(identity.appSlug).welcome\"", count: 1, in: contentViewPath)
+    try require("\"\(identity.appSlug).welcome-title\"", count: 1, in: contentViewPath)
+    try require("\"\(identity.appSlug).welcome\"", count: 1, in: localizationPath)
+    try require("@testable import \(identity.moduleName)", count: 1, in: unitPath)
+    try require("\"\(identity.appSlug).welcome\"", count: 2, in: unitPath)
+    try require("final class \(identity.moduleName)UITests: XCTestCase", count: 1, in: uiPath)
+    try require("\"\(identity.appSlug).welcome-title\"", count: 1, in: uiPath)
+
+    try require("# \(identity.displayName) agent contract", count: 1, in: "AGENTS.md")
+    try require("-project \(identity.moduleName).xcodeproj", count: 5, in: "README.md")
+    try require("-scheme \(identity.moduleName)", count: 5, in: "README.md")
+    try require("  bundleId: \(identity.bundleId)", count: 1, in: "Config/ownership.yml")
+    try require("\"scheme\": \"\(identity.moduleName)\"", count: 1, in: "docs/verification.md")
+    try require("tests:\(identity.moduleName)Tests/", count: 1, in: "docs/verification.md")
+    try require("\"file\": \"\(identity.moduleName)/Settings/NotificationSettings.swift\"", count: 1, in: "docs/agent-contracts/review-packet.md")
+
+    let architecture = try content("specs/architecture.md")
+    guard identifierOccurrenceCount(of: source, in: architecture) == 2,
+          architecture.contains("`\(source)` は最小の SwiftUI アプリ"),
+          architecture.contains("`\(source)`をFeature実装のまま残しません"),
+          architecture.contains("├── \(identity.moduleName)/"),
+          architecture.contains("├── \(identity.moduleName)Tests/"),
+          architecture.contains("├── \(identity.moduleName)UITests/"),
+          architecture.contains("├── \(identity.moduleName).xcodeproj/"),
+          architecture.contains("\(identity.moduleName)/\n├── \(identity.moduleName)App.swift") else {
+        throw BootstrapError.missingAnchor
+    }
+
+    let security = try content("docs/security.md")
+    guard countOccurrences(of: "ios-template/\(identity.appSlug)/", in: security) == 3,
+          countOccurrences(of: "ios-template/template-app/", in: security) == 0,
+          security.contains("~/Library/Application Support/iOS-Template/secrets/${appSlug}/") else {
+        throw BootstrapError.missingAnchor
+    }
+}
+
+func audit(rootPath: String, manifestPath: String, moduleName: String) throws {
+    guard rootPath.hasPrefix("/") else {
+        throw BootstrapError.invalidRoot
+    }
+    let root = URL(fileURLWithPath: rootPath).standardizedFileURL
+    guard !isSymbolicLink(root),
+          FileManager.default.fileExists(atPath: root.path) else {
+        throw BootstrapError.invalidRoot
+    }
+    let manifestURL = URL(fileURLWithPath: manifestPath).standardizedFileURL
+    let normalizedRootPath = root.path.hasSuffix("/") ? String(root.path.dropLast()) : root.path
+    guard manifestURL.path.hasPrefix(normalizedRootPath + "/"),
+          !isSymbolicLink(manifestURL) else {
+        throw BootstrapError.invalidPath
+    }
+
+    let manifest = try readManifest(at: manifestURL.path)
+    let identityURL = try safePath("Config/app-identity.json", under: root)
+    guard !isSymbolicLink(identityURL),
+          let data = FileManager.default.contents(atPath: identityURL.path),
+          let record = try? JSONDecoder().decode(ResultIdentity.self, from: data),
+          record.schemaVersion == 1,
+          record.sourceIdentityVersion == manifest.schemaVersion,
+          record.moduleName == moduleName else {
+        throw BootstrapError.invalidIdentity
+    }
+    let identity = try validatedIdentity(
+        AppIdentity(
+            displayName: record.displayName,
+            moduleName: record.moduleName,
+            appSlug: record.appSlug,
+            bundleId: record.bundleId
+        ),
+        manifest: manifest
+    )
+    try auditResiduals(root: root, manifest: manifest, identity: identity)
 }
 
 func changedPaths(rootPath: String, manifestPath: String) throws -> [String] {
@@ -615,6 +975,8 @@ func main() throws {
         let output = try encoder.encode(result)
         FileHandle.standardOutput.write(output)
         FileHandle.standardOutput.write(Data("\n".utf8))
+    case let .audit(rootPath, manifestPath, moduleName):
+        try audit(rootPath: rootPath, manifestPath: manifestPath, moduleName: moduleName)
     case let .changedPaths(rootPath, manifestPath):
         for path in try changedPaths(rootPath: rootPath, manifestPath: manifestPath) {
             FileHandle.standardOutput.write(Data("\(path)\n".utf8))

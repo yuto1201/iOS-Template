@@ -87,6 +87,10 @@ expected = {
 raise SystemExit(0 if identity == expected else 1)
 PY
   then
+    swift "$caller_root/tools/bootstrap-app.swift" audit \
+      --root "$caller_root" \
+      --manifest "$manifest" \
+      --module-name "$module_name" >/dev/null || die 'existing app identity failed residual audit'
     emit_result 'already-complete'
     exit 0
   fi
