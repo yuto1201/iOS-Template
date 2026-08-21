@@ -7,6 +7,7 @@ Date: 2026-08-21
 ## 1. テンプレート完成条件
 
 - [ ] 最小の SwiftUI アプリが iPhone と iPad で起動する。
+- [ ] 新規リポジトリのIdentity bootstrapが、検証済み入力からXcode project、Target、Scheme、Module、Test、Bundle ID、設定を一貫して変換できる。
 - [ ] Unit Test と UI Test のサンプルが実行できる。
 - [ ] 日本語と英語を切り替えて主要画面を検証できる。
 - [ ] `.agents/skills/` のCoreスキルをCodexとClaudeの双方から利用できる。
@@ -87,11 +88,11 @@ Pre-mergeの失敗は同じIssueで修正します。マージ後に判明した
 
 ## 7. Bootstrap Issue
 
-自動化ツール自身を作る最初の2件だけは、まだ存在しないツールを完了条件にできません。Foundation IssueとSimulator verification IssueをBootstrap Issueとし、Codexが次を手動で実行します。
+自動化ツール自身を作る最初の3件だけは、まだ存在しないツールを完了条件にできません。Foundation Issue、Identity bootstrap Issue、Simulator verification IssueをBootstrap Issueとし、Codexが次を手動で実行します。
 
 - 個人GitHubアカウント確認、Issue、Branch、Push、PR、Squash Merge、後片付け
 - Head SHAを明記したBuild・Test・4条件Simulator結果のPR記録
 - 反対モデルのread-onlyレビューと、対象Head SHAのPR記録
 - `--match-head-commit` によるSquash Merge
 
-Bootstrapで免除されるのは、未実装の自動スクリプトを通すことだけです。Build、Test、標準Simulatorマトリクス、反対モデルレビュー、SHA一致は免除しません。Simulator verification Issueがマージされた後は検証ツールを使い、Security and workflow Issueがマージされた後は全自動ゲートを使います。
+Bootstrapで免除されるのは、未実装の自動スクリプトを通すことだけです。Build、Test、標準Simulatorマトリクス、反対モデルレビュー、SHA一致は免除しません。Identity bootstrapは使い捨てのテンプレート生成リポジトリでも同じ検証を行います。Simulator verification Issueがマージされた後は検証ツールを使い、Security and workflow Issueがマージされた後は全自動ゲートを使います。
