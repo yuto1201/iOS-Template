@@ -1,0 +1,23 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "template.welcome" : {
+      "comment" : "Deterministic welcome message shown on the template launch screen.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ready to build"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開発を始められます"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

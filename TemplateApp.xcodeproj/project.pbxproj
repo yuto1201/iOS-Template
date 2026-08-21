@@ -24,6 +24,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C0D300010000000000000001 /* Public.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Public.xcconfig; sourceTree = "<group>"; };
 		4E7ECA3A30389D2700BBA255 /* TemplateApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TemplateApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4E7ECA4730389D2800BBA255 /* TemplateAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TemplateAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4E7ECA5130389D2800BBA255 /* TemplateAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TemplateAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -75,11 +76,20 @@
 		4E7ECA3130389D2700BBA255 = {
 			isa = PBXGroup;
 			children = (
+				C0D300020000000000000002 /* Config */,
 				4E7ECA3C30389D2700BBA255 /* TemplateApp */,
 				4E7ECA4A30389D2800BBA255 /* TemplateAppTests */,
 				4E7ECA5430389D2800BBA255 /* TemplateAppUITests */,
 				4E7ECA3B30389D2700BBA255 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		C0D300020000000000000002 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				C0D300010000000000000001 /* Public.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		4E7ECA3B30389D2700BBA255 /* Products */ = {
@@ -191,6 +201,7 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				ja,
 				Base,
 			);
 			mainGroup = 4E7ECA3130389D2700BBA255;
@@ -271,6 +282,7 @@
 /* Begin XCBuildConfiguration section */
 		4E7ECA5930389D2800BBA255 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0D300010000000000000001 /* Public.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -335,6 +347,7 @@
 		};
 		4E7ECA5A30389D2800BBA255 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0D300010000000000000001 /* Public.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
