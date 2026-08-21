@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${1:-}" != "validation" ]]; then
-  echo "usage: $0 validation" >&2
+mode="${1:-}"
+if [[ "$mode" != "validation" && "$mode" != "transform" ]]; then
+  echo "usage: $0 validation|transform" >&2
   exit 64
 fi
 
@@ -13,7 +14,8 @@ manifest="Config/template-identity.json"
 bootstrap="tools/bootstrap-app.swift"
 output="$(mktemp -t app-bootstrap-output.XXXXXX)"
 errors="$(mktemp -t app-bootstrap-errors.XXXXXX)"
-trap 'rm -f "$output" "$errors"' EXIT
+fixture=""
+trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"' EXIT
 
 fixture_hash() {
   {
@@ -77,6 +79,133 @@ expect_invalid() {
     exit 1
   }
 }
+
+if [[ "$mode" == "transform" ]]; then
+  source_hash_before="$(fixture_hash)"
+  fixture="$(mktemp -d -t app-bootstrap-transform.XXXXXX)"
+  rm -rf "$fixture"
+  git clone --no-local "$root" "$fixture" >/dev/null
+  git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
+  historical_plan="$fixture/docs/superpowers/plans/2026-08-22-app-bootstrap.md"
+  historical_plan_hash_before="$(shasum "$historical_plan" | awk '{print $1}')"
+  pbx_uuid_hash_before="$(rg -o '[A-F0-9]{24}' "$fixture/TemplateApp.xcodeproj/project.pbxproj" | LC_ALL=C sort -u | shasum | awk '{print $1}')"
+
+  if ! swift "$bootstrap" apply \
+    --root "$fixture" \
+    --manifest "$fixture/$manifest" \
+    --display-name 'Garden Notes' \
+    --module-name 'GardenNotes' \
+    --app-slug 'garden-notes' \
+    --bundle-id 'com.yuto.GardenNotes' >"$output" 2>"$errors"; then
+    echo "transform failed: $(<"$errors")" >&2
+    exit 1
+  fi
+
+  for expected_path in \
+    GardenNotes.xcodeproj \
+    GardenNotes.xcodeproj/xcshareddata/xcschemes/GardenNotes.xcscheme \
+    GardenNotes/GardenNotesApp.swift \
+    GardenNotesTests/GardenNotesTests.swift \
+    GardenNotesUITests/GardenNotesUITests.swift; do
+    [[ -e "$fixture/$expected_path" ]] || {
+      echo "missing transformed path: $expected_path" >&2
+      exit 1
+    }
+  done
+
+  pbxproj="$fixture/GardenNotes.xcodeproj/project.pbxproj"
+  grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotes;' "$pbxproj"
+  grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotesTests;' "$pbxproj"
+  grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotesUITests;' "$pbxproj"
+  grep -Fq 'DEVELOPMENT_TEAM = AUZ2MV247A;' "$pbxproj"
+  [[ "$pbx_uuid_hash_before" == "$(rg -o '[A-F0-9]{24}' "$pbxproj" | LC_ALL=C sort -u | shasum | awk '{print $1}')" ]] || {
+    echo 'PBX UUIDs changed during transform' >&2
+    exit 1
+  }
+  grep -Fqx '@testable import GardenNotes' "$fixture/GardenNotesTests/GardenNotesTests.swift"
+  grep -Fqx 'struct GardenNotesApp: App {' "$fixture/GardenNotes/GardenNotesApp.swift"
+  grep -Fqx '            Text("garden-notes.welcome")' "$fixture/GardenNotes/ContentView.swift"
+  grep -Fqx '                .accessibilityIdentifier("garden-notes.welcome-title")' "$fixture/GardenNotes/ContentView.swift"
+  grep -Fqx 'ios-template/garden-notes/elevenlabs/production/api-key' "$fixture/docs/security.md"
+  grep -Fqx '  "file": "GardenNotes/Settings/NotificationSettings.swift",' "$fixture/docs/agent-contracts/review-packet.md"
+
+  python3 - "$fixture/Config/app-identity.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as source:
+    actual = json.load(source)
+
+expected = {
+    "appSlug": "garden-notes",
+    "bundleId": "com.yuto.GardenNotes",
+    "displayName": "Garden Notes",
+    "moduleName": "GardenNotes",
+    "schemaVersion": 1,
+    "sourceIdentityVersion": 1,
+}
+if actual != expected:
+    raise SystemExit(f"unexpected app identity: {actual!r}")
+PY
+
+  python3 - "$fixture/Config/ownership.yml" <<'PY'
+import sys
+
+with open(sys.argv[1]) as source:
+    actual = source.read()
+
+expected = """schemaVersion: 1
+
+github:
+  login: yuto1201
+
+supabase:
+  organization: YUTO1201
+  projectRef: null
+
+cloudflare:
+  accountId: null
+
+appStore:
+  teamId: null
+  bundleId: com.yuto.GardenNotes
+"""
+if actual != expected:
+    raise SystemExit(f"unexpected ownership content: {actual!r}")
+PY
+  [[ "$historical_plan_hash_before" == "$(shasum "$historical_plan" | awk '{print $1}')" ]] || {
+    echo 'historical plan changed during transform' >&2
+    exit 1
+  }
+
+  if ! DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    xcodebuild -list -json -project "$fixture/GardenNotes.xcodeproj" >"$output" 2>"$errors"; then
+    echo "xcodebuild -list failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  python3 - "$output" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as source:
+    listing = json.load(source)
+
+project = listing["project"]
+if project["name"] != "GardenNotes":
+    raise SystemExit(f"unexpected project: {project['name']!r}")
+if project["schemes"] != ["GardenNotes"]:
+    raise SystemExit(f"unexpected schemes: {project['schemes']!r}")
+if project["targets"] != ["GardenNotes", "GardenNotesTests", "GardenNotesUITests"]:
+    raise SystemExit(f"unexpected targets: {project['targets']!r}")
+PY
+  [[ "$source_hash_before" == "$(fixture_hash)" ]] || {
+    echo 'apply changed content outside its staging root' >&2
+    exit 1
+  }
+
+  echo 'transform tests passed'
+  exit 0
+fi
 
 expect_valid
 
