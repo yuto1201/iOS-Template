@@ -15,7 +15,8 @@ bootstrap="tools/bootstrap-app.swift"
 output="$(mktemp -t app-bootstrap-output.XXXXXX)"
 errors="$(mktemp -t app-bootstrap-errors.XXXXXX)"
 fixture=""
-trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"' EXIT
+escaped_fixture=""
+trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"; [[ -z "$escaped_fixture" ]] || rm -rf "$escaped_fixture"' EXIT
 
 fixture_hash() {
   {
@@ -118,6 +119,16 @@ if [[ "$mode" == "transform" ]]; then
   grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotesTests;' "$pbxproj"
   grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotesUITests;' "$pbxproj"
   grep -Fq 'DEVELOPMENT_TEAM = AUZ2MV247A;' "$pbxproj"
+  python3 - "$pbxproj" <<'PY'
+import sys
+
+with open(sys.argv[1]) as source:
+    content = source.read()
+
+display_name_setting = 'INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";'
+if content.count(display_name_setting) != 2:
+    raise SystemExit(f"expected exactly two App display-name settings, found {content.count(display_name_setting)}")
+PY
   [[ "$pbx_uuid_hash_before" == "$(rg -o '[A-F0-9]{24}' "$pbxproj" | LC_ALL=C sort -u | shasum | awk '{print $1}')" ]] || {
     echo 'PBX UUIDs changed during transform' >&2
     exit 1
@@ -127,7 +138,12 @@ if [[ "$mode" == "transform" ]]; then
   grep -Fqx '            Text("garden-notes.welcome")' "$fixture/GardenNotes/ContentView.swift"
   grep -Fqx '                .accessibilityIdentifier("garden-notes.welcome-title")' "$fixture/GardenNotes/ContentView.swift"
   grep -Fqx 'ios-template/garden-notes/elevenlabs/production/api-key' "$fixture/docs/security.md"
+  grep -Fqx '~/Library/Application Support/iOS-Template/secrets/${appSlug}/' "$fixture/docs/security.md"
   grep -Fqx '  "file": "GardenNotes/Settings/NotificationSettings.swift",' "$fixture/docs/agent-contracts/review-packet.md"
+  grep -Fqx '# Garden Notes agent contract' "$fixture/AGENTS.md" || {
+    echo 'AGENTS heading was not transformed with the display name' >&2
+    exit 1
+  }
 
   python3 - "$fixture/Config/app-identity.json" <<'PY'
 import json
@@ -198,6 +214,37 @@ if project["schemes"] != ["GardenNotes"]:
 if project["targets"] != ["GardenNotes", "GardenNotesTests", "GardenNotesUITests"]:
     raise SystemExit(f"unexpected targets: {project['targets']!r}")
 PY
+
+  escaped_fixture="$(mktemp -d -t app-bootstrap-escaped.XXXXXX)"
+  rm -rf "$escaped_fixture"
+  git clone --no-local "$root" "$escaped_fixture" >/dev/null
+  git -C "$escaped_fixture" checkout -b codex/test-bootstrap-escaped >/dev/null
+  escaped_display_name='Garden "Notes" \ Draft'
+  if ! swift "$bootstrap" apply \
+    --root "$escaped_fixture" \
+    --manifest "$escaped_fixture/$manifest" \
+    --display-name "$escaped_display_name" \
+    --module-name 'QuotedGardenNotes' \
+    --app-slug 'quoted-garden-notes' \
+    --bundle-id 'com.yuto.QuotedGardenNotes' >"$output" 2>"$errors"; then
+    echo "quoted display-name transform failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  python3 - "$escaped_fixture/QuotedGardenNotes.xcodeproj/project.pbxproj" <<'PY'
+import sys
+
+with open(sys.argv[1]) as source:
+    content = source.read()
+
+display_name_setting = r'INFOPLIST_KEY_CFBundleDisplayName = "Garden \"Notes\" \\ Draft";'
+if content.count(display_name_setting) != 2:
+    raise SystemExit(f"expected exactly two escaped display-name settings, found {content.count(display_name_setting)}")
+PY
+  if ! DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+    xcodebuild -list -json -project "$escaped_fixture/QuotedGardenNotes.xcodeproj" >"$output" 2>"$errors"; then
+    echo "quoted display-name xcodebuild -list failed: $(<"$errors")" >&2
+    exit 1
+  fi
   [[ "$source_hash_before" == "$(fixture_hash)" ]] || {
     echo 'apply changed content outside its staging root' >&2
     exit 1
@@ -218,6 +265,8 @@ slug_51="${slug_50}a"
 
 expect_valid_case 'display name at 30 characters' \
   --display-name "$display_30" --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.yuto.GardenNotes'
+expect_valid_case 'display name with quotes and backslash' \
+  --display-name 'Garden "Notes" \ Draft' --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.yuto.GardenNotes'
 expect_invalid 'display name at 31 characters' \
   --display-name "$display_31" --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.yuto.GardenNotes'
 expect_valid_case 'module name at 50 characters' \

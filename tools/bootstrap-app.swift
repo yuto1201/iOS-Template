@@ -163,7 +163,8 @@ func validatedIdentity(_ identity: AppIdentity, manifest: TemplateManifest) thro
         bundleId: identity.bundleId
     )
 
-    guard matches(normalized.displayName, pattern: "^[^/\\\\\\p{Cc}]{1,30}$"),
+    guard (1...30).contains(normalized.displayName.count),
+          !normalized.displayName.contains("/"),
           matches(normalized.moduleName, pattern: "^[A-Za-z][A-Za-z0-9]{1,49}$"),
           !swiftKeywords.contains(normalized.moduleName),
           normalized.moduleName != manifest.source.module,
@@ -227,7 +228,9 @@ func insertDisplayName(_ displayName: String, bundleID: String, inPBXProj path: 
         throw BootstrapError.malformedProject
     }
 
-    let escapedDisplayName = displayName.replacingOccurrences(of: "\"", with: "\\\"")
+    let escapedDisplayName = displayName
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
     let replacement = "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \(bundleID);\n\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = \"\(escapedDisplayName)\";\n\t\t\t\tPRODUCT_NAME"
     do {
         try content.replacingOccurrences(of: anchor, with: replacement).write(to: path, atomically: true, encoding: .utf8)
@@ -362,6 +365,20 @@ func replaceOwnershipBundleID(_ bundleID: String, in path: URL) throws {
     }
 }
 
+func replaceFirstAgentContractHeading(_ displayName: String, in path: URL) throws {
+    let heading = "# iOS-Template agent contract"
+    guard let content = try? String(contentsOf: path, encoding: .utf8),
+          let range = content.range(of: heading) else {
+        throw BootstrapError.missingAnchor
+    }
+    let transformed = content.replacingCharacters(in: range, with: "# \(displayName) agent contract")
+    do {
+        try transformed.write(to: path, atomically: true, encoding: .utf8)
+    } catch {
+        throw BootstrapError.writeFailed
+    }
+}
+
 func transformContent(root: URL, manifest: TemplateManifest, identity: AppIdentity) throws {
     let livePaths = Set(manifest.liveContentPaths)
     guard livePaths.count == manifest.liveContentPaths.count,
@@ -372,6 +389,7 @@ func transformContent(root: URL, manifest: TemplateManifest, identity: AppIdenti
           livePaths.contains("\(manifest.source.module)/Localizable.xcstrings"),
           livePaths.contains("\(manifest.source.module)Tests/\(manifest.source.module)Tests.swift"),
           livePaths.contains("\(manifest.source.module)UITests/\(manifest.source.module)UITests.swift"),
+          livePaths.contains("AGENTS.md"),
           livePaths.contains("Config/ownership.yml"),
           livePaths.contains("docs/security.md") else {
         throw BootstrapError.unsupportedManifest
@@ -418,6 +436,7 @@ func transformContent(root: URL, manifest: TemplateManifest, identity: AppIdenti
     let security = try safePath("docs/security.md", under: root)
     try replaceExactly("template-app", with: identity.appSlug, in: security, minimumCount: 3)
     try replaceOwnershipBundleID(identity.bundleId, in: try safePath("Config/ownership.yml", under: root))
+    try replaceFirstAgentContractHeading(identity.displayName, in: try safePath("AGENTS.md", under: root))
     try insertDisplayName(identity.displayName, bundleID: identity.bundleId, inPBXProj: pbxproj)
 }
 
