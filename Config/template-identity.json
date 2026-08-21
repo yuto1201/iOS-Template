@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "project": "TemplateApp",
+    "module": "TemplateApp",
+    "bundleId": "com.yuto.TemplateApp"
+  },
+  "renamePaths": [
+    "TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme",
+    "TemplateApp.xcodeproj",
+    "TemplateApp/TemplateAppApp.swift",
+    "TemplateAppTests/TemplateAppTests.swift",
+    "TemplateAppUITests/TemplateAppUITests.swift",
+    "TemplateApp",
+    "TemplateAppTests",
+    "TemplateAppUITests"
+  ],
+  "liveContentPaths": [
+    "TemplateApp.xcodeproj/project.pbxproj",
+    "TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme",
+    "TemplateApp/TemplateAppApp.swift",
+    "TemplateApp/ContentView.swift",
+    "TemplateApp/Localizable.xcstrings",
+    "TemplateAppTests/TemplateAppTests.swift",
+    "TemplateAppUITests/TemplateAppUITests.swift",
+    "AGENTS.md",
+    "README.md",
+    "Config/ownership.yml",
+    "specs/architecture.md",
+    "docs/verification.md",
+    "docs/security.md",
+    "docs/agent-contracts/review-packet.md"
+  ]
+}
