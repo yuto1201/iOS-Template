@@ -511,14 +511,13 @@ for index in 0 1 2 3; do
       json_tool test-tree "$case_tree" "$action_value" "$udid" >/dev/null 2>"$run_state/$case_id-tree-parse-error" || case_failed="UI selected test identifier"
     fi
     if [[ -z "$case_failed" ]]; then
-      current_pid_file="$run_state/$case_id-current-pid"
-      if run_xcrun_bounded "$current_pid_file" "$run_state/$case_id-current-pid-error" \
-          simctl spawn "$udid" /usr/bin/pgrep -x "$app_executable"; then
-        launch_pid="$(/bin/cat "$current_pid_file")"
-        [[ "$launch_pid" =~ ^[1-9][0-9]*$ ]] || case_failed="current application PID"
-      else
-        case_failed="current application PID"
-      fi
+      run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1 || true
+      launch_output="$(run_xcrun simctl launch "$udid" "$bundle_identifier" -AppleLanguages "($language)" -AppleLocale "$locale" 2>/dev/null)" || case_failed="UI relaunch"
+    fi
+    if [[ -z "$case_failed" ]]; then
+      launch_prefix="$bundle_identifier: "
+      launch_pid="${launch_output#"$launch_prefix"}"
+      [[ "$launch_output" == "$launch_prefix"* && "$launch_pid" =~ ^[1-9][0-9]*$ ]] || case_failed="UI relaunch PID"
     fi
     if [[ -z "$case_failed" ]]; then
       current_process_file="$run_state/$case_id-current-process"

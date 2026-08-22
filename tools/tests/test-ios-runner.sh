@@ -506,7 +506,9 @@ case "$command" in
     /usr/bin/awk -F '\t' -v udid="${3-}" '$3 == "simctl" && $4 == "terminate" && $5 == udid {seen=1} END {exit seen ? 0 : 1}' "$fake_log" || { echo 'launch lacked pre-termination' >&2; exit 1; }
     [[ "$(state case_mode)" != launch-fail || "${3-}" != "00000000-0000-0000-0000-000000000002" ]] || { echo 'configured launch failure' >&2; exit 1; }
     [[ "$(state case_mode)" != late-fail || "${3-}" != "00000000-0000-0000-0000-000000000004" ]] || { echo 'configured late launch failure' >&2; exit 1; }
-    printf '%s: 4321\n' "${4-}"
+    launch_pid=4321
+    [[ "$(state case_mode)" != pid-replacement || ! -e "$state_dir/ui-ran-iphone-en" || "${3-}" != "00000000-0000-0000-0000-000000000001" ]] || launch_pid=9876
+    printf '%s: %s\n' "${4-}" "$launch_pid"
     ;;
   spawn)
     if [[ "$(state case_mode)" == stubborn-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && "${4-}" == /bin/kill ]]; then
@@ -515,12 +517,9 @@ case "$command" in
       while true; do /bin/sleep 0.05; done
     fi
     if [[ "${4-}" == /usr/bin/pgrep && "${5-}" == -x && "${6-}" == TemplateApp ]]; then
-      if [[ "$(state case_mode)" == pid-replacement && -e "$state_dir/ui-ran-iphone-en" && "${3-}" == "00000000-0000-0000-0000-000000000001" ]]; then
-        printf '%s\n' 9876
-      else
-        printf '%s\n' 4321
-      fi
-      exit 0
+      echo 'sysmon request failed with error: sysmond service not found' >&2
+      echo 'pgrep: Cannot get process list' >&2
+      exit 3
     fi
     if [[ "${4-}" == /bin/ps && "${5-}" == -ww && "${6-}" == -p && "${8-}" == -o && "${9-}" == comm= ]]; then
       expected_pid=4321
@@ -984,14 +983,14 @@ actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequen
 end
 expected = %w[
   xcode-version build build-diagnostics unit-test unit-diagnostics unit-summary unit-tests
-  iphone-en-boot iphone-en-bootstatus iphone-en-install iphone-en-get_app_container iphone-en-terminate iphone-en-launch iphone-en-spawn iphone-en-ui-test iphone-en-diagnostics iphone-en-summary iphone-en-tests iphone-en-spawn iphone-en-spawn iphone-en-spawn iphone-en-screenshot iphone-en-terminate
+  iphone-en-boot iphone-en-bootstatus iphone-en-install iphone-en-get_app_container iphone-en-terminate iphone-en-launch iphone-en-spawn iphone-en-ui-test iphone-en-diagnostics iphone-en-summary iphone-en-tests iphone-en-terminate iphone-en-launch iphone-en-spawn iphone-en-spawn iphone-en-screenshot iphone-en-terminate
   iphone-ja-boot iphone-ja-bootstatus iphone-ja-install iphone-ja-get_app_container iphone-ja-terminate iphone-ja-launch iphone-ja-spawn iphone-ja-spawn iphone-ja-screenshot iphone-ja-terminate
-  ipad-en-boot ipad-en-bootstatus ipad-en-install ipad-en-get_app_container ipad-en-terminate ipad-en-launch ipad-en-spawn ipad-en-ui-test ipad-en-diagnostics ipad-en-summary ipad-en-tests ipad-en-spawn ipad-en-spawn ipad-en-spawn ipad-en-screenshot ipad-en-terminate
+  ipad-en-boot ipad-en-bootstatus ipad-en-install ipad-en-get_app_container ipad-en-terminate ipad-en-launch ipad-en-spawn ipad-en-ui-test ipad-en-diagnostics ipad-en-summary ipad-en-tests ipad-en-terminate ipad-en-launch ipad-en-spawn ipad-en-spawn ipad-en-screenshot ipad-en-terminate
   ipad-ja-boot ipad-ja-bootstatus ipad-ja-install ipad-ja-get_app_container ipad-ja-terminate ipad-ja-launch ipad-ja-spawn ipad-ja-spawn ipad-ja-screenshot ipad-ja-terminate
 ]
 abort "unexpected Xcode/Simulator command order:\n#{actual.join("\n")}" unless actual == expected
 RUBY
-[[ "$(grep -c $'^xcrun\t.*\tsimctl\tlaunch\t' "$fake_log")" == 4 ]] || { echo "wrong locale launch count" >&2; exit 1; }
+[[ "$(grep -c $'^xcrun\t.*\tsimctl\tlaunch\t' "$fake_log")" == 6 ]] || { echo "wrong locale launch count" >&2; exit 1; }
 grep -q -- $'-AppleLanguages\t(en)' "$fake_log"
 grep -q -- $'-AppleLanguages\t(ja)' "$fake_log"
 grep -q -- $'-AppleLocale\ten_US' "$fake_log"
