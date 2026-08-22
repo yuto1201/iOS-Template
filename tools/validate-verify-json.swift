@@ -4,6 +4,7 @@ import CoreFoundation
 import CryptoKit
 import Darwin
 import Foundation
+import ImageIO
 
 struct ValidationFailure: Error, CustomStringConvertible {
     let description: String
@@ -14,6 +15,7 @@ struct ValidationFailure: Error, CustomStringConvertible {
 }
 
 typealias JSONObject = [String: Any]
+var heldValidatedCandidateFileDescriptor: Int32?
 
 let shaPattern = try! NSRegularExpression(pattern: "^[0-9a-f]{40}$")
 let digestPattern = try! NSRegularExpression(pattern: "^sha256:[0-9a-f]{64}$")
@@ -250,19 +252,48 @@ func publishValidatedCandidate(
         at: "evidence directory"
     )
     defer { close(directory) }
+    let candidate = openat(directory, candidateName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard candidate >= 0 else { throw ValidationFailure("validated candidate changed before publication") }
+    defer { close(candidate) }
     var information = stat()
-    guard fstatat(directory, candidateName, &information, AT_SYMLINK_NOFOLLOW) == 0,
+    var pathInformation = stat()
+    guard fstat(candidate, &information) == 0,
+          fstatat(directory, candidateName, &pathInformation, AT_SYMLINK_NOFOLLOW) == 0,
           (information.st_mode & S_IFMT) == S_IFREG,
           information.st_nlink == 1,
           information.st_uid == getuid(),
-          (information.st_mode & 0o777) == S_IRUSR else {
+          (information.st_mode & 0o777) == S_IRUSR,
+          information.st_dev == pathInformation.st_dev,
+          information.st_ino == pathInformation.st_ino else {
         throw ValidationFailure("validated candidate changed before publication")
     }
-    guard renameatx_np(directory, candidateName, directory, "verify.json", UInt32(RENAME_EXCL)) == 0 else {
+    if let held = heldValidatedCandidateFileDescriptor {
+        var heldInformation = stat()
+        guard fstat(held, &heldInformation) == 0,
+              heldInformation.st_dev == information.st_dev,
+              heldInformation.st_ino == information.st_ino,
+              sha256(data: try readAll(held, at: "held verify.json candidate")) == sha256(data: try readAll(candidate, at: "verify.json candidate")) else {
+            throw ValidationFailure("validated candidate changed before publication")
+        }
+    }
+    guard linkat(directory, candidateName, directory, "verify.json", 0) == 0 else {
         if errno == EEXIST { throw ValidationFailure("canonical verify.json already exists") }
         throw ValidationFailure("validated candidate could not be published")
     }
-    guard fsync(directory) == 0 else {
+    let published = openat(directory, "verify.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard published >= 0 else {
+        _ = unlinkat(directory, "verify.json", 0)
+        throw ValidationFailure("verify.json publication could not be verified")
+    }
+    defer { close(published) }
+    var publishedInformation = stat()
+    guard fstat(published, &publishedInformation) == 0,
+          publishedInformation.st_dev == information.st_dev,
+          publishedInformation.st_ino == information.st_ino,
+          fsync(published) == 0,
+          unlinkat(directory, candidateName, 0) == 0,
+          fsync(directory) == 0 else {
+        _ = unlinkat(directory, "verify.json", 0)
         throw ValidationFailure("verify.json publication could not be synchronized")
     }
 }
@@ -414,6 +445,7 @@ struct VerificationCaseInfo {
 
 struct VerificationInfo {
     let bundleIdentifier: String
+    let unitTestIdentifier: String
     let cases: [VerificationCaseInfo]
     let acceptanceMappings: [[String]]
 }
@@ -421,13 +453,19 @@ struct VerificationInfo {
 func validateOptionalVerification(_ value: Any, acceptanceIDs: [String]) throws -> VerificationInfo {
     let verification = try requireObject(value, at: "issueContract.verification")
     try requireExactKeys(
-        verification, ["bundleIdentifier", "cases", "acceptanceMappings"], at: "issueContract.verification"
+        verification, ["bundleIdentifier", "unitTestIdentifier", "cases", "acceptanceMappings"], at: "issueContract.verification"
     )
     let bundleIdentifier = try requireString(
         verification["bundleIdentifier"]!, at: "issueContract.verification.bundleIdentifier"
     )
     guard matches(bundleIdentifier, regex: bundleIdentifierPattern) else {
         throw ValidationFailure("issueContract.verification.bundleIdentifier is invalid")
+    }
+    let unitTestIdentifier = try requireString(
+        verification["unitTestIdentifier"]!, at: "issueContract.verification.unitTestIdentifier"
+    )
+    guard matches(unitTestIdentifier, regex: testIdentifierPattern) else {
+        throw ValidationFailure("issueContract.verification.unitTestIdentifier must be Target/Class/testMethod")
     }
     let expectedIDs = ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
     let cases = try requireArray(verification["cases"]!, at: "issueContract.verification.cases")
@@ -494,6 +532,7 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String]) throws 
     }
     return VerificationInfo(
         bundleIdentifier: bundleIdentifier,
+        unitTestIdentifier: unitTestIdentifier,
         cases: normalizedCases,
         acceptanceMappings: normalizedMappings
     )
@@ -1035,6 +1074,7 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
         "matrixPath": options.matrix,
         "matrixDigest": "sha256:\(sha256(data: matrixData))",
         "bundleIdentifier": verification.bundleIdentifier,
+        "unitTestIdentifier": verification.unitTestIdentifier,
         "acceptanceIDs": contract.acceptanceIDs,
         "acceptanceMappings": mappings,
         "xcode": ["path": matrix.xcode.path, "version": matrix.xcode.version, "build": matrix.xcode.build],
@@ -1045,29 +1085,32 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
         issue: options.issue,
         head: options.expectedHead
     )
-    document["runState"] = prepared.runStatePath
-    document["lockToken"] = prepared.lockToken
+    document["attemptRoot"] = prepared.attemptPath
+    document["runState"] = prepared.attemptPath
+    document["lockPath"] = prepared.lockPath
+    document["lockReadyFIFO"] = prepared.readyFIFOPath
+    document["lockControlFIFO"] = prepared.controlFIFOPath
+    let configPath = prepared.attemptPath + "/config.json"
+    let configData: Data
     do {
-        let configData = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+        configData = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) + Data("\n".utf8)
         try writeExclusiveFile(
-            directoryFileDescriptor: prepared.runStateFileDescriptor,
+            directoryFileDescriptor: prepared.attemptFileDescriptor,
             name: "config.json",
-            data: configData + Data("\n".utf8)
+            data: configData,
+            permissions: S_IRUSR
         )
     } catch {
-        _ = unlinkat(prepared.workspaceFileDescriptor, ".verify.lock", 0)
-        close(prepared.runStateFileDescriptor)
+        close(prepared.attemptFileDescriptor)
         close(prepared.workspaceFileDescriptor)
         throw error
     }
-    close(prepared.runStateFileDescriptor)
+    close(prepared.attemptFileDescriptor)
     close(prepared.workspaceFileDescriptor)
-    let receipt: [String: Any] = [
-        "configPath": prepared.runStatePath + "/config.json",
-        "workspaceRoot": workspaceRoot,
-        "lockToken": prepared.lockToken
-    ]
-    return try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+    let configDigest = "sha256:\(sha256(data: configData))"
+    return Data([configPath, configDigest, workspaceRoot, prepared.attemptPath, prepared.lockPath,
+                 prepared.readyFIFOPath, prepared.controlFIFOPath]
+        .joined(separator: "\t").utf8)
 }
 
 func verifyRunnerInputs(
@@ -1113,9 +1156,11 @@ func verifyRunnerInputs(
 
 struct PreparedRunnerWorkspace {
     let workspaceFileDescriptor: Int32
-    let runStateFileDescriptor: Int32
-    let runStatePath: String
-    let lockToken: String
+    let attemptFileDescriptor: Int32
+    let attemptPath: String
+    let lockPath: String
+    let readyFIFOPath: String
+    let controlFIFOPath: String
 }
 
 func securePrivateDirectory(parent: Int32, name: String, label: String) throws -> Int32 {
@@ -1148,12 +1193,13 @@ func securePrivateDirectory(parent: Int32, name: String, label: String) throws -
 func writeExclusiveFile(
     directoryFileDescriptor: Int32,
     name: String,
-    data: Data
+    data: Data,
+    permissions: mode_t = S_IRUSR | S_IWUSR
 ) throws {
     let descriptor = openat(
         directoryFileDescriptor, name,
         O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
-        S_IRUSR | S_IWUSR
+        permissions
     )
     guard descriptor >= 0 else {
         throw ValidationFailure("exclusive file publication collided")
@@ -1172,10 +1218,60 @@ func writeExclusiveFile(
             offset += count
         }
     }
+    guard fchmod(descriptor, permissions) == 0 else {
+        throw ValidationFailure("exclusive file permissions could not be sealed")
+    }
     guard fsync(descriptor) == 0, fsync(directoryFileDescriptor) == 0 else {
         throw ValidationFailure("exclusive file publication could not be synchronized")
     }
     succeeded = true
+}
+
+func publishGeneratedData(
+    directoryFileDescriptor: Int32,
+    canonicalName: String,
+    temporaryPrefix: String,
+    data: Data
+) throws {
+    let temporaryName = "\(temporaryPrefix)-\(UUID().uuidString.lowercased())"
+    try writeExclusiveFile(
+        directoryFileDescriptor: directoryFileDescriptor,
+        name: temporaryName,
+        data: data,
+        permissions: S_IRUSR
+    )
+    defer { _ = unlinkat(directoryFileDescriptor, temporaryName, 0) }
+    let sealed = openat(directoryFileDescriptor, temporaryName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard sealed >= 0 else { throw ValidationFailure("sealed publication candidate is unavailable") }
+    defer { close(sealed) }
+    var sealedInformation = stat()
+    guard fstat(sealed, &sealedInformation) == 0,
+          sealedInformation.st_nlink == 1,
+          sealedInformation.st_uid == getuid(),
+          (sealedInformation.st_mode & 0o777) == S_IRUSR,
+          sha256(data: try readAll(sealed, at: "sealed publication candidate")) == sha256(data: data) else {
+        throw ValidationFailure("sealed publication candidate changed")
+    }
+    guard linkat(directoryFileDescriptor, temporaryName, directoryFileDescriptor, canonicalName, 0) == 0 else {
+        if errno == EEXIST { throw ValidationFailure("canonical publication already exists") }
+        throw ValidationFailure("canonical publication failed")
+    }
+    let published = openat(directoryFileDescriptor, canonicalName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard published >= 0 else {
+        _ = unlinkat(directoryFileDescriptor, canonicalName, 0)
+        throw ValidationFailure("canonical publication could not be verified")
+    }
+    defer { close(published) }
+    var publishedInformation = stat()
+    guard fstat(published, &publishedInformation) == 0,
+          publishedInformation.st_dev == sealedInformation.st_dev,
+          publishedInformation.st_ino == sealedInformation.st_ino,
+          fsync(published) == 0,
+          unlinkat(directoryFileDescriptor, temporaryName, 0) == 0,
+          fsync(directoryFileDescriptor) == 0 else {
+        _ = unlinkat(directoryFileDescriptor, canonicalName, 0)
+        throw ValidationFailure("canonical publication could not be synchronized")
+    }
 }
 
 func prepareRunnerWorkspace(worktreeID: String, issue: Int, head: String) throws -> PreparedRunnerWorkspace {
@@ -1192,33 +1288,51 @@ func prepareRunnerWorkspace(worktreeID: String, issue: Int, head: String) throws
         close(current)
         current = next
     }
-    let lockToken = UUID().uuidString.lowercased()
-    for name in ["Cases", "Screenshots"] {
-        let directory = try securePrivateDirectory(parent: current, name: name, label: "runner \(name)")
-        close(directory)
-    }
-    do {
-        try writeExclusiveFile(
-            directoryFileDescriptor: current,
-            name: ".verify.lock",
-            data: Data((lockToken + "\n").utf8)
-        )
-    } catch {
+    let lockDescriptor = openat(
+        current, ".verify.lock", O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC,
+        S_IRUSR | S_IWUSR
+    )
+    guard lockDescriptor >= 0 else {
         close(current)
-        throw ValidationFailure("verification lock is already held")
+        throw ValidationFailure("verification advisory lock file is unavailable")
     }
-    let runName = ".run-\(UUID().uuidString.lowercased())"
+    var lockInfo = stat()
+    guard fstat(lockDescriptor, &lockInfo) == 0,
+          (lockInfo.st_mode & S_IFMT) == S_IFREG,
+          lockInfo.st_uid == getuid(),
+          lockInfo.st_nlink == 1,
+          fchmod(lockDescriptor, S_IRUSR | S_IWUSR) == 0 else {
+        close(lockDescriptor)
+        close(current)
+        throw ValidationFailure("verification advisory lock file is unsafe")
+    }
+    close(lockDescriptor)
+    let attempts = try securePrivateDirectory(parent: current, name: "Attempts", label: "attempts workspace")
+    let attemptName = "attempt-\(UUID().uuidString.lowercased())"
     do {
-        let runState = try securePrivateDirectory(parent: current, name: runName, label: "runner state")
+        let attempt = try securePrivateDirectory(parent: attempts, name: attemptName, label: "runner attempt")
+        close(attempts)
+        for name in ["Cases", "Screenshots"] {
+            let directory = try securePrivateDirectory(parent: attempt, name: name, label: "attempt \(name)")
+            close(directory)
+        }
+        for name in ["lock-ready.fifo", "lock-control.fifo"] {
+            guard mkfifoat(attempt, name, S_IRUSR | S_IWUSR) == 0 else {
+                throw ValidationFailure("runner lock channel could not be created")
+            }
+        }
         let root = "/tmp/ios-template-verify/\(worktreeID)/issue-\(issue)/\(head)"
+        close(attempts)
         return PreparedRunnerWorkspace(
             workspaceFileDescriptor: current,
-            runStateFileDescriptor: runState,
-            runStatePath: root + "/" + runName,
-            lockToken: lockToken
+            attemptFileDescriptor: attempt,
+            attemptPath: root + "/Attempts/" + attemptName,
+            lockPath: root + "/.verify.lock",
+            readyFIFOPath: root + "/Attempts/" + attemptName + "/lock-ready.fifo",
+            controlFIFOPath: root + "/Attempts/" + attemptName + "/lock-control.fifo"
         )
     } catch {
-        _ = unlinkat(current, ".verify.lock", 0)
+        close(attempts)
         close(current)
         throw error
     }
@@ -1254,60 +1368,162 @@ func removeDirectoryContents(_ descriptor: Int32) throws {
     }
 }
 
-func releaseRunnerWorkspace(configPath: String, token: String) throws {
+func readSealedRunnerConfig(configPath: String, expectedDigest: String) throws -> JSONObject {
+    guard matches(expectedDigest, regex: digestPattern), configPath.hasPrefix("/tmp/") else {
+        throw ValidationFailure("runner config identity is invalid")
+    }
     let components = try relativeComponents(
         String(configPath.dropFirst("/tmp/".count)), at: "runner config"
     )
-    guard configPath.hasPrefix("/tmp/"), components.count == 6,
+    guard components.count == 7,
           components[0] == "ios-template-verify",
           components[2].hasPrefix("issue-"),
           matches(components[3], regex: shaPattern),
-          components[4].hasPrefix(".run-"),
-          components[5] == "config.json" else {
+          components[4] == "Attempts",
+          components[5].hasPrefix("attempt-"),
+          components[6] == "config.json" else {
         throw ValidationFailure("runner config path is not canonical")
     }
-    // The component count includes the worktree ID and the final config filename.
     let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
     defer { close(temporary) }
-    var directory = temporary
-    var ownedDescriptors: [Int32] = []
-    defer { ownedDescriptors.reversed().forEach { close($0) } }
-    for component in components.prefix(5) {
-        let next = openat(directory, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard next >= 0 else { throw ValidationFailure("runner workspace is unavailable") }
-        var information = stat()
-        guard fstat(next, &information) == 0, information.st_uid == getuid(),
-              (information.st_mode & 0o777) == S_IRWXU else {
-            close(next)
-            throw ValidationFailure("runner workspace is not private and owned")
-        }
-        ownedDescriptors.append(next)
-        directory = next
-    }
     let configData = try readBoundRegularFile(
-        rootFileDescriptor: directory,
-        components: ["config.json"],
+        rootFileDescriptor: temporary,
+        components: components,
         at: "runner config"
     )
-    let config = try readJSONObject(data: configData, at: "runner config")
-    guard try requireString(config["lockToken"]!, at: "runner config lockToken") == token else {
-        throw ValidationFailure("runner lock token mismatch")
+    guard "sha256:\(sha256(data: configData))" == expectedDigest else {
+        throw ValidationFailure("runner config digest changed")
     }
-    let workspace = ownedDescriptors[ownedDescriptors.count - 2]
-    let lockData = try readBoundRegularFile(
-        rootFileDescriptor: workspace,
-        components: [".verify.lock"],
-        at: "runner lock"
+    let configParent = try openBoundDirectory(
+        rootFileDescriptor: temporary,
+        components: Array(components.dropLast()),
+        at: "runner config parent"
     )
-    guard String(data: lockData, encoding: .utf8) == token + "\n" else {
-        throw ValidationFailure("runner lock token mismatch")
+    defer { close(configParent) }
+    let configFile = openat(configParent, components.last!, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard configFile >= 0 else { throw ValidationFailure("runner config is unavailable") }
+    defer { close(configFile) }
+    var configInfo = stat()
+    guard fstat(configFile, &configInfo) == 0,
+          configInfo.st_uid == getuid(), configInfo.st_nlink == 1,
+          (configInfo.st_mode & 0o777) == S_IRUSR else {
+        throw ValidationFailure("runner config is not sealed")
     }
-    try removeDirectoryContents(directory)
-    guard unlinkat(workspace, components[4], AT_REMOVEDIR) == 0,
-          unlinkat(workspace, ".verify.lock", 0) == 0,
-          fsync(workspace) == 0 else {
-        throw ValidationFailure("runner workspace lock could not be released")
+    return try readJSONObject(data: configData, at: "runner config")
+}
+
+func runnerConfigValue(configPath: String, expectedDigest: String, keyPath: String) throws -> String {
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
+    var value: Any = config
+    for component in keyPath.split(separator: ".").map(String.init) {
+        if let object = value as? JSONObject, let next = object[component] {
+            value = next
+        } else if let array = value as? [Any], let index = Int(component), array.indices.contains(index) {
+            value = array[index]
+        } else {
+            throw ValidationFailure("runner config key is unavailable")
+        }
+    }
+    guard let string = value as? String, !string.contains("\n"), !string.contains("\t") else {
+        throw ValidationFailure("runner config value is not a safe scalar")
+    }
+    return string
+}
+
+func verifyRunnerXcode(
+    configPath: String,
+    expectedDigest: String,
+    path: String,
+    version: String,
+    build: String
+) throws {
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
+    let expected = try validateXcodeIdentity(config["xcode"]!, at: "runner config xcode")
+    guard expected.path == path, expected.version == version, expected.build == build else {
+        throw ValidationFailure("resolved Xcode does not match the frozen matrix")
+    }
+}
+
+func validatePNGData(_ data: Data) throws {
+    let signature = Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    guard data.count >= 24, data.prefix(8) == signature,
+          String(data: data[12..<16], encoding: .ascii) == "IHDR" else {
+        throw ValidationFailure("screenshot is not a PNG")
+    }
+    let width = data[16..<20].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+    let height = data[20..<24].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+    guard width > 0, height > 0,
+          let source = CGImageSourceCreateWithData(data as CFData, nil),
+          CGImageSourceGetCount(source) == 1,
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+          image.width == Int(width), image.height == Int(height) else {
+        throw ValidationFailure("screenshot PNG is not decodable")
+    }
+}
+
+func validateRunnerPNG(source: String) throws {
+    guard source.hasPrefix("/tmp/ios-template-verify/"), source.hasSuffix(".png") else {
+        throw ValidationFailure("screenshot path is invalid")
+    }
+    let components = try relativeComponents(String(source.dropFirst("/tmp/".count)), at: "screenshot")
+    let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
+    defer { close(temporary) }
+    let data = try readBoundRegularFile(rootFileDescriptor: temporary, components: components, at: "screenshot")
+    try validatePNGData(data)
+}
+
+func cleanRunnerAttempt(configPath: String, expectedDigest: String) throws {
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
+    let attemptPath = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
+    guard configPath == attemptPath + "/config.json", attemptPath.hasPrefix("/tmp/") else {
+        throw ValidationFailure("runner attempt identity mismatch")
+    }
+    let components = try relativeComponents(String(attemptPath.dropFirst("/tmp/".count)), at: "runner attempt")
+    let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
+    defer { close(temporary) }
+    let parent = try openBoundDirectory(rootFileDescriptor: temporary, components: Array(components.dropLast()), at: "runner attempt parent")
+    defer { close(parent) }
+    let attempt = openat(parent, components.last!, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard attempt >= 0 else { throw ValidationFailure("runner attempt is unavailable") }
+    try removeDirectoryContents(attempt)
+    close(attempt)
+    guard unlinkat(parent, components.last!, AT_REMOVEDIR) == 0, fsync(parent) == 0 else {
+        throw ValidationFailure("runner attempt could not be cleaned")
+    }
+}
+
+func holdRunnerLock(configPath: String, expectedDigest: String) throws {
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
+    let lockPath = try requireString(config["lockPath"]!, at: "runner config lockPath")
+    guard lockPath.hasPrefix("/tmp/") else { throw ValidationFailure("runner lock path is invalid") }
+    let components = try relativeComponents(String(lockPath.dropFirst("/tmp/".count)), at: "runner lock")
+    let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
+    defer { close(temporary) }
+    let parent = try openBoundDirectory(rootFileDescriptor: temporary, components: Array(components.dropLast()), at: "runner lock parent")
+    defer { close(parent) }
+    let lockFile = openat(parent, components.last!, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
+    guard lockFile >= 0 else { throw ValidationFailure("runner advisory lock is unavailable") }
+    defer { close(lockFile) }
+    var info = stat()
+    guard fstat(lockFile, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+          info.st_uid == getuid(), info.st_nlink == 1,
+          flock(lockFile, LOCK_EX | LOCK_NB) == 0 else {
+        throw ValidationFailure("verification lock is already held")
+    }
+    FileHandle.standardOutput.write(Data("LOCKED\n".utf8))
+    var byte: UInt8 = 0
+    while true {
+        let count = Darwin.read(STDIN_FILENO, &byte, 1)
+        if count == 0 { break }
+        if count < 0 && errno == EINTR { continue }
+        guard count > 0 else { throw ValidationFailure("runner lock control failed") }
+    }
+    guard flock(lockFile, LOCK_UN) == 0 else {
+        throw ValidationFailure("verification lock release failed")
     }
 }
 
@@ -1414,53 +1630,337 @@ func ensureOwnedDirectory(
     return descriptor
 }
 
-func publishRunnerScreenshot(source: String, issue: Int, head: String, caseID: String) throws {
-    let validCases = Set(["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"])
-    guard issue > 0, matches(head, regex: shaPattern), validCases.contains(caseID),
-          source.hasPrefix("/tmp/ios-template-verify/"),
-          source.hasSuffix("/Screenshots/\(caseID).png") else {
-        throw ValidationFailure("screenshot publication inputs are invalid")
-    }
-    let sourceComponents = try relativeComponents(String(source.dropFirst("/tmp/".count)), at: "screenshot source")
-    let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-    guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
-    defer { close(temporary) }
-    let screenshotData = try readBoundRegularFile(
-        rootFileDescriptor: temporary,
-        components: sourceComponents,
-        at: "screenshot source"
-    )
-    guard !screenshotData.isEmpty else { throw ValidationFailure("screenshot source is empty") }
+struct RunnerFinalizeOptions {
+    let issue: Int
+    let expectedBase: String
+    let expectedHead: String
+    let draftPath: String
+    let visualPath: String
+}
 
-    let topLevel = try runGitString(["rev-parse", "--show-toplevel"], failure: "current directory is not a Git worktree")
-    let physicalRoot = URL(fileURLWithPath: topLevel).resolvingSymlinksInPath().standardizedFileURL.path
-    let repository = try openRepositoryRoot(physicalRoot)
-    defer { close(repository) }
-    var directory = dup(repository)
-    defer { close(directory) }
-    let components: [(String, Bool, String)] = [
-        (".artifacts", false, "artifact root"),
-        ("issues", false, "Issue artifact root"),
-        (String(issue), false, "Issue artifact directory"),
-        (head, true, "Head evidence directory"),
-        (caseID, true, "case evidence directory")
+struct RunnerDraftOptions {
+    let configPath: String
+    let configDigest: String
+    let issue: Int
+    let expectedBase: String
+    let expectedHead: String
+    let scheme: String
+    let derivedData: String
+    let buildResult: String
+    let testResult: String
+    let passed: Int
+    let failed: Int
+    let skipped: Int
+}
+
+func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
+    guard options.issue > 0, matches(options.expectedBase, regex: shaPattern),
+          matches(options.expectedHead, regex: shaPattern), options.expectedBase != options.expectedHead,
+          options.scheme.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil,
+          options.passed > 0, options.failed == 0, options.skipped == 0 else {
+        throw ValidationFailure("runner draft inputs are invalid")
+    }
+    let config = try readSealedRunnerConfig(configPath: options.configPath, expectedDigest: options.configDigest)
+    let repository = try validateTrustedRepository(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+    defer { close(repository.rootFileDescriptor) }
+    guard try requireString(config["repositoryRoot"]!, at: "runner config repositoryRoot") == repository.rootPath else {
+        throw ValidationFailure("runner config repository identity mismatch")
+    }
+    let contractPath = try requireString(config["contractPath"]!, at: "runner config contractPath")
+    let matrixPath = try requireString(config["matrixPath"]!, at: "runner config matrixPath")
+    let contractDigest = try requireString(config["contractDigest"]!, at: "runner config contractDigest")
+    let matrixDigest = try requireString(config["matrixDigest"]!, at: "runner config matrixDigest")
+    try verifyRunnerInputs(
+        options: RunnerSnapshotOptions(
+            issue: options.issue, expectedBase: options.expectedBase, expectedHead: options.expectedHead,
+            issueContract: contractPath, matrix: matrixPath
+        ),
+        contractDigest: contractDigest,
+        matrixDigest: matrixDigest
+    )
+    let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
+    guard options.configPath == attemptRoot + "/config.json",
+          options.derivedData == attemptRoot + "/DerivedData",
+          options.buildResult == attemptRoot + "/Build.xcresult",
+          options.testResult == attemptRoot + "/Tests.xcresult" else {
+        throw ValidationFailure("runner draft workspace paths are invalid")
+    }
+    let configuredCases = try requireArray(config["cases"]!, at: "runner config cases")
+    guard configuredCases.count == 4 else { throw ValidationFailure("runner config cases are invalid") }
+    var draftCases: [[String: Any]] = []
+    for value in configuredCases {
+        let entry = try requireObject(value, at: "runner config case")
+        let id = try requireString(entry["id"]!, at: "runner config case id")
+        let action = try requireString(entry["action"]!, at: "runner config case action")
+        let actionValue = try requireString(entry["value"]!, at: "runner config case value")
+        draftCases.append([
+            "id": id,
+            "status": "passed",
+            "screenshot": "\(id)/screenshot.png",
+            "mechanicalCheck": action == "testIdentifier" ? "test:\(actionValue)" : "assertion:launch-succeeded"
+        ])
+    }
+    let configuredMappings = try requireArray(config["acceptanceMappings"]!, at: "runner config acceptanceMappings")
+    let executionMappings: [[String: Any]] = try configuredMappings.map { value in
+        let mapping = try requireObject(value, at: "runner config acceptance mapping")
+        let id = try requireString(mapping["id"]!, at: "runner config acceptance ID")
+        let checks = try requireStringArray(mapping["checks"]!, at: "runner config acceptance checks")
+            .filter { !$0.hasPrefix("visual:") }
+        return ["id": id, "evidence": checks]
+    }
+    let completedAt = ISO8601DateFormatter().string(from: Date())
+    let draft: [String: Any] = [
+        "schemaVersion": 1, "status": "awaiting-visual-review", "issue": options.issue,
+        "baseSha": options.expectedBase, "headSha": options.expectedHead,
+        "issueContract": ["path": contractPath, "digest": contractDigest],
+        "matrixFile": matrixPath, "matrixDigest": matrixDigest,
+        "executionRoute": "xcodebuild-simctl", "xcode": config["xcode"]!,
+        "build": ["status": "passed", "scheme": options.scheme, "warningsAdded": 0],
+        "tests": ["status": "passed", "passed": options.passed, "failed": 0, "skipped": 0],
+        "cases": draftCases, "acceptanceEvidence": executionMappings,
+        "workspaceArtifacts": [
+            "derivedDataPath": options.derivedData,
+            "buildResultBundlePath": options.buildResult,
+            "testResultBundlePath": options.testResult
+        ],
+        "executionCompletedAt": completedAt
     ]
-    for (name, isPrivate, label) in components {
-        let next = try ensureOwnedDirectory(parent: directory, name: name, privatePermissions: isPrivate, label: label)
-        close(directory)
-        directory = next
+    let draftData = try JSONSerialization.data(withJSONObject: draft, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
+    let currentHead = try runGitString(["rev-parse", "HEAD"], failure: "current Git Head unavailable before draft publication")
+    let currentStatus = try runGitProcess(["status", "--porcelain", "--untracked-files=all"])
+    guard currentHead == options.expectedHead, currentStatus.status == 0, currentStatus.stdout.isEmpty else {
+        throw ValidationFailure("working tree changed before draft publication")
     }
-    let temporaryName = ".screenshot-\(UUID().uuidString.lowercased())"
-    try writeExclusiveFile(directoryFileDescriptor: directory, name: temporaryName, data: screenshotData)
-    defer { _ = unlinkat(directory, temporaryName, 0) }
-    guard linkat(directory, temporaryName, directory, "screenshot.png", 0) == 0 else {
-        if errno == EEXIST { throw ValidationFailure("canonical screenshot already exists") }
-        throw ValidationFailure("screenshot publication failed")
+    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
+    let evidenceDirectory = try openBoundDirectory(
+        rootFileDescriptor: repository.rootFileDescriptor, components: evidenceComponents, at: "evidence directory"
+    )
+    defer { close(evidenceDirectory) }
+    var screenshotDirectories: [Int32] = []
+    var screenshotData: [Data] = []
+    defer { screenshotDirectories.forEach { close($0) } }
+    for value in configuredCases {
+        let entry = try requireObject(value, at: "runner config case")
+        let id = try requireString(entry["id"]!, at: "runner config case id")
+        let sourcePath = attemptRoot + "/Screenshots/\(id).png"
+        let sourceComponents = try relativeComponents(String(sourcePath.dropFirst("/tmp/".count)), at: "attempt screenshot")
+        let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
+        let data: Data
+        do {
+            data = try readBoundRegularFile(rootFileDescriptor: temporary, components: sourceComponents, at: "attempt screenshot")
+            close(temporary)
+        } catch {
+            close(temporary)
+            throw error
+        }
+        try validatePNGData(data)
+        let caseDirectory = try ensureOwnedDirectory(
+            parent: evidenceDirectory, name: id, privatePermissions: true, label: "case evidence directory"
+        )
+        var existing = stat()
+        guard fstatat(caseDirectory, "screenshot.png", &existing, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT else {
+            close(caseDirectory)
+            throw ValidationFailure("canonical screenshot already exists")
+        }
+        screenshotDirectories.append(caseDirectory)
+        screenshotData.append(data)
     }
-    guard unlinkat(directory, temporaryName, 0) == 0, fsync(directory) == 0 else {
-        _ = unlinkat(directory, "screenshot.png", 0)
-        throw ValidationFailure("screenshot publication could not be synchronized")
+    var publishedScreenshotCount = 0
+    do {
+        for index in screenshotDirectories.indices {
+            try publishGeneratedData(
+                directoryFileDescriptor: screenshotDirectories[index],
+                canonicalName: "screenshot.png",
+                temporaryPrefix: ".screenshot-candidate",
+                data: screenshotData[index]
+            )
+            publishedScreenshotCount += 1
+        }
+        try publishGeneratedData(
+            directoryFileDescriptor: evidenceDirectory,
+            canonicalName: "verify-draft.json",
+            temporaryPrefix: ".verify-draft-candidate",
+            data: draftData
+        )
+    } catch {
+        for index in 0..<publishedScreenshotCount {
+            _ = unlinkat(screenshotDirectories[index], "screenshot.png", 0)
+            _ = fsync(screenshotDirectories[index])
+        }
+        throw error
     }
+    return repository.rootPath + "/" + (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
+}
+
+func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+    )
+    defer { close(repository.rootFileDescriptor) }
+    let status = try runGitProcess(["status", "--porcelain", "--untracked-files=all"])
+    guard status.status == 0, status.stdout.isEmpty else {
+        throw ValidationFailure("working tree changed before final publication")
+    }
+    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
+    let expectedDraft = (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
+    let expectedVisual = (evidenceComponents + ["visual-result.json"]).joined(separator: "/")
+    guard options.draftPath == expectedDraft, options.visualPath == expectedVisual else {
+        throw ValidationFailure("draft and visual result must use canonical paths")
+    }
+    let draftData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: evidenceComponents + ["verify-draft.json"], at: "draft"
+    )
+    let visualData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: evidenceComponents + ["visual-result.json"], at: "visual result"
+    )
+    let draft = try readJSONObject(data: draftData, at: "draft")
+    let visual = try readJSONObject(data: visualData, at: "visual result")
+    try requireExactKeys(draft, [
+        "schemaVersion", "status", "issue", "baseSha", "headSha", "issueContract", "matrixFile",
+        "matrixDigest", "executionRoute", "xcode", "build", "tests", "cases", "acceptanceEvidence",
+        "workspaceArtifacts", "executionCompletedAt"
+    ], at: "draft")
+    guard try requireInteger(draft["schemaVersion"]!, at: "draft schemaVersion") == 1,
+          try requireString(draft["status"]!, at: "draft status") == "awaiting-visual-review",
+          try requireInteger(draft["issue"]!, at: "draft issue") == options.issue,
+          try requireString(draft["baseSha"]!, at: "draft baseSha") == options.expectedBase,
+          try requireString(draft["headSha"]!, at: "draft headSha") == options.expectedHead else {
+        throw ValidationFailure("draft identity does not match current Git range")
+    }
+    let contractReference = try requireObject(draft["issueContract"]!, at: "draft issueContract")
+    let contract = try validateIssueContract(reference: contractReference, issue: options.issue, repository: repository)
+    guard let verification = contract.verification else {
+        throw ValidationFailure("canonical contract has no verification contract")
+    }
+    let matrixPath = try requireString(draft["matrixFile"]!, at: "draft matrixFile")
+    let matrixComponents = try relativeComponents(matrixPath, at: "draft matrixFile")
+    let matrixData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor, components: matrixComponents, at: "draft matrixFile"
+    )
+    try validateDigest(draft["matrixDigest"]!, data: matrixData, at: "draft matrixDigest")
+    let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
+    guard try requireString(draft["executionRoute"]!, at: "draft executionRoute") == "xcodebuild-simctl",
+          try validateXcodeIdentity(draft["xcode"]!, at: "draft xcode") == matrix.xcode else {
+        throw ValidationFailure("draft execution identity is invalid")
+    }
+    try validateBuild(draft["build"]!, documentationOnly: false)
+    try validateTests(draft["tests"]!, documentationOnly: false)
+    let draftCases = try requireArray(draft["cases"]!, at: "draft cases")
+    guard draftCases.count == 4 else { throw ValidationFailure("draft must contain exact four cases") }
+    for (index, value) in draftCases.enumerated() {
+        let entry = try requireObject(value, at: "draft case")
+        try requireExactKeys(entry, ["id", "status", "screenshot", "mechanicalCheck"], at: "draft case")
+        let expectedCase = verification.cases[index]
+        let expectedCheck = expectedCase.action == "testIdentifier"
+            ? "test:\(expectedCase.value)" : "assertion:launch-succeeded"
+        guard try requireString(entry["id"]!, at: "draft case id") == matrix.caseIDs[index],
+              try requireString(entry["status"]!, at: "draft case status") == "passed",
+              try requireString(entry["screenshot"]!, at: "draft case screenshot") == "\(matrix.caseIDs[index])/screenshot.png",
+              try requireString(entry["mechanicalCheck"]!, at: "draft mechanicalCheck") == expectedCheck else {
+            throw ValidationFailure("draft mechanical checks do not match the canonical contract")
+        }
+    }
+    let acceptance = try requireArray(draft["acceptanceEvidence"]!, at: "draft acceptanceEvidence")
+    guard acceptance.count == contract.acceptanceIDs.count else {
+        throw ValidationFailure("draft acceptance mappings do not match the canonical contract")
+    }
+    for (index, value) in acceptance.enumerated() {
+        let entry = try requireObject(value, at: "draft acceptance evidence")
+        try requireExactKeys(entry, ["id", "evidence"], at: "draft acceptance evidence")
+        let executionChecks = verification.acceptanceMappings[index].filter { !$0.hasPrefix("visual:") }
+        guard try requireString(entry["id"]!, at: "draft acceptance ID") == contract.acceptanceIDs[index],
+              try requireStringArray(entry["evidence"]!, at: "draft acceptance evidence") == executionChecks else {
+            throw ValidationFailure("draft acceptance mappings do not match the canonical contract")
+        }
+    }
+    let artifacts = try requireObject(draft["workspaceArtifacts"]!, at: "draft workspaceArtifacts")
+    try requireExactKeys(artifacts, ["derivedDataPath", "buildResultBundlePath", "testResultBundlePath"], at: "draft workspaceArtifacts")
+    let rootDigest = sha256(data: Data(repository.rootPath.utf8))
+    let worktreeName = URL(fileURLWithPath: repository.rootPath).lastPathComponent
+        .replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "-", options: .regularExpression)
+    let workspace = "/tmp/ios-template-verify/\(worktreeName)-\(rootDigest)/issue-\(options.issue)/\(options.expectedHead)"
+    let derived = try requireString(artifacts["derivedDataPath"]!, at: "draft derivedDataPath")
+    let prefix = workspace + "/Attempts/"
+    guard derived.hasPrefix(prefix), derived.hasSuffix("/DerivedData") else {
+        throw ValidationFailure("draft workspaceArtifacts do not match the current physical worktree")
+    }
+    let attempt = String(derived.dropFirst(prefix.count).dropLast("/DerivedData".count))
+    guard attempt.range(of: "^attempt-[0-9a-f-]+$", options: .regularExpression) != nil,
+          try requireString(artifacts["buildResultBundlePath"]!, at: "draft buildResultBundlePath") == "\(prefix)\(attempt)/Build.xcresult",
+          try requireString(artifacts["testResultBundlePath"]!, at: "draft testResultBundlePath") == "\(prefix)\(attempt)/Tests.xcresult" else {
+        throw ValidationFailure("draft workspaceArtifacts do not match the current physical worktree")
+    }
+    let executionCompleted = try requireISO8601Date(draft["executionCompletedAt"]!, at: "draft executionCompletedAt")
+
+    try requireExactKeys(visual, ["schemaVersion", "status", "issue", "headSha", "draft", "cases", "findings", "reviewedAt"], at: "visual result")
+    guard try requireInteger(visual["schemaVersion"]!, at: "visual schemaVersion") == 1,
+          try requireString(visual["status"]!, at: "visual status") == "approved",
+          try requireInteger(visual["issue"]!, at: "visual issue") == options.issue,
+          try requireString(visual["headSha"]!, at: "visual headSha") == options.expectedHead,
+          try requireStringArray(visual["findings"]!, at: "visual findings").isEmpty else {
+        throw ValidationFailure("visual result is not approved")
+    }
+    let visualDraft = try requireObject(visual["draft"]!, at: "visual draft")
+    try requireExactKeys(visualDraft, ["path", "digest"], at: "visual draft")
+    guard try requireString(visualDraft["path"]!, at: "visual draft path") == options.draftPath,
+          try requireString(visualDraft["digest"]!, at: "visual draft digest") == "sha256:\(sha256(data: draftData))" else {
+        throw ValidationFailure("visual draft digest mismatch")
+    }
+    let visualCases = try requireArray(visual["cases"]!, at: "visual cases")
+    guard visualCases.count == 4 else { throw ValidationFailure("visual result must contain exact four cases") }
+    for (index, value) in visualCases.enumerated() {
+        let entry = try requireObject(value, at: "visual case")
+        try requireExactKeys(entry, ["id", "status", "screenshot", "findings"], at: "visual case")
+        guard try requireString(entry["id"]!, at: "visual case id") == matrix.caseIDs[index],
+              try requireString(entry["status"]!, at: "visual case status") == "approved",
+              try requireString(entry["screenshot"]!, at: "visual screenshot") == "\(matrix.caseIDs[index])/screenshot.png",
+              try requireStringArray(entry["findings"]!, at: "visual case findings").isEmpty else {
+            throw ValidationFailure("visual result cases mismatch or contain findings")
+        }
+    }
+    let reviewedAt = try requireISO8601Date(visual["reviewedAt"]!, at: "visual reviewedAt")
+    guard reviewedAt >= executionCompleted, reviewedAt <= Date().addingTimeInterval(300) else {
+        throw ValidationFailure("visual review timestamp is invalid")
+    }
+    let finalCases = matrix.caseIDs.map { ["id": $0, "status": "passed", "screenshot": "\($0)/screenshot.png"] }
+    let finalAcceptance: [[String: Any]] = contract.acceptanceIDs.enumerated().map { index, id in
+        ["id": id, "status": "passed", "evidence": verification.acceptanceMappings[index]]
+    }
+    let final: [String: Any] = [
+        "schemaVersion": 1, "status": "passed", "changeClassification": "application-code", "reason": NSNull(),
+        "issue": options.issue, "baseSha": options.expectedBase, "headSha": options.expectedHead,
+        "issueContract": contractReference, "matrixFile": matrixPath, "matrixDigest": draft["matrixDigest"]!,
+        "executionRoute": "xcodebuild-simctl", "xcode": draft["xcode"]!, "build": draft["build"]!,
+        "tests": draft["tests"]!, "cases": finalCases,
+        "visualEvaluation": ["status": "passed", "findings": []],
+        "acceptanceEvidence": finalAcceptance,
+        "completedAt": try requireString(visual["reviewedAt"]!, at: "visual reviewedAt")
+    ]
+    let finalData = try JSONSerialization.data(withJSONObject: final, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
+    let evidenceDirectory = try openBoundDirectory(
+        rootFileDescriptor: repository.rootFileDescriptor, components: evidenceComponents, at: "evidence directory"
+    )
+    defer { close(evidenceDirectory) }
+    let candidateName = ".verify-candidate-\(UUID().uuidString.lowercased())"
+    try writeExclusiveFile(directoryFileDescriptor: evidenceDirectory, name: candidateName, data: finalData, permissions: S_IRUSR)
+    let candidateFD = openat(evidenceDirectory, candidateName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard candidateFD >= 0 else { throw ValidationFailure("verify.json candidate could not be retained") }
+    defer {
+        heldValidatedCandidateFileDescriptor = nil
+        close(candidateFD)
+        _ = unlinkat(evidenceDirectory, candidateName, 0)
+    }
+    heldValidatedCandidateFileDescriptor = candidateFD
+    let finalPath = repository.rootPath + "/" + (evidenceComponents + ["verify.json"]).joined(separator: "/")
+    let candidatePath = repository.rootPath + "/" + (evidenceComponents + [candidateName]).joined(separator: "/")
+    try validate(options: Options(
+        file: finalPath, candidateFile: candidatePath, expectedIssue: options.issue,
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+    ))
+    return finalPath
 }
 
 func parseOptions(_ arguments: [String]) throws -> Options {
@@ -1712,26 +2212,89 @@ do {
             throw ValidationFailure("invalid runner input-check arguments")
         }
         try verifyRunnerInputs(options: options, contractDigest: contractDigest, matrixDigest: matrixDigest)
-    } else if arguments.first == "--runner-release" {
-        guard arguments.count == 5, arguments[1] == "--config", arguments[3] == "--token" else {
-            throw ValidationFailure("invalid runner release arguments")
+    } else if arguments.first == "--runner-config" {
+        guard arguments.count >= 6, arguments[1] == "--config", arguments[3] == "--digest" else {
+            throw ValidationFailure("invalid runner config arguments")
         }
-        try releaseRunnerWorkspace(configPath: arguments[2], token: arguments[4])
+        if arguments.count == 7, arguments[5] == "--get" {
+            print(try runnerConfigValue(configPath: arguments[2], expectedDigest: arguments[4], keyPath: arguments[6]))
+        } else if arguments.count == 6, arguments[5] == "--check" {
+            _ = try readSealedRunnerConfig(configPath: arguments[2], expectedDigest: arguments[4])
+        } else {
+            throw ValidationFailure("invalid runner config operation")
+        }
+    } else if arguments.first == "--runner-lock-holder" {
+        guard arguments.count == 5, arguments[1] == "--config", arguments[3] == "--digest" else {
+            throw ValidationFailure("invalid runner lock-holder arguments")
+        }
+        try holdRunnerLock(configPath: arguments[2], expectedDigest: arguments[4])
+    } else if arguments.first == "--runner-clean-attempt" {
+        guard arguments.count == 5, arguments[1] == "--config", arguments[3] == "--digest" else {
+            throw ValidationFailure("invalid runner cleanup arguments")
+        }
+        try cleanRunnerAttempt(configPath: arguments[2], expectedDigest: arguments[4])
+    } else if arguments.first == "--runner-verify-xcode" {
+        guard arguments.count == 11, arguments[1] == "--config", arguments[3] == "--digest",
+              arguments[5] == "--path", arguments[7] == "--version", arguments[9] == "--build" else {
+            throw ValidationFailure("invalid runner Xcode arguments")
+        }
+        try verifyRunnerXcode(
+            configPath: arguments[2], expectedDigest: arguments[4],
+            path: arguments[6], version: arguments[8], build: arguments[10]
+        )
+    } else if arguments.first == "--runner-validate-png" {
+        guard arguments.count == 3, arguments[1] == "--source" else {
+            throw ValidationFailure("invalid runner PNG arguments")
+        }
+        try validateRunnerPNG(source: arguments[2])
+    } else if arguments.first == "--runner-finalize" {
+        guard arguments.count == 11 else { throw ValidationFailure("invalid runner finalization arguments") }
+        var values: [String: String] = [:]
+        var index = 1
+        while index < arguments.count {
+            guard values[arguments[index]] == nil else { throw ValidationFailure("duplicate runner finalization argument") }
+            values[arguments[index]] = arguments[index + 1]
+            index += 2
+        }
+        guard let issueText = values["--issue"], let issue = Int(issueText), issue > 0,
+              let expectedBase = values["--expected-base"], let expectedHead = values["--expected-head"],
+              let draft = values["--draft"], let visual = values["--visual-result"], values.count == 5 else {
+            throw ValidationFailure("invalid runner finalization arguments")
+        }
+        print(try finalizeRunnerEvidence(RunnerFinalizeOptions(
+            issue: issue, expectedBase: expectedBase, expectedHead: expectedHead,
+            draftPath: draft, visualPath: visual
+        )))
+    } else if arguments.first == "--runner-publish-draft" {
+        guard arguments.count == 25 else { throw ValidationFailure("invalid runner draft arguments") }
+        var values: [String: String] = [:]
+        var index = 1
+        while index < arguments.count {
+            guard values[arguments[index]] == nil else { throw ValidationFailure("duplicate runner draft argument") }
+            values[arguments[index]] = arguments[index + 1]
+            index += 2
+        }
+        guard let config = values["--config"], let digest = values["--digest"],
+              let issueText = values["--issue"], let issue = Int(issueText),
+              let expectedBase = values["--expected-base"], let expectedHead = values["--expected-head"],
+              let scheme = values["--scheme"], let derivedData = values["--derived-data"],
+              let buildResult = values["--build-result"], let testResult = values["--test-result"],
+              let passedText = values["--passed"], let passed = Int(passedText),
+              let failedText = values["--failed"], let failed = Int(failedText),
+              let skippedText = values["--skipped"], let skipped = Int(skippedText), values.count == 12 else {
+            throw ValidationFailure("invalid runner draft arguments")
+        }
+        print(try publishRunnerDraft(RunnerDraftOptions(
+            configPath: config, configDigest: digest, issue: issue,
+            expectedBase: expectedBase, expectedHead: expectedHead, scheme: scheme,
+            derivedData: derivedData, buildResult: buildResult, testResult: testResult,
+            passed: passed, failed: failed, skipped: skipped
+        )))
     } else if arguments.first == "--runner-find-app" {
         guard arguments.count == 5, arguments[1] == "--derived-data", arguments[3] == "--bundle-identifier" else {
             throw ValidationFailure("invalid built application lookup arguments")
         }
         print(try findBuiltApplication(derivedDataPath: arguments[2], bundleIdentifier: arguments[4]))
-    } else if arguments.first == "--runner-publish-screenshot" {
-        guard arguments.count == 9,
-              arguments[1] == "--source", arguments[3] == "--issue",
-              arguments[5] == "--head", arguments[7] == "--case",
-              let issue = Int(arguments[4]) else {
-            throw ValidationFailure("invalid screenshot publication arguments")
-        }
-        try publishRunnerScreenshot(
-            source: arguments[2], issue: issue, head: arguments[6], caseID: arguments[8]
-        )
     } else {
         let options = try parseOptions(arguments)
         try validate(options: options)

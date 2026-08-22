@@ -329,6 +329,7 @@ prepare_fixture optional-verification-contract
 mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
   document["verification"] = {
     "bundleIdentifier" => "com.example.TemplateApp",
+    "unitTestIdentifier" => "TemplateAppTests/UnitSmokeTests/testUnit",
     "cases" => [
       {"id" => "iphone-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
       {"id" => "iphone-ja", "assertion" => {"kind" => "launch-succeeded"}},
@@ -356,6 +357,7 @@ prepare_fixture incomplete-verification-contract
 mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
   document["verification"] = {
     "bundleIdentifier" => "com.example.TemplateApp",
+    "unitTestIdentifier" => "TemplateAppTests/UnitSmokeTests/testUnit",
     "cases" => [{"id" => "iphone-en", "assertion" => {"kind" => "launch-succeeded"}}],
     "acceptanceMappings" => []
   }
@@ -367,6 +369,7 @@ prepare_fixture ambiguous-verification-action
 mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
   document["verification"] = {
     "bundleIdentifier" => "com.example.TemplateApp",
+    "unitTestIdentifier" => "TemplateAppTests/UnitSmokeTests/testUnit",
     "cases" => [
       {"id" => "iphone-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch", "assertion" => {"kind" => "launch-succeeded"}},
       {"id" => "iphone-ja", "assertion" => {"kind" => "launch-succeeded"}},

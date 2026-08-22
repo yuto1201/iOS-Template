@@ -50,7 +50,7 @@ CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/iss
 
 検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。ClaudeはGitHubから取得せず、このCodex生成snapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用でき、Issue本文が変わった場合はCodexが再取得してdigestを更新します。
 
-application検証を実行するIssue contractだけ、上の必須fieldに加えて次のexact `verification` objectを持てます。許可するkeyは `bundleIdentifier`、固定順4件の `cases`、受け入れ条件と同じ順の `acceptanceMappings` だけです。各caseは `id` に加え、`testIdentifier` または `assertion` のちょうど一方を持ちます。`testIdentifier` は `Target/Class/testMethod`、Task 4で許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}` です。application実行時にこのobjectがない、不完全、順序違い、両actionを持つ場合は、Build前に失敗します。
+application検証を実行するIssue contractだけ、上の必須fieldに加えて次のexact `verification` objectを持てます。許可するkeyは `bundleIdentifier`、`unitTestIdentifier`、固定順4件の `cases`、受け入れ条件と同じ順の `acceptanceMappings` だけです。`unitTestIdentifier` とcaseの `testIdentifier` はどちらも `Target/Class/testMethod` です。各caseは `id` に加え、`testIdentifier` または `assertion` のちょうど一方を持ちます。Task 4で許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}` です。application実行時にこのobjectがない、不完全、順序違い、両actionを持つ場合は、Build前に失敗します。
 
 `acceptanceMappings` は全 `AC-*` をexactに一度ずつ含め、各 `checks` は空でなく重複せず、次のcanonical順を守ります: `stage:build`、`stage:unit-tests`、4つの `case:<case-id>`、4つの `visual:<case-id>`。少なくとも1つのstageまたはcase checkが必要です。runnerは実行したstage/caseだけをdraftへ記録し、finalizeはAIが承認したvisual checkを加えたexact mappingをfinal evidenceへ記録します。未知または未実行の参照は許可しません。
 
@@ -58,6 +58,7 @@ application検証を実行するIssue contractだけ、上の必須fieldに加�
 {
   "verification": {
     "bundleIdentifier": "com.example.ExampleApp",
+    "unitTestIdentifier": "ExampleAppTests/UnitSmokeTests/testUnit",
     "cases": [
       {"id": "iphone-en", "testIdentifier": "ExampleAppUITests/SmokeTests/testLaunch"},
       {"id": "iphone-ja", "assertion": {"kind": "launch-succeeded"}},

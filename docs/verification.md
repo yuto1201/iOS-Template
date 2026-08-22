@@ -95,6 +95,7 @@ AIはスクリーンショットごとに次を評価します。
 ### Stage D.1: 二段階の証拠公開
 
 application検証は、実行と視覚承認を分けます。最初のcommandは現在のGit Head、信頼済みBase、canonical Issue contract、完全な固定matrixをXcode commandより先に検証します。Buildを1回、unit testを1回だけ実行し、その後4caseを直列実行します。
+historical evidence表記の`tests:TemplateAppTests/NotificationSettingsTests`はbootstrapのlive identity anchorとしてだけ保持します。Task 4 contractの`acceptanceMappings.checks`ではこの表記を許可せず、`stage:unit-tests`と実行済みcase referenceを使います。
 
 ```bash
 tools/verify-ios-issue.sh \
@@ -106,15 +107,15 @@ tools/verify-ios-issue.sh \
   --scheme ExampleApp
 ```
 
-runnerは `/tmp/ios-template-verify/${physicalWorktreeName}-${sha256OfPhysicalRoot}/issue-42/${headSha}/` の `DerivedData`、`Build.xcresult`、`Tests.xcresult`、`Cases/${caseId}.xcresult`、一時Screenshotだけを使い、Repository内へDerivedDataやresult bundleを作りません。`/tmp` の各directoryは現在のuid所有、mode `0700`、symlinkなしをdescriptor-boundに確認し、Issue/Head単位のexclusive lockを保持します。同じIssue/Headの同時実行は一方だけが進みます。
+runnerは `/tmp/ios-template-verify/${physicalWorktreeName}-${sha256OfPhysicalRoot}/issue-42/${headSha}/Attempts/attempt-${uuid}/` の `DerivedData`、`Build.xcresult`、`Tests.xcresult`、`Cases/${caseId}.xcresult`、一時Screenshotだけを使い、Repository内へDerivedDataやresult bundleを作りません。`/tmp` の各directoryは現在のuid所有、mode `0700`、symlinkなしをdescriptor-boundに確認します。Issue/Head単位のkernel advisory lockはrunner lifetime中だけ保持され、正常終了、signal、crashでkernelが解放します。同じIssue/Headの同時実行は一方だけが進み、失敗attemptだけを片付けるため、同じHeadを安全に再試行できます。
 
-productionはabsolute `/usr/bin/git`、`/usr/bin/xcode-select`、`/usr/bin/xcrun` を使います。`/Applications/Xcode.app/Contents/Developer` が有効なら優先し、それ以外はtrusted `xcode-select -p` のphysical pathを使います。そこからnon-symlinkの `usr/bin/xcodebuild` と同じDeveloper directory内へ解決されるSwift toolchainを固定し、`xcodebuild -version` が成功した場合だけ採用します。すべてのXcode commandへ同じcommand-scoped `DEVELOPER_DIR` を渡し、Git/Xcodeの危険な環境変数を除去します。callerの `PATH`、shell function、環境変数でproduction executableを差し替えるinterfaceは持ちません。
+productionはabsolute `/usr/bin/git`、`/usr/bin/xcode-select`、`/usr/bin/xcrun` を使います。`/Applications/Xcode.app/Contents/Developer` が有効なら優先し、それ以外はtrusted `xcode-select -p` のphysical pathを使います。そこからnon-symlinkの `usr/bin/xcodebuild` と同じDeveloper directory内へ解決されるSwift toolchainを固定し、`xcodebuild -version` が成功した場合だけ採用します。Git、Ruby、Swift、XcodeBuild、xcrunはvalidated HOME/TMPDIR/user/localeと固定PATHだけを入れた`env -i`から実行します。Xcode commandだけへ同じcommand-scoped `DEVELOPER_DIR` を追加し、Git、Ruby/Gem/Bundler、DYLD、Swift driver、SDK/toolchain、compiler/build-setting環境を継承しません。callerの `PATH`、shell function、環境変数でproduction executableを差し替えるinterfaceは持ちません。
 
-Build、unit test、`testIdentifier` caseのdiagnostics/test countsはhuman-readable logをgrepせず、trusted `xcrun xcresulttool` のstructured resultだけで判定します。Build/unit test/caseのwarning、analyzer warning、errorはすべて0でなければ失敗します。unit testは1件以上passed、`testIdentifier` caseは指定した1件だけがexact matrix UDIDとlocale/languageでpassedし、failed/skipped/expected failureが0でなければ失敗します。
+Buildはsingle destination、`-parallel-testing-enabled NO`の`build-for-testing`を1回だけ実行します。その後、contractのexact `unitTestIdentifier`を同じdestinationで`test-without-building -only-testing:`し、各`testIdentifier` caseも同じbuildを使います。Build、unit test、caseのdiagnostics/test countsはhuman-readable logをgrepせず、trusted `xcrun xcresulttool` schema `0.1.0` の`devicesAndConfigurations`とtest treeから判定します。Build/unit test/caseのwarning、analyzer warning、errorはすべて0でなければ失敗します。unit stageと各UI stageは指定した1件だけがexpected target/class/method、exact matrix UDIDとconfigurationでpassedし、failed/skipped/expected failureが0でなければ失敗します。UI caseではcontractのlocale/language引数もcommandに固定します。
 
 各caseはmatrixのexact UDIDをbootまたは既存Booted状態として確認し、bootstatus、built appのinstall、既存processのterminate、exact language/localeでlaunch、bounded process-liveness probe、contractの機械check、Screenshot、terminateの順に直列実行します。`testIdentifier` はunique case xcresultを使うexact `-only-testing` です。`launch-succeeded` はlaunchが返したPIDのlivenessまでを確認する狭いsmoke checkであり、UI内容の保証ではありません。runnerはSimulatorをcreate、erase、delete、または別deviceへ代替しません。途中終了時も現在activeなBundle IDをbest-effort terminateします。
 
-実行成功時はfinal結果ではなく、canonical `.artifacts/issues/42/${headSha}/verify-draft.json` をcandidate検証後にatomic no-replace publishし、fileとdirectoryをfsyncします。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceはcontractのmappingからvisual参照だけを除いたexactな実行済みstage/case参照です。canonical contract/matrixとGit Headはpublication直前にも再検証します。
+実行成功時はfinal結果ではなく、4枚のdecodable PNGとcanonical `.artifacts/issues/42/${headSha}/verify-draft.json` を一つのpublication transactionとしてno-replace publishし、fileとdirectoryをfsyncします。全4caseとinput再検証が完了するまではcanonical Screenshotもdraftも公開しません。draft衝突を含むpublication失敗時は、このattemptが公開したScreenshotだけをrollbackするため、同じHeadの再試行を妨げません。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceはcontractのmappingからvisual参照だけを除いたexactな実行済みstage/case参照です。sealed config digest、canonical contract/matrix、Git Headとclean statusはcaseごと、およびpublication直前にdescriptor-boundで再検証します。
 
 ```json
 {
@@ -141,9 +142,9 @@ Build、unit test、`testIdentifier` caseのdiagnostics/test countsはhuman-read
     {"id": "AC-2", "evidence": ["case:ipad-en", "case:ipad-ja"]}
   ],
   "workspaceArtifacts": {
-    "derivedDataPath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/DerivedData",
-    "buildResultBundlePath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Build.xcresult",
-    "testResultBundlePath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Tests.xcresult"
+    "derivedDataPath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Attempts/attempt-uuid/DerivedData",
+    "buildResultBundlePath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Attempts/attempt-uuid/Build.xcresult",
+    "testResultBundlePath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Attempts/attempt-uuid/Tests.xcresult"
   },
   "executionCompletedAt": "2026-08-21T12:55:00+09:00"
 }
@@ -169,7 +170,7 @@ Task 5のAI評価はcanonical `.artifacts/issues/42/${headSha}/visual-result.jso
 }
 ```
 
-次のfinalize commandはcurrent Head、canonical path、draft digest、Issue、4case、Screenshot path、承認状態、時刻順序、各mechanical checkとAC mappingのcanonical contract一致を再検証します。strict Task 3 schemaのprivate candidateを完成させ、exact Base/Issue/Headを引数に `tools/validate-verify-json.swift` でcandidateを検証してからatomic no-replace publishし、directoryをfsyncします。衝突時は既存winnerを保持し、失敗時にpartial `verify.json` を露出しません。
+次のfinalize commandはcurrent Headとclean status、descriptor-bound canonical path、draft digest、Issue、matrix、4case、Screenshot path、承認状態、時刻順序、各mechanical checkとAC mappingのcurrent canonical contract一致を再検証します。Swift finalizerがstrict Task 3 schemaのprivate sealed candidateを完成させ、同じprocess内のvalidatorがexact Base/Issue/Headで検証します。validated candidate FD/inode/digestを保持したままno-replace hardlinkでcanonical `verify.json`を公開して再照合し、fileとdirectoryをfsyncします。衝突時は既存winnerを保持し、失敗時にpartial `verify.json` を露出しません。
 
 ```bash
 tools/verify-ios-issue.sh --finalize \
