@@ -50,8 +50,19 @@ func round3TestPublicationRace() {
     try? file.close()
 }
 
+func round4TestKillDuringDraftPublication() {
+    let modePath = "#{state_dir}/publication_kill"
+    let markerPath = "#{state_dir}/publication-kill-fired"
+    guard !FileManager.default.fileExists(atPath: markerPath),
+          let mode = try? String(contentsOfFile: modePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+          mode == "1",
+          FileManager.default.createFile(atPath: markerPath, contents: Data(), attributes: nil) else { return }
+    _ = kill(getpid(), SIGKILL)
+}
+
 SWIFT
 text.sub!("typealias JSONObject", helper + "typealias JSONObject")
+text.gsub!("publishedScreenshotCount += 1", "publishedScreenshotCount += 1\n            round4TestKillDuringDraftPublication()")
 if text.include?("try beforeLink()")
   text.gsub!("try beforeLink()", "round3TestPublicationRace()\n    try beforeLink()")
 else
@@ -70,7 +81,7 @@ validator_binary="$scratch/validate-verify-json"
   -e "s|^PREFERRED_DEVELOPER_DIR=.*|PREFERRED_DEVELOPER_DIR=\"$fake_developer\"|" \
   "$test_source/tools/lib/xcode.sh"
 
-for poisoned in bash git xcode-select xcrun xcodebuild swift; do
+for poisoned in bash dirname git xcode-select xcrun xcodebuild swift; do
   /usr/bin/sed "s|@NAME@|$poisoned|g; s|@LOG@|$poison_log|g" >"$poison_bin/$poisoned" <<'SH'
 #!/bin/sh
 printf '%s\n' '@NAME@' >>'@LOG@'
@@ -159,7 +170,7 @@ if [[ "$mode" == build-for-testing ]]; then
   [[ "$parallel" == NO && "$destination_count" == 1 && "$destination" == *id=00000000-0000-0000-0000-000000000001 ]] || { echo 'build destination or parallel setting is invalid' >&2; exit 1; }
   app="$derived/Build/Products/Debug-iphonesimulator/TemplateApp.app"
   mkdir -p "$app" "$result"
-  plist='<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.TemplateApp</string></dict></plist>'
+  plist='<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.TemplateApp</string><key>CFBundleExecutable</key><string>TemplateApp</string></dict></plist>'
   if [[ "$(state build_mode)" == plist-symlink ]]; then
     printf '%s\n' "$plist" >"$derived/outside-info.plist"
     /bin/ln -s "$derived/outside-info.plist" "$app/Info.plist"
@@ -177,6 +188,9 @@ if [[ "$mode" == build-for-testing ]]; then
     special-file)
       mkdir -p "$app/Resources"
       /usr/bin/mkfifo "$app/Resources/unsupported.fifo"
+      ;;
+    structural-collision)
+      /usr/bin/ruby --disable-gems -e 'File.binwrite(ARGV.fetch(0), "F\0b\0X")' "$app/a"
       ;;
   esac
   hold_file="$(state hold_file)"
@@ -227,6 +241,7 @@ esac
 [[ "$language" == "$expected_language" && "$region" == "$expected_region" ]] || { echo 'wrong UI locale' >&2; exit 1; }
 [[ "$result" == */Cases/"$expected_case".xcresult ]] || { echo 'wrong or missing UI result path' >&2; exit 1; }
 mkdir -p "$result"
+[[ "$(state case_mode)" != pid-replacement ]] || : >"$state_dir/ui-ran-$expected_case"
 echo "Test Suite 'Selected tests' passed"
 SH
 chmod +x "$fake_developer/usr/bin/xcodebuild"
@@ -378,7 +393,19 @@ case "$command" in
       '{"udid":"00000000-0000-0000-0000-000000000003","state":"Booted"},' \
       '{"udid":"00000000-0000-0000-0000-000000000004","state":"Booted"}]}}'
     ;;
-  bootstatus|terminate) exit 0 ;;
+  bootstatus) exit 0 ;;
+  get_app_container)
+    [[ "${4-}" == com.example.TemplateApp && "${5-}" == app ]] || { echo 'wrong app container lookup' >&2; exit 1; }
+    printf '%s\n' "/Users/fixture/Containers/${3-}/TemplateApp.app"
+    ;;
+  terminate)
+    if [[ "$(state mutate_after_case)" =~ ^(contract|matrix)$ && "${3-}" == "00000000-0000-0000-0000-000000000001" && ! -e "$state_dir/mutate-after-case-fired" ]] && \
+       /usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "io" && $5 == "00000000-0000-0000-0000-000000000001" {seen=1} END {exit seen ? 0 : 1}' "$fake_log"; then
+      : >"$state_dir/mutate-after-case-fired"
+      printf '\n' >>"$(state "$(state mutate_after_case)_path")"
+    fi
+    exit 0
+    ;;
   install)
     app_path="${4-}"
     [[ -d "$app_path" ]] || { echo 'install path is not an app directory' >&2; exit 1; }
@@ -392,6 +419,13 @@ case "$command" in
       /bin/mv "$app_path" "$app_path.replaced"
       mkdir -p "$app_path"
       /bin/cp "$app_path.replaced/Info.plist" "$app_path/Info.plist"
+    elif [[ "$(state app_mode)" == structural-collision && ! -e "$state_dir/app-mutated" ]]; then
+      : >"$state_dir/app-mutated"
+      /bin/chmod 0600 "$app_path/a"
+      /usr/bin/ruby --disable-gems -e 'File.binwrite(ARGV.fetch(0), "")' "$app_path/a"
+      /bin/chmod 0400 "$app_path/a"
+      /usr/bin/ruby --disable-gems -e 'File.binwrite(ARGV.fetch(0), "X")' "$app_path/b"
+      /bin/chmod 0400 "$app_path/b"
     fi
     exit 0
     ;;
@@ -402,7 +436,24 @@ case "$command" in
     printf '%s: 4321\n' "${4-}"
     ;;
   spawn)
-    [[ "${4-}" == /bin/kill && "${5-}" == -0 && "${6-}" == 4321 ]] || { echo 'wrong process liveness probe' >&2; exit 1; }
+    if [[ "${4-}" == /usr/bin/pgrep && "${5-}" == -x && "${6-}" == TemplateApp ]]; then
+      if [[ "$(state case_mode)" == pid-replacement && -e "$state_dir/ui-ran-iphone-en" && "${3-}" == "00000000-0000-0000-0000-000000000001" ]]; then
+        printf '%s\n' 9876
+      else
+        printf '%s\n' 4321
+      fi
+      exit 0
+    fi
+    if [[ "${4-}" == /bin/ps && "${5-}" == -p && "${7-}" == -o && "${8-}" == command= ]]; then
+      expected_pid=4321
+      [[ "$(state case_mode)" != pid-replacement || ! -e "$state_dir/ui-ran-iphone-en" || "${3-}" != "00000000-0000-0000-0000-000000000001" ]] || expected_pid=9876
+      [[ "${6-}" == "$expected_pid" ]] || { echo 'ps inspected stale application PID' >&2; exit 1; }
+      printf '%s\n' "/Users/fixture/Containers/${3-}/TemplateApp.app/TemplateApp"
+      exit 0
+    fi
+    expected_pid=4321
+    [[ "$(state case_mode)" != pid-replacement || ! -e "$state_dir/ui-ran-iphone-en" || "${3-}" != "00000000-0000-0000-0000-000000000001" ]] || expected_pid=9876
+    [[ "${4-}" == /bin/kill && "${5-}" == -0 && "${6-}" == "$expected_pid" ]] || { echo 'wrong process liveness probe' >&2; exit 1; }
     spawn_count_file="$state_dir/spawn-${3-}"
     spawn_count=0
     [[ ! -f "$spawn_count_file" ]] || spawn_count="$(/bin/cat "$spawn_count_file")"
@@ -529,8 +580,8 @@ prepare_repo() {
   : >"$fake_log"
   : >"$poison_log"
   /bin/rm -f "$poison_sentinel"
-  for key in build_mode test_mode ui_mode case_mode mutate_input prebooted preferred_invalid \
-    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race; do
+  for key in build_mode test_mode ui_mode case_mode mutate_input mutate_after_case prebooted preferred_invalid \
+    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race publication_kill; do
     set_state "$key" ""
   done
   for spawn_state in "$adapter_state"/spawn-*; do
@@ -538,6 +589,15 @@ prepare_repo() {
   done
   /bin/rm -f "$adapter_state/app-mutated"
   /bin/rm -f "$adapter_state/publication-race-fired"
+  /bin/rm -f "$adapter_state/publication-kill-fired" "$adapter_state/mutate-after-case-fired" "$adapter_state"/ui-ran-*
+}
+
+refresh_head_paths() {
+  head_sha="$(git -C "$repo" rev-parse HEAD)"
+  draft="$repo/.artifacts/issues/42/$head_sha/verify-draft.json"
+  visual="$repo/.artifacts/issues/42/$head_sha/visual-result.json"
+  final="$repo/.artifacts/issues/42/$head_sha/verify.json"
+  mkdir -p "$(dirname "$draft")"
 }
 
 run_execute() {
@@ -546,6 +606,7 @@ run_execute() {
   set_state ui_mode "${FAKE_UI_MODE-}"
   set_state case_mode "${FAKE_CASE_MODE-}"
   set_state mutate_input "${FAKE_MUTATE_INPUT-}"
+  set_state mutate_after_case "${FAKE_MUTATE_AFTER_CASE-}"
   set_state prebooted "${FAKE_PREBOOTED-}"
   set_state preferred_invalid "${FAKE_PREFERRED_XCODE_INVALID-}"
   set_state hold_file "${FAKE_HOLD_BUILD_FILE-}"
@@ -554,6 +615,7 @@ run_execute() {
   set_state config_mode "${FAKE_CONFIG_MODE-}"
   set_state app_mode "${FAKE_APP_MODE-}"
   set_state publication_race "${FAKE_PUBLICATION_RACE-}"
+  set_state publication_kill "${FAKE_PUBLICATION_KILL-}"
   set_state contract_path "$contract"
   set_state matrix_path "$matrix"
   set_state fallback_developer "${FAKE_FALLBACK_DEVELOPER_DIR:-$fake_developer}"
@@ -570,10 +632,10 @@ run_execute() {
     SWIFT_EXEC="$poison_tool" SWIFT_DRIVER_SWIFT_FRONTEND_EXEC="$poison_tool" \
     CC="$poison_tool" CXX="$poison_tool" LD="$poison_tool" OTHER_SWIFT_FLAGS=-malicious \
     XCODE_XCCONFIG_FILE=/malicious/settings.xcconfig \
-    "$runner" --issue 42 --expected-base "$base_sha" \
+    "$runner" --issue 42 --expected-base "${FAKE_EXPECTED_BASE:-$base_sha}" \
       --issue-contract .artifacts/issues/42/issue-contract.json \
       --matrix .artifacts/batches/runner-fixture/simulator-matrix.json \
-      --project TemplateApp.xcodeproj --scheme TemplateApp)
+      --project "${FAKE_PROJECT_PATH:-TemplateApp.xcodeproj}" --scheme TemplateApp)
 }
 
 run_finalize() {
@@ -663,6 +725,9 @@ document = JSON.parse(File.read(draft))
 abort "wrong draft status" unless document["status"] == "awaiting-visual-review"
 abort "draft claimed visual approval" if document.key?("visualEvaluation")
 abort "wrong Head" unless document["headSha"] == head
+project = document.fetch("build").fetch("project")
+abort "wrong project path" unless project.fetch("path") == "TemplateApp.xcodeproj"
+abort "missing project digest" unless project.fetch("digest").match?(/\Asha256:[0-9a-f]{64}\z/)
 abort "wrong cases" unless document["cases"].map { |entry| entry["id"] } == %w[iphone-en iphone-ja ipad-en ipad-ja]
 evidence_root = File.dirname(draft)
 document.fetch("cases").each do |entry|
@@ -747,10 +812,10 @@ actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequen
 end
 expected = %w[
   xcode-version build build-diagnostics unit-test unit-diagnostics unit-summary unit-tests
-  iphone-en-boot iphone-en-bootstatus iphone-en-install iphone-en-terminate iphone-en-launch iphone-en-spawn iphone-en-ui-test iphone-en-diagnostics iphone-en-summary iphone-en-tests iphone-en-spawn iphone-en-screenshot iphone-en-terminate
-  iphone-ja-boot iphone-ja-bootstatus iphone-ja-install iphone-ja-terminate iphone-ja-launch iphone-ja-spawn iphone-ja-spawn iphone-ja-screenshot iphone-ja-terminate
-  ipad-en-boot ipad-en-bootstatus ipad-en-install ipad-en-terminate ipad-en-launch ipad-en-spawn ipad-en-ui-test ipad-en-diagnostics ipad-en-summary ipad-en-tests ipad-en-spawn ipad-en-screenshot ipad-en-terminate
-  ipad-ja-boot ipad-ja-bootstatus ipad-ja-install ipad-ja-terminate ipad-ja-launch ipad-ja-spawn ipad-ja-spawn ipad-ja-screenshot ipad-ja-terminate
+  iphone-en-boot iphone-en-bootstatus iphone-en-install iphone-en-get_app_container iphone-en-terminate iphone-en-launch iphone-en-spawn iphone-en-ui-test iphone-en-diagnostics iphone-en-summary iphone-en-tests iphone-en-spawn iphone-en-spawn iphone-en-spawn iphone-en-screenshot iphone-en-terminate
+  iphone-ja-boot iphone-ja-bootstatus iphone-ja-install iphone-ja-get_app_container iphone-ja-terminate iphone-ja-launch iphone-ja-spawn iphone-ja-spawn iphone-ja-screenshot iphone-ja-terminate
+  ipad-en-boot ipad-en-bootstatus ipad-en-install ipad-en-get_app_container ipad-en-terminate ipad-en-launch ipad-en-spawn ipad-en-ui-test ipad-en-diagnostics ipad-en-summary ipad-en-tests ipad-en-spawn ipad-en-spawn ipad-en-spawn ipad-en-screenshot ipad-en-terminate
+  ipad-ja-boot ipad-ja-bootstatus ipad-ja-install ipad-ja-get_app_container ipad-ja-terminate ipad-ja-launch ipad-ja-spawn ipad-ja-spawn ipad-ja-screenshot ipad-ja-terminate
 ]
 abort "unexpected Xcode/Simulator command order:\n#{actual.join("\n")}" unless actual == expected
 RUBY
@@ -780,6 +845,8 @@ document.fetch("cases").each do |entry|
   screenshot = File.join(File.dirname(path), entry.fetch("screenshot"))
   abort "final screenshot digest mismatch" unless entry.fetch("screenshotDigest") == "sha256:#{Digest::SHA256.file(screenshot).hexdigest}"
 end
+project = document.fetch("build").fetch("project")
+abort "final project identity mismatch" unless project.fetch("path") == "TemplateApp.xcodeproj" && project.fetch("digest").match?(/\Asha256:[0-9a-f]{64}\z/)
 RUBY
 
 prepare_repo first-run valid absent-head
@@ -822,6 +889,27 @@ run_execute
   exit 1
 }
 
+prepare_repo ignored-project
+printf '%s\n' 'Evil.xcodeproj/' >>"$repo/.git/info/exclude"
+mkdir -p "$repo/Evil.xcodeproj"
+printf '%s\n' '{}' >"$repo/Evil.xcodeproj/project.pbxproj"
+FAKE_PROJECT_PATH=Evil.xcodeproj expect_execute_failure ignored-project "project"
+if /usr/bin/awk -F '\t' '$1 == "xcodebuild" && ($0 ~ /build-for-testing$/ || $0 ~ /test-without-building$/) {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+  echo "ignored project reached Build" >&2; exit 1
+fi
+
+prepare_repo intermediate-project-symlink
+mkdir -p "$repo/RealProjects/TemplateApp.xcodeproj"
+printf '%s\n' '{}' >"$repo/RealProjects/TemplateApp.xcodeproj/project.pbxproj"
+/bin/ln -s RealProjects "$repo/LinkedProjects"
+git -C "$repo" add -- RealProjects LinkedProjects
+git -C "$repo" commit -q -m 'add linked project fixture'
+refresh_head_paths
+FAKE_PROJECT_PATH=LinkedProjects/TemplateApp.xcodeproj expect_execute_failure intermediate-project-symlink "project"
+if /usr/bin/awk -F '\t' '$1 == "xcodebuild" && ($0 ~ /build-for-testing$/ || $0 ~ /test-without-building$/) {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+  echo "symlinked project reached Build" >&2; exit 1
+fi
+
 for mode in absent missing-unit-test missing-case missing-action both-actions missing-mapping unknown-mapping; do
   prepare_repo "contract-$mode" "$mode"
   expect_execute_failure "contract-$mode" "verification"
@@ -831,7 +919,19 @@ done
 prepare_repo dirty-range
 printf '%s\n' dirty >>"$repo/docs/head.md"
 expect_execute_failure dirty-range "working tree must be clean"
-[[ ! -s "$fake_log" ]] || { echo "dirty range reached Xcode" >&2; exit 1; }
+dirty_failure="$(/usr/bin/find "$(dirname "$draft")/failures" -type f -name 'failure-*.json' -print -quit)"
+[[ -n "$dirty_failure" ]] || { echo "dirty preflight did not publish failure evidence" >&2; exit 1; }
+/usr/bin/ruby -rjson -e 'd = JSON.parse(File.read(ARGV.fetch(0))); abort unless d["stage"] == "preflight" && d["error"] == "working tree must be clean"' "$dirty_failure"
+if /usr/bin/awk -F '\t' '$1 == "xcodebuild" && ($0 ~ /build-for-testing$/ || $0 ~ /test-without-building$/) || ($1 == "xcrun" && $3 == "simctl") {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+  echo "dirty range reached Build or Simulator" >&2; exit 1
+fi
+
+prepare_repo invalid-base
+invalid_base="ffffffffffffffffffffffffffffffffffffffff"
+FAKE_EXPECTED_BASE="$invalid_base" expect_execute_failure invalid-base "expected Base is not a commit"
+invalid_base_failure="$(/usr/bin/find "$(dirname "$draft")/failures" -type f -name 'failure-*.json' -print -quit)"
+[[ -n "$invalid_base_failure" ]] || { echo "invalid Base preflight did not publish failure evidence" >&2; exit 1; }
+/usr/bin/ruby -rjson -e 'd = JSON.parse(File.read(ARGV.fetch(0))); abort unless d["stage"] == "preflight" && d["baseSha"] == ARGV.fetch(1)' "$invalid_base_failure" "$invalid_base"
 
 prepare_repo warning
 FAKE_BUILD_MODE=warning expect_execute_failure warning "build warnings are not allowed"
@@ -889,6 +989,14 @@ for source in contract matrix; do
 done
 
 for source in contract matrix; do
+  prepare_repo "mutated-after-case-$source"
+  FAKE_MUTATE_AFTER_CASE="$source" expect_execute_failure "mutated-after-case-$source" "$source changed during verification"
+  if /usr/bin/awk -F '\t' '$3 == "simctl" && $5 == "00000000-0000-0000-0000-000000000002" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+    echo "runner issued later-case Simulator commands after $source mutation" >&2; exit 1
+  fi
+done
+
+for source in contract matrix; do
   prepare_repo "publication-race-$source"
   FAKE_PUBLICATION_RACE="$source" expect_execute_failure "publication-race-$source" "atomic draft publication failed"
   [[ ! -e "$draft" ]] || { echo "publication race emitted a stale draft" >&2; exit 1; }
@@ -908,6 +1016,13 @@ FAKE_CASE_MODE=crash expect_execute_failure case-crash "case iphone-ja failed"
 prepare_repo post-ui-crash
 FAKE_CASE_MODE=post-ui-crash expect_execute_failure post-ui-crash "case iphone-en failed"
 
+prepare_repo ui-pid-replacement
+FAKE_CASE_MODE=pid-replacement run_execute
+[[ -f "$draft" ]] || { echo "UI PID replacement did not complete verification" >&2; exit 1; }
+/usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "spawn" && $5 == "00000000-0000-0000-0000-000000000001" && $6 == "/bin/kill" && $8 == "9876" {found=1} END {exit found ? 0 : 1}' "$fake_log" || {
+  echo "runner did not probe the reacquired UI application PID" >&2; exit 1
+}
+
 prepare_repo app-plist-symlink
 FAKE_BUILD_MODE=plist-symlink expect_execute_failure app-plist-symlink "built application"
 
@@ -923,6 +1038,9 @@ FAKE_APP_MODE=mutate-after-install expect_execute_failure app-content-mutation "
 prepare_repo app-path-replacement
 FAKE_APP_MODE=replace-after-install expect_execute_failure app-path-replacement "built application"
 
+prepare_repo app-structural-collision
+FAKE_APP_MODE=structural-collision expect_execute_failure app-structural-collision "built application"
+
 prepare_repo late-failure-retry
 FAKE_CASE_MODE=late-fail expect_execute_failure late-failure-retry "case ipad-ja failed"
 for case_id in iphone-en iphone-ja ipad-en ipad-ja; do
@@ -937,6 +1055,13 @@ grep -Fq sentinel-draft "$draft" || { echo "draft collision replaced the winner"
 for case_id in iphone-en iphone-ja ipad-en ipad-ja; do
   [[ ! -e "$(dirname "$draft")/$case_id/screenshot.png" ]] || { echo "draft collision left a partial screenshot bundle" >&2; exit 1; }
 done
+
+
+prepare_repo killed-draft-publication
+FAKE_PUBLICATION_KILL=1 expect_execute_failure killed-draft-publication "atomic draft publication failed"
+run_execute
+[[ -f "$draft" ]] || { echo "same-Head retry did not recover killed draft publication" >&2; exit 1; }
+[[ ! -e "$(dirname "$draft")/.verify-publication-journal.json" ]] || { echo "successful retry left publication journal" >&2; exit 1; }
 
 prepare_repo concurrent-lock
 hold_file="$scratch/concurrent-hold"

@@ -73,7 +73,7 @@ application検証を実行するIssue contractだけ、上の必須fieldに加�
 }
 ```
 
-このobjectはIssue contractのdigestへ含まれます。runnerは開始時にbytesをdescriptor-boundなsealed snapshotへ固定し、各caseとScreenshot/draftのno-replace publication境界でGit Head、clean status、canonical contract/matrixのexact bytes/digestを再照合します。Build productはprivate attemptへ再帰copyしてtree digestを固定し、各install直前に再検証します。draft、visual-result、final evidenceは各ScreenshotのSHA-256も共有し、finalizeはcanonical PNG bytesまで再照合します。CLI引数や環境変数でBundle ID、test identifier、assertionを差し替えません。
+このobjectはIssue contractのdigestへ含まれます。runnerは開始時にbytesをdescriptor-boundなsealed snapshotへ固定し、各caseとScreenshot/draftのno-replace publication境界でGit Head、clean status、canonical contract/matrixのexact bytes/digestを再照合します。`--project` の全component/contentもsymlinkなしでcurrent Headへ照合し、exact path/tree digestをdraft/finalの `build.project` に固定します。Build productはprivate attemptへ再帰copyしてlength-prefixしたtree digestを固定し、各install直前に再検証します。draft、visual-result、final evidenceは各ScreenshotのSHA-256も共有し、finalizeはcanonical PNG bytesまで再照合します。Screenshot/draft publicationはIssue/Head lock下のdurable journalからSIGKILL後もpartial transactionだけをrecoveryできます。CLI引数や環境変数でBundle ID、test identifier、assertionを差し替えません。
 
 ## 4. 状態機械
 

@@ -109,15 +109,15 @@ tools/verify-ios-issue.sh \
 
 runnerは `/tmp/ios-template-verify/${physicalWorktreeName}-${sha256OfPhysicalRoot}/issue-42/${headSha}/Attempts/attempt-${uuid}/` の `DerivedData`、`Build.xcresult`、`Tests.xcresult`、`Cases/${caseId}.xcresult`、一時Screenshotだけを使い、Repository内へDerivedDataやresult bundleを作りません。`/tmp` の各directoryは現在のuid所有、mode `0700`、symlinkなしをdescriptor-boundに確認します。Issue/Head単位のkernel advisory lockはrunner lifetime中だけ保持され、正常終了、signal、crashでkernelが解放します。同じIssue/Headの同時実行は一方だけが進み、失敗attemptだけを片付けるため、同じHeadを安全に再試行できます。
 
-production entrypointはprivileged modeのabsolute `/bin/bash -p` で起動し、absolute `/usr/bin/git`、`/usr/bin/xcode-select`、`/usr/bin/xcrun` を使います。Gitは全呼び出しでRepository localのfsmonitorを無効化し、hooks pathを`/dev/null`へ固定します。`/Applications/Xcode.app/Contents/Developer` が有効なら優先し、それ以外はtrusted `xcode-select -p` のphysical pathを使います。そこからnon-symlinkの `usr/bin/xcodebuild` と同じDeveloper directory内へ解決されるSwift toolchainを固定し、`xcodebuild -version` が成功した場合だけ採用します。Git、Ruby、Swift、XcodeBuild、xcrunはvalidated HOME/TMPDIR/user/localeと固定PATHだけを入れた`env -i`から実行します。Xcode commandだけへ同じcommand-scoped `DEVELOPER_DIR` を追加し、Git、Ruby/Gem/Bundler、DYLD、Swift driver、SDK/toolchain、compiler/build-setting環境を継承しません。callerの `PATH`、`BASH_ENV`、export済みshell function、環境変数でproduction executableを差し替えるinterfaceは持ちません。
+production entrypointはprivileged modeのabsolute `/bin/bash -p` で起動し、entrypoint directoryはshell parameter expansion、`builtin cd`、absolute `/bin/pwd`だけで解決します。その後はabsolute `/usr/bin/git`、`/usr/bin/xcode-select`、`/usr/bin/xcrun` を使います。Gitは全呼び出しでRepository localのfsmonitorを無効化し、hooks pathを`/dev/null`へ固定します。`/Applications/Xcode.app/Contents/Developer` が有効なら優先し、それ以外はtrusted `xcode-select -p` のphysical pathを使います。そこからnon-symlinkの `usr/bin/xcodebuild` と同じDeveloper directory内へ解決されるSwift toolchainを固定し、`xcodebuild -version` が成功した場合だけ採用します。Git、Ruby、Swift、XcodeBuild、xcrunはvalidated HOME/TMPDIR/user/localeと固定PATHだけを入れた`env -i`から実行します。Xcode commandだけへ同じcommand-scoped `DEVELOPER_DIR` を追加し、Git、Ruby/Gem/Bundler、DYLD、Swift driver、SDK/toolchain、compiler/build-setting環境を継承しません。callerの `PATH`、`BASH_ENV`、export済みshell function、環境変数でproduction executableを差し替えるinterfaceは持ちません。
 
-Buildはsingle destination、`-parallel-testing-enabled NO`の`build-for-testing`を1回だけ実行します。その後、contractのexact `unitTestIdentifier`を同じdestinationで`test-without-building -only-testing:`し、各`testIdentifier` caseも同じbuildを使います。Build、unit test、caseのdiagnostics/test countsはhuman-readable logをgrepせず、trusted `xcrun xcresulttool` schema `0.1.0` の`devicesAndConfigurations`とtest treeから判定します。Build/unit test/caseのwarning、analyzer warning、errorはすべて0でなければ失敗します。unit stageと各UI stageはsummary、configuration、test treeのすべてで指定した1件だけがexpected target/class/method、exact matrix UDIDとconfigurationでpassedし、failed/skipped/expected failureが0でなければ失敗します。UI caseではcontractのlocale/language引数もcommandに固定します。
+`--project` はRepository-relativeなcommitted `.xcodeproj` directoryだけを許可します。全path componentと全内部directory/fileをdescriptor-boundで開き、symlink、special file、ignored/untracked contentを拒否し、各blobのexact bytesをcurrent Headへ照合します。型、path、contentをlength-prefixしたtuple hashを `build.project` のpath/digestとしてsealed config、draft、finalへ記録します。Buildはsingle destination、`-parallel-testing-enabled NO`の`build-for-testing`を1回だけ実行します。その後、contractのexact `unitTestIdentifier`を同じdestinationで`test-without-building -only-testing:`し、各`testIdentifier` caseも同じbuildを使います。Build、unit test、caseのdiagnostics/test countsはhuman-readable logをgrepせず、trusted `xcrun xcresulttool` schema `0.1.0` の`devicesAndConfigurations`とtest treeから判定します。Build/unit test/caseのwarning、analyzer warning、errorはすべて0でなければ失敗します。unit stageと各UI stageはsummary、configuration、test treeのすべてで指定した1件だけがexpected target/class/method、exact matrix UDIDとconfigurationでpassedし、failed/skipped/expected failureが0でなければ失敗します。UI caseではcontractのlocale/language引数もcommandに固定します。
 
-Build productはlocked attempt内のDerivedData `Build/Products` 配下にあるregular app directoryだけを候補にし、Bundle IDを検証します。runnerはbundle tree全体をdescriptor-boundに再帰走査し、symlink、special file、別uid、複数hardlinkを拒否してprivate `StagedApp`へcopy、seal、fsyncし、そのexact tree digestを固定します。各install直前にstaged treeとBundle IDを再読してdigest一致を要求するため、Build productやstaged pathの置換をinstallへ持ち込めません。
+Build productはlocked attempt内のDerivedData `Build/Products` 配下にあるregular app directoryだけを候補にし、Bundle IDとBundle executableを検証します。runnerはbundle tree全体をdescriptor-boundに再帰走査し、symlink、special file、別uid、複数hardlinkを拒否してprivate `StagedApp`へcopy、seal、fsyncします。tree digestはrecord type、path、content length/contentをlength-prefixして構造とbytesを一意に固定します。各install直前にstaged tree、Bundle ID、executableを再読してdigest一致を要求するため、Build productやstaged pathの置換をinstallへ持ち込めません。
 
-各caseはmatrixのexact UDIDをbootまたは既存Booted状態として確認し、bootstatus、staged appのinstall、既存processのterminate、exact language/localeでlaunch、bounded process-liveness probe、contractの機械check、もう一度のbounded liveness probe、Screenshot、terminateの順に直列実行します。`testIdentifier` はunique case xcresultを使うexact `-only-testing` です。`launch-succeeded` はlaunchが返したPIDのlivenessまでを確認する狭いsmoke checkであり、UI内容の保証ではありません。runnerはSimulatorをcreate、erase、delete、または別deviceへ代替しません。途中終了時も現在activeなBundle IDをbest-effort terminateします。
+各case直前にlive Git Head/clean status、sealed config、canonical contract/matrix、project bytes/digestを再検証します。その後matrixのexact UDIDをbootまたは既存Booted状態として確認し、bootstatus、staged appのinstall、Bundle IDからinstalled app containerを取得、既存processのterminate、exact language/localeでlaunch、bounded process-liveness probe、contractの機械check、もう一度のbounded liveness probe、Screenshot、terminateの順に直列実行します。`testIdentifier` はunique case xcresultを使うexact `-only-testing` です。UI testがappを再launchできるため、完了後はvalidated executableをSimulator内のbounded `pgrep`/`ps`で一意に再取得し、そのcommand pathがBundle IDから取得したapp container内のexact executableであることを照合してcurrent PIDをprobeします。すべてのSimulator process queryはhost側でも5秒に制限します。`launch-succeeded` はlaunchが返したPIDのlivenessまでを確認する狭いsmoke checkであり、UI内容の保証ではありません。runnerはSimulatorをcreate、erase、delete、または別deviceへ代替しません。途中終了時も現在activeなBundle IDをbest-effort terminateします。
 
-実行成功時はfinal結果ではなく、4枚のdecodable PNGとcanonical `.artifacts/issues/42/${headSha}/verify-draft.json` を一つのpublication transactionとしてno-replace publishし、fileとdirectoryをfsyncします。全4caseとinput再検証が完了するまではcanonical Screenshotもdraftも公開しません。draft衝突を含むpublication失敗時は、このattemptが公開したScreenshotだけをrollbackするため、同じHeadの再試行を妨げません。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceはcontractのmappingからvisual参照だけを除いたexactな実行済みstage/case参照です。sealed config digest、canonical contract/matrix、Git Headとclean statusはcaseごと、およびpublication直前にdescriptor-boundで再検証します。
+実行成功時はfinal結果ではなく、4枚のdecodable PNGとcanonical `.artifacts/issues/42/${headSha}/verify-draft.json` を一つのpublication transactionとしてno-replace publishし、fileとdirectoryをfsyncします。全4caseとinput再検証が完了するまではcanonical Screenshotもdraftも公開しません。publication前にsealed `.verify-publication-journal.json` をdurable publishし、draft完成後にだけ削除・fsyncします。SIGKILL等で途中終了した場合、次のrunnerがIssue/Head lock取得後にjournalのexact digestを検証し、このtransactionのpartial Screenshotだけをrollbackして同じHeadを再試行できます。通常のdraft衝突も同じ範囲だけをrollbackします。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceはcontractのmappingからvisual参照だけを除いたexactな実行済みstage/case参照です。sealed config digest、canonical contract/matrix/project、Git Headとclean statusはcaseごと、およびpublication直前にdescriptor-boundで再検証します。
 
 ```json
 {
@@ -131,7 +131,7 @@ Build productはlocked attempt内のDerivedData `Build/Products` 配下にある
   "matrixDigest": "sha256:490d32bf9174b57fb9b05a00e0231d22082e4a9576b0377f0df2641d96349d0b",
   "executionRoute": "xcodebuild-simctl",
   "xcode": {"path": "/Applications/Xcode.app/Contents/Developer", "version": "26.5", "build": "17F42"},
-  "build": {"status": "passed", "scheme": "ExampleApp", "warningsAdded": 0},
+  "build": {"status": "passed", "scheme": "ExampleApp", "warningsAdded": 0, "project": {"path": "ExampleApp.xcodeproj", "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"}},
   "tests": {"status": "passed", "passed": 1, "failed": 0, "skipped": 0},
   "cases": [
     {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/screenshot.png", "screenshotDigest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9", "mechanicalCheck": "test:ExampleAppUITests/SmokeTests/testLaunch"},
@@ -182,7 +182,7 @@ tools/verify-ios-issue.sh --finalize \
   --visual-result ".artifacts/issues/42/${HEAD_SHA}/visual-result.json"
 ```
 
-各失敗は既存結果を上書きせず、`.artifacts/issues/42/${headSha}/failures/failure-${timestamp}-${unique}.json` へ次のexact sanitized schemaでdescriptor-boundなprivate candidateからatomic no-replace publishし、fileとdirectoryをfsyncします。`stage` と `error` はrunnerが定める非秘密の分類だけで、command output、Token、個人pathは保存しません。
+Issue/current Head identityを確立した後のrange、dirty status、その他preflightを含む各失敗は既存結果を上書きせず、`.artifacts/issues/42/${headSha}/failures/failure-${uuid}.json` へ次のexact sanitized schemaでdescriptor-boundなprivate candidateからatomic no-replace publishし、fileとdirectoryをfsyncします。failure writerはGit top-levelとcurrent Headを独立再検証しますが、失敗理由になったclean statusやBase ancestryを成功条件にはしません。`stage` と `error` はrunnerが定める非秘密の分類だけで、command output、Token、個人pathは保存しません。
 
 ```json
 {
@@ -222,7 +222,7 @@ tools/verify-ios-issue.sh --finalize \
     "version": "26.5",
     "build": "17F42"
   },
-  "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0},
+  "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0, "project": {"path": "ExampleApp.xcodeproj", "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"}},
   "tests": {"status": "passed", "passed": 1, "failed": 0, "skipped": 0},
   "cases": [
     {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/settings.png", "screenshotDigest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9"},
@@ -282,7 +282,7 @@ validatorは `--expected-head` が現在のGit Headと一致し、BaseとHeadが
   "matrixDigest": null,
   "executionRoute": "none",
   "xcode": null,
-  "build": {"status": "not-applicable", "scheme": null, "warningsAdded": null},
+  "build": {"status": "not-applicable", "scheme": null, "warningsAdded": null, "project": null},
   "tests": {"status": "not-applicable", "passed": null, "failed": null, "skipped": null},
   "cases": [],
   "visualEvaluation": {"status": "not-applicable", "findings": []},

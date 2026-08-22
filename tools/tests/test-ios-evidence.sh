@@ -80,9 +80,10 @@ prepare_fixture() {
   git -C "$fixture_root" config user.name 'Evidence Test'
   git -C "$fixture_root" config user.email 'evidence@example.invalid'
 
-  mkdir -p "$fixture_root/docs"
+  mkdir -p "$fixture_root/docs" "$fixture_root/TemplateApp.xcodeproj"
+  printf '%s\n' '{}' >"$fixture_root/TemplateApp.xcodeproj/project.pbxproj"
   printf '%s\n' '# Initial' >"$fixture_root/docs/initial.md"
-  git -C "$fixture_root" add -- docs/initial.md
+  git -C "$fixture_root" add -- docs/initial.md TemplateApp.xcodeproj/project.pbxproj
   git -C "$fixture_root" commit -q -m initial
   older_base_sha="$(git -C "$fixture_root" rev-parse HEAD)"
 
@@ -219,7 +220,7 @@ make_documentation_only() {
     document["matrixDigest"] = nil
     document["executionRoute"] = "none"
     document["xcode"] = nil
-    document["build"] = {"status" => "not-applicable", "scheme" => nil, "warningsAdded" => nil}
+    document["build"] = {"status" => "not-applicable", "scheme" => nil, "warningsAdded" => nil, "project" => nil}
     document["tests"] = {"status" => "not-applicable", "passed" => nil, "failed" => nil, "skipped" => nil}
     document["cases"] = []
     document["visualEvaluation"] = {"status" => "not-applicable", "findings" => []}
@@ -327,6 +328,15 @@ expect_failure zero-tests "tests.passed must be at least 1"
 prepare_fixture added-warning
 mutate_json "$evidence_file" 'document.fetch("build")["warningsAdded"] = 1'
 expect_failure added-warning "build.warningsAdded must be zero"
+
+prepare_fixture wrong-project-digest
+mutate_json "$evidence_file" 'document.fetch("build").fetch("project")["digest"] = "sha256:" + "0" * 64'
+expect_failure wrong-project-digest "build.project does not match the current project at expected Head"
+
+prepare_fixture ignored-project-content
+printf '%s\n' '*.ignored' >>"$fixture_root/.git/info/exclude"
+printf '%s\n' ignored >"$fixture_root/TemplateApp.xcodeproj/Evil.ignored"
+expect_failure ignored-project-content "project contains an untracked, ignored, or non-blob path"
 
 prepare_fixture missing-contract
 rm "$fixture_root/.artifacts/issues/42/issue-contract.json"

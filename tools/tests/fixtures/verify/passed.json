@@ -21,7 +21,11 @@
   "build": {
     "status": "passed",
     "scheme": "TemplateApp",
-    "warningsAdded": 0
+    "warningsAdded": 0,
+    "project": {
+      "path": "TemplateApp.xcodeproj",
+      "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"
+    }
   },
   "tests": {
     "status": "passed",

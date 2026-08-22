@@ -402,6 +402,30 @@ struct TrustedRepository {
     let rootFileDescriptor: Int32
 }
 
+func validateFailureRepository(expectedHead: String) throws -> TrustedRepository {
+    guard matches(expectedHead, regex: shaPattern) else {
+        throw ValidationFailure("failure evidence Head is invalid")
+    }
+    let topLevel = try runGitString(
+        ["rev-parse", "--show-toplevel"],
+        failure: "current directory is not a Git worktree"
+    )
+    let gitRoot = URL(fileURLWithPath: topLevel, isDirectory: true)
+        .resolvingSymlinksInPath().standardizedFileURL.path
+    let currentDirectory = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    ).resolvingSymlinksInPath().standardizedFileURL.path
+    guard currentDirectory == gitRoot else {
+        throw ValidationFailure("failure evidence must run from the Git top-level")
+    }
+    let currentHead = try runGitString(["rev-parse", "HEAD"], failure: "unable to resolve current Git HEAD")
+    guard currentHead == expectedHead else {
+        throw ValidationFailure("failure evidence Head does not match current Git HEAD")
+    }
+    return TrustedRepository(rootPath: gitRoot, rootFileDescriptor: try openRepositoryRoot(gitRoot))
+}
+
 func validateTrustedRepository(expectedBase: String, expectedHead: String) throws -> TrustedRepository {
     let topLevel = try runGitString(
         ["rev-parse", "--show-toplevel"],
@@ -814,15 +838,21 @@ func validateAcceptanceEvidence(
     }
 }
 
-func validateBuild(_ value: Any, documentationOnly: Bool) throws {
+func validateBuild(
+    _ value: Any,
+    documentationOnly: Bool,
+    repository: TrustedRepository? = nil,
+    expectedHead: String? = nil
+) throws {
     let build = try requireObject(value, at: "build")
-    try requireExactKeys(build, ["status", "scheme", "warningsAdded"], at: "build")
+    try requireExactKeys(build, ["status", "scheme", "warningsAdded", "project"], at: "build")
     if documentationOnly {
         guard try requireString(build["status"]!, at: "build.status") == "not-applicable" else {
             throw ValidationFailure("build.status must be not-applicable")
         }
         try requireNull(build["scheme"]!, at: "build.scheme")
         try requireNull(build["warningsAdded"]!, at: "build.warningsAdded")
+        try requireNull(build["project"]!, at: "build.project")
     } else {
         guard try requireString(build["status"]!, at: "build.status") == "passed" else {
             throw ValidationFailure("build.status must be passed")
@@ -831,6 +861,12 @@ func validateBuild(_ value: Any, documentationOnly: Bool) throws {
         guard try requireInteger(build["warningsAdded"]!, at: "build.warningsAdded", minimum: 0) == 0 else {
             throw ValidationFailure("build.warningsAdded must be zero")
         }
+        guard let repository, let expectedHead else {
+            throw ValidationFailure("application build project validation context is absent")
+        }
+        _ = try validateProjectReference(
+            build["project"]!, repository: repository, expectedHead: expectedHead, at: "build.project"
+        )
     }
 }
 
@@ -1011,18 +1047,156 @@ struct Options {
     let expectedHead: String
 }
 
+struct ProjectIdentity {
+    let path: String
+    let digest: String
+
+    var jsonObject: [String: Any] { ["path": path, "digest": digest] }
+}
+
+func gitObjectType(head: String, path: String) throws -> String {
+    try runGitString(
+        ["cat-file", "-t", "\(head):\(path)"],
+        failure: "project contains a path that is not committed at expected Head"
+    )
+}
+
+func gitBlobData(head: String, path: String) throws -> Data {
+    let result = try runGitProcess(["cat-file", "blob", "\(head):\(path)"])
+    guard result.status == 0 else {
+        throw ValidationFailure("project contains an untracked, ignored, or non-blob path")
+    }
+    return result.stdout
+}
+
+func inspectProjectIdentity(
+    repository: TrustedRepository,
+    projectPath: String,
+    expectedHead: String
+) throws -> ProjectIdentity {
+    let components = try relativeComponents(projectPath, at: "project path")
+    guard components.last?.hasSuffix(".xcodeproj") == true,
+          components.allSatisfy({ !$0.contains("\0") && !$0.contains("\n") && !$0.contains("\r") }) else {
+        throw ValidationFailure("project path must identify a safe .xcodeproj directory")
+    }
+    guard try gitObjectType(head: expectedHead, path: projectPath) == "tree" else {
+        throw ValidationFailure("project path is not a committed directory at expected Head")
+    }
+    let project = try openBoundDirectory(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: components,
+        at: "project path"
+    )
+    defer { close(project) }
+    var projectInformation = stat()
+    guard fstat(project, &projectInformation) == 0, projectInformation.st_uid == getuid() else {
+        throw ValidationFailure("project directory is not owned by the current user")
+    }
+
+    var hasher = SHA256()
+    updateLengthPrefixed(&hasher, string: "ios-template-project-v1")
+    var sawProjectFile = false
+
+    func walk(_ directory: Int32, relativePath: String) throws {
+        for name in try sortedDirectoryNames(directory, label: "project directory") {
+            guard !name.contains("\0"), !name.contains("\n"), !name.contains("\r") else {
+                throw ValidationFailure("project contains an unsafe path name")
+            }
+            var pathInformation = stat()
+            guard fstatat(directory, name, &pathInformation, AT_SYMLINK_NOFOLLOW) == 0 else {
+                throw ValidationFailure("project changed during traversal")
+            }
+            let relative = relativePath.isEmpty ? name : relativePath + "/" + name
+            let repositoryPath = projectPath + "/" + relative
+            let kind = pathInformation.st_mode & S_IFMT
+            guard pathInformation.st_uid == getuid(), kind != S_IFLNK else {
+                throw ValidationFailure("project contains an unowned item or symbolic link")
+            }
+            if kind == S_IFDIR {
+                guard try gitObjectType(head: expectedHead, path: repositoryPath) == "tree" else {
+                    throw ValidationFailure("project directory is not committed at expected Head")
+                }
+                let child = openat(directory, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                guard child >= 0 else { throw ValidationFailure("project directory changed during traversal") }
+                defer { close(child) }
+                var childInformation = stat()
+                guard fstat(child, &childInformation) == 0,
+                      childInformation.st_dev == pathInformation.st_dev,
+                      childInformation.st_ino == pathInformation.st_ino else {
+                    throw ValidationFailure("project directory changed during traversal")
+                }
+                updateLengthPrefixed(&hasher, string: "D")
+                updateLengthPrefixed(&hasher, string: relative)
+                try walk(child, relativePath: relative)
+            } else if kind == S_IFREG {
+                guard pathInformation.st_nlink == 1 else {
+                    throw ValidationFailure("project file must have exactly one hard link")
+                }
+                let file = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+                guard file >= 0 else { throw ValidationFailure("project file changed during traversal") }
+                defer { close(file) }
+                var fileInformation = stat()
+                guard fstat(file, &fileInformation) == 0,
+                      (fileInformation.st_mode & S_IFMT) == S_IFREG,
+                      fileInformation.st_dev == pathInformation.st_dev,
+                      fileInformation.st_ino == pathInformation.st_ino,
+                      fileInformation.st_nlink == 1 else {
+                    throw ValidationFailure("project file changed during traversal")
+                }
+                let data = try readAll(file, at: "project file")
+                guard data == (try gitBlobData(head: expectedHead, path: repositoryPath)) else {
+                    throw ValidationFailure("project file bytes do not match expected Head")
+                }
+                updateLengthPrefixed(&hasher, string: (fileInformation.st_mode & 0o111) == 0 ? "F" : "X")
+                updateLengthPrefixed(&hasher, string: relative)
+                updateLengthPrefixed(&hasher, data: data)
+                if relative == "project.pbxproj" { sawProjectFile = true }
+            } else {
+                throw ValidationFailure("project contains a special file")
+            }
+        }
+    }
+    try walk(project, relativePath: "")
+    guard sawProjectFile else { throw ValidationFailure("project.pbxproj is missing or uncommitted") }
+    let digest = "sha256:" + hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    return ProjectIdentity(path: projectPath, digest: digest)
+}
+
+func validateProjectReference(
+    _ value: Any,
+    repository: TrustedRepository,
+    expectedHead: String,
+    at path: String
+) throws -> ProjectIdentity {
+    let reference = try requireObject(value, at: path)
+    try requireExactKeys(reference, ["path", "digest"], at: path)
+    let projectPath = try requireString(reference["path"]!, at: "\(path).path")
+    let expectedDigest = try requireString(reference["digest"]!, at: "\(path).digest")
+    guard matches(expectedDigest, regex: digestPattern) else {
+        throw ValidationFailure("\(path).digest must use sha256:<64 lowercase hex>")
+    }
+    let identity = try inspectProjectIdentity(
+        repository: repository, projectPath: projectPath, expectedHead: expectedHead
+    )
+    guard identity.digest == expectedDigest else {
+        throw ValidationFailure("\(path) does not match the current project at expected Head")
+    }
+    return identity
+}
+
 struct RunnerSnapshotOptions {
     let issue: Int
     let expectedBase: String
     let expectedHead: String
     let issueContract: String
     let matrix: String
+    let project: String
 }
 
 func parseRunnerSnapshotOptions(_ arguments: [String]) throws -> RunnerSnapshotOptions {
     var values: [String: String] = [:]
     var index = 0
-    let allowed = Set(["--issue", "--expected-base", "--expected-head", "--issue-contract", "--matrix"])
+    let allowed = Set(["--issue", "--expected-base", "--expected-head", "--issue-contract", "--matrix", "--project"])
     while index < arguments.count {
         let key = arguments[index]
         guard allowed.contains(key), values[key] == nil, index + 1 < arguments.count else {
@@ -1035,7 +1209,8 @@ func parseRunnerSnapshotOptions(_ arguments: [String]) throws -> RunnerSnapshotO
           let expectedBase = values["--expected-base"], matches(expectedBase, regex: shaPattern),
           let expectedHead = values["--expected-head"], matches(expectedHead, regex: shaPattern),
           let issueContract = values["--issue-contract"],
-          let matrix = values["--matrix"], values.count == allowed.count else {
+          let matrix = values["--matrix"],
+          let project = values["--project"], values.count == allowed.count else {
         throw ValidationFailure("invalid runner snapshot arguments")
     }
     return RunnerSnapshotOptions(
@@ -1043,7 +1218,8 @@ func parseRunnerSnapshotOptions(_ arguments: [String]) throws -> RunnerSnapshotO
         expectedBase: expectedBase,
         expectedHead: expectedHead,
         issueContract: issueContract,
-        matrix: matrix
+        matrix: matrix,
+        project: project
     )
 }
 
@@ -1092,6 +1268,9 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
     guard verification.cases.map(\.id) == matrix.caseIDs else {
         throw ValidationFailure("verification cases do not match matrix cases")
     }
+    let projectIdentity = try inspectProjectIdentity(
+        repository: repository, projectPath: options.project, expectedHead: options.expectedHead
+    )
 
     let cases: [[String: Any]] = matrix.cases.enumerated().map { index, matrixCase in
         let action = verification.cases[index]
@@ -1118,6 +1297,7 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
         "contractDigest": contractDigest,
         "matrixPath": options.matrix,
         "matrixDigest": "sha256:\(sha256(data: matrixData))",
+        "project": projectIdentity.jsonObject,
         "bundleIdentifier": verification.bundleIdentifier,
         "unitTestIdentifier": verification.unitTestIdentifier,
         "acceptanceIDs": contract.acceptanceIDs,
@@ -1161,9 +1341,11 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
 func verifyRunnerInputs(
     options: RunnerSnapshotOptions,
     contractDigest: String,
-    matrixDigest: String
+    matrixDigest: String,
+    projectDigest: String
 ) throws {
-    guard matches(contractDigest, regex: digestPattern), matches(matrixDigest, regex: digestPattern) else {
+    guard matches(contractDigest, regex: digestPattern), matches(matrixDigest, regex: digestPattern),
+          matches(projectDigest, regex: digestPattern) else {
         throw ValidationFailure("runner input digest is invalid")
     }
     let repository = try validateTrustedRepository(
@@ -1197,6 +1379,12 @@ func verifyRunnerInputs(
         throw ValidationFailure("matrix changed during verification")
     }
     _ = try validateMatrix(data: matrixData, recordedPath: options.matrix)
+    let projectIdentity = try inspectProjectIdentity(
+        repository: repository, projectPath: options.project, expectedHead: options.expectedHead
+    )
+    guard projectIdentity.digest == projectDigest else {
+        throw ValidationFailure("project changed during verification")
+    }
 }
 
 struct PreparedRunnerWorkspace {
@@ -1609,11 +1797,19 @@ func sortedDirectoryNames(_ directory: Int32, label: String) throws -> [String] 
     return names.sorted { Data($0.utf8).lexicographicallyPrecedes(Data($1.utf8)) }
 }
 
+func updateLengthPrefixed(_ hasher: inout SHA256, data: Data) {
+    var length = UInt64(data.count).bigEndian
+    withUnsafeBytes(of: &length) { hasher.update(data: Data($0)) }
+    hasher.update(data: data)
+}
+
+func updateLengthPrefixed(_ hasher: inout SHA256, string: String) {
+    updateLengthPrefixed(&hasher, data: Data(string.utf8))
+}
+
 func updateBundleDigest(_ hasher: inout SHA256, marker: String, path: String) {
-    hasher.update(data: Data(marker.utf8))
-    hasher.update(data: Data([0]))
-    hasher.update(data: Data(path.utf8))
-    hasher.update(data: Data([0]))
+    updateLengthPrefixed(&hasher, string: marker)
+    updateLengthPrefixed(&hasher, string: path)
 }
 
 func processBundleTree(
@@ -1679,6 +1875,8 @@ func processBundleTree(
             }
             let executable = (sourceInformation.st_mode & 0o111) != 0
             updateBundleDigest(&hasher, marker: executable ? "X" : "F", path: path)
+            var contentLength = UInt64(sourceInformation.st_size).bigEndian
+            withUnsafeBytes(of: &contentLength) { hasher.update(data: Data($0)) }
             var destination: Int32?
             if let destinationDirectory {
                 let permissions: mode_t = executable ? (S_IRUSR | S_IXUSR) : S_IRUSR
@@ -1737,7 +1935,7 @@ func findBuiltApplication(
     configDigest: String,
     derivedDataPath: String,
     bundleIdentifier: String
-) throws -> (path: String, digest: String) {
+) throws -> (path: String, digest: String, executable: String) {
     guard matches(bundleIdentifier, regex: bundleIdentifierPattern),
           derivedDataPath.hasPrefix("/tmp/ios-template-verify/"),
           derivedDataPath.hasSuffix("/DerivedData") else {
@@ -1767,7 +1965,7 @@ func findBuiltApplication(
     )
     defer { close(products) }
 
-    var matchedPaths: [String] = []
+    var matchedApplications: [(path: String, executable: String)] = []
     func scan(_ directory: Int32, relativePath: String) throws {
         guard let stream = fdopendir(dup(directory)) else {
             throw ValidationFailure("Build products could not be enumerated")
@@ -1801,6 +1999,10 @@ func findBuiltApplication(
                     throw ValidationFailure("built application Info.plist is invalid")
                 }
                 if plist["CFBundleIdentifier"] as? String == bundleIdentifier {
+                    guard let executable = plist["CFBundleExecutable"] as? String,
+                          executable.range(of: "^[A-Za-z_][A-Za-z0-9_.-]{0,127}$", options: .regularExpression) != nil else {
+                        throw ValidationFailure("built application executable identity is invalid")
+                    }
                     guard information.st_uid == getuid() else {
                         throw ValidationFailure("built application is not owned by the current user")
                     }
@@ -1810,7 +2012,7 @@ func findBuiltApplication(
                         sourceDirectory: child, destinationDirectory: nil,
                         relativePath: "", hasher: &validationHasher
                     )
-                    matchedPaths.append(childPath)
+                    matchedApplications.append((childPath, executable))
                 }
             } else {
                 try scan(child, relativePath: childPath)
@@ -1818,10 +2020,11 @@ func findBuiltApplication(
         }
     }
     try scan(products, relativePath: "")
-    guard matchedPaths.count == 1 else {
+    guard matchedApplications.count == 1 else {
         throw ValidationFailure("exactly one contained built application must match the bundle identifier")
     }
-    let matchedPath = matchedPaths[0]
+    let matchedPath = matchedApplications[0].path
+    let executable = matchedApplications[0].executable
     let source = try openBoundDirectory(
         rootFileDescriptor: products,
         components: try relativeComponents(matchedPath, at: "built application"),
@@ -1850,16 +2053,18 @@ func findBuiltApplication(
         throw ValidationFailure("staged application could not be synchronized")
     }
     let digest = "sha256:" + hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    return (attemptRoot + "/StagedApp/" + appName, digest)
+    return (attemptRoot + "/StagedApp/" + appName, digest, executable)
 }
 
 func validateStagedApplication(
     configPath: String,
     configDigest: String,
     appPath: String,
-    expectedBundleDigest: String
+    expectedBundleDigest: String,
+    expectedExecutable: String
 ) throws {
-    guard matches(expectedBundleDigest, regex: digestPattern) else {
+    guard matches(expectedBundleDigest, regex: digestPattern),
+          expectedExecutable.range(of: "^[A-Za-z_][A-Za-z0-9_.-]{0,127}$", options: .regularExpression) != nil else {
         throw ValidationFailure("staged application digest is invalid")
     }
     let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: configDigest)
@@ -1883,7 +2088,8 @@ func validateStagedApplication(
     let plistValue = try PropertyListSerialization.propertyList(from: plistData, options: [], format: nil)
     let expectedBundleIdentifier = try requireString(config["bundleIdentifier"]!, at: "runner config bundleIdentifier")
     guard let plist = plistValue as? [String: Any],
-          plist["CFBundleIdentifier"] as? String == expectedBundleIdentifier else {
+          plist["CFBundleIdentifier"] as? String == expectedBundleIdentifier,
+          plist["CFBundleExecutable"] as? String == expectedExecutable else {
         throw ValidationFailure("staged application bundle identifier changed")
     }
 }
@@ -1984,19 +2190,115 @@ struct RunnerFailureOptions {
     let message: String
 }
 
+func recoverRunnerPublication(
+    configPath: String,
+    configDigest: String,
+    issue: Int,
+    expectedBase: String,
+    expectedHead: String
+) throws {
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: configDigest)
+    let repository = try validateTrustedRepository(expectedBase: expectedBase, expectedHead: expectedHead)
+    defer { close(repository.rootFileDescriptor) }
+    guard try requireString(config["repositoryRoot"]!, at: "runner config repositoryRoot") == repository.rootPath else {
+        throw ValidationFailure("runner publication recovery repository mismatch")
+    }
+    let evidenceComponents = [".artifacts", "issues", String(issue), expectedHead]
+    let evidenceDirectory = try openBoundDirectory(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: evidenceComponents,
+        at: "publication recovery evidence directory"
+    )
+    defer { close(evidenceDirectory) }
+    var journalInformation = stat()
+    if fstatat(evidenceDirectory, ".verify-publication-journal.json", &journalInformation, AT_SYMLINK_NOFOLLOW) != 0 {
+        guard errno == ENOENT else { throw ValidationFailure("publication journal state is unavailable") }
+        return
+    }
+    let journalData = try readBoundRegularFile(
+        rootFileDescriptor: evidenceDirectory,
+        components: [".verify-publication-journal.json"],
+        at: "publication journal"
+    )
+    let journal = try readJSONObject(data: journalData, at: "publication journal")
+    try requireExactKeys(journal, ["schemaVersion", "issue", "headSha", "draftDigest", "cases"], at: "publication journal")
+    guard try requireInteger(journal["schemaVersion"]!, at: "publication journal schemaVersion") == 1,
+          try requireInteger(journal["issue"]!, at: "publication journal issue") == issue,
+          try requireString(journal["headSha"]!, at: "publication journal headSha") == expectedHead else {
+        throw ValidationFailure("publication journal identity mismatch")
+    }
+    let draftDigest = try requireString(journal["draftDigest"]!, at: "publication journal draftDigest")
+    guard matches(draftDigest, regex: digestPattern) else {
+        throw ValidationFailure("publication journal draftDigest is invalid")
+    }
+    let configuredCases = try requireArray(config["cases"]!, at: "runner config cases")
+    let cases = try requireArray(journal["cases"]!, at: "publication journal cases")
+    guard configuredCases.count == 4, cases.count == configuredCases.count else {
+        throw ValidationFailure("publication journal cases mismatch")
+    }
+    var expectedCases: [(id: String, digest: String)] = []
+    for index in cases.indices {
+        let configured = try requireObject(configuredCases[index], at: "runner config case")
+        let entry = try requireObject(cases[index], at: "publication journal case")
+        try requireExactKeys(entry, ["id", "screenshotDigest"], at: "publication journal case")
+        let id = try requireString(entry["id"]!, at: "publication journal case id")
+        let digest = try requireString(entry["screenshotDigest"]!, at: "publication journal screenshotDigest")
+        guard id == (try requireString(configured["id"]!, at: "runner config case id")),
+              matches(digest, regex: digestPattern) else {
+            throw ValidationFailure("publication journal cases mismatch")
+        }
+        expectedCases.append((id, digest))
+    }
+
+    var draftInformation = stat()
+    let draftExists = fstatat(evidenceDirectory, "verify-draft.json", &draftInformation, AT_SYMLINK_NOFOLLOW) == 0
+    if draftExists {
+        let draftData = try readBoundRegularFile(
+            rootFileDescriptor: evidenceDirectory, components: ["verify-draft.json"], at: "recovered draft"
+        )
+        guard "sha256:\(sha256(data: draftData))" == draftDigest else {
+            throw ValidationFailure("publication journal does not match canonical draft")
+        }
+    }
+    for expectedCase in expectedCases {
+        let caseDirectory = try openBoundDirectory(
+            rootFileDescriptor: evidenceDirectory, components: [expectedCase.id],
+            at: "publication recovery case directory"
+        )
+        defer { close(caseDirectory) }
+        var screenshotInformation = stat()
+        if fstatat(caseDirectory, "screenshot.png", &screenshotInformation, AT_SYMLINK_NOFOLLOW) == 0 {
+            let data = try readBoundRegularFile(
+                rootFileDescriptor: caseDirectory, components: ["screenshot.png"], at: "recovered screenshot"
+            )
+            guard "sha256:\(sha256(data: data))" == expectedCase.digest else {
+                throw ValidationFailure("publication journal does not match canonical screenshot")
+            }
+            if !draftExists {
+                guard unlinkat(caseDirectory, "screenshot.png", 0) == 0, fsync(caseDirectory) == 0 else {
+                    throw ValidationFailure("interrupted screenshot publication could not be recovered")
+                }
+            }
+        } else if errno != ENOENT || draftExists {
+            throw ValidationFailure("publication journal references an unavailable screenshot")
+        }
+    }
+    guard unlinkat(evidenceDirectory, ".verify-publication-journal.json", 0) == 0,
+          fsync(evidenceDirectory) == 0 else {
+        throw ValidationFailure("publication journal could not be cleared")
+    }
+}
+
 func recordRunnerFailure(_ options: RunnerFailureOptions) throws -> String {
     guard options.issue > 0,
           matches(options.expectedBase, regex: shaPattern),
           matches(options.expectedHead, regex: shaPattern),
-          options.expectedBase != options.expectedHead,
           options.stage.range(of: "^[A-Za-z0-9_.-]{1,80}$", options: .regularExpression) != nil,
           !options.message.isEmpty, options.message.utf8.count <= 240,
           !options.message.contains("\n"), !options.message.contains("\r"), !options.message.contains("\0") else {
         throw ValidationFailure("runner failure inputs are invalid")
     }
-    let repository = try validateTrustedRepository(
-        expectedBase: options.expectedBase, expectedHead: options.expectedHead
-    )
+    let repository = try validateFailureRepository(expectedHead: options.expectedHead)
     defer { close(repository.rootFileDescriptor) }
     let evidenceDirectory = try ensureCanonicalEvidenceDirectory(
         repository: repository, issue: options.issue, head: options.expectedHead
@@ -2045,13 +2347,17 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
     let matrixPath = try requireString(config["matrixPath"]!, at: "runner config matrixPath")
     let contractDigest = try requireString(config["contractDigest"]!, at: "runner config contractDigest")
     let matrixDigest = try requireString(config["matrixDigest"]!, at: "runner config matrixDigest")
+    let projectReference = try requireObject(config["project"]!, at: "runner config project")
+    let projectPath = try requireString(projectReference["path"]!, at: "runner config project.path")
+    let projectDigest = try requireString(projectReference["digest"]!, at: "runner config project.digest")
     try verifyRunnerInputs(
         options: RunnerSnapshotOptions(
             issue: options.issue, expectedBase: options.expectedBase, expectedHead: options.expectedHead,
-            issueContract: contractPath, matrix: matrixPath
+            issueContract: contractPath, matrix: matrixPath, project: projectPath
         ),
         contractDigest: contractDigest,
-        matrixDigest: matrixDigest
+        matrixDigest: matrixDigest,
+        projectDigest: projectDigest
     )
     let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
     guard options.configPath == attemptRoot + "/config.json",
@@ -2108,7 +2414,10 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
         "issueContract": ["path": contractPath, "digest": contractDigest],
         "matrixFile": matrixPath, "matrixDigest": matrixDigest,
         "executionRoute": "xcodebuild-simctl", "xcode": config["xcode"]!,
-        "build": ["status": "passed", "scheme": options.scheme, "warningsAdded": 0],
+        "build": [
+            "status": "passed", "scheme": options.scheme, "warningsAdded": 0,
+            "project": projectReference
+        ],
         "tests": ["status": "passed", "passed": options.passed, "failed": 0, "skipped": 0],
         "cases": draftCases, "acceptanceEvidence": executionMappings,
         "workspaceArtifacts": [
@@ -2147,12 +2456,13 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
     var publishedScreenshotCount = 0
     let snapshotOptions = RunnerSnapshotOptions(
         issue: options.issue, expectedBase: options.expectedBase, expectedHead: options.expectedHead,
-        issueContract: contractPath, matrix: matrixPath
+        issueContract: contractPath, matrix: matrixPath, project: projectPath
     )
     func revalidateDraftPublicationBoundary() throws {
         _ = try readSealedRunnerConfig(configPath: options.configPath, expectedDigest: options.configDigest)
         try verifyRunnerInputs(
-            options: snapshotOptions, contractDigest: contractDigest, matrixDigest: matrixDigest
+            options: snapshotOptions, contractDigest: contractDigest, matrixDigest: matrixDigest,
+            projectDigest: projectDigest
         )
         for index in 0..<publishedScreenshotCount {
             let canonical = try readBoundRegularFile(
@@ -2164,7 +2474,28 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
             }
         }
     }
+    let journalCases: [[String: Any]] = draftCases.map { entry in
+        ["id": entry["id"]!, "screenshotDigest": entry["screenshotDigest"]!]
+    }
+    let journal: [String: Any] = [
+        "schemaVersion": 1,
+        "issue": options.issue,
+        "headSha": options.expectedHead,
+        "draftDigest": "sha256:\(sha256(data: draftData))",
+        "cases": journalCases
+    ]
+    let journalData = try JSONSerialization.data(withJSONObject: journal, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
+    var journalPublished = false
+    var draftPublished = false
     do {
+        try publishGeneratedData(
+            directoryFileDescriptor: evidenceDirectory,
+            canonicalName: ".verify-publication-journal.json",
+            temporaryPrefix: ".publication-journal-candidate",
+            data: journalData,
+            beforeLink: revalidateDraftPublicationBoundary
+        )
+        journalPublished = true
         for index in screenshotDirectories.indices {
             try publishGeneratedData(
                 directoryFileDescriptor: screenshotDirectories[index],
@@ -2182,10 +2513,22 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
             data: draftData,
             beforeLink: revalidateDraftPublicationBoundary
         )
+        draftPublished = true
+        guard unlinkat(evidenceDirectory, ".verify-publication-journal.json", 0) == 0,
+              fsync(evidenceDirectory) == 0 else {
+            throw ValidationFailure("publication journal could not be cleared")
+        }
+        journalPublished = false
     } catch {
-        for index in 0..<publishedScreenshotCount {
-            _ = unlinkat(screenshotDirectories[index], "screenshot.png", 0)
-            _ = fsync(screenshotDirectories[index])
+        if !draftPublished {
+            for index in 0..<publishedScreenshotCount {
+                _ = unlinkat(screenshotDirectories[index], "screenshot.png", 0)
+                _ = fsync(screenshotDirectories[index])
+            }
+            if journalPublished {
+                _ = unlinkat(evidenceDirectory, ".verify-publication-journal.json", 0)
+                _ = fsync(evidenceDirectory)
+            }
         }
         throw error
     }
@@ -2245,7 +2588,10 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
           try validateXcodeIdentity(draft["xcode"]!, at: "draft xcode") == matrix.xcode else {
         throw ValidationFailure("draft execution identity is invalid")
     }
-    try validateBuild(draft["build"]!, documentationOnly: false)
+    try validateBuild(
+        draft["build"]!, documentationOnly: false,
+        repository: repository, expectedHead: options.expectedHead
+    )
     try validateTests(draft["tests"]!, documentationOnly: false)
     let draftCases = try requireArray(draft["cases"]!, at: "draft cases")
     guard draftCases.count == 4 else { throw ValidationFailure("draft must contain exact four cases") }
@@ -2554,7 +2900,10 @@ func validate(options: Options) throws {
         guard xcode == matrix.xcode else {
             throw ValidationFailure("xcode identity must exactly match matrixFile.xcode")
         }
-        try validateBuild(root["build"]!, documentationOnly: false)
+        try validateBuild(
+            root["build"]!, documentationOnly: false,
+            repository: repository, expectedHead: headSha
+        )
         try validateTests(root["tests"]!, documentationOnly: false)
         try validateApplicationCases(
             root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
@@ -2568,6 +2917,10 @@ func validate(options: Options) throws {
         let contractPath = try requireString(contractReference["path"]!, at: "issueContract.path")
         let contractDigest = try requireString(contractReference["digest"]!, at: "issueContract.digest")
         let matrixDigest = try requireString(root["matrixDigest"]!, at: "matrixDigest")
+        let buildReference = try requireObject(root["build"]!, at: "build")
+        let projectReference = try requireObject(buildReference["project"]!, at: "build.project")
+        let projectPath = try requireString(projectReference["path"]!, at: "build.project.path")
+        let projectDigest = try requireString(projectReference["digest"]!, at: "build.project.digest")
         candidatePublicationCheck = {
             try verifyRunnerInputs(
                 options: RunnerSnapshotOptions(
@@ -2575,10 +2928,12 @@ func validate(options: Options) throws {
                     expectedBase: options.expectedBase,
                     expectedHead: options.expectedHead,
                     issueContract: contractPath,
-                    matrix: matrixPath
+                    matrix: matrixPath,
+                    project: projectPath
                 ),
                 contractDigest: contractDigest,
-                matrixDigest: matrixDigest
+                matrixDigest: matrixDigest,
+                projectDigest: projectDigest
             )
             try validateApplicationCases(
                 root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
@@ -2634,7 +2989,7 @@ do {
         FileHandle.standardOutput.write(try runnerSnapshot(options: options))
         FileHandle.standardOutput.write(Data("\n".utf8))
     } else if arguments.first == "--runner-check-inputs" {
-        guard arguments.count == 15 else { throw ValidationFailure("invalid runner input-check arguments") }
+        guard arguments.count == 19 else { throw ValidationFailure("invalid runner input-check arguments") }
         var values: [String: String] = [:]
         var index = 1
         while index < arguments.count {
@@ -2647,13 +3002,19 @@ do {
             "--expected-base", values["--expected-base"] ?? "",
             "--expected-head", values["--expected-head"] ?? "",
             "--issue-contract", values["--issue-contract"] ?? "",
-            "--matrix", values["--matrix"] ?? ""
+            "--matrix", values["--matrix"] ?? "",
+            "--project", values["--project"] ?? ""
         ]
         let options = try parseRunnerSnapshotOptions(snapshotArguments)
-        guard let contractDigest = values["--contract-digest"], let matrixDigest = values["--matrix-digest"], values.count == 7 else {
+        guard let contractDigest = values["--contract-digest"],
+              let matrixDigest = values["--matrix-digest"],
+              let projectDigest = values["--project-digest"], values.count == 9 else {
             throw ValidationFailure("invalid runner input-check arguments")
         }
-        try verifyRunnerInputs(options: options, contractDigest: contractDigest, matrixDigest: matrixDigest)
+        try verifyRunnerInputs(
+            options: options, contractDigest: contractDigest, matrixDigest: matrixDigest,
+            projectDigest: projectDigest
+        )
     } else if arguments.first == "--runner-config" {
         guard arguments.count >= 6, arguments[1] == "--config", arguments[3] == "--digest" else {
             throw ValidationFailure("invalid runner config arguments")
@@ -2670,6 +3031,25 @@ do {
             throw ValidationFailure("invalid runner lock-holder arguments")
         }
         try holdRunnerLock(configPath: arguments[2], expectedDigest: arguments[4])
+    } else if arguments.first == "--runner-recover-publication" {
+        guard arguments.count == 11 else { throw ValidationFailure("invalid runner publication recovery arguments") }
+        var values: [String: String] = [:]
+        var index = 1
+        while index < arguments.count {
+            guard values[arguments[index]] == nil else { throw ValidationFailure("duplicate runner publication recovery argument") }
+            values[arguments[index]] = arguments[index + 1]
+            index += 2
+        }
+        guard let config = values["--config"], let digest = values["--digest"],
+              let issueText = values["--issue"], let issue = Int(issueText),
+              let expectedBase = values["--expected-base"], let expectedHead = values["--expected-head"],
+              values.count == 5 else {
+            throw ValidationFailure("invalid runner publication recovery arguments")
+        }
+        try recoverRunnerPublication(
+            configPath: config, configDigest: digest, issue: issue,
+            expectedBase: expectedBase, expectedHead: expectedHead
+        )
     } else if arguments.first == "--runner-clean-attempt" {
         guard arguments.count == 5, arguments[1] == "--config", arguments[3] == "--digest" else {
             throw ValidationFailure("invalid runner cleanup arguments")
@@ -2759,15 +3139,17 @@ do {
             configPath: arguments[2], configDigest: arguments[4],
             derivedDataPath: arguments[6], bundleIdentifier: arguments[8]
         )
-        print(result.path + "\t" + result.digest)
+        print(result.path + "\t" + result.digest + "\t" + result.executable)
     } else if arguments.first == "--runner-check-app" {
-        guard arguments.count == 9, arguments[1] == "--config", arguments[3] == "--digest",
-              arguments[5] == "--app", arguments[7] == "--bundle-digest" else {
+        guard arguments.count == 11, arguments[1] == "--config", arguments[3] == "--digest",
+              arguments[5] == "--app", arguments[7] == "--bundle-digest",
+              arguments[9] == "--executable" else {
             throw ValidationFailure("invalid staged application check arguments")
         }
         try validateStagedApplication(
             configPath: arguments[2], configDigest: arguments[4],
-            appPath: arguments[6], expectedBundleDigest: arguments[8]
+            appPath: arguments[6], expectedBundleDigest: arguments[8],
+            expectedExecutable: arguments[10]
         )
     } else {
         let options = try parseOptions(arguments)

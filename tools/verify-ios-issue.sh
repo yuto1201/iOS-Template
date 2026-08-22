@@ -1,7 +1,10 @@
 #!/bin/bash -p
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+script_source="${BASH_SOURCE[0]}"
+script_source_directory="."
+[[ "$script_source" != */* ]] || script_source_directory="${script_source%/*}"
+script_dir="$(builtin cd -- "$script_source_directory" && /bin/pwd -P)"
 # shellcheck source=tools/lib/xcode.sh
 source "$script_dir/lib/xcode.sh"
 
@@ -143,11 +146,6 @@ repository_root="$(cd "$repository_root" && pwd -P)"
 [[ "$(pwd -P)" == "$repository_root" ]] || { echo "iOS verification failed: run from the Git top-level" >&2; exit 1; }
 head_sha="$(run_git rev-parse HEAD 2>/dev/null)" || { echo "iOS verification failed: current Git Head unavailable" >&2; exit 1; }
 [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "iOS verification failed: current Git Head is invalid" >&2; exit 1; }
-run_git rev-parse --verify "${expected_base}^{commit}" >/dev/null 2>&1 || { echo "iOS verification failed: expected Base is not a commit" >&2; exit 1; }
-[[ "$expected_base" != "$head_sha" ]] || { echo "iOS verification failed: Base and Head must differ" >&2; exit 1; }
-run_git merge-base --is-ancestor "$expected_base" "$head_sha" || { echo "iOS verification failed: expected Base is not an ancestor of current Git Head" >&2; exit 1; }
-[[ -z "$(run_git status --porcelain --untracked-files=all)" ]] || { echo "iOS verification failed: working tree must be clean" >&2; exit 1; }
-
 evidence_dir="$repository_root/.artifacts/issues/$issue/$head_sha"
 stage="preflight"
 fail() {
@@ -163,6 +161,11 @@ fail() {
   echo "iOS verification failed: $message" >&2
   exit 1
 }
+
+run_git rev-parse --verify "${expected_base}^{commit}" >/dev/null 2>&1 || fail "expected Base is not a commit"
+[[ "$expected_base" != "$head_sha" ]] || fail "Base and Head must differ"
+run_git merge-base --is-ancestor "$expected_base" "$head_sha" || fail "expected Base is not an ancestor of current Git Head"
+[[ -z "$(run_git status --porcelain --untracked-files=all)" ]] || fail "working tree must be clean"
 
 if [[ "$mode" == "finalize" ]]; then
   expected_draft=".artifacts/issues/$issue/$head_sha/verify-draft.json"
@@ -193,18 +196,18 @@ fi
 expected_contract=".artifacts/issues/$issue/issue-contract.json"
 [[ "$issue_contract" == "$expected_contract" ]] || fail "issue contract must use the canonical path"
 [[ "$matrix" =~ ^\.artifacts/batches/[A-Za-z0-9][A-Za-z0-9-]{0,63}/simulator-matrix\.json$ ]] || fail "matrix must use the canonical path"
-[[ "$project" != /* && "$project" != *".."* && -d "$repository_root/$project" && ! -L "$repository_root/$project" ]] || fail "project path is invalid"
 [[ "$scheme" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "scheme is invalid"
 
 stage="input-validation"
 select_initial_xcode_environment || fail "Xcode tools could not be derived"
 if ! snapshot_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-snapshot \
   --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
-  --issue-contract "$issue_contract" --matrix "$matrix" 2>&1)"; then
+  --issue-contract "$issue_contract" --matrix "$matrix" --project "$project" 2>&1)"; then
   diagnostic="$snapshot_receipt"
   case "$diagnostic" in
     *"lock"*) fail "verification lock is already held" ;;
     *"verification"*) fail "verification contract is absent or incomplete" ;;
+    *"project"*) fail "project path or contents are invalid" ;;
     *) fail "contract or matrix validation failed" ;;
   esac
 fi
@@ -220,6 +223,7 @@ config_check() {
 }
 active_udid=""
 active_bundle=""
+active_probe_pid=""
 runner_succeeded=0
 lock_holder_pid=""
 run_state="$attempt_root"
@@ -227,6 +231,10 @@ release_runner() {
   local status="$?"
   if [[ -n "$active_udid" && -n "$active_bundle" ]]; then
     run_xcrun simctl terminate "$active_udid" "$active_bundle" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$active_probe_pid" ]]; then
+    /bin/kill -TERM "$active_probe_pid" >/dev/null 2>&1 || true
+    wait "$active_probe_pid" >/dev/null 2>&1 || true
   fi
   exec 9>&- || true
   if [[ -n "$lock_holder_pid" ]]; then
@@ -245,8 +253,47 @@ trap release_runner EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+run_xcrun_bounded() {
+  local output_path="$1" error_path="$2" result=0 iteration
+  shift 2
+  run_xcrun "$@" >"$output_path" 2>"$error_path" &
+  active_probe_pid="$!"
+  for ((iteration = 0; iteration < 100; iteration++)); do
+    if ! /bin/kill -0 "$active_probe_pid" >/dev/null 2>&1; then
+      wait "$active_probe_pid" || result="$?"
+      active_probe_pid=""
+      return "$result"
+    fi
+    /bin/sleep 0.05
+  done
+  /bin/kill -TERM "$active_probe_pid" >/dev/null 2>&1 || true
+  wait "$active_probe_pid" >/dev/null 2>&1 || true
+  active_probe_pid=""
+  return 124
+}
+
 config_check || fail "verification workspace receipt is invalid"
 [[ "$(config_value workspaceRoot)" == "$workspace_root" && "$(config_value attemptRoot)" == "$attempt_root" && "$(config_value lockPath)" == "$lock_path" && "$(config_value lockReadyFIFO)" == "$lock_ready_fifo" && "$(config_value lockControlFIFO)" == "$lock_control_fifo" ]] || fail "verification workspace identity mismatch"
+project="$(config_value project.path)"
+project_digest="$(config_value project.digest)"
+contract_digest="$(config_value contractDigest)"
+matrix_digest="$(config_value matrixDigest)"
+verify_live_inputs() {
+  local input_diagnostic
+  config_check || fail "verification config changed during verification"
+  if ! input_diagnostic="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-inputs \
+    --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
+    --issue-contract "$issue_contract" --matrix "$matrix" --project "$project" \
+    --contract-digest "$contract_digest" --matrix-digest "$matrix_digest" \
+    --project-digest "$project_digest" 2>&1)"; then
+    case "$input_diagnostic" in
+      *"contract changed"*) fail "contract changed during verification" ;;
+      *"matrix changed"*) fail "matrix changed during verification" ;;
+      *"project"*) fail "project changed during verification" ;;
+      *) fail "verification inputs changed during verification" ;;
+    esac
+  fi
+}
 run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-lock-holder \
   --config "$config" --digest "$config_digest" <"$lock_control_fifo" >"$lock_ready_fifo" &
 lock_holder_pid="$!"
@@ -258,6 +305,13 @@ if ! read -r -t 30 lock_status <"$lock_ready_fifo" || [[ "$lock_status" != "LOCK
     --config "$config" --digest "$config_digest" >/dev/null 2>&1 || true
   fail "verification lock is already held"
 fi
+
+stage="publication-recovery"
+verify_live_inputs
+run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-recover-publication \
+  --config "$config" --digest "$config_digest" --issue "$issue" \
+  --expected-base "$expected_base" --expected-head "$head_sha" \
+  >/dev/null 2>"$run_state/publication-recovery-error" || fail "interrupted draft publication could not be recovered"
 
 stage="xcode-resolution"
 if ! probe_xcode_environment; then
@@ -317,11 +371,12 @@ if ! app_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --r
   --bundle-identifier "$bundle_identifier" 2>"$run_state/app-lookup-error")"; then
   fail "built application matching the verification bundle identifier was not found safely"
 fi
-IFS=$'\t' read -r app_path app_digest <<<"$app_receipt"
-[[ -n "$app_path" && "$app_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "built application staging receipt is invalid"
+IFS=$'\t' read -r app_path app_digest app_executable <<<"$app_receipt"
+[[ -n "$app_path" && "$app_digest" =~ ^sha256:[0-9a-f]{64}$ && "$app_executable" =~ ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$ ]] || fail "built application staging receipt is invalid"
 
 for index in 0 1 2 3; do
-  config_check || fail "verification config changed during verification"
+  stage="case-input-$index"
+  verify_live_inputs
   case_id="$(config_value cases.$index.id)"
   udid="$(config_value cases.$index.udid)"
   locale="$(config_value cases.$index.locale)"
@@ -339,10 +394,21 @@ for index in 0 1 2 3; do
   if [[ -z "$case_failed" ]]; then
     run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-app \
       --config "$config" --digest "$config_digest" --app "$app_path" \
-      --bundle-digest "$app_digest" >/dev/null 2>"$run_state/$case_id-app-validation-error" \
+      --bundle-digest "$app_digest" --executable "$app_executable" \
+      >/dev/null 2>"$run_state/$case_id-app-validation-error" \
       || fail "built application changed during verification"
   fi
   [[ -n "$case_failed" ]] || run_xcrun simctl install "$udid" "$app_path" >/dev/null 2>&1 || case_failed="install"
+  if [[ -z "$case_failed" ]]; then
+    installed_container_file="$run_state/$case_id-installed-container"
+    if run_xcrun_bounded "$installed_container_file" "$run_state/$case_id-installed-container-error" \
+        simctl get_app_container "$udid" "$bundle_identifier" app; then
+      installed_app_container="$(/bin/cat "$installed_container_file")"
+      [[ "$installed_app_container" =~ ^/[^[:cntrl:]]+\.app$ ]] || case_failed="installed application identity"
+    else
+      case_failed="installed application identity"
+    fi
+  fi
   if [[ -z "$case_failed" ]]; then
     run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1 || true
     active_udid="$udid"
@@ -358,7 +424,8 @@ for index in 0 1 2 3; do
     [[ "$launch_output" == "$launch_prefix"* && "$launch_pid" =~ ^[1-9][0-9]*$ ]] || case_failed="launch PID"
   fi
   if [[ -z "$case_failed" ]]; then
-    run_xcrun simctl spawn "$udid" /bin/kill -0 "$launch_pid" >/dev/null 2>&1 || case_failed="process liveness"
+    run_xcrun_bounded /dev/null "$run_state/$case_id-liveness-error" \
+      simctl spawn "$udid" /bin/kill -0 "$launch_pid" || case_failed="process liveness"
   fi
   if [[ -z "$case_failed" && "$action" == "testIdentifier" ]]; then
     region="${locale#*_}"
@@ -392,11 +459,31 @@ for index in 0 1 2 3; do
     if [[ -z "$case_failed" ]]; then
       json_tool test-tree "$case_tree" "$action_value" "$udid" >/dev/null 2>"$run_state/$case_id-tree-parse-error" || case_failed="UI selected test identifier"
     fi
+    if [[ -z "$case_failed" ]]; then
+      current_pid_file="$run_state/$case_id-current-pid"
+      if run_xcrun_bounded "$current_pid_file" "$run_state/$case_id-current-pid-error" \
+          simctl spawn "$udid" /usr/bin/pgrep -x "$app_executable"; then
+        launch_pid="$(/bin/cat "$current_pid_file")"
+        [[ "$launch_pid" =~ ^[1-9][0-9]*$ ]] || case_failed="current application PID"
+      else
+        case_failed="current application PID"
+      fi
+    fi
+    if [[ -z "$case_failed" ]]; then
+      current_process_file="$run_state/$case_id-current-process"
+      if run_xcrun_bounded "$current_process_file" "$run_state/$case_id-current-process-error" \
+          simctl spawn "$udid" /bin/ps -p "$launch_pid" -o command=; then
+        [[ "$(/bin/cat "$current_process_file")" == "$installed_app_container/$app_executable" ]] || case_failed="current application identity"
+      else
+        case_failed="current application identity"
+      fi
+    fi
   elif [[ -z "$case_failed" && "$action_value" != "launch-succeeded" ]]; then
     case_failed="mechanical assertion"
   fi
   if [[ -z "$case_failed" ]]; then
-    run_xcrun simctl spawn "$udid" /bin/kill -0 "$launch_pid" >/dev/null 2>&1 || case_failed="post-check process liveness"
+    run_xcrun_bounded /dev/null "$run_state/$case_id-post-check-liveness-error" \
+      simctl spawn "$udid" /bin/kill -0 "$launch_pid" || case_failed="post-check process liveness"
   fi
   screenshot_source="$attempt_root/Screenshots/$case_id.png"
   [[ ! -e "$screenshot_source" ]] || case_failed="screenshot collision"
@@ -415,19 +502,7 @@ for index in 0 1 2 3; do
 done
 
 stage="input-stability"
-config_check || fail "verification config changed during verification"
-contract_digest="$(config_value contractDigest)"
-matrix_digest="$(config_value matrixDigest)"
-if ! input_diagnostic="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-inputs \
-  --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
-  --issue-contract "$issue_contract" --matrix "$matrix" \
-  --contract-digest "$contract_digest" --matrix-digest "$matrix_digest" 2>&1)"; then
-  case "$input_diagnostic" in
-    *"contract changed"*) fail "contract changed during verification" ;;
-    *"matrix changed"*) fail "matrix changed during verification" ;;
-    *) fail "verification inputs changed during verification" ;;
-  esac
-fi
+verify_live_inputs
 [[ "$(run_git rev-parse HEAD)" == "$head_sha" ]] || fail "current Git Head changed during verification"
 [[ -z "$(run_git status --porcelain --untracked-files=all)" ]] || fail "working tree changed during verification"
 
