@@ -235,10 +235,18 @@ func iPadAirRank(_ deviceType: DeviceType) -> (generation: [Int], screen: Int)? 
     guard deviceType.name.hasPrefix("iPad Air") else {
         return nil
     }
-    let generationSource = firstCapture(in: deviceType.name, pattern: #"\(M([0-9]+(?:\.[0-9]+)*)\)"#)
-        ?? firstCapture(in: deviceType.name, pattern: #"\(([0-9]+)(?:st|nd|rd|th) generation\)"#)
-    guard let generationSource,
-          let generation = numericDotVersionComponents(in: generationSource) else {
+    let generation: [Int]
+    if let chipSource = firstCapture(in: deviceType.name, pattern: #"\(M([0-9]+(?:\.[0-9]+)*)\)"#),
+       var chipGeneration = numericDotVersionComponents(in: chipSource),
+       let chipMajor = chipGeneration.first {
+        let (modelGeneration, overflow) = chipMajor.addingReportingOverflow(4)
+        guard !overflow else { return nil }
+        chipGeneration[0] = modelGeneration
+        generation = chipGeneration
+    } else if let ordinalSource = firstCapture(in: deviceType.name, pattern: #"\(([0-9]+)(?:st|nd|rd|th) generation\)"#),
+              let ordinalGeneration = numericDotVersionComponents(in: ordinalSource) {
+        generation = ordinalGeneration
+    } else {
         return nil
     }
     let screenSource = firstCapture(in: deviceType.name, pattern: #"([0-9]+)-inch"#)

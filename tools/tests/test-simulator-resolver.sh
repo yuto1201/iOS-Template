@@ -68,6 +68,20 @@ expect_failure() {
 run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json"
 assert_matrix
 
+run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes-m4-vs-5th.json" "$fixtures/devices.json"
+ruby -rjson - "$output" <<'RUBY'
+matrix = JSON.parse(File.read(ARGV.fetch(0)))
+expected = [
+  ["ipad-en", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M4", "iPad Air 13-inch (M4)"],
+  ["ipad-ja", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M4", "iPad Air 13-inch (M4)"]
+]
+actual = matrix.fetch("cases").select { |entry| entry.fetch("family") == "iPad" }.map do |entry|
+  type = entry.fetch("deviceType")
+  [entry.fetch("id"), type.fetch("identifier"), type.fetch("name")]
+end
+abort "M4 iPad Air must outrank 5th generation and prefer 13-inch: #{actual.inspect}" unless actual == expected
+RUBY
+
 tie_runtimes="$scratch/tie-runtimes.json"
 ruby -rjson - "$fixtures/runtimes.json" "$tie_runtimes" <<'RUBY'
 source, destination = ARGV
