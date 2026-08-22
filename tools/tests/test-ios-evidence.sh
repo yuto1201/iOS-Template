@@ -536,6 +536,10 @@ prepare_fixture missing-matrix-digest
 mutate_json "$evidence_file" 'document.delete("matrixDigest")'
 expect_failure missing-matrix-digest "missing keys matrixDigest"
 
+prepare_fixture missing-matrix
+rm "$fixture_root/.artifacts/batches/evidence-fixture/simulator-matrix.json"
+expect_failure missing-matrix "matrixFile is unavailable"
+
 prepare_fixture changed-matrix
 printf '\n' >>"$fixture_root/.artifacts/batches/evidence-fixture/simulator-matrix.json"
 expect_failure changed-matrix "matrixDigest does not match exact file bytes"
@@ -589,6 +593,10 @@ expect_failure extra-acceptance "must contain every Issue contract AC exactly on
 prepare_fixture visual-finding
 mutate_json "$evidence_file" 'document.fetch("visualEvaluation").fetch("findings") << "layout overlap"'
 expect_failure visual-finding "visualEvaluation must be passed without findings"
+
+prepare_fixture failed-visual-evaluation
+mutate_json "$evidence_file" 'document.fetch("visualEvaluation")["status"] = "failed"'
+expect_failure failed-visual-evaluation "visualEvaluation must be passed without findings"
 
 prepare_fixture unknown-key
 mutate_json "$evidence_file" 'document["unexpected"] = true'
