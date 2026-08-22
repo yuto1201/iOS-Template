@@ -520,6 +520,16 @@ for index in 0 1 2 3; do
       [[ "$launch_output" == "$launch_prefix"* && "$launch_pid" =~ ^[1-9][0-9]*$ ]] || case_failed="UI relaunch PID"
     fi
     if [[ -z "$case_failed" ]]; then
+      current_container_file="$run_state/$case_id-current-container"
+      if run_xcrun_bounded "$current_container_file" "$run_state/$case_id-current-container-error" \
+          simctl get_app_container "$udid" "$bundle_identifier" app; then
+        installed_app_container="$(/bin/cat "$current_container_file")"
+        [[ "$installed_app_container" =~ ^/[^[:cntrl:]]+\.app$ ]] || case_failed="current application container"
+      else
+        case_failed="current application container"
+      fi
+    fi
+    if [[ -z "$case_failed" ]]; then
       current_process_file="$run_state/$case_id-current-process"
       if run_xcrun_bounded "$current_process_file" "$run_state/$case_id-current-process-error" \
           simctl spawn "$udid" /bin/ps -ww -p "$launch_pid" -o comm=; then
