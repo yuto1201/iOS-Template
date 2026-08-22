@@ -68,6 +68,7 @@ when "test-tree"
   abort_with("test tree device is invalid") unless devices.is_a?(Array) && devices.length == 1 && devices[0].is_a?(Hash) && devices[0]["deviceId"] == expected_udid
   target, klass, method = expected_identifier.split("/", -1)
   abort_with("expected test identifier is invalid") unless [target, klass, method].all? { |entry| entry && !entry.empty? }
+  declared_method = method
   method = method.delete_suffix("()")
   test_cases = []
   visit = lambda do |node|
@@ -82,7 +83,7 @@ when "test-tree"
   abort_with("selected test tree must contain exactly one passed test") unless test_cases.length == 1
   selected = test_cases.fetch(0)
   expected_node = "#{klass}/#{method}()"
-  expected_url_suffix = "/#{target}/#{klass}/#{method}()"
+  expected_url_suffix = "/#{target}/#{klass}/#{declared_method}"
   abort_with("selected test tree identifier mismatch") unless selected["nodeIdentifier"] == expected_node && selected["nodeIdentifierURL"].is_a?(String) && selected["nodeIdentifierURL"].end_with?(expected_url_suffix) && selected["result"] == "Passed"
 when "diagnostics"
   diagnostics_path, expected_status = ARGV

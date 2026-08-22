@@ -413,17 +413,17 @@ if [[ "${1-}" == xcresulttool ]]; then
   [[ "${2-}" == get && "${3-}" == test-results ]] || { echo 'unexpected xcresulttool query' >&2; exit 1; }
   if [[ "$result_path" == */Tests.xcresult ]]; then
     passed=1 failed=0 skipped=0 total=1 udid=00000000-0000-0000-0000-000000000001
-    selected_target=TemplateAppTests selected_class=UnitSmokeTests selected_method=testUnit
+    selected_target=TemplateAppTests selected_class=UnitSmokeTests selected_method=testUnit selected_url_method='testUnit()'
     case "$(state test_mode)" in
       failed) passed=0; failed=1 ;;
       skipped) passed=0; skipped=1 ;;
       zero) passed=0; total=0 ;;
       two-summary) passed=2; total=2 ;;
-      wrong-selector) selected_method=anotherTest ;;
+      wrong-selector) selected_method=anotherTest; selected_url_method='anotherTest()' ;;
     esac
   else
     passed=1 failed=0 skipped=0 total=1
-    selected_target=TemplateAppUITests selected_class=SmokeTests selected_method=testLaunch
+    selected_target=TemplateAppUITests selected_class=SmokeTests selected_method=testLaunch selected_url_method=testLaunch
     case "$result_path" in
       */Cases/iphone-en.xcresult) udid=00000000-0000-0000-0000-000000000001 ;;
       */Cases/ipad-en.xcresult) udid=00000000-0000-0000-0000-000000000003 ;;
@@ -432,7 +432,7 @@ if [[ "${1-}" == xcresulttool ]]; then
     case "$(state ui_mode)" in
       zero) passed=0; total=0 ;;
       skipped) passed=0; skipped=1 ;;
-      wrong-selector) selected_method=anotherTest ;;
+      wrong-selector) selected_method=anotherTest; selected_url_method=anotherTest ;;
     esac
   fi
   if [[ "${4-}" == summary ]]; then
@@ -441,8 +441,8 @@ if [[ "${1-}" == xcresulttool ]]; then
     exit 0
   fi
   if [[ "${4-}" == tests ]]; then
-    printf '{"devices":[{"deviceId":"%s"}],"testNodes":[{"children":[{"children":[{"children":[{"duration":"0.1s","durationInSeconds":0.1,"name":"selected","nodeIdentifier":"%s/%s()","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s/%s/%s()","nodeType":"Test Case","result":"%s"}],"name":"suite","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s/%s","nodeType":"Test Suite","result":"%s"}],"name":"target","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s","nodeType":"Unit test bundle","result":"%s"}],"name":"Test Plan","nodeType":"Test Plan","result":"%s"}]}\n' \
-      "$udid" "$selected_class" "$selected_method" "$selected_target" "$selected_class" "$selected_method" \
+    printf '{"devices":[{"deviceId":"%s"}],"testNodes":[{"children":[{"children":[{"children":[{"duration":"0.1s","durationInSeconds":0.1,"name":"selected","nodeIdentifier":"%s/%s()","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s/%s/%s","nodeType":"Test Case","result":"%s"}],"name":"suite","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s/%s","nodeType":"Test Suite","result":"%s"}],"name":"target","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s","nodeType":"Unit test bundle","result":"%s"}],"name":"Test Plan","nodeType":"Test Plan","result":"%s"}]}\n' \
+      "$udid" "$selected_class" "$selected_method" "$selected_target" "$selected_class" "$selected_url_method" \
       "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" "$selected_target" "$selected_class" \
       "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" "$selected_target" \
       "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" \
