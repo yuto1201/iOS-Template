@@ -18,7 +18,7 @@
     "version": "26.5",
     "build": "17F42"
   },
-  "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0, "project": {"path": "TemplateApp.xcodeproj", "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"}},
+  "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0, "project": {"path": "TemplateApp.xcodeproj", "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"}, "sourceTree": {"headSha": "HEAD_SHA", "digest": "sha256:SOURCE_TREE_DIGEST", "projectPath": "TemplateApp.xcodeproj"}},
   "tests": {"status": "passed", "passed": 24, "failed": 0, "skipped": 0},
   "cases": [
     {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/settings.png", "screenshotDigest": "sha256:54808a0ac07556c8c537b0d112510e5133f12077aa3283aaf69eb3bbc45d2fbb"},

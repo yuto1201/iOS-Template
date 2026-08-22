@@ -136,19 +136,39 @@ prepare_fixture() {
   cp "$matrix_fixture" "$matrix_dir/simulator-matrix.json"
   cp -R "$fixtures/screenshots/." "$evidence_dir/"
 
-  local contract_digest matrix_digest
+  local contract_digest matrix_digest source_tree_digest
   contract_digest="$(shasum -a 256 "$issue_dir/issue-contract.json" | awk '{print $1}')"
   matrix_digest="$(shasum -a 256 "$matrix_dir/simulator-matrix.json" | awk '{print $1}')"
+  source_tree_digest="$(/usr/bin/ruby -rdigest - "$fixture_root" "$head_sha" <<'RUBY'
+repository, head = ARGV
+records = IO.popen(["/usr/bin/git", "-C", repository, "ls-tree", "-r", "-z", "--full-tree", head], "rb", &:read).split("\0", -1)
+records.pop
+digest = Digest::SHA256.new
+add = ->(value) { bytes = value.b; digest.update([bytes.bytesize].pack("Q>")); digest.update(bytes) }
+add.call("ios-template-source-tree-v1")
+add.call(head)
+records.each do |record|
+  metadata, path = record.split("\t", 2)
+  mode, type, object = metadata.split(" ")
+  next unless type == "blob"
+  blob = IO.popen(["/usr/bin/git", "-C", repository, "cat-file", "blob", object], "rb", &:read)
+  [mode, object, path].each { |value| add.call(value) }
+  add.call(blob)
+end
+puts digest.hexdigest
+RUBY
+)"
   ruby - "$fixtures/$template" "$evidence_file" \
-    "$base_sha" "$head_sha" "$older_base_sha" "$contract_digest" "$matrix_digest" <<'RUBY'
-source, destination, base_sha, head_sha, stale_sha, contract_digest, matrix_digest = ARGV
+    "$base_sha" "$head_sha" "$older_base_sha" "$contract_digest" "$matrix_digest" "$source_tree_digest" <<'RUBY'
+source, destination, base_sha, head_sha, stale_sha, contract_digest, matrix_digest, source_tree_digest = ARGV
 text = File.read(source)
 {
   "BASE_SHA" => base_sha,
   "HEAD_SHA" => head_sha,
   "STALE_SHA" => stale_sha,
   "CONTRACT_DIGEST" => contract_digest,
-  "MATRIX_DIGEST" => matrix_digest
+  "MATRIX_DIGEST" => matrix_digest,
+  "SOURCE_TREE_DIGEST" => source_tree_digest
 }.each { |key, value| text = text.gsub(key, value) }
 File.write(destination, text)
 RUBY
@@ -220,7 +240,7 @@ make_documentation_only() {
     document["matrixDigest"] = nil
     document["executionRoute"] = "none"
     document["xcode"] = nil
-    document["build"] = {"status" => "not-applicable", "scheme" => nil, "warningsAdded" => nil, "project" => nil}
+    document["build"] = {"status" => "not-applicable", "scheme" => nil, "warningsAdded" => nil, "project" => nil, "sourceTree" => nil}
     document["tests"] = {"status" => "not-applicable", "passed" => nil, "failed" => nil, "skipped" => nil}
     document["cases"] = []
     document["visualEvaluation"] = {"status" => "not-applicable", "findings" => []}
@@ -333,10 +353,18 @@ prepare_fixture wrong-project-digest
 mutate_json "$evidence_file" 'document.fetch("build").fetch("project")["digest"] = "sha256:" + "0" * 64'
 expect_failure wrong-project-digest "build.project does not match the current project at expected Head"
 
+prepare_fixture wrong-source-tree-digest
+mutate_json "$evidence_file" 'document.fetch("build").fetch("sourceTree")["digest"] = "sha256:" + "0" * 64'
+expect_failure wrong-source-tree-digest "build.sourceTree does not match exact Head"
+
+prepare_fixture wrong-source-tree-head
+mutate_json "$evidence_file" 'document.fetch("build").fetch("sourceTree")["headSha"] = "0" * 40'
+expect_failure wrong-source-tree-head "build.sourceTree identity is invalid"
+
 prepare_fixture ignored-project-content
 printf '%s\n' '*.ignored' >>"$fixture_root/.git/info/exclude"
 printf '%s\n' ignored >"$fixture_root/TemplateApp.xcodeproj/Evil.ignored"
-expect_failure ignored-project-content "project contains an untracked, ignored, or non-blob path"
+run_validator
 
 prepare_fixture missing-contract
 rm "$fixture_root/.artifacts/issues/42/issue-contract.json"

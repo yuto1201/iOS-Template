@@ -1,10 +1,18 @@
 #!/bin/bash -p
 set -euo pipefail
 
+unset CDPATH
 script_source="${BASH_SOURCE[0]}"
-script_source_directory="."
-[[ "$script_source" != */* ]] || script_source_directory="${script_source%/*}"
-script_dir="$(builtin cd -- "$script_source_directory" && /bin/pwd -P)"
+[[ "$script_source" == */* && "$script_source" != *[$'\001'-$'\037'$'\177']* ]] || {
+  echo "iOS verification failed: unsafe runner invocation path" >&2
+  exit 1
+}
+script_source_directory="${script_source%/*}"
+[[ "$script_source_directory" == /* || "$script_source_directory" == ./* ]] || script_source_directory="./$script_source_directory"
+script_dir="$({ builtin cd -P -- "$script_source_directory" >/dev/null && /bin/pwd -P; })" || {
+  echo "iOS verification failed: runner directory unavailable" >&2
+  exit 1
+}
 # shellcheck source=tools/lib/xcode.sh
 source "$script_dir/lib/xcode.sh"
 
@@ -165,8 +173,6 @@ fail() {
 run_git rev-parse --verify "${expected_base}^{commit}" >/dev/null 2>&1 || fail "expected Base is not a commit"
 [[ "$expected_base" != "$head_sha" ]] || fail "Base and Head must differ"
 run_git merge-base --is-ancestor "$expected_base" "$head_sha" || fail "expected Base is not an ancestor of current Git Head"
-[[ -z "$(run_git status --porcelain --untracked-files=all)" ]] || fail "working tree must be clean"
-
 if [[ "$mode" == "finalize" ]]; then
   expected_draft=".artifacts/issues/$issue/$head_sha/verify-draft.json"
   expected_visual=".artifacts/issues/$issue/$head_sha/visual-result.json"
@@ -198,7 +204,6 @@ expected_contract=".artifacts/issues/$issue/issue-contract.json"
 [[ "$matrix" =~ ^\.artifacts/batches/[A-Za-z0-9][A-Za-z0-9-]{0,63}/simulator-matrix\.json$ ]] || fail "matrix must use the canonical path"
 [[ "$scheme" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "scheme is invalid"
 
-stage="input-validation"
 select_initial_xcode_environment || fail "Xcode tools could not be derived"
 if ! snapshot_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-snapshot \
   --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
@@ -207,10 +212,12 @@ if ! snapshot_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift
   case "$diagnostic" in
     *"lock"*) fail "verification lock is already held" ;;
     *"verification"*) fail "verification contract is absent or incomplete" ;;
+    *"tracked"*|*"source bytes"*|*"source mode"*) fail "working tree must be clean" ;;
     *"project"*) fail "project path or contents are invalid" ;;
     *) fail "contract or matrix validation failed" ;;
   esac
 fi
+stage="input-validation"
 IFS=$'\t' read -r config config_digest workspace_root attempt_root lock_path lock_ready_fifo lock_control_fifo <<<"$snapshot_receipt"
 [[ -n "$config" && -n "$config_digest" && -n "$workspace_root" && -n "$attempt_root" && -n "$lock_path" && -n "$lock_ready_fifo" && -n "$lock_control_fifo" ]] || fail "verification workspace receipt is invalid"
 config_value() {
@@ -274,8 +281,16 @@ run_xcrun_bounded() {
 
 config_check || fail "verification workspace receipt is invalid"
 [[ "$(config_value workspaceRoot)" == "$workspace_root" && "$(config_value attemptRoot)" == "$attempt_root" && "$(config_value lockPath)" == "$lock_path" && "$(config_value lockReadyFIFO)" == "$lock_ready_fifo" && "$(config_value lockControlFIFO)" == "$lock_control_fifo" ]] || fail "verification workspace identity mismatch"
-project="$(config_value project.path)"
+project_relative="$(config_value project.path)"
+project="$(config_value buildProjectPath)"
+source_root="$(config_value sourceRoot)"
 project_digest="$(config_value project.digest)"
+source_digest="$(config_value sourceTree.digest)"
+run_snapshot_xcodebuild() (
+  unset CDPATH
+  builtin cd -P -- "$source_root" >/dev/null
+  run_xcodebuild "$@"
+)
 contract_digest="$(config_value contractDigest)"
 matrix_digest="$(config_value matrixDigest)"
 verify_live_inputs() {
@@ -283,9 +298,9 @@ verify_live_inputs() {
   config_check || fail "verification config changed during verification"
   if ! input_diagnostic="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-inputs \
     --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
-    --issue-contract "$issue_contract" --matrix "$matrix" --project "$project" \
+    --issue-contract "$issue_contract" --matrix "$matrix" --project "$project_relative" \
     --contract-digest "$contract_digest" --matrix-digest "$matrix_digest" \
-    --project-digest "$project_digest" 2>&1)"; then
+    --project-digest "$project_digest" --source-digest "$source_digest" 2>&1)"; then
     case "$input_diagnostic" in
       *"contract changed"*) fail "contract changed during verification" ;;
       *"matrix changed"*) fail "matrix changed during verification" ;;
@@ -330,7 +345,7 @@ first_udid="$(config_value cases.0.udid)"
 
 stage="build"
 build_log="$run_state/build.log"
-if ! run_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
+if ! run_snapshot_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
   -destination "platform=iOS Simulator,id=$first_udid" -derivedDataPath "$derived_data" \
   -resultBundlePath "$build_result" -parallel-testing-enabled NO build-for-testing >"$build_log" 2>&1; then
   fail "build command failed"
@@ -342,7 +357,7 @@ json_tool diagnostics "$build_diagnostics" 2>"$run_state/build-diagnostics-parse
 stage="unit-tests"
 test_log="$run_state/tests.log"
 unit_test_identifier="$(config_value unitTestIdentifier)"
-if ! run_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
+if ! run_snapshot_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
   -destination "platform=iOS Simulator,id=$first_udid" -derivedDataPath "$derived_data" \
   -resultBundlePath "$test_result" -parallel-testing-enabled NO \
   -only-testing:"$unit_test_identifier" test-without-building >"$test_log" 2>&1; then
@@ -433,7 +448,7 @@ for index in 0 1 2 3; do
     [[ ! -e "$case_result" ]] || case_failed="UI result collision"
   fi
   if [[ -z "$case_failed" && "$action" == "testIdentifier" ]]; then
-    run_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
+    run_snapshot_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived_data" \
       -resultBundlePath "$case_result" -parallel-testing-enabled NO \
       -only-testing:"$action_value" -testLanguage "$language" -testRegion "$region" \
@@ -472,7 +487,7 @@ for index in 0 1 2 3; do
     if [[ -z "$case_failed" ]]; then
       current_process_file="$run_state/$case_id-current-process"
       if run_xcrun_bounded "$current_process_file" "$run_state/$case_id-current-process-error" \
-          simctl spawn "$udid" /bin/ps -p "$launch_pid" -o command=; then
+          simctl spawn "$udid" /bin/ps -ww -p "$launch_pid" -o comm=; then
         [[ "$(/bin/cat "$current_process_file")" == "$installed_app_container/$app_executable" ]] || case_failed="current application identity"
       else
         case_failed="current application identity"
@@ -504,7 +519,6 @@ done
 stage="input-stability"
 verify_live_inputs
 [[ "$(run_git rev-parse HEAD)" == "$head_sha" ]] || fail "current Git Head changed during verification"
-[[ -z "$(run_git status --porcelain --untracked-files=all)" ]] || fail "working tree changed during verification"
 
 stage="draft-publication"
 draft_path="$evidence_dir/verify-draft.json"

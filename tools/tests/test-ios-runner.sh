@@ -60,9 +60,21 @@ func round4TestKillDuringDraftPublication() {
     _ = kill(getpid(), SIGKILL)
 }
 
+func round5TestKillBeforePublication(_ canonicalName: String) {
+    let modePath = "#{state_dir}/publication_kill_target"
+    guard let target = try? String(contentsOfFile: modePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+          !target.isEmpty, target == canonicalName else { return }
+    let markerPath = "#{state_dir}/publication-kill-" + target.replacingOccurrences(of: "/", with: "-")
+    guard !FileManager.default.fileExists(atPath: markerPath),
+          FileManager.default.createFile(atPath: markerPath, contents: Data(), attributes: nil) else { return }
+    _ = kill(getpid(), SIGKILL)
+}
+
 SWIFT
 text.sub!("typealias JSONObject", helper + "typealias JSONObject")
 text.gsub!("publishedScreenshotCount += 1", "publishedScreenshotCount += 1\n            round4TestKillDuringDraftPublication()")
+text.gsub!("guard renameatx_np(\n        directoryFileDescriptor", "round5TestKillBeforePublication(canonicalName)\n    guard renameatx_np(\n        directoryFileDescriptor")
+text.gsub!("guard renameatx_np(directory, candidateName", "round5TestKillBeforePublication(\"verify.json\")\n    guard renameatx_np(directory, candidateName")
 if text.include?("try beforeLink()")
   text.gsub!("try beforeLink()", "round3TestPublicationRace()\n    try beforeLink()")
 else
@@ -159,14 +171,23 @@ done
 [[ "$mode" != build ]] || { echo 'plain build is forbidden' >&2; exit 1; }
 if [[ "$mode" == build-for-testing ]]; then
   [[ "$(state build_mode)" != fail ]] || { echo "configured build failure TOKEN-super-secret" >&2; exit 1; }
-  derived="" result="" destination="" parallel="" previous="" destination_count=0
+  derived="" result="" destination="" parallel="" project="" previous="" destination_count=0
   for argument in "$@"; do
+    [[ "$previous" != -project ]] || project="$argument"
     [[ "$previous" != -derivedDataPath ]] || derived="$argument"
     [[ "$previous" != -resultBundlePath ]] || result="$argument"
     if [[ "$previous" == -destination ]]; then destination="$argument"; destination_count=$((destination_count + 1)); fi
     [[ "$previous" != -parallel-testing-enabled ]] || parallel="$argument"
     previous="$argument"
   done
+  [[ "$project" == */Source/TemplateApp.xcodeproj ]] || { echo 'build did not use the private raw-Head source snapshot' >&2; exit 1; }
+  source_root="${project%/TemplateApp.xcodeproj}"
+  [[ "$(/bin/pwd -P)" == "$(builtin cd "$source_root" && /bin/pwd -P)" ]] || { echo 'xcodebuild cwd escaped the private raw-Head source snapshot' >&2; exit 1; }
+  [[ "$(/bin/cat "$source_root/Sources/App.swift")" == HEAD-SOURCE ]] || { echo 'raw-Head source snapshot is incomplete' >&2; exit 1; }
+  [[ "$(/bin/cat "$source_root/Config/App.xcconfig")" == HEAD-CONFIG ]] || { echo 'raw-Head config snapshot is incomplete' >&2; exit 1; }
+  [[ ! -e "$source_root/Sources/Ignored.swift" ]] || { echo 'ignored source entered raw-Head snapshot' >&2; exit 1; }
+  mutate_path="$(state mutate_worktree_path)"
+  [[ "$(state mutate_worktree)" != 1 || -z "$mutate_path" ]] || printf '%s\n' MUTATED-WORKTREE >"$mutate_path"
   [[ "$parallel" == NO && "$destination_count" == 1 && "$destination" == *id=00000000-0000-0000-0000-000000000001 ]] || { echo 'build destination or parallel setting is invalid' >&2; exit 1; }
   app="$derived/Build/Products/Debug-iphonesimulator/TemplateApp.app"
   mkdir -p "$app" "$result"
@@ -444,10 +465,10 @@ case "$command" in
       fi
       exit 0
     fi
-    if [[ "${4-}" == /bin/ps && "${5-}" == -p && "${7-}" == -o && "${8-}" == command= ]]; then
+    if [[ "${4-}" == /bin/ps && "${5-}" == -ww && "${6-}" == -p && "${8-}" == -o && "${9-}" == comm= ]]; then
       expected_pid=4321
       [[ "$(state case_mode)" != pid-replacement || ! -e "$state_dir/ui-ran-iphone-en" || "${3-}" != "00000000-0000-0000-0000-000000000001" ]] || expected_pid=9876
-      [[ "${6-}" == "$expected_pid" ]] || { echo 'ps inspected stale application PID' >&2; exit 1; }
+      [[ "${7-}" == "$expected_pid" ]] || { echo 'ps inspected stale application PID' >&2; exit 1; }
       printf '%s\n' "/Users/fixture/Containers/${3-}/TemplateApp.app/TemplateApp"
       exit 0
     fi
@@ -553,15 +574,17 @@ RUBY
 prepare_repo() {
   local label="$1" contract_mode="${2:-valid}" head_directory="${3:-present}"
   repo="$scratch/$label/repository"
-  mkdir -p "$repo/TemplateApp.xcodeproj" "$repo/docs"
+  mkdir -p "$repo/TemplateApp.xcodeproj" "$repo/docs" "$repo/Sources" "$repo/Config"
   repo="$(cd "$repo" && pwd -P)"
   git -C "$repo" init -q
   git -C "$repo" config user.name 'Runner Test'
   git -C "$repo" config user.email 'runner@example.invalid'
   printf '%s\n' '.artifacts/' >"$repo/.gitignore"
   printf '%s\n' '{}' >"$repo/TemplateApp.xcodeproj/project.pbxproj"
+  printf '%s\n' HEAD-SOURCE >"$repo/Sources/App.swift"
+  printf '%s\n' HEAD-CONFIG >"$repo/Config/App.xcconfig"
   printf '%s\n' '# Base' >"$repo/docs/base.md"
-  git -C "$repo" add -- .gitignore TemplateApp.xcodeproj docs/base.md
+  git -C "$repo" add -- .gitignore TemplateApp.xcodeproj Sources Config docs/base.md
   git -C "$repo" commit -q -m base
   base_sha="$(git -C "$repo" rev-parse HEAD)"
   printf '%s\n' '# Head' >"$repo/docs/head.md"
@@ -581,7 +604,7 @@ prepare_repo() {
   : >"$poison_log"
   /bin/rm -f "$poison_sentinel"
   for key in build_mode test_mode ui_mode case_mode mutate_input mutate_after_case prebooted preferred_invalid \
-    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race publication_kill; do
+    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race publication_kill publication_kill_target mutate_worktree mutate_worktree_path; do
     set_state "$key" ""
   done
   for spawn_state in "$adapter_state"/spawn-*; do
@@ -590,6 +613,7 @@ prepare_repo() {
   /bin/rm -f "$adapter_state/app-mutated"
   /bin/rm -f "$adapter_state/publication-race-fired"
   /bin/rm -f "$adapter_state/publication-kill-fired" "$adapter_state/mutate-after-case-fired" "$adapter_state"/ui-ran-*
+  /bin/rm -f "$adapter_state"/publication-kill-*
 }
 
 refresh_head_paths() {
@@ -616,6 +640,9 @@ run_execute() {
   set_state app_mode "${FAKE_APP_MODE-}"
   set_state publication_race "${FAKE_PUBLICATION_RACE-}"
   set_state publication_kill "${FAKE_PUBLICATION_KILL-}"
+  set_state publication_kill_target "${FAKE_PUBLICATION_KILL_TARGET-}"
+  set_state mutate_worktree "${FAKE_MUTATE_WORKTREE-}"
+  set_state mutate_worktree_path "$repo/Sources/App.swift"
   set_state contract_path "$contract"
   set_state matrix_path "$matrix"
   set_state fallback_developer "${FAKE_FALLBACK_DEVELOPER_DIR:-$fake_developer}"
@@ -642,6 +669,7 @@ run_finalize() {
   set_state collide_final "${FAKE_COLLIDE_FINAL-}"
   set_state candidate_mode "${FAKE_CANDIDATE_MODE-}"
   set_state publication_race "${FAKE_PUBLICATION_RACE-}"
+  set_state publication_kill_target "${FAKE_PUBLICATION_KILL_TARGET-}"
   set_state candidate_path "$(dirname "$final")"
   (cd "$repo" && /usr/bin/env \
     "BASH_FUNC_cd%%=() { printf '%s\\n' bash-function-executed >>'$poison_sentinel'; builtin cd \"\$@\"; }" \
@@ -714,6 +742,25 @@ if [[ ! -e "$runner" ]]; then
   exit 1
 fi
 
+startup_stdout="$scratch/startup.stdout"
+startup_stderr="$scratch/startup.stderr"
+if (cd "$scratch" && CDPATH="$scratch" test-source/tools/verify-ios-issue.sh >"$startup_stdout" 2>"$startup_stderr"); then
+  echo "startup unexpectedly accepted missing arguments" >&2; exit 1
+fi
+[[ ! -s "$startup_stdout" ]] || { echo "hostile CDPATH contaminated startup resolution" >&2; exit 1; }
+grep -Fq 'usage:' "$startup_stderr" || { echo "relative startup did not reach the trusted runner" >&2; exit 1; }
+if (cd "$test_source/tools" && /bin/bash -p verify-ios-issue.sh >"$startup_stdout" 2>"$startup_stderr"); then
+  echo "pathless startup unexpectedly succeeded" >&2; exit 1
+fi
+grep -Fq 'unsafe runner invocation path' "$startup_stderr" || { echo "pathless startup was not rejected" >&2; exit 1; }
+control_runner="$test_source/tools/verify-ios-issue"$'\n'".sh"
+/bin/cp "$runner" "$control_runner"
+chmod +x "$control_runner"
+if "$control_runner" >"$startup_stdout" 2>"$startup_stderr"; then
+  echo "control-character startup unexpectedly succeeded" >&2; exit 1
+fi
+grep -Fq 'unsafe runner invocation path' "$startup_stderr" || { echo "control-character startup was not rejected" >&2; exit 1; }
+
 prepare_repo valid
 run_execute
 [[ ! -s "$poison_log" ]] || { echo "production dispatch used caller PATH" >&2; cat "$poison_log" >&2; exit 1; }
@@ -728,6 +775,10 @@ abort "wrong Head" unless document["headSha"] == head
 project = document.fetch("build").fetch("project")
 abort "wrong project path" unless project.fetch("path") == "TemplateApp.xcodeproj"
 abort "missing project digest" unless project.fetch("digest").match?(/\Asha256:[0-9a-f]{64}\z/)
+source_tree = document.fetch("build").fetch("sourceTree")
+abort "wrong source Head" unless source_tree.fetch("headSha") == head
+abort "wrong source project" unless source_tree.fetch("projectPath") == "TemplateApp.xcodeproj"
+abort "missing source tree digest" unless source_tree.fetch("digest").match?(/\Asha256:[0-9a-f]{64}\z/)
 abort "wrong cases" unless document["cases"].map { |entry| entry["id"] } == %w[iphone-en iphone-ja ipad-en ipad-ja]
 evidence_root = File.dirname(draft)
 document.fetch("cases").each do |entry|
@@ -898,6 +949,43 @@ if /usr/bin/awk -F '\t' '$1 == "xcodebuild" && ($0 ~ /build-for-testing$/ || $0 
   echo "ignored project reached Build" >&2; exit 1
 fi
 
+prepare_repo ignored-synchronized-source
+printf '%s\n' 'Sources/Ignored.swift' >>"$repo/.git/info/exclude"
+printf '%s\n' 'IGNORED-SOURCE' >"$repo/Sources/Ignored.swift"
+run_execute
+[[ -f "$draft" ]] || { echo "ignored source prevented isolated raw-Head execution" >&2; exit 1; }
+
+prepare_repo assume-unchanged-source
+git -C "$repo" update-index --assume-unchanged Sources/App.swift
+printf '%s\n' MUTATED >"$repo/Sources/App.swift"
+expect_execute_failure assume-unchanged-source "working tree must be clean"
+
+prepare_repo assume-unchanged-xcconfig
+git -C "$repo" update-index --assume-unchanged Config/App.xcconfig
+printf '%s\n' MUTATED >"$repo/Config/App.xcconfig"
+expect_execute_failure assume-unchanged-xcconfig "working tree must be clean"
+
+prepare_repo hostile-filter
+filter_sentinel="$scratch/filter-sentinel"
+git -C "$repo" config filter.hostile.smudge "/bin/sh -c 'printf filter-executed >>$filter_sentinel; /bin/cat'"
+git -C "$repo" config filter.hostile.clean /bin/cat
+printf '%s\n' '*.swift filter=hostile' >"$repo/.git/info/attributes"
+/bin/rm -f "$filter_sentinel"
+run_execute
+[[ ! -e "$filter_sentinel" ]] || { echo "runner executed a hostile conversion filter" >&2; exit 1; }
+
+prepare_repo missing-project-member
+git -C "$repo" rm -q Sources/App.swift
+git -C "$repo" commit -q -m 'remove project member fixture'
+refresh_head_paths
+FAKE_BUILD_MODE= expect_execute_failure missing-project-member "build command failed"
+
+prepare_repo mutate-worktree-during-build
+FAKE_MUTATE_WORKTREE=1 expect_execute_failure mutate-worktree-during-build "verification inputs changed"
+if /usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+  echo "worktree mutation reached Simulator commands" >&2; exit 1
+fi
+
 prepare_repo intermediate-project-symlink
 mkdir -p "$repo/RealProjects/TemplateApp.xcodeproj"
 printf '%s\n' '{}' >"$repo/RealProjects/TemplateApp.xcodeproj/project.pbxproj"
@@ -1062,6 +1150,21 @@ FAKE_PUBLICATION_KILL=1 expect_execute_failure killed-draft-publication "atomic 
 run_execute
 [[ -f "$draft" ]] || { echo "same-Head retry did not recover killed draft publication" >&2; exit 1; }
 [[ ! -e "$(dirname "$draft")/.verify-publication-journal.json" ]] || { echo "successful retry left publication journal" >&2; exit 1; }
+
+for canonical_name in .verify-publication-journal.json screenshot.png verify-draft.json; do
+  label="kill-before-${canonical_name//[^A-Za-z0-9]/-}"
+  prepare_repo "$label"
+  FAKE_PUBLICATION_KILL_TARGET="$canonical_name" expect_execute_failure "$label" "atomic draft publication failed"
+  run_execute
+  [[ -f "$draft" ]] || { echo "same-Head retry failed after kill before $canonical_name" >&2; exit 1; }
+done
+
+prepare_repo kill-before-final
+run_execute
+write_visual approved
+FAKE_PUBLICATION_KILL_TARGET=verify.json expect_finalize_failure kill-before-final "visual result is invalid"
+run_finalize
+[[ -f "$final" ]] || { echo "final retry failed after kill before canonical rename" >&2; exit 1; }
 
 prepare_repo concurrent-lock
 hold_file="$scratch/concurrent-hold"
