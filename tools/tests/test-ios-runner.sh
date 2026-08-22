@@ -318,6 +318,10 @@ set -euo pipefail
 state_dir="@STATE_DIR@"
 validator_binary="@VALIDATOR_BINARY@"
 state() { [[ -f "$state_dir/$1" ]] && /bin/cat "$state_dir/$1" || true; }
+[[ "${0##*/}" == swift ]] || {
+  echo 'Swift frontend was invoked directly instead of the Swift driver symlink' >&2
+  exit 1
+}
 run_swift() {
   if [[ "${1-}" == */validate-verify-json.swift ]]; then
     shift
@@ -372,6 +376,9 @@ fi
 run_swift "$@"
 SH
 chmod +x "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+/bin/mv "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift" \
+  "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend"
+/bin/ln -s swift-frontend "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
 
 cat >"$adapter_bin/xcrun" <<'SH'
 #!/bin/bash -p
@@ -552,7 +559,7 @@ chmod +x "$adapter_bin/xcrun"
 
 for adapter in "$adapter_bin/xcode-select" "$adapter_bin/xcrun" \
   "$fake_developer/usr/bin/xcodebuild" \
-  "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"; do
+  "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend"; do
   /usr/bin/sed -i '' -e "s|@STATE_DIR@|$adapter_state|g" -e "s|@FAKE_LOG@|$fake_log|g" \
     -e "s|@VALIDATOR_BINARY@|$validator_binary|g" "$adapter"
 done
@@ -859,6 +866,21 @@ if "$control_runner" >"$startup_stdout" 2>"$startup_stderr"; then
   echo "control-character startup unexpectedly succeeded" >&2; exit 1
 fi
 grep -Fq 'unsafe runner invocation path' "$startup_stderr" || { echo "control-character startup was not rejected" >&2; exit 1; }
+
+swift_driver_probe="$scratch/swift-driver-probe.swift"
+printf '%s\n' 'print("swift-driver-ok")' >"$swift_driver_probe"
+if ! swift_driver_output="$(
+  source "$test_source/tools/lib/xcode.sh"
+  select_initial_xcode_environment
+  run_xcode_swift "$swift_driver_probe"
+)"; then
+  echo "Xcode Swift dispatch did not preserve the validated driver invocation name" >&2
+  exit 1
+fi
+[[ "$swift_driver_output" == swift-driver-ok ]] || {
+  echo "Xcode Swift driver probe returned unexpected output" >&2
+  exit 1
+}
 
 prepare_repo valid
 run_execute

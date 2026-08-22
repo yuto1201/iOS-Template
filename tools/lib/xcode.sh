@@ -45,7 +45,7 @@ derive_xcode_tools() {
   [[ -e "$swift_candidate" ]] || return 1
   swift_physical="$(run_scrubbed /usr/bin/ruby --disable-gems -e 'puts File.realpath(ARGV.fetch(0))' "$swift_candidate" 2>/dev/null)" || return 1
   [[ "$swift_physical" == "$developer/"* && -f "$swift_physical" && -x "$swift_physical" ]] || return 1
-  XCODE_SWIFT_PATH="$swift_physical"
+  XCODE_SWIFT_PATH="$swift_candidate"
   XCODE_DEVELOPER_DIR="$developer"
   export XCODEBUILD_PATH XCODE_SWIFT_PATH XCODE_DEVELOPER_DIR
 }
