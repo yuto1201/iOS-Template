@@ -1148,6 +1148,8 @@ struct Options {
     let expectedIssue: Int
     let expectedBase: String
     let expectedHead: String
+    let initialVisualResultData: Data?
+    let initialVisualResultDigest: String?
 }
 
 struct ProjectIdentity {
@@ -3060,52 +3062,34 @@ func validateCanonicalRunnerDraft(
     )
 }
 
-func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
-    let repository = try validateTrustedRepository(
-        expectedBase: options.expectedBase, expectedHead: options.expectedHead
-    )
-    defer { close(repository.rootFileDescriptor) }
-    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
-    let expectedDraft = (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
-    let expectedVisual = (evidenceComponents + ["visual-result.json"]).joined(separator: "/")
-    guard options.draftPath == expectedDraft, options.visualPath == expectedVisual else {
-        throw ValidationFailure("draft and visual result must use canonical paths")
-    }
-    let validatedDraft = try validateCanonicalRunnerDraft(
-        repository: repository, issue: options.issue, expectedBase: options.expectedBase,
-        expectedHead: options.expectedHead, draftComponents: evidenceComponents + ["verify-draft.json"]
-    )
-    let draftData = validatedDraft.data
-    let visualData = try readBoundRegularFile(
-        rootFileDescriptor: repository.rootFileDescriptor,
-        components: evidenceComponents + ["visual-result.json"], at: "visual result"
-    )
-    let draft = validatedDraft.object
-    let visual = try readJSONObject(data: visualData, at: "visual result")
-    let contractReference = validatedDraft.contractReference
-    let contract = validatedDraft.contract
-    let verification = validatedDraft.verification
-    let matrixPath = validatedDraft.matrixPath
-    let matrix = validatedDraft.matrix
-    let draftCases = validatedDraft.cases
-    let executionCompleted = validatedDraft.executionCompletedAt
+struct CanonicalVisualResultValidation {
+    let object: JSONObject
+    let reviewedAt: Date
+}
 
-    let packet = try validateCanonicalVisualPacket(
-        repository: repository, issue: options.issue, expectedHead: options.expectedHead,
-        draftPath: options.draftPath, draft: validatedDraft
-    )
-    try requireExactKeys(visual, ["schemaVersion", "status", "issue", "headSha", "draft", "visualPacket", "cases", "findings", "reviewedAt"], at: "visual result")
+func validateCanonicalVisualResult(
+    data: Data,
+    issue: Int,
+    expectedHead: String,
+    draftPath: String,
+    draft: CanonicalDraftValidation,
+    packet: VisualPacketInfo
+) throws -> CanonicalVisualResultValidation {
+    let visual = try readJSONObject(data: data, at: "visual result")
+    try requireExactKeys(visual, [
+        "schemaVersion", "status", "issue", "headSha", "draft", "visualPacket", "cases", "findings", "reviewedAt"
+    ], at: "visual result")
     guard try requireInteger(visual["schemaVersion"]!, at: "visual schemaVersion") == 1,
           try requireString(visual["status"]!, at: "visual status") == "approved",
-          try requireInteger(visual["issue"]!, at: "visual issue") == options.issue,
-          try requireString(visual["headSha"]!, at: "visual headSha") == options.expectedHead,
+          try requireInteger(visual["issue"]!, at: "visual issue") == issue,
+          try requireString(visual["headSha"]!, at: "visual headSha") == expectedHead,
           try requireStringArray(visual["findings"]!, at: "visual findings").isEmpty else {
         throw ValidationFailure("visual result is not approved")
     }
     let visualDraft = try requireObject(visual["draft"]!, at: "visual draft")
     try requireExactKeys(visualDraft, ["path", "digest"], at: "visual draft")
-    guard try requireString(visualDraft["path"]!, at: "visual draft path") == options.draftPath,
-          try requireString(visualDraft["digest"]!, at: "visual draft digest") == "sha256:\(sha256(data: draftData))" else {
+    guard try requireString(visualDraft["path"]!, at: "visual draft path") == draftPath,
+          try requireString(visualDraft["digest"]!, at: "visual draft digest") == "sha256:\(sha256(data: draft.data))" else {
         throw ValidationFailure("visual draft digest mismatch")
     }
     let visualPacket = try requireObject(visual["visualPacket"]!, at: "visual visualPacket")
@@ -3119,7 +3103,7 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     for (index, value) in visualCases.enumerated() {
         let entry = try requireObject(value, at: "visual case")
         try requireExactKeys(entry, ["id", "status", "images", "findings"], at: "visual case")
-        guard try requireString(entry["id"]!, at: "visual case id") == matrix.caseIDs[index],
+        guard try requireString(entry["id"]!, at: "visual case id") == draft.matrix.caseIDs[index],
               try requireString(entry["status"]!, at: "visual case status") == "approved",
               try requireStringArray(entry["findings"]!, at: "visual case findings").isEmpty else {
             throw ValidationFailure("visual result cases mismatch or contain findings")
@@ -3141,9 +3125,49 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
         }
     }
     let reviewedAt = try requireISO8601Date(visual["reviewedAt"]!, at: "visual reviewedAt")
-    guard reviewedAt >= executionCompleted, reviewedAt <= Date().addingTimeInterval(300) else {
+    guard reviewedAt >= draft.executionCompletedAt, reviewedAt <= Date().addingTimeInterval(300) else {
         throw ValidationFailure("visual review timestamp is invalid")
     }
+    return CanonicalVisualResultValidation(object: visual, reviewedAt: reviewedAt)
+}
+
+func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+    )
+    defer { close(repository.rootFileDescriptor) }
+    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
+    let expectedDraft = (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
+    let expectedVisual = (evidenceComponents + ["visual-result.json"]).joined(separator: "/")
+    guard options.draftPath == expectedDraft, options.visualPath == expectedVisual else {
+        throw ValidationFailure("draft and visual result must use canonical paths")
+    }
+    let validatedDraft = try validateCanonicalRunnerDraft(
+        repository: repository, issue: options.issue, expectedBase: options.expectedBase,
+        expectedHead: options.expectedHead, draftComponents: evidenceComponents + ["verify-draft.json"]
+    )
+    let visualData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: evidenceComponents + ["visual-result.json"], at: "visual result"
+    )
+    let draft = validatedDraft.object
+    let visualDigest = sha256(data: visualData)
+    let contractReference = validatedDraft.contractReference
+    let contract = validatedDraft.contract
+    let verification = validatedDraft.verification
+    let matrixPath = validatedDraft.matrixPath
+    let matrix = validatedDraft.matrix
+    let draftCases = validatedDraft.cases
+
+    let packet = try validateCanonicalVisualPacket(
+        repository: repository, issue: options.issue, expectedHead: options.expectedHead,
+        draftPath: options.draftPath, draft: validatedDraft
+    )
+    let validatedVisual = try validateCanonicalVisualResult(
+        data: visualData, issue: options.issue, expectedHead: options.expectedHead,
+        draftPath: options.draftPath, draft: validatedDraft, packet: packet
+    )
+    let visual = validatedVisual.object
     let finalCases: [[String: Any]] = try matrix.caseIDs.enumerated().map { index, id in
         let draftEntry = try requireObject(draftCases[index], at: "draft case")
         return [
@@ -3197,7 +3221,8 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     let candidatePath = repository.rootPath + "/" + (evidenceComponents + [candidateName]).joined(separator: "/")
     try validate(options: Options(
         file: finalPath, candidateFile: candidatePath, expectedIssue: options.issue,
-        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead,
+        initialVisualResultData: visualData, initialVisualResultDigest: visualDigest
     ))
     return finalPath
 }
@@ -3769,7 +3794,9 @@ func parseOptions(_ arguments: [String]) throws -> Options {
         candidateFile: candidateFile,
         expectedIssue: expectedIssue,
         expectedBase: expectedBase,
-        expectedHead: expectedHead
+        expectedHead: expectedHead,
+        initialVisualResultData: nil,
+        initialVisualResultDigest: nil
     )
 }
 
@@ -3911,6 +3938,37 @@ func validate(options: Options) throws {
             repository: repository, issue: issue, expectedHead: headSha,
             draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json", draft: canonicalDraft
         )
+        let visualResultComponents = [
+            ".artifacts", "issues", String(issue), headSha, "visual-result.json"
+        ]
+        let initialVisualResultData: Data?
+        let initialVisualResultDigest: String?
+        if candidateName != nil {
+            guard let expectedVisualData = options.initialVisualResultData,
+                  let expectedVisualDigest = options.initialVisualResultDigest,
+                  sha256(data: expectedVisualData) == expectedVisualDigest else {
+                throw ValidationFailure("initial visual result validation state is unavailable")
+            }
+            let currentVisualData = try readBoundRegularFile(
+                rootFileDescriptor: repository.rootFileDescriptor,
+                components: visualResultComponents,
+                at: "visual result"
+            )
+            guard currentVisualData == expectedVisualData,
+                  sha256(data: currentVisualData) == expectedVisualDigest else {
+                throw ValidationFailure("visual result changed before publication")
+            }
+            _ = try validateCanonicalVisualResult(
+                data: currentVisualData, issue: issue, expectedHead: headSha,
+                draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json",
+                draft: canonicalDraft, packet: visualPacket
+            )
+            initialVisualResultData = expectedVisualData
+            initialVisualResultDigest = expectedVisualDigest
+        } else {
+            initialVisualResultData = nil
+            initialVisualResultDigest = nil
+        }
         try validateApplicationVisual(root["visualEvaluation"]!, packet: visualPacket)
         try validateAcceptanceEvidence(
             root["acceptanceEvidence"]!, contractIDs: contract.acceptanceIDs, documentationOnly: false,
@@ -3951,6 +4009,24 @@ func validate(options: Options) throws {
             let currentPacket = try validateCanonicalVisualPacket(
                 repository: repository, issue: issue, expectedHead: headSha,
                 draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json", draft: currentDraft
+            )
+            guard let expectedVisualData = initialVisualResultData,
+                  let expectedVisualDigest = initialVisualResultDigest else {
+                throw ValidationFailure("initial visual result validation state is unavailable")
+            }
+            let currentVisualData = try readBoundRegularFile(
+                rootFileDescriptor: repository.rootFileDescriptor,
+                components: visualResultComponents,
+                at: "visual result"
+            )
+            guard currentVisualData == expectedVisualData,
+                  sha256(data: currentVisualData) == expectedVisualDigest else {
+                throw ValidationFailure("visual result changed before publication")
+            }
+            _ = try validateCanonicalVisualResult(
+                data: currentVisualData, issue: issue, expectedHead: headSha,
+                draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json",
+                draft: currentDraft, packet: currentPacket
             )
             try validateApplicationVisual(root["visualEvaluation"]!, packet: currentPacket)
         }

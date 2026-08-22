@@ -30,7 +30,7 @@ func round3TestPublicationRace() {
     let markerPath = "#{state_dir}/publication-race-fired"
     guard !FileManager.default.fileExists(atPath: markerPath),
           let mode = try? String(contentsOfFile: modePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-          ["contract", "matrix", "candidate", "image-bytes", "image-set", "packet"].contains(mode),
+          ["contract", "matrix", "candidate", "image-bytes", "image-set", "packet", "visual-result"].contains(mode),
           let target = try? String(contentsOfFile: "#{state_dir}/" + mode + "_path", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
           !target.isEmpty,
           FileManager.default.createFile(atPath: markerPath, contents: Data(), attributes: nil) else { return }
@@ -57,6 +57,15 @@ func round3TestPublicationRace() {
         try? file.synchronize()
         try? file.close()
         try? FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: target)
+        return
+    }
+    if mode == "visual-result" {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: target)),
+              var document = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        document["status"] = "rejected"
+        document["findings"] = ["approval withdrawn"]
+        guard let changed = try? JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]) else { return }
+        try? (changed + Data("\\n".utf8)).write(to: URL(fileURLWithPath: target), options: [.atomic])
         return
     }
     guard let file = FileHandle(forWritingAtPath: target) else { return }
@@ -736,6 +745,7 @@ run_finalize() {
   set_state publication_kill_after_target "${FAKE_PUBLICATION_KILL_AFTER_TARGET-}"
   set_state candidate_path "$(dirname "$final")"
   set_state packet_path "$(dirname "$final")/visual-packet.json"
+  set_state visual-result_path "$visual"
   set_state image-bytes_path "$(dirname "$final")/iphone-en/settings-open.png"
   set_state image-set_path "$(dirname "$final")/iphone-en"
   (cd "$repo" && /usr/bin/env \
@@ -1256,6 +1266,11 @@ prepare_repo final-publication-race-packet
 run_execute
 write_visual approved
 FAKE_PUBLICATION_RACE=packet expect_finalize_failure final-publication-race-packet "visual result is invalid"
+
+prepare_repo final-publication-race-visual-result
+run_execute
+write_visual approved
+FAKE_PUBLICATION_RACE=visual-result expect_finalize_failure final-publication-race-visual-result "visual result is invalid"
 
 for source in contract matrix; do
   prepare_repo "mutated-after-case-$source"
