@@ -82,7 +82,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 | iPhone | `iPhone 17 Pro` (`com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro`、Pro Maxを除外) |
 | iPad | `iPad Air 13-inch (M4)` (`com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M4`) |
 
-検証ケースは `iphone-en` (`en_US`/`en`)、`iphone-ja` (`ja_JP`/`ja`)、`ipad-en` (`en_US`/`en`)、`ipad-ja` (`ja_JP`/`ja`) の固定順です。選択Testは合計5実行で、Unit Test 1件 `TemplateAppTests/TemplateAppTests/welcomeMessageLocalizations` と、各caseでUI Test 1件ずつ（英語caseは `TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle`、日本語caseは `TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle`）を実行します。
+検証ケースは `iphone-en` (`en_US`/`en`)、`iphone-ja` (`ja_JP`/`ja`)、`ipad-en` (`en_US`/`en`)、`ipad-ja` (`ja_JP`/`ja`) の固定順です。選択Testは合計5実行で、Unit Test 1件 `TemplateAppTests/TemplateAppTests/welcomeMessageLocalizations()` と、各caseでUI Test 1件ずつ（英語caseは `TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle`、日本語caseは `TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle`）を実行します。
 
 初回のmatrix解決は、Repository全体のSimulator lock下で次を実行します。
 

@@ -68,6 +68,7 @@ when "test-tree"
   abort_with("test tree device is invalid") unless devices.is_a?(Array) && devices.length == 1 && devices[0].is_a?(Hash) && devices[0]["deviceId"] == expected_udid
   target, klass, method = expected_identifier.split("/", -1)
   abort_with("expected test identifier is invalid") unless [target, klass, method].all? { |entry| entry && !entry.empty? }
+  method = method.delete_suffix("()")
   test_cases = []
   visit = lambda do |node|
     if node.is_a?(Hash)
@@ -84,11 +85,13 @@ when "test-tree"
   expected_url_suffix = "/#{target}/#{klass}/#{method}()"
   abort_with("selected test tree identifier mismatch") unless selected["nodeIdentifier"] == expected_node && selected["nodeIdentifierURL"].is_a?(String) && selected["nodeIdentifierURL"].end_with?(expected_url_suffix) && selected["result"] == "Passed"
 when "diagnostics"
-  diagnostics = JSON.parse(File.read(ARGV.fetch(0)))
+  diagnostics_path, expected_status = ARGV
+  diagnostics = JSON.parse(File.read(diagnostics_path))
   warning_count = integer!(diagnostics["warningCount"], "warningCount", 0)
   analyzer_count = integer!(diagnostics["analyzerWarningCount"], "analyzerWarningCount", 0)
   error_count = integer!(diagnostics["errorCount"], "errorCount", 0)
-  abort_with("structured diagnostics status is not succeeded") unless diagnostics["status"] == "succeeded"
+  abort_with("expected diagnostics status is invalid") unless %w[succeeded notRequested].include?(expected_status)
+  abort_with("structured diagnostics status mismatch") unless diagnostics["status"] == expected_status
   %w[warnings analyzerWarnings errors].each do |key|
     abort_with("structured diagnostics #{key} must be empty") unless diagnostics[key].is_a?(Array) && diagnostics[key].empty?
   end
@@ -384,7 +387,7 @@ if ! run_snapshot_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesi
 fi
 build_diagnostics="$run_state/build-diagnostics.json"
 run_xcrun xcresulttool get build-results --schema-version 0.1.0 --path "$build_result" --compact >"$build_diagnostics" 2>"$run_state/build-diagnostics-error" || fail "build diagnostics failed"
-json_tool diagnostics "$build_diagnostics" 2>"$run_state/build-diagnostics-parse-error" || fail "build warnings are not allowed"
+json_tool diagnostics "$build_diagnostics" succeeded 2>"$run_state/build-diagnostics-parse-error" || fail "build warnings are not allowed"
 
 stage="unit-tests"
 test_log="$run_state/tests.log"
@@ -397,7 +400,7 @@ if ! run_snapshot_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesi
 fi
 test_diagnostics="$run_state/test-diagnostics.json"
 run_xcrun xcresulttool get build-results --schema-version 0.1.0 --path "$test_result" --compact >"$test_diagnostics" 2>"$run_state/test-diagnostics-error" || fail "unit test diagnostics failed"
-json_tool diagnostics "$test_diagnostics" 2>"$run_state/test-diagnostics-parse-error" || fail "unit test warnings are not allowed"
+json_tool diagnostics "$test_diagnostics" notRequested 2>"$run_state/test-diagnostics-parse-error" || fail "unit test warnings are not allowed"
 summary="$run_state/test-summary.json"
 if ! run_xcrun xcresulttool get test-results summary --schema-version 0.1.0 --path "$test_result" --compact >"$summary" 2>"$run_state/xcresult-error"; then
   fail "unit tests summary failed"
@@ -490,7 +493,7 @@ for index in 0 1 2 3; do
       run_xcrun xcresulttool get build-results --schema-version 0.1.0 --path "$case_result" --compact >"$case_diagnostics" 2>"$run_state/$case_id-diagnostics-error" || case_failed="UI diagnostics"
     fi
     if [[ -z "$case_failed" ]]; then
-      json_tool diagnostics "$case_diagnostics" 2>"$run_state/$case_id-diagnostics-parse-error" || case_failed="UI warnings"
+      json_tool diagnostics "$case_diagnostics" notRequested 2>"$run_state/$case_id-diagnostics-parse-error" || case_failed="UI warnings"
     fi
     if [[ -z "$case_failed" ]]; then
       case_summary="$run_state/$case_id-summary.json"

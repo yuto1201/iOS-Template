@@ -26,7 +26,7 @@ let bundleIdentifierPattern = try! NSRegularExpression(
     pattern: "^[A-Za-z0-9][A-Za-z0-9-]*(\\.[A-Za-z0-9][A-Za-z0-9-]*)+$"
 )
 let testIdentifierPattern = try! NSRegularExpression(
-    pattern: "^[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*$"
+    pattern: "^[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*(\\(\\))?$"
 )
 let iso8601Pattern = try! NSRegularExpression(
     pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
@@ -550,7 +550,7 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String]) throws 
         verification["unitTestIdentifier"]!, at: "issueContract.verification.unitTestIdentifier"
     )
     guard matches(unitTestIdentifier, regex: testIdentifierPattern) else {
-        throw ValidationFailure("issueContract.verification.unitTestIdentifier must be Target/Class/testMethod")
+        throw ValidationFailure("issueContract.verification.unitTestIdentifier must be Target/Class/testMethod with optional trailing ()")
     }
     let expectedIDs = ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
     let cases = try requireArray(verification["cases"]!, at: "issueContract.verification.cases")
@@ -572,7 +572,7 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String]) throws 
         if keys == testKeys {
             let identifier = try requireString(entry["testIdentifier"]!, at: "\(path).testIdentifier")
             guard matches(identifier, regex: testIdentifierPattern) else {
-                throw ValidationFailure("\(path).testIdentifier must be Target/Class/testMethod")
+                throw ValidationFailure("\(path).testIdentifier must be Target/Class/testMethod with optional trailing ()")
             }
             return VerificationCaseInfo(id: expectedIDs[index], action: "testIdentifier", value: identifier)
         } else {

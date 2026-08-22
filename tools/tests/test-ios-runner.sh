@@ -282,7 +282,7 @@ done
 [[ "$project" == */Source/TemplateApp.xcodeproj ]] || { echo 'test did not use the private raw-Head source snapshot' >&2; exit 1; }
 source_root="${project%/TemplateApp.xcodeproj}"
 [[ "$(/bin/pwd -P)" == "$(builtin cd "$source_root" && /bin/pwd -P)" ]] || { echo 'test cwd escaped the private raw-Head source snapshot' >&2; exit 1; }
-  if [[ "$identifier" == TemplateAppTests/UnitSmokeTests/testUnit ]]; then
+  if [[ "$identifier" == TemplateAppTests/UnitSmokeTests/testUnit\(\) ]]; then
   [[ "$(state test_mode)" != command-fail ]] || { echo 'configured unit test command failure' >&2; exit 1; }
   [[ "$destination" == *id=00000000-0000-0000-0000-000000000001 ]] || { echo 'wrong unit destination' >&2; exit 1; }
   [[ -z "$language$region" && "$result" == */Tests.xcresult ]] || { echo 'unit stage included UI locale or wrong result' >&2; exit 1; }
@@ -400,14 +400,14 @@ if [[ "${1-}" == xcresulttool ]]; then
   done
   [[ -n "$result_path" ]] || { echo 'missing xcresult path' >&2; exit 1; }
   if [[ "${3-}" == build-results ]]; then
-    warnings=0 errors=0
+    warnings=0 errors=0 status=succeeded
     case "$result_path" in
       */Build.xcresult) [[ "$(state build_mode)" != warning ]] || warnings=1 ;;
-      */Tests.xcresult) [[ "$(state test_mode)" != warning ]] || warnings=1 ;;
-      */Cases/*.xcresult) [[ "$(state ui_mode)" != warning ]] || warnings=1 ;;
+      */Tests.xcresult) status=notRequested; [[ "$(state test_mode)" != warning ]] || warnings=1 ;;
+      */Cases/*.xcresult) status=notRequested; [[ "$(state ui_mode)" != warning ]] || warnings=1 ;;
       *) echo 'unexpected diagnostics result path' >&2; exit 1 ;;
     esac
-    printf '{"status":"succeeded","analyzerWarningCount":0,"errorCount":%s,"warningCount":%s,"analyzerWarnings":[],"warnings":[],"errors":[]}\n' "$errors" "$warnings"
+    printf '{"status":"%s","analyzerWarningCount":0,"errorCount":%s,"warningCount":%s,"analyzerWarnings":[],"warnings":[],"errors":[]}\n' "$status" "$errors" "$warnings"
     exit 0
   fi
   [[ "${2-}" == get && "${3-}" == test-results ]] || { echo 'unexpected xcresulttool query' >&2; exit 1; }
@@ -595,7 +595,7 @@ document = {
   "dependencies" => [], "externalOperations" => [], "fetchedAt" => Time.now.iso8601,
   "verification" => {
     "bundleIdentifier" => "com.example.TemplateApp",
-    "unitTestIdentifier" => "TemplateAppTests/UnitSmokeTests/testUnit",
+    "unitTestIdentifier" => "TemplateAppTests/UnitSmokeTests/testUnit()",
     "cases" => cases,
     "acceptanceMappings" => mappings
   }
@@ -950,7 +950,7 @@ actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequen
     end
     if fields.last == "test-without-building"
       identifier = fields.find { |field| field.start_with?("-only-testing:") }.sub("-only-testing:", "")
-      if identifier == "TemplateAppTests/UnitSmokeTests/testUnit"
+      if identifier == "TemplateAppTests/UnitSmokeTests/testUnit()"
         sequence << "unit-test"
       else
         udid = fields.fetch(fields.index("-destination") + 1).split("id=", 2).last
