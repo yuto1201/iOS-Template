@@ -18,5 +18,19 @@
   ],
   "dependencies": [],
   "externalOperations": [],
+  "verification": {
+    "bundleIdentifier": "com.example.TemplateApp",
+    "unitTestIdentifier": "TemplateAppTests/UnitSmokeTests/testUnit",
+    "cases": [
+      {"id": "iphone-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+      {"id": "iphone-ja", "assertion": {"kind": "launch-succeeded"}},
+      {"id": "ipad-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+      {"id": "ipad-ja", "assertion": {"kind": "launch-succeeded"}}
+    ],
+    "acceptanceMappings": [
+      {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},
+      {"id": "AC-2", "checks": ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
+    ]
+  },
   "fetchedAt": "2026-08-21T12:00:00+09:00"
 }

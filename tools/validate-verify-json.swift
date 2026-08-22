@@ -88,6 +88,13 @@ func requireInteger(_ value: Any, at path: String, minimum: Int? = nil) throws -
     return integer
 }
 
+func requireBool(_ value: Any, at path: String) throws -> Bool {
+    guard let boolean = value as? Bool else {
+        throw ValidationFailure("\(path) must be a boolean")
+    }
+    return boolean
+}
+
 func requireNull(_ value: Any, at path: String) throws {
     guard value is NSNull else {
         throw ValidationFailure("\(path) must be null")
@@ -721,6 +728,7 @@ struct DeviceTypeIdentity: Equatable {
 }
 
 struct MatrixInfo {
+    let resolvedAt: Date
     let xcode: XcodeIdentity
     let runtime: RuntimeIdentity
     let cases: [MatrixCaseInfo]
@@ -829,7 +837,7 @@ func validateMatrix(
             locale: locale, language: language, udid: udid
         ))
     }
-    return MatrixInfo(xcode: xcode, runtime: runtimeIdentity, cases: normalizedCases)
+    return MatrixInfo(resolvedAt: resolvedAt, xcode: xcode, runtime: runtimeIdentity, cases: normalizedCases)
 }
 
 func validateAcceptanceEvidence(
@@ -959,6 +967,46 @@ func validateVisual(_ value: Any, documentationOnly: Bool) throws {
     let findings = try requireArray(visual["findings"]!, at: "visualEvaluation.findings")
     guard findings.isEmpty else {
         throw ValidationFailure("visualEvaluation.findings must be empty for accepted evidence")
+    }
+}
+
+func validateApplicationVisual(_ value: Any, packet: VisualPacketInfo) throws {
+    let visual = try requireObject(value, at: "visualEvaluation")
+    try requireExactKeys(visual, ["status", "packet", "cases", "findings"], at: "visualEvaluation")
+    guard try requireString(visual["status"]!, at: "visualEvaluation.status") == "passed",
+          try requireArray(visual["findings"]!, at: "visualEvaluation.findings").isEmpty else {
+        throw ValidationFailure("visualEvaluation must be passed without findings")
+    }
+    let reference = try requireObject(visual["packet"]!, at: "visualEvaluation.packet")
+    try requireExactKeys(reference, ["path", "digest"], at: "visualEvaluation.packet")
+    guard try requireString(reference["path"]!, at: "visualEvaluation.packet.path") == packet.path,
+          try requireDigestString(reference["digest"]!, at: "visualEvaluation.packet.digest") == packet.digest else {
+        throw ValidationFailure("visualEvaluation packet binding is invalid")
+    }
+    let cases = try requireArray(visual["cases"]!, at: "visualEvaluation.cases")
+    guard cases.count == packet.cases.count else { throw ValidationFailure("visualEvaluation cases mismatch") }
+    for (caseIndex, raw) in cases.enumerated() {
+        let entry = try requireObject(raw, at: "visualEvaluation case")
+        try requireExactKeys(entry, ["id", "images"], at: "visualEvaluation case")
+        guard try requireString(entry["id"]!, at: "visualEvaluation case id") == packet.cases[caseIndex].id else {
+            throw ValidationFailure("visualEvaluation cases mismatch")
+        }
+        let images = try requireArray(entry["images"]!, at: "visualEvaluation images")
+        guard images.count == packet.cases[caseIndex].images.count else {
+            throw ValidationFailure("visualEvaluation image attestations mismatch")
+        }
+        for (imageIndex, rawImage) in images.enumerated() {
+            let image = try requireObject(rawImage, at: "visualEvaluation image")
+            try requireExactKeys(image, ["state", "path", "digest", "status", "findings"], at: "visualEvaluation image")
+            let expected = packet.cases[caseIndex].images[imageIndex]
+            guard try requireString(image["state"]!, at: "visualEvaluation image state") == expected.state,
+                  try requireString(image["path"]!, at: "visualEvaluation image path") == expected.path,
+                  try requireDigestString(image["digest"]!, at: "visualEvaluation image digest") == expected.digest,
+                  try requireString(image["status"]!, at: "visualEvaluation image status") == "passed",
+                  try requireArray(image["findings"]!, at: "visualEvaluation image findings").isEmpty else {
+                throw ValidationFailure("visualEvaluation image attestations mismatch")
+            }
+        }
     }
 }
 
@@ -2868,27 +2916,37 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
     return repository.rootPath + "/" + (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
 }
 
-func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
-    let repository = try validateTrustedRepository(
-        expectedBase: options.expectedBase, expectedHead: options.expectedHead
-    )
-    defer { close(repository.rootFileDescriptor) }
-    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
-    let expectedDraft = (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
-    let expectedVisual = (evidenceComponents + ["visual-result.json"]).joined(separator: "/")
-    guard options.draftPath == expectedDraft, options.visualPath == expectedVisual else {
-        throw ValidationFailure("draft and visual result must use canonical paths")
+struct CanonicalDraftValidation {
+    let data: Data
+    let object: JSONObject
+    let evidenceComponents: [String]
+    let contractReference: JSONObject
+    let contract: IssueContract
+    let verification: VerificationInfo
+    let matrixPath: String
+    let matrixComponents: [String]
+    let matrixData: Data
+    let matrix: MatrixInfo
+    let cases: [Any]
+    let screenshotData: [Data]
+    let executionCompletedAt: Date
+}
+
+func validateCanonicalRunnerDraft(
+    repository: TrustedRepository,
+    issue: Int,
+    expectedBase: String,
+    expectedHead: String,
+    draftComponents: [String]
+) throws -> CanonicalDraftValidation {
+    let evidenceComponents = [".artifacts", "issues", String(issue), expectedHead]
+    guard draftComponents == evidenceComponents + ["verify-draft.json"] else {
+        throw ValidationFailure("draft must use the canonical Issue/Head path")
     }
     let draftData = try readBoundRegularFile(
-        rootFileDescriptor: repository.rootFileDescriptor,
-        components: evidenceComponents + ["verify-draft.json"], at: "draft"
-    )
-    let visualData = try readBoundRegularFile(
-        rootFileDescriptor: repository.rootFileDescriptor,
-        components: evidenceComponents + ["visual-result.json"], at: "visual result"
+        rootFileDescriptor: repository.rootFileDescriptor, components: draftComponents, at: "draft"
     )
     let draft = try readJSONObject(data: draftData, at: "draft")
-    let visual = try readJSONObject(data: visualData, at: "visual result")
     try requireExactKeys(draft, [
         "schemaVersion", "status", "issue", "baseSha", "headSha", "issueContract", "matrixFile",
         "matrixDigest", "executionRoute", "xcode", "build", "tests", "cases", "acceptanceEvidence",
@@ -2896,13 +2954,15 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     ], at: "draft")
     guard try requireInteger(draft["schemaVersion"]!, at: "draft schemaVersion") == 1,
           try requireString(draft["status"]!, at: "draft status") == "awaiting-visual-review",
-          try requireInteger(draft["issue"]!, at: "draft issue") == options.issue,
-          try requireString(draft["baseSha"]!, at: "draft baseSha") == options.expectedBase,
-          try requireString(draft["headSha"]!, at: "draft headSha") == options.expectedHead else {
+          try requireInteger(draft["issue"]!, at: "draft issue") == issue,
+          try requireString(draft["baseSha"]!, at: "draft baseSha") == expectedBase else {
         throw ValidationFailure("draft identity does not match current Git range")
     }
+    guard try requireString(draft["headSha"]!, at: "draft headSha") == expectedHead else {
+        throw ValidationFailure("draft Head does not match current Git Head")
+    }
     let contractReference = try requireObject(draft["issueContract"]!, at: "draft issueContract")
-    let contract = try validateIssueContract(reference: contractReference, issue: options.issue, repository: repository)
+    let contract = try validateIssueContract(reference: contractReference, issue: issue, repository: repository)
     guard let verification = contract.verification else {
         throw ValidationFailure("canonical contract has no verification contract")
     }
@@ -2918,12 +2978,15 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
         throw ValidationFailure("draft execution identity is invalid")
     }
     try validateBuild(
-        draft["build"]!, documentationOnly: false,
-        repository: repository, expectedHead: options.expectedHead
+        draft["build"]!, documentationOnly: false, repository: repository, expectedHead: expectedHead
     )
     try validateTests(draft["tests"]!, documentationOnly: false)
+
     let draftCases = try requireArray(draft["cases"]!, at: "draft cases")
-    guard draftCases.count == 4 else { throw ValidationFailure("draft must contain exact four cases") }
+    guard draftCases.count == 4, draftCases.count == matrix.cases.count else {
+        throw ValidationFailure("draft must contain exact four cases")
+    }
+    var screenshotData: [Data] = []
     for (index, value) in draftCases.enumerated() {
         let entry = try requireObject(value, at: "draft case")
         try requireExactKeys(entry, ["id", "status", "screenshot", "screenshotDigest", "mechanicalCheck"], at: "draft case")
@@ -2932,16 +2995,25 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
             ? "test:\(expectedCase.value)" : "assertion:launch-succeeded"
         guard try requireString(entry["id"]!, at: "draft case id") == matrix.caseIDs[index],
               try requireString(entry["status"]!, at: "draft case status") == "passed",
-              try requireString(entry["screenshot"]!, at: "draft case screenshot") == "\(matrix.caseIDs[index])/screenshot.png",
               try requireString(entry["mechanicalCheck"]!, at: "draft mechanicalCheck") == expectedCheck else {
             throw ValidationFailure("draft mechanical checks do not match the canonical contract")
         }
-        let screenshotData = try readBoundRegularFile(
-            rootFileDescriptor: repository.rootFileDescriptor,
-            components: evidenceComponents + [matrix.caseIDs[index], "screenshot.png"],
-            at: "draft case screenshot"
-        )
-        try validateDigest(entry["screenshotDigest"]!, data: screenshotData, at: "draft case screenshotDigest")
+        guard try requireString(entry["screenshot"]!, at: "draft case screenshot") == "\(matrix.caseIDs[index])/screenshot.png" else {
+            throw ValidationFailure("draft primary screenshot path is invalid")
+        }
+        let image: Data
+        do {
+            image = try readBoundRegularFile(
+                rootFileDescriptor: repository.rootFileDescriptor,
+                components: evidenceComponents + [matrix.caseIDs[index], "screenshot.png"],
+                at: "draft case screenshot"
+            )
+        } catch {
+            throw ValidationFailure("primary screenshot is unavailable")
+        }
+        try validatePNGData(image)
+        try validateDigest(entry["screenshotDigest"]!, data: image, at: "draft case screenshotDigest")
+        screenshotData.append(image)
     }
     let acceptance = try requireArray(draft["acceptanceEvidence"]!, at: "draft acceptanceEvidence")
     guard acceptance.count == contract.acceptanceIDs.count else {
@@ -2961,7 +3033,7 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     let rootDigest = sha256(data: Data(repository.rootPath.utf8))
     let worktreeName = URL(fileURLWithPath: repository.rootPath).lastPathComponent
         .replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "-", options: .regularExpression)
-    let workspace = "/tmp/ios-template-verify/\(worktreeName)-\(rootDigest)/issue-\(options.issue)/\(options.expectedHead)"
+    let workspace = "/tmp/ios-template-verify/\(worktreeName)-\(rootDigest)/issue-\(issue)/\(expectedHead)"
     let derived = try requireString(artifacts["derivedDataPath"]!, at: "draft derivedDataPath")
     let prefix = workspace + "/Attempts/"
     guard derived.hasPrefix(prefix), derived.hasSuffix("/DerivedData") else {
@@ -2973,9 +3045,56 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
           try requireString(artifacts["testResultBundlePath"]!, at: "draft testResultBundlePath") == "\(prefix)\(attempt)/Tests.xcresult" else {
         throw ValidationFailure("draft workspaceArtifacts do not match the current physical worktree")
     }
-    let executionCompleted = try requireISO8601Date(draft["executionCompletedAt"]!, at: "draft executionCompletedAt")
+    let completed = try requireISO8601Date(draft["executionCompletedAt"]!, at: "draft executionCompletedAt")
+    guard completed >= contract.fetchedAt, completed >= matrix.resolvedAt else {
+        throw ValidationFailure("draft executionCompletedAt precedes canonical inputs")
+    }
+    guard completed <= Date().addingTimeInterval(300) else {
+        throw ValidationFailure("draft executionCompletedAt is implausibly in the future")
+    }
+    return CanonicalDraftValidation(
+        data: draftData, object: draft, evidenceComponents: evidenceComponents,
+        contractReference: contractReference, contract: contract, verification: verification,
+        matrixPath: matrixPath, matrixComponents: matrixComponents, matrixData: matrixData, matrix: matrix,
+        cases: draftCases, screenshotData: screenshotData, executionCompletedAt: completed
+    )
+}
 
-    try requireExactKeys(visual, ["schemaVersion", "status", "issue", "headSha", "draft", "cases", "findings", "reviewedAt"], at: "visual result")
+func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+    )
+    defer { close(repository.rootFileDescriptor) }
+    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
+    let expectedDraft = (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
+    let expectedVisual = (evidenceComponents + ["visual-result.json"]).joined(separator: "/")
+    guard options.draftPath == expectedDraft, options.visualPath == expectedVisual else {
+        throw ValidationFailure("draft and visual result must use canonical paths")
+    }
+    let validatedDraft = try validateCanonicalRunnerDraft(
+        repository: repository, issue: options.issue, expectedBase: options.expectedBase,
+        expectedHead: options.expectedHead, draftComponents: evidenceComponents + ["verify-draft.json"]
+    )
+    let draftData = validatedDraft.data
+    let visualData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: evidenceComponents + ["visual-result.json"], at: "visual result"
+    )
+    let draft = validatedDraft.object
+    let visual = try readJSONObject(data: visualData, at: "visual result")
+    let contractReference = validatedDraft.contractReference
+    let contract = validatedDraft.contract
+    let verification = validatedDraft.verification
+    let matrixPath = validatedDraft.matrixPath
+    let matrix = validatedDraft.matrix
+    let draftCases = validatedDraft.cases
+    let executionCompleted = validatedDraft.executionCompletedAt
+
+    let packet = try validateCanonicalVisualPacket(
+        repository: repository, issue: options.issue, expectedHead: options.expectedHead,
+        draftPath: options.draftPath, draft: validatedDraft
+    )
+    try requireExactKeys(visual, ["schemaVersion", "status", "issue", "headSha", "draft", "visualPacket", "cases", "findings", "reviewedAt"], at: "visual result")
     guard try requireInteger(visual["schemaVersion"]!, at: "visual schemaVersion") == 1,
           try requireString(visual["status"]!, at: "visual status") == "approved",
           try requireInteger(visual["issue"]!, at: "visual issue") == options.issue,
@@ -2989,19 +3108,36 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
           try requireString(visualDraft["digest"]!, at: "visual draft digest") == "sha256:\(sha256(data: draftData))" else {
         throw ValidationFailure("visual draft digest mismatch")
     }
+    let visualPacket = try requireObject(visual["visualPacket"]!, at: "visual visualPacket")
+    try requireExactKeys(visualPacket, ["path", "digest"], at: "visual visualPacket")
+    guard try requireString(visualPacket["path"]!, at: "visual visualPacket path") == packet.path,
+          try requireDigestString(visualPacket["digest"]!, at: "visual visualPacket digest") == packet.digest else {
+        throw ValidationFailure("visual packet digest mismatch")
+    }
     let visualCases = try requireArray(visual["cases"]!, at: "visual cases")
     guard visualCases.count == 4 else { throw ValidationFailure("visual result must contain exact four cases") }
     for (index, value) in visualCases.enumerated() {
         let entry = try requireObject(value, at: "visual case")
-        try requireExactKeys(entry, ["id", "status", "screenshot", "screenshotDigest", "findings"], at: "visual case")
-        let draftEntry = try requireObject(draftCases[index], at: "draft case")
-        let expectedScreenshotDigest = try requireString(draftEntry["screenshotDigest"]!, at: "draft screenshotDigest")
+        try requireExactKeys(entry, ["id", "status", "images", "findings"], at: "visual case")
         guard try requireString(entry["id"]!, at: "visual case id") == matrix.caseIDs[index],
               try requireString(entry["status"]!, at: "visual case status") == "approved",
-              try requireString(entry["screenshot"]!, at: "visual screenshot") == "\(matrix.caseIDs[index])/screenshot.png",
-              try requireString(entry["screenshotDigest"]!, at: "visual screenshotDigest") == expectedScreenshotDigest,
               try requireStringArray(entry["findings"]!, at: "visual case findings").isEmpty else {
             throw ValidationFailure("visual result cases mismatch or contain findings")
+        }
+        let images = try requireArray(entry["images"]!, at: "visual case images")
+        guard images.count == packet.cases[index].images.count else {
+            throw ValidationFailure("visual result image attestations do not match visual packet")
+        }
+        for (imageIndex, rawImage) in images.enumerated() {
+            let image = try requireObject(rawImage, at: "visual result image")
+            try requireExactKeys(image, ["state", "path", "digest", "findings"], at: "visual result image")
+            let expectedImage = packet.cases[index].images[imageIndex]
+            guard try requireString(image["state"]!, at: "visual image state") == expectedImage.state,
+                  try requireString(image["path"]!, at: "visual image path") == expectedImage.path,
+                  try requireDigestString(image["digest"]!, at: "visual image digest") == expectedImage.digest,
+                  try requireStringArray(image["findings"]!, at: "visual image findings").isEmpty else {
+                throw ValidationFailure("visual result image attestations do not match visual packet")
+            }
         }
     }
     let reviewedAt = try requireISO8601Date(visual["reviewedAt"]!, at: "visual reviewedAt")
@@ -3024,7 +3160,20 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
         "issueContract": contractReference, "matrixFile": matrixPath, "matrixDigest": draft["matrixDigest"]!,
         "executionRoute": "xcodebuild-simctl", "xcode": draft["xcode"]!, "build": draft["build"]!,
         "tests": draft["tests"]!, "cases": finalCases,
-        "visualEvaluation": ["status": "passed", "findings": []],
+        "visualEvaluation": [
+            "status": "passed",
+            "packet": ["path": packet.path, "digest": packet.digest],
+            "cases": packet.cases.map { packetCase in
+                [
+                    "id": packetCase.id,
+                    "images": packetCase.images.map { image in
+                        ["state": image.state, "path": image.path, "digest": image.digest,
+                         "status": "passed", "findings": []] as [String: Any]
+                    }
+                ] as [String: Any]
+            },
+            "findings": []
+        ],
         "acceptanceEvidence": finalAcceptance,
         "completedAt": try requireString(visual["reviewedAt"]!, at: "visual reviewedAt")
     ]
@@ -3100,12 +3249,207 @@ func sanitizedAcceptanceText(_ value: String, at path: String) throws -> String 
     return value
 }
 
+func validateSafePacketString(_ value: String, at path: String) throws {
+    guard value.count <= 4_096,
+          !value.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else {
+        throw ValidationFailure("unsafe serialized metadata at \(path)")
+    }
+    let unsafePatterns = [
+        #"(?i)(?:file://)?/(?:Users|home|private/var)/[^\s]+"#,
+        #"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"#,
+        #"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"#,
+        #"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"#,
+        #"(?i)\b(?:token|api[_-]?key|password|passwd|secret|credential)\s*[:=]\s*\S+"#,
+        #"\b(?:ghp_|github_pat_|glpat-|xox[baprs]-|sk-(?:proj-)?|sb_secret_)[A-Za-z0-9_-]{6,}"#,
+        #"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"#
+    ]
+    guard !unsafePatterns.contains(where: {
+        value.range(of: $0, options: .regularExpression) != nil
+    }) else {
+        throw ValidationFailure("unsafe serialized metadata at \(path)")
+    }
+}
+
+func validateSafePacketMetadata(_ value: Any, at path: String = "visual packet") throws {
+    if let string = value as? String {
+        try validateSafePacketString(string, at: path)
+    } else if let array = value as? [Any] {
+        for (index, item) in array.enumerated() {
+            try validateSafePacketMetadata(item, at: "\(path)[\(index)]")
+        }
+    } else if let object = value as? JSONObject {
+        for key in object.keys.sorted() {
+            try validateSafePacketString(key, at: "\(path).key")
+            try validateSafePacketMetadata(object[key]!, at: "\(path).\(key)")
+        }
+    }
+}
+
 func requireDigestString(_ value: Any, at path: String) throws -> String {
     let digest = try requireString(value, at: path)
     guard matches(digest, regex: digestPattern) else {
         throw ValidationFailure("\(path) must use sha256:<64 lowercase hex>")
     }
     return digest
+}
+
+struct VisualPacketImageInfo {
+    let state: String
+    let path: String
+    let digest: String
+}
+
+struct VisualPacketCaseInfo {
+    let id: String
+    let images: [VisualPacketImageInfo]
+}
+
+struct VisualPacketInfo {
+    let path: String
+    let data: Data
+    let digest: String
+    let cases: [VisualPacketCaseInfo]
+}
+
+func validateCanonicalVisualPacket(
+    repository: TrustedRepository,
+    issue: Int,
+    expectedHead: String,
+    draftPath: String,
+    draft: CanonicalDraftValidation
+) throws -> VisualPacketInfo {
+    let packetPath = ".artifacts/issues/\(issue)/\(expectedHead)/visual-packet.json"
+    let packetComponents = try relativeComponents(packetPath, at: "visual packet")
+    let packetData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor, components: packetComponents, at: "visual packet"
+    )
+    let packet = try readJSONObject(data: packetData, at: "visual packet")
+    try requireExactKeys(packet, [
+        "schemaVersion", "status", "issue", "headSha", "draft", "issueContract", "matrix",
+        "acceptanceCriteria", "cases", "reviewChecks"
+    ], at: "visual packet")
+    try validateSafePacketMetadata(packet)
+    guard try requireInteger(packet["schemaVersion"]!, at: "visual packet schemaVersion") == 1,
+          try requireString(packet["status"]!, at: "visual packet status") == "ready-for-visual-review",
+          try requireInteger(packet["issue"]!, at: "visual packet issue") == issue,
+          try requireString(packet["headSha"]!, at: "visual packet headSha") == expectedHead else {
+        throw ValidationFailure("visual packet identity is invalid")
+    }
+    let draftReference = try requireObject(packet["draft"]!, at: "visual packet draft")
+    try requireExactKeys(draftReference, ["path", "digest"], at: "visual packet draft")
+    guard try requireString(draftReference["path"]!, at: "visual packet draft path") == draftPath,
+          try requireDigestString(draftReference["digest"]!, at: "visual packet draft digest") == "sha256:\(sha256(data: draft.data))" else {
+        throw ValidationFailure("visual packet draft binding is invalid")
+    }
+    let contractReference = try requireObject(packet["issueContract"]!, at: "visual packet issueContract")
+    try requireExactKeys(contractReference, ["path", "digest"], at: "visual packet issueContract")
+    let expectedContractPath = try requireString(draft.contractReference["path"]!, at: "draft issueContract path")
+    let expectedContractDigest = try requireDigestString(draft.contractReference["digest"]!, at: "draft issueContract digest")
+    guard try requireString(contractReference["path"]!, at: "visual packet issueContract path") == expectedContractPath,
+          try requireDigestString(contractReference["digest"]!, at: "visual packet issueContract digest") == expectedContractDigest else {
+        throw ValidationFailure("visual packet contract binding is invalid")
+    }
+    let matrixReference = try requireObject(packet["matrix"]!, at: "visual packet matrix")
+    try requireExactKeys(matrixReference, ["path", "digest"], at: "visual packet matrix")
+    guard try requireString(matrixReference["path"]!, at: "visual packet matrix path") == draft.matrixPath,
+          try requireDigestString(matrixReference["digest"]!, at: "visual packet matrix digest") == "sha256:\(sha256(data: draft.matrixData))" else {
+        throw ValidationFailure("visual packet matrix binding is invalid")
+    }
+    let criteria = try requireArray(packet["acceptanceCriteria"]!, at: "visual packet acceptanceCriteria")
+    guard criteria.count == draft.contract.acceptanceCriteria.count else {
+        throw ValidationFailure("visual packet acceptance criteria mismatch")
+    }
+    for (index, raw) in criteria.enumerated() {
+        let entry = try requireObject(raw, at: "visual packet acceptanceCriteria")
+        try requireExactKeys(entry, ["id", "text"], at: "visual packet acceptanceCriteria")
+        guard try requireString(entry["id"]!, at: "visual packet acceptance ID") == draft.contract.acceptanceCriteria[index].id,
+              try requireString(entry["text"]!, at: "visual packet acceptance text") == draft.contract.acceptanceCriteria[index].text else {
+            throw ValidationFailure("visual packet acceptance criteria mismatch")
+        }
+    }
+    let expectedChecks = [
+        "acceptance-criteria", "clipping", "overlap", "translation", "information-hierarchy",
+        "ipad-adaptation", "dynamic-type-indicators", "tap-targets", "spec-comparison"
+    ]
+    guard try requireStringArray(packet["reviewChecks"]!, at: "visual packet reviewChecks") == expectedChecks else {
+        throw ValidationFailure("visual packet review checks mismatch")
+    }
+    let rawCases = try requireArray(packet["cases"]!, at: "visual packet cases")
+    guard rawCases.count == draft.matrix.cases.count else {
+        throw ValidationFailure("visual packet cases mismatch")
+    }
+    var normalizedCases: [VisualPacketCaseInfo] = []
+    for (caseIndex, raw) in rawCases.enumerated() {
+        let path = "visual packet cases[\(caseIndex)]"
+        let entry = try requireObject(raw, at: path)
+        try requireExactKeys(entry, ["id", "family", "deviceType", "runtime", "locale", "language", "images"], at: path)
+        let expected = draft.matrix.cases[caseIndex]
+        let device = try requireObject(entry["deviceType"]!, at: "\(path).deviceType")
+        try requireExactKeys(device, ["identifier", "name"], at: "\(path).deviceType")
+        let runtime = try requireObject(entry["runtime"]!, at: "\(path).runtime")
+        try requireExactKeys(runtime, ["identifier", "version"], at: "\(path).runtime")
+        guard try requireString(entry["id"]!, at: "\(path).id") == expected.id,
+              try requireString(entry["family"]!, at: "\(path).family") == expected.family,
+              try requireString(device["identifier"]!, at: "\(path).deviceType.identifier") == expected.deviceType.identifier,
+              try requireString(device["name"]!, at: "\(path).deviceType.name") == expected.deviceType.name,
+              try requireString(runtime["identifier"]!, at: "\(path).runtime.identifier") == draft.matrix.runtime.identifier,
+              try requireString(runtime["version"]!, at: "\(path).runtime.version") == draft.matrix.runtime.version,
+              try requireString(entry["locale"]!, at: "\(path).locale") == expected.locale,
+              try requireString(entry["language"]!, at: "\(path).language") == expected.language else {
+            throw ValidationFailure("visual packet case metadata mismatch")
+        }
+        let rawImages = try requireArray(entry["images"]!, at: "\(path).images")
+        guard !rawImages.isEmpty else { throw ValidationFailure("visual packet case has no images") }
+        var images: [VisualPacketImageInfo] = []
+        var states = Set<String>()
+        var imagePaths = Set<String>()
+        for (imageIndex, rawImage) in rawImages.enumerated() {
+            let imagePath = "\(path).images[\(imageIndex)]"
+            let image = try requireObject(rawImage, at: imagePath)
+            try requireExactKeys(image, ["state", "primary", "path", "digest", "width", "height"], at: imagePath)
+            let state = try requireString(image["state"]!, at: "\(imagePath).state")
+            let relativePath = try requireString(image["path"]!, at: "\(imagePath).path")
+            let digest = try requireDigestString(image["digest"]!, at: "\(imagePath).digest")
+            let primary = try requireBool(image["primary"]!, at: "\(imagePath).primary")
+            let components = try relativeComponents(relativePath, at: "\(imagePath).path")
+            guard components.count == 2, components[0] == expected.id,
+                  components[1].lowercased().hasSuffix(".png"),
+                  states.insert(state).inserted, imagePaths.insert(relativePath).inserted,
+                  primary == (imageIndex == 0),
+                  (imageIndex != 0 || (state == "primary" && components[1] == "screenshot.png")) else {
+                throw ValidationFailure("visual packet image identity is invalid")
+            }
+            let current = try readBoundRegularFile(
+                rootFileDescriptor: repository.rootFileDescriptor,
+                components: draft.evidenceComponents + components, at: "visual packet image"
+            )
+            guard digest == "sha256:\(sha256(data: current))" else {
+                throw ValidationFailure("reviewed image digest does not match current bytes")
+            }
+            let dimensions = try pngDimensions(current)
+            guard try requireInteger(image["width"]!, at: "\(imagePath).width", minimum: 1) == dimensions.width,
+                  try requireInteger(image["height"]!, at: "\(imagePath).height", minimum: 1) == dimensions.height else {
+                throw ValidationFailure("visual packet image binding is invalid")
+            }
+            images.append(VisualPacketImageInfo(state: state, path: relativePath, digest: digest))
+        }
+        let caseDirectory = try openBoundDirectory(
+            rootFileDescriptor: repository.rootFileDescriptor,
+            components: draft.evidenceComponents + [expected.id], at: "visual packet case directory"
+        )
+        defer { close(caseDirectory) }
+        let livePNGNames = try sortedDirectoryNames(caseDirectory, label: "visual packet case directory")
+            .filter { $0.lowercased().hasSuffix(".png") }
+        let expectedPNGNames = images.map { URL(fileURLWithPath: $0.path).lastPathComponent }
+        let orderedLiveNames = ["screenshot.png"] + livePNGNames.filter { $0 != "screenshot.png" }.sorted()
+        guard orderedLiveNames == expectedPNGNames else {
+            throw ValidationFailure("reviewed image set does not match current case files")
+        }
+        normalizedCases.append(VisualPacketCaseInfo(id: expected.id, images: images))
+    }
+    return VisualPacketInfo(
+        path: packetPath, data: packetData, digest: "sha256:\(sha256(data: packetData))", cases: normalizedCases
+    )
 }
 
 func createVisualReviewPacket(_ options: VisualPacketOptions) throws -> String {
@@ -3132,94 +3476,23 @@ func createVisualReviewPacketCanonical(
     defer { close(repository.rootFileDescriptor) }
     let evidenceComponents = Array(draftComponents.dropLast())
 
-    let draftData = try readBoundRegularFile(
-        rootFileDescriptor: repository.rootFileDescriptor, components: draftComponents, at: "draft"
+    let validatedDraft = try validateCanonicalRunnerDraft(
+        repository: repository, issue: options.issue, expectedBase: options.expectedBase,
+        expectedHead: expectedHead, draftComponents: draftComponents
     )
-    let draft = try readJSONObject(data: draftData, at: "draft")
-    try requireExactKeys(
-        draft,
-        [
-            "schemaVersion", "status", "issue", "baseSha", "headSha", "issueContract", "matrixFile",
-            "matrixDigest", "executionRoute", "xcode", "build", "tests", "cases", "acceptanceEvidence",
-            "workspaceArtifacts", "executionCompletedAt"
-        ],
-        at: "draft"
-    )
-    guard try requireInteger(draft["schemaVersion"]!, at: "draft schemaVersion") == 1,
-          try requireString(draft["status"]!, at: "draft status") == "awaiting-visual-review",
-          try requireInteger(draft["issue"]!, at: "draft issue") == options.issue,
-          try requireString(draft["baseSha"]!, at: "draft baseSha") == options.expectedBase else {
-        throw ValidationFailure("draft identity is invalid")
-    }
-    guard try requireString(draft["headSha"]!, at: "draft headSha") == expectedHead else {
-        throw ValidationFailure("draft Head does not match current Git Head")
-    }
-
-    let contractReference = try requireObject(draft["issueContract"]!, at: "draft issueContract")
-    let contract = try validateIssueContract(
-        reference: contractReference, issue: options.issue, repository: repository
-    )
-    guard let verification = contract.verification else {
-        throw ValidationFailure("canonical contract has no verification contract")
-    }
+    let draftData = validatedDraft.data
+    let draft = validatedDraft.object
+    let contractReference = validatedDraft.contractReference
+    let contract = validatedDraft.contract
+    let verification = validatedDraft.verification
     let contractPath = try requireString(contractReference["path"]!, at: "issueContract.path")
     let contractDigest = try requireDigestString(contractReference["digest"]!, at: "issueContract.digest")
 
-    let matrixPath = try requireString(draft["matrixFile"]!, at: "draft matrixFile")
-    let matrixComponents = try relativeComponents(matrixPath, at: "draft matrixFile")
-    let matrixData = try readBoundRegularFile(
-        rootFileDescriptor: repository.rootFileDescriptor, components: matrixComponents, at: "draft matrixFile"
-    )
-    try validateDigest(draft["matrixDigest"]!, data: matrixData, at: "draft matrixDigest")
+    let matrixPath = validatedDraft.matrixPath
+    let matrixComponents = validatedDraft.matrixComponents
     let matrixDigest = try requireDigestString(draft["matrixDigest"]!, at: "draft matrixDigest")
-    let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
-    guard try validateXcodeIdentity(draft["xcode"]!, at: "draft xcode") == matrix.xcode else {
-        throw ValidationFailure("draft Xcode identity does not match matrix")
-    }
-    let executionRoute = try requireString(draft["executionRoute"]!, at: "draft executionRoute")
-    guard ["xcodebuild-simctl", "xcodebuild-mcp"].contains(executionRoute) else {
-        throw ValidationFailure("draft executionRoute is invalid")
-    }
-
-    let build = try requireObject(draft["build"]!, at: "draft build")
-    try requireExactKeys(build, ["status", "scheme", "warningsAdded", "project", "sourceTree"], at: "draft build")
-    guard try requireString(build["status"]!, at: "draft build.status") == "passed",
-          try requireInteger(build["warningsAdded"]!, at: "draft build.warningsAdded", minimum: 0) == 0 else {
-        throw ValidationFailure("draft Build is not passed and warning-free")
-    }
-    _ = try requireString(build["scheme"]!, at: "draft build.scheme")
-    let project = try requireObject(build["project"]!, at: "draft build.project")
-    try requireExactKeys(project, ["path", "digest"], at: "draft build.project")
-    let projectPath = try requireString(project["path"]!, at: "draft build.project.path")
-    _ = try requireDigestString(project["digest"]!, at: "draft build.project.digest")
-    let sourceTree = try requireObject(build["sourceTree"]!, at: "draft build.sourceTree")
-    try requireExactKeys(sourceTree, ["headSha", "digest", "projectPath"], at: "draft build.sourceTree")
-    guard try requireString(sourceTree["headSha"]!, at: "draft build.sourceTree.headSha") == expectedHead,
-          try requireString(sourceTree["projectPath"]!, at: "draft build.sourceTree.projectPath") == projectPath else {
-        throw ValidationFailure("draft source identity is invalid")
-    }
-    _ = try requireDigestString(sourceTree["digest"]!, at: "draft build.sourceTree.digest")
-
-    let tests = try requireObject(draft["tests"]!, at: "draft tests")
-    try requireExactKeys(tests, ["status", "passed", "failed", "skipped"], at: "draft tests")
-    guard try requireString(tests["status"]!, at: "draft tests.status") == "passed",
-          try requireInteger(tests["passed"]!, at: "draft tests.passed", minimum: 1) >= 1,
-          try requireInteger(tests["failed"]!, at: "draft tests.failed", minimum: 0) == 0,
-          try requireInteger(tests["skipped"]!, at: "draft tests.skipped", minimum: 0) == 0 else {
-        throw ValidationFailure("draft tests are not passed without failures or skips")
-    }
-
-    let artifacts = try requireObject(draft["workspaceArtifacts"]!, at: "draft workspaceArtifacts")
-    try requireExactKeys(
-        artifacts, ["derivedDataPath", "buildResultBundlePath", "testResultBundlePath"],
-        at: "draft workspaceArtifacts"
-    )
-    for key in ["derivedDataPath", "buildResultBundlePath", "testResultBundlePath"] {
-        _ = try requireString(artifacts[key]!, at: "draft workspaceArtifacts.\(key)")
-    }
-    _ = try requireISO8601Date(draft["executionCompletedAt"]!, at: "draft executionCompletedAt")
-
-    let draftCases = try requireArray(draft["cases"]!, at: "draft cases")
+    let matrix = validatedDraft.matrix
+    let draftCases = validatedDraft.cases
     guard draftCases.count == matrix.cases.count else {
         throw ValidationFailure("draft must contain the exact four matrix cases")
     }
@@ -3377,6 +3650,7 @@ func createVisualReviewPacketCanonical(
             "ipad-adaptation", "dynamic-type-indicators", "tap-targets", "spec-comparison"
         ]
     ]
+    try validateSafePacketMetadata(packet)
     let packetData = try JSONSerialization.data(withJSONObject: packet, options: [.prettyPrinted, .sortedKeys])
         + Data("\n".utf8)
 
@@ -3386,6 +3660,9 @@ func createVisualReviewPacketCanonical(
         at: "evidence directory"
     )
     defer { close(evidenceDirectory) }
+    try removeInterruptedPublicationCandidates(
+        directory: evidenceDirectory, prefixes: [".visual-packet-candidate-"]
+    )
     var existingInformation = stat()
     if fstatat(evidenceDirectory, "visual-packet.json", &existingInformation, AT_SYMLINK_NOFOLLOW) == 0 {
         throw ValidationFailure("canonical visual packet already exists")
@@ -3402,6 +3679,13 @@ func createVisualReviewPacketCanonical(
             let liveHead = try runGitString(["rev-parse", "HEAD"], failure: "unable to revalidate Git Head")
             guard liveHead == expectedHead else {
                 throw ValidationFailure("Git Head changed before visual packet publication")
+            }
+            let currentDraft = try validateCanonicalRunnerDraft(
+                repository: repository, issue: options.issue, expectedBase: options.expectedBase,
+                expectedHead: expectedHead, draftComponents: draftComponents
+            )
+            guard sha256(data: currentDraft.data) == sha256(data: draftData) else {
+                throw ValidationFailure("draft changed before visual packet publication")
             }
             for receipt in receipts {
                 let current = try readBoundRegularFile(
@@ -3618,7 +3902,16 @@ func validate(options: Options) throws {
             root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
             head: headSha, repository: repository
         )
-        try validateVisual(root["visualEvaluation"]!, documentationOnly: false)
+        let canonicalDraft = try validateCanonicalRunnerDraft(
+            repository: repository, issue: issue, expectedBase: options.expectedBase,
+            expectedHead: options.expectedHead,
+            draftComponents: [".artifacts", "issues", String(issue), headSha, "verify-draft.json"]
+        )
+        let visualPacket = try validateCanonicalVisualPacket(
+            repository: repository, issue: issue, expectedHead: headSha,
+            draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json", draft: canonicalDraft
+        )
+        try validateApplicationVisual(root["visualEvaluation"]!, packet: visualPacket)
         try validateAcceptanceEvidence(
             root["acceptanceEvidence"]!, contractIDs: contract.acceptanceIDs, documentationOnly: false,
             expectedMappings: contract.verification?.acceptanceMappings

@@ -18,7 +18,7 @@ The packet builder must succeed immediately before evaluation. A packet copied f
 
 ## 2. Exact packet schema
 
-`visual-packet.json` is an exact schema-version-1 object. No unlisted key is allowed. All paths are relative to `.artifacts/issues/${issue}/${headSha}/`; the packet never contains Simulator UDIDs, DerivedData paths, Xcode paths, account data, secrets, or personal absolute paths.
+`visual-packet.json` is an exact schema-version-1 object. No unlisted key is allowed. Descriptor references (`draft`, `issueContract`, and `matrix`) are repository-relative canonical paths. Image paths are relative to `.artifacts/issues/${issue}/${headSha}/`. The packet never contains Simulator UDIDs, DerivedData paths, Xcode paths, account data, secrets, or personal absolute paths.
 
 ```json
 {
@@ -119,7 +119,7 @@ case=<case-id>; image=<relative-image-path>; check=<review-check>; finding=<obse
 
 ## 5. Exact visual result schema
 
-The evaluator writes `.artifacts/issues/${issue}/${headSha}/visual-result.json`. The object has exactly the keys below. It remains bound to the draft exact bytes and to each primary screenshot exact digest; additional-state findings cite their packet image path in the finding string.
+The evaluator writes `.artifacts/issues/${issue}/${headSha}/visual-result.json`. The object has exactly the keys below. It binds the exact draft and visual-packet bytes, and attests every ordered primary and additional image in every case.
 
 ```json
 {
@@ -131,33 +131,52 @@ The evaluator writes `.artifacts/issues/${issue}/${headSha}/visual-result.json`.
     "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify-draft.json",
     "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
+  "visualPacket": {
+    "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/visual-packet.json",
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
   "cases": [
     {
       "id": "iphone-en",
       "status": "approved",
-      "screenshot": "iphone-en/screenshot.png",
-      "screenshotDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "images": [
+        {
+          "state": "primary",
+          "path": "iphone-en/screenshot.png",
+          "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "findings": []
+        },
+        {
+          "state": "settings-open",
+          "path": "iphone-en/settings-open.png",
+          "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "findings": []
+        }
+      ],
       "findings": []
     },
     {
       "id": "iphone-ja",
       "status": "approved",
-      "screenshot": "iphone-ja/screenshot.png",
-      "screenshotDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "images": [
+        {"state": "primary", "path": "iphone-ja/screenshot.png", "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "findings": []}
+      ],
       "findings": []
     },
     {
       "id": "ipad-en",
       "status": "approved",
-      "screenshot": "ipad-en/screenshot.png",
-      "screenshotDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "images": [
+        {"state": "primary", "path": "ipad-en/screenshot.png", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "findings": []}
+      ],
       "findings": []
     },
     {
       "id": "ipad-ja",
       "status": "approved",
-      "screenshot": "ipad-ja/screenshot.png",
-      "screenshotDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "images": [
+        {"state": "primary", "path": "ipad-ja/screenshot.png", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "findings": []}
+      ],
       "findings": []
     }
   ],
@@ -166,4 +185,4 @@ The evaluator writes `.artifacts/issues/${issue}/${headSha}/visual-result.json`.
 }
 ```
 
-For approval, top-level `status` and all case statuses are `approved`, all finding arrays are empty, the four cases retain canonical order, and `reviewedAt` is a complete ISO 8601 timestamp no earlier than draft completion. If any finding exists, use `changes-requested` for the top-level status and the affected case status, place each finding in its affected case and once in the top-level array, and do not run finalization. The current finalizer accepts only the all-approved form and revalidates the draft, contract, matrix, current Head, and primary screenshot bytes before producing `verify.json`.
+The example is an exact representation: the first case demonstrates an additional state while the other packet cases contain only their primary state. A real result must reproduce every packet image in exact order and may never omit an entry. For approval, top-level `status` and all case statuses are `approved`, all finding arrays are empty, the four cases retain canonical order, and `reviewedAt` is a complete ISO 8601 timestamp no earlier than draft completion. If any finding exists, use `changes-requested` for the top-level status and the affected case status, place each finding in its affected case and once in the top-level array, and do not run finalization. The current finalizer accepts only the all-approved form and revalidates the draft, contract, matrix, current Head, packet bytes, and every reviewed image before producing `verify.json`.

@@ -11,6 +11,8 @@ validator_source="$source_repo/tools/validate-verify-json.swift"
 validator="$scratch/validate-verify-json"
 swift_bin="$(command -v swift)"
 swiftc "$validator_source" -o "$validator"
+png_fixture="$scratch/one-pixel.png"
+printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' | /usr/bin/base64 -D >"$png_fixture"
 
 poison_bin="$scratch/poison-bin"
 poison_log="$scratch/poison.log"
@@ -173,6 +175,85 @@ text = File.read(source)
 }.each { |key, value| text = text.gsub(key, value) }
 File.write(destination, text)
 RUBY
+
+  # Application evidence uses the same two-phase draft/packet chain as the runner.
+  if [[ "$template" != "stale-sha.json" && "$change_kind" == "normal" ]]; then
+    local canonical_root root_digest workspace draft_file packet_file
+    canonical_root="$(/usr/bin/swift -e 'import Foundation; print(URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath().standardizedFileURL.path)' "$fixture_root")"
+    root_digest="$(printf '%s' "$canonical_root" | shasum -a 256 | awk '{print $1}')"
+    workspace="/tmp/ios-template-verify/$(basename "$canonical_root")-$root_digest/issue-42/$head_sha/Attempts/attempt-aaaaaaaa"
+    draft_file="$evidence_dir/verify-draft.json"
+    packet_file="$evidence_dir/visual-packet.json"
+    for id in iphone-en iphone-ja ipad-en ipad-ja; do
+      cp "$png_fixture" "$evidence_dir/$id/screenshot.png"
+      /usr/bin/ruby -rzlib - "$png_fixture" "$evidence_dir/$id/settings.png" "$id" <<'RUBY'
+source, destination, label = ARGV
+png = File.binread(source)
+payload = "State\0#{label}".b
+type = "tEXt".b
+chunk = [payload.bytesize].pack("N") + type + payload + [Zlib.crc32(type + payload)].pack("N")
+File.binwrite(destination, png.byteslice(0, png.bytesize - 12) + chunk + png.byteslice(-12, 12))
+RUBY
+    done
+    EVIDENCE="$evidence_file" ruby -rjson -rdigest <<'RUBY'
+final = JSON.parse(File.read(ENV.fetch("EVIDENCE")))
+root = File.dirname(ENV.fetch("EVIDENCE"))
+final.fetch("cases").each do |entry|
+  entry["screenshotDigest"] = "sha256:#{Digest::SHA256.file(File.join(root, entry.fetch("screenshot"))).hexdigest}"
+end
+File.write(ENV.fetch("EVIDENCE"), JSON.pretty_generate(final) + "\n")
+RUBY
+    REPOSITORY="$fixture_root" EVIDENCE="$evidence_file" DRAFT="$draft_file" WORKSPACE="$workspace" \
+      ruby -rjson -rdigest <<'RUBY'
+repository = ENV.fetch("REPOSITORY")
+final = JSON.parse(File.read(ENV.fetch("EVIDENCE")))
+ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
+draft = {
+  "schemaVersion" => 1, "status" => "awaiting-visual-review", "issue" => 42,
+  "baseSha" => final.fetch("baseSha"), "headSha" => final.fetch("headSha"),
+  "issueContract" => final.fetch("issueContract"), "matrixFile" => final.fetch("matrixFile"),
+  "matrixDigest" => final.fetch("matrixDigest"), "executionRoute" => "xcodebuild-simctl",
+  "xcode" => final.fetch("xcode"), "build" => final.fetch("build"), "tests" => final.fetch("tests"),
+  "cases" => ids.map.with_index do |id, index|
+    image = File.join(File.dirname(ENV.fetch("DRAFT")), id, "screenshot.png")
+    {
+      "id" => id, "status" => "passed", "screenshot" => "#{id}/screenshot.png",
+      "screenshotDigest" => "sha256:#{Digest::SHA256.file(image).hexdigest}",
+      "mechanicalCheck" => index.even? ? "test:TemplateAppUITests/SmokeTests/testLaunch" : "assertion:launch-succeeded"
+    }
+  end,
+  "acceptanceEvidence" => final.fetch("acceptanceEvidence").map { |entry| {"id" => entry.fetch("id"), "evidence" => entry.fetch("evidence").reject { |check| check.start_with?("visual:") }} },
+  "workspaceArtifacts" => {
+    "derivedDataPath" => "#{ENV.fetch("WORKSPACE")}/DerivedData",
+    "buildResultBundlePath" => "#{ENV.fetch("WORKSPACE")}/Build.xcresult",
+    "testResultBundlePath" => "#{ENV.fetch("WORKSPACE")}/Tests.xcresult"
+  },
+  "executionCompletedAt" => "2026-08-21T12:30:00+09:00"
+}
+File.write(ENV.fetch("DRAFT"), JSON.pretty_generate(draft) + "\n")
+RUBY
+    (
+      cd "$fixture_root"
+      "$validator" --visual-packet --issue 42 --expected-base "$base_sha" \
+        --draft ".artifacts/issues/42/$head_sha/verify-draft.json" \
+        --output ".artifacts/issues/42/$head_sha/visual-packet.json" >/dev/null
+    )
+    EVIDENCE="$evidence_file" DRAFT="$draft_file" PACKET="$packet_file" ruby -rjson -rdigest <<'RUBY'
+final = JSON.parse(File.read(ENV.fetch("EVIDENCE")))
+packet = JSON.parse(File.read(ENV.fetch("PACKET")))
+final["visualEvaluation"] = {
+  "status" => "passed",
+  "packet" => {"path" => packet.fetch("draft").fetch("path").sub(/verify-draft\.json\z/, "visual-packet.json"), "digest" => "sha256:#{Digest::SHA256.file(ENV.fetch("PACKET")).hexdigest}"},
+  "cases" => packet.fetch("cases").map do |entry|
+    {"id" => entry.fetch("id"), "images" => entry.fetch("images").map { |image|
+      {"state" => image.fetch("state"), "path" => image.fetch("path"), "digest" => image.fetch("digest"), "status" => "passed", "findings" => []}
+    }}
+  end,
+  "findings" => []
+}
+File.write(ENV.fetch("EVIDENCE"), JSON.pretty_generate(final) + "\n")
+RUBY
+  fi
 }
 
 mutate_json() {
@@ -399,29 +480,6 @@ refresh_contract_digest
 expect_failure duplicate-contract-ac "acceptance IDs must be stable, ordered, and start at AC-1"
 
 prepare_fixture optional-verification-contract
-mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
-  document["verification"] = {
-    "bundleIdentifier" => "com.example.TemplateApp",
-    "unitTestIdentifier" => "TemplateAppTests/UnitSmokeTests/testUnit",
-    "cases" => [
-      {"id" => "iphone-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
-      {"id" => "iphone-ja", "assertion" => {"kind" => "launch-succeeded"}},
-      {"id" => "ipad-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
-      {"id" => "ipad-ja", "assertion" => {"kind" => "launch-succeeded"}}
-    ],
-    "acceptanceMappings" => [
-      {"id" => "AC-1", "checks" => ["stage:build", "stage:unit-tests"]},
-      {"id" => "AC-2", "checks" => ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
-    ]
-  }
-'
-mutate_json "$evidence_file" '
-  document["acceptanceEvidence"] = [
-    {"id" => "AC-1", "status" => "passed", "evidence" => ["stage:build", "stage:unit-tests"]},
-    {"id" => "AC-2", "status" => "passed", "evidence" => ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
-  ]
-'
-refresh_contract_digest
 run_validator
 mutate_json "$evidence_file" 'document.fetch("acceptanceEvidence").reverse!'
 expect_failure optional-verification-evidence-order "acceptanceEvidence must follow the exact Issue contract AC order"
@@ -530,7 +588,7 @@ expect_failure extra-acceptance "must contain every Issue contract AC exactly on
 
 prepare_fixture visual-finding
 mutate_json "$evidence_file" 'document.fetch("visualEvaluation").fetch("findings") << "layout overlap"'
-expect_failure visual-finding "visualEvaluation.findings must be empty"
+expect_failure visual-finding "visualEvaluation must be passed without findings"
 
 prepare_fixture unknown-key
 mutate_json "$evidence_file" 'document["unexpected"] = true'

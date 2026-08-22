@@ -152,7 +152,7 @@ Build productはlocked attempt内のDerivedData `Build/Products` 配下にある
 }
 ```
 
-Task 5のAI評価はcanonical `.artifacts/issues/42/${headSha}/visual-result.json` を次のexact schemaで書きます。`draft.path` は同じIssue/Headのcanonical path、`draft.digest` はdraftのexact bytesです。4件すべての `id`、`screenshot`、`screenshotDigest` はdraftに一致し、承認時はtop-levelと各caseの `findings` が空です。
+Task 5のAI評価はcanonical `.artifacts/issues/42/${headSha}/visual-result.json` を次のexact schemaで書きます。`draft` と `visualPacket` は同じIssue/Headのcanonical pathとexact bytesを固定します。4件すべての `images` はpacketのprimary/additional imageを同じ順序、state、path、digestで列挙し、承認時はtop-level、各case、各imageの `findings` が空です。
 
 ```json
 {
@@ -161,18 +161,19 @@ Task 5のAI評価はcanonical `.artifacts/issues/42/${headSha}/visual-result.jso
   "issue": 42,
   "headSha": "0123456789abcdef0123456789abcdef01234567",
   "draft": {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify-draft.json", "digest": "sha256:4ae755fb899a15125dfe7db017761abe901e1de00bf266894157826c827a3f2f"},
+  "visualPacket": {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/visual-packet.json", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
   "cases": [
-    {"id": "iphone-en", "status": "approved", "screenshot": "iphone-en/screenshot.png", "screenshotDigest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9", "findings": []},
-    {"id": "iphone-ja", "status": "approved", "screenshot": "iphone-ja/screenshot.png", "screenshotDigest": "sha256:fd1a5bba126762a8aee2cbfd9816ba4983c335bad13cc170e6db5940449bb4b3", "findings": []},
-    {"id": "ipad-en", "status": "approved", "screenshot": "ipad-en/screenshot.png", "screenshotDigest": "sha256:8f5674ac5c3bdfa4bc63bf120ee8d6a7706598557fc99b51d37de343e7091e9d", "findings": []},
-    {"id": "ipad-ja", "status": "approved", "screenshot": "ipad-ja/screenshot.png", "screenshotDigest": "sha256:5d173426722d981121aee0251e7c64a2b25797ea3fc154c06c4aaeb433e2ee62", "findings": []}
+    {"id": "iphone-en", "status": "approved", "images": [{"state": "primary", "path": "iphone-en/screenshot.png", "digest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9", "findings": []}, {"state": "settings-open", "path": "iphone-en/settings-open.png", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "findings": []}], "findings": []},
+    {"id": "iphone-ja", "status": "approved", "images": [{"state": "primary", "path": "iphone-ja/screenshot.png", "digest": "sha256:fd1a5bba126762a8aee2cbfd9816ba4983c335bad13cc170e6db5940449bb4b3", "findings": []}], "findings": []},
+    {"id": "ipad-en", "status": "approved", "images": [{"state": "primary", "path": "ipad-en/screenshot.png", "digest": "sha256:8f5674ac5c3bdfa4bc63bf120ee8d6a7706598557fc99b51d37de343e7091e9d", "findings": []}], "findings": []},
+    {"id": "ipad-ja", "status": "approved", "images": [{"state": "primary", "path": "ipad-ja/screenshot.png", "digest": "sha256:5d173426722d981121aee0251e7c64a2b25797ea3fc154c06c4aaeb433e2ee62", "findings": []}], "findings": []}
   ],
   "findings": [],
   "reviewedAt": "2026-08-21T13:00:00+09:00"
 }
 ```
 
-次のfinalize commandはcurrent Headとtracked Head bytes/flags、descriptor-bound canonical path、draft digest、Issue、matrix、4case、Screenshot path/digest/bytes、承認状態、時刻順序、各mechanical checkとAC mappingのcurrent canonical contract一致を再検証します。Swift finalizerがstrict Task 3 schemaのprivate sealed candidateを完成させ、同じprocess内のvalidatorがexact Base/Issue/Headで検証します。validated candidate FD/inode/digestを保持し、Git/config/Screenshotをpublication境界で再検証したまま`renameatx_np(RENAME_EXCL)`でcanonical `verify.json`をatomic no-replace公開して再照合し、fileとdirectoryをfsyncします。standalone `--candidate-file` publicationは許可しません。rename直後のprocess deathから再実行した場合は、既存`verify.json`がowned sealed regular fileでcandidateとexact digest一致するときだけidempotent successとしてfsyncし、mismatched/corrupt/unsafeな既存fileは拒否して保持します。その他の衝突時も既存winnerを保持し、失敗時にpartial `verify.json` を露出しません。
+次のfinalize commandはcurrent Headとtracked Head bytes/flags、descriptor-bound canonical path、draft/packet digest、Issue、matrix、4case、全reviewed imageのpath/digest/current bytes、承認状態、時刻順序、各mechanical checkとAC mappingのcurrent canonical contract一致を再検証します。Swift finalizerがstrict Task 3 schemaのprivate sealed candidateを完成させ、同じprocess内のvalidatorがexact Base/Issue/Headで検証します。validated candidate FD/inode/digestを保持し、Git/config/Screenshotをpublication境界で再検証したまま`renameatx_np(RENAME_EXCL)`でcanonical `verify.json`をatomic no-replace公開して再照合し、fileとdirectoryをfsyncします。standalone `--candidate-file` publicationは許可しません。rename直後のprocess deathから再実行した場合は、既存`verify.json`がowned sealed regular fileでcandidateとexact digest一致するときだけidempotent successとしてfsyncし、mismatched/corrupt/unsafeな既存fileは拒否して保持します。その他の衝突時も既存winnerを保持し、失敗時にpartial `verify.json` を露出しません。
 
 ```bash
 tools/verify-ios-issue.sh --finalize \
@@ -225,12 +226,22 @@ Issue/current Head identityを確立した後のrange、tracked Head不一致、
   "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0, "project": {"path": "ExampleApp.xcodeproj", "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"}, "sourceTree": {"headSha": "0123456789abcdef0123456789abcdef01234567", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "projectPath": "ExampleApp.xcodeproj"}},
   "tests": {"status": "passed", "passed": 1, "failed": 0, "skipped": 0},
   "cases": [
-    {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/settings.png", "screenshotDigest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9"},
-    {"id": "iphone-ja", "status": "passed", "screenshot": "iphone-ja/settings.png", "screenshotDigest": "sha256:fd1a5bba126762a8aee2cbfd9816ba4983c335bad13cc170e6db5940449bb4b3"},
-    {"id": "ipad-en", "status": "passed", "screenshot": "ipad-en/settings.png", "screenshotDigest": "sha256:8f5674ac5c3bdfa4bc63bf120ee8d6a7706598557fc99b51d37de343e7091e9d"},
-    {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/settings.png", "screenshotDigest": "sha256:5d173426722d981121aee0251e7c64a2b25797ea3fc154c06c4aaeb433e2ee62"}
+    {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/screenshot.png", "screenshotDigest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9"},
+    {"id": "iphone-ja", "status": "passed", "screenshot": "iphone-ja/screenshot.png", "screenshotDigest": "sha256:fd1a5bba126762a8aee2cbfd9816ba4983c335bad13cc170e6db5940449bb4b3"},
+    {"id": "ipad-en", "status": "passed", "screenshot": "ipad-en/screenshot.png", "screenshotDigest": "sha256:8f5674ac5c3bdfa4bc63bf120ee8d6a7706598557fc99b51d37de343e7091e9d"},
+    {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/screenshot.png", "screenshotDigest": "sha256:5d173426722d981121aee0251e7c64a2b25797ea3fc154c06c4aaeb433e2ee62"}
   ],
-  "visualEvaluation": {"status": "passed", "findings": []},
+  "visualEvaluation": {
+    "status": "passed",
+    "packet": {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/visual-packet.json", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "cases": [
+      {"id": "iphone-en", "images": [{"state": "primary", "path": "iphone-en/screenshot.png", "digest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9", "status": "passed", "findings": []}, {"state": "settings-open", "path": "iphone-en/settings-open.png", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "passed", "findings": []}]},
+      {"id": "iphone-ja", "images": [{"state": "primary", "path": "iphone-ja/screenshot.png", "digest": "sha256:fd1a5bba126762a8aee2cbfd9816ba4983c335bad13cc170e6db5940449bb4b3", "status": "passed", "findings": []}]},
+      {"id": "ipad-en", "images": [{"state": "primary", "path": "ipad-en/screenshot.png", "digest": "sha256:8f5674ac5c3bdfa4bc63bf120ee8d6a7706598557fc99b51d37de343e7091e9d", "status": "passed", "findings": []}]},
+      {"id": "ipad-ja", "images": [{"state": "primary", "path": "ipad-ja/screenshot.png", "digest": "sha256:5d173426722d981121aee0251e7c64a2b25797ea3fc154c06c4aaeb433e2ee62", "status": "passed", "findings": []}]}
+    ],
+    "findings": []
+  },
   "acceptanceEvidence": [
     {
       "id": "AC-1",

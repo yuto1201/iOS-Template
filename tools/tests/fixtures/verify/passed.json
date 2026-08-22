@@ -69,14 +69,22 @@
       "id": "AC-1",
       "status": "passed",
       "evidence": [
-        "tests:TemplateAppTests/EvidenceTests"
+        "stage:build",
+        "stage:unit-tests"
       ]
     },
     {
       "id": "AC-2",
       "status": "passed",
       "evidence": [
-        "cases:iphone-en,iphone-ja,ipad-en,ipad-ja"
+        "case:iphone-en",
+        "case:iphone-ja",
+        "case:ipad-en",
+        "case:ipad-ja",
+        "visual:iphone-en",
+        "visual:iphone-ja",
+        "visual:ipad-en",
+        "visual:ipad-ja"
       ]
     }
   ],

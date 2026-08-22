@@ -759,15 +759,26 @@ expect_finalize_failure() {
   [[ ! -e "$final" ]] || { echo "failed finalization left verify.json" >&2; exit 1; }
 }
 
+write_packet() {
+  local packet="$(dirname "$draft")/visual-packet.json"
+  [[ -e "$packet" ]] && return
+  (cd "$repo" && "$validator_binary" --visual-packet --issue 42 --expected-base "$base_sha" \
+    --draft ".artifacts/issues/42/$head_sha/verify-draft.json" \
+    --output ".artifacts/issues/42/$head_sha/visual-packet.json" >/dev/null)
+}
+
 write_visual() {
-  /usr/bin/ruby -rjson -rtime -rdigest - "$draft" "$visual" "${1:-approved}" <<'RUBY'
-draft_path, visual_path, mode = ARGV
+  write_packet
+  /usr/bin/ruby -rjson -rtime -rdigest - "$draft" "$(dirname "$draft")/visual-packet.json" "$visual" "${1:-approved}" <<'RUBY'
+draft_path, packet_path, visual_path, mode = ARGV
 draft = JSON.parse(File.read(draft_path))
+packet = JSON.parse(File.read(packet_path))
 document = {
   "schemaVersion" => 1, "status" => "approved", "issue" => draft.fetch("issue"),
   "headSha" => draft.fetch("headSha"),
   "draft" => {"path" => ".artifacts/issues/42/#{draft.fetch("headSha")}/verify-draft.json", "digest" => "sha256:#{Digest::SHA256.file(draft_path).hexdigest}"},
-  "cases" => draft.fetch("cases").map { |entry| {"id" => entry.fetch("id"), "status" => "approved", "screenshot" => entry.fetch("screenshot"), "screenshotDigest" => entry.fetch("screenshotDigest"), "findings" => []} },
+  "visualPacket" => {"path" => ".artifacts/issues/42/#{draft.fetch("headSha")}/visual-packet.json", "digest" => "sha256:#{Digest::SHA256.file(packet_path).hexdigest}"},
+  "cases" => packet.fetch("cases").map { |entry| {"id" => entry.fetch("id"), "status" => "approved", "images" => entry.fetch("images").map { |image| {"state" => image.fetch("state"), "path" => image.fetch("path"), "digest" => image.fetch("digest"), "findings" => []} }, "findings" => []} },
   "findings" => [], "reviewedAt" => Time.now.iso8601
 }
 case mode
@@ -776,7 +787,7 @@ when "wrong-digest" then document.fetch("draft")["digest"] = "sha256:" + "0" * 6
 when "wrong-head" then document["headSha"] = "0" * 40
 when "missing-case" then document.fetch("cases").pop
 when "case-finding" then document.fetch("cases").fetch(0)["findings"] = ["clipped"]
-when "wrong-screenshot-digest" then document.fetch("cases").fetch(0)["screenshotDigest"] = "sha256:" + "0" * 64
+when "wrong-screenshot-digest" then document.fetch("cases").fetch(0).fetch("images").fetch(0)["digest"] = "sha256:" + "0" * 64
 end
 File.write(visual_path, JSON.pretty_generate(document) + "\n")
 RUBY
@@ -1399,10 +1410,11 @@ run_execute
 write_visual approved
 /bin/chmod 0600 "$draft"
 printf '\n' >>"$draft"
-expect_finalize_failure draft-mutation "draft digest"
+expect_finalize_failure draft-mutation "visual"
 
 prepare_repo draft-nested-schema-mutation
 run_execute
+write_packet
 /bin/chmod 0600 "$draft"
 /usr/bin/ruby -rjson - "$draft" <<'RUBY'
 path = ARGV.fetch(0)
@@ -1415,6 +1427,7 @@ expect_finalize_failure draft-nested-schema-mutation "visual"
 
 prepare_repo draft-mechanical-mutation
 run_execute
+write_packet
 /bin/chmod 0600 "$draft"
 /usr/bin/ruby -rjson - "$draft" <<'RUBY'
 path = ARGV.fetch(0)
@@ -1427,6 +1440,7 @@ expect_finalize_failure draft-mechanical-mutation "visual"
 
 prepare_repo draft-mapping-mutation
 run_execute
+write_packet
 /bin/chmod 0600 "$draft"
 /usr/bin/ruby -rjson - "$draft" <<'RUBY'
 path = ARGV.fetch(0)
