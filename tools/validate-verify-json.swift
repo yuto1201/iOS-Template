@@ -169,6 +169,13 @@ func readAll(_ fileDescriptor: Int32, at path: String) throws -> Data {
     }
 }
 
+func readAllFromStart(_ fileDescriptor: Int32, at path: String) throws -> Data {
+    guard lseek(fileDescriptor, 0, SEEK_SET) == 0 else {
+        throw ValidationFailure("\(path) could not be rewound")
+    }
+    return try readAll(fileDescriptor, at: path)
+}
+
 func openRepositoryRoot(_ path: String) throws -> Int32 {
     let fileDescriptor = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
     guard fileDescriptor >= 0 else {
@@ -244,7 +251,8 @@ func openBoundDirectory(rootFileDescriptor: Int32, components: [String], at path
 func publishValidatedCandidate(
     repository: TrustedRepository,
     evidenceDirectoryComponents: [String],
-    candidateName: String
+    candidateName: String,
+    beforeLink: () throws -> Void
 ) throws {
     let directory = try openBoundDirectory(
         rootFileDescriptor: repository.rootFileDescriptor,
@@ -267,13 +275,35 @@ func publishValidatedCandidate(
           information.st_ino == pathInformation.st_ino else {
         throw ValidationFailure("validated candidate changed before publication")
     }
+    let candidateDigest = sha256(data: try readAllFromStart(candidate, at: "verify.json candidate"))
     if let held = heldValidatedCandidateFileDescriptor {
         var heldInformation = stat()
         guard fstat(held, &heldInformation) == 0,
               heldInformation.st_dev == information.st_dev,
               heldInformation.st_ino == information.st_ino,
-              sha256(data: try readAll(held, at: "held verify.json candidate")) == sha256(data: try readAll(candidate, at: "verify.json candidate")) else {
+              sha256(data: try readAllFromStart(held, at: "held verify.json candidate")) == candidateDigest else {
             throw ValidationFailure("validated candidate changed before publication")
+        }
+    }
+    try beforeLink()
+    var boundaryInformation = stat()
+    var boundaryPathInformation = stat()
+    guard fstat(candidate, &boundaryInformation) == 0,
+          fstatat(directory, candidateName, &boundaryPathInformation, AT_SYMLINK_NOFOLLOW) == 0,
+          boundaryInformation.st_dev == information.st_dev,
+          boundaryInformation.st_ino == information.st_ino,
+          boundaryInformation.st_nlink == 1,
+          boundaryInformation.st_uid == getuid(),
+          (boundaryInformation.st_mode & S_IFMT) == S_IFREG,
+          (boundaryInformation.st_mode & 0o777) == S_IRUSR,
+          boundaryPathInformation.st_dev == information.st_dev,
+          boundaryPathInformation.st_ino == information.st_ino,
+          sha256(data: try readAllFromStart(candidate, at: "verify.json publication candidate")) == candidateDigest else {
+        throw ValidationFailure("validated candidate changed at publication boundary")
+    }
+    if let held = heldValidatedCandidateFileDescriptor {
+        guard sha256(data: try readAllFromStart(held, at: "held verify.json publication candidate")) == candidateDigest else {
+            throw ValidationFailure("validated candidate changed at publication boundary")
         }
     }
     guard linkat(directory, candidateName, directory, "verify.json", 0) == 0 else {
@@ -330,7 +360,7 @@ struct ProcessResult {
 func runGitProcess(_ arguments: [String]) throws -> ProcessResult {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-    process.arguments = arguments
+    process.arguments = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"] + arguments
     process.currentDirectoryURL = URL(
         fileURLWithPath: FileManager.default.currentDirectoryPath,
         isDirectory: true
@@ -845,6 +875,7 @@ struct EvidenceCase {
     let id: String
     let screenshot: String
     let screenshotComponents: [String]
+    let screenshotDigest: String
 }
 
 func validateApplicationCases(
@@ -863,7 +894,7 @@ func validateApplicationCases(
     for (index, rawCase) in cases.enumerated() {
         let path = "cases[\(index)]"
         let entry = try requireObject(rawCase, at: path)
-        try requireExactKeys(entry, ["id", "status", "screenshot"], at: path)
+        try requireExactKeys(entry, ["id", "status", "screenshot", "screenshotDigest"], at: path)
         let id = try requireString(entry["id"]!, at: "\(path).id")
         guard seenIDs.insert(id).inserted else {
             throw ValidationFailure("cases contain duplicate ID \(id)")
@@ -873,7 +904,14 @@ func validateApplicationCases(
         }
         let screenshot = try requireString(entry["screenshot"]!, at: "\(path).screenshot")
         let screenshotComponents = try relativeComponents(screenshot, at: "\(path).screenshot")
-        evidenceCases.append(EvidenceCase(id: id, screenshot: screenshot, screenshotComponents: screenshotComponents))
+        let screenshotDigest = try requireString(entry["screenshotDigest"]!, at: "\(path).screenshotDigest")
+        guard matches(screenshotDigest, regex: digestPattern) else {
+            throw ValidationFailure("\(path).screenshotDigest must use sha256:<64 lowercase hex>")
+        }
+        evidenceCases.append(EvidenceCase(
+            id: id, screenshot: screenshot, screenshotComponents: screenshotComponents,
+            screenshotDigest: screenshotDigest
+        ))
     }
     guard evidenceCases.map(\.id) == matrixCaseIDs else {
         throw ValidationFailure("cases must bind exactly to frozen matrix rows in order")
@@ -885,11 +923,14 @@ func validateApplicationCases(
         guard evidenceCase.screenshotComponents.first == evidenceCase.id else {
             throw ValidationFailure("cases[\(index)].screenshot must begin with its case ID")
         }
-        _ = try readBoundRegularFile(
+        let screenshotData = try readBoundRegularFile(
             rootFileDescriptor: repository.rootFileDescriptor,
             components: [".artifacts", "issues", String(issue), head] + evidenceCase.screenshotComponents,
             at: "cases[\(index)].screenshot"
         )
+        guard evidenceCase.screenshotDigest == "sha256:\(sha256(data: screenshotData))" else {
+            throw ValidationFailure("cases[\(index)].screenshotDigest does not match exact screenshot bytes")
+        }
     }
 }
 
@@ -1016,6 +1057,10 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
     guard status.status == 0, status.stdout.isEmpty else {
         throw ValidationFailure("working tree must be clean")
     }
+    let evidenceDirectory = try ensureCanonicalEvidenceDirectory(
+        repository: repository, issue: options.issue, head: options.expectedHead
+    )
+    close(evidenceDirectory)
 
     let expectedContract = ".artifacts/issues/\(options.issue)/issue-contract.json"
     guard options.issueContract == expectedContract else {
@@ -1231,7 +1276,8 @@ func publishGeneratedData(
     directoryFileDescriptor: Int32,
     canonicalName: String,
     temporaryPrefix: String,
-    data: Data
+    data: Data,
+    beforeLink: () throws -> Void = {}
 ) throws {
     let temporaryName = "\(temporaryPrefix)-\(UUID().uuidString.lowercased())"
     try writeExclusiveFile(
@@ -1245,12 +1291,29 @@ func publishGeneratedData(
     guard sealed >= 0 else { throw ValidationFailure("sealed publication candidate is unavailable") }
     defer { close(sealed) }
     var sealedInformation = stat()
+    let expectedDigest = sha256(data: data)
     guard fstat(sealed, &sealedInformation) == 0,
           sealedInformation.st_nlink == 1,
           sealedInformation.st_uid == getuid(),
           (sealedInformation.st_mode & 0o777) == S_IRUSR,
-          sha256(data: try readAll(sealed, at: "sealed publication candidate")) == sha256(data: data) else {
+          sha256(data: try readAllFromStart(sealed, at: "sealed publication candidate")) == expectedDigest else {
         throw ValidationFailure("sealed publication candidate changed")
+    }
+    try beforeLink()
+    var boundaryInformation = stat()
+    var boundaryPathInformation = stat()
+    guard fstat(sealed, &boundaryInformation) == 0,
+          fstatat(directoryFileDescriptor, temporaryName, &boundaryPathInformation, AT_SYMLINK_NOFOLLOW) == 0,
+          boundaryInformation.st_dev == sealedInformation.st_dev,
+          boundaryInformation.st_ino == sealedInformation.st_ino,
+          boundaryInformation.st_nlink == 1,
+          boundaryInformation.st_uid == getuid(),
+          (boundaryInformation.st_mode & S_IFMT) == S_IFREG,
+          (boundaryInformation.st_mode & 0o777) == S_IRUSR,
+          boundaryPathInformation.st_dev == sealedInformation.st_dev,
+          boundaryPathInformation.st_ino == sealedInformation.st_ino,
+          sha256(data: try readAllFromStart(sealed, at: "publication candidate")) == expectedDigest else {
+        throw ValidationFailure("sealed publication candidate changed at publication boundary")
     }
     guard linkat(directoryFileDescriptor, temporaryName, directoryFileDescriptor, canonicalName, 0) == 0 else {
         if errno == EEXIST { throw ValidationFailure("canonical publication already exists") }
@@ -1527,11 +1590,164 @@ func holdRunnerLock(configPath: String, expectedDigest: String) throws {
     }
 }
 
-func findBuiltApplication(derivedDataPath: String, bundleIdentifier: String) throws -> String {
+func sortedDirectoryNames(_ directory: Int32, label: String) throws -> [String] {
+    guard let stream = fdopendir(dup(directory)) else {
+        throw ValidationFailure("\(label) could not be enumerated")
+    }
+    defer { closedir(stream) }
+    var names: [String] = []
+    while let entry = readdir(stream) {
+        let name = withUnsafePointer(to: &entry.pointee.d_name) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
+        }
+        if name == "." || name == ".." { continue }
+        guard !name.isEmpty, !name.contains("/"), !name.contains("\0") else {
+            throw ValidationFailure("\(label) contains an unsafe name")
+        }
+        names.append(name)
+    }
+    return names.sorted { Data($0.utf8).lexicographicallyPrecedes(Data($1.utf8)) }
+}
+
+func updateBundleDigest(_ hasher: inout SHA256, marker: String, path: String) {
+    hasher.update(data: Data(marker.utf8))
+    hasher.update(data: Data([0]))
+    hasher.update(data: Data(path.utf8))
+    hasher.update(data: Data([0]))
+}
+
+func processBundleTree(
+    sourceDirectory: Int32,
+    destinationDirectory: Int32?,
+    relativePath: String,
+    hasher: inout SHA256
+) throws {
+    for name in try sortedDirectoryNames(sourceDirectory, label: "application bundle") {
+        var pathInformation = stat()
+        guard fstatat(sourceDirectory, name, &pathInformation, AT_SYMLINK_NOFOLLOW) == 0 else {
+            throw ValidationFailure("application bundle changed during traversal")
+        }
+        let path = relativePath.isEmpty ? name : relativePath + "/" + name
+        let kind = pathInformation.st_mode & S_IFMT
+        guard pathInformation.st_uid == getuid(), kind != S_IFLNK else {
+            throw ValidationFailure("application bundle contains an unowned item or symbolic link")
+        }
+        if kind == S_IFDIR {
+            let sourceChild = openat(sourceDirectory, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard sourceChild >= 0 else { throw ValidationFailure("application bundle directory changed") }
+            defer { close(sourceChild) }
+            var sourceChildInformation = stat()
+            guard fstat(sourceChild, &sourceChildInformation) == 0,
+                  sourceChildInformation.st_dev == pathInformation.st_dev,
+                  sourceChildInformation.st_ino == pathInformation.st_ino else {
+                throw ValidationFailure("application bundle directory changed")
+            }
+            updateBundleDigest(&hasher, marker: "D", path: path)
+            var destinationChild: Int32?
+            if let destinationDirectory {
+                guard mkdirat(destinationDirectory, name, S_IRWXU) == 0 else {
+                    throw ValidationFailure("staged application directory collided")
+                }
+                let child = openat(destinationDirectory, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                guard child >= 0 else { throw ValidationFailure("staged application directory is unavailable") }
+                destinationChild = child
+            }
+            defer { if let destinationChild { close(destinationChild) } }
+            try processBundleTree(
+                sourceDirectory: sourceChild,
+                destinationDirectory: destinationChild,
+                relativePath: path,
+                hasher: &hasher
+            )
+            if let destinationChild, fsync(destinationChild) != 0 {
+                throw ValidationFailure("staged application directory could not be synchronized")
+            }
+        } else if kind == S_IFREG {
+            guard pathInformation.st_nlink == 1 else {
+                throw ValidationFailure("application bundle file must have exactly one hard link")
+            }
+            let source = openat(sourceDirectory, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+            guard source >= 0 else { throw ValidationFailure("application bundle file changed") }
+            defer { close(source) }
+            var sourceInformation = stat()
+            guard fstat(source, &sourceInformation) == 0,
+                  (sourceInformation.st_mode & S_IFMT) == S_IFREG,
+                  sourceInformation.st_dev == pathInformation.st_dev,
+                  sourceInformation.st_ino == pathInformation.st_ino,
+                  sourceInformation.st_nlink == 1 else {
+                throw ValidationFailure("application bundle file changed")
+            }
+            let executable = (sourceInformation.st_mode & 0o111) != 0
+            updateBundleDigest(&hasher, marker: executable ? "X" : "F", path: path)
+            var destination: Int32?
+            if let destinationDirectory {
+                let permissions: mode_t = executable ? (S_IRUSR | S_IXUSR) : S_IRUSR
+                let file = openat(
+                    destinationDirectory, name,
+                    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                    permissions
+                )
+                guard file >= 0 else { throw ValidationFailure("staged application file collided") }
+                destination = file
+            }
+            defer { if let destination { close(destination) } }
+            var buffer = [UInt8](repeating: 0, count: 65_536)
+            while true {
+                let count = Darwin.read(source, &buffer, buffer.count)
+                if count == 0 { break }
+                if count < 0 && errno == EINTR { continue }
+                guard count > 0 else { throw ValidationFailure("application bundle file could not be read") }
+                hasher.update(data: Data(buffer[0..<count]))
+                if let destination {
+                    var offset = 0
+                    while offset < count {
+                        let written = buffer.withUnsafeBytes {
+                            Darwin.write(destination, $0.baseAddress!.advanced(by: offset), count - offset)
+                        }
+                        if written < 0 && errno == EINTR { continue }
+                        guard written > 0 else { throw ValidationFailure("staged application file could not be written") }
+                        offset += written
+                    }
+                }
+            }
+            if let destination {
+                let permissions: mode_t = executable ? (S_IRUSR | S_IXUSR) : S_IRUSR
+                guard fchmod(destination, permissions) == 0, fsync(destination) == 0 else {
+                    throw ValidationFailure("staged application file could not be sealed")
+                }
+            }
+        } else {
+            throw ValidationFailure("application bundle contains a special file")
+        }
+    }
+}
+
+func bundleDigest(directory: Int32) throws -> String {
+    var hasher = SHA256()
+    hasher.update(data: Data("ios-template-app-bundle-v1\0".utf8))
+    try processBundleTree(
+        sourceDirectory: directory, destinationDirectory: nil,
+        relativePath: "", hasher: &hasher
+    )
+    return "sha256:" + hasher.finalize().map { String(format: "%02x", $0) }.joined()
+}
+
+func findBuiltApplication(
+    configPath: String,
+    configDigest: String,
+    derivedDataPath: String,
+    bundleIdentifier: String
+) throws -> (path: String, digest: String) {
     guard matches(bundleIdentifier, regex: bundleIdentifierPattern),
           derivedDataPath.hasPrefix("/tmp/ios-template-verify/"),
           derivedDataPath.hasSuffix("/DerivedData") else {
         throw ValidationFailure("built application lookup inputs are invalid")
+    }
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: configDigest)
+    let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
+    guard derivedDataPath == attemptRoot + "/DerivedData",
+          try requireString(config["bundleIdentifier"]!, at: "runner config bundleIdentifier") == bundleIdentifier else {
+        throw ValidationFailure("built application lookup does not match runner config")
     }
     let relative = String(derivedDataPath.dropFirst("/tmp/".count))
     let components = try relativeComponents(relative, at: "DerivedData")
@@ -1551,7 +1767,7 @@ func findBuiltApplication(derivedDataPath: String, bundleIdentifier: String) thr
     )
     defer { close(products) }
 
-    var matches: [String] = []
+    var matchedPaths: [String] = []
     func scan(_ directory: Int32, relativePath: String) throws {
         guard let stream = fdopendir(dup(directory)) else {
             throw ValidationFailure("Build products could not be enumerated")
@@ -1588,7 +1804,13 @@ func findBuiltApplication(derivedDataPath: String, bundleIdentifier: String) thr
                     guard information.st_uid == getuid() else {
                         throw ValidationFailure("built application is not owned by the current user")
                     }
-                    matches.append(derivedDataPath + "/Build/Products/" + childPath)
+                    var validationHasher = SHA256()
+                    validationHasher.update(data: Data("ios-template-app-bundle-v1\0".utf8))
+                    try processBundleTree(
+                        sourceDirectory: child, destinationDirectory: nil,
+                        relativePath: "", hasher: &validationHasher
+                    )
+                    matchedPaths.append(childPath)
                 }
             } else {
                 try scan(child, relativePath: childPath)
@@ -1596,10 +1818,74 @@ func findBuiltApplication(derivedDataPath: String, bundleIdentifier: String) thr
         }
     }
     try scan(products, relativePath: "")
-    guard matches.count == 1 else {
+    guard matchedPaths.count == 1 else {
         throw ValidationFailure("exactly one contained built application must match the bundle identifier")
     }
-    return matches[0]
+    let matchedPath = matchedPaths[0]
+    let source = try openBoundDirectory(
+        rootFileDescriptor: products,
+        components: try relativeComponents(matchedPath, at: "built application"),
+        at: "built application"
+    )
+    defer { close(source) }
+    let attemptComponents = try relativeComponents(String(attemptRoot.dropFirst("/tmp/".count)), at: "runner attempt")
+    let attempt = try openBoundDirectory(rootFileDescriptor: temporary, components: attemptComponents, at: "runner attempt")
+    defer { close(attempt) }
+    let stagedRoot = try securePrivateDirectory(parent: attempt, name: "StagedApp", label: "staged application root")
+    defer { close(stagedRoot) }
+    let appName = URL(fileURLWithPath: matchedPath).lastPathComponent
+    guard appName.hasSuffix(".app"), mkdirat(stagedRoot, appName, S_IRWXU) == 0 else {
+        throw ValidationFailure("staged application destination collided")
+    }
+    let staged = openat(stagedRoot, appName, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard staged >= 0 else { throw ValidationFailure("staged application is unavailable") }
+    defer { close(staged) }
+    var hasher = SHA256()
+    hasher.update(data: Data("ios-template-app-bundle-v1\0".utf8))
+    try processBundleTree(
+        sourceDirectory: source, destinationDirectory: staged,
+        relativePath: "", hasher: &hasher
+    )
+    guard fsync(staged) == 0, fsync(stagedRoot) == 0 else {
+        throw ValidationFailure("staged application could not be synchronized")
+    }
+    let digest = "sha256:" + hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    return (attemptRoot + "/StagedApp/" + appName, digest)
+}
+
+func validateStagedApplication(
+    configPath: String,
+    configDigest: String,
+    appPath: String,
+    expectedBundleDigest: String
+) throws {
+    guard matches(expectedBundleDigest, regex: digestPattern) else {
+        throw ValidationFailure("staged application digest is invalid")
+    }
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: configDigest)
+    let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
+    let appName = URL(fileURLWithPath: appPath).lastPathComponent
+    guard appName.hasSuffix(".app"), appPath == attemptRoot + "/StagedApp/" + appName else {
+        throw ValidationFailure("staged application path is invalid")
+    }
+    let components = try relativeComponents(String(appPath.dropFirst("/tmp/".count)), at: "staged application")
+    let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
+    defer { close(temporary) }
+    let app = try openBoundDirectory(rootFileDescriptor: temporary, components: components, at: "staged application")
+    defer { close(app) }
+    guard try bundleDigest(directory: app) == expectedBundleDigest else {
+        throw ValidationFailure("staged application digest changed")
+    }
+    let plistData = try readBoundRegularFile(
+        rootFileDescriptor: app, components: ["Info.plist"], at: "staged application Info.plist"
+    )
+    let plistValue = try PropertyListSerialization.propertyList(from: plistData, options: [], format: nil)
+    let expectedBundleIdentifier = try requireString(config["bundleIdentifier"]!, at: "runner config bundleIdentifier")
+    guard let plist = plistValue as? [String: Any],
+          plist["CFBundleIdentifier"] as? String == expectedBundleIdentifier else {
+        throw ValidationFailure("staged application bundle identifier changed")
+    }
 }
 
 func ensureOwnedDirectory(
@@ -1609,7 +1895,10 @@ func ensureOwnedDirectory(
     label: String
 ) throws -> Int32 {
     let mode: mode_t = privatePermissions ? S_IRWXU : (S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH)
-    if mkdirat(parent, name, mode) != 0, errno != EEXIST {
+    var created = false
+    if mkdirat(parent, name, mode) == 0 {
+        created = true
+    } else if errno != EEXIST {
         throw ValidationFailure("\(label) could not be created")
     }
     let descriptor = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -1627,7 +1916,41 @@ func ensureOwnedDirectory(
             throw ValidationFailure("\(label) could not be made private")
         }
     }
+    if created, fsync(parent) != 0 {
+        close(descriptor)
+        throw ValidationFailure("\(label) creation could not be synchronized")
+    }
     return descriptor
+}
+
+func ensureCanonicalEvidenceDirectory(
+    repository: TrustedRepository,
+    issue: Int,
+    head: String
+) throws -> Int32 {
+    guard issue > 0, matches(head, regex: shaPattern) else {
+        throw ValidationFailure("canonical evidence directory identity is invalid")
+    }
+    var current = dup(repository.rootFileDescriptor)
+    guard current >= 0 else { throw ValidationFailure("unable to bind repository directory") }
+    do {
+        for (name, isPrivate, label) in [
+            (".artifacts", false, "artifact root"),
+            ("issues", false, "Issue evidence root"),
+            (String(issue), false, "Issue evidence directory"),
+            (head, true, "Head evidence directory")
+        ] {
+            let next = try ensureOwnedDirectory(
+                parent: current, name: name, privatePermissions: isPrivate, label: label
+            )
+            close(current)
+            current = next
+        }
+        return current
+    } catch {
+        close(current)
+        throw error
+    }
 }
 
 struct RunnerFinalizeOptions {
@@ -1651,6 +1974,58 @@ struct RunnerDraftOptions {
     let passed: Int
     let failed: Int
     let skipped: Int
+}
+
+struct RunnerFailureOptions {
+    let issue: Int
+    let expectedBase: String
+    let expectedHead: String
+    let stage: String
+    let message: String
+}
+
+func recordRunnerFailure(_ options: RunnerFailureOptions) throws -> String {
+    guard options.issue > 0,
+          matches(options.expectedBase, regex: shaPattern),
+          matches(options.expectedHead, regex: shaPattern),
+          options.expectedBase != options.expectedHead,
+          options.stage.range(of: "^[A-Za-z0-9_.-]{1,80}$", options: .regularExpression) != nil,
+          !options.message.isEmpty, options.message.utf8.count <= 240,
+          !options.message.contains("\n"), !options.message.contains("\r"), !options.message.contains("\0") else {
+        throw ValidationFailure("runner failure inputs are invalid")
+    }
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+    )
+    defer { close(repository.rootFileDescriptor) }
+    let evidenceDirectory = try ensureCanonicalEvidenceDirectory(
+        repository: repository, issue: options.issue, head: options.expectedHead
+    )
+    defer { close(evidenceDirectory) }
+    let failures = try ensureOwnedDirectory(
+        parent: evidenceDirectory, name: "failures", privatePermissions: true,
+        label: "failure evidence directory"
+    )
+    defer { close(failures) }
+    let document: [String: Any] = [
+        "schemaVersion": 1,
+        "status": "failed",
+        "issue": options.issue,
+        "baseSha": options.expectedBase,
+        "headSha": options.expectedHead,
+        "stage": options.stage,
+        "error": options.message,
+        "recordedAt": ISO8601DateFormatter().string(from: Date())
+    ]
+    let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
+    let name = "failure-\(UUID().uuidString.lowercased()).json"
+    try publishGeneratedData(
+        directoryFileDescriptor: failures,
+        canonicalName: name,
+        temporaryPrefix: ".failure-candidate",
+        data: data
+    )
+    return repository.rootPath + "/.artifacts/issues/\(options.issue)/\(options.expectedHead)/failures/" + name
 }
 
 func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
@@ -1688,15 +2063,33 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
     let configuredCases = try requireArray(config["cases"]!, at: "runner config cases")
     guard configuredCases.count == 4 else { throw ValidationFailure("runner config cases are invalid") }
     var draftCases: [[String: Any]] = []
+    var screenshotData: [Data] = []
     for value in configuredCases {
         let entry = try requireObject(value, at: "runner config case")
         let id = try requireString(entry["id"]!, at: "runner config case id")
         let action = try requireString(entry["action"]!, at: "runner config case action")
         let actionValue = try requireString(entry["value"]!, at: "runner config case value")
+        let sourcePath = attemptRoot + "/Screenshots/\(id).png"
+        let sourceComponents = try relativeComponents(String(sourcePath.dropFirst("/tmp/".count)), at: "attempt screenshot")
+        let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
+        let data: Data
+        do {
+            data = try readBoundRegularFile(
+                rootFileDescriptor: temporary, components: sourceComponents, at: "attempt screenshot"
+            )
+            close(temporary)
+        } catch {
+            close(temporary)
+            throw error
+        }
+        try validatePNGData(data)
+        screenshotData.append(data)
         draftCases.append([
             "id": id,
             "status": "passed",
             "screenshot": "\(id)/screenshot.png",
+            "screenshotDigest": "sha256:\(sha256(data: data))",
             "mechanicalCheck": action == "testIdentifier" ? "test:\(actionValue)" : "assertion:launch-succeeded"
         ])
     }
@@ -1737,24 +2130,10 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
     )
     defer { close(evidenceDirectory) }
     var screenshotDirectories: [Int32] = []
-    var screenshotData: [Data] = []
     defer { screenshotDirectories.forEach { close($0) } }
     for value in configuredCases {
         let entry = try requireObject(value, at: "runner config case")
         let id = try requireString(entry["id"]!, at: "runner config case id")
-        let sourcePath = attemptRoot + "/Screenshots/\(id).png"
-        let sourceComponents = try relativeComponents(String(sourcePath.dropFirst("/tmp/".count)), at: "attempt screenshot")
-        let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-        guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
-        let data: Data
-        do {
-            data = try readBoundRegularFile(rootFileDescriptor: temporary, components: sourceComponents, at: "attempt screenshot")
-            close(temporary)
-        } catch {
-            close(temporary)
-            throw error
-        }
-        try validatePNGData(data)
         let caseDirectory = try ensureOwnedDirectory(
             parent: evidenceDirectory, name: id, privatePermissions: true, label: "case evidence directory"
         )
@@ -1764,16 +2143,35 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
             throw ValidationFailure("canonical screenshot already exists")
         }
         screenshotDirectories.append(caseDirectory)
-        screenshotData.append(data)
     }
     var publishedScreenshotCount = 0
+    let snapshotOptions = RunnerSnapshotOptions(
+        issue: options.issue, expectedBase: options.expectedBase, expectedHead: options.expectedHead,
+        issueContract: contractPath, matrix: matrixPath
+    )
+    func revalidateDraftPublicationBoundary() throws {
+        _ = try readSealedRunnerConfig(configPath: options.configPath, expectedDigest: options.configDigest)
+        try verifyRunnerInputs(
+            options: snapshotOptions, contractDigest: contractDigest, matrixDigest: matrixDigest
+        )
+        for index in 0..<publishedScreenshotCount {
+            let canonical = try readBoundRegularFile(
+                rootFileDescriptor: screenshotDirectories[index], components: ["screenshot.png"],
+                at: "published screenshot"
+            )
+            guard sha256(data: canonical) == sha256(data: screenshotData[index]) else {
+                throw ValidationFailure("published screenshot changed before draft publication")
+            }
+        }
+    }
     do {
         for index in screenshotDirectories.indices {
             try publishGeneratedData(
                 directoryFileDescriptor: screenshotDirectories[index],
                 canonicalName: "screenshot.png",
                 temporaryPrefix: ".screenshot-candidate",
-                data: screenshotData[index]
+                data: screenshotData[index],
+                beforeLink: revalidateDraftPublicationBoundary
             )
             publishedScreenshotCount += 1
         }
@@ -1781,7 +2179,8 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
             directoryFileDescriptor: evidenceDirectory,
             canonicalName: "verify-draft.json",
             temporaryPrefix: ".verify-draft-candidate",
-            data: draftData
+            data: draftData,
+            beforeLink: revalidateDraftPublicationBoundary
         )
     } catch {
         for index in 0..<publishedScreenshotCount {
@@ -1852,7 +2251,7 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     guard draftCases.count == 4 else { throw ValidationFailure("draft must contain exact four cases") }
     for (index, value) in draftCases.enumerated() {
         let entry = try requireObject(value, at: "draft case")
-        try requireExactKeys(entry, ["id", "status", "screenshot", "mechanicalCheck"], at: "draft case")
+        try requireExactKeys(entry, ["id", "status", "screenshot", "screenshotDigest", "mechanicalCheck"], at: "draft case")
         let expectedCase = verification.cases[index]
         let expectedCheck = expectedCase.action == "testIdentifier"
             ? "test:\(expectedCase.value)" : "assertion:launch-succeeded"
@@ -1862,6 +2261,12 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
               try requireString(entry["mechanicalCheck"]!, at: "draft mechanicalCheck") == expectedCheck else {
             throw ValidationFailure("draft mechanical checks do not match the canonical contract")
         }
+        let screenshotData = try readBoundRegularFile(
+            rootFileDescriptor: repository.rootFileDescriptor,
+            components: evidenceComponents + [matrix.caseIDs[index], "screenshot.png"],
+            at: "draft case screenshot"
+        )
+        try validateDigest(entry["screenshotDigest"]!, data: screenshotData, at: "draft case screenshotDigest")
     }
     let acceptance = try requireArray(draft["acceptanceEvidence"]!, at: "draft acceptanceEvidence")
     guard acceptance.count == contract.acceptanceIDs.count else {
@@ -1913,10 +2318,13 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     guard visualCases.count == 4 else { throw ValidationFailure("visual result must contain exact four cases") }
     for (index, value) in visualCases.enumerated() {
         let entry = try requireObject(value, at: "visual case")
-        try requireExactKeys(entry, ["id", "status", "screenshot", "findings"], at: "visual case")
+        try requireExactKeys(entry, ["id", "status", "screenshot", "screenshotDigest", "findings"], at: "visual case")
+        let draftEntry = try requireObject(draftCases[index], at: "draft case")
+        let expectedScreenshotDigest = try requireString(draftEntry["screenshotDigest"]!, at: "draft screenshotDigest")
         guard try requireString(entry["id"]!, at: "visual case id") == matrix.caseIDs[index],
               try requireString(entry["status"]!, at: "visual case status") == "approved",
               try requireString(entry["screenshot"]!, at: "visual screenshot") == "\(matrix.caseIDs[index])/screenshot.png",
+              try requireString(entry["screenshotDigest"]!, at: "visual screenshotDigest") == expectedScreenshotDigest,
               try requireStringArray(entry["findings"]!, at: "visual case findings").isEmpty else {
             throw ValidationFailure("visual result cases mismatch or contain findings")
         }
@@ -1925,7 +2333,13 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     guard reviewedAt >= executionCompleted, reviewedAt <= Date().addingTimeInterval(300) else {
         throw ValidationFailure("visual review timestamp is invalid")
     }
-    let finalCases = matrix.caseIDs.map { ["id": $0, "status": "passed", "screenshot": "\($0)/screenshot.png"] }
+    let finalCases: [[String: Any]] = try matrix.caseIDs.enumerated().map { index, id in
+        let draftEntry = try requireObject(draftCases[index], at: "draft case")
+        return [
+            "id": id, "status": "passed", "screenshot": "\(id)/screenshot.png",
+            "screenshotDigest": try requireString(draftEntry["screenshotDigest"]!, at: "draft screenshotDigest")
+        ]
+    }
     let finalAcceptance: [[String: Any]] = contract.acceptanceIDs.enumerated().map { index, id in
         ["id": id, "status": "passed", "evidence": verification.acceptanceMappings[index]]
     }
@@ -2042,6 +2456,9 @@ func validate(options: Options) throws {
     let candidateName: String?
     let sourceComponents: [String]
     if let candidateFile = options.candidateFile {
+        guard heldValidatedCandidateFileDescriptor != nil else {
+            throw ValidationFailure("standalone candidate publication is not supported")
+        }
         let candidateURL = URL(fileURLWithPath: absoluteStandardizedPath(candidateFile))
         let evidenceDirectoryPath = repository.rootPath + "/" + evidenceComponents.dropLast().joined(separator: "/")
         guard candidateURL.deletingLastPathComponent().path == evidenceDirectoryPath,
@@ -2104,6 +2521,7 @@ func validate(options: Options) throws {
     }
 
     let classification = try requireString(root["changeClassification"]!, at: "changeClassification")
+    var candidatePublicationCheck: (() throws -> Void)?
     switch classification {
     case "application-code":
         guard try requireString(root["status"]!, at: "status") == "passed" else {
@@ -2147,6 +2565,26 @@ func validate(options: Options) throws {
             root["acceptanceEvidence"]!, contractIDs: contract.acceptanceIDs, documentationOnly: false,
             expectedMappings: contract.verification?.acceptanceMappings
         )
+        let contractPath = try requireString(contractReference["path"]!, at: "issueContract.path")
+        let contractDigest = try requireString(contractReference["digest"]!, at: "issueContract.digest")
+        let matrixDigest = try requireString(root["matrixDigest"]!, at: "matrixDigest")
+        candidatePublicationCheck = {
+            try verifyRunnerInputs(
+                options: RunnerSnapshotOptions(
+                    issue: issue,
+                    expectedBase: options.expectedBase,
+                    expectedHead: options.expectedHead,
+                    issueContract: contractPath,
+                    matrix: matrixPath
+                ),
+                contractDigest: contractDigest,
+                matrixDigest: matrixDigest
+            )
+            try validateApplicationCases(
+                root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
+                head: headSha, repository: repository
+            )
+        }
 
     case "documentation-only":
         guard try requireString(root["status"]!, at: "status") == "not-applicable" else {
@@ -2177,10 +2615,14 @@ func validate(options: Options) throws {
         throw ValidationFailure("changeClassification is not supported")
     }
     if let candidateName {
+        guard let candidatePublicationCheck else {
+            throw ValidationFailure("standalone candidate publication is not supported")
+        }
         try publishValidatedCandidate(
             repository: repository,
             evidenceDirectoryComponents: Array(evidenceComponents.dropLast()),
-            candidateName: candidateName
+            candidateName: candidateName,
+            beforeLink: candidatePublicationCheck
         )
     }
 }
@@ -2265,6 +2707,24 @@ do {
             issue: issue, expectedBase: expectedBase, expectedHead: expectedHead,
             draftPath: draft, visualPath: visual
         )))
+    } else if arguments.first == "--runner-record-failure" {
+        guard arguments.count == 11 else { throw ValidationFailure("invalid runner failure arguments") }
+        var values: [String: String] = [:]
+        var index = 1
+        while index < arguments.count {
+            guard values[arguments[index]] == nil else { throw ValidationFailure("duplicate runner failure argument") }
+            values[arguments[index]] = arguments[index + 1]
+            index += 2
+        }
+        guard let issueText = values["--issue"], let issue = Int(issueText),
+              let expectedBase = values["--expected-base"], let expectedHead = values["--expected-head"],
+              let stage = values["--stage"], let message = values["--message"], values.count == 5 else {
+            throw ValidationFailure("invalid runner failure arguments")
+        }
+        print(try recordRunnerFailure(RunnerFailureOptions(
+            issue: issue, expectedBase: expectedBase, expectedHead: expectedHead,
+            stage: stage, message: message
+        )))
     } else if arguments.first == "--runner-publish-draft" {
         guard arguments.count == 25 else { throw ValidationFailure("invalid runner draft arguments") }
         var values: [String: String] = [:]
@@ -2291,10 +2751,24 @@ do {
             passed: passed, failed: failed, skipped: skipped
         )))
     } else if arguments.first == "--runner-find-app" {
-        guard arguments.count == 5, arguments[1] == "--derived-data", arguments[3] == "--bundle-identifier" else {
+        guard arguments.count == 9, arguments[1] == "--config", arguments[3] == "--digest",
+              arguments[5] == "--derived-data", arguments[7] == "--bundle-identifier" else {
             throw ValidationFailure("invalid built application lookup arguments")
         }
-        print(try findBuiltApplication(derivedDataPath: arguments[2], bundleIdentifier: arguments[4]))
+        let result = try findBuiltApplication(
+            configPath: arguments[2], configDigest: arguments[4],
+            derivedDataPath: arguments[6], bundleIdentifier: arguments[8]
+        )
+        print(result.path + "\t" + result.digest)
+    } else if arguments.first == "--runner-check-app" {
+        guard arguments.count == 9, arguments[1] == "--config", arguments[3] == "--digest",
+              arguments[5] == "--app", arguments[7] == "--bundle-digest" else {
+            throw ValidationFailure("invalid staged application check arguments")
+        }
+        try validateStagedApplication(
+            configPath: arguments[2], configDigest: arguments[4],
+            appPath: arguments[6], expectedBundleDigest: arguments[8]
+        )
     } else {
         let options = try parseOptions(arguments)
         try validate(options: options)

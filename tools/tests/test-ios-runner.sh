@@ -12,6 +12,7 @@ fake_developer="$scratch/FakeXcode/Contents/Developer"
 fake_log="$scratch/commands.log"
 poison_log="$scratch/poison.log"
 poison_sentinel="$scratch/poison-sentinel"
+git_policy_sentinel="$scratch/git-policy-sentinel"
 adapter_state="$scratch/adapter-state"
 test_source="$scratch/test-source"
 runner="$test_source/tools/verify-ios-issue.sh"
@@ -20,6 +21,44 @@ mkdir -p "$adapter_bin" "$poison_bin" "$adapter_state" "$fake_developer/usr/bin"
 /bin/cp "$source_repo/tools/verify-ios-issue.sh" "$runner"
 /bin/cp "$source_repo/tools/lib/xcode.sh" "$test_source/tools/lib/xcode.sh"
 /bin/cp "$source_repo/tools/validate-verify-json.swift" "$test_source/tools/validate-verify-json.swift"
+/usr/bin/ruby - "$test_source/tools/validate-verify-json.swift" "$adapter_state" <<'RUBY'
+path, state_dir = ARGV
+text = File.read(path)
+helper = <<~SWIFT
+func round3TestPublicationRace() {
+    let modePath = "#{state_dir}/publication_race"
+    let markerPath = "#{state_dir}/publication-race-fired"
+    guard !FileManager.default.fileExists(atPath: markerPath),
+          let mode = try? String(contentsOfFile: modePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+          mode == "contract" || mode == "matrix" || mode == "candidate",
+          let target = try? String(contentsOfFile: "#{state_dir}/" + mode + "_path", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+          !target.isEmpty,
+          FileManager.default.createFile(atPath: markerPath, contents: Data(), attributes: nil) else { return }
+    if mode == "candidate" {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: target),
+              let name = names.first(where: { $0.hasPrefix(".verify-candidate-") }) else { return }
+        let path = target + "/" + name
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+        try? FileManager.default.removeItem(atPath: path)
+        _ = FileManager.default.createFile(atPath: path, contents: Data("substituted-candidate\\n".utf8), attributes: [.posixPermissions: 0o400])
+        return
+    }
+    guard let file = FileHandle(forWritingAtPath: target) else { return }
+    file.seekToEndOfFile()
+    file.write(Data("\\n".utf8))
+    try? file.synchronize()
+    try? file.close()
+}
+
+SWIFT
+text.sub!("typealias JSONObject", helper + "typealias JSONObject")
+if text.include?("try beforeLink()")
+  text.gsub!("try beforeLink()", "round3TestPublicationRace()\n    try beforeLink()")
+else
+  text.gsub!("guard linkat(", "round3TestPublicationRace()\n    guard linkat(")
+end
+File.write(path, text)
+RUBY
 validator_binary="$scratch/validate-verify-json"
 /usr/bin/swiftc "$test_source/tools/validate-verify-json.swift" -o "$validator_binary"
 
@@ -31,9 +70,9 @@ validator_binary="$scratch/validate-verify-json"
   -e "s|^PREFERRED_DEVELOPER_DIR=.*|PREFERRED_DEVELOPER_DIR=\"$fake_developer\"|" \
   "$test_source/tools/lib/xcode.sh"
 
-for poisoned in git xcode-select xcrun xcodebuild swift; do
+for poisoned in bash git xcode-select xcrun xcodebuild swift; do
   /usr/bin/sed "s|@NAME@|$poisoned|g; s|@LOG@|$poison_log|g" >"$poison_bin/$poisoned" <<'SH'
-#!/usr/bin/env bash
+#!/bin/sh
 printf '%s\n' '@NAME@' >>'@LOG@'
 exit 97
 SH
@@ -42,15 +81,19 @@ done
 
 poison_ruby="$scratch/poison-ruby.rb"
 poison_tool="$scratch/poison-tool"
+poison_bash_env="$scratch/poison-bash-env.sh"
 /usr/bin/sed "s|@SENTINEL@|$poison_sentinel|g" >"$poison_ruby" <<'RUBY'
 File.open("@SENTINEL@", "a") { |file| file.puts("ruby-environment-executed") }
 RUBY
 /usr/bin/sed "s|@SENTINEL@|$poison_sentinel|g" >"$poison_tool" <<'SH'
-#!/usr/bin/env bash
+#!/bin/bash -p
 printf '%s\n' poison-tool-executed >>'@SENTINEL@'
 exit 98
 SH
 chmod +x "$poison_tool"
+/usr/bin/sed "s|@SENTINEL@|$poison_sentinel|g" >"$poison_bash_env" <<'SH'
+printf '%s\n' bash-env-executed >>'@SENTINEL@'
+SH
 
 set_state() {
   local key="$1" value="$2"
@@ -62,7 +105,7 @@ set_state() {
 }
 
 cat >"$adapter_bin/xcode-select" <<'SH'
-#!/usr/bin/env bash
+#!/bin/bash -p
 set -euo pipefail
 state_dir="@STATE_DIR@" fake_log="@FAKE_LOG@"
 state() { [[ -f "$state_dir/$1" ]] && /bin/cat "$state_dir/$1" || true; }
@@ -75,7 +118,7 @@ SH
 chmod +x "$adapter_bin/xcode-select"
 
 cat >"$fake_developer/usr/bin/xcodebuild" <<'SH'
-#!/usr/bin/env bash
+#!/bin/bash -p
 set -euo pipefail
 state_dir="@STATE_DIR@" fake_log="@FAKE_LOG@"
 state() { [[ -f "$state_dir/$1" ]] && /bin/cat "$state_dir/$1" || true; }
@@ -123,6 +166,19 @@ if [[ "$mode" == build-for-testing ]]; then
   else
     printf '%s\n' "$plist" >"$app/Info.plist"
   fi
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$app/TemplateApp"
+  chmod 0700 "$app/TemplateApp"
+  case "$(state app_mode)" in
+    nested-symlink)
+      mkdir -p "$app/Resources"
+      printf '%s\n' outside >"$derived/outside-resource"
+      /bin/ln -s "$derived/outside-resource" "$app/Resources/linked-resource"
+      ;;
+    special-file)
+      mkdir -p "$app/Resources"
+      /usr/bin/mkfifo "$app/Resources/unsupported.fifo"
+      ;;
+  esac
   hold_file="$(state hold_file)"
   if [[ -n "$hold_file" ]]; then
     printf '%s\n' "$PPID" >"$hold_file.owner"
@@ -176,7 +232,7 @@ SH
 chmod +x "$fake_developer/usr/bin/xcodebuild"
 
 cat >"$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift" <<'SH'
-#!/usr/bin/env bash
+#!/bin/bash -p
 set -euo pipefail
 state_dir="@STATE_DIR@"
 validator_binary="@VALIDATOR_BINARY@"
@@ -237,7 +293,7 @@ SH
 chmod +x "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
 
 cat >"$adapter_bin/xcrun" <<'SH'
-#!/usr/bin/env bash
+#!/bin/bash -p
 set -euo pipefail
 state_dir="@STATE_DIR@" fake_log="@FAKE_LOG@"
 state() { [[ -f "$state_dir/$1" ]] && /bin/cat "$state_dir/$1" || true; }
@@ -274,6 +330,7 @@ if [[ "${1-}" == xcresulttool ]]; then
       failed) passed=0; failed=1 ;;
       skipped) passed=0; skipped=1 ;;
       zero) passed=0; total=0 ;;
+      two-summary) passed=2; total=2 ;;
       wrong-selector) selected_method=anotherTest ;;
     esac
   else
@@ -298,7 +355,7 @@ if [[ "${1-}" == xcresulttool ]]; then
   if [[ "${4-}" == tests ]]; then
     printf '{"devices":[{"deviceId":"%s"}],"testNodes":[{"children":[{"children":[{"children":[{"duration":"0.1s","durationInSeconds":0.1,"name":"selected","nodeIdentifier":"%s/%s()","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s/%s/%s()","nodeType":"Test Case","result":"%s"}],"name":"suite","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s/%s","nodeType":"Test Suite","result":"%s"}],"name":"target","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s","nodeType":"Unit test bundle","result":"%s"}],"name":"Test Plan","nodeType":"Test Plan","result":"%s"}]}\n' \
       "$udid" "$selected_class" "$selected_method" "$selected_target" "$selected_class" "$selected_method" \
-      "$([[ "$passed" == 1 ]] && printf Passed || printf Failed)" "$selected_target" "$selected_class" \
+      "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" "$selected_target" "$selected_class" \
       "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" "$selected_target" \
       "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" \
       "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)"
@@ -321,7 +378,23 @@ case "$command" in
       '{"udid":"00000000-0000-0000-0000-000000000003","state":"Booted"},' \
       '{"udid":"00000000-0000-0000-0000-000000000004","state":"Booted"}]}}'
     ;;
-  bootstatus|install|terminate) exit 0 ;;
+  bootstatus|terminate) exit 0 ;;
+  install)
+    app_path="${4-}"
+    [[ -d "$app_path" ]] || { echo 'install path is not an app directory' >&2; exit 1; }
+    if [[ "$(state app_mode)" == mutate-after-install && ! -e "$state_dir/app-mutated" ]]; then
+      : >"$state_dir/app-mutated"
+      chmod 0600 "$app_path/Info.plist"
+      printf '%s\n' mutated-after-install >>"$app_path/Info.plist"
+      chmod 0400 "$app_path/Info.plist"
+    elif [[ "$(state app_mode)" == replace-after-install && ! -e "$state_dir/app-mutated" ]]; then
+      : >"$state_dir/app-mutated"
+      /bin/mv "$app_path" "$app_path.replaced"
+      mkdir -p "$app_path"
+      /bin/cp "$app_path.replaced/Info.plist" "$app_path/Info.plist"
+    fi
+    exit 0
+    ;;
   launch)
     /usr/bin/awk -F '\t' -v udid="${3-}" '$3 == "simctl" && $4 == "terminate" && $5 == udid {seen=1} END {exit seen ? 0 : 1}' "$fake_log" || { echo 'launch lacked pre-termination' >&2; exit 1; }
     [[ "$(state case_mode)" != launch-fail || "${3-}" != "00000000-0000-0000-0000-000000000002" ]] || { echo 'configured launch failure' >&2; exit 1; }
@@ -330,7 +403,13 @@ case "$command" in
     ;;
   spawn)
     [[ "${4-}" == /bin/kill && "${5-}" == -0 && "${6-}" == 4321 ]] || { echo 'wrong process liveness probe' >&2; exit 1; }
+    spawn_count_file="$state_dir/spawn-${3-}"
+    spawn_count=0
+    [[ ! -f "$spawn_count_file" ]] || spawn_count="$(/bin/cat "$spawn_count_file")"
+    spawn_count=$((spawn_count + 1))
+    printf '%s\n' "$spawn_count" >"$spawn_count_file"
     [[ "$(state case_mode)" != crash || "${3-}" != "00000000-0000-0000-0000-000000000002" ]] || exit 1
+    [[ "$(state case_mode)" != post-ui-crash || "${3-}" != "00000000-0000-0000-0000-000000000001" || "$spawn_count" -lt 2 ]] || exit 1
     ;;
   io)
     [[ "${4-}" == screenshot ]] || { echo 'expected screenshot' >&2; exit 1; }
@@ -421,7 +500,7 @@ RUBY
 }
 
 prepare_repo() {
-  local label="$1" contract_mode="${2:-valid}"
+  local label="$1" contract_mode="${2:-valid}" head_directory="${3:-present}"
   repo="$scratch/$label/repository"
   mkdir -p "$repo/TemplateApp.xcodeproj" "$repo/docs"
   repo="$(cd "$repo" && pwd -P)"
@@ -443,16 +522,22 @@ prepare_repo() {
   draft="$repo/.artifacts/issues/42/$head_sha/verify-draft.json"
   visual="$repo/.artifacts/issues/42/$head_sha/visual-result.json"
   final="$repo/.artifacts/issues/42/$head_sha/verify.json"
-  mkdir -p "$(dirname "$contract")" "$(dirname "$matrix")" "$(dirname "$draft")"
+  mkdir -p "$(dirname "$contract")" "$(dirname "$matrix")"
+  [[ "$head_directory" != present ]] || mkdir -p "$(dirname "$draft")"
   write_contract "$contract" "$contract_mode"
   write_matrix "$matrix"
   : >"$fake_log"
   : >"$poison_log"
   /bin/rm -f "$poison_sentinel"
   for key in build_mode test_mode ui_mode case_mode mutate_input prebooted preferred_invalid \
-    hold_file collide_draft collide_final png_mode config_mode candidate_mode; do
+    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race; do
     set_state "$key" ""
   done
+  for spawn_state in "$adapter_state"/spawn-*; do
+    [[ ! -e "$spawn_state" ]] || /bin/rm -f "$spawn_state"
+  done
+  /bin/rm -f "$adapter_state/app-mutated"
+  /bin/rm -f "$adapter_state/publication-race-fired"
 }
 
 run_execute() {
@@ -467,10 +552,14 @@ run_execute() {
   set_state collide_draft "${FAKE_COLLIDE_DRAFT-}"
   set_state png_mode "${FAKE_PNG_MODE-}"
   set_state config_mode "${FAKE_CONFIG_MODE-}"
+  set_state app_mode "${FAKE_APP_MODE-}"
+  set_state publication_race "${FAKE_PUBLICATION_RACE-}"
   set_state contract_path "$contract"
   set_state matrix_path "$matrix"
   set_state fallback_developer "${FAKE_FALLBACK_DEVELOPER_DIR:-$fake_developer}"
-  (cd "$repo" && PATH="$poison_bin:/usr/bin:/bin" \
+  (cd "$repo" && /usr/bin/env \
+    "BASH_FUNC_cd%%=() { printf '%s\\n' bash-function-executed >>'$poison_sentinel'; builtin cd \"\$@\"; }" \
+    BASH_ENV="$poison_bash_env" PATH="$poison_bin:/usr/bin:/bin" \
     GIT_DIR=/malicious/git-dir GIT_WORK_TREE=/malicious/work-tree GIT_INDEX_FILE=/malicious/index \
     GIT_OBJECT_DIRECTORY=/malicious/objects GIT_ALTERNATE_OBJECT_DIRECTORIES=/malicious/alternates \
     GIT_CONFIG_GLOBAL=/malicious/global GIT_CONFIG_SYSTEM=/malicious/system GIT_CONFIG_NOSYSTEM=0 \
@@ -490,7 +579,11 @@ run_execute() {
 run_finalize() {
   set_state collide_final "${FAKE_COLLIDE_FINAL-}"
   set_state candidate_mode "${FAKE_CANDIDATE_MODE-}"
-  (cd "$repo" && PATH="$poison_bin:/usr/bin:/bin" \
+  set_state publication_race "${FAKE_PUBLICATION_RACE-}"
+  set_state candidate_path "$(dirname "$final")"
+  (cd "$repo" && /usr/bin/env \
+    "BASH_FUNC_cd%%=() { printf '%s\\n' bash-function-executed >>'$poison_sentinel'; builtin cd \"\$@\"; }" \
+    BASH_ENV="$poison_bash_env" PATH="$poison_bin:/usr/bin:/bin" \
     GIT_DIR=/malicious/git-dir GIT_WORK_TREE=/malicious/work-tree GIT_INDEX_FILE=/malicious/index \
     GIT_OBJECT_DIRECTORY=/malicious/objects GIT_ALTERNATE_OBJECT_DIRECTORIES=/malicious/alternates \
     GIT_CONFIG_GLOBAL=/malicious/global GIT_CONFIG_SYSTEM=/malicious/system GIT_CONFIG_NOSYSTEM=0 \
@@ -536,7 +629,7 @@ document = {
   "schemaVersion" => 1, "status" => "approved", "issue" => draft.fetch("issue"),
   "headSha" => draft.fetch("headSha"),
   "draft" => {"path" => ".artifacts/issues/42/#{draft.fetch("headSha")}/verify-draft.json", "digest" => "sha256:#{Digest::SHA256.file(draft_path).hexdigest}"},
-  "cases" => draft.fetch("cases").map { |entry| {"id" => entry.fetch("id"), "status" => "approved", "screenshot" => entry.fetch("screenshot"), "findings" => []} },
+  "cases" => draft.fetch("cases").map { |entry| {"id" => entry.fetch("id"), "status" => "approved", "screenshot" => entry.fetch("screenshot"), "screenshotDigest" => entry.fetch("screenshotDigest"), "findings" => []} },
   "findings" => [], "reviewedAt" => Time.now.iso8601
 }
 case mode
@@ -545,6 +638,7 @@ when "wrong-digest" then document.fetch("draft")["digest"] = "sha256:" + "0" * 6
 when "wrong-head" then document["headSha"] = "0" * 40
 when "missing-case" then document.fetch("cases").pop
 when "case-finding" then document.fetch("cases").fetch(0)["findings"] = ["clipped"]
+when "wrong-screenshot-digest" then document.fetch("cases").fetch(0)["screenshotDigest"] = "sha256:" + "0" * 64
 end
 File.write(visual_path, JSON.pretty_generate(document) + "\n")
 RUBY
@@ -563,13 +657,19 @@ run_execute
 [[ ! -s "$poison_log" ]] || { echo "production dispatch used caller PATH" >&2; cat "$poison_log" >&2; exit 1; }
 [[ ! -e "$poison_sentinel" ]] || { echo "security-critical child inherited poisoned environment" >&2; cat "$poison_sentinel" >&2; exit 1; }
 [[ -f "$draft" && ! -e "$final" ]] || { echo "execution did not publish only the draft" >&2; exit 1; }
-/usr/bin/ruby -rjson - "$draft" "$head_sha" <<'RUBY'
+/usr/bin/ruby -rjson -rdigest - "$draft" "$head_sha" <<'RUBY'
 draft, head = ARGV
 document = JSON.parse(File.read(draft))
 abort "wrong draft status" unless document["status"] == "awaiting-visual-review"
 abort "draft claimed visual approval" if document.key?("visualEvaluation")
 abort "wrong Head" unless document["headSha"] == head
 abort "wrong cases" unless document["cases"].map { |entry| entry["id"] } == %w[iphone-en iphone-ja ipad-en ipad-ja]
+evidence_root = File.dirname(draft)
+document.fetch("cases").each do |entry|
+  screenshot = File.join(evidence_root, entry.fetch("screenshot"))
+  expected = "sha256:#{Digest::SHA256.file(screenshot).hexdigest}"
+  abort "missing or wrong screenshot digest" unless entry.fetch("screenshotDigest") == expected
+end
 abort "missing AC mappings" unless document["acceptanceEvidence"].map { |entry| entry["id"] } == %w[AC-1 AC-2]
 abort "wrong execution AC evidence" unless document["acceptanceEvidence"].map { |entry| entry["evidence"] } == [
   %w[stage:build stage:unit-tests],
@@ -588,6 +688,10 @@ workspace_root="$(/usr/bin/ruby -rjson -e 'puts File.dirname(JSON.parse(File.rea
 build_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\tbuild-for-testing$/ {count++} END {print count+0}' "$fake_log")"
 test_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\ttest-without-building$/ {count++} END {print count+0}' "$fake_log")"
 [[ "$build_count" == 1 && "$test_count" == 3 ]] || { echo "wrong Build/Test invocation counts" >&2; cat "$fake_log" >&2; exit 1; }
+/usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && $4 == "install" { count++; if ($6 !~ /\/Attempts\/attempt-[0-9a-f-]+\/StagedApp\/TemplateApp\.app$/) bad=1 } END { exit count == 4 && !bad ? 0 : 1 }' "$fake_log" || {
+  echo "Simulator install did not use the exact private staged application" >&2
+  exit 1
+}
 /usr/bin/ruby - "$fake_log" "$fake_developer" <<'RUBY'
 path = ARGV.fetch(0)
 case_for = {
@@ -643,10 +747,10 @@ actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequen
 end
 expected = %w[
   xcode-version build build-diagnostics unit-test unit-diagnostics unit-summary unit-tests
-  iphone-en-boot iphone-en-bootstatus iphone-en-install iphone-en-terminate iphone-en-launch iphone-en-spawn iphone-en-ui-test iphone-en-diagnostics iphone-en-summary iphone-en-tests iphone-en-screenshot iphone-en-terminate
-  iphone-ja-boot iphone-ja-bootstatus iphone-ja-install iphone-ja-terminate iphone-ja-launch iphone-ja-spawn iphone-ja-screenshot iphone-ja-terminate
-  ipad-en-boot ipad-en-bootstatus ipad-en-install ipad-en-terminate ipad-en-launch ipad-en-spawn ipad-en-ui-test ipad-en-diagnostics ipad-en-summary ipad-en-tests ipad-en-screenshot ipad-en-terminate
-  ipad-ja-boot ipad-ja-bootstatus ipad-ja-install ipad-ja-terminate ipad-ja-launch ipad-ja-spawn ipad-ja-screenshot ipad-ja-terminate
+  iphone-en-boot iphone-en-bootstatus iphone-en-install iphone-en-terminate iphone-en-launch iphone-en-spawn iphone-en-ui-test iphone-en-diagnostics iphone-en-summary iphone-en-tests iphone-en-spawn iphone-en-screenshot iphone-en-terminate
+  iphone-ja-boot iphone-ja-bootstatus iphone-ja-install iphone-ja-terminate iphone-ja-launch iphone-ja-spawn iphone-ja-spawn iphone-ja-screenshot iphone-ja-terminate
+  ipad-en-boot ipad-en-bootstatus ipad-en-install ipad-en-terminate ipad-en-launch ipad-en-spawn ipad-en-ui-test ipad-en-diagnostics ipad-en-summary ipad-en-tests ipad-en-spawn ipad-en-screenshot ipad-en-terminate
+  ipad-ja-boot ipad-ja-bootstatus ipad-ja-install ipad-ja-terminate ipad-ja-launch ipad-ja-spawn ipad-ja-spawn ipad-ja-screenshot ipad-ja-terminate
 ]
 abort "unexpected Xcode/Simulator command order:\n#{actual.join("\n")}" unless actual == expected
 RUBY
@@ -669,6 +773,54 @@ run_finalize
 [[ -f "$final" ]] || { echo "finalizer did not publish verify.json" >&2; exit 1; }
 [[ ! -s "$poison_log" ]] || { echo "finalizer dispatch used caller PATH" >&2; cat "$poison_log" >&2; exit 1; }
 (cd "$repo" && swift "$source_repo/tools/validate-verify-json.swift" --file "$final" --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha")
+/usr/bin/ruby -rjson -rdigest - "$final" <<'RUBY'
+path = ARGV.fetch(0)
+document = JSON.parse(File.read(path))
+document.fetch("cases").each do |entry|
+  screenshot = File.join(File.dirname(path), entry.fetch("screenshot"))
+  abort "final screenshot digest mismatch" unless entry.fetch("screenshotDigest") == "sha256:#{Digest::SHA256.file(screenshot).hexdigest}"
+end
+RUBY
+
+prepare_repo first-run valid absent-head
+run_execute
+[[ -f "$draft" ]] || { echo "first run did not create and publish into the canonical Head directory" >&2; exit 1; }
+
+prepare_repo atomic-failure-evidence
+FAKE_BUILD_MODE=fail expect_execute_failure atomic-failure-evidence "build command failed"
+failure_file="$(/usr/bin/find "$(dirname "$draft")/failures" -type f -name 'failure-*.json' -print -quit)"
+[[ -n "$failure_file" ]] || { echo "failure evidence was not published" >&2; exit 1; }
+[[ "$(/usr/bin/stat -f '%Lp' "$failure_file")" == 400 ]] || { echo "failure evidence was not sealed read-only" >&2; exit 1; }
+/usr/bin/ruby -rjson -e 'document = JSON.parse(File.read(ARGV.fetch(0))); abort unless document["status"] == "failed" && document["stage"] == "build"' "$failure_file"
+if /usr/bin/find "$(dirname "$draft")/failures" -type f ! -name 'failure-*.json' -print -quit | /usr/bin/grep -q .; then
+  echo "failure publication left a temporary file" >&2
+  exit 1
+fi
+
+prepare_repo malicious-git-policy
+malicious_hooks="$scratch/malicious-hooks"
+mkdir -p "$malicious_hooks"
+/usr/bin/sed "s|@SENTINEL@|$git_policy_sentinel|g" >"$scratch/malicious-fsmonitor" <<'SH'
+#!/bin/sh
+printf '%s\n' fsmonitor-executed >>'@SENTINEL@'
+exit 1
+SH
+/usr/bin/sed "s|@SENTINEL@|$git_policy_sentinel|g" >"$malicious_hooks/post-index-change" <<'SH'
+#!/bin/sh
+printf '%s\n' hook-executed >>'@SENTINEL@'
+exit 0
+SH
+chmod +x "$scratch/malicious-fsmonitor" "$malicious_hooks/post-index-change"
+git -C "$repo" config core.fsmonitor "$scratch/malicious-fsmonitor"
+git -C "$repo" config core.hooksPath "$malicious_hooks"
+touch "$repo/docs/head.md"
+/bin/rm -f "$git_policy_sentinel"
+run_execute
+[[ ! -e "$git_policy_sentinel" ]] || {
+  echo "trusted Git executed repository-local fsmonitor or hooks" >&2
+  /bin/cat "$git_policy_sentinel" >&2
+  exit 1
+}
 
 for mode in absent missing-unit-test missing-case missing-action both-actions missing-mapping unknown-mapping; do
   prepare_repo "contract-$mode" "$mode"
@@ -693,6 +845,9 @@ done
 
 prepare_repo tests-wrong-selector
 FAKE_TEST_MODE=wrong-selector expect_execute_failure tests-wrong-selector "unit tests"
+
+prepare_repo tests-two-summary
+FAKE_TEST_MODE=two-summary expect_execute_failure tests-two-summary "unit tests"
 
 prepare_repo tests-warning
 FAKE_TEST_MODE=warning expect_execute_failure tests-warning "unit test warnings are not allowed"
@@ -733,6 +888,15 @@ for source in contract matrix; do
   [[ ! -e "$draft" ]] || { echo "mutated input published draft" >&2; exit 1; }
 done
 
+for source in contract matrix; do
+  prepare_repo "publication-race-$source"
+  FAKE_PUBLICATION_RACE="$source" expect_execute_failure "publication-race-$source" "atomic draft publication failed"
+  [[ ! -e "$draft" ]] || { echo "publication race emitted a stale draft" >&2; exit 1; }
+  for case_id in iphone-en iphone-ja ipad-en ipad-ja; do
+    [[ ! -e "$(dirname "$draft")/$case_id/screenshot.png" ]] || { echo "publication race left a screenshot" >&2; exit 1; }
+  done
+done
+
 prepare_repo case-failure
 FAKE_CASE_MODE=launch-fail expect_execute_failure case-failure "case iphone-ja failed"
 [[ ! -e "$draft" ]] || { echo "case failure published draft" >&2; exit 1; }
@@ -741,8 +905,23 @@ FAKE_CASE_MODE=launch-fail expect_execute_failure case-failure "case iphone-ja f
 prepare_repo case-crash
 FAKE_CASE_MODE=crash expect_execute_failure case-crash "case iphone-ja failed"
 
+prepare_repo post-ui-crash
+FAKE_CASE_MODE=post-ui-crash expect_execute_failure post-ui-crash "case iphone-en failed"
+
 prepare_repo app-plist-symlink
 FAKE_BUILD_MODE=plist-symlink expect_execute_failure app-plist-symlink "built application"
+
+prepare_repo app-nested-symlink
+FAKE_APP_MODE=nested-symlink expect_execute_failure app-nested-symlink "built application"
+
+prepare_repo app-special-file
+FAKE_APP_MODE=special-file expect_execute_failure app-special-file "built application"
+
+prepare_repo app-content-mutation
+FAKE_APP_MODE=mutate-after-install expect_execute_failure app-content-mutation "built application"
+
+prepare_repo app-path-replacement
+FAKE_APP_MODE=replace-after-install expect_execute_failure app-path-replacement "built application"
 
 prepare_repo late-failure-retry
 FAKE_CASE_MODE=late-fail expect_execute_failure late-failure-retry "case ipad-ja failed"
@@ -808,12 +987,21 @@ FAKE_PREFERRED_XCODE_INVALID=1 FAKE_FALLBACK_DEVELOPER_DIR="$fallback_developer"
 grep -Fq $'xcode-select\tDEVELOPER_DIR=\t-p' "$fake_log"
 /usr/bin/awk -F '\t' -v expected="DEVELOPER_DIR=$fallback_developer" '$1 == "xcodebuild" || $1 == "xcrun" {last=$2} END {exit last == expected ? 0 : 1}' "$fake_log"
 
-for mode in rejected wrong-digest wrong-head missing-case case-finding; do
+for mode in rejected wrong-digest wrong-head missing-case case-finding wrong-screenshot-digest; do
   prepare_repo "final-$mode"
   run_execute
   write_visual "$mode"
   expect_finalize_failure "final-$mode" "visual"
 done
+
+prepare_repo screenshot-byte-mutation
+run_execute
+write_visual approved
+screenshot_path="$(dirname "$draft")/iphone-en/screenshot.png"
+/bin/chmod 0600 "$screenshot_path"
+printf 'changed-after-draft' >>"$screenshot_path"
+/bin/chmod 0400 "$screenshot_path"
+expect_finalize_failure screenshot-byte-mutation "visual"
 
 prepare_repo draft-mutation
 run_execute
@@ -863,6 +1051,19 @@ run_execute
 write_visual approved
 printf '\n' >>"$contract"
 expect_finalize_failure canonical-contract-mutation "visual"
+
+for source in contract matrix; do
+  prepare_repo "final-publication-race-$source"
+  run_execute
+  write_visual approved
+  FAKE_PUBLICATION_RACE="$source" expect_finalize_failure "final-publication-race-$source" "visual result is invalid"
+done
+
+prepare_repo final-publication-race-candidate
+run_execute
+write_visual approved
+FAKE_PUBLICATION_RACE=candidate expect_finalize_failure final-publication-race-candidate "visual result is invalid"
+[[ ! -e "$final" ]] || { echo "publication-boundary candidate substitution became canonical" >&2; exit 1; }
 
 prepare_repo final-collision
 run_execute

@@ -21,10 +21,10 @@
   "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0},
   "tests": {"status": "passed", "passed": 24, "failed": 0, "skipped": 0},
   "cases": [
-    {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/settings.png"},
-    {"id": "iphone-ja", "status": "passed", "screenshot": "iphone-ja/settings.png"},
-    {"id": "ipad-en", "status": "passed", "screenshot": "ipad-en/settings.png"},
-    {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/settings.png"}
+    {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/settings.png", "screenshotDigest": "sha256:54808a0ac07556c8c537b0d112510e5133f12077aa3283aaf69eb3bbc45d2fbb"},
+    {"id": "iphone-ja", "status": "passed", "screenshot": "iphone-ja/settings.png", "screenshotDigest": "sha256:fd1a02220ea3cd639f9ef7892fc31669e2b2022edfe15195706d1cd0f56d1cf4"},
+    {"id": "ipad-en", "status": "passed", "screenshot": "ipad-en/settings.png", "screenshotDigest": "sha256:8f567719af9d1cfa716957bf32ac6df9660f7686ac9793ee6ac68a4f264a3fed"},
+    {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/settings.png", "screenshotDigest": "sha256:5d17300fbb93ab7bc88265aaf285a1cf89e1c85aebf097932932a724c63a40ed"}
   ],
   "visualEvaluation": {"status": "passed", "findings": []},
   "acceptanceEvidence": [

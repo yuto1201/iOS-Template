@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -9,7 +9,8 @@ TRUSTED_GIT="/usr/bin/git"
 
 run_git() {
   run_scrubbed GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
-    GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 "$TRUSTED_GIT" "$@"
+    GIT_CONFIG_COUNT=0 GIT_NO_REPLACE_OBJECTS=1 "$TRUSTED_GIT" \
+    -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"
 }
 
 json_tool() {
@@ -25,19 +26,6 @@ def integer!(value, label, minimum = nil)
   value
 end
 
-def mkdir_p(path)
-  expanded = File.expand_path(path)
-  current = File::SEPARATOR
-  expanded.split(File::SEPARATOR).reject(&:empty?).each do |component|
-    current = File.join(current, component)
-    begin
-      Dir.mkdir(current, 0o700)
-    rescue Errno::EEXIST
-      abort_with("output ancestor is not a directory") unless File.directory?(current) && !File.symlink?(current)
-    end
-  end
-end
-
 action = ARGV.shift
 case action
 when "test-summary"
@@ -50,8 +38,8 @@ when "test-summary"
   expected_failures = integer!(summary["expectedFailures"], "expectedFailures", 0)
   abort_with("test result status is not Passed") unless summary["result"] == "Passed"
   abort_with("unit tests did not report exact totals") unless total == passed + failed + skipped
-  expected_passed = expected_kind == "case" ? 1 : nil
-  abort_with("tests failed, were skipped, or selected the wrong count") unless passed > 0 && failed == 0 && skipped == 0 && expected_failures == 0 && (expected_passed.nil? || passed == expected_passed)
+  abort_with("test summary kind is invalid") unless %w[unit case].include?(expected_kind)
+  abort_with("tests failed, were skipped, or selected the wrong count") unless passed == 1 && total == 1 && failed == 0 && skipped == 0 && expected_failures == 0
   configurations = summary["devicesAndConfigurations"]
   abort_with("devicesAndConfigurations must contain exactly one entry") unless configurations.is_a?(Array) && configurations.length == 1
   configuration = configurations.fetch(0)
@@ -101,20 +89,6 @@ when "simulator-booted"
   abort_with("simulator state output is invalid") unless devices.is_a?(Hash)
   matches = devices.values.flat_map { |entries| entries.is_a?(Array) ? entries : [] }.select { |entry| entry.is_a?(Hash) && entry["udid"] == udid }
   abort_with("simulator is not uniquely Booted") unless matches.length == 1 && matches[0]["state"] == "Booted"
-when "failure"
-  directory, issue_text, base, head, stage, error = ARGV
-  mkdir_p(directory)
-  document = {"schemaVersion" => 1, "status" => "failed", "issue" => Integer(issue_text, 10), "baseSha" => base, "headSha" => head, "stage" => stage, "error" => error, "recordedAt" => Time.now.iso8601}
-  100.times do
-    path = File.join(directory, "failure-#{Time.now.strftime("%Y%m%dT%H%M%S")}-#{Process.pid}-#{rand(1_000_000)}.json")
-    begin
-      File.open(path, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |file| file.write(JSON.pretty_generate(document) + "\n") }
-      puts path
-      exit 0
-    rescue Errno::EEXIST
-    end
-  end
-  abort_with("could not create unique failure record")
 else
   abort_with("unknown JSON helper action")
 end
@@ -175,11 +149,17 @@ run_git merge-base --is-ancestor "$expected_base" "$head_sha" || { echo "iOS ver
 [[ -z "$(run_git status --porcelain --untracked-files=all)" ]] || { echo "iOS verification failed: working tree must be clean" >&2; exit 1; }
 
 evidence_dir="$repository_root/.artifacts/issues/$issue/$head_sha"
-failure_dir="$evidence_dir/failures"
 stage="preflight"
 fail() {
   local message="$1"
-  json_tool failure "$failure_dir" "$issue" "$expected_base" "$head_sha" "$stage" "$message" >/dev/null 2>&1 || true
+  if [[ -z "${XCODE_SWIFT_PATH-}" ]]; then
+    select_initial_xcode_environment >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${XCODE_SWIFT_PATH-}" ]]; then
+    run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-record-failure \
+      --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
+      --stage "$stage" --message "$message" >/dev/null 2>&1 || true
+  fi
   echo "iOS verification failed: $message" >&2
   exit 1
 }
@@ -238,13 +218,11 @@ config_check() {
   run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-config \
     --config "$config" --digest "$config_digest" --check >/dev/null
 }
-config_check || fail "verification workspace receipt is invalid"
-run_state="$attempt_root"
-[[ "$(config_value workspaceRoot)" == "$workspace_root" && "$(config_value attemptRoot)" == "$attempt_root" && "$(config_value lockPath)" == "$lock_path" && "$(config_value lockReadyFIFO)" == "$lock_ready_fifo" && "$(config_value lockControlFIFO)" == "$lock_control_fifo" ]] || fail "verification workspace identity mismatch"
 active_udid=""
 active_bundle=""
 runner_succeeded=0
 lock_holder_pid=""
+run_state="$attempt_root"
 release_runner() {
   local status="$?"
   if [[ -n "$active_udid" && -n "$active_bundle" ]]; then
@@ -263,6 +241,12 @@ release_runner() {
   fi
   return "$status"
 }
+trap release_runner EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+config_check || fail "verification workspace receipt is invalid"
+[[ "$(config_value workspaceRoot)" == "$workspace_root" && "$(config_value attemptRoot)" == "$attempt_root" && "$(config_value lockPath)" == "$lock_path" && "$(config_value lockReadyFIFO)" == "$lock_ready_fifo" && "$(config_value lockControlFIFO)" == "$lock_control_fifo" ]] || fail "verification workspace identity mismatch"
 run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-lock-holder \
   --config "$config" --digest "$config_digest" <"$lock_control_fifo" >"$lock_ready_fifo" &
 lock_holder_pid="$!"
@@ -274,9 +258,6 @@ if ! read -r -t 30 lock_status <"$lock_ready_fifo" || [[ "$lock_status" != "LOCK
     --config "$config" --digest "$config_digest" >/dev/null 2>&1 || true
   fail "verification lock is already held"
 fi
-trap release_runner EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 stage="xcode-resolution"
 if ! probe_xcode_environment; then
@@ -331,10 +312,13 @@ fi
 json_tool test-tree "$unit_tree" "$unit_test_identifier" "$first_udid" 2>"$run_state/test-tree-parse-error" || fail "unit tests selected the wrong identifier"
 
 bundle_identifier="$(config_value bundleIdentifier)"
-if ! app_path="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-find-app \
-  --derived-data "$derived_data" --bundle-identifier "$bundle_identifier" 2>"$run_state/app-lookup-error")"; then
+if ! app_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-find-app \
+  --config "$config" --digest "$config_digest" --derived-data "$derived_data" \
+  --bundle-identifier "$bundle_identifier" 2>"$run_state/app-lookup-error")"; then
   fail "built application matching the verification bundle identifier was not found safely"
 fi
+IFS=$'\t' read -r app_path app_digest <<<"$app_receipt"
+[[ -n "$app_path" && "$app_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "built application staging receipt is invalid"
 
 for index in 0 1 2 3; do
   config_check || fail "verification config changed during verification"
@@ -352,6 +336,12 @@ for index in 0 1 2 3; do
     [[ -n "$case_failed" ]] || json_tool simulator-booted "$simulator_state" "$udid" >/dev/null 2>&1 || case_failed="boot state"
   fi
   [[ -n "$case_failed" ]] || run_xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || case_failed="bootstatus"
+  if [[ -z "$case_failed" ]]; then
+    run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-app \
+      --config "$config" --digest "$config_digest" --app "$app_path" \
+      --bundle-digest "$app_digest" >/dev/null 2>"$run_state/$case_id-app-validation-error" \
+      || fail "built application changed during verification"
+  fi
   [[ -n "$case_failed" ]] || run_xcrun simctl install "$udid" "$app_path" >/dev/null 2>&1 || case_failed="install"
   if [[ -z "$case_failed" ]]; then
     run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1 || true
@@ -405,6 +395,9 @@ for index in 0 1 2 3; do
   elif [[ -z "$case_failed" && "$action_value" != "launch-succeeded" ]]; then
     case_failed="mechanical assertion"
   fi
+  if [[ -z "$case_failed" ]]; then
+    run_xcrun simctl spawn "$udid" /bin/kill -0 "$launch_pid" >/dev/null 2>&1 || case_failed="post-check process liveness"
+  fi
   screenshot_source="$attempt_root/Screenshots/$case_id.png"
   [[ ! -e "$screenshot_source" ]] || case_failed="screenshot collision"
   [[ -n "$case_failed" ]] || run_xcrun simctl io "$udid" screenshot "$screenshot_source" >/dev/null 2>&1 || case_failed="screenshot"
@@ -418,7 +411,7 @@ for index in 0 1 2 3; do
   elif [[ -z "$case_failed" ]]; then
     case_failed="terminate"
   fi
-  [[ -z "$case_failed" ]] || fail "case $case_id failed"
+  [[ -z "$case_failed" ]] || fail "case $case_id failed: $case_failed"
 done
 
 stage="input-stability"

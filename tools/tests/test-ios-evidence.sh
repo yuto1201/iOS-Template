@@ -244,6 +244,24 @@ expect_failure expected-base-mismatch "baseSha does not match --expected-base" "
 expect_failure nonancestor-base "expected Base is not an ancestor of expected Head" "$nonancestor_sha" "$head_sha"
 expect_failure expected-head-not-current "--expected-head must equal current Git HEAD" "$older_base_sha" "$base_sha"
 
+prepare_fixture standalone-candidate
+standalone_candidate="$(dirname "$evidence_file")/.verify-candidate-external"
+cp "$evidence_file" "$standalone_candidate"
+chmod 0400 "$standalone_candidate"
+if (
+  cd "$fixture_root"
+  "$validator" --file "$evidence_file" --candidate-file "$standalone_candidate" \
+    --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha"
+) >"$scratch/standalone-candidate.stdout" 2>"$scratch/standalone-candidate.stderr"; then
+  echo "validator accepted a standalone candidate without a retained validated descriptor" >&2
+  exit 1
+fi
+grep -Fq "standalone candidate publication is not supported" "$scratch/standalone-candidate.stderr" || {
+  echo "standalone candidate was rejected for the wrong reason" >&2
+  cat "$scratch/standalone-candidate.stderr" >&2
+  exit 1
+}
+
 prepare_fixture stale-sha stale-sha.json
 expect_failure stale-sha "headSha does not match --expected-head"
 
@@ -267,6 +285,18 @@ prepare_fixture hardlink-screenshot
 ln "$fixture_root/.artifacts/issues/42/$head_sha/iphone-en/settings.png" \
   "$fixture_root/.artifacts/issues/42/$head_sha/iphone-en/duplicate.png"
 expect_failure hardlink-screenshot "cases[0].screenshot must have exactly one hard link"
+
+prepare_fixture missing-screenshot-digest
+mutate_json "$evidence_file" 'document.fetch("cases").fetch(0).delete("screenshotDigest")'
+expect_failure missing-screenshot-digest "cases[0]: missing keys screenshotDigest"
+
+prepare_fixture wrong-screenshot-digest
+mutate_json "$evidence_file" 'document.fetch("cases").fetch(0)["screenshotDigest"] = "sha256:" + "0" * 64'
+expect_failure wrong-screenshot-digest "cases[0].screenshotDigest does not match exact screenshot bytes"
+
+prepare_fixture changed-screenshot-bytes
+printf 'changed-after-evidence' >>"$fixture_root/.artifacts/issues/42/$head_sha/iphone-en/settings.png"
+expect_failure changed-screenshot-bytes "cases[0].screenshotDigest does not match exact screenshot bytes"
 
 prepare_fixture escaping-screenshot
 mutate_json "$evidence_file" 'document.fetch("cases").fetch(0)["screenshot"] = "../../../../outside.png"'
