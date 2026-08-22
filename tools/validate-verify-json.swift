@@ -3259,7 +3259,7 @@ func validateSafePacketString(_ value: String, at path: String) throws {
         #"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"#,
         #"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"#,
         #"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"#,
-        #"(?i)\b(?:token|api[_-]?key|password|passwd|secret|credential)\s*[:=]\s*\S+"#,
+        #"(?i)\b(?:token|api[_-]?key|password|passwd|secret|credential)\s*[:=]\s*(?=[^\s]{8,})(?=[^\s]*(?:[0-9]|[_./+=-]))[A-Za-z0-9._~+/=-]+"#,
         #"\b(?:ghp_|github_pat_|glpat-|xox[baprs]-|sk-(?:proj-)?|sb_secret_)[A-Za-z0-9_-]{6,}"#,
         #"(?i)\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@"#
     ]
@@ -3943,6 +3943,16 @@ func validate(options: Options) throws {
                 root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
                 head: headSha, repository: repository
             )
+            let currentDraft = try validateCanonicalRunnerDraft(
+                repository: repository, issue: issue, expectedBase: options.expectedBase,
+                expectedHead: options.expectedHead,
+                draftComponents: [".artifacts", "issues", String(issue), headSha, "verify-draft.json"]
+            )
+            let currentPacket = try validateCanonicalVisualPacket(
+                repository: repository, issue: issue, expectedHead: headSha,
+                draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json", draft: currentDraft
+            )
+            try validateApplicationVisual(root["visualEvaluation"]!, packet: currentPacket)
         }
 
     case "documentation-only":

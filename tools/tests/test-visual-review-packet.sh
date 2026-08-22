@@ -412,6 +412,15 @@ expect_failure malicious-contract-text "unsafe serialized metadata"
   echo "secret appeared in contract rejection diagnostic" >&2; exit 1;
 }
 
+prepare_fixture generic-credential-labels
+mutate_json "$contract" 'document.fetch("acceptanceCriteria").fetch(0)["text"] = "Password: Required; Token: Optional"'
+refresh_contract_digest
+run_builder >/dev/null
+PACKET="$packet" /usr/bin/ruby --disable-gems -rjson -e '
+  text = JSON.parse(File.read(ENV.fetch("PACKET"))).fetch("acceptanceCriteria").first.fetch("text")
+  abort "generic labels changed" unless text == "Password: Required; Token: Optional"
+'
+
 prepare_fixture malicious-matrix-text
 mutate_json "$matrix" 'document.fetch("cases").first(2).each { |entry| entry.fetch("deviceType")["name"] = "/Users/alice/private/device" }'
 refresh_matrix_digest

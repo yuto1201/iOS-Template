@@ -30,7 +30,7 @@ func round3TestPublicationRace() {
     let markerPath = "#{state_dir}/publication-race-fired"
     guard !FileManager.default.fileExists(atPath: markerPath),
           let mode = try? String(contentsOfFile: modePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-          mode == "contract" || mode == "matrix" || mode == "candidate",
+          ["contract", "matrix", "candidate", "image-bytes", "image-set", "packet"].contains(mode),
           let target = try? String(contentsOfFile: "#{state_dir}/" + mode + "_path", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
           !target.isEmpty,
           FileManager.default.createFile(atPath: markerPath, contents: Data(), attributes: nil) else { return }
@@ -41,6 +41,22 @@ func round3TestPublicationRace() {
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
         try? FileManager.default.removeItem(atPath: path)
         _ = FileManager.default.createFile(atPath: path, contents: Data("substituted-candidate\\n".utf8), attributes: [.posixPermissions: 0o400])
+        return
+    }
+    if mode == "image-set" {
+        _ = FileManager.default.createFile(
+            atPath: target + "/late-state.png", contents: Data("late-state\\n".utf8), attributes: nil
+        )
+        return
+    }
+    if mode == "packet" {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target)
+        guard let file = FileHandle(forWritingAtPath: target) else { return }
+        file.seekToEndOfFile()
+        file.write(Data("\\n".utf8))
+        try? file.synchronize()
+        try? file.close()
+        try? FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: target)
         return
     }
     guard let file = FileHandle(forWritingAtPath: target) else { return }
@@ -719,6 +735,9 @@ run_finalize() {
   set_state publication_kill_target "${FAKE_PUBLICATION_KILL_TARGET-}"
   set_state publication_kill_after_target "${FAKE_PUBLICATION_KILL_AFTER_TARGET-}"
   set_state candidate_path "$(dirname "$final")"
+  set_state packet_path "$(dirname "$final")/visual-packet.json"
+  set_state image-bytes_path "$(dirname "$final")/iphone-en/settings-open.png"
+  set_state image-set_path "$(dirname "$final")/iphone-en"
   (cd "$repo" && /usr/bin/env \
     "BASH_FUNC_cd%%=() { printf '%s\\n' bash-function-executed >>'$poison_sentinel'; builtin cd \"\$@\"; }" \
     BASH_ENV="$poison_bash_env" PATH="$poison_bin:/usr/bin:/bin" \
@@ -765,6 +784,17 @@ write_packet() {
   (cd "$repo" && "$validator_binary" --visual-packet --issue 42 --expected-base "$base_sha" \
     --draft ".artifacts/issues/42/$head_sha/verify-draft.json" \
     --output ".artifacts/issues/42/$head_sha/visual-packet.json" >/dev/null)
+}
+
+write_additional_png() {
+  /usr/bin/ruby -rzlib - "$1" "$2" <<'RUBY'
+source, destination = ARGV
+png = File.binread(source)
+payload = "State\0settings-open".b
+type = "tEXt".b
+chunk = [payload.bytesize].pack("N") + type + payload + [Zlib.crc32(type + payload)].pack("N")
+File.binwrite(destination, png.byteslice(0, png.bytesize - 12) + chunk + png.byteslice(-12, 12))
+RUBY
 }
 
 write_visual() {
@@ -1210,6 +1240,22 @@ for source in contract matrix; do
   FAKE_MUTATE_INPUT="$source" expect_execute_failure "mutated-$source" "$source changed during verification"
   [[ ! -e "$draft" ]] || { echo "mutated input published draft" >&2; exit 1; }
 done
+
+prepare_repo final-publication-race-image-bytes
+run_execute
+write_additional_png "$(dirname "$draft")/iphone-en/screenshot.png" "$(dirname "$draft")/iphone-en/settings-open.png"
+write_visual approved
+FAKE_PUBLICATION_RACE=image-bytes expect_finalize_failure final-publication-race-image-bytes "visual result is invalid"
+
+prepare_repo final-publication-race-image-set
+run_execute
+write_visual approved
+FAKE_PUBLICATION_RACE=image-set expect_finalize_failure final-publication-race-image-set "visual result is invalid"
+
+prepare_repo final-publication-race-packet
+run_execute
+write_visual approved
+FAKE_PUBLICATION_RACE=packet expect_finalize_failure final-publication-race-packet "visual result is invalid"
 
 for source in contract matrix; do
   prepare_repo "mutated-after-case-$source"
