@@ -503,9 +503,16 @@ func validateXcodeIdentity(_ value: Any, at path: String) throws -> XcodeIdentit
 }
 
 struct IssueContract {
-    let acceptanceIDs: [String]
+    let acceptanceCriteria: [AcceptanceCriterion]
     let fetchedAt: Date
     let verification: VerificationInfo?
+
+    var acceptanceIDs: [String] { acceptanceCriteria.map(\.id) }
+}
+
+struct AcceptanceCriterion {
+    let id: String
+    let text: String
 }
 
 struct VerificationCaseInfo {
@@ -676,7 +683,7 @@ func validateIssueContract(
     guard !rawCriteria.isEmpty else {
         throw ValidationFailure("issueContract.acceptanceCriteria must not be empty")
     }
-    var ids: [String] = []
+    var criteria: [AcceptanceCriterion] = []
     for (index, rawCriterion) in rawCriteria.enumerated() {
         let path = "issueContract.acceptanceCriteria[\(index)]"
         let criterion = try requireObject(rawCriterion, at: path)
@@ -688,9 +695,10 @@ func validateIssueContract(
         guard id == "AC-\(index + 1)" else {
             throw ValidationFailure("issueContract acceptance IDs must be stable, ordered, and start at AC-1")
         }
-        _ = try requireString(criterion["text"]!, at: "\(path).text")
-        ids.append(id)
+        let text = try requireString(criterion["text"]!, at: "\(path).text")
+        criteria.append(AcceptanceCriterion(id: id, text: text))
     }
+    let ids = criteria.map(\.id)
     guard Set(ids).count == ids.count else {
         throw ValidationFailure("issueContract acceptance IDs must be unique")
     }
@@ -701,7 +709,7 @@ func validateIssueContract(
         normalizedVerification = nil
     }
     return IssueContract(
-        acceptanceIDs: ids,
+        acceptanceCriteria: criteria,
         fetchedAt: fetchedAt,
         verification: normalizedVerification
     )
@@ -714,6 +722,7 @@ struct DeviceTypeIdentity: Equatable {
 
 struct MatrixInfo {
     let xcode: XcodeIdentity
+    let runtime: RuntimeIdentity
     let cases: [MatrixCaseInfo]
 
     var caseIDs: [String] { cases.map(\.id) }
@@ -721,9 +730,16 @@ struct MatrixInfo {
 
 struct MatrixCaseInfo {
     let id: String
+    let family: String
+    let deviceType: DeviceTypeIdentity
     let locale: String
     let language: String
     let udid: String
+}
+
+struct RuntimeIdentity: Equatable {
+    let identifier: String
+    let version: String
 }
 
 func validateMatrix(
@@ -758,8 +774,10 @@ func validateMatrix(
     let xcode = try validateXcodeIdentity(matrix["xcode"]!, at: "matrixFile.xcode")
     let runtime = try requireObject(matrix["runtime"]!, at: "matrixFile.runtime")
     try requireExactKeys(runtime, ["identifier", "version"], at: "matrixFile.runtime")
-    _ = try requireString(runtime["identifier"]!, at: "matrixFile.runtime.identifier")
-    _ = try requireString(runtime["version"]!, at: "matrixFile.runtime.version")
+    let runtimeIdentity = RuntimeIdentity(
+        identifier: try requireString(runtime["identifier"]!, at: "matrixFile.runtime.identifier"),
+        version: try requireString(runtime["version"]!, at: "matrixFile.runtime.version")
+    )
 
     let expected: [(String, String, String, String)] = [
         ("iphone-en", "iPhone", "en_US", "en"),
@@ -806,9 +824,12 @@ func validateMatrix(
         guard udids.insert(udid).inserted else {
             throw ValidationFailure("matrixFile Simulator UDIDs must be unique")
         }
-        normalizedCases.append(MatrixCaseInfo(id: id, locale: locale, language: language, udid: udid))
+        normalizedCases.append(MatrixCaseInfo(
+            id: id, family: family, deviceType: deviceType,
+            locale: locale, language: language, udid: udid
+        ))
     }
-    return MatrixInfo(xcode: xcode, cases: normalizedCases)
+    return MatrixInfo(xcode: xcode, runtime: runtimeIdentity, cases: normalizedCases)
 }
 
 func validateAcceptanceEvidence(
@@ -1983,7 +2004,7 @@ func verifyRunnerXcode(
     }
 }
 
-func validatePNGData(_ data: Data) throws {
+func pngDimensions(_ data: Data) throws -> (width: Int, height: Int) {
     let signature = Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
     guard data.count >= 24, data.prefix(8) == signature,
           String(data: data[12..<16], encoding: .ascii) == "IHDR" else {
@@ -1998,6 +2019,11 @@ func validatePNGData(_ data: Data) throws {
           image.width == Int(width), image.height == Int(height) else {
         throw ValidationFailure("screenshot PNG is not decodable")
     }
+    return (Int(width), Int(height))
+}
+
+func validatePNGData(_ data: Data) throws {
+    _ = try pngDimensions(data)
 }
 
 func validateRunnerPNG(source: String) throws {
@@ -3027,6 +3053,385 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     return finalPath
 }
 
+struct VisualPacketOptions {
+    let issue: Int
+    let expectedBase: String
+    let draftPath: String
+    let outputPath: String
+}
+
+struct VisualPacketReceipt {
+    let components: [String]
+    let digest: String
+    let label: String
+}
+
+func parseVisualPacketOptions(_ arguments: [String]) throws -> VisualPacketOptions {
+    guard arguments.count == 8 else {
+        throw ValidationFailure("invalid visual packet arguments")
+    }
+    let allowed = Set(["--issue", "--expected-base", "--draft", "--output"])
+    var values: [String: String] = [:]
+    var index = 0
+    while index < arguments.count {
+        let key = arguments[index]
+        guard allowed.contains(key), values[key] == nil else {
+            throw ValidationFailure("invalid or duplicate visual packet argument")
+        }
+        values[key] = arguments[index + 1]
+        index += 2
+    }
+    guard let issueText = values["--issue"], let issue = Int(issueText), issue > 0,
+          let expectedBase = values["--expected-base"], matches(expectedBase, regex: shaPattern),
+          let draft = values["--draft"], let output = values["--output"] else {
+        throw ValidationFailure("invalid visual packet arguments")
+    }
+    return VisualPacketOptions(issue: issue, expectedBase: expectedBase, draftPath: draft, outputPath: output)
+}
+
+func sanitizedAcceptanceText(_ value: String, at path: String) throws -> String {
+    guard value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+          value.count <= 1_000,
+          value.unicodeScalars.allSatisfy({ scalar in
+              scalar.value >= 0x20 && scalar.value != 0x7f
+          }) else {
+        throw ValidationFailure("\(path) is not safe single-line review text")
+    }
+    return value
+}
+
+func requireDigestString(_ value: Any, at path: String) throws -> String {
+    let digest = try requireString(value, at: path)
+    guard matches(digest, regex: digestPattern) else {
+        throw ValidationFailure("\(path) must use sha256:<64 lowercase hex>")
+    }
+    return digest
+}
+
+func createVisualReviewPacket(_ options: VisualPacketOptions) throws -> String {
+    let draftComponents = try relativeComponents(options.draftPath, at: "draft")
+    guard draftComponents.count == 5,
+          draftComponents[0] == ".artifacts", draftComponents[1] == "issues",
+          draftComponents[2] == String(options.issue), matches(draftComponents[3], regex: shaPattern),
+          draftComponents[4] == "verify-draft.json" else {
+        throw ValidationFailure("draft must use the canonical Issue/Head path")
+    }
+    return try createVisualReviewPacketCanonical(options, draftComponents: draftComponents)
+}
+
+func createVisualReviewPacketCanonical(
+    _ options: VisualPacketOptions,
+    draftComponents: [String]
+) throws -> String {
+    let expectedHead = draftComponents[3]
+    let expectedOutput = ".artifacts/issues/\(options.issue)/\(expectedHead)/visual-packet.json"
+    guard options.outputPath == expectedOutput else {
+        throw ValidationFailure("output must use the canonical Issue/Head visual-packet.json path")
+    }
+    let repository = try validateTrustedRepository(expectedBase: options.expectedBase, expectedHead: expectedHead)
+    defer { close(repository.rootFileDescriptor) }
+    let evidenceComponents = Array(draftComponents.dropLast())
+
+    let draftData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor, components: draftComponents, at: "draft"
+    )
+    let draft = try readJSONObject(data: draftData, at: "draft")
+    try requireExactKeys(
+        draft,
+        [
+            "schemaVersion", "status", "issue", "baseSha", "headSha", "issueContract", "matrixFile",
+            "matrixDigest", "executionRoute", "xcode", "build", "tests", "cases", "acceptanceEvidence",
+            "workspaceArtifacts", "executionCompletedAt"
+        ],
+        at: "draft"
+    )
+    guard try requireInteger(draft["schemaVersion"]!, at: "draft schemaVersion") == 1,
+          try requireString(draft["status"]!, at: "draft status") == "awaiting-visual-review",
+          try requireInteger(draft["issue"]!, at: "draft issue") == options.issue,
+          try requireString(draft["baseSha"]!, at: "draft baseSha") == options.expectedBase else {
+        throw ValidationFailure("draft identity is invalid")
+    }
+    guard try requireString(draft["headSha"]!, at: "draft headSha") == expectedHead else {
+        throw ValidationFailure("draft Head does not match current Git Head")
+    }
+
+    let contractReference = try requireObject(draft["issueContract"]!, at: "draft issueContract")
+    let contract = try validateIssueContract(
+        reference: contractReference, issue: options.issue, repository: repository
+    )
+    guard let verification = contract.verification else {
+        throw ValidationFailure("canonical contract has no verification contract")
+    }
+    let contractPath = try requireString(contractReference["path"]!, at: "issueContract.path")
+    let contractDigest = try requireDigestString(contractReference["digest"]!, at: "issueContract.digest")
+
+    let matrixPath = try requireString(draft["matrixFile"]!, at: "draft matrixFile")
+    let matrixComponents = try relativeComponents(matrixPath, at: "draft matrixFile")
+    let matrixData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor, components: matrixComponents, at: "draft matrixFile"
+    )
+    try validateDigest(draft["matrixDigest"]!, data: matrixData, at: "draft matrixDigest")
+    let matrixDigest = try requireDigestString(draft["matrixDigest"]!, at: "draft matrixDigest")
+    let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
+    guard try validateXcodeIdentity(draft["xcode"]!, at: "draft xcode") == matrix.xcode else {
+        throw ValidationFailure("draft Xcode identity does not match matrix")
+    }
+    let executionRoute = try requireString(draft["executionRoute"]!, at: "draft executionRoute")
+    guard ["xcodebuild-simctl", "xcodebuild-mcp"].contains(executionRoute) else {
+        throw ValidationFailure("draft executionRoute is invalid")
+    }
+
+    let build = try requireObject(draft["build"]!, at: "draft build")
+    try requireExactKeys(build, ["status", "scheme", "warningsAdded", "project", "sourceTree"], at: "draft build")
+    guard try requireString(build["status"]!, at: "draft build.status") == "passed",
+          try requireInteger(build["warningsAdded"]!, at: "draft build.warningsAdded", minimum: 0) == 0 else {
+        throw ValidationFailure("draft Build is not passed and warning-free")
+    }
+    _ = try requireString(build["scheme"]!, at: "draft build.scheme")
+    let project = try requireObject(build["project"]!, at: "draft build.project")
+    try requireExactKeys(project, ["path", "digest"], at: "draft build.project")
+    let projectPath = try requireString(project["path"]!, at: "draft build.project.path")
+    _ = try requireDigestString(project["digest"]!, at: "draft build.project.digest")
+    let sourceTree = try requireObject(build["sourceTree"]!, at: "draft build.sourceTree")
+    try requireExactKeys(sourceTree, ["headSha", "digest", "projectPath"], at: "draft build.sourceTree")
+    guard try requireString(sourceTree["headSha"]!, at: "draft build.sourceTree.headSha") == expectedHead,
+          try requireString(sourceTree["projectPath"]!, at: "draft build.sourceTree.projectPath") == projectPath else {
+        throw ValidationFailure("draft source identity is invalid")
+    }
+    _ = try requireDigestString(sourceTree["digest"]!, at: "draft build.sourceTree.digest")
+
+    let tests = try requireObject(draft["tests"]!, at: "draft tests")
+    try requireExactKeys(tests, ["status", "passed", "failed", "skipped"], at: "draft tests")
+    guard try requireString(tests["status"]!, at: "draft tests.status") == "passed",
+          try requireInteger(tests["passed"]!, at: "draft tests.passed", minimum: 1) >= 1,
+          try requireInteger(tests["failed"]!, at: "draft tests.failed", minimum: 0) == 0,
+          try requireInteger(tests["skipped"]!, at: "draft tests.skipped", minimum: 0) == 0 else {
+        throw ValidationFailure("draft tests are not passed without failures or skips")
+    }
+
+    let artifacts = try requireObject(draft["workspaceArtifacts"]!, at: "draft workspaceArtifacts")
+    try requireExactKeys(
+        artifacts, ["derivedDataPath", "buildResultBundlePath", "testResultBundlePath"],
+        at: "draft workspaceArtifacts"
+    )
+    for key in ["derivedDataPath", "buildResultBundlePath", "testResultBundlePath"] {
+        _ = try requireString(artifacts[key]!, at: "draft workspaceArtifacts.\(key)")
+    }
+    _ = try requireISO8601Date(draft["executionCompletedAt"]!, at: "draft executionCompletedAt")
+
+    let draftCases = try requireArray(draft["cases"]!, at: "draft cases")
+    guard draftCases.count == matrix.cases.count else {
+        throw ValidationFailure("draft must contain the exact four matrix cases")
+    }
+    var receipts: [VisualPacketReceipt] = [
+        VisualPacketReceipt(components: draftComponents, digest: sha256(data: draftData), label: "draft"),
+        VisualPacketReceipt(
+            components: try relativeComponents(contractPath, at: "issueContract.path"),
+            digest: String(contractDigest.dropFirst("sha256:".count)), label: "issue contract"
+        ),
+        VisualPacketReceipt(
+            components: matrixComponents,
+            digest: String(matrixDigest.dropFirst("sha256:".count)), label: "matrix"
+        )
+    ]
+    var casePNGNames: [[String]] = []
+    var packetCases: [[String: Any]] = []
+    for (index, rawCase) in draftCases.enumerated() {
+        let path = "draft cases[\(index)]"
+        let entry = try requireObject(rawCase, at: path)
+        try requireExactKeys(
+            entry, ["id", "status", "screenshot", "screenshotDigest", "mechanicalCheck"], at: path
+        )
+        let matrixCase = matrix.cases[index]
+        let verificationCase = verification.cases[index]
+        let expectedMechanical = verificationCase.action == "testIdentifier"
+            ? "test:\(verificationCase.value)" : "assertion:launch-succeeded"
+        guard try requireString(entry["id"]!, at: "\(path).id") == matrixCase.id,
+              try requireString(entry["status"]!, at: "\(path).status") == "passed",
+              try requireString(entry["mechanicalCheck"]!, at: "\(path).mechanicalCheck") == expectedMechanical else {
+            throw ValidationFailure("draft case does not match canonical matrix and contract")
+        }
+        let primaryPath = try requireString(entry["screenshot"]!, at: "\(path).screenshot")
+        guard primaryPath == "\(matrixCase.id)/screenshot.png" else {
+            throw ValidationFailure("draft primary screenshot path is invalid")
+        }
+        let caseDirectoryComponents = evidenceComponents + [matrixCase.id]
+        let caseDirectory = try openBoundDirectory(
+            rootFileDescriptor: repository.rootFileDescriptor,
+            components: caseDirectoryComponents,
+            at: "case screenshot directory"
+        )
+        defer { close(caseDirectory) }
+        let allNames = try sortedDirectoryNames(caseDirectory, label: "case screenshot directory")
+        let pngNames = allNames.filter { $0.lowercased().hasSuffix(".png") }
+        guard pngNames.contains("screenshot.png") else {
+            throw ValidationFailure("primary screenshot is unavailable")
+        }
+        let orderedNames = ["screenshot.png"] + pngNames.filter { $0 != "screenshot.png" }.sorted()
+        casePNGNames.append(orderedNames)
+        var images: [[String: Any]] = []
+        var states = Set<String>()
+        var digests = Set<String>()
+        for name in orderedNames {
+            let lowercase = name.lowercased()
+            let secretTokens = [
+                "secret", "token", "password", "passwd", "api-key", "apikey", "private-key",
+                "credential", ".env", ".p8", "cookie", "session"
+            ]
+            guard !secretTokens.contains(where: { lowercase.contains($0) }) else {
+                throw ValidationFailure("secret-like screenshot filename is forbidden")
+            }
+            let state = name == "screenshot.png" ? "primary" : String(name.dropLast(4))
+            guard state.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", options: .regularExpression) != nil,
+                  states.insert(state.lowercased()).inserted else {
+                throw ValidationFailure("screenshot state label is invalid or duplicated")
+            }
+            var information = stat()
+            guard fstatat(caseDirectory, name, &information, AT_SYMLINK_NOFOLLOW) == 0,
+                  (information.st_mode & S_IFMT) == S_IFREG,
+                  information.st_uid == getuid(), information.st_nlink == 1 else {
+                throw ValidationFailure("additional screenshot must be a regular non-symbolic-link file")
+            }
+            let imageComponents = caseDirectoryComponents + [name]
+            let imageData: Data
+            do {
+                imageData = try readBoundRegularFile(
+                    rootFileDescriptor: repository.rootFileDescriptor,
+                    components: imageComponents,
+                    at: name == "screenshot.png" ? "primary screenshot" : "additional screenshot"
+                )
+            } catch {
+                if name == "screenshot.png" { throw ValidationFailure("primary screenshot is unavailable") }
+                throw error
+            }
+            let dimensions = try pngDimensions(imageData)
+            let imageDigest = sha256(data: imageData)
+            guard digests.insert(imageDigest).inserted else {
+                throw ValidationFailure("case contains duplicate screenshot bytes")
+            }
+            if name == "screenshot.png" {
+                let recorded = try requireDigestString(entry["screenshotDigest"]!, at: "\(path).screenshotDigest")
+                guard recorded == "sha256:\(imageDigest)" else {
+                    throw ValidationFailure("draft primary screenshot digest does not match exact bytes")
+                }
+            }
+            receipts.append(VisualPacketReceipt(components: imageComponents, digest: imageDigest, label: "screenshot"))
+            images.append([
+                "state": state,
+                "primary": name == "screenshot.png",
+                "path": "\(matrixCase.id)/\(name)",
+                "digest": "sha256:\(imageDigest)",
+                "width": dimensions.width,
+                "height": dimensions.height
+            ])
+        }
+        packetCases.append([
+            "id": matrixCase.id,
+            "family": matrixCase.family,
+            "deviceType": [
+                "identifier": matrixCase.deviceType.identifier,
+                "name": matrixCase.deviceType.name
+            ],
+            "runtime": [
+                "identifier": matrix.runtime.identifier,
+                "version": matrix.runtime.version
+            ],
+            "locale": matrixCase.locale,
+            "language": matrixCase.language,
+            "images": images
+        ])
+    }
+
+    let acceptance = try requireArray(draft["acceptanceEvidence"]!, at: "draft acceptanceEvidence")
+    guard acceptance.count == contract.acceptanceIDs.count else {
+        throw ValidationFailure("draft acceptance mappings do not match canonical contract")
+    }
+    for (index, rawEntry) in acceptance.enumerated() {
+        let entry = try requireObject(rawEntry, at: "draft acceptanceEvidence[\(index)]")
+        try requireExactKeys(entry, ["id", "evidence"], at: "draft acceptanceEvidence[\(index)]")
+        let expectedExecution = verification.acceptanceMappings[index].filter { !$0.hasPrefix("visual:") }
+        guard try requireString(entry["id"]!, at: "draft acceptance ID") == contract.acceptanceIDs[index],
+              try requireStringArray(entry["evidence"]!, at: "draft acceptance evidence") == expectedExecution else {
+            throw ValidationFailure("draft acceptance mappings do not match canonical contract")
+        }
+    }
+
+    let acceptanceCriteria: [[String: Any]] = try contract.acceptanceCriteria.enumerated().map { index, criterion in
+        [
+            "id": criterion.id,
+            "text": try sanitizedAcceptanceText(criterion.text, at: "acceptanceCriteria[\(index)].text")
+        ]
+    }
+    let packet: [String: Any] = [
+        "schemaVersion": 1,
+        "status": "ready-for-visual-review",
+        "issue": options.issue,
+        "headSha": expectedHead,
+        "draft": ["path": options.draftPath, "digest": "sha256:\(sha256(data: draftData))"],
+        "issueContract": ["path": contractPath, "digest": contractDigest],
+        "matrix": ["path": matrixPath, "digest": matrixDigest],
+        "acceptanceCriteria": acceptanceCriteria,
+        "cases": packetCases,
+        "reviewChecks": [
+            "acceptance-criteria", "clipping", "overlap", "translation", "information-hierarchy",
+            "ipad-adaptation", "dynamic-type-indicators", "tap-targets", "spec-comparison"
+        ]
+    ]
+    let packetData = try JSONSerialization.data(withJSONObject: packet, options: [.prettyPrinted, .sortedKeys])
+        + Data("\n".utf8)
+
+    let evidenceDirectory = try openBoundDirectory(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: evidenceComponents,
+        at: "evidence directory"
+    )
+    defer { close(evidenceDirectory) }
+    var existingInformation = stat()
+    if fstatat(evidenceDirectory, "visual-packet.json", &existingInformation, AT_SYMLINK_NOFOLLOW) == 0 {
+        throw ValidationFailure("canonical visual packet already exists")
+    }
+    guard errno == ENOENT else {
+        throw ValidationFailure("canonical visual packet path is unsafe")
+    }
+    try publishGeneratedData(
+        directoryFileDescriptor: evidenceDirectory,
+        canonicalName: "visual-packet.json",
+        temporaryPrefix: ".visual-packet-candidate",
+        data: packetData,
+        beforeLink: {
+            let liveHead = try runGitString(["rev-parse", "HEAD"], failure: "unable to revalidate Git Head")
+            guard liveHead == expectedHead else {
+                throw ValidationFailure("Git Head changed before visual packet publication")
+            }
+            for receipt in receipts {
+                let current = try readBoundRegularFile(
+                    rootFileDescriptor: repository.rootFileDescriptor,
+                    components: receipt.components,
+                    at: receipt.label
+                )
+                guard sha256(data: current) == receipt.digest else {
+                    throw ValidationFailure("\(receipt.label) changed before visual packet publication")
+                }
+            }
+            for (index, matrixCase) in matrix.cases.enumerated() {
+                let directory = try openBoundDirectory(
+                    rootFileDescriptor: repository.rootFileDescriptor,
+                    components: evidenceComponents + [matrixCase.id],
+                    at: "case screenshot directory"
+                )
+                defer { close(directory) }
+                let names = try sortedDirectoryNames(directory, label: "case screenshot directory")
+                    .filter { $0.lowercased().hasSuffix(".png") }
+                let ordered = ["screenshot.png"] + names.filter { $0 != "screenshot.png" }.sorted()
+                guard ordered == casePNGNames[index] else {
+                    throw ValidationFailure("case screenshot set changed before visual packet publication")
+                }
+            }
+        }
+    )
+    return options.outputPath
+}
+
 func parseOptions(_ arguments: [String]) throws -> Options {
     var file: String?
     var expectedIssue: Int?
@@ -3290,7 +3695,9 @@ func validate(options: Options) throws {
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    if arguments.first == "--runner-snapshot" {
+    if arguments.first == "--visual-packet" {
+        print(try createVisualReviewPacket(parseVisualPacketOptions(Array(arguments.dropFirst()))))
+    } else if arguments.first == "--runner-snapshot" {
         let options = try parseRunnerSnapshotOptions(Array(arguments.dropFirst()))
         FileHandle.standardOutput.write(try runnerSnapshot(options: options))
         FileHandle.standardOutput.write(Data("\n".utf8))
