@@ -1152,6 +1152,13 @@ struct Options {
     let initialVisualResultDigest: String?
 }
 
+struct DocumentationPublishOptions {
+    let issue: Int
+    let expectedBase: String
+    let expectedHead: String
+    let inputPath: String
+}
+
 struct ProjectIdentity {
     let path: String
     let digest: String
@@ -3741,6 +3748,151 @@ func createVisualReviewPacketCanonical(
     return options.outputPath
 }
 
+func parseDocumentationPublishOptions(_ arguments: [String]) throws -> DocumentationPublishOptions {
+    var values: [String: String] = [:]
+    var index = 0
+    let allowed = Set(["--issue", "--expected-base", "--expected-head", "--input"])
+    while index < arguments.count {
+        let key = arguments[index]
+        guard allowed.contains(key), values[key] == nil, index + 1 < arguments.count else {
+            throw ValidationFailure("invalid documentation publication arguments")
+        }
+        values[key] = arguments[index + 1]
+        index += 2
+    }
+    guard let issueText = values["--issue"], let issue = Int(issueText), issue > 0,
+          let expectedBase = values["--expected-base"], matches(expectedBase, regex: shaPattern),
+          let expectedHead = values["--expected-head"], matches(expectedHead, regex: shaPattern),
+          let inputPath = values["--input"], values.count == allowed.count else {
+        throw ValidationFailure("invalid documentation publication arguments")
+    }
+    let expectedInput = ".artifacts/issues/\(issue)/documentation-evidence-input.json"
+    guard inputPath == expectedInput else {
+        throw ValidationFailure("documentation evidence input must use the canonical path: \(expectedInput)")
+    }
+    return DocumentationPublishOptions(
+        issue: issue, expectedBase: expectedBase, expectedHead: expectedHead, inputPath: inputPath
+    )
+}
+
+func publishDocumentationEvidence(_ options: DocumentationPublishOptions) throws -> String {
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+    )
+    defer { close(repository.rootFileDescriptor) }
+
+    let inputData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: try relativeComponents(options.inputPath, at: "documentation evidence input"),
+        at: "documentation evidence input"
+    )
+    let input = try readJSONObject(data: inputData, at: "documentation evidence input")
+    try requireExactKeys(
+        input, ["schemaVersion", "reason", "acceptanceEvidence"], at: "documentation evidence input"
+    )
+    guard try requireInteger(input["schemaVersion"]!, at: "documentation evidence input.schemaVersion") == 1 else {
+        throw ValidationFailure("documentation evidence input.schemaVersion must be 1")
+    }
+    let reason = try requireString(input["reason"]!, at: "documentation evidence input.reason")
+
+    let contractPath = ".artifacts/issues/\(options.issue)/issue-contract.json"
+    let contractData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: [".artifacts", "issues", String(options.issue), "issue-contract.json"],
+        at: "issueContract.path"
+    )
+    let contractReference: [String: Any] = [
+        "path": contractPath, "digest": "sha256:\(sha256(data: contractData))"
+    ]
+    let contract = try validateIssueContract(
+        reference: contractReference, issue: options.issue, repository: repository
+    )
+
+    let rawAcceptance = try requireArray(
+        input["acceptanceEvidence"]!, at: "documentation evidence input.acceptanceEvidence"
+    )
+    let acceptance: [[String: Any]] = try rawAcceptance.enumerated().map { index, rawEntry in
+        let path = "documentation evidence input.acceptanceEvidence[\(index)]"
+        let entry = try requireObject(rawEntry, at: path)
+        try requireExactKeys(entry, ["id", "evidence"], at: path)
+        return [
+            "id": try requireString(entry["id"]!, at: "\(path).id"),
+            "status": "passed",
+            "evidence": try requireStringArray(entry["evidence"]!, at: "\(path).evidence", nonempty: true)
+        ]
+    }
+    try validateAcceptanceEvidence(
+        acceptance, contractIDs: contract.acceptanceIDs, documentationOnly: true
+    )
+    try validateDocumentationDiff(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+    )
+
+    let completedAt = max(Date(), contract.fetchedAt)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let document: [String: Any] = [
+        "schemaVersion": 1,
+        "status": "not-applicable",
+        "changeClassification": "documentation-only",
+        "reason": reason,
+        "issue": options.issue,
+        "baseSha": options.expectedBase,
+        "headSha": options.expectedHead,
+        "issueContract": contractReference,
+        "matrixFile": NSNull(),
+        "matrixDigest": NSNull(),
+        "executionRoute": "none",
+        "xcode": NSNull(),
+        "build": [
+            "status": "not-applicable", "scheme": NSNull(), "warningsAdded": NSNull(),
+            "project": NSNull(), "sourceTree": NSNull()
+        ],
+        "tests": [
+            "status": "not-applicable", "passed": NSNull(), "failed": NSNull(), "skipped": NSNull()
+        ],
+        "cases": [],
+        "visualEvaluation": ["status": "not-applicable", "findings": []],
+        "acceptanceEvidence": acceptance,
+        "completedAt": formatter.string(from: completedAt)
+    ]
+    let data = try JSONSerialization.data(
+        withJSONObject: document, options: [.prettyPrinted, .sortedKeys]
+    ) + Data("\n".utf8)
+    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
+    let evidenceDirectory = try ensureCanonicalEvidenceDirectory(
+        repository: repository, issue: options.issue, head: options.expectedHead
+    )
+    defer { close(evidenceDirectory) }
+    try removeInterruptedPublicationCandidates(
+        directory: evidenceDirectory, prefixes: [".verify-candidate-"]
+    )
+    let candidateName = ".verify-candidate-\(UUID().uuidString.lowercased())"
+    try writeExclusiveFile(
+        directoryFileDescriptor: evidenceDirectory, name: candidateName,
+        data: data, permissions: S_IRUSR
+    )
+    let candidateFD = openat(evidenceDirectory, candidateName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard candidateFD >= 0 else { throw ValidationFailure("verify.json candidate could not be retained") }
+    defer {
+        heldValidatedCandidateFileDescriptor = nil
+        close(candidateFD)
+        _ = unlinkat(evidenceDirectory, candidateName, 0)
+    }
+    heldValidatedCandidateFileDescriptor = candidateFD
+    let relativePath = (evidenceComponents + ["verify.json"]).joined(separator: "/")
+    try validate(options: Options(
+        file: repository.rootPath + "/" + relativePath,
+        candidateFile: repository.rootPath + "/" + (evidenceComponents + [candidateName]).joined(separator: "/"),
+        expectedIssue: options.issue,
+        expectedBase: options.expectedBase,
+        expectedHead: options.expectedHead,
+        initialVisualResultData: nil,
+        initialVisualResultDigest: nil
+    ))
+    return relativePath
+}
+
 func parseOptions(_ arguments: [String]) throws -> Options {
     var file: String?
     var expectedIssue: Int?
@@ -4055,6 +4207,21 @@ func validate(options: Options) throws {
             expectedBase: options.expectedBase,
             expectedHead: options.expectedHead
         )
+        candidatePublicationCheck = {
+            let currentHead = try runGitString(
+                ["rev-parse", "HEAD"], failure: "unable to recheck current Git HEAD"
+            )
+            guard currentHead == options.expectedHead else {
+                throw ValidationFailure("Git Head changed before documentation evidence publication")
+            }
+            _ = try validateIssueContract(
+                reference: contractReference, issue: issue, repository: repository
+            )
+            try validateDocumentationDiff(
+                expectedBase: options.expectedBase,
+                expectedHead: options.expectedHead
+            )
+        }
 
     default:
         throw ValidationFailure("changeClassification is not supported")
@@ -4074,7 +4241,11 @@ func validate(options: Options) throws {
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    if arguments.first == "--visual-packet" {
+    if arguments.first == "--publish-documentation" {
+        print(try publishDocumentationEvidence(
+            parseDocumentationPublishOptions(Array(arguments.dropFirst()))
+        ))
+    } else if arguments.first == "--visual-packet" {
         print(try createVisualReviewPacket(parseVisualPacketOptions(Array(arguments.dropFirst()))))
     } else if arguments.first == "--runner-snapshot" {
         let options = try parseRunnerSnapshotOptions(Array(arguments.dropFirst()))

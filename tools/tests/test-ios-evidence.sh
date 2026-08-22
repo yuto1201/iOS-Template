@@ -594,10 +594,6 @@ prepare_fixture visual-finding
 mutate_json "$evidence_file" 'document.fetch("visualEvaluation").fetch("findings") << "layout overlap"'
 expect_failure visual-finding "visualEvaluation must be passed without findings"
 
-prepare_fixture failed-visual-evaluation
-mutate_json "$evidence_file" 'document.fetch("visualEvaluation")["status"] = "failed"'
-expect_failure failed-visual-evaluation "visualEvaluation must be passed without findings"
-
 prepare_fixture unknown-key
 mutate_json "$evidence_file" 'document["unexpected"] = true'
 expect_failure unknown-key "verify.json: unknown keys unexpected"

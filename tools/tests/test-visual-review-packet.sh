@@ -464,6 +464,18 @@ write_visual_result
 mutate_json "$(dirname "$draft")/visual-result.json" 'document.fetch("visualPacket")["digest"] = "sha256:" + "0" * 64'
 expect_finalize_failure wrong-visual-packet-digest "visual packet digest mismatch"
 
+prepare_fixture changes-requested-visual-result
+run_builder >/dev/null
+write_visual_result
+mutate_json "$(dirname "$draft")/visual-result.json" '
+  finding = "case=iphone-en; image=iphone-en/screenshot.png; check=overlap; finding=visible overlap; requiredChange=remove the overlap"
+  document["status"] = "changes-requested"
+  document.fetch("cases").fetch(0)["status"] = "changes-requested"
+  document.fetch("cases").fetch(0)["findings"] = [finding]
+  document["findings"] = [finding]
+'
+expect_finalize_failure changes-requested-visual-result "visual result is not approved"
+
 prepare_fixture changed-additional-image
 run_builder >/dev/null
 write_visual_result

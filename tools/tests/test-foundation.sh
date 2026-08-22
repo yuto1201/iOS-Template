@@ -21,6 +21,8 @@ required_files=(
   tools/bootstrap-app.swift
   tools/tests/test-app-bootstrap.sh
   tools/check-markdown-links.swift
+  tools/publish-documentation-verify.sh
+  tools/with-ios-simulator-lock.sh
   .agents/skills/app-bootstrap/SKILL.md
   .agents/skills/ios-verify/SKILL.md
   .agents/skills/spec-workflow/SKILL.md
@@ -219,6 +221,30 @@ if [[ ! -f "$claude_ios_verify_skill/SKILL.md" ]]; then
   echo "Claude iOS verification skill link does not resolve" >&2
   exit 1
 fi
+
+if [[ ! -x tools/with-ios-simulator-lock.sh ]] || [[ ! -x tools/publish-documentation-verify.sh ]]; then
+  echo "iOS verification lock and documentation publisher must be executable" >&2
+  exit 1
+fi
+
+python3 - <<'PYTHON'
+from pathlib import Path
+
+skill = Path(".agents/skills/ios-verify/SKILL.md").read_text()
+required = (
+    "tools/with-ios-simulator-lock.sh",
+    "tools/publish-documentation-verify.sh",
+    "No canonical XcodeBuildMCP evidence producer exists",
+    "printf '%s %s\\n' \"$EVIDENCE\" \"$DIGEST\"",
+)
+missing = [value for value in required if value not in skill]
+if missing:
+    raise SystemExit(f"iOS verification skill lacks executable workflow elements: {missing!r}")
+if 'executionRoute: "xcodebuild-mcp"' in skill:
+    raise SystemExit("iOS verification skill advertises an unsupported MCP evidence route")
+if "SHA256_OF_THAT_EXACT_FILE" in skill:
+    raise SystemExit("iOS verification skill leaves an unresolved digest placeholder")
+PYTHON
 
 bootstrap_validation=$(swift tools/bootstrap-app.swift validate \
   --manifest Config/template-identity.json \
