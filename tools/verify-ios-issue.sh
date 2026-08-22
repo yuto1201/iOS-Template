@@ -234,14 +234,34 @@ active_probe_pid=""
 runner_succeeded=0
 lock_holder_pid=""
 run_state="$attempt_root"
+stop_probe_group() {
+  local probe_pid="$1" iteration
+  /bin/kill -TERM -- "-$probe_pid" >/dev/null 2>&1 || true
+  for ((iteration = 0; iteration < 20; iteration++)); do
+    /bin/kill -0 -- "-$probe_pid" >/dev/null 2>&1 || break
+    /bin/sleep 0.05
+  done
+  if /bin/kill -0 -- "-$probe_pid" >/dev/null 2>&1; then
+    /bin/kill -KILL -- "-$probe_pid" >/dev/null 2>&1 || true
+    for ((iteration = 0; iteration < 20; iteration++)); do
+      /bin/kill -0 -- "-$probe_pid" >/dev/null 2>&1 || break
+      /bin/sleep 0.05
+    done
+  fi
+  wait "$probe_pid" >/dev/null 2>&1 || true
+  ! /bin/kill -0 -- "-$probe_pid" >/dev/null 2>&1
+}
 release_runner() {
   local status="$?"
   if [[ -n "$active_udid" && -n "$active_bundle" ]]; then
     run_xcrun simctl terminate "$active_udid" "$active_bundle" >/dev/null 2>&1 || true
   fi
   if [[ -n "$active_probe_pid" ]]; then
-    /bin/kill -TERM "$active_probe_pid" >/dev/null 2>&1 || true
-    wait "$active_probe_pid" >/dev/null 2>&1 || true
+    if ! stop_probe_group "$active_probe_pid"; then
+      echo "iOS verification failed: bounded Simulator probe cleanup failed" >&2
+      [[ "$status" -ne 0 ]] || status=1
+    fi
+    active_probe_pid=""
   fi
   exec 9>&- || true
   if [[ -n "$lock_holder_pid" ]]; then
@@ -251,8 +271,11 @@ release_runner() {
     fi
   fi
   if [[ "$runner_succeeded" -ne 1 ]]; then
-    run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-clean-attempt \
-      --config "$config" --digest "$config_digest" >/dev/null 2>&1 || true
+    if ! run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-clean-attempt \
+        --config "$config" --digest "$config_digest" >/dev/null 2>&1; then
+      echo "iOS verification failed: verification attempt cleanup failed" >&2
+      [[ "$status" -ne 0 ]] || status=1
+    fi
   fi
   return "$status"
 }
@@ -263,8 +286,10 @@ trap 'exit 143' TERM
 run_xcrun_bounded() {
   local output_path="$1" error_path="$2" result=0 iteration
   shift 2
+  set -m
   run_xcrun "$@" >"$output_path" 2>"$error_path" &
   active_probe_pid="$!"
+  set +m
   for ((iteration = 0; iteration < 100; iteration++)); do
     if ! /bin/kill -0 "$active_probe_pid" >/dev/null 2>&1; then
       wait "$active_probe_pid" || result="$?"
@@ -273,9 +298,9 @@ run_xcrun_bounded() {
     fi
     /bin/sleep 0.05
   done
-  /bin/kill -TERM "$active_probe_pid" >/dev/null 2>&1 || true
-  wait "$active_probe_pid" >/dev/null 2>&1 || true
+  stop_probe_group "$active_probe_pid" || result=125
   active_probe_pid=""
+  [[ "$result" -eq 0 ]] || return "$result"
   return 124
 }
 
@@ -323,10 +348,17 @@ fi
 
 stage="publication-recovery"
 verify_live_inputs
-run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-recover-publication \
+if ! recovered_draft="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-recover-publication \
   --config "$config" --digest "$config_digest" --issue "$issue" \
   --expected-base "$expected_base" --expected-head "$head_sha" \
-  >/dev/null 2>"$run_state/publication-recovery-error" || fail "interrupted draft publication could not be recovered"
+  2>"$run_state/publication-recovery-error")"; then
+  fail "interrupted draft publication could not be recovered"
+fi
+if [[ -n "$recovered_draft" ]]; then
+  [[ "$recovered_draft" == "$evidence_dir/verify-draft.json" ]] || fail "interrupted draft publication could not be recovered"
+  printf '%s\n' "$recovered_draft"
+  exit 0
+fi
 
 stage="xcode-resolution"
 if ! probe_xcode_environment; then

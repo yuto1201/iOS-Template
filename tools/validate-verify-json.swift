@@ -306,9 +306,27 @@ func publishValidatedCandidate(
             throw ValidationFailure("validated candidate changed at publication boundary")
         }
     }
-    guard renameatx_np(directory, candidateName, directory, "verify.json", UInt32(RENAME_EXCL)) == 0 else {
-        if errno == EEXIST { throw ValidationFailure("canonical verify.json already exists") }
-        throw ValidationFailure("validated candidate could not be published")
+    if renameatx_np(directory, candidateName, directory, "verify.json", UInt32(RENAME_EXCL)) != 0 {
+        guard errno == EEXIST else {
+            throw ValidationFailure("validated candidate could not be published")
+        }
+        let existing = openat(directory, "verify.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard existing >= 0 else {
+            throw ValidationFailure("canonical verify.json already exists but is unsafe")
+        }
+        defer { close(existing) }
+        var existingInformation = stat()
+        guard fstat(existing, &existingInformation) == 0,
+              (existingInformation.st_mode & S_IFMT) == S_IFREG,
+              existingInformation.st_uid == getuid(),
+              existingInformation.st_nlink == 1,
+              (existingInformation.st_mode & 0o777) == S_IRUSR,
+              sha256(data: try readAllFromStart(existing, at: "existing verify.json")) == candidateDigest,
+              fsync(existing) == 0,
+              fsync(directory) == 0 else {
+            throw ValidationFailure("canonical verify.json already exists with different or unsafe bytes")
+        }
+        return
     }
     let published = openat(directory, "verify.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
     guard published >= 0 else {
@@ -864,7 +882,7 @@ func validateBuild(
         guard let repository, let expectedHead else {
             throw ValidationFailure("application build project validation context is absent")
         }
-        _ = try validateProjectReference(
+        let project = try validateProjectReference(
             build["project"]!, repository: repository, expectedHead: expectedHead, at: "build.project"
         )
         let source = try requireObject(build["sourceTree"]!, at: "build.sourceTree")
@@ -874,6 +892,9 @@ func validateBuild(
         let projectPath = try requireString(source["projectPath"]!, at: "build.sourceTree.projectPath")
         guard head == expectedHead, matches(digest, regex: digestPattern) else {
             throw ValidationFailure("build.sourceTree identity is invalid")
+        }
+        guard projectPath == project.path else {
+            throw ValidationFailure("build.sourceTree.projectPath must match build.project.path")
         }
         let entries = try headTreeEntries(head: expectedHead)
         try validateWorkingTree(entries: entries, repository: repository)
@@ -1128,6 +1149,7 @@ func sourceTreeIdentity(entries: [HeadTreeEntry], head: String, projectPath: Str
     var hasher = SHA256()
     updateLengthPrefixed(&hasher, string: "ios-template-source-tree-v1")
     updateLengthPrefixed(&hasher, string: head)
+    updateLengthPrefixed(&hasher, string: projectPath)
     for entry in entries {
         updateLengthPrefixed(&hasher, string: entry.mode)
         updateLengthPrefixed(&hasher, string: entry.objectID)
@@ -1202,6 +1224,78 @@ func validateWorkingTree(entries: [HeadTreeEntry], repository: TrustedRepository
     }
 }
 
+func normalizedSnapshotSymlinkTarget(linkPath: String, target: String) throws -> [String] {
+    guard !target.isEmpty, !target.hasPrefix("/"),
+          !target.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else {
+        throw ValidationFailure("Head source symbolic link target is unsafe")
+    }
+    var resolved = Array(try relativeComponents(linkPath, at: "Head source symbolic link").dropLast())
+    for component in target.split(separator: "/", omittingEmptySubsequences: false).map(String.init) {
+        guard !component.isEmpty else {
+            throw ValidationFailure("Head source symbolic link target is unsafe")
+        }
+        if component == "." { continue }
+        if component == ".." {
+            guard !resolved.isEmpty else {
+                throw ValidationFailure("Head source symbolic link escapes the source snapshot")
+            }
+            resolved.removeLast()
+        } else {
+            resolved.append(component)
+        }
+    }
+    guard !resolved.isEmpty else {
+        throw ValidationFailure("Head source symbolic link target is unsafe")
+    }
+    return resolved
+}
+
+func validatedSnapshotSymlinkTargets(entries: [HeadTreeEntry]) throws -> [String: String] {
+    var targets: [String: String] = [:]
+    var knownPaths = Set<String>()
+    for entry in entries {
+        let components = try relativeComponents(entry.path, at: "Head source path")
+        knownPaths.insert(entry.path)
+        for count in 1..<components.count {
+            knownPaths.insert(components.prefix(count).joined(separator: "/"))
+        }
+        guard entry.mode == "120000" else { continue }
+        guard let target = String(data: entry.data, encoding: .utf8), Data(target.utf8) == entry.data else {
+            throw ValidationFailure("Head source symbolic link target is not UTF-8")
+        }
+        _ = try normalizedSnapshotSymlinkTarget(linkPath: entry.path, target: target)
+        targets[entry.path] = target
+    }
+
+    for linkPath in targets.keys.sorted() {
+        var components = try normalizedSnapshotSymlinkTarget(linkPath: linkPath, target: targets[linkPath]!)
+        var visited = Set([linkPath])
+        while true {
+            var substituted = false
+            for count in 1...components.count {
+                let prefix = components.prefix(count).joined(separator: "/")
+                guard let nestedTarget = targets[prefix] else { continue }
+                guard visited.insert(prefix).inserted else {
+                    throw ValidationFailure("Head source symbolic link cycle is not supported")
+                }
+                let replacement = try normalizedSnapshotSymlinkTarget(linkPath: prefix, target: nestedTarget)
+                components = replacement + components.dropFirst(count)
+                substituted = true
+                break
+            }
+            if !substituted { break }
+        }
+        let destination = components.joined(separator: "/")
+        guard knownPaths.contains(destination) else {
+            throw ValidationFailure("Head source symbolic link target is not committed at exact Head")
+        }
+        if linkPath.hasPrefix(destination + "/") {
+            throw ValidationFailure("Head source symbolic link cycle is not supported")
+        }
+    }
+    return targets
+}
+
 func materializeHeadSource(entries: [HeadTreeEntry], attemptRoot: String) throws -> String {
     let attempt = open(attemptRoot, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
     guard attempt >= 0 else { throw ValidationFailure("attempt workspace is unavailable") }
@@ -1210,7 +1304,8 @@ func materializeHeadSource(entries: [HeadTreeEntry], attemptRoot: String) throws
     let source = openat(attempt, "Source", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
     guard source >= 0 else { throw ValidationFailure("source snapshot is unavailable") }
     defer { close(source) }
-    for entry in entries where entry.mode != "120000" {
+    let symlinkTargets = try validatedSnapshotSymlinkTargets(entries: entries)
+    for entry in entries {
         let components = try relativeComponents(entry.path, at: "Head source path")
         var directory = dup(source)
         for component in components.dropLast() {
@@ -1222,11 +1317,30 @@ func materializeHeadSource(entries: [HeadTreeEntry], attemptRoot: String) throws
             guard next >= 0 else { throw ValidationFailure("source snapshot contains an unsafe directory") }
             directory = next
         }
+        close(directory)
+    }
+    for entry in entries where entry.mode != "120000" {
+        let components = try relativeComponents(entry.path, at: "Head source path")
+        let directory = try openBoundDirectory(
+            rootFileDescriptor: source, components: Array(components.dropLast()), at: "source snapshot parent"
+        )
         defer { close(directory) }
         try writeExclusiveFile(
             directoryFileDescriptor: directory, name: components.last!, data: entry.data,
             permissions: entry.mode == "100755" ? S_IRUSR | S_IXUSR : S_IRUSR
         )
+    }
+    for entry in entries where entry.mode == "120000" {
+        let components = try relativeComponents(entry.path, at: "Head source path")
+        let directory = try openBoundDirectory(
+            rootFileDescriptor: source, components: Array(components.dropLast()), at: "source snapshot parent"
+        )
+        defer { close(directory) }
+        let target = symlinkTargets[entry.path]!
+        let result = target.withCString { symlinkat($0, directory, components.last!) }
+        guard result == 0, fsync(directory) == 0 else {
+            throw ValidationFailure("source snapshot symbolic link creation failed")
+        }
     }
     func sealDirectory(_ directory: Int32) throws {
         for name in try sortedDirectoryNames(directory, label: "source snapshot") {
@@ -1239,6 +1353,8 @@ func materializeHeadSource(entries: [HeadTreeEntry], attemptRoot: String) throws
                 guard child >= 0 else { throw ValidationFailure("source snapshot directory changed while sealing") }
                 defer { close(child) }
                 try sealDirectory(child)
+            } else if (information.st_mode & S_IFMT) == S_IFLNK {
+                continue
             } else if (information.st_mode & S_IFMT) != S_IFREG {
                 throw ValidationFailure("source snapshot contains a special item")
             }
@@ -1400,35 +1516,33 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
         issue: options.issue,
         head: options.expectedHead
     )
-    let sourceRoot = try materializeHeadSource(entries: entries, attemptRoot: prepared.attemptPath)
-    document["sourceRoot"] = sourceRoot
-    document["buildProjectPath"] = sourceRoot + "/" + options.project
-    document["attemptRoot"] = prepared.attemptPath
-    document["runState"] = prepared.attemptPath
-    document["lockPath"] = prepared.lockPath
-    document["lockReadyFIFO"] = prepared.readyFIFOPath
-    document["lockControlFIFO"] = prepared.controlFIFOPath
-    let configPath = prepared.attemptPath + "/config.json"
-    let configData: Data
     do {
-        configData = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) + Data("\n".utf8)
+        let sourceRoot = try materializeHeadSource(entries: entries, attemptRoot: prepared.attemptPath)
+        document["sourceRoot"] = sourceRoot
+        document["buildProjectPath"] = sourceRoot + "/" + options.project
+        document["attemptRoot"] = prepared.attemptPath
+        document["runState"] = prepared.attemptPath
+        document["lockPath"] = prepared.lockPath
+        document["lockReadyFIFO"] = prepared.readyFIFOPath
+        document["lockControlFIFO"] = prepared.controlFIFOPath
+        let configPath = prepared.attemptPath + "/config.json"
+        let configData = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]) + Data("\n".utf8)
         try writeExclusiveFile(
             directoryFileDescriptor: prepared.attemptFileDescriptor,
             name: "config.json",
             data: configData,
             permissions: S_IRUSR
         )
-    } catch {
         close(prepared.attemptFileDescriptor)
         close(prepared.workspaceFileDescriptor)
+        let configDigest = "sha256:\(sha256(data: configData))"
+        return Data([configPath, configDigest, workspaceRoot, prepared.attemptPath, prepared.lockPath,
+                     prepared.readyFIFOPath, prepared.controlFIFOPath]
+            .joined(separator: "\t").utf8)
+    } catch {
+        try discardPreparedRunnerWorkspace(prepared)
         throw error
     }
-    close(prepared.attemptFileDescriptor)
-    close(prepared.workspaceFileDescriptor)
-    let configDigest = "sha256:\(sha256(data: configData))"
-    return Data([configPath, configDigest, workspaceRoot, prepared.attemptPath, prepared.lockPath,
-                 prepared.readyFIFOPath, prepared.controlFIFOPath]
-        .joined(separator: "\t").utf8)
 }
 
 func verifyRunnerInputs(
@@ -1711,6 +1825,14 @@ func prepareRunnerWorkspace(worktreeID: String, issue: Int, head: String) throws
 }
 
 func removeDirectoryContents(_ descriptor: Int32) throws {
+    var directoryInformation = stat()
+    guard fstat(descriptor, &directoryInformation) == 0,
+          (directoryInformation.st_mode & S_IFMT) == S_IFDIR,
+          directoryInformation.st_uid == getuid(),
+          fchmod(descriptor, S_IRWXU) == 0,
+          fsync(descriptor) == 0 else {
+        throw ValidationFailure("runner state directory is not safely owned")
+    }
     guard let stream = fdopendir(dup(descriptor)) else {
         throw ValidationFailure("runner state could not be enumerated")
     }
@@ -1724,11 +1846,27 @@ func removeDirectoryContents(_ descriptor: Int32) throws {
         guard fstatat(descriptor, name, &information, AT_SYMLINK_NOFOLLOW) == 0 else {
             throw ValidationFailure("runner state changed during cleanup")
         }
+        guard information.st_uid == getuid() else {
+            throw ValidationFailure("runner state contains an unowned item")
+        }
         if (information.st_mode & S_IFMT) == S_IFDIR {
             let child = openat(descriptor, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             guard child >= 0 else { throw ValidationFailure("runner state directory changed during cleanup") }
-            try removeDirectoryContents(child)
-            close(child)
+            var boundInformation = stat()
+            guard fstat(child, &boundInformation) == 0,
+                  boundInformation.st_dev == information.st_dev,
+                  boundInformation.st_ino == information.st_ino,
+                  boundInformation.st_uid == getuid() else {
+                close(child)
+                throw ValidationFailure("runner state directory changed during cleanup")
+            }
+            do {
+                try removeDirectoryContents(child)
+                close(child)
+            } catch {
+                close(child)
+                throw error
+            }
             guard unlinkat(descriptor, name, AT_REMOVEDIR) == 0 else {
                 throw ValidationFailure("runner state directory could not be removed")
             }
@@ -1737,6 +1875,34 @@ func removeDirectoryContents(_ descriptor: Int32) throws {
                 throw ValidationFailure("runner state file could not be removed")
             }
         }
+        guard fsync(descriptor) == 0 else {
+            throw ValidationFailure("runner state cleanup could not be synchronized")
+        }
+    }
+    guard fsync(descriptor) == 0 else {
+        throw ValidationFailure("runner state cleanup could not be synchronized")
+    }
+}
+
+func discardPreparedRunnerWorkspace(_ prepared: PreparedRunnerWorkspace) throws {
+    let attemptName = URL(fileURLWithPath: prepared.attemptPath).lastPathComponent
+    defer {
+        close(prepared.attemptFileDescriptor)
+        close(prepared.workspaceFileDescriptor)
+    }
+    try removeDirectoryContents(prepared.attemptFileDescriptor)
+    let attempts = openat(
+        prepared.workspaceFileDescriptor, "Attempts",
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+    )
+    guard attempts >= 0 else {
+        throw ValidationFailure("attempts workspace changed during cleanup")
+    }
+    defer { close(attempts) }
+    guard unlinkat(attempts, attemptName, AT_REMOVEDIR) == 0,
+          fsync(attempts) == 0,
+          fsync(prepared.workspaceFileDescriptor) == 0 else {
+        throw ValidationFailure("runner attempt could not be discarded")
     }
 }
 
@@ -2317,7 +2483,7 @@ func recoverRunnerPublication(
     issue: Int,
     expectedBase: String,
     expectedHead: String
-) throws {
+) throws -> String? {
     let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: configDigest)
     let repository = try validateTrustedRepository(expectedBase: expectedBase, expectedHead: expectedHead)
     defer { close(repository.rootFileDescriptor) }
@@ -2350,7 +2516,7 @@ func recoverRunnerPublication(
     var journalInformation = stat()
     if fstatat(evidenceDirectory, ".verify-publication-journal.json", &journalInformation, AT_SYMLINK_NOFOLLOW) != 0 {
         guard errno == ENOENT else { throw ValidationFailure("publication journal state is unavailable") }
-        return
+        return nil
     }
     let journalData = try readBoundRegularFile(
         rootFileDescriptor: evidenceDirectory,
@@ -2423,6 +2589,10 @@ func recoverRunnerPublication(
           fsync(evidenceDirectory) == 0 else {
         throw ValidationFailure("publication journal could not be cleared")
     }
+    if draftExists {
+        return repository.rootPath + "/" + (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
+    }
+    return nil
 }
 
 func recordRunnerFailure(_ options: RunnerFailureOptions) throws -> String {
@@ -3183,10 +3353,12 @@ do {
               values.count == 5 else {
             throw ValidationFailure("invalid runner publication recovery arguments")
         }
-        try recoverRunnerPublication(
+        if let recovered = try recoverRunnerPublication(
             configPath: config, configDigest: digest, issue: issue,
             expectedBase: expectedBase, expectedHead: expectedHead
-        )
+        ) {
+            print(recovered)
+        }
     } else if arguments.first == "--runner-clean-attempt" {
         guard arguments.count == 5, arguments[1] == "--config", arguments[3] == "--digest" else {
             throw ValidationFailure("invalid runner cleanup arguments")

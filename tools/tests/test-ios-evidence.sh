@@ -147,6 +147,7 @@ digest = Digest::SHA256.new
 add = ->(value) { bytes = value.b; digest.update([bytes.bytesize].pack("Q>")); digest.update(bytes) }
 add.call("ios-template-source-tree-v1")
 add.call(head)
+add.call("TemplateApp.xcodeproj")
 records.each do |record|
   metadata, path = record.split("\t", 2)
   mode, type, object = metadata.split(" ")
@@ -360,6 +361,10 @@ expect_failure wrong-source-tree-digest "build.sourceTree does not match exact H
 prepare_fixture wrong-source-tree-head
 mutate_json "$evidence_file" 'document.fetch("build").fetch("sourceTree")["headSha"] = "0" * 40'
 expect_failure wrong-source-tree-head "build.sourceTree identity is invalid"
+
+prepare_fixture mismatched-source-tree-project
+mutate_json "$evidence_file" 'document.fetch("build").fetch("sourceTree")["projectPath"] = "Other.xcodeproj"'
+expect_failure mismatched-source-tree-project "build.sourceTree.projectPath must match build.project.path"
 
 prepare_fixture ignored-project-content
 printf '%s\n' '*.ignored' >>"$fixture_root/.git/info/exclude"

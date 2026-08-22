@@ -70,11 +70,27 @@ func round5TestKillBeforePublication(_ canonicalName: String) {
     _ = kill(getpid(), SIGKILL)
 }
 
+func completionTestKillAfterPublication(_ canonicalName: String) {
+    let modePath = "#{state_dir}/publication_kill_after_target"
+    guard let target = try? String(contentsOfFile: modePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+          !target.isEmpty, target == canonicalName else { return }
+    let markerPath = "#{state_dir}/publication-kill-after-" + target.replacingOccurrences(of: "/", with: "-")
+    guard !FileManager.default.fileExists(atPath: markerPath),
+          FileManager.default.createFile(atPath: markerPath, contents: Data(), attributes: nil) else { return }
+    _ = kill(getpid(), SIGKILL)
+}
+
 SWIFT
 text.sub!("typealias JSONObject", helper + "typealias JSONObject")
 text.gsub!("publishedScreenshotCount += 1", "publishedScreenshotCount += 1\n            round4TestKillDuringDraftPublication()")
 text.gsub!("guard renameatx_np(\n        directoryFileDescriptor", "round5TestKillBeforePublication(canonicalName)\n    guard renameatx_np(\n        directoryFileDescriptor")
-text.gsub!("guard renameatx_np(directory, candidateName", "round5TestKillBeforePublication(\"verify.json\")\n    guard renameatx_np(directory, candidateName")
+if text.include?("if renameatx_np(directory, candidateName")
+  text.gsub!("if renameatx_np(directory, candidateName", "round5TestKillBeforePublication(\"verify.json\")\n    if renameatx_np(directory, candidateName")
+else
+  text.gsub!("guard renameatx_np(directory, candidateName", "round5TestKillBeforePublication(\"verify.json\")\n    guard renameatx_np(directory, candidateName")
+end
+text.gsub!("    let published = openat(directoryFileDescriptor, canonicalName", "    completionTestKillAfterPublication(canonicalName)\n    let published = openat(directoryFileDescriptor, canonicalName")
+text.gsub!("    let published = openat(directory, \"verify.json\"", "    completionTestKillAfterPublication(\"verify.json\")\n    let published = openat(directory, \"verify.json\"")
 if text.include?("try beforeLink()")
   text.gsub!("try beforeLink()", "round3TestPublicationRace()\n    try beforeLink()")
 else
@@ -225,9 +241,10 @@ if [[ "$mode" == build-for-testing ]]; then
   exit 0
 fi
 [[ "$mode" == ui-test ]] || { echo 'unexpected xcodebuild arguments' >&2; exit 1; }
-destination="" identifier="" language="" region="" result="" previous=""
+destination="" identifier="" language="" region="" result="" project="" previous=""
 parallel="" destination_count=0
 for argument in "$@"; do
+  [[ "$previous" != -project ]] || project="$argument"
   if [[ "$previous" == -destination ]]; then destination="$argument"; destination_count=$((destination_count + 1)); fi
   [[ "$previous" != -testLanguage ]] || language="$argument"
   [[ "$previous" != -testRegion ]] || region="$argument"
@@ -237,6 +254,9 @@ for argument in "$@"; do
   previous="$argument"
 done
 [[ "$parallel" == NO && "$destination_count" == 1 ]] || { echo 'parallel testing or destination count is invalid' >&2; exit 1; }
+[[ "$project" == */Source/TemplateApp.xcodeproj ]] || { echo 'test did not use the private raw-Head source snapshot' >&2; exit 1; }
+source_root="${project%/TemplateApp.xcodeproj}"
+[[ "$(/bin/pwd -P)" == "$(builtin cd "$source_root" && /bin/pwd -P)" ]] || { echo 'test cwd escaped the private raw-Head source snapshot' >&2; exit 1; }
   if [[ "$identifier" == TemplateAppTests/UnitSmokeTests/testUnit ]]; then
   [[ "$(state test_mode)" != command-fail ]] || { echo 'configured unit test command failure' >&2; exit 1; }
   [[ "$destination" == *id=00000000-0000-0000-0000-000000000001 ]] || { echo 'wrong unit destination' >&2; exit 1; }
@@ -457,6 +477,11 @@ case "$command" in
     printf '%s: 4321\n' "${4-}"
     ;;
   spawn)
+    if [[ "$(state case_mode)" == stubborn-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && "${4-}" == /bin/kill ]]; then
+      printf '%s\n' "$$" >"$state_dir/stubborn-probe-pid"
+      trap '' TERM
+      while true; do /bin/sleep 0.05; done
+    fi
     if [[ "${4-}" == /usr/bin/pgrep && "${5-}" == -x && "${6-}" == TemplateApp ]]; then
       if [[ "$(state case_mode)" == pid-replacement && -e "$state_dir/ui-ran-iphone-en" && "${3-}" == "00000000-0000-0000-0000-000000000001" ]]; then
         printf '%s\n' 9876
@@ -604,7 +629,7 @@ prepare_repo() {
   : >"$poison_log"
   /bin/rm -f "$poison_sentinel"
   for key in build_mode test_mode ui_mode case_mode mutate_input mutate_after_case prebooted preferred_invalid \
-    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race publication_kill publication_kill_target mutate_worktree mutate_worktree_path; do
+    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race publication_kill publication_kill_target publication_kill_after_target mutate_worktree mutate_worktree_path; do
     set_state "$key" ""
   done
   for spawn_state in "$adapter_state"/spawn-*; do
@@ -614,6 +639,8 @@ prepare_repo() {
   /bin/rm -f "$adapter_state/publication-race-fired"
   /bin/rm -f "$adapter_state/publication-kill-fired" "$adapter_state/mutate-after-case-fired" "$adapter_state"/ui-ran-*
   /bin/rm -f "$adapter_state"/publication-kill-*
+  /bin/rm -f "$adapter_state"/publication-kill-after-*
+  /bin/rm -f "$adapter_state/stubborn-probe-pid"
 }
 
 refresh_head_paths() {
@@ -622,6 +649,25 @@ refresh_head_paths() {
   visual="$repo/.artifacts/issues/42/$head_sha/visual-result.json"
   final="$repo/.artifacts/issues/42/$head_sha/verify.json"
   mkdir -p "$(dirname "$draft")"
+}
+
+runner_workspace() {
+  /usr/bin/ruby --disable-gems -rdigest -e '
+    root = File.realpath(ARGV.fetch(0))
+    name = File.basename(root).gsub(/[^A-Za-z0-9_.-]/, "-")
+    puts "/tmp/ios-template-verify/#{name}-#{Digest::SHA256.hexdigest(root)}/issue-42/#{ARGV.fetch(1)}"
+  ' "$repo" "$head_sha"
+}
+
+assert_no_failed_attempts() {
+  local workspace attempts
+  workspace="$(runner_workspace)"
+  attempts="$workspace/Attempts"
+  if [[ -d "$attempts" ]] && /usr/bin/find "$attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt-*' -print -quit | /usr/bin/grep -q .; then
+    echo "failed verification retained a private attempt" >&2
+    /usr/bin/find "$attempts" -mindepth 1 -maxdepth 2 -print >&2
+    exit 1
+  fi
 }
 
 run_execute() {
@@ -641,6 +687,7 @@ run_execute() {
   set_state publication_race "${FAKE_PUBLICATION_RACE-}"
   set_state publication_kill "${FAKE_PUBLICATION_KILL-}"
   set_state publication_kill_target "${FAKE_PUBLICATION_KILL_TARGET-}"
+  set_state publication_kill_after_target "${FAKE_PUBLICATION_KILL_AFTER_TARGET-}"
   set_state mutate_worktree "${FAKE_MUTATE_WORKTREE-}"
   set_state mutate_worktree_path "$repo/Sources/App.swift"
   set_state contract_path "$contract"
@@ -670,6 +717,7 @@ run_finalize() {
   set_state candidate_mode "${FAKE_CANDIDATE_MODE-}"
   set_state publication_race "${FAKE_PUBLICATION_RACE-}"
   set_state publication_kill_target "${FAKE_PUBLICATION_KILL_TARGET-}"
+  set_state publication_kill_after_target "${FAKE_PUBLICATION_KILL_AFTER_TARGET-}"
   set_state candidate_path "$(dirname "$final")"
   (cd "$repo" && /usr/bin/env \
     "BASH_FUNC_cd%%=() { printf '%s\\n' bash-function-executed >>'$poison_sentinel'; builtin cd \"\$@\"; }" \
@@ -899,13 +947,61 @@ end
 project = document.fetch("build").fetch("project")
 abort "final project identity mismatch" unless project.fetch("path") == "TemplateApp.xcodeproj" && project.fetch("digest").match?(/\Asha256:[0-9a-f]{64}\z/)
 RUBY
+run_finalize
+[[ -f "$final" ]] || { echo "idempotent finalization did not preserve exact canonical evidence" >&2; exit 1; }
 
 prepare_repo first-run valid absent-head
 run_execute
 [[ -f "$draft" ]] || { echo "first run did not create and publish into the canonical Head directory" >&2; exit 1; }
 
+prepare_repo contained-source-symlink
+git -C "$repo" mv Sources/App.swift Sources/RealApp.swift
+/bin/ln -s RealApp.swift "$repo/Sources/App.swift"
+git -C "$repo" add -- Sources/App.swift
+git -C "$repo" commit -q -m 'use contained source symlink'
+refresh_head_paths
+run_execute
+[[ -f "$draft" ]] || { echo "contained source symlink was not materialized" >&2; exit 1; }
+
+prepare_repo contained-config-symlink
+git -C "$repo" mv Config/App.xcconfig Config/RealApp.xcconfig
+/bin/ln -s RealApp.xcconfig "$repo/Config/App.xcconfig"
+git -C "$repo" add -- Config/App.xcconfig
+git -C "$repo" commit -q -m 'use contained config symlink'
+refresh_head_paths
+run_execute
+[[ -f "$draft" ]] || { echo "contained config symlink was not materialized" >&2; exit 1; }
+
+prepare_repo escaping-source-symlink
+git -C "$repo" rm -q Sources/App.swift
+/bin/mkdir -p "$repo/Sources"
+/bin/ln -s ../../outside.swift "$repo/Sources/App.swift"
+git -C "$repo" add -- Sources/App.swift
+git -C "$repo" commit -q -m 'add escaping source symlink'
+refresh_head_paths
+expect_execute_failure escaping-source-symlink "contract or matrix validation failed"
+assert_no_failed_attempts
+if /usr/bin/awk -F '\t' '$1 == "xcodebuild" && $0 ~ /build-for-testing$/ {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+  echo "escaping source symlink reached Build" >&2; exit 1
+fi
+
+prepare_repo cyclic-source-symlink
+git -C "$repo" rm -q Sources/App.swift
+/bin/mkdir -p "$repo/Sources"
+/bin/ln -s Loop.swift "$repo/Sources/App.swift"
+/bin/ln -s App.swift "$repo/Sources/Loop.swift"
+git -C "$repo" add -- Sources/App.swift Sources/Loop.swift
+git -C "$repo" commit -q -m 'add cyclic source symlinks'
+refresh_head_paths
+expect_execute_failure cyclic-source-symlink "contract or matrix validation failed"
+assert_no_failed_attempts
+if /usr/bin/awk -F '\t' '$1 == "xcodebuild" && $0 ~ /build-for-testing$/ {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+  echo "cyclic source symlink reached Build" >&2; exit 1
+fi
+
 prepare_repo atomic-failure-evidence
 FAKE_BUILD_MODE=fail expect_execute_failure atomic-failure-evidence "build command failed"
+assert_no_failed_attempts
 failure_file="$(/usr/bin/find "$(dirname "$draft")/failures" -type f -name 'failure-*.json' -print -quit)"
 [[ -n "$failure_file" ]] || { echo "failure evidence was not published" >&2; exit 1; }
 [[ "$(/usr/bin/stat -f '%Lp' "$failure_file")" == 400 ]] || { echo "failure evidence was not sealed read-only" >&2; exit 1; }
@@ -914,6 +1010,34 @@ if /usr/bin/find "$(dirname "$draft")/failures" -type f ! -name 'failure-*.json'
   echo "failure publication left a temporary file" >&2
   exit 1
 fi
+
+prepare_repo stubborn-probe-timeout
+FAKE_CASE_MODE=stubborn-probe run_execute >"$scratch/stubborn-probe.stdout" 2>"$scratch/stubborn-probe.stderr" &
+stubborn_runner_pid=$!
+stubborn_finished=0
+for _ in $(/usr/bin/jot 400); do
+  if ! /bin/kill -0 "$stubborn_runner_pid" >/dev/null 2>&1; then stubborn_finished=1; break; fi
+  /bin/sleep 0.05
+done
+if [[ "$stubborn_finished" != 1 ]]; then
+  stubborn_child_pid="$(/bin/cat "$adapter_state/stubborn-probe-pid" 2>/dev/null || true)"
+  [[ ! "$stubborn_child_pid" =~ ^[1-9][0-9]*$ ]] || /bin/kill -KILL "$stubborn_child_pid" >/dev/null 2>&1 || true
+  /bin/kill -KILL "$stubborn_runner_pid" >/dev/null 2>&1 || true
+  wait "$stubborn_runner_pid" 2>/dev/null || true
+  echo "bounded Simulator probe hung after TERM" >&2
+  exit 1
+fi
+if wait "$stubborn_runner_pid"; then
+  echo "stubborn Simulator probe unexpectedly succeeded" >&2; exit 1
+fi
+grep -Fq 'process liveness' "$scratch/stubborn-probe.stderr" || { echo "stubborn probe reported the wrong failure" >&2; exit 1; }
+stubborn_child_pid="$(/bin/cat "$adapter_state/stubborn-probe-pid" 2>/dev/null || true)"
+if [[ "$stubborn_child_pid" =~ ^[1-9][0-9]*$ ]] && /bin/kill -0 "$stubborn_child_pid" >/dev/null 2>&1; then
+  /bin/kill -KILL "$stubborn_child_pid" >/dev/null 2>&1 || true
+  echo "bounded Simulator probe left a TERM-ignoring descendant" >&2
+  exit 1
+fi
+assert_no_failed_attempts
 
 prepare_repo malicious-git-policy
 malicious_hooks="$scratch/malicious-hooks"
@@ -1159,12 +1283,48 @@ for canonical_name in .verify-publication-journal.json screenshot.png verify-dra
   [[ -f "$draft" ]] || { echo "same-Head retry failed after kill before $canonical_name" >&2; exit 1; }
 done
 
+for canonical_name in .verify-publication-journal.json screenshot.png verify-draft.json; do
+  label="kill-after-${canonical_name//[^A-Za-z0-9]/-}"
+  prepare_repo "$label"
+  FAKE_PUBLICATION_KILL_AFTER_TARGET="$canonical_name" expect_execute_failure "$label" "atomic draft publication failed"
+  : >"$fake_log"
+  run_execute
+  [[ -f "$draft" ]] || { echo "same-Head retry failed after kill after $canonical_name" >&2; exit 1; }
+  if [[ "$canonical_name" == verify-draft.json ]] && /usr/bin/awk -F '\t' '$1 == "xcodebuild" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+    echo "complete canonical draft transaction was re-executed" >&2; exit 1
+  fi
+done
+
 prepare_repo kill-before-final
 run_execute
 write_visual approved
 FAKE_PUBLICATION_KILL_TARGET=verify.json expect_finalize_failure kill-before-final "visual result is invalid"
 run_finalize
 [[ -f "$final" ]] || { echo "final retry failed after kill before canonical rename" >&2; exit 1; }
+
+prepare_repo kill-after-final
+run_execute
+write_visual approved
+if FAKE_PUBLICATION_KILL_AFTER_TARGET=verify.json run_finalize >"$scratch/kill-after-final.stdout" 2>"$scratch/kill-after-final.stderr"; then
+  echo "kill-after-final fixture unexpectedly returned success" >&2; exit 1
+fi
+[[ -f "$final" ]] || { echo "kill after final rename did not leave canonical evidence" >&2; exit 1; }
+run_finalize
+[[ -f "$final" ]] || { echo "final retry did not accept exact canonical evidence" >&2; exit 1; }
+
+prepare_repo corrupt-after-final
+run_execute
+write_visual approved
+if FAKE_PUBLICATION_KILL_AFTER_TARGET=verify.json run_finalize >"$scratch/corrupt-after-final.stdout" 2>"$scratch/corrupt-after-final.stderr"; then
+  echo "corrupt-after-final fixture unexpectedly returned success" >&2; exit 1
+fi
+/bin/chmod 0600 "$final"
+printf '%s\n' corrupt-final >"$final"
+/bin/chmod 0400 "$final"
+if run_finalize >"$scratch/corrupt-final-retry.stdout" 2>"$scratch/corrupt-final-retry.stderr"; then
+  echo "finalizer accepted corrupt existing canonical evidence" >&2; exit 1
+fi
+grep -Fq 'canonical verify.json already exists' "$scratch/corrupt-final-retry.stderr" || { echo "corrupt final retry reported the wrong error" >&2; exit 1; }
 
 prepare_repo concurrent-lock
 hold_file="$scratch/concurrent-hold"
@@ -1176,6 +1336,9 @@ for _ in $(/usr/bin/jot 600); do
 done
 [[ -e "$hold_file.started" ]] || { echo "first concurrent runner did not reach Build" >&2; exit 1; }
 expect_execute_failure concurrent-lock "lock"
+workspace="$(runner_workspace)"
+attempt_count="$(/usr/bin/find "$workspace/Attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt-*' | /usr/bin/wc -l | /usr/bin/tr -d ' ')"
+[[ "$attempt_count" == 1 ]] || { echo "lock loser retained a private attempt" >&2; exit 1; }
 : >"$hold_file.release"
 wait "$first_runner_pid"
 [[ -f "$draft" ]] || { echo "concurrent lock winner did not publish draft" >&2; exit 1; }
