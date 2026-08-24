@@ -287,6 +287,7 @@ source_root="${project%/TemplateApp.xcodeproj}"
   [[ "$destination" == *id=00000000-0000-0000-0000-000000000001 ]] || { echo 'wrong unit destination' >&2; exit 1; }
   [[ -z "$language$region" && "$result" == */Tests.xcresult ]] || { echo 'unit stage included UI locale or wrong result' >&2; exit 1; }
   mkdir -p "$result"
+  printf '%s\n' Booted >"$state_dir/device-state-00000000-0000-0000-0000-000000000001"
   if [[ "$(state config_mode)" == mutate ]]; then
     workspace="$(dirname "$result")"
     config="$workspace/config.json"
@@ -456,15 +457,61 @@ fi
 command="${2-}"
 case "$command" in
   boot)
-    [[ "$(state prebooted)" != 1 ]] || exit 1
+    if [[ "$(state prebooted)" == 1 ]]; then
+      printf '%s\n' Booted >"$state_dir/device-state-${3-}"
+      exit 1
+    fi
+    printf '%s\n' Booted >"$state_dir/device-state-${3-}"
     ;;
   list)
     [[ "${3-}" == devices && "${4-}" == --json ]] || { echo 'wrong simulator state query' >&2; exit 1; }
-    printf '%s\n' '{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[' \
-      '{"udid":"00000000-0000-0000-0000-000000000001","state":"Booted"},' \
-      '{"udid":"00000000-0000-0000-0000-000000000002","state":"Booted"},' \
-      '{"udid":"00000000-0000-0000-0000-000000000003","state":"Booted"},' \
-      '{"udid":"00000000-0000-0000-0000-000000000004","state":"Booted"}]}}'
+    /usr/bin/ruby --disable-gems -rjson - "$state_dir" "$(state simulator_identity_mode)" <<'RUBY'
+state_dir, mode = ARGV
+runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+rows = [
+  ["iphone-en", "00000000-0000-0000-0000-000000000001", "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"],
+  ["iphone-ja", "00000000-0000-0000-0000-000000000002", "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"],
+  ["ipad-en", "00000000-0000-0000-0000-000000000003", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3"],
+  ["ipad-ja", "00000000-0000-0000-0000-000000000004", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3"]
+]
+devices = rows.map do |id, udid, type|
+  state_path = File.join(state_dir, "device-state-#{udid}")
+  {
+    "udid" => udid,
+    "name" => "iOS-Template-runner-fixture-#{id}",
+    "state" => File.exist?(state_path) ? File.read(state_path).strip : "Booted",
+    "isAvailable" => true,
+    "deviceTypeIdentifier" => type
+  }
+end
+devices.pop if mode == "missing"
+devices[3]["name"] = "tampered" if mode == "wrong"
+devices[3]["isAvailable"] = false if mode == "unavailable"
+devices[3]["deviceTypeIdentifier"] = "com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M3" if mode == "wrong-type"
+wrong_runtime_device = devices.pop if mode == "wrong-runtime"
+devices << {
+  "udid" => "00000000-0000-0000-0000-999999999999",
+  "name" => mode == "duplicate" ? "iOS-Template-runner-fixture-iphone-en" : "Unrelated Personal Simulator",
+  "state" => "Shutdown",
+  "isAvailable" => true,
+  "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-16"
+}
+document = {"devices" => {runtime => devices}}
+document.fetch("devices")["com.apple.CoreSimulator.SimRuntime.iOS-25-0"] = [wrong_runtime_device] if wrong_runtime_device
+puts JSON.generate(document)
+RUBY
+    ;;
+  shutdown)
+    [[ "$(state resource_failure)" != shutdown-after-case || "${3-}" != "00000000-0000-0000-0000-000000000001" || ! -e "$state_dir/ui-ran-iphone-en" ]] || exit 1
+    printf '%s\n' Shutdown >"$state_dir/device-state-${3-}"
+    ;;
+  erase)
+    [[ "$(state resource_failure)" != erase-after-case || "${3-}" != "00000000-0000-0000-0000-000000000001" || ! -e "$state_dir/ui-ran-iphone-en" ]] || exit 1
+    [[ "$(state "device-state-${3-}")" == Shutdown ]] || { echo 'erase requires Shutdown' >&2; exit 1; }
+    erase_count_file="$state_dir/erase-count-${3-}"
+    erase_count=0
+    [[ ! -f "$erase_count_file" ]] || erase_count="$(/bin/cat "$erase_count_file")"
+    printf '%s\n' "$((erase_count + 1))" >"$erase_count_file"
     ;;
   bootstatus) exit 0 ;;
   get_app_container)
@@ -480,11 +527,13 @@ case "$command" in
     if [[ "$(state mutate_after_case)" =~ ^(contract|matrix)$ && "${3-}" == "00000000-0000-0000-0000-000000000001" && ! -e "$state_dir/mutate-after-case-fired" ]] && \
        /usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "io" && $5 == "00000000-0000-0000-0000-000000000001" {seen=1} END {exit seen ? 0 : 1}' "$fake_log"; then
       : >"$state_dir/mutate-after-case-fired"
-      printf '\n' >>"$(state "$(state mutate_after_case)_path")"
+       printf '\n' >>"$(state "$(state mutate_after_case)_path")"
     fi
+    [[ "$(state resource_failure)" != terminate-after-case || "${3-}" != "00000000-0000-0000-0000-000000000001" || ! -e "$state_dir/ui-ran-iphone-en" ]] || exit 1
     exit 0
     ;;
   install)
+    [[ "$(state resource_failure)" != install || "${3-}" != "00000000-0000-0000-0000-000000000001" ]] || exit 1
     app_path="${4-}"
     [[ -d "$app_path" ]] || { echo 'install path is not an app directory' >&2; exit 1; }
     if [[ "$(state app_mode)" == mutate-after-install && ! -e "$state_dir/app-mutated" ]]; then
@@ -551,6 +600,7 @@ case "$command" in
     ;;
   io)
     [[ "${4-}" == screenshot ]] || { echo 'expected screenshot' >&2; exit 1; }
+    [[ "$(state resource_failure)" != screenshot || "${3-}" != "00000000-0000-0000-0000-000000000001" ]] || exit 1
     /usr/bin/awk -F '\t' -v udid="${3-}" '$3 == "simctl" && $4 == "spawn" && $5 == udid && $6 == "/bin/kill" && $7 == "-0" {seen=1} END {exit seen ? 0 : 1}' "$fake_log" || { echo 'screenshot lacked liveness probe' >&2; exit 1; }
     mkdir -p "$(dirname "${5-}")"
     if [[ "$(state png_mode)" == corrupt ]]; then
@@ -561,6 +611,7 @@ iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAA
 PNG
     fi
     ;;
+  delete) echo 'runner must never delete a Simulator' >&2; exit 1 ;;
   *) echo "unexpected simctl command: $command" >&2; exit 1 ;;
 esac
 SH
@@ -670,7 +721,7 @@ prepare_repo() {
   : >"$poison_log"
   /bin/rm -f "$poison_sentinel"
   for key in build_mode test_mode ui_mode case_mode mutate_input mutate_after_case prebooted preferred_invalid \
-    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race publication_kill publication_kill_target publication_kill_after_target mutate_worktree mutate_worktree_path; do
+    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race publication_kill publication_kill_target publication_kill_after_target mutate_worktree mutate_worktree_path simulator_identity_mode resource_failure; do
     set_state "$key" ""
   done
   for spawn_state in "$adapter_state"/spawn-*; do
@@ -682,6 +733,14 @@ prepare_repo() {
   /bin/rm -f "$adapter_state"/publication-kill-*
   /bin/rm -f "$adapter_state"/publication-kill-after-*
   /bin/rm -f "$adapter_state/stubborn-probe-pid"
+  /bin/rm -f "$adapter_state"/device-state-* "$adapter_state"/erase-count-*
+  for udid in \
+    00000000-0000-0000-0000-000000000001 \
+    00000000-0000-0000-0000-000000000002 \
+    00000000-0000-0000-0000-000000000003 \
+    00000000-0000-0000-0000-000000000004; do
+    printf '%s\n' Booted >"$adapter_state/device-state-$udid"
+  done
 }
 
 refresh_head_paths() {
@@ -725,6 +784,8 @@ run_execute() {
   set_state png_mode "${FAKE_PNG_MODE-}"
   set_state config_mode "${FAKE_CONFIG_MODE-}"
   set_state app_mode "${FAKE_APP_MODE-}"
+  set_state simulator_identity_mode "${FAKE_SIMULATOR_IDENTITY_MODE-}"
+  set_state resource_failure "${FAKE_RESOURCE_FAILURE-}"
   set_state publication_race "${FAKE_PUBLICATION_RACE-}"
   set_state publication_kill "${FAKE_PUBLICATION_KILL-}"
   set_state publication_kill_target "${FAKE_PUBLICATION_KILL_TARGET-}"
@@ -893,6 +954,43 @@ fi
 
 prepare_repo valid
 run_execute
+resource_config="$(/usr/bin/find "$(runner_workspace)/Attempts" -mindepth 2 -maxdepth 2 -type f -name config.json -print -quit)"
+[[ -n "$resource_config" ]] || { echo "runner did not retain its sealed resource ownership config" >&2; exit 1; }
+/usr/bin/ruby -rjson - "$resource_config" <<'RUBY'
+config = JSON.parse(File.read(ARGV.fetch(0)))
+abort "runner config did not seal the batch identity" unless config.fetch("batchId") == "runner-fixture"
+abort "runner config did not seal the runtime identity" unless config.fetch("runtime") == {
+  "identifier" => "com.apple.CoreSimulator.SimRuntime.iOS-26-5", "version" => "26.5"
+}
+expected = %w[iphone-en iphone-ja ipad-en ipad-ja].map { |id| "iOS-Template-runner-fixture-#{id}" }
+abort "runner config did not seal dedicated Simulator names" unless config.fetch("cases").map { |entry| entry.fetch("name") } == expected
+abort "runner config did not seal Device Type identities" unless config.fetch("cases").all? do |entry|
+  entry.fetch("deviceType").keys.sort == %w[identifier name]
+end
+RUBY
+/usr/bin/ruby - "$fake_log" <<'RUBY'
+lines = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
+owned = (1..4).map { |slot| format("00000000-0000-0000-0000-%012d", slot) }
+simctl = lines.each_index.select { |index| lines[index][0] == "xcrun" && lines[index][2] == "simctl" }
+erase = simctl.select { |index| lines[index][3] == "erase" }
+abort "runner did not perform exact startup, post-unit, and per-case erase" unless erase.length == 9
+abort "startup erase did not cover the exact four-device set" unless erase.first(4).map { |index| lines[index][4] } == owned
+build = lines.index { |fields| fields[0] == "xcodebuild" && fields.last == "build-for-testing" }
+unit = lines.index { |fields| fields[0] == "xcodebuild" && fields.last == "test-without-building" && fields.any? { |field| field.include?("TemplateAppTests/UnitSmokeTests") } }
+abort "startup reclamation did not precede Build" unless erase.first(4).all? { |index| index < build }
+abort "post-unit reclamation did not precede first UI case" unless erase[4] > unit && lines[erase[4]][4] == owned[0]
+owned.each_with_index do |udid, offset|
+  screenshot = lines.index { |fields| fields[0] == "xcrun" && fields[2] == "simctl" && fields[3] == "io" && fields[4] == udid }
+  final_terminate = lines.each_index.select { |index| lines[index][0] == "xcrun" && lines[index][2] == "simctl" && lines[index][3] == "terminate" && lines[index][4] == udid }.last
+  shutdown = lines.each_index.select { |index| lines[index][0] == "xcrun" && lines[index][2] == "simctl" && lines[index][3] == "shutdown" && lines[index][4] == udid }.last
+  final_erase = erase[5 + offset]
+  abort "case resource reclamation order is invalid for #{udid}" unless screenshot < final_terminate && final_terminate < shutdown && shutdown < final_erase
+end
+unrelated = "00000000-0000-0000-0000-999999999999"
+abort "runner mutated an unrelated Simulator" if lines.any? do |fields|
+  fields[0] == "xcrun" && fields[2] == "simctl" && %w[shutdown erase delete].include?(fields[3]) && fields[4] == unrelated
+end
+RUBY
 [[ ! -s "$poison_log" ]] || { echo "production dispatch used caller PATH" >&2; cat "$poison_log" >&2; exit 1; }
 [[ ! -e "$poison_sentinel" ]] || { echo "security-critical child inherited poisoned environment" >&2; cat "$poison_sentinel" >&2; exit 1; }
 [[ -f "$draft" && ! -e "$final" ]] || { echo "execution did not publish only the draft" >&2; exit 1; }
@@ -930,6 +1028,16 @@ abort "worktree ID lacks full physical-root digest" unless worktree_id.match?(/-
 RUBY
 workspace_root="$(/usr/bin/ruby -rjson -e 'puts File.dirname(JSON.parse(File.read(ARGV[0])).fetch("workspaceArtifacts").fetch("derivedDataPath"))' "$draft")"
 [[ "$(/usr/bin/stat -f '%Lp' "$workspace_root")" == 700 ]] || { echo "workspace is not mode 0700" >&2; exit 1; }
+for case_id in iphone-en iphone-ja ipad-en ipad-ja; do
+  screenshot="$workspace_root/Screenshots/$case_id.png"
+  receipt="$workspace_root/$case_id-screenshot.sha256"
+  [[ "$(/usr/bin/stat -f '%Lp' "$screenshot")" == 400 && "$(/usr/bin/stat -f '%Lp' "$receipt")" == 400 ]] || {
+    echo "case screenshot and digest receipt were not durably sealed" >&2; exit 1
+  }
+  [[ "$(/bin/cat "$receipt")" == "sha256:$(/usr/bin/shasum -a 256 "$screenshot" | /usr/bin/awk '{print $1}')" ]] || {
+    echo "case screenshot receipt does not bind the host PNG" >&2; exit 1
+  }
+done
 
 build_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\tbuild-for-testing$/ {count++} END {print count+0}' "$fake_log")"
 test_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\ttest-without-building$/ {count++} END {print count+0}' "$fake_log")"
@@ -985,6 +1093,7 @@ actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequen
     next
   elsif fields[0] == "xcrun" && fields[2] == "simctl"
     command = fields.fetch(3)
+    next if %w[list shutdown erase].include?(command)
     udid = fields.fetch(4)
     label = command == "io" ? "screenshot" : command
     sequence << "#{case_for.fetch(udid)}-#{label}"
@@ -1188,8 +1297,8 @@ FAKE_BUILD_MODE= expect_execute_failure missing-project-member "build command fa
 
 prepare_repo mutate-worktree-during-build
 FAKE_MUTATE_WORKTREE=1 expect_execute_failure mutate-worktree-during-build "verification inputs changed"
-if /usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
-  echo "worktree mutation reached Simulator commands" >&2; exit 1
+if /usr/bin/awk -F '\t' '$1 == "xcodebuild" && $0 ~ /build-for-testing$/ {built=1; next} built && $1 == "xcrun" && $3 == "simctl" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+  echo "worktree mutation reached post-Build Simulator commands" >&2; exit 1
 fi
 
 prepare_repo intermediate-project-symlink
@@ -1208,6 +1317,15 @@ for mode in absent missing-unit-test missing-case missing-action both-actions mi
   prepare_repo "contract-$mode" "$mode"
   expect_execute_failure "contract-$mode" "verification"
   [[ ! -s "$fake_log" ]] || { echo "invalid contract reached Xcode for $mode" >&2; cat "$fake_log" >&2; exit 1; }
+done
+
+for mode in wrong duplicate missing unavailable wrong-type wrong-runtime; do
+  prepare_repo "simulator-identity-$mode"
+  FAKE_SIMULATOR_IDENTITY_MODE="$mode" expect_execute_failure "simulator-identity-$mode" "dedicated Simulator ownership validation failed"
+  if /usr/bin/awk -F '\t' '($1 == "xcodebuild" && ($0 ~ /build-for-testing$/ || $0 ~ /test-without-building$/)) || ($1 == "xcrun" && $3 == "simctl" && ($4 == "shutdown" || $4 == "erase" || $4 == "delete")) {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+    echo "invalid full-set Simulator identity reached Xcode or destructive mutation for $mode" >&2; exit 1
+  fi
+  [[ ! -e "$draft" ]] || { echo "invalid Simulator identity published draft for $mode" >&2; exit 1; }
 done
 
 prepare_repo dirty-range
@@ -1306,7 +1424,12 @@ FAKE_PUBLICATION_RACE=visual-result expect_finalize_failure final-publication-ra
 for source in contract matrix; do
   prepare_repo "mutated-after-case-$source"
   FAKE_MUTATE_AFTER_CASE="$source" expect_execute_failure "mutated-after-case-$source" "$source changed during verification"
-  if /usr/bin/awk -F '\t' '$3 == "simctl" && $5 == "00000000-0000-0000-0000-000000000002" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+  if /usr/bin/awk -F '\t' '
+    $3 == "simctl" && $4 == "io" && $5 == "00000000-0000-0000-0000-000000000001" {screenshot=1}
+    screenshot && $3 == "simctl" && $4 == "terminate" && $5 == "00000000-0000-0000-0000-000000000001" {boundary=1; next}
+    boundary && $3 == "simctl" && $5 == "00000000-0000-0000-0000-000000000002" {found=1}
+    END {exit found ? 0 : 1}
+  ' "$fake_log"; then
     echo "runner issued later-case Simulator commands after $source mutation" >&2; exit 1
   fi
 done
@@ -1324,6 +1447,19 @@ prepare_repo case-failure
 FAKE_CASE_MODE=launch-fail expect_execute_failure case-failure "case iphone-ja failed"
 [[ ! -e "$draft" ]] || { echo "case failure published draft" >&2; exit 1; }
 /usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "terminate" && $5 == "00000000-0000-0000-0000-000000000002" {count++} END {exit count >= 2 ? 0 : 1}' "$fake_log" || { echo "case failure did not terminate active app" >&2; exit 1; }
+/usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "erase" && $5 == "00000000-0000-0000-0000-000000000002" {count++} END {exit count >= 2 ? 0 : 1}' "$fake_log" || { echo "launch failure did not reclaim the active Simulator" >&2; exit 1; }
+
+for mode in install screenshot terminate-after-case shutdown-after-case erase-after-case; do
+  prepare_repo "resource-failure-$mode"
+  FAKE_RESOURCE_FAILURE="$mode" expect_execute_failure "resource-failure-$mode" "case iphone-en failed"
+  [[ ! -e "$draft" ]] || { echo "resource failure published draft for $mode" >&2; exit 1; }
+  failure_file="$(/usr/bin/find "$(dirname "$draft")/failures" -type f -name 'failure-*.json' -print -quit)"
+  [[ -n "$failure_file" ]] || { echo "resource failure lacked sanitized failure evidence for $mode" >&2; exit 1; }
+  /usr/bin/ruby -rjson -e 'd = JSON.parse(File.read(ARGV.fetch(0))); abort unless d["status"] == "failed" && d["stage"].start_with?("case-iphone-en") && !d["error"].empty?' "$failure_file"
+  if /usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && $4 == "delete" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+    echo "resource cleanup deleted a Simulator for $mode" >&2; exit 1
+  fi
+done
 
 prepare_repo case-crash
 FAKE_CASE_MODE=crash expect_execute_failure case-crash "case iphone-ja failed"

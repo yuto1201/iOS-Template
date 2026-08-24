@@ -234,9 +234,11 @@ config_check() {
 }
 active_udid=""
 active_bundle=""
+active_case_id=""
 active_probe_pid=""
 runner_succeeded=0
 lock_holder_pid=""
+simulator_snapshot_index=0
 run_state="$attempt_root"
 stop_probe_group() {
   local probe_pid="$1" iteration
@@ -259,6 +261,13 @@ release_runner() {
   local status="$?"
   if [[ -n "$active_udid" && -n "$active_bundle" ]]; then
     run_xcrun simctl terminate "$active_udid" "$active_bundle" >/dev/null 2>&1 || true
+    if [[ -n "$active_case_id" ]] && ! reclaim_owned_simulator "$active_case_id" "exit-cleanup"; then
+      run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-record-failure \
+        --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
+        --stage "$stage" --message "active Simulator resource reclamation failed" >/dev/null 2>&1 || true
+      echo "iOS verification failed: active Simulator resource reclamation failed" >&2
+      [[ "$status" -ne 0 ]] || status=1
+    fi
   fi
   if [[ -n "$active_probe_pid" ]]; then
     if ! stop_probe_group "$active_probe_pid"; then
@@ -306,6 +315,58 @@ run_xcrun_bounded() {
   active_probe_pid=""
   [[ "$result" -eq 0 ]] || return "$result"
   return 124
+}
+
+capture_simulator_identities() {
+  local label="$1" target_case="${2-}" expected_state="${3-}" snapshot output
+  [[ "$label" =~ ^[A-Za-z0-9-]+$ ]] || return 1
+  simulator_snapshot_index=$((simulator_snapshot_index + 1))
+  snapshot="$run_state/simulator-devices-${simulator_snapshot_index}-${label}.json"
+  [[ ! -e "$snapshot" ]] || return 1
+  run_xcrun simctl list devices --json >"$snapshot" 2>"$run_state/simulator-devices-${simulator_snapshot_index}-${label}-error" || return 1
+  if [[ -n "$target_case" && -n "$expected_state" ]]; then
+    output="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-simulators \
+      --config "$config" --digest "$config_digest" --devices "$snapshot" \
+      --target "$target_case" --expected-state "$expected_state")" || return 1
+  elif [[ -n "$target_case" ]]; then
+    output="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-simulators \
+      --config "$config" --digest "$config_digest" --devices "$snapshot" \
+      --target "$target_case")" || return 1
+  else
+    run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-simulators \
+      --config "$config" --digest "$config_digest" --devices "$snapshot" >/dev/null || return 1
+    output=""
+  fi
+  current_simulator_state="$output"
+}
+
+case_udid() {
+  case "$1" in
+    iphone-en) config_value cases.0.udid ;;
+    iphone-ja) config_value cases.1.udid ;;
+    ipad-en) config_value cases.2.udid ;;
+    ipad-ja) config_value cases.3.udid ;;
+    *) return 1 ;;
+  esac
+}
+
+reclaim_owned_simulator() {
+  local case_id="$1" label="$2" udid
+  udid="$(case_udid "$case_id")" || return 1
+  capture_simulator_identities "$label-pre" "$case_id" || return 1
+  case "$current_simulator_state" in
+    Booted) run_xcrun simctl shutdown "$udid" >/dev/null 2>&1 || return 1 ;;
+    Shutdown) ;;
+    *) return 1 ;;
+  esac
+  capture_simulator_identities "$label-shutdown" "$case_id" Shutdown || return 1
+  run_xcrun simctl erase "$udid" >/dev/null 2>&1 || return 1
+  capture_simulator_identities "$label-post" "$case_id" Shutdown || return 1
+  if [[ "$active_udid" == "$udid" ]]; then
+    active_udid=""
+    active_bundle=""
+    active_case_id=""
+  fi
 }
 
 config_check || fail "verification workspace receipt is invalid"
@@ -364,6 +425,13 @@ if [[ -n "$recovered_draft" ]]; then
   exit 0
 fi
 
+stage="simulator-ownership"
+capture_simulator_identities "startup-full-set" || fail "dedicated Simulator ownership validation failed"
+for owned_case_id in iphone-en iphone-ja ipad-en ipad-ja; do
+  reclaim_owned_simulator "$owned_case_id" "startup-$owned_case_id" \
+    || fail "dedicated Simulator startup reclamation failed"
+done
+
 stage="xcode-resolution"
 if ! probe_xcode_environment; then
   select_fallback_xcode_environment || fail "Xcode could not be resolved"
@@ -416,6 +484,11 @@ if ! run_xcrun xcresulttool get test-results tests --schema-version 0.1.0 --path
 fi
 json_tool test-tree "$unit_tree" "$unit_test_identifier" "$first_udid" 2>"$run_state/test-tree-parse-error" || fail "unit tests selected the wrong identifier"
 
+stage="post-unit-simulator-reclamation"
+verify_live_inputs
+reclaim_owned_simulator "iphone-en" "post-unit-iphone-en" \
+  || fail "unit-test Simulator resource reclamation failed"
+
 bundle_identifier="$(config_value bundleIdentifier)"
 if ! app_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-find-app \
   --config "$config" --digest "$config_digest" --derived-data "$derived_data" \
@@ -436,6 +509,9 @@ for index in 0 1 2 3; do
   action_value="$(config_value cases.$index.value)"
   stage="case-$case_id"
   case_failed=""
+  active_udid="$udid"
+  active_bundle="$bundle_identifier"
+  active_case_id="$case_id"
   if ! run_xcrun simctl boot "$udid" >/dev/null 2>&1; then
     simulator_state="$run_state/$case_id-simulator-state.json"
     run_xcrun simctl list devices --json >"$simulator_state" 2>/dev/null || case_failed="boot state"
@@ -462,8 +538,6 @@ for index in 0 1 2 3; do
   fi
   if [[ -z "$case_failed" ]]; then
     run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1 || true
-    active_udid="$udid"
-    active_bundle="$bundle_identifier"
   fi
   launch_output=""
   if [[ -z "$case_failed" ]]; then
@@ -549,14 +623,20 @@ for index in 0 1 2 3; do
   [[ ! -e "$screenshot_source" ]] || case_failed="screenshot collision"
   [[ -n "$case_failed" ]] || run_xcrun simctl io "$udid" screenshot "$screenshot_source" >/dev/null 2>&1 || case_failed="screenshot"
   if [[ -z "$case_failed" ]]; then
-    run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-validate-png \
+    run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-seal-png \
+      --config "$config" --digest "$config_digest" --case "$case_id" \
       --source "$screenshot_source" >/dev/null 2>"$run_state/$case_id-screenshot-validation-error" || case_failed="screenshot validation"
   fi
-  if run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1; then
-    active_udid=""
-    active_bundle=""
-  elif [[ -z "$case_failed" ]]; then
+  if [[ -z "$case_failed" ]]; then
+    stage="case-$case_id-input-stability"
+    verify_live_inputs
+    stage="case-$case_id-reclamation"
+  fi
+  if ! run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1 && [[ -z "$case_failed" ]]; then
     case_failed="terminate"
+  fi
+  if ! reclaim_owned_simulator "$case_id" "case-$case_id" && [[ -z "$case_failed" ]]; then
+    case_failed="resource reclamation"
   fi
   [[ -z "$case_failed" ]] || fail "case $case_id failed: $case_failed"
 done

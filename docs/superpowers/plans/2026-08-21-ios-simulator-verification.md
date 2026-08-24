@@ -191,7 +191,7 @@ Read the first matrix UDID, set `HEAD_SHA` from `git rev-parse HEAD`, and run `x
 
 - [ ] **Step 5: Implement serialized locale cases**
 
-For each recorded UDID: boot, wait for boot status, install the built app, launch with `-AppleLanguages` and `-AppleLocale`, run the Issue-specific UI test plan or smoke assertion, take named screenshots, terminate the app, and proceed to the next case. Never erase a Simulator not created by the batch lifecycle tool.
+Seal the batch ID, Runtime and Device Type identities, dedicated names, and exact four UDIDs into the runner config. Before Build, validate the complete live four-device ownership set and erase only those dedicated device contents; after unit tests, restore the first UI destination to a clean state. For each recorded UDID: revalidate ownership, boot, wait for boot status, install the built app, launch with `-AppleLanguages` and `-AppleLocale`, run the Issue-specific UI test plan or smoke assertion, durably copy and digest the named host screenshot, revalidate inputs, terminate the target Bundle ID, then shutdown/erase and postcheck that same dedicated device. Failure and TERM reclaim only the active owned case; the next start reclaims all four after SIGKILL. Any identity or reclamation failure emits no draft. `erase` preserves the frozen UDID and is distinct from `delete`; delete the four dedicated devices only after same-Head evidence and opposite-model review complete. Never mutate an unrelated Simulator or partially resume/merge case evidence.
 
 - [ ] **Step 6: Write evidence atomically**
 
