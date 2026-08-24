@@ -63,7 +63,7 @@ module IOSTemplate
           "verify" => {"path" => "#{prefix}verify.json", "digest" => ReviewContract.digest(verify_file.bytes)},
           "imageFiles" => image_references
         }
-        packet_bytes = JSON.generate(packet)
+        packet_bytes = JSON.generate(packet).b
 
         validate_git_identity!(repo, base_sha, head_sha)
         snapshots.verify!
@@ -152,7 +152,10 @@ module IOSTemplate
     end
 
     def parse_object(bytes, at)
-      value = JSON.parse(bytes)
+      # JSON.parse changes a binary String's encoding in place. Parse a copy so
+      # the descriptor-bound snapshot remains byte-for-byte comparable when a
+      # contract or verification document contains non-ASCII text.
+      value = JSON.parse(bytes.dup)
       reject("#{at} must be an object") unless value.is_a?(Hash)
       value
     end

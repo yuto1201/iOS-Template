@@ -38,7 +38,7 @@ mkdir -p "$artifact_head/iphone-en"
 printf 'sealed-image-A\n' > "$artifact_head/iphone-en/screenshot.png"
 image_digest=$(digest "$artifact_head/iphone-en/screenshot.png")
 cat > "$artifact_issue/issue-contract.json" <<JSON
-{"schemaVersion":1,"issue":$issue,"repository":"yuto1201/iOS-Template","goal":"Seal exact review evidence","specAnchors":["specs/acceptance.md#review-sealing"],"acceptanceCriteria":[{"id":"AC-1","text":"Review binds exact evidence"}],"dependencies":[],"externalOperations":[],"externalOperationDetailsDigest":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","fetchedAt":"2026-08-24T00:00:00Z"}
+{"schemaVersion":1,"issue":$issue,"repository":"yuto1201/iOS-Template","goal":"Seal exact review evidence","specAnchors":["specs/acceptance.md#品質ゲート"],"acceptanceCriteria":[{"id":"AC-1","text":"Review binds exact evidence"}],"dependencies":[],"externalOperations":[],"externalOperationDetailsDigest":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","fetchedAt":"2026-08-24T00:00:00Z"}
 JSON
 ruby -rjson -e '
   path=ARGV.fetch(0); value=JSON.parse(File.binread(path))
