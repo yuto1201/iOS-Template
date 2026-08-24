@@ -331,7 +331,7 @@ if $PROGRAM_NAME == __FILE__
 
     case options["format"]
     when "contract"
-      puts IOSTemplate::IssueContract.canonical_json(result.contract)
+      STDOUT.write(IOSTemplate::IssueContract.canonical_json(result.contract))
     when "envelope"
       puts IOSTemplate::IssueContract.canonical_json(
         "contract" => result.contract,

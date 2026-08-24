@@ -175,6 +175,22 @@ assert_json "$clone/.artifacts/issues/42/issue-contract.json" '
   abort unless value["dependencies"] == [5]
   abort unless value["externalOperations"] == ["github.push_branch", "supabase.inspect_project"]
 '
+ruby -rjson -rdigest -e '
+  def canonical(value)
+    case value
+    when Hash then value.keys.sort.each_with_object({}) { |key, out| out[key] = canonical(value.fetch(key)) }
+    when Array then value.map { |entry| canonical(entry) }
+    else value
+    end
+  end
+  contract_path, state_path = ARGV
+  contract_bytes = File.binread(contract_path)
+  expected_bytes = JSON.generate(canonical(JSON.parse(contract_bytes)))
+  abort "Issue contract bytes are not exact canonical JSON" unless contract_bytes == expected_bytes
+  state = JSON.parse(File.binread(state_path))
+  expected_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
+  abort "state Issue-contract digest does not cover exact canonical bytes" unless state.dig("issueContract", "digest") == expected_digest
+' "$clone/.artifacts/issues/42/issue-contract.json" "$clone/.artifacts/issues/42/state.json"
 assert_json "$clone/.artifacts/issues/42/state.json" '
   value = JSON.parse(File.read(ARGV[0]))
   abort unless value["issue"] == 42 && value["branch"] == "codex/42-settings-screen"
