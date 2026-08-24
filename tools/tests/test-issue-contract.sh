@@ -14,6 +14,11 @@ assert_fails() {
   fi
 }
 
+assert_json() {
+  local document=$1 code=$2
+  ruby -rjson -e "$code" "$document"
+}
+
 write_feature_issue() {
   local path=$1
   local external_operations=${2:-- None.}
@@ -68,26 +73,62 @@ assert_fails 'duplicate acceptance criteria ID is rejected' "$repo_root/tools/va
 sed '/## Spec anchors/,/## Dependencies/d' "$workspace/feature.md" > "$workspace/missing-anchor.md"
 assert_fails 'missing specification anchors are rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/missing-anchor.md"
 
-write_feature_issue "$workspace/missing-service.md" $'- Environment: staging\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+write_feature_issue "$workspace/missing-service.md" $'- Operation: supabase.inspect_project\n- Environment: staging\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
 assert_fails 'external operation without a service is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/missing-service.md"
 
-write_feature_issue "$workspace/unknown-approval-classification.md" $'- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: maybe' 'None.'
+write_feature_issue "$workspace/unknown-operation.md" $'- Operation: github.destroy_repository\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+assert_fails 'an operation outside the AUTHORITY allowlist is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-operation.md"
+
+write_feature_issue "$workspace/service-mismatch.md" $'- Operation: supabase.inspect_project\n- Service: GitHub\n- Environment: staging\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+assert_fails 'an operation whose service does not match its prefix is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/service-mismatch.md"
+
+write_feature_issue "$workspace/unknown-approval-classification.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: maybe' 'None.'
 assert_fails 'unknown approval classification is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-approval-classification.md"
 
-write_feature_issue "$workspace/missing-approval-classification.md" $'- Service: GitHub\n- Environment: production\n- Executor: Codex' 'None.'
+write_feature_issue "$workspace/missing-approval-classification.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex' 'None.'
 assert_fails 'missing approval classification is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/missing-approval-classification.md"
 
-write_feature_issue "$workspace/app-store-legal-claim.md" $'- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'None.'
+write_feature_issue "$workspace/duplicate-field.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+assert_fails 'a repeated field inside an operation block is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/duplicate-field.md"
+
+write_feature_issue "$workspace/malformed-block.md" $'- Service: GitHub\n- Operation: github.push_branch\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+assert_fails 'an operation block whose fields are out of order is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/malformed-block.md"
+
+write_feature_issue "$workspace/duplicate-operation.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+assert_fails 'a repeated operation identifier is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/duplicate-operation.md"
+
+write_feature_issue "$workspace/app-store-legal-claim.md" $'- Operation: appstore.submit_review\n- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'None.'
 assert_fails 'final App Store legal claim requires an approval reference' "$repo_root/tools/validate-issue-body.sh" "$workspace/app-store-legal-claim.md"
 
-write_feature_issue "$workspace/irreversible-production-transform.md" $'- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'None.'
+write_feature_issue "$workspace/irreversible-production-transform.md" $'- Operation: supabase.apply_migrations\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'None.'
 assert_fails 'irreversible production transform requires an approval reference' "$repo_root/tools/validate-issue-body.sh" "$workspace/irreversible-production-transform.md"
 
-write_feature_issue "$workspace/normal-repo-operation.md" $'- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+write_feature_issue "$workspace/no-operation-with-approval.md" '- None.' 'Approval reference: #73'
+assert_fails 'an approval reference without an external operation is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/no-operation-with-approval.md"
+
+write_feature_issue "$workspace/no-approval-operation-with-reference.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'Approval reference: #73'
+assert_fails 'an approval reference mismatching all no operations is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/no-approval-operation-with-reference.md"
+
+write_feature_issue "$workspace/normal-repo-operation.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/normal-repo-operation.md"
 
-write_feature_issue "$workspace/approved-external-operation.md" $'- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73'
+write_feature_issue "$workspace/approved-external-operation.md" $'- Operation: appstore.submit_review\n- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/approved-external-operation.md"
+
+write_feature_issue "$workspace/multi-provider.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n- Operation: supabase.inspect_project\n- Service: Supabase\n- Environment: staging\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+"$repo_root/tools/validate-issue-body.sh" "$workspace/multi-provider.md"
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/multi-provider.md" --type feature --format envelope \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > "$workspace/multi-provider.json"
+assert_json "$workspace/multi-provider.json" '
+  value = JSON.parse(File.read(ARGV[0]))
+  abort unless value.fetch("contract").fetch("externalOperations") == ["github.push_branch", "supabase.inspect_project"]
+  abort unless value.fetch("externalOperationDetails") == [
+    {"operation" => "github.push_branch", "service" => "GitHub", "environment" => "production", "executor" => "Codex", "approvalRequired" => false},
+    {"operation" => "supabase.inspect_project", "service" => "Supabase", "environment" => "staging", "executor" => "Codex", "approvalRequired" => false}
+  ]
+'
 
 "$repo_root/tools/validate-issue-body.sh" --type feature "$workspace/feature.md"
 

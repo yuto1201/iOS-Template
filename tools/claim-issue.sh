@@ -127,44 +127,10 @@ fi
 [[ -z "$branches" && -z "$worktrees" && ! -e "$worktree_path" ]] || conflict 'Issue already has a conflicting Branch or worktree candidate'
 
 fetched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-printf '%s' "$issue_json" | ruby -rjson -e '
-  require "json"
-  def canonical(value)
-    case value
-    when Hash then value.keys.sort.each_with_object({}) { |key, out| out[key] = canonical(value[key]) }
-    when Array then value.map { |entry| canonical(entry) }
-    else value
-    end
-  end
-  issue, repo, fetched_at = ARGV
-  document = JSON.parse(STDIN.read)
-  body = document.fetch("body")
-  headings = []
-  body.each_line.with_index(1) { |line, number| match = line.match(/\A#+\s+(.+?)\s*\z/); headings << [match[1], number] if match }
-  section = lambda do |name|
-    index = headings.index { |heading, _| heading == name }
-    abort "Issue body missing #{name}" unless index
-    start_line = headings[index][1]
-    stop = headings[(index + 1)..]&.first&.last || body.lines.length + 1
-    body.lines[start_line...stop - 1].join.strip
-  end
-  goal = section.call("Goal")
-  anchors = section.call("Spec anchors").scan(/\[[^\]]+\]\(([^)]+)\)/).flatten.map { |raw| raw.strip.sub(/\A<|>\z/, "") }.uniq
-  abort "Issue body has no specification anchors" if anchors.empty?
-  criteria = section.call("Acceptance criteria").each_line.map do |line|
-    match = line.match(/^\s*[-*]\s+(AC-(\d+))\s*:\s*(\S.*?)\s*$/)
-    match && {"id" => match[1], "text" => match[3]}
-  end.compact
-  abort "Issue body has no acceptance criteria" if criteria.empty?
-  criteria.each_with_index { |criterion, index| abort "Acceptance criteria must be AC-1 through AC-n" unless criterion["id"] == "AC-#{index + 1}" }
-  abort "Acceptance criteria must be unique" unless criteria.map { |criterion| criterion["id"] }.uniq.length == criteria.length
-  dependencies_section = section.call("Dependencies")
-  dependencies = dependencies_section.match?(/\A\s*(?:[-*]\s*)?None\.?\s*\z/i) ? [] : dependencies_section.scan(/#([1-9][0-9]*)/).flatten.map(&:to_i).uniq
-  external_section = section.call("External operations")
-  external = external_section.match?(/\A\s*(?:[-*]\s*)?None\.?\s*\z/i) ? [] : external_section.each_line.map { |line| line.strip.sub(/\A[-*]\s*/, "") }.reject(&:empty?).uniq
-  contract = {"schemaVersion" => 1, "issue" => Integer(issue), "repository" => repo, "goal" => goal, "specAnchors" => anchors, "acceptanceCriteria" => criteria, "dependencies" => dependencies, "externalOperations" => external, "fetchedAt" => fetched_at}
-  print JSON.generate(canonical(contract))
-' "$issue" "$repo" "$fetched_at" > "$contract_candidate"
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$body" --type "$issue_type" --format contract \
+  --issue "$issue" --repo "$repo" --fetched-at "$fetched_at" \
+  > "$contract_candidate"
 contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$contract_candidate")"
 
 git -C "$repo_root" fetch origin main >/dev/null

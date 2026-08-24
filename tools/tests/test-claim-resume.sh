@@ -122,7 +122,17 @@ Make the Settings screen deterministic.
 
 ## External operations
 
-- None.
+- Operation: github.push_branch
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+- Operation: supabase.inspect_project
+- Service: Supabase
+- Environment: staging
+- Executor: Codex
+- Approval required: no
 
 ## User approvals
 
@@ -162,7 +172,8 @@ assert_json "$clone/.artifacts/issues/42/issue-contract.json" '
   abort unless value["goal"] == "Make the Settings screen deterministic."
   abort unless value["specAnchors"] == ["specs/acceptance.md#2-issue-definition-of-ready"]
   abort unless value["acceptanceCriteria"].map { |entry| entry["id"] } == ["AC-1", "AC-2"]
-  abort unless value["dependencies"] == [5] && value["externalOperations"] == []
+  abort unless value["dependencies"] == [5]
+  abort unless value["externalOperations"] == ["github.push_branch", "supabase.inspect_project"]
 '
 assert_json "$clone/.artifacts/issues/42/state.json" '
   value = JSON.parse(File.read(ARGV[0]))
