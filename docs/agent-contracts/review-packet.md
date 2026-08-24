@@ -47,8 +47,8 @@
     ],
     "suite": {"path": "tools/tests", "pattern": "test-*.sh", "total": 2, "passed": 2, "failed": 0},
     "tests": [
-      {"path": "tools/tests/test-claude-guard.sh", "status": "passed", "exitStatus": 0, "outputDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "startedAt": "2026-08-21T13:00:00Z", "completedAt": "2026-08-21T13:01:00Z"},
-      {"path": "tools/tests/test-workflow-state.sh", "status": "passed", "exitStatus": 0, "outputDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "startedAt": "2026-08-21T13:01:00Z", "completedAt": "2026-08-21T13:02:00Z"}
+      {"path": "tools/tests/test-claude-guard.sh", "arguments": [], "status": "passed", "exitStatus": 0, "outputDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "startedAt": "2026-08-21T13:00:00Z", "completedAt": "2026-08-21T13:01:00Z"},
+      {"path": "tools/tests/test-workflow-state.sh", "arguments": [], "status": "passed", "exitStatus": 0, "outputDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "startedAt": "2026-08-21T13:01:00Z", "completedAt": "2026-08-21T13:02:00Z"}
     ],
     "acceptanceEvidence": [
       {"id": "AC-1", "status": "passed", "tests": ["tools/tests/test-claude-guard.sh"]},

@@ -119,16 +119,18 @@ module IOSTemplate
         begin
           reject("detached test worktree resolved an unexpected Head") unless git!(worktree, "rev-parse", "HEAD").strip == head_sha
           tests.each do |path|
+            arguments = test_arguments(path)
             started = Time.now.utc
             stdout, stderr, status = Open3.capture3(
               {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil},
-              "/bin/bash", "-p", path,
+              "/bin/bash", "-p", path, *arguments,
               chdir: worktree
             )
             completed = Time.now.utc
             exit_status = status.exitstatus || 128 + status.termsig.to_i
             results << {
               "path" => path,
+              "arguments" => arguments,
               "status" => status.success? ? "passed" : "failed",
               "exitStatus" => exit_status,
               "outputDigest" => ReviewContract.digest(stdout.b + "\0".b + stderr.b),
@@ -146,6 +148,10 @@ module IOSTemplate
         end
       end
       results
+    end
+
+    def test_arguments(path)
+      path == "tools/tests/test-app-bootstrap.sh" ? ["all"] : []
     end
 
     def tracked_tests(repo, head_sha)

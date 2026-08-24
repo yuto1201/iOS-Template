@@ -176,9 +176,11 @@ module IOSTemplate
       reject("repositoryTests tests must be a nonempty array") unless tests.is_a?(Array) && !tests.empty?
       test_paths = []
       tests.each_with_index do |test, index|
-        exact_keys!(test, %w[path status exitStatus outputDigest startedAt completedAt], "repositoryTests.tests[#{index}]")
+        exact_keys!(test, %w[path arguments status exitStatus outputDigest startedAt completedAt], "repositoryTests.tests[#{index}]")
         path = string!(test["path"], "repositoryTests.tests[#{index}].path")
         reject("repositoryTests test path is invalid") unless path.match?(%r{\Atools/tests/test-[a-z0-9-]+\.sh\z})
+        expected_arguments = path == "tools/tests/test-app-bootstrap.sh" ? ["all"] : []
+        reject("repositoryTests test arguments differ") unless test["arguments"] == expected_arguments
         reject("repositoryTests contains a failed test") unless test["status"] == "passed" && test["exitStatus"] == 0
         digest!(test["outputDigest"], "repositoryTests.tests[#{index}].outputDigest")
         started = iso8601!(test["startedAt"], "repositoryTests.tests[#{index}].startedAt")

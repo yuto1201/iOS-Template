@@ -68,6 +68,7 @@ EVIDENCE="$evidence" BASE="$base_sha" HEAD="$head_sha" OUTPUT="$output" ruby -rj
   abort "wrong identity" unless value.values_at("schemaVersion", "status", "issue", "baseSha", "headSha") == [1, "passed", 42, ENV.fetch("BASE"), ENV.fetch("HEAD")]
   abort "wrong suite totals" unless value.fetch("suite") == {"path"=>"tools/tests","pattern"=>"test-*.sh","total"=>2,"passed"=>2,"failed"=>0}
   abort "wrong test order" unless value.fetch("tests").map { |item| item.fetch("path") } == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh]
+  abort "test arguments differ" unless value.fetch("tests").all? { |item| item.fetch("arguments") == [] }
   abort "test did not pass" unless value.fetch("tests").all? { |item| item.fetch("status") == "passed" && item.fetch("exitStatus") == 0 && item.fetch("outputDigest").match?(/\Asha256:[0-9a-f]{64}\z/) }
   abort "wrong AC map" unless value.fetch("acceptanceEvidence") == [
     {"id"=>"AC-1","status"=>"passed","tests"=>["tools/tests/test-alpha.sh"]},
