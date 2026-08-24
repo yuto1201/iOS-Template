@@ -65,6 +65,18 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 BuildとUnit Testは同じHead SHAにつき一度実行し、4つのlocaleごとに重複実行しません。
 
+Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evidence producer自体へ依存する場合は、iOSのUnit Testだけで代用しません。`tools/run-repository-tests.sh` を使い、current Headのtracked `tools/tests/test-*.sh` 全件をrunner所有のclean detached worktreeで実行します。各ACへ関連test pathをexactに一度対応付け、成功した全testのexit status、sanitized output digest、時刻、runner bytesを `.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-tests.json` へno-replaceで保存します。test本文のstdout/stderrはartifactへ保存しません。失敗、Head変更、dirty caller、contract不一致、mapping不足、既存artifact衝突のどれかがあればcanonical evidenceは発行しません。
+
+```bash
+tools/run-repository-tests.sh \
+  --issue "${ISSUE}" \
+  --expected-base "${BASE_SHA}" \
+  --map AC-1=tools/tests/test-claude-guard.sh \
+  --map AC-2=tools/tests/test-workflow-state.sh
+```
+
+`prepare-review-packet.sh` はこのcanonical evidenceが存在する場合だけ検証してpacket内の `repositoryTests` へ封印します。したがってreviewerとpre-merge gateは、iOS smoke testとは別に、現在Headで実際に通過したRepository test suiteと各ACの対応を評価できます。
+
 ### Stage C: UI and acceptance matrix
 
 4条件それぞれで次を行います。

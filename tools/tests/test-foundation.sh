@@ -3,6 +3,10 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 cd "$repo_root"
+ignore_probe_root=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-ignore-probe.XXXXXX")
+trap 'rm -rf -- "$ignore_probe_root"' EXIT
+cp .gitignore "$ignore_probe_root/.gitignore"
+git_dir=$(git rev-parse --absolute-git-dir)
 
 required_files=(
   AGENTS.md
@@ -22,6 +26,9 @@ required_files=(
   tools/tests/test-app-bootstrap.sh
   tools/check-markdown-links.swift
   tools/publish-documentation-verify.sh
+  tools/run-repository-tests.sh
+  tools/lib/run-repository-tests.rb
+  tools/tests/test-repository-test-evidence.sh
   tools/lib/review-receipt.rb
   tools/lib/validate-review-receipt.rb
   tools/with-ios-simulator-lock.sh
@@ -98,14 +105,14 @@ ignored_paths=(
 )
 
 for path in "${ignored_paths[@]}"; do
-  rule_source=$(git check-ignore -v -- "$path" | cut -d: -f1)
+  rule_source=$(git --git-dir="$git_dir" --work-tree="$ignore_probe_root" check-ignore --no-index -v -- "$path" | cut -d: -f1)
   if [[ "$rule_source" != ".gitignore" ]]; then
     echo "path is not ignored by the repository .gitignore: $path" >&2
     exit 1
   fi
 done
 
-if git check-ignore -q -- .env.example; then
+if git --git-dir="$git_dir" --work-tree="$ignore_probe_root" check-ignore --no-index -q -- .env.example; then
   echo ".env.example must remain trackable" >&2
   exit 1
 fi
@@ -238,8 +245,8 @@ if [[ ! -f "$claude_ios_verify_skill/SKILL.md" ]]; then
   exit 1
 fi
 
-if [[ ! -x tools/with-ios-simulator-lock.sh ]] || [[ ! -x tools/publish-documentation-verify.sh ]]; then
-  echo "iOS verification lock and documentation publisher must be executable" >&2
+if [[ ! -x tools/with-ios-simulator-lock.sh ]] || [[ ! -x tools/publish-documentation-verify.sh ]] || [[ ! -x tools/run-repository-tests.sh ]] || [[ ! -x tools/tests/test-repository-test-evidence.sh ]]; then
+  echo "verification tools and their evidence tests must be executable" >&2
   exit 1
 fi
 

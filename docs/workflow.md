@@ -157,11 +157,13 @@ ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変
 
 1. `ios-verify` がバッチ固定済みSimulatorマトリクスを読む。
 2. Buildと対象Testを実行する。
-3. iPhone ProとiPad Airを日英で操作する。
-4. スクリーンショットと機械判定を保存する。
-5. AIが見た目と受け入れ条件を評価する。
-6. `verify.json` にHead SHAを記録する。
-7. 同じHeadを明示して`in-progress -> verify-passed`へ遷移し、durable stateへ固定する。
+3. IssueがRepository toolやworkflowを変更する場合、`run-repository-tests.sh` でtracked `tools/tests/test-*.sh` 全件をclean detached worktree上で実行し、同じHeadとAC対応を封印する。
+4. iPhone ProとiPad Airを日英で操作する。
+5. スクリーンショットと機械判定を保存する。
+6. AIが見た目と受け入れ条件を評価する。
+7. `verify.json` にHead SHAを記録する。
+8. `prepare-review-packet.sh` が存在するrepository test evidenceもpacket内へ含めたことを確認する。
+9. 同じHeadを明示して`in-progress -> verify-passed`へ遷移し、durable stateへ固定する。
 
 ### 5.4 Opposite-model review
 

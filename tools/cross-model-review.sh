@@ -100,7 +100,7 @@ snapshot_repository > "$snapshot_before"
 review_status=0
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 if [[ "$primary" == codex ]]; then
-  instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. Return only one JSON object conforming exactly to docs/agent-contracts/review-packet.md Result schema, including the exact reviewPacketDigest from the schema v2 packet bytes.'
+  instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. If repositoryTests is present, assess its current-Head suite and per-AC mappings as sealed evidence. Return exactly one raw JSON object conforming to docs/agent-contracts/review-packet.md Result schema, including the exact reviewPacketDigest from the schema v2 packet bytes. Do not add prose or Markdown fences before or after the JSON object.'
   if ruby -rtimeout -e '
     command = ARGV
     timeout_seconds = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "600"), 10)

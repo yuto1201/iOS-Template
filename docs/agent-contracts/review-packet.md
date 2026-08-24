@@ -6,7 +6,7 @@
 
 ## 2. Review packet
 
-`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。schema v1は通常レビューの既存成果物を読む場合に限る互換形式で、pre-merge gateは受理しません。
+`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。`repository-tests.json` が同じIssue/Headに存在する場合は、全tracked `tools/tests/test-*.sh` の結果、runner bytes、実行時刻、AC別対応を検証し、`repositoryTests` としてpacket内へ値ごと封印します。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。schema v1は通常レビューの既存成果物を読む場合に限る互換形式で、pre-merge gateは受理しません。
 
 ```json
 {
@@ -34,6 +34,29 @@
     "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify.json",
     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   },
+  "repositoryTests": {
+    "schemaVersion": 1,
+    "status": "passed",
+    "issue": 42,
+    "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
+    "headSha": "0123456789abcdef0123456789abcdef01234567",
+    "issueContract": {"path": ".artifacts/issues/42/issue-contract.json", "digest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e"},
+    "runnerFiles": [
+      {"path": "tools/run-repository-tests.sh", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"path": "tools/lib/run-repository-tests.rb", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+    ],
+    "suite": {"path": "tools/tests", "pattern": "test-*.sh", "total": 2, "passed": 2, "failed": 0},
+    "tests": [
+      {"path": "tools/tests/test-claude-guard.sh", "status": "passed", "exitStatus": 0, "outputDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "startedAt": "2026-08-21T13:00:00Z", "completedAt": "2026-08-21T13:01:00Z"},
+      {"path": "tools/tests/test-workflow-state.sh", "status": "passed", "exitStatus": 0, "outputDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "startedAt": "2026-08-21T13:01:00Z", "completedAt": "2026-08-21T13:02:00Z"}
+    ],
+    "acceptanceEvidence": [
+      {"id": "AC-1", "status": "passed", "tests": ["tools/tests/test-claude-guard.sh"]},
+      {"id": "AC-2", "status": "passed", "tests": ["tools/tests/test-workflow-state.sh"]}
+    ],
+    "startedAt": "2026-08-21T13:00:00Z",
+    "completedAt": "2026-08-21T13:02:00Z"
+  },
   "imageFiles": [
     {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/iphone-en/settings.png", "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
     {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/iphone-ja/settings.png", "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
@@ -43,7 +66,7 @@
 }
 ```
 
-例のパスと値は形式を示します。実際のIssue、仕様、SHA、画像を使用します。
+例のパスと値は形式を示します。実際のIssue、仕様、SHA、画像を使用します。`repositoryTests` は同じHeadのcanonical `repository-tests.json` がある場合だけ存在します。reviewerは各ACについて、iOS evidenceだけでなくこのAC別test mappingも参照できます。
 
 ## 3. Reviewer questions
 
@@ -124,7 +147,7 @@ tools/prepare-review-packet.sh \
   --head-sha "${HEAD_SHA}"
 ```
 
-producerは `/usr/bin/git diff --binary --full-index --no-ext-diff --no-textconv --no-renames` の固定形でexact Base..Head `review.diff` を生成します。verifyの `visualEvaluation.cases[].images[]` をcase/image順に平坦化したpath/digestだけが `imageFiles` です。文書例外では空配列です。verify、画像、contractをsingle-linkかつno-followで開いたdescriptorをpublication完了まで保持し、path/inode/bytes、Git Head、actual diffをpublication前後で再検証します。
+producerは `/usr/bin/git diff --binary --full-index --no-ext-diff --no-textconv --no-renames` の固定形でexact Base..Head `review.diff` を生成します。verifyの `visualEvaluation.cases[].images[]` をcase/image順に平坦化したpath/digestだけが `imageFiles` です。文書例外では空配列です。verify、画像、contract、および存在するrepository test evidenceをsingle-linkかつno-followで開いたdescriptorをpublication完了まで保持し、path/inode/bytes、Git Head、actual diffをpublication前後で再検証します。`repositoryTests` はpacket内の値なので、review resultとpacketをsealする既存のexact-byte closureへそのまま含まれます。
 
 pre-merge gateのdescriptor-owning callerは、まず次を呼びます。
 

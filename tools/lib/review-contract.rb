@@ -19,6 +19,7 @@ module IOSTemplate
       schemaVersion issue primaryModel reviewerModel baseSha headSha verifySha
       issueContract specAnchors acceptanceCriteria diff verify imageFiles
     ].freeze
+    PACKET_V2_REPOSITORY_TEST_KEYS = (PACKET_V2_KEYS + %w[repositoryTests]).freeze
     RESULT_V1_KEYS = %w[
       schemaVersion issue reviewerModel baseSha headSha verifySha
       issueContractDigest verdict findings acceptanceAssessment reviewedAt
@@ -54,6 +55,10 @@ module IOSTemplate
       validate_packet_identity!(packet, schema, primary, reviewer, issue, base_sha, head_sha)
       validate_contract!(packet, contract, contract_digest, issue, schema: schema)
       criteria = validate_scope!(packet, contract)
+      validate_repository_tests!(
+        packet["repositoryTests"], issue: issue, base_sha: base_sha, head_sha: head_sha,
+        contract_digest: contract_digest, criteria: criteria
+      ) if packet.key?("repositoryTests")
       completed_at = validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, require_temporal_order)
 
       if schema == 2
@@ -79,7 +84,7 @@ module IOSTemplate
     def strict_references!(packet_bytes:, issue:, head_sha:)
       packet = parse_object(packet_bytes, "packet")
       reject("merge-ready review requires packet schemaVersion 2") unless packet["schemaVersion"] == 2
-      exact_keys!(packet, PACKET_V2_KEYS, "packet")
+      exact_packet_v2_keys!(packet)
       reject("packet identity differs from caller") unless packet["issue"] == issue && packet["headSha"] == head_sha
       prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
       diff = reference!(packet["diff"], "packet.diff")
@@ -139,13 +144,75 @@ module IOSTemplate
     end
 
     def validate_packet_identity!(packet, schema, primary, reviewer, issue, base_sha, head_sha)
-      exact_keys!(packet, schema == 2 ? PACKET_V2_KEYS : PACKET_V1_KEYS, "packet")
+      schema == 2 ? exact_packet_v2_keys!(packet) : exact_keys!(packet, PACKET_V1_KEYS, "packet")
       reject("packet identity does not match the merge identity") unless
         packet["issue"] == issue && packet["primaryModel"] == primary &&
         packet["reviewerModel"] == reviewer && packet["baseSha"] == base_sha &&
         packet["headSha"] == head_sha && packet["verifySha"] == head_sha
       sha!(base_sha, "base SHA")
       sha!(head_sha, "head SHA")
+    end
+
+    def validate_repository_tests!(value, issue:, base_sha:, head_sha:, contract_digest:, criteria:)
+      exact_keys!(value, %w[schemaVersion status issue baseSha headSha issueContract runnerFiles suite tests acceptanceEvidence startedAt completedAt], "repositoryTests")
+      reject("repositoryTests identity differs from the review packet") unless
+        value["schemaVersion"] == 1 && value["status"] == "passed" && value["issue"] == issue &&
+        value["baseSha"] == base_sha && value["headSha"] == head_sha
+      expected_contract = {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => contract_digest}
+      reject("repositoryTests issue contract differs") unless value["issueContract"] == expected_contract
+
+      runners = value["runnerFiles"]
+      reject("repositoryTests runnerFiles are invalid") unless runners.is_a?(Array) && runners.length == 2
+      expected_runner_paths = %w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb]
+      runners.each_with_index do |reference, index|
+        reference!(reference, "repositoryTests.runnerFiles[#{index}]")
+        reject("repositoryTests runner file differs") unless reference["path"] == expected_runner_paths[index]
+      end
+
+      suite = value["suite"]
+      exact_keys!(suite, %w[path pattern total passed failed], "repositoryTests.suite")
+      reject("repositoryTests suite selector differs") unless suite["path"] == "tools/tests" && suite["pattern"] == "test-*.sh"
+      tests = value["tests"]
+      reject("repositoryTests tests must be a nonempty array") unless tests.is_a?(Array) && !tests.empty?
+      test_paths = []
+      tests.each_with_index do |test, index|
+        exact_keys!(test, %w[path status exitStatus outputDigest startedAt completedAt], "repositoryTests.tests[#{index}]")
+        path = string!(test["path"], "repositoryTests.tests[#{index}].path")
+        reject("repositoryTests test path is invalid") unless path.match?(%r{\Atools/tests/test-[a-z0-9-]+\.sh\z})
+        reject("repositoryTests contains a failed test") unless test["status"] == "passed" && test["exitStatus"] == 0
+        digest!(test["outputDigest"], "repositoryTests.tests[#{index}].outputDigest")
+        started = iso8601!(test["startedAt"], "repositoryTests.tests[#{index}].startedAt")
+        completed = iso8601!(test["completedAt"], "repositoryTests.tests[#{index}].completedAt")
+        reject("repositoryTests test completion precedes its start") if completed < started
+        test_paths << path
+      end
+      reject("repositoryTests test paths must be sorted and unique") unless test_paths == test_paths.sort && test_paths.uniq == test_paths
+      reject("repositoryTests suite totals differ") unless
+        suite["total"] == tests.length && suite["passed"] == tests.length && suite["failed"] == 0
+
+      acceptance = value["acceptanceEvidence"]
+      reject("repositoryTests acceptance evidence differs from Issue criteria") unless acceptance.is_a?(Array) && acceptance.length == criteria.length
+      acceptance.each_with_index do |entry, index|
+        exact_keys!(entry, %w[id status tests], "repositoryTests.acceptanceEvidence[#{index}]")
+        reject("repositoryTests acceptance IDs differ") unless entry["id"] == criteria[index]["id"] && entry["status"] == "passed"
+        references = unique_nonempty_strings!(entry["tests"], "repositoryTests.acceptanceEvidence[#{index}].tests", require_nonempty: true)
+        reject("repositoryTests acceptance test reference is unknown") unless references.all? { |path| test_paths.include?(path) }
+      end
+      started_at = iso8601!(value["startedAt"], "repositoryTests.startedAt")
+      completed_at = iso8601!(value["completedAt"], "repositoryTests.completedAt")
+      reject("repositoryTests completion precedes its start") if completed_at < started_at
+      tests.each do |test|
+        reject("repositoryTests test time is outside the suite interval") if
+          iso8601!(test["startedAt"], "repositoryTests test start") < started_at ||
+          iso8601!(test["completedAt"], "repositoryTests test completion") > completed_at
+      end
+      value
+    end
+
+    def exact_packet_v2_keys!(packet)
+      reject("packet must be an object") unless packet.is_a?(Hash)
+      allowed = [PACKET_V2_KEYS.sort, PACKET_V2_REPOSITORY_TEST_KEYS.sort]
+      reject("packet: unexpected or missing keys") unless allowed.include?(packet.keys.sort)
     end
 
     def validate_contract!(packet, contract, contract_digest, issue, schema: packet["schemaVersion"])

@@ -34,10 +34,16 @@ module IOSTemplate
         head_directory = snapshots.directory(issue_directory, head_sha, at: "Head artifact directory")
         contract_file = snapshots.leaf(issue_directory, "issue-contract.json", at: "issue contract")
         verify_file = snapshots.leaf(head_directory, "verify.json", at: "verify.json")
+        repository_tests_file = existing_leaf(snapshots, head_directory, "repository-tests.json", "repository-tests.json")
         contract = parse_object(contract_file.bytes, "issue contract")
         verify = parse_object(verify_file.bytes, "verify.json")
         contract_digest = ReviewContract.digest(contract_file.bytes)
         validate_inputs!(contract, verify, issue, base_sha, head_sha, contract_digest)
+        repository_tests = repository_tests_file && parse_object(repository_tests_file.bytes, "repository-tests.json")
+        ReviewContract.validate_repository_tests!(
+          repository_tests, issue: issue, base_sha: base_sha, head_sha: head_sha,
+          contract_digest: contract_digest, criteria: contract.fetch("acceptanceCriteria")
+        ) if repository_tests
 
         image_references = ReviewContract.verified_image_references!(verify, issue: issue, head_sha: head_sha)
         image_files = image_references.map do |reference|
@@ -63,6 +69,7 @@ module IOSTemplate
           "verify" => {"path" => "#{prefix}verify.json", "digest" => ReviewContract.digest(verify_file.bytes)},
           "imageFiles" => image_references
         }
+        packet["repositoryTests"] = repository_tests if repository_tests
         packet_bytes = JSON.generate(packet).b
 
         validate_git_identity!(repo, base_sha, head_sha)
