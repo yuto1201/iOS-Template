@@ -163,7 +163,6 @@ issue_root = File.join(artifacts, "issues", issue.to_s)
 head_root = File.join(issue_root, head_sha)
 expected_packet_path = ".artifacts/issues/#{issue}/#{head_sha}/review-packet.json"
 reject("packet path is not canonical") unless packet_input == expected_packet_path
-packet_file = artifact_file!(artifacts, packet_input, head_root, "packet", artifacts_identity)
 exact_keys!(packet["issueContract"], %w[path digest], "packet.issueContract")
 expected_contract_path = ".artifacts/issues/#{issue}/issue-contract.json"
 reject("packet.issueContract.path is not canonical") unless packet["issueContract"]["path"] == expected_contract_path
@@ -215,10 +214,23 @@ if result_input.empty?
   exit 0
 end
 
-result_input_path = File.expand_path(result_input, Dir.pwd)
-result_parent = File.realpath(File.dirname(result_input_path))
-result_path = File.join(result_parent, File.basename(result_input_path))
-result_file = secure_file!(result_path, result_parent, "result")
+expected_result_relative = ".artifacts/issues/#{issue}/#{head_sha}/review.json"
+expected_result_absolute = File.join(head_root, "review.json")
+if result_input == expected_result_relative || result_input == expected_result_absolute
+  result_file = artifact_file!(artifacts, expected_result_relative, head_root, "result", artifacts_identity)
+elsif result_input.start_with?(artifacts + "/") || result_input.start_with?(".artifacts/")
+  reject("published result path is not canonical")
+elsif result_input.start_with?("/")
+  result_path = result_input
+  result_parent = File.dirname(result_path)
+  reject("result parent must be a physical directory") unless File.realpath(result_parent) == result_parent
+  result_file = secure_file!(result_path, result_parent, "result")
+else
+  reject("result contains an unsafe component") if result_input.split("/").any? { |component| component.empty? || component == "." || component == ".." }
+  result_root = File.realpath(Dir.pwd)
+  reject("current directory must be physical") unless result_root == Dir.pwd
+  result_file = secure_file!(File.join(result_root, result_input), result_root, "result")
+end
 result = json_file!(result_file, "result")
 result_keys = %w[schemaVersion issue reviewerModel baseSha headSha verifySha issueContractDigest verdict findings acceptanceAssessment reviewedAt]
 exact_keys!(result, result_keys, "result")

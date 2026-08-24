@@ -2,14 +2,38 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
+
+if [[ "${IOS_TEMPLATE_REVIEW_FIXTURE_READY:-0}" != 1 ]]; then
+  fixture_workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-cross-model-fixture.XXXXXX")
+  fixture_workspace=$(cd "$fixture_workspace" && pwd -P)
+  fixture_primary="$fixture_workspace/primary"
+  fixture_linked="$fixture_primary/.worktrees/reviewer"
+  trap 'rm -rf "$fixture_workspace"' EXIT
+
+  mkdir -p "$fixture_primary"
+  (cd "$repo_root" && git ls-files -z | tar --null -T - -cf -) | (cd "$fixture_primary" && tar -xf -)
+  git -C "$fixture_primary" init -q
+  git -C "$fixture_primary" config user.name 'Review Fixture'
+  git -C "$fixture_primary" config user.email 'review-fixture@example.invalid'
+  git -C "$fixture_primary" add .
+  git -C "$fixture_primary" commit -qm 'fixture base'
+  git -C "$fixture_primary" commit --allow-empty -qm 'fixture head'
+  mkdir -p "$fixture_primary/.worktrees" "$fixture_primary/.artifacts"
+  git -C "$fixture_primary" worktree add -q --detach "$fixture_linked" HEAD
+  ln -s ../../.artifacts "$fixture_linked/.artifacts"
+
+  (cd "$fixture_linked" && IOS_TEMPLATE_REVIEW_FIXTURE_READY=1 bash tools/tests/test-cross-model-review.sh)
+  exit 0
+fi
+
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-cross-model-review.XXXXXX")
 issue=424243
 head_sha=$(git -C "$repo_root" rev-parse HEAD)
 base_sha=$(git -C "$repo_root" rev-parse HEAD~1)
 artifact_issue="$repo_root/.artifacts/issues/$issue"
 artifact_root="$artifact_issue/$head_sha"
-artifact_sibling="$repo_root/.artifacts/issues/${issue}9"
-trap 'rm -rf "$workspace" "$artifact_issue" "$artifact_sibling"' EXIT
+artifact_sibling_lexical="$repo_root/.artifacts/issues/${issue}9"
+trap 'rm -rf "$workspace" "$artifact_issue" "$artifact_sibling_lexical"' EXIT
 [[ ! -e "$artifact_issue" ]] || { echo "refusing to overwrite $artifact_issue" >&2; exit 1; }
 
 fake_bin="$workspace/bin"
@@ -62,15 +86,27 @@ JSON
 git_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --absolute-git-dir)
 git_common=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
 artifact_issue_physical=$(cd "$artifact_issue" && pwd -P)
-sandbox_filesystem="permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$repo_root\"=\"read\",\"$git_dir\"=\"read\",\"$git_common\"=\"read\",\"$artifact_issue_physical\"=\"read\"}"
+artifacts_physical=$(cd "$repo_root/.artifacts" && pwd -P)
+artifact_sibling_physical="$artifacts_physical/issues/${issue}9"
+artifact_head_physical="$artifact_issue_physical/$head_sha"
+artifact_contract_physical="$artifact_issue_physical/issue-contract.json"
+artifact_stale_head_physical="$artifact_issue_physical/$(printf 'f%.0s' {1..40})"
+sandbox_filesystem="permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$repo_root\"=\"read\",\"$repo_root/.artifacts\"=\"deny\",\"$git_dir\"=\"read\",\"$git_common\"=\"read\",\"$artifact_contract_physical\"=\"read\",\"$artifact_head_physical\"=\"read\"}"
 reviewer_sandbox() {
   "$real_codex" sandbox -c 'default_permissions="reviewer"' -c 'permissions.reviewer.extends=":read-only"' -c "$sandbox_filesystem" -c 'permissions.reviewer.network={enabled=false}' -P reviewer -- "$@"
 }
-reviewer_sandbox /bin/cat "$artifact_root/review-packet.json" >/dev/null
+reviewer_sandbox /bin/cat "$artifact_issue_physical/$head_sha/review-packet.json" >/dev/null
+reviewer_sandbox /bin/cat "$artifact_contract_physical" >/dev/null
+reviewer_sandbox /bin/cat "$artifact_head_physical/review.diff" >/dev/null
+reviewer_sandbox /bin/cat "$artifact_head_physical/verify.json" >/dev/null
 reviewer_sandbox /bin/cat "$repo_root/README.md" >/dev/null
-mkdir -p "$artifact_sibling"
-printf 'must-not-be-readable-by-reviewer\n' > "$artifact_sibling/sentinel"
-assert_fails 'custom reviewer profile denies sibling Issue artifacts' reviewer_sandbox /bin/cat "$artifact_sibling/sentinel"
+mkdir -p "$artifact_sibling_physical"
+printf 'must-not-be-readable-by-reviewer\n' > "$artifact_sibling_physical/sentinel"
+mkdir -p "$artifact_stale_head_physical"
+printf 'must-not-be-readable-by-reviewer\n' > "$artifact_stale_head_physical/sentinel"
+assert_fails 'custom reviewer profile denies sibling Issue physical artifacts' reviewer_sandbox /bin/cat "$artifact_sibling_physical/sentinel"
+assert_fails 'custom reviewer profile denies sibling Issue artifacts through the linked lexical path' reviewer_sandbox /bin/cat "$artifact_sibling_lexical/sentinel"
+assert_fails 'custom reviewer profile denies stale Head artifacts' reviewer_sandbox /bin/cat "$artifact_stale_head_physical/sentinel"
 assert_fails 'custom reviewer profile denies the retained CODEX_HOME sentinel' reviewer_sandbox /bin/cat "$fake_codex_home/sentinel"
 assert_fails 'custom reviewer profile denies absolute executable socket creation' reviewer_sandbox /usr/bin/ruby -rsocket -e 'Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0); exit 0'
 

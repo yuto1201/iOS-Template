@@ -29,12 +29,15 @@ packet_absolute="$artifact_issue_root/$head_sha/review-packet.json"
 git -C "$repo_root" cat-file -e "$head_sha^{commit}" && git -C "$repo_root" merge-base --is-ancestor "$base_sha" "$head_sha" || { echo 'packet Base/Head is not a valid commit range' >&2; exit 1; }
 [[ "$(git -C "$repo_root" rev-parse HEAD)" == "$head_sha" ]] || { echo 'current Head does not match the review packet' >&2; exit 1; }
 
-snapshot_before=$(mktemp "${TMPDIR:-/tmp}/ios-template-review-before.XXXXXX")
-snapshot_after=$(mktemp "${TMPDIR:-/tmp}/ios-template-review-after.XXXXXX")
-raw_output=$(mktemp "${TMPDIR:-/tmp}/ios-template-review-output.XXXXXX")
-normalized_output=$(mktemp "${TMPDIR:-/tmp}/ios-template-review-normalized.XXXXXX")
-validated=$(mktemp "${TMPDIR:-/tmp}/ios-template-review-validated.XXXXXX")
-trap 'rm -f "$snapshot_before" "$snapshot_after" "$raw_output" "$normalized_output" "$validated"' EXIT
+review_workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-cross-review.XXXXXX")
+review_workspace=$(cd "$review_workspace" && pwd -P)
+chmod 700 "$review_workspace"
+snapshot_before="$review_workspace/snapshot-before"
+snapshot_after="$review_workspace/snapshot-after"
+raw_output="$review_workspace/raw-output"
+normalized_output="$review_workspace/normalized-output"
+validated="$review_workspace/validated"
+trap 'rm -rf "$review_workspace"' EXIT
 
 complete_existing_review() {
   [[ -f "$output_absolute" && ! -L "$output_absolute" ]] || { echo 'existing review output is not a regular file' >&2; exit 1; }
@@ -145,20 +148,10 @@ File.binwrite(normalized, JSON.generate(value))
 RUBY
 "$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$normalized_output" > "$validated"
 
-ruby - "$output_absolute" "$validated" <<'RUBY'
-output, source = ARGV
-data = File.binread(source)
-begin
-  file = File.open(output, File::WRONLY | File::CREAT | File::EXCL, 0o600)
-  file.write(data)
-  file.flush
-  file.fsync
-  file.close
-rescue Errno::EEXIST
-  warn "review output already exists"
-  exit 1
-end
-RUBY
+publication_packet=$("$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet")
+[[ $(jq -er '.issue' <<<"$publication_packet") == "$issue" && $(jq -er '.headSha' <<<"$publication_packet") == "$head_sha" ]] || { echo 'review packet identity changed before publication' >&2; exit 1; }
+publication=$("$repo_root/tools/lib/publish-review-result.rb" "$repo_root" "$issue" "$head_sha" "$validated")
+[[ $(jq -er '.path' <<<"$publication") == "$output_absolute" ]] || { echo 'review publication returned an unexpected path' >&2; exit 1; }
 "$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$output_absolute" > "$validated"
 verdict=$(jq -er '.verdict' "$validated")
 next_state=$([[ "$verdict" == approved ]] && echo approved-for-merge || echo changes-requested)

@@ -82,6 +82,17 @@ printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 packet_relative=".artifacts/issues/$issue/$head_sha/review-packet.json"
 output_relative=".artifacts/issues/$issue/$head_sha/review.json"
 
+# Publication is a separate descriptor-bound boundary from result validation.
+write_result claude
+published=$("$linked/tools/lib/publish-review-result.rb" "$linked" "$issue" "$head_sha" "$workspace/result.json")
+[[ $(jq -er '.path' <<<"$published") == "$artifact_head/review.json" ]]
+cmp -s "$workspace/result.json" "$artifact_head/review.json" || {
+  shasum -a 256 "$workspace/result.json" "$artifact_head/review.json" >&2
+  wc -c "$workspace/result.json" "$artifact_head/review.json" >&2
+  exit 1
+}
+rm "$artifact_head/review.json"
+
 # The production change that makes this pass is accepting only the exact shared
 # worktree topology and mapping canonical artifact paths to the primary store.
 write_packet codex claude
@@ -128,6 +139,9 @@ mv "$artifact_head/review.diff.real" "$artifact_head/review.diff"
 mv "$artifact_head" "$artifact_issue/head.real"
 ln -s head.real "$artifact_head"
 assert_fails 'a nested artifact directory symlink is rejected' "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative"
+write_result claude
+assert_fails 'publication refuses a swapped Head parent component' "$linked/tools/lib/publish-review-result.rb" "$linked" "$issue" "$head_sha" "$workspace/result.json"
+[[ ! -e "$artifact_issue/head.real/review.json" ]]
 rm "$artifact_head"
 mv "$artifact_issue/head.real" "$artifact_head"
 
@@ -148,6 +162,14 @@ assert_fails 'a hard-linked verify file is rejected' "$linked/tools/validate-rev
 rm "$workspace/verify.hardlink"
 
 write_result claude
+mkdir "$workspace/result-parent"
+cp "$workspace/result.json" "$workspace/result-parent/review.json"
+ln -s result-parent "$workspace/result-parent-link"
+assert_fails 'a review result with a symlinked parent is rejected' "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result-parent-link/review.json"
+
+cp "$workspace/result.json" "$artifact_head/noncanonical-review.json"
+assert_fails 'a published review must use the exact canonical Head review path' "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$artifact_head/noncanonical-review.json"
+
 ln "$workspace/result.json" "$workspace/result-hardlink.json"
 assert_fails 'a hard-linked review result is rejected' "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result-hardlink.json"
 
