@@ -14,6 +14,8 @@ mkdir -p "$primary/tools/lib" "$primary/docs" "$primary/TemplateApp.xcodeproj"
 cp "$source_root/tools/render-pr-body.sh" "$primary/tools/"
 cp "$source_root/tools/validate-verify-json.swift" "$primary/tools/"
 cp "$source_root/tools/lib/descriptor-files.rb" "$primary/tools/lib/"
+cp "$source_root/tools/lib/review-contract.rb" "$primary/tools/lib/"
+cp "$source_root/tools/lib/review-sealing.rb" "$primary/tools/lib/"
 printf '%s\n' '{}' >"$primary/TemplateApp.xcodeproj/project.pbxproj"
 printf '%s\n' '# Initial' >"$primary/docs/initial.md"
 git -C "$primary" init -q
@@ -38,6 +40,8 @@ matrix_dir="$primary/.artifacts/batches/evidence-fixture"
 contract="$issue_dir/issue-contract.json"
 verify="$head_dir/verify.json"
 review="$head_dir/review.json"
+review_packet="$head_dir/review-packet.json"
+review_diff="$head_dir/review.diff"
 draft="$head_dir/verify-draft.json"
 packet="$head_dir/visual-packet.json"
 matrix="$matrix_dir/simulator-matrix.json"
@@ -132,16 +136,54 @@ EVIDENCE="$verify" PACKET="$packet" ruby -rjson -rdigest -e '
 path=ENV.fetch("EVIDENCE");value=JSON.parse(File.read(path));packet=JSON.parse(File.read(ENV.fetch("PACKET")));
 value["visualEvaluation"]={"status"=>"passed","packet"=>{"path"=>".artifacts/issues/42/#{value.fetch("headSha")}/visual-packet.json","digest"=>"sha256:#{Digest::SHA256.file(ENV.fetch("PACKET")).hexdigest}"},"cases"=>packet.fetch("cases").map{|entry|{"id"=>entry.fetch("id"),"images"=>entry.fetch("images").map{|image|{"state"=>image.fetch("state"),"path"=>image.fetch("path"),"digest"=>image.fetch("digest"),"status"=>"passed","findings"=>[]}}}},"findings"=>[]};File.write(path,JSON.pretty_generate(value)+"\n")'
 
-VERIFY="$verify" REVIEW="$review" HEAD="$head" BASE="$base" DIGEST="sha256:$contract_digest" ruby -rjson -e '
-verify=JSON.parse(File.read(ENV.fetch("VERIFY")));criteria=verify.fetch("acceptanceEvidence");
-value={"schemaVersion"=>1,"issue"=>42,"reviewerModel"=>"claude","baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"verifySha"=>ENV.fetch("HEAD"),"issueContractDigest"=>ENV.fetch("DIGEST"),"verdict"=>"approved","findings"=>[],"acceptanceAssessment"=>criteria.map{|item|{"id"=>item.fetch("id"),"status"=>"supported","evidence"=>["review.diff"]}},"reviewedAt"=>"2026-08-21T13:01:00+09:00"};File.write(ENV.fetch("REVIEW"),JSON.generate(value))'
+seal_review() {
+  REPOSITORY="$worktree" CONTRACT="$contract" VERIFY="$verify" REVIEW_PACKET="$review_packet" REVIEW_DIFF="$review_diff" REVIEW="$review" HEAD="$head" BASE="$base" \
+    ruby -I "$primary/tools/lib" -rjson -rdigest -rreview-contract <<'RUBY'
+repo = File.realpath(ENV.fetch("REPOSITORY"))
+contract_path = ENV.fetch("CONTRACT")
+verify_path = ENV.fetch("VERIFY")
+packet_path = ENV.fetch("REVIEW_PACKET")
+diff_path = ENV.fetch("REVIEW_DIFF")
+result_path = ENV.fetch("REVIEW")
+base = ENV.fetch("BASE")
+head = ENV.fetch("HEAD")
+contract_bytes = File.binread(contract_path)
+verify_bytes = File.binread(verify_path)
+contract = JSON.parse(contract_bytes)
+verify = JSON.parse(verify_bytes)
+diff = IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: base, head_sha: head)
+images = IOSTemplate::ReviewContract.verified_image_references!(verify, issue: 42, head_sha: head)
+prefix = ".artifacts/issues/42/#{head}/"
+packet = {
+  "schemaVersion" => 2, "issue" => 42, "primaryModel" => "codex", "reviewerModel" => "claude",
+  "baseSha" => base, "headSha" => head, "verifySha" => head,
+  "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => IOSTemplate::ReviewContract.digest(contract_bytes)},
+  "specAnchors" => contract.fetch("specAnchors"), "acceptanceCriteria" => contract.fetch("acceptanceCriteria"),
+  "diff" => {"path" => "#{prefix}review.diff", "digest" => IOSTemplate::ReviewContract.digest(diff)},
+  "verify" => {"path" => "#{prefix}verify.json", "digest" => IOSTemplate::ReviewContract.digest(verify_bytes)},
+  "imageFiles" => images
+}
+packet_bytes = JSON.generate(packet)
+result = {
+  "schemaVersion" => 2, "issue" => 42, "reviewerModel" => "claude", "baseSha" => base,
+  "headSha" => head, "verifySha" => head, "issueContractDigest" => IOSTemplate::ReviewContract.digest(contract_bytes),
+  "verdict" => "approved", "findings" => [],
+  "acceptanceAssessment" => verify.fetch("acceptanceEvidence").map { |item| {"id" => item.fetch("id"), "status" => "supported", "evidence" => ["verify.json#acceptanceEvidence"]} },
+  "reviewedAt" => "2026-08-21T13:01:00+09:00", "reviewPacketDigest" => IOSTemplate::ReviewContract.digest(packet_bytes)
+}
+File.binwrite(diff_path, diff)
+File.binwrite(packet_path, packet_bytes)
+File.binwrite(result_path, JSON.generate(result))
+RUBY
+}
+seal_review
 
-cp "$verify" "$scratch/verify.good"; cp "$review" "$scratch/review.good"; cp "$matrix" "$scratch/matrix.good"; cp "$packet" "$scratch/packet.good"
+cp "$contract" "$scratch/contract.good"; cp "$verify" "$scratch/verify.good"; cp "$review" "$scratch/review.good"; cp "$review_packet" "$scratch/review-packet.good"; cp "$review_diff" "$scratch/review-diff.good"; cp "$matrix" "$scratch/matrix.good"; cp "$packet" "$scratch/packet.good"
 for id in iphone-en iphone-ja ipad-en ipad-ja; do cp "$head_dir/$id/screenshot.png" "$scratch/$id-screenshot.good"; cp "$head_dir/$id/settings.png" "$scratch/$id-settings.good"; done
 
 run_renderer() { "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head"; }
 restore_application() {
-  cp "$scratch/verify.good" "$verify"; cp "$scratch/review.good" "$review"; cp "$scratch/matrix.good" "$matrix"; rm -f "$packet"; cp "$scratch/packet.good" "$packet"
+  cp "$scratch/contract.good" "$contract"; cp "$scratch/verify.good" "$verify"; cp "$scratch/review.good" "$review"; cp "$scratch/review-packet.good" "$review_packet"; cp "$scratch/review-diff.good" "$review_diff"; cp "$scratch/matrix.good" "$matrix"; rm -f "$packet"; cp "$scratch/packet.good" "$packet"
   for id in iphone-en iphone-ja ipad-en ipad-ja; do cp "$scratch/$id-screenshot.good" "$head_dir/$id/screenshot.png"; cp "$scratch/$id-settings.good" "$head_dir/$id/settings.png"; done
 }
 expect_refusal() {
@@ -191,8 +233,26 @@ if run_renderer >"$scratch/same-byte-swap.out" 2>"$scratch/same-byte-swap.err"; 
 wait "$swapper"
 restore_application
 
+# The strict review packet itself is retained too. Replacing it atomically with
+# identical bytes must still invalidate the merge-ready claim.
+ruby - "$review_packet" <<'RUBY' &
+packet = ARGV.fetch(0)
+guard = File.open(packet, "rb")
+loop do
+  if guard.flock(File::LOCK_EX | File::LOCK_NB)
+    guard.flock(File::LOCK_UN); sleep 0.001
+  else
+    replacement = "#{packet}.swap"; File.binwrite(replacement, File.binread(packet)); File.rename(replacement, packet); break
+  end
+end
+RUBY
+swapper=$!
+if run_renderer >"$scratch/same-byte-review-packet-swap.out" 2>"$scratch/same-byte-review-packet-swap.err"; then wait "$swapper" || true; echo 'same-byte atomic review packet swap was rendered as merge-ready' >&2; exit 1; fi
+wait "$swapper"
+restore_application
+
 ln "$verify" "$verify.hardlink"; expect_refusal hardlinked-verify
-grep -Fq 'single-link regular file' "$scratch/hardlinked-verify.err" || { echo 'hardlink refusal was not explicit' >&2; exit 1; }
+grep -Fq 'single-link' "$scratch/hardlinked-verify.err" || { echo 'hardlink refusal was not explicit' >&2; exit 1; }
 rm "$verify.hardlink"
 
 expect_verify_mutation() {
@@ -212,6 +272,34 @@ restore_application
 cp "$scratch/review.good" "$review"; ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.read(p));v["acceptanceAssessment"][0]["status"]="unsupported";File.write(p,JSON.generate(v))' "$review"; expect_refusal unsupported-review; restore_application
 cp "$scratch/review.good" "$review"; ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.read(p));v["unexpected"]="field";File.write(p,JSON.generate(v))' "$review"; expect_refusal review-schema; restore_application
 
+# Merge-ready rendering requires the sealed schema-v2 review closure, not the
+# legacy result shape that lacks an exact packet-byte digest.
+ruby -rjson -e 'p=ARGV.fetch(0);v=JSON.parse(File.binread(p));v["schemaVersion"]=1;v.delete("reviewPacketDigest");File.binwrite(p,JSON.generate(v))' "$review"
+expect_refusal legacy-v1-review; restore_application
+
+ruby -rjson -e 'p=ARGV.fetch(0);v=JSON.parse(File.binread(p));v["reviewPacketDigest"]="sha256:"+("f"*64);File.binwrite(p,JSON.generate(v))' "$review"
+expect_refusal result-packet-digest-mismatch; restore_application
+
+ruby -rjson -e 'p=ARGV.fetch(0);v=JSON.parse(File.binread(p));v["specAnchors"]=["specs/other.md#packet-swap"];File.binwrite(p,JSON.generate(v))' "$review_packet"
+expect_refusal review-packet-swap; restore_application
+
+PACKET="$review_packet" REVIEW="$review" ruby -rjson -rdigest -e '
+packet=JSON.parse(File.binread(ENV.fetch("PACKET")));packet["primaryModel"]="untrusted";packet["reviewerModel"]="codex";bytes=JSON.generate(packet);File.binwrite(ENV.fetch("PACKET"),bytes);result=JSON.parse(File.binread(ENV.fetch("REVIEW")));result["reviewerModel"]="codex";result["reviewPacketDigest"]="sha256:#{Digest::SHA256.hexdigest(bytes)}";File.binwrite(ENV.fetch("REVIEW"),JSON.generate(result))'
+expect_refusal invalid-primary-model; restore_application
+
+# Even a self-consistent packet/result digest cannot bless bytes that are not
+# the deterministic actual Base..Head diff.
+printf 'bogus but self-consistent diff\n' >"$review_diff"
+DIFF="$review_diff" PACKET="$review_packet" REVIEW="$review" ruby -rjson -rdigest -e '
+packet=JSON.parse(File.binread(ENV.fetch("PACKET")));packet.fetch("diff")["digest"]="sha256:#{Digest::SHA256.file(ENV.fetch("DIFF")).hexdigest}";bytes=JSON.generate(packet);File.binwrite(ENV.fetch("PACKET"),bytes);result=JSON.parse(File.binread(ENV.fetch("REVIEW")));result["reviewPacketDigest"]="sha256:#{Digest::SHA256.hexdigest(bytes)}";File.binwrite(ENV.fetch("REVIEW"),JSON.generate(result))'
+expect_refusal bogus-actual-diff; restore_application
+
+ruby -rjson -e 'p=ARGV.fetch(0);v=JSON.parse(File.binread(p));v["externalOperationDetailsDigest"]="sha256:"+("1"*64);File.binwrite(p,JSON.generate(v))' "$contract"
+expect_refusal changed-contract-details; restore_application
+
+ruby -rjson -e 'p=ARGV.fetch(0);v=JSON.parse(File.binread(p));v.delete("externalOperationDetailsDigest");File.binwrite(p,JSON.generate(v))' "$contract"
+expect_refusal missing-operation-details-digest; restore_application
+
 mv "$head_dir" "$head_dir.real"; ln -s "$head.real" "$head_dir"
 expect_refusal symlinked-head
 grep -Fq 'descriptor' "$scratch/symlinked-head.err" || { echo 'symlink component refusal was not explicit' >&2; exit 1; }
@@ -222,6 +310,7 @@ VERIFY="$verify" ruby -rjson -e '
 p=ENV.fetch("VERIFY");v=JSON.parse(File.read(p));v["status"]="not-applicable";v["changeClassification"]="documentation-only";v["reason"]="Only allowlisted Markdown documentation changed";v["matrixFile"]=nil;v["matrixDigest"]=nil;v["executionRoute"]="none";v["xcode"]=nil;v["build"]={"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil};v["tests"]={"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil};v["cases"]=[];v["visualEvaluation"]={"status"=>"not-applicable","findings"=>[]};v["acceptanceEvidence"]=[{"id"=>"AC-1","status"=>"passed","evidence"=>["documents:renderer"]},{"id"=>"AC-2","status"=>"passed","evidence"=>["links:renderer"]}];File.write(p,JSON.pretty_generate(v)+"\n")'
 VERIFY="$verify" REVIEW="$review" ruby -rjson -e '
 v=JSON.parse(File.read(ENV.fetch("VERIFY")));r=JSON.parse(File.read(ENV.fetch("REVIEW")));r["acceptanceAssessment"]=v.fetch("acceptanceEvidence").map{|item|{"id"=>item.fetch("id"),"status"=>"supported","evidence"=>["review.diff"]}};File.write(ENV.fetch("REVIEW"),JSON.generate(r))'
+seal_review
 documentation_body=$(run_renderer)
 grep -Fq 'Verify status: `not-applicable`' <<<"$documentation_body" || { echo 'documentation-only PR body was rejected' >&2; exit 1; }
 

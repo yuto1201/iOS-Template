@@ -13,7 +13,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$issue" =~ ^[1-9][0-9]*$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || usage
 
-ruby -rjson -rdigest -rtime -ropen3 -I"$repo_root/tools/lib" -rdescriptor-files - "$repo_root" "$issue" "$head_sha" <<'RUBY'
+ruby -rjson -rdigest -rtime -ropen3 -I"$repo_root/tools/lib" -rdescriptor-files -rreview-contract -rreview-sealing - "$repo_root" "$issue" "$head_sha" <<'RUBY'
 repo, issue_text, head = ARGV
 issue = Integer(issue_text)
 
@@ -27,72 +27,49 @@ def exact_keys!(value, keys, at)
 end
 
 class HeldEvidence
-  Directory = Struct.new(:io, :parent, :name, :stat, :at, :watch_contents, keyword_init: true)
-  Leaf = Struct.new(:io, :parent, :name, :stat, :bytes, :at, keyword_init: true)
-
   def initialize(root)
-    io = DescriptorFiles.open_directory(root)
     @root_path = root
-    @root = Directory.new(io: io, parent: nil, name: nil, stat: io.stat, at: "primary checkout", watch_contents: false)
+    @snapshots = IOSTemplate::ReviewSealing::SnapshotSet.new(root, at: "primary checkout")
+    @root = @snapshots.root
+    @root_stat = @root.stat
     @directories = {[] => @root}
     @leaves = {}
+    @watched_directories = []
   end
 
   def leaf(components, at)
     components = safe_components(components, at)
     return @leaves.fetch(components) if @leaves.key?(components)
     parent = directory(components[0...-1], at)
-    io, stat = DescriptorFiles.open_regular_at(parent.io, components.last)
-    io.binmode
-    io.flock(File::LOCK_SH)
-    bytes = DescriptorFiles.read_opened(io, stat)
-    value = Leaf.new(io: io, parent: parent, name: components.last, stat: stat, bytes: bytes, at: at)
+    value = @snapshots.leaf(parent, components.last, at: at)
+    value.io.flock(File::LOCK_SH)
     @leaves[components] = value
-  rescue SystemCallError, IOError, ArgumentError => error
+  rescue IOSTemplate::ReviewSealing::SealError, SystemCallError, IOError, ArgumentError => error
     reject("#{at} descriptor is unavailable or invalid: #{error.message}")
   end
 
   def watch_directory(components, at)
     value = directory(safe_components(components, at), at)
-    value.watch_contents = true
+    @watched_directories << [value, value.io.stat, at]
   end
 
   def verify!
-    current = nil
-    current_root = nil
     current_root = DescriptorFiles.open_directory(@root_path)
-    reject("primary checkout identity changed") unless DescriptorFiles.stable_identity_equal?(@root.stat, current_root.stat)
+    reject("primary checkout identity changed") unless DescriptorFiles.stable_identity_equal?(@root_stat, current_root.stat)
     current_root.close
-    @directories.each_value do |entry|
-      next unless entry.parent
-      current = DescriptorFiles.open_directory_at(entry.parent.io, entry.name)
-      current_stat = current.stat
-      current.close
-      same = DescriptorFiles.stable_identity_equal?(entry.stat, current_stat)
-      same &&= DescriptorFiles.metadata_equal?(entry.stat, current_stat) if entry.watch_contents
-      reject("#{entry.at} component identity or contents changed") unless same
+    @snapshots.verify!
+    @watched_directories.each do |entry, original, at|
+      current = entry.io.stat
+      reject("#{at} contents changed") unless DescriptorFiles.metadata_equal?(original, current)
     end
-    @leaves.each_value do |entry|
-      held_bytes = DescriptorFiles.read_opened(entry.io, entry.stat)
-      current, current_stat = DescriptorFiles.open_regular_at(entry.parent.io, entry.name)
-      current.binmode
-      current_bytes = DescriptorFiles.read_opened(current, current_stat)
-      current.close
-      held_same = held_bytes == entry.bytes
-      current_same = current_bytes == entry.bytes
-      metadata_same = DescriptorFiles.metadata_equal?(entry.stat, current_stat)
-      reject("#{entry.at} identity or bytes changed (held=#{held_same}, current=#{current_same}, identity=#{metadata_same})") unless
-        held_same && current_same && metadata_same
-    end
-  rescue SystemCallError, IOError, ArgumentError => error
+  rescue IOSTemplate::ReviewSealing::SealError, SystemCallError, IOError, ArgumentError => error
     reject("descriptor-held evidence changed: #{error.message}")
   ensure
-    current&.close unless current&.closed?
     current_root&.close unless current_root&.closed?
   end
 
   def close
-    (@leaves.values.map(&:io) + @directories.values.map(&:io)).reverse_each { |io| io.close unless io.closed? }
+    @snapshots.close
   end
 
   private
@@ -109,8 +86,7 @@ class HeldEvidence
     components.each do |component|
       path = (path + [component]).freeze
       current = @directories[path] ||= begin
-        io = DescriptorFiles.open_directory_at(current.io, component)
-        Directory.new(io: io, parent: current, name: component, stat: io.stat, at: at, watch_contents: false)
+        @snapshots.directory(current, component, at: at)
       end
     end
     current
@@ -153,34 +129,24 @@ snapshots = HeldEvidence.new(primary)
 contract_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, "issue-contract.json"], "Issue contract")
 verify_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, head, "verify.json"], "verify.json")
 review_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, head, "review.json"], "review.json")
+review_packet_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, head, "review-packet.json"], "review-packet.json")
 contract_bytes = contract_leaf.bytes
 verify_bytes = verify_leaf.bytes
 contract = parse_leaf(contract_leaf, "Issue contract")
 verify = parse_leaf(verify_leaf, "verify.json")
 review = parse_leaf(review_leaf, "review.json")
+review_packet = parse_leaf(review_packet_leaf, "review-packet.json")
 contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
 verify_digest = "sha256:#{Digest::SHA256.hexdigest(verify_bytes)}"
-contract_required = %w[schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies externalOperations fetchedAt]
+contract_required = %w[schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies externalOperations externalOperationDetailsDigest fetchedAt]
 reject("Issue contract schema is incomplete") unless contract.is_a?(Hash) && (contract.keys - contract_required - ["verification"]).empty? && contract_required.all? { |key| contract.key?(key) }
 exact_keys!(verify, %w[schemaVersion status changeClassification reason issue baseSha headSha issueContract matrixFile matrixDigest executionRoute xcode build tests cases visualEvaluation acceptanceEvidence completedAt], "verify.json")
-exact_keys!(review, %w[schemaVersion issue reviewerModel baseSha headSha verifySha issueContractDigest verdict findings acceptanceAssessment reviewedAt], "review.json")
 reject("contract identity mismatch") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue
 reject("contract repository is invalid") unless contract["repository"].is_a?(String) && contract["repository"].match?(%r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z})
+reject("contract operation-details digest is invalid") unless contract["externalOperationDetailsDigest"].is_a?(String) && contract["externalOperationDetailsDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
 reject("verification identity mismatch") unless verify.is_a?(Hash) && verify["schemaVersion"] == 1 && verify["issue"] == issue && verify["headSha"] == head && verify.dig("issueContract", "path") == ".artifacts/issues/#{issue}/issue-contract.json" && verify.dig("issueContract", "digest") == contract_digest
 reject("verification Base SHA is invalid") unless verify["baseSha"].is_a?(String) && verify["baseSha"].match?(/\A[0-9a-f]{40}\z/)
 exact_keys!(verify["issueContract"], %w[path digest], "verify.issueContract")
-reject("review identity mismatch") unless review.is_a?(Hash) && review["schemaVersion"] == 1 && review["issue"] == issue && review["baseSha"] == verify["baseSha"] && review["headSha"] == head && review["verifySha"] == head && review["issueContractDigest"] == contract_digest
-begin
-  completed_at = Time.iso8601(verify.fetch("completedAt"))
-  reviewed_at = Time.iso8601(review.fetch("reviewedAt"))
-  reject("verification or review timestamp is implausibly in the future") if completed_at > Time.now + 300 || reviewed_at > Time.now + 300
-  reject("review timestamp precedes verification") if reviewed_at < completed_at
-rescue KeyError, ArgumentError, TypeError
-  reject("verification or review timestamp is incomplete")
-end
-reviewer = review["reviewerModel"]
-reject("reviewer model is invalid") unless %w[codex claude].include?(reviewer)
-reject("review verdict is not approved") unless review["verdict"] == "approved" && review["findings"] == []
 anchors = contract["specAnchors"]
 reject("spec anchors are missing") unless anchors.is_a?(Array) && !anchors.empty? && anchors.all? { |entry| entry.is_a?(String) && !entry.empty? }
 criteria = contract["acceptanceCriteria"]
@@ -192,8 +158,43 @@ criteria.each_with_index do |criterion, index|
   item = evidence[index]
   reject("acceptance evidence order or readiness differs") unless item.is_a?(Hash) && item.keys.sort == %w[id status evidence].sort && item["id"] == criterion["id"] && item["status"] == "passed" && item["evidence"].is_a?(Array) && !item["evidence"].empty? && item["evidence"].all? { |entry| entry.is_a?(String) && !entry.empty? }
 end
-assessments = review["acceptanceAssessment"]
-reject("review acceptance assessment is not fully supported") unless assessments.is_a?(Array) && assessments.length == criteria.length && assessments.each_with_index.all? { |item, index| item.is_a?(Hash) && item.keys.sort == %w[id status evidence].sort && item["id"] == criteria[index]["id"] && item["status"] == "supported" && item["evidence"].is_a?(Array) && !item["evidence"].empty? && item["evidence"].all? { |entry| entry.is_a?(String) && !entry.empty? } }
+
+# The shared review contract owns every packet/result/verify/diff/image
+# relationship. The renderer only holds the referenced bytes and supplies the
+# independently generated Git diff to that pure validator.
+begin
+  review_references = IOSTemplate::ReviewContract.strict_references!(
+    packet_bytes: review_packet_leaf.bytes, issue: issue, head_sha: head
+  )
+  review_diff_components = relative_components(review_references.fetch("diff").fetch("path"), "review.diff")
+  review_diff_leaf = snapshots.leaf(review_diff_components, "review.diff")
+  review_image_bytes = review_references.fetch("imageFiles").to_h do |reference|
+    components = relative_components(reference.fetch("path"), "review image")
+    leaf = snapshots.leaf(components, "review image #{reference.fetch('path')}")
+    [reference.fetch("path"), leaf.bytes]
+  end
+  primary_model = review_packet["primaryModel"]
+  reject("review primary model is invalid") unless %w[codex claude].include?(primary_model)
+  reviewer = primary_model == "codex" ? "claude" : "codex"
+  IOSTemplate::ReviewContract.validate_packet_identity!(review_packet, 2, primary_model, reviewer, issue, verify["baseSha"], head)
+  expected_contract_reference = {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => contract_digest}
+  reject("review packet issue contract does not match exact current bytes") unless review_packet["issueContract"] == expected_contract_reference
+  IOSTemplate::ReviewContract.validate_scope!(review_packet, contract)
+  completed_at = IOSTemplate::ReviewContract.validate_verify_identity!(review_packet, 2, verify, issue, verify["baseSha"], head, contract_digest, true)
+  IOSTemplate::ReviewContract.validate_strict_closure!(
+    packet: review_packet, packet_bytes: review_packet_leaf.bytes, verify: verify,
+    verify_bytes: verify_bytes, issue: issue, head_sha: head,
+    diff_bytes: review_diff_leaf.bytes, image_bytes: review_image_bytes,
+    actual_diff_bytes: IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: verify["baseSha"], head_sha: head)
+  )
+  IOSTemplate::ReviewContract.validate_result!(
+    review, 2, review_packet_leaf.bytes, reviewer, issue, verify["baseSha"], head,
+    contract_digest, criteria, completed_at, Time.now.utc, true
+  )
+rescue IOSTemplate::ReviewContract::ValidationError => error
+  reject("strict review closure is invalid: #{error.message}")
+end
+reject("review verdict is not approved") unless review["verdict"] == "approved"
 build = verify["build"]
 tests = verify["tests"]
 cases = verify["cases"]
