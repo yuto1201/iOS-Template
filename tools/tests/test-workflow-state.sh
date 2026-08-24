@@ -118,6 +118,16 @@ assert_json() {
 
 cd "$repo_root"
 mkdir -p "$artifact_issue"
+
+# Before Claim there is no sealed contract. Reads and the proposed -> approved
+# transition must be authorized from the freshly read Issue body and exact argv.
+printf '["state:proposed"]' > "$FAKE_GH_LABELS_FILE"
+"$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from proposed --to approved >/dev/null
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+rm -f "$artifact_issue/state.json" "$artifact_issue/state-transition.pending.json"
+printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+
 ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
   --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
   > "$artifact_issue/issue-contract.json"
@@ -197,6 +207,7 @@ printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 printf '[]' > "$FAKE_GH_LOG"
 printf '0' > "$FAKE_GH_VIEW_COUNT_FILE"
 printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+rm -f ".artifacts/issues/$test_issue/state.json" ".artifacts/issues/$test_issue/state-transition.pending.json"
 export FAKE_GH_RACE_BEFORE_EDIT_VIEW=2
 export FAKE_GH_RACE_BEFORE_EDIT_LABELS='["state:in-progress"]'
 assert_fails 'transition recheck rejects a changed current state' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
@@ -209,6 +220,7 @@ rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 printf '0' > "$FAKE_GH_VIEW_COUNT_FILE"
 printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+rm -f ".artifacts/issues/$test_issue/state.json" ".artifacts/issues/$test_issue/state-transition.pending.json"
 export FAKE_GH_RACE_AFTER_EDIT_LABELS='["state:in-progress"]'
 assert_fails 'transition post-read rejects a changed result state' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'

@@ -132,10 +132,12 @@ assert_inline_allow allow-chained-safe-transitive-cycle Bash command "cd '$repo_
 assert_inline_allow allow-local-git-worktree Bash command "git worktree list --porcelain"
 assert_inline_allow allow-local-git-diff-script-path Bash command "git diff -- tools/request-codex-op.sh"
 assert_inline_allow allow-safe-find Bash command "find docs -type f -name '*.md' -print"
-assert_inline_allow allow-safe-python-file Bash command "python3 tools/tests/fixtures/local-check.py"
+assert_inline_allow allow-safe-python-file Bash command "python3 tools/tests/fixtures/claude-hook/local-check.py"
 assert_inline_allow allow-backtick-local-git Bash command 'printf "%s\n" `git status --short`'
 assert_inline_allow allow-local-xcode-mcp mcp__XcodeBuildMCP__build_sim projectPath "$repo_root/TemplateApp.xcodeproj"
+assert_inline_allow allow-registered-local-xcode-mcp mcp__xcodebuild__build_sim projectPath "$repo_root/TemplateApp.xcodeproj"
 assert_inline_allow allow-local-xcode-simulator-mcp mcp__xcodebuildmcp__screenshot simulatorId "00000000-0000-0000-0000-000000000000"
+assert_inline_allow allow-local-xcode-session-default mcp__xcodebuild__session_set_defaults simulatorId "00000000-0000-0000-0000-000000000000"
 
 assert_inline_deny deny-read-dedicated-secret Read file_path "$HOME/Library/Application Support/iOS-Template/secrets/example/key.p8"
 assert_inline_deny deny-glob-environment-secret Glob pattern "$HOME/projects/example/.env.local"
@@ -170,7 +172,12 @@ assert_inline_deny deny-node-eval-after-option Bash command "node --no-warnings 
 assert_inline_deny deny-shell-command-after-option Bash command "bash --noprofile -c 'printf safe-looking'"
 assert_inline_deny deny-backtick-provider Bash command 'printf "%s\n" `gh issue list`'
 assert_inline_deny deny-backtick-interpreter Bash command 'printf "%s\n" `python3 -c "print(1)"`'
+assert_inline_deny deny-intraword-quoted-provider Bash command 'g"h" issue list'
+assert_inline_deny deny-assigned-provider-expansion Bash command 'x=gh; $x issue list'
 assert_inline_deny deny-unlisted-mcp mcp__calendar__list_events calendarId local
+assert_inline_deny deny-near-match-xcode-mcp mcp__xcodebuildx__build_sim projectPath "$repo_root/TemplateApp.xcodeproj"
+assert_inline_deny deny-unknown-xcode-action mcp__xcodebuild__archive_upload projectPath "$repo_root/TemplateApp.xcodeproj"
+assert_inline_deny deny-xcode-device-default mcp__xcodebuild__session_set_defaults deviceId "00000000-0000-0000-0000-000000000000"
 
 assert_inline_deny deny-dot-tools-script Bash command "./tools/tests/fixtures/claude-hook/unapproved-external.sh"
 assert_inline_deny deny-sh-tools-script Bash command "sh tools/tests/fixtures/claude-hook/unapproved-external.sh"
@@ -229,5 +236,13 @@ CLAUDE_PROJECT_DIR="$loader_project" "$loader" > "$workspace/loader-oversized.ou
   context = JSON.parse(File.binread(ARGV.fetch(0))).fetch("hookSpecificOutput").fetch("additionalContext")
   abort "oversized contract did not fail visibly" unless context.include?("blocked:environment") && context.include?("32768")
 ' "$workspace/loader-oversized.out"
+
+chmod 000 "$loader_project/AGENTS.md"
+CLAUDE_PROJECT_DIR="$loader_project" "$loader" > "$workspace/loader-unreadable.out"
+chmod 600 "$loader_project/AGENTS.md"
+/usr/bin/ruby -rjson -e '
+  context = JSON.parse(File.binread(ARGV.fetch(0))).fetch("hookSpecificOutput").fetch("additionalContext")
+  abort "unreadable contract did not fail visibly" unless context.include?("blocked:environment") && context.include?("unreadable")
+' "$workspace/loader-unreadable.out"
 
 echo "PASS: Claude hooks preserve AGENTS bytes, allow only local work, and deny hidden external/secret operations"

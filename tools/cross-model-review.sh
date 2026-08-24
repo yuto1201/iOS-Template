@@ -108,6 +108,16 @@ if [[ "$primary" == codex ]]; then
     exit 2 unless (1..600).cover?(timeout_seconds) && (1..5).cover?(term_grace)
     # A dedicated process group lets timeout cleanup reach reviewer descendants.
     pid = Process.spawn(*command, in: File::NULL, pgroup: true)
+    %w[INT TERM HUP].each do |signal|
+      Signal.trap(signal) do
+        begin
+          Process.kill(signal, -pid)
+        rescue Errno::ESRCH
+          nil
+        end
+        exit(128 + Signal.list.fetch(signal))
+      end
+    end
     begin
       Timeout.timeout(timeout_seconds) { Process.wait(pid) }
     rescue Timeout::Error

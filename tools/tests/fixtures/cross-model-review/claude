@@ -11,6 +11,9 @@ case "${FAKE_REVIEWER_MODE:?}" in
   timeout) exit 124 ;;
   hang)
     printf '%s\n' "$$" > "${FAKE_REVIEWER_PID_FILE:?}"
+    if [[ -n "${FAKE_REVIEWER_WATCHDOG_PID_FILE:-}" ]]; then
+      printf '%s\n' "$PPID" > "$FAKE_REVIEWER_WATCHDOG_PID_FILE"
+    fi
     /bin/bash -c '
       trap "" HUP
       trap '\''printf "TERM\n" > "$FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE"; exit 0'\'' TERM

@@ -11,6 +11,16 @@ normalize_text() {
   builtin printf '%s' "$1" | /usr/bin/tr '[:upper:]\n\r\t' '[:lower:]   '
 }
 
+xcode_mcp_action_is_allowed() {
+  case "$1" in
+    boot_sim|build_run_sim|build_sim|clean|discover_projs|get_app_bundle_id|get_coverage_report|get_file_coverage|get_sim_app_path|install_app_sim|launch_app_sim|list_schemes|list_sims|open_sim|record_sim_video|screenshot|show_build_settings|snapshot_ui|stop_app_sim|test_sim) return 0 ;;
+    session_clear_defaults|session_set_defaults|session_show_defaults|session_use_defaults_profile) return 0 ;;
+    batch|button|drag|gesture|key_press|key_sequence|long_press|swipe|tap|touch|type_text|wait_for_ui) return 0 ;;
+    debug_attach_sim|debug_breakpoint_add|debug_breakpoint_remove|debug_continue|debug_detach|debug_lldb_command|debug_stack|debug_variables) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 contains_restricted_material() {
   local value safe_value
   value=$(normalize_text "$1")
@@ -51,8 +61,12 @@ command_is_forbidden() {
   local shell_boundary token_left token_right
   command=$(normalize_text "$1")
   command=${command//\\/}
+  # Shell quoting can split a command name without changing the executed token
+  # (for example g"h"). Match the dequoted spelling and fail closed.
+  command=${command//\'/}
+  command=${command//\"/}
 
-  shell_boundary="[[:space:];|&()<>{}\`\$\"']"
+  shell_boundary="[[:space:];|&()<>{}=!?,\`\$\"']"
   token_left="(^|/|$shell_boundary)"
   token_right="($shell_boundary|$)"
 
@@ -261,8 +275,22 @@ fi
 
 normalized_tool=$(normalize_text "$tool_name")
 # XcodeBuildMCP is the only documented local-only MCP server required for
-# repository Xcode/Simulator work. Every other MCP server fails closed.
-if [[ "$normalized_tool" == mcp__* && "$normalized_tool" != mcp__xcodebuildmcp__?* ]]; then
+# repository Xcode/Simulator work. Claude installations currently expose it as
+# xcodebuild; retain xcodebuildmcp for installations using the descriptive name.
+# Every other MCP server fails closed.
+is_local_xcode_mcp=false
+xcode_mcp_action=''
+if [[ "$normalized_tool" == mcp__xcodebuild__?* ]]; then
+  is_local_xcode_mcp=true
+  xcode_mcp_action=${normalized_tool#mcp__xcodebuild__}
+elif [[ "$normalized_tool" == mcp__xcodebuildmcp__?* ]]; then
+  is_local_xcode_mcp=true
+  xcode_mcp_action=${normalized_tool#mcp__xcodebuildmcp__}
+elif [[ "$normalized_tool" == mcp__* ]]; then
+  deny
+  exit 0
+fi
+if [[ "$is_local_xcode_mcp" == true ]] && ! xcode_mcp_action_is_allowed "$xcode_mcp_action"; then
   deny
   exit 0
 fi
@@ -282,6 +310,24 @@ fi
 if contains_restricted_material "$tool_input"; then
   deny
   exit 0
+fi
+
+if [[ "$is_local_xcode_mcp" == true ]]; then
+  normalized_xcode_input=$(normalize_text "$tool_input")
+  if [[ "$normalized_xcode_input" == *accounts* || "$normalized_xcode_input" == *organizer* ||
+        "$normalized_xcode_input" == *"signing team"* || "$normalized_xcode_input" == *archive*upload* ||
+        "$normalized_xcode_input" == *"app store connect"* || "$normalized_xcode_input" == *keychain* ]]; then
+    deny
+    exit 0
+  fi
+  if [[ "$xcode_mcp_action" == session_set_defaults ]]; then
+    for forbidden_key in deviceId platform persist; do
+      if /usr/bin/plutil -extract "tool_input.$forbidden_key" raw -o - "$temporary_input" >/dev/null 2>&1; then
+        deny
+        exit 0
+      fi
+    done
+  fi
 fi
 
 for input_path_key in file_path path; do

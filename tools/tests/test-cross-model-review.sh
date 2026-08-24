@@ -260,6 +260,37 @@ fi
 unset FAKE_REVIEWER_PID_FILE FAKE_REVIEWER_SIGNAL_FILE FAKE_REVIEWER_DESCENDANT_PID_FILE FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE
 
 reset_review_requested
+export FAKE_REVIEWER_MODE=hang
+export FAKE_REVIEWER_PID_FILE="$workspace/interrupted-reviewer.pid"
+export FAKE_REVIEWER_SIGNAL_FILE="$workspace/interrupted-reviewer.signal"
+export FAKE_REVIEWER_DESCENDANT_PID_FILE="$workspace/interrupted-reviewer-descendant.pid"
+export FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE="$workspace/interrupted-reviewer-descendant.signal"
+export FAKE_REVIEWER_WATCHDOG_PID_FILE="$workspace/interrupted-reviewer-watchdog.pid"
+IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS=30 run_review >"$workspace/interrupted-review.out" 2>&1 &
+interrupted_review_pid=$!
+for _ in {1..100}; do
+  [[ -s "$FAKE_REVIEWER_WATCHDOG_PID_FILE" && -s "$FAKE_REVIEWER_DESCENDANT_PID_FILE" ]] && break
+  sleep 0.05
+done
+[[ -s "$FAKE_REVIEWER_WATCHDOG_PID_FILE" ]] || { echo 'review watchdog PID was not published' >&2; exit 1; }
+kill -TERM "$(cat "$FAKE_REVIEWER_WATCHDOG_PID_FILE")"
+if wait "$interrupted_review_pid"; then
+  echo 'interrupted review unexpectedly succeeded' >&2
+  exit 1
+fi
+for _ in {1..20}; do
+  reviewer_pid=$(cat "$FAKE_REVIEWER_PID_FILE")
+  reviewer_descendant_pid=$(cat "$FAKE_REVIEWER_DESCENDANT_PID_FILE")
+  if ! kill -0 "$reviewer_pid" 2>/dev/null && ! kill -0 "$reviewer_descendant_pid" 2>/dev/null; then break; fi
+  sleep 0.1
+done
+[[ "$(cat "$FAKE_REVIEWER_SIGNAL_FILE")" == TERM ]] || { echo 'interrupted reviewer did not receive TERM' >&2; exit 1; }
+[[ "$(cat "$FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE")" == TERM ]] || { echo 'interrupted reviewer descendant did not receive TERM' >&2; exit 1; }
+! kill -0 "$reviewer_pid" 2>/dev/null || { echo 'interrupted reviewer survived' >&2; exit 1; }
+! kill -0 "$reviewer_descendant_pid" 2>/dev/null || { echo 'interrupted reviewer descendant survived' >&2; exit 1; }
+unset FAKE_REVIEWER_PID_FILE FAKE_REVIEWER_SIGNAL_FILE FAKE_REVIEWER_DESCENDANT_PID_FILE FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE FAKE_REVIEWER_WATCHDOG_PID_FILE
+
+reset_review_requested
 export FAKE_REVIEWER_MODE=write
 export FAKE_REVIEWER_WRITE_PATH="$artifact_root/reviewer-write.txt"
 write_result approved
@@ -308,4 +339,4 @@ cat > "$artifact_root/review-receipt.json" <<JSON
 JSON
 assert_fails 'a forged receipt cannot authorize an existing review' run_review codex
 
-echo 'PASS: opposite-model execution receipts, approved, envelope, changes-requested, malformed, SHA mismatch, timeout, write-attempt, native hardened Codex sandbox probes, and exact recovery cases'
+echo 'PASS: opposite-model execution receipts, approved, envelope, changes-requested, malformed, SHA mismatch, timeout, interrupt cleanup, write-attempt, native hardened Codex sandbox probes, and exact recovery cases'

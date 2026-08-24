@@ -9,7 +9,9 @@ if [[ -z "$project_dir" || ! -f "$agents_file" ]]; then
   exit 0
 fi
 
-RUBYOPT='' RUBYLIB='' /usr/bin/ruby --disable-gems -rjson - "$agents_file" <<'RUBY'
+blocked_payload='{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"AGENTS.md is unavailable or unreadable. Stop with blocked:environment and restore the repository contract before continuing."}}'
+payload=''
+if ! payload=$(RUBYOPT='' RUBYLIB='' /usr/bin/ruby --disable-gems -rjson - "$agents_file" 2>/dev/null <<'RUBY'
 path = ARGV.fetch(0)
 content = File.binread(path)
 context =
@@ -32,3 +34,13 @@ STDOUT.write(JSON.generate({
 }))
 STDOUT.write("\n")
 RUBY
+); then
+  builtin printf '%s\n' "$blocked_payload"
+  exit 0
+fi
+
+if [[ -z "$payload" ]]; then
+  builtin printf '%s\n' "$blocked_payload"
+  exit 0
+fi
+builtin printf '%s\n' "$payload"

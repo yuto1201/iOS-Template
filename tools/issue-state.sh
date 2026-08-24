@@ -30,10 +30,12 @@ else
     [[ -z "$head_sha" ]] || { echo '--head-sha is allowed only for in-progress -> verify-passed' >&2; exit 1; }
   fi
 fi
-issue_contract_authorization=sealed
-if [[ "$command" == transition && "$from" == approved && "$to" == claimed ]]; then
-  # This non-exported mode is the sole live-contract authorization path.
-  issue_contract_authorization=approved-to-claimed
+if [[ "$command" == get ]]; then
+  issue_contract_authorization=pre-claim-read
+else
+  # The mode and transition endpoints are derived only from validated argv.
+  # workflow.sh uses the sealed contract whenever Claim evidence exists.
+  issue_contract_authorization=transition
 fi
 
 read_issue() {
@@ -45,7 +47,7 @@ read_issue() {
 }
 require_issue_operation() {
   local document=$1 operation=$2
-  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$document" "$operation" "$issue_contract_authorization"
+  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$document" "$operation" "$issue_contract_authorization" "$from" "$to"
 }
 state_from_issue() {
   local document=$1 state

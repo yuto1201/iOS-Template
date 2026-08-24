@@ -64,15 +64,74 @@ workflow_require_sealed_issue_operation() {
   fi
 }
 
+workflow_issue_has_sealed_identity() {
+  local repo_root=$1 issue=$2
+  local contract="$repo_root/.artifacts/issues/$issue/issue-contract.json"
+  local state_file="$repo_root/.artifacts/issues/$issue/state.json"
+  if [[ -e "$contract" || -L "$contract" ]]; then
+    return 0
+  fi
+  if [[ ! -e "$state_file" && ! -L "$state_file" ]]; then
+    return 1
+  fi
+  [[ -f "$state_file" && ! -L "$state_file" ]] || return 0
+  # Only the exact minimal record produced before Claim may continue to use the
+  # live Issue contract. Any full or malformed record requires sealed evidence
+  # and therefore fails closed when the contract is absent.
+  ruby -rjson -rtime -e '
+    begin
+      value = JSON.parse(File.binread(ARGV.fetch(0)))
+      minimal = %w[executor from resumeState state timestamp to]
+      states = %w[proposed approved claimed in-progress verify-passed review-requested changes-requested approved-for-merge merged done paused superseded blocked:user blocked:ops blocked:review blocked:conflict blocked:dependency blocked:environment blocked:repeated-failure]
+      valid = value.is_a?(Hash) && value.keys.sort == minimal && value["executor"] == "codex" &&
+        states.include?(value["state"]) && (value["from"].nil? || states.include?(value["from"])) &&
+        states.include?(value["to"]) && (value["resumeState"].nil? || states.include?(value["resumeState"]))
+      Time.iso8601(value["timestamp"]) if valid
+      exit(valid ? 1 : 0)
+    rescue JSON::ParserError, Errno::ENOENT, Errno::EACCES, ArgumentError, TypeError
+      exit 0
+    end
+  ' "$state_file"
+}
+
 workflow_require_issue_operation() {
-  local repo_root=$1 repo=$2 issue=$3 issue_json=$4 operation=$5 authorization=${6:-sealed} state
+  local repo_root=$1 repo=$2 issue=$3 issue_json=$4 operation=$5 authorization=${6:-sealed}
+  local expected_from=${7:-} expected_to=${8:-} state
   case "$authorization" in
     sealed)
       workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation"
       ;;
-    approved-to-claimed)
+    pre-claim-read)
+      if workflow_issue_has_sealed_identity "$repo_root" "$issue"; then
+        workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation" || return 1
+        return
+      fi
       state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
-      [[ "$state" == approved || "$state" == claimed ]] || return 1
+      workflow_is_state "$state" || return 1
+      [[ "$state" != claimed && "$state" != in-progress && "$state" != verify-passed &&
+         "$state" != review-requested && "$state" != changes-requested &&
+         "$state" != approved-for-merge && "$state" != merged && "$state" != done ]] || return 1
+      workflow_require_live_issue_operation "$repo_root" "$repo" "$issue" "$issue_json" "$operation"
+      ;;
+    transition)
+      [[ -n "$expected_from" && -n "$expected_to" ]] || return 1
+      if workflow_issue_has_sealed_identity "$repo_root" "$issue"; then
+        workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation" || return 1
+        # Claim publishes the first remote state only after both the sealed
+        # snapshot and the freshly fetched live Issue still authorize it.
+        if [[ "$expected_from" == approved && "$expected_to" == claimed ]]; then
+          state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
+          [[ "$state" == approved || "$state" == claimed ]] || return 1
+          workflow_require_live_issue_operation "$repo_root" "$repo" "$issue" "$issue_json" "$operation"
+        fi
+        return
+      fi
+      state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
+      [[ "$state" == "$expected_from" || "$state" == "$expected_to" ]] || return 1
+      if [[ ! -e "$repo_root/.artifacts/issues/$issue/state.json" &&
+            "$expected_from" != proposed && "$expected_from" != approved ]]; then
+        return 1
+      fi
       workflow_require_live_issue_operation "$repo_root" "$repo" "$issue" "$issue_json" "$operation"
       ;;
     *)
