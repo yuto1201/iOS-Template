@@ -40,9 +40,18 @@ Dispatch from that returned state; do not replay from the beginning:
 - `merged`: perform the cleanup stage below. `done`: return idempotent success without Claim or Resume.
 
 Transition only through `tools/issue-state.sh`; do not hand-edit labels, markers, or state JSON.
+Every allowed recovery into `in-progress` clears the old durable Head binding. Treat that state as unverified: re-resolve the current Issue worktree Head and repeat verification before creating a new binding; never reuse an earlier Head or its evidence.
 
 2. Only in `in-progress`, implement the Issue contract. Apply TDD and commit locally. A changed Head invalidates prior verification/review.
-3. Use `ios-verify`. Transition to `verify-passed` only after canonical `verify.json` validates for current Head; documentation-only work uses that skill's `tools/publish-documentation-verify.sh` path, not a skipped check.
+3. Use `ios-verify`. Transition to `verify-passed` only after canonical `verify.json` validates for current Head; documentation-only work uses that skill's `tools/publish-documentation-verify.sh` path, not a skipped check. From the canonical Issue worktree, bind the exact current Head accepted by the state tool:
+
+```sh
+ISSUE_WORKTREE="$(git rev-parse --show-toplevel)"
+HEAD_SHA="$(git -C "$ISSUE_WORKTREE" rev-parse HEAD)"
+cd "$ISSUE_WORKTREE"
+tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" --from in-progress --to verify-passed --head-sha "$HEAD_SHA"
+```
+
 4. Transition to `review-requested`, then run the exact opposite-model handoff:
 
 ```sh

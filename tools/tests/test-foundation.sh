@@ -353,6 +353,22 @@ RUBY
   fi
 done
 
+python3 - <<'PYTHON'
+from pathlib import Path
+
+ship_issue = Path(".agents/skills/ship-issue/SKILL.md").read_text()
+required = (
+    'ISSUE_WORKTREE="$(git rev-parse --show-toplevel)"',
+    'HEAD_SHA="$(git -C "$ISSUE_WORKTREE" rev-parse HEAD)"',
+    'tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" --from in-progress --to verify-passed --head-sha "$HEAD_SHA"',
+    "clears the old durable Head binding",
+    "re-resolve the current Issue worktree Head",
+)
+missing = [value for value in required if value not in ship_issue]
+if missing:
+    raise SystemExit(f"ship-issue skill lacks current-Head verification binding: {missing!r}")
+PYTHON
+
 for agent in "${evaluator_agents[@]}"; do
   codex_agent=".codex/agents/$agent.toml"
   claude_agent=".claude/agents/$agent.md"
