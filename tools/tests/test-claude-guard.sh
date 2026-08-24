@@ -5,6 +5,7 @@ repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 cd "$repo_root"
 
 guard="$repo_root/.claude/hooks/guard-external-ops.sh"
+loader="$repo_root/.claude/hooks/load-agents-md.sh"
 fixtures="$repo_root/tools/tests/fixtures/claude-hook"
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-claude-guard.XXXXXX")
 runtime_link="$repo_root/tools/tests/fixtures/claude-hook/runtime-link.sh"
@@ -132,6 +133,9 @@ assert_inline_allow allow-local-git-worktree Bash command "git worktree list --p
 assert_inline_allow allow-local-git-diff-script-path Bash command "git diff -- tools/request-codex-op.sh"
 assert_inline_allow allow-safe-find Bash command "find docs -type f -name '*.md' -print"
 assert_inline_allow allow-safe-python-file Bash command "python3 tools/tests/fixtures/local-check.py"
+assert_inline_allow allow-backtick-local-git Bash command 'printf "%s\n" `git status --short`'
+assert_inline_allow allow-local-xcode-mcp mcp__XcodeBuildMCP__build_sim projectPath "$repo_root/TemplateApp.xcodeproj"
+assert_inline_allow allow-local-xcode-simulator-mcp mcp__xcodebuildmcp__screenshot simulatorId "00000000-0000-0000-0000-000000000000"
 
 assert_inline_deny deny-read-dedicated-secret Read file_path "$HOME/Library/Application Support/iOS-Template/secrets/example/key.p8"
 assert_inline_deny deny-glob-environment-secret Glob pattern "$HOME/projects/example/.env.local"
@@ -164,6 +168,9 @@ assert_inline_deny deny-perl-eval Bash command "perl -e 'system qw(gh issue list
 assert_inline_deny deny-node-eval Bash command "node -e 'require(\"child_process\").execSync(\"gh issue list\")'"
 assert_inline_deny deny-node-eval-after-option Bash command "node --no-warnings -e 'console.log(1)'"
 assert_inline_deny deny-shell-command-after-option Bash command "bash --noprofile -c 'printf safe-looking'"
+assert_inline_deny deny-backtick-provider Bash command 'printf "%s\n" `gh issue list`'
+assert_inline_deny deny-backtick-interpreter Bash command 'printf "%s\n" `python3 -c "print(1)"`'
+assert_inline_deny deny-unlisted-mcp mcp__calendar__list_events calendarId local
 
 assert_inline_deny deny-dot-tools-script Bash command "./tools/tests/fixtures/claude-hook/unapproved-external.sh"
 assert_inline_deny deny-sh-tools-script Bash command "sh tools/tests/fixtures/claude-hook/unapproved-external.sh"
@@ -187,4 +194,40 @@ assert_inline_deny deny-git-exec-path Bash command "git --exec-path=/tmp status"
 assert_inline_deny deny-direct-ssh-git-plumbing Bash command "ssh git@github.com git-receive-pack yuto1201/iOS-Template.git"
 assert_inline_deny deny-direct-rsync-remote Bash command "rsync -a docs/ example@example.com:/tmp/docs/"
 
-echo "PASS: Claude guard allows local work and denies direct or hidden external/secret operations"
+loader_project="$workspace/loader-project"
+mkdir -p "$loader_project"
+
+assert_loader_exact_bytes() {
+  local name=$1 expected=$2 output
+  output="$workspace/$name.out"
+  CLAUDE_PROJECT_DIR="$loader_project" "$loader" > "$output"
+  EXPECTED="$expected" /usr/bin/ruby -rjson -e '
+    value = JSON.parse(File.binread(ARGV.fetch(0))).fetch("hookSpecificOutput").fetch("additionalContext")
+    expected = File.binread(ENV.fetch("EXPECTED"))
+    abort "additionalContext bytes differ" unless value.b == expected
+  ' "$output"
+}
+
+quote_controls="$workspace/quote-controls.bin"
+/usr/bin/ruby -e 'File.binwrite(ARGV.fetch(0), "quote:\" backslash:\\\nnewline:\ncarriage:\rtab:\tend")' "$quote_controls"
+cp "$quote_controls" "$loader_project/AGENTS.md"
+assert_loader_exact_bytes loader-quote-controls "$quote_controls"
+
+c0_controls="$workspace/c0-controls.bin"
+/usr/bin/ruby -e 'File.binwrite(ARGV.fetch(0), "c0:".b + (0..31).to_a.pack("C*") + ":utf8:日本語\n")' "$c0_controls"
+cp "$c0_controls" "$loader_project/AGENTS.md"
+assert_loader_exact_bytes loader-c0-controls "$c0_controls"
+
+exact_limit="$workspace/exact-limit.bin"
+/usr/bin/ruby -e 'File.binwrite(ARGV.fetch(0), "a" * 32_768)' "$exact_limit"
+cp "$exact_limit" "$loader_project/AGENTS.md"
+assert_loader_exact_bytes loader-exact-limit "$exact_limit"
+
+/usr/bin/ruby -e 'File.binwrite(ARGV.fetch(0), "a" * 32_769)' "$loader_project/AGENTS.md"
+CLAUDE_PROJECT_DIR="$loader_project" "$loader" > "$workspace/loader-oversized.out"
+/usr/bin/ruby -rjson -e '
+  context = JSON.parse(File.binread(ARGV.fetch(0))).fetch("hookSpecificOutput").fetch("additionalContext")
+  abort "oversized contract did not fail visibly" unless context.include?("blocked:environment") && context.include?("32768")
+' "$workspace/loader-oversized.out"
+
+echo "PASS: Claude hooks preserve AGENTS bytes, allow only local work, and deny hidden external/secret operations"

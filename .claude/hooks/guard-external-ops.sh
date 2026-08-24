@@ -48,32 +48,37 @@ command_is_forbidden() {
   local provider_pattern shell_eval_pattern shell_prefixed_eval_pattern
   local interpreter_eval_pattern interpreter_prefixed_eval_pattern plumbing_pattern
   local git_token_pattern remote_git_pattern security_read_pattern network_pattern
+  local shell_boundary token_left token_right
   command=$(normalize_text "$1")
   command=${command//\\/}
 
+  shell_boundary="[[:space:];|&()<>{}\`\$\"']"
+  token_left="(^|/|$shell_boundary)"
+  token_right="($shell_boundary|$)"
+
   contains_restricted_material "$command" && return 0
 
-  provider_pattern='(^|[/[:space:];|&()\"'"'"'])(gh|supabase|wrangler|elevenlabs|fastlane|codex|itms-transporter|transporter)([[:space:];|&()\"'"'"']|$)'
+  provider_pattern="${token_left}(gh|supabase|wrangler|elevenlabs|fastlane|codex|itms-transporter|transporter)${token_right}"
   if [[ "$command" =~ $provider_pattern ||
-        "$command" =~ (^|[[:space:];\|\&])xcrun[[:space:]]+(altool|notarytool)([[:space:];\|\&]|$) ]]; then
+        "$command" =~ ${token_left}xcrun[[:space:]]+(altool|notarytool)${token_right} ]]; then
     return 0
   fi
 
-  shell_eval_pattern='(^|[/[:space:];|&()])((ba|z|da|fi)?sh|fish)[[:space:]]*(-[^[:space:]]*c|--command)'
-  shell_prefixed_eval_pattern='(^|[/[:space:];|&()])((ba|z|da|fi)?sh|fish)[^;|&]*[[:space:]](-[a-z]*c[a-z]*|--command)([[:space:]\"'"'"']|$)'
-  interpreter_eval_pattern='(^|[/[:space:];|&()])(python[0-9.]*|ruby|perl|node)[[:space:]]*(-[^[:space:]]*[ce]|--(command|eval))'
-  interpreter_prefixed_eval_pattern='(^|[/[:space:];|&()])(python[0-9.]*|ruby|perl|node)[^;|&]*[[:space:]](-[ce]|--(command|eval))([[:space:]\"'"'"'=]|$)'
+  shell_eval_pattern="${token_left}((ba|z|da|fi)?sh|fish)[[:space:]]*(-[^[:space:]]*c|--command)"
+  shell_prefixed_eval_pattern="${token_left}((ba|z|da|fi)?sh|fish)[^;|&]*[[:space:]](-[a-z]*c[a-z]*|--command)${token_right}"
+  interpreter_eval_pattern="${token_left}(python[0-9.]*|ruby|perl|node)[[:space:]]*(-[^[:space:]]*[ce]|--(command|eval))"
+  interpreter_prefixed_eval_pattern="${token_left}(python[0-9.]*|ruby|perl|node)[^;|&]*[[:space:]](-[ce]|--(command|eval))([=]|${token_right})"
   if [[ "$command" =~ $shell_eval_pattern || "$command" =~ $shell_prefixed_eval_pattern ||
         "$command" =~ $interpreter_eval_pattern || "$command" =~ $interpreter_prefixed_eval_pattern ||
-        "$command" =~ (^|[[:space:];\|\&])(eval|osascript[[:space:]]+-e)([[:space:];\|\&]|$) ]]; then
+        "$command" =~ ${token_left}(eval|osascript[[:space:]]+-e)${token_right} ]]; then
     return 0
   fi
 
-  if [[ "$command" =~ (^|[/[:space:];\|\&])xargs([[:space:];\|\&]|$) ||
-        "$command" =~ (^|[/[:space:];\|\&])find[[:space:]].*-(exec|execdir|ok|okdir)([[:space:];\|\&]|$) ]]; then
+  if [[ "$command" =~ ${token_left}xargs${token_right} ||
+        "$command" =~ ${token_left}find[[:space:]].*-(exec|execdir|ok|okdir)${token_right} ]]; then
     return 0
   fi
-  if [[ "$command" =~ (^|[/[:space:];\|\&])env[[:space:]].*(--split-string|--chdir|-s|-c)([=[:space:];\|\&]|$) ]]; then
+  if [[ "$command" =~ ${token_left}env[[:space:]].*(--split-string|--chdir|-s|-c)([=]|${token_right}) ]]; then
     return 0
   fi
 
@@ -84,10 +89,10 @@ command_is_forbidden() {
     return 0
   fi
 
-  security_read_pattern='(^|[/[:space:];|&()])security[[:space:]]+(find-generic-password|find-internet-password|find-identity|dump-keychain|export|unlock-keychain|list-keychains)([[:space:];|&()]|$)'
+  security_read_pattern="${token_left}security[[:space:]]+(find-generic-password|find-internet-password|find-identity|dump-keychain|export|unlock-keychain|list-keychains)${token_right}"
   [[ "$command" =~ $security_read_pattern ]] && return 0
 
-  plumbing_pattern='(^|[/[:space:];|&()])(git-(send-pack|fetch-pack|http-fetch|http-push|credential[^[:space:];|&()]*|remote-[^[:space:];|&()]+|upload-pack|receive-pack|daemon))([[:space:];|&()]|$)'
+  plumbing_pattern="${token_left}(git-(send-pack|fetch-pack|http-fetch|http-push|credential[^[:space:];|&()]*|remote-[^[:space:];|&()]+|upload-pack|receive-pack|daemon))${token_right}"
   [[ "$command" =~ $plumbing_pattern ]] && return 0
 
   git_token_pattern='(^|[^[:alnum:]_.-])(/[^[:space:];|&()]*/)?git([[:space:]]|$)'
@@ -100,13 +105,13 @@ command_is_forbidden() {
     return 0
   fi
 
-  if [[ "$command" =~ (^|[/[:space:];\|\&])(ssh|scp|sftp)([[:space:];\|\&]|$) ||
-        "$command" =~ (^|[/[:space:];\|\&])rsync[[:space:]].*(rsync://|[^[:space:]]+:[^[:space:]]+) ]]; then
+  if [[ "$command" =~ ${token_left}(ssh|scp|sftp)${token_right} ||
+        "$command" =~ ${token_left}rsync[[:space:]].*(rsync://|[^[:space:]]+:[^[:space:]]+) ]]; then
     return 0
   fi
 
   if [[ "$script_mode" == true ]]; then
-    network_pattern='(^|[/[:space:];|&()])(curl|wget|nc|ncat)([[:space:];|&()]|$)'
+    network_pattern="${token_left}(curl|wget|nc|ncat)${token_right}"
     [[ "$command" =~ $network_pattern ]] && return 0
   fi
 
@@ -255,6 +260,12 @@ if [[ -z "$tool_name" || "$tool_name" == *$'\n'* || "$tool_name" == *$'\r'* ]]; 
 fi
 
 normalized_tool=$(normalize_text "$tool_name")
+# XcodeBuildMCP is the only documented local-only MCP server required for
+# repository Xcode/Simulator work. Every other MCP server fails closed.
+if [[ "$normalized_tool" == mcp__* && "$normalized_tool" != mcp__xcodebuildmcp__?* ]]; then
+  deny
+  exit 0
+fi
 if [[ "$normalized_tool" == *github* || "$normalized_tool" == *supabase* ||
       "$normalized_tool" == *cloudflare* || "$normalized_tool" == *elevenlabs* ||
       "$normalized_tool" == *appstore* || "$normalized_tool" == *app-store* ||

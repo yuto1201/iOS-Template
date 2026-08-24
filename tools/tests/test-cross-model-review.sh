@@ -33,7 +33,18 @@ base_sha=$(git -C "$repo_root" rev-parse HEAD~1)
 artifact_issue="$repo_root/.artifacts/issues/$issue"
 artifact_root="$artifact_issue/$head_sha"
 artifact_sibling_lexical="$repo_root/.artifacts/issues/${issue}9"
-trap 'rm -rf "$workspace" "$artifact_issue" "$artifact_sibling_lexical"' EXIT
+cleanup_review_fixture() {
+  local pid_file pid
+  for pid_file in "$workspace"/*.pid; do
+    [[ -f "$pid_file" ]] || continue
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    kill -TERM "$pid" 2>/dev/null || true
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  rm -rf "$workspace" "$artifact_issue" "$artifact_sibling_lexical"
+}
+trap cleanup_review_fixture EXIT
 [[ ! -e "$artifact_issue" ]] || { echo "refusing to overwrite $artifact_issue" >&2; exit 1; }
 
 fake_bin="$workspace/bin"
@@ -225,16 +236,28 @@ reset_review_requested
 export FAKE_REVIEWER_MODE=hang
 export FAKE_REVIEWER_PID_FILE="$workspace/hanging-reviewer.pid"
 export FAKE_REVIEWER_SIGNAL_FILE="$workspace/hanging-reviewer.signal"
+export FAKE_REVIEWER_DESCENDANT_PID_FILE="$workspace/hanging-reviewer-descendant.pid"
+export FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE="$workspace/hanging-reviewer-descendant.signal"
 IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS=1 IOS_TEMPLATE_REVIEW_TERM_GRACE_SECONDS=1 \
-  assert_fails 'reviewer watchdog terminates a real hanging child and becomes blocked review' run_review
+  assert_fails 'reviewer watchdog terminates a real hanging process group and becomes blocked review' run_review
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:review"]'
 [[ "$(cat "$FAKE_REVIEWER_SIGNAL_FILE")" == TERM ]] || { echo 'hanging reviewer did not receive TERM' >&2; exit 1; }
+[[ "$(cat "$FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE")" == TERM ]] || { echo 'hanging reviewer descendant did not receive TERM' >&2; exit 1; }
 reviewer_pid=$(cat "$FAKE_REVIEWER_PID_FILE")
 if kill -0 "$reviewer_pid" 2>/dev/null; then
   echo 'hanging reviewer survived the watchdog' >&2
   exit 1
 fi
-unset FAKE_REVIEWER_PID_FILE FAKE_REVIEWER_SIGNAL_FILE
+reviewer_descendant_pid=$(cat "$FAKE_REVIEWER_DESCENDANT_PID_FILE")
+for _ in {1..20}; do
+  kill -0 "$reviewer_descendant_pid" 2>/dev/null || break
+  sleep 0.1
+done
+if kill -0 "$reviewer_descendant_pid" 2>/dev/null; then
+  echo 'hanging reviewer descendant survived the watchdog' >&2
+  exit 1
+fi
+unset FAKE_REVIEWER_PID_FILE FAKE_REVIEWER_SIGNAL_FILE FAKE_REVIEWER_DESCENDANT_PID_FILE FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE
 
 reset_review_requested
 export FAKE_REVIEWER_MODE=write

@@ -11,6 +11,12 @@ case "${FAKE_REVIEWER_MODE:?}" in
   timeout) exit 124 ;;
   hang)
     printf '%s\n' "$$" > "${FAKE_REVIEWER_PID_FILE:?}"
+    /bin/bash -c '
+      trap "" HUP
+      trap '\''printf "TERM\n" > "$FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE"; exit 0'\'' TERM
+      while :; do sleep 1; done
+    ' &
+    printf '%s\n' "$!" > "${FAKE_REVIEWER_DESCENDANT_PID_FILE:?}"
     trap 'printf "TERM\n" > "${FAKE_REVIEWER_SIGNAL_FILE:?}"; exit 0' TERM
     while :; do sleep 1; done
     ;;

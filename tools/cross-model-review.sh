@@ -106,12 +106,55 @@ if [[ "$primary" == codex ]]; then
     timeout_seconds = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "600"), 10)
     term_grace = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TERM_GRACE_SECONDS", "5"), 10)
     exit 2 unless (1..600).cover?(timeout_seconds) && (1..5).cover?(term_grace)
-    pid = Process.spawn(*command, in: File::NULL)
+    # A dedicated process group lets timeout cleanup reach reviewer descendants.
+    pid = Process.spawn(*command, in: File::NULL, pgroup: true)
     begin
       Timeout.timeout(timeout_seconds) { Process.wait(pid) }
     rescue Timeout::Error
-      Process.kill("TERM", pid) rescue nil
-      begin; Timeout.timeout(term_grace) { Process.wait(pid) }; rescue Timeout::Error; Process.kill("KILL", pid) rescue nil; Process.wait(pid) rescue nil; end
+      signal_group = lambda do |signal|
+        begin
+          Process.kill(signal, -pid)
+        rescue Errno::ESRCH
+          nil
+        end
+      end
+      group_alive = lambda do
+        begin
+          Process.kill(0, -pid)
+          true
+        rescue Errno::ESRCH
+          false
+        end
+      end
+      child_reaped = false
+      signal_group.call("TERM")
+      begin
+        Timeout.timeout(term_grace) do
+          loop do
+            begin
+              child_reaped ||= !Process.waitpid(pid, Process::WNOHANG).nil?
+            rescue Errno::ECHILD
+              child_reaped = true
+            end
+            break unless group_alive.call
+            sleep 0.05
+          end
+        end
+      rescue Timeout::Error
+        signal_group.call("KILL")
+      end
+      unless child_reaped
+        begin
+          Process.wait(pid)
+        rescue Errno::ECHILD
+          nil
+        end
+      end
+      if group_alive.call
+        signal_group.call("KILL")
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 1
+        sleep 0.05 while group_alive.call && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+      end
       exit 124
     end
     exit($?.exitstatus || 1)

@@ -54,7 +54,7 @@ workflow_require_sealed_issue_operation() {
     IOSTemplate::IssueContract.validate_snapshot!(value, issue: Integer(issue), repository: repo)
     abort "sealed Issue contract is not canonical" unless bytes == IOSTemplate::IssueContract.canonical_json(value)
     abort "required external operation is not declared: #{operation}" unless IOSTemplate::IssueContract.operation_declared?(value, operation)
-  ' "$contract" "$issue" "$repo" "$operation"
+  ' "$contract" "$issue" "$repo" "$operation" || return 1
   local state_file="$repo_root/.artifacts/issues/$issue/state.json"
   if [[ -f "$state_file" && ! -L "$state_file" ]]; then
     local expected_digest actual_digest
@@ -65,13 +65,20 @@ workflow_require_sealed_issue_operation() {
 }
 
 workflow_require_issue_operation() {
-  local repo_root=$1 repo=$2 issue=$3 issue_json=$4 operation=$5 state
-  state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
-  if [[ "${WORKFLOW_USE_LIVE_ISSUE_CONTRACT:-0}" == 1 || "$state" == proposed || "$state" == approved ]]; then
-    workflow_require_live_issue_operation "$repo_root" "$repo" "$issue" "$issue_json" "$operation"
-  else
-    workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation"
-  fi
+  local repo_root=$1 repo=$2 issue=$3 issue_json=$4 operation=$5 authorization=${6:-sealed} state
+  case "$authorization" in
+    sealed)
+      workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation"
+      ;;
+    approved-to-claimed)
+      state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
+      [[ "$state" == approved || "$state" == claimed ]] || return 1
+      workflow_require_live_issue_operation "$repo_root" "$repo" "$issue" "$issue_json" "$operation"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 # A linked Issue worktree executes at its own Git Head, while durable evidence

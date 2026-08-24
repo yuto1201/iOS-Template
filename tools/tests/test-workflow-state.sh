@@ -117,6 +117,10 @@ assert_json() {
 }
 
 cd "$repo_root"
+mkdir -p "$artifact_issue"
+ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+  --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > "$artifact_issue/issue-contract.json"
 
 # A wrong account must prevent the preflight artifact from being written.
 export FAKE_GH_LOGIN=company-account
@@ -134,8 +138,8 @@ assert_fails 'repository owner mismatch is rejected' "$repo_root/tools/github-ac
 unset FAKE_GH_REPO_OWNER
 
 # Every authenticated Issue read has a fresh exact personal-account/repository
-# preflight and requires github.read_issue in the live contract. A mutation also
-# requires github.update_issue before its first edit.
+# preflight. Outside the exact approved -> claimed path, authorization comes
+# from the sealed contract rather than an ambient live-body switch.
 : > "$FAKE_GH_LOG"
 "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
 ruby -e '
@@ -148,7 +152,7 @@ cp "$FAKE_GH_ISSUE_BODY" "$workspace/issue-body-valid.md"
 ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.read_issue\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n/, ""); File.write(path,text)' "$FAKE_GH_ISSUE_BODY"
 rm -f ".artifacts/issues/$test_issue/state.json"
 : > "$FAKE_GH_LOG"
-assert_fails 'Issue read without github.read_issue declaration is rejected' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+assert_fails 'approved to claimed requires github.read_issue in the live contract' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
 ! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
 cp "$workspace/issue-body-valid.md" "$FAKE_GH_ISSUE_BODY"
 
@@ -237,6 +241,27 @@ cat > ".artifacts/issues/$test_issue/state.json" <<EOF
 EOF
 printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+
+# An attacker-controlled environment variable must not switch any post-Claim
+# transition back to the mutable live Issue body. The live body authorizes the
+# mutation, while this sealed contract intentionally does not.
+cp ".artifacts/issues/$test_issue/issue-contract.json" "$workspace/contract-before-ambient-env.json"
+cp ".artifacts/issues/$test_issue/state.json" "$workspace/state-before-ambient-env.json"
+cp "$FAKE_GH_ISSUE_BODY" "$workspace/sealed-read-only-body.md"
+ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.update_issue\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n?/, ""); File.write(path,text)' "$workspace/sealed-read-only-body.md"
+ruby "$repo_root/tools/lib/issue-contract.rb" --body "$workspace/sealed-read-only-body.md" --type feature --format contract \
+  --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > ".artifacts/issues/$test_issue/issue-contract.json"
+assert_json ".artifacts/issues/$test_issue/issue-contract.json" 'abort if JSON.parse(File.read(ARGV[0])).fetch("externalOperations").include?("github.update_issue")'
+restricted_contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' ".artifacts/issues/$test_issue/issue-contract.json")"
+DIGEST="$restricted_contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value.fetch("issueContract")["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' ".artifacts/issues/$test_issue/state.json"
+: > "$FAKE_GH_LOG"
+WORKFLOW_USE_LIVE_ISSUE_CONTRACT=1 assert_fails 'ambient live-contract variable cannot authorize a later transition' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from claimed --to in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:claimed"]'
+! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
+cp "$workspace/contract-before-ambient-env.json" ".artifacts/issues/$test_issue/issue-contract.json"
+cp "$workspace/state-before-ambient-env.json" ".artifacts/issues/$test_issue/state.json"
+
 assert_fails 'Head argument is forbidden outside in-progress to verify-passed' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from claimed --to in-progress --head-sha "$head_sha"
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from claimed --to in-progress >/dev/null
 

@@ -30,13 +30,22 @@ else
     [[ -z "$head_sha" ]] || { echo '--head-sha is allowed only for in-progress -> verify-passed' >&2; exit 1; }
   fi
 fi
+issue_contract_authorization=sealed
+if [[ "$command" == transition && "$from" == approved && "$to" == claimed ]]; then
+  # This non-exported mode is the sole live-contract authorization path.
+  issue_contract_authorization=approved-to-claimed
+fi
 
 read_issue() {
   local document
   workflow_github_preflight "$repo_root" "$repo" "$issue" github.read_issue || { echo 'GitHub account preflight failed before Issue read' >&2; exit 1; }
   document=$(gh issue view "$issue" --repo "$repo" --json title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
-  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$document" github.read_issue || { echo 'Issue contract does not authorize Issue reads' >&2; exit 1; }
+  require_issue_operation "$document" github.read_issue || { echo 'Issue contract does not authorize Issue reads' >&2; exit 1; }
   printf '%s\n' "$document"
+}
+require_issue_operation() {
+  local document=$1 operation=$2
+  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$document" "$operation" "$issue_contract_authorization"
 }
 state_from_issue() {
   local document=$1 state
@@ -56,11 +65,6 @@ issue_json=$(read_issue)
 current=$(state_from_issue "$issue_json")
 expected_owner=$(ruby -ne 'puts $1 if /^\s*login:\s*([A-Za-z0-9-]+)\s*$/' "$repo_root/Config/ownership.yml")
 [[ -n "$expected_owner" ]] || { echo 'configured GitHub login is missing' >&2; exit 1; }
-if [[ "$command" == transition && "$current" == approved && "$from" == approved && "$to" == claimed ]]; then
-  # Claim has already validated the exact live body and may be publishing its
-  # sealed snapshot while this compare-and-set crosses the remote boundary.
-  export WORKFLOW_USE_LIVE_ISSUE_CONTRACT=1
-fi
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 state_file="$repo_root/.artifacts/issues/$issue/state.json"
 prepare_state() {
@@ -115,13 +119,13 @@ write_state() {
 }
 mutate_labels() {
   local document=$1 remove=$2 add=$3
-  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$document" github.update_issue || { echo 'Issue contract does not authorize Issue state mutation' >&2; exit 1; }
+  require_issue_operation "$document" github.update_issue || { echo 'Issue contract does not authorize Issue state mutation' >&2; exit 1; }
   workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || { echo 'GitHub account preflight failed before Issue mutation' >&2; exit 1; }
   gh issue edit "$issue" --repo "$repo" --remove-label "$remove" --add-label "$add"
 }
 post_marker() {
   local document=$1 marker=$2
-  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$document" github.update_issue || { echo 'Issue contract does not authorize Issue state comment' >&2; exit 1; }
+  require_issue_operation "$document" github.update_issue || { echo 'Issue contract does not authorize Issue state comment' >&2; exit 1; }
   workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || { echo 'GitHub account preflight failed before Issue comment' >&2; exit 1; }
   gh issue comment "$issue" --repo "$repo" --body "$marker"
 }
@@ -188,7 +192,7 @@ if [[ -e "$pending_path" || -L "$pending_path" ]]; then
 else
   [[ "$current" == "$from" ]] || { echo "compare-and-set failed: expected state:$from, found state:$current" >&2; exit 1; }
   preauthorized_from_document=$(require_current_state "$from")
-  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$preauthorized_from_document" github.update_issue || { echo 'Issue contract does not authorize Issue state mutation' >&2; exit 1; }
+  require_issue_operation "$preauthorized_from_document" github.update_issue || { echo 'Issue contract does not authorize Issue state mutation' >&2; exit 1; }
   workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || { echo 'GitHub account preflight failed before Issue mutation' >&2; exit 1; }
   pending=$(ruby "$json_tool" state-transition-pending "$issue" "$repo" "$from" "$to" "$resume_state" "$timestamp" "${head_sha:-null}")
   write_pending "$pending"
