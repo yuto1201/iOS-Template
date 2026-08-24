@@ -177,7 +177,7 @@ if [[ "$primary" == codex ]]; then
       exit 124
     end
     exit($?.exitstatus || 1)
-  ' claude --print --output-format json --no-session-persistence --allowedTools Read --allowedTools Glob --allowedTools Grep "$instruction
+  ' claude --print --output-format json --no-session-persistence --allowedTools Read --allowedTools Glob --allowedTools Grep -- "$instruction
 Validated review packet: $packet_absolute" </dev/null > "$raw_output"; then
     :
   else
