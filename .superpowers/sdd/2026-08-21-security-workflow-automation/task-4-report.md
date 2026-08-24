@@ -31,3 +31,35 @@
 ## Concerns
 
 - If the GitHub transition succeeds but `git worktree add` subsequently fails for an unexpected local Git error, the durable Issue state is `claimed` while Resume intentionally fails closed rather than guessing a worktree. This is observable and recoverable by resolving the local conflict; no existing worktree or Branch is removed automatically.
+
+---
+
+## Fix round 1: canonical resume candidates and latest-marker validation
+
+### Implementation
+
+- `resume-issue.sh` now uses the exact Claim ASCII title-to-slug normalization before accepting Branch or worktree facts. Only `codex|claude/<issue>-<current-slug>` and `.worktrees/<issue>-<current-slug>` qualify; a stale-title candidate is `blocked:conflict`.
+- Resume selects the latest comment containing an `ios-template-state` marker and requires exactly one structurally valid marker in it. A newer mismatched, malformed, or duplicate marker therefore fails closed instead of allowing an older convenient marker.
+- Resume verifies that the marker target equals the current label, the `from -> to` edge is in `workflow_transition_allowed`, and blocked/paused marker resume state follows the same recovery rules as the state-transition tool.
+
+### TDD evidence
+
+- RED command: `bash tools/tests/test-claim-resume.sh`
+- RED output: `expected failure: resume rejects a stale-title Branch and worktree`.
+- GREEN command: `bash tools/tests/test-claim-resume.sh`
+- GREEN output: `PASS: deterministic Issue claim, idempotency, conflict refusal, dirty-main preservation, and marker-based resume`.
+
+### Covering verification
+
+- `bash tools/tests/test-claim-resume.sh` — PASS, including stale slug, newer marker mismatch masking an older match, malformed newest marker, duplicate newest markers, invalid `done -> claimed` marker, dirty-main preservation, idempotency, and duplicate remote tracking ref behavior.
+- `bash tools/tests/test-workflow-state.sh` — PASS: `PASS: GitHub preflight, durable state transitions, and fixed Codex operation transport`.
+- `bash tools/tests/test-issue-contract.sh` — PASS: `PASS: Issue forms, Definition of Ready validator, PR template, labels, and Codex label sync`.
+- `bash -n tools/claim-issue.sh tools/resume-issue.sh tools/tests/test-claim-resume.sh` — PASS.
+- `git diff --check` — PASS.
+
+### Self-review
+
+- Verified Resume does not accept any wildcard Issue Branch or worktree after a title rename.
+- Verified a comment later than the valid Claim marker cannot be ignored merely because it is malformed or references another state.
+- Verified workflow legality is checked after structural validation and before any local state-file write.
+- The deferred `type:docs` / `type:release` Minor remains unchanged, as requested.

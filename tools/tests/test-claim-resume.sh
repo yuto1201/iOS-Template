@@ -63,7 +63,7 @@ case "${1:-} ${2:-}" in
     printf '%s\n' '{"nameWithOwner":"yuto1201/iOS-Template","defaultBranchRef":{"name":"main"},"url":"https://github.com/yuto1201/iOS-Template"}'
     ;;
   'issue view')
-    ruby -rjson -e 'puts JSON.generate({"title" => "Settings screen", "body" => File.read(ENV.fetch("FAKE_GH_ISSUE_BODY")), "labels" => JSON.parse(File.read(ENV.fetch("FAKE_GH_LABELS_FILE"))).map { |name| {"name" => name} }, "comments" => JSON.parse(File.read(ENV.fetch("FAKE_GH_COMMENTS_FILE")))})'
+    ruby -rjson -e 'puts JSON.generate({"title" => ENV.fetch("FAKE_GH_ISSUE_TITLE", "Settings screen"), "body" => File.read(ENV.fetch("FAKE_GH_ISSUE_BODY")), "labels" => JSON.parse(File.read(ENV.fetch("FAKE_GH_LABELS_FILE"))).map { |name| {"name" => name} }, "comments" => JSON.parse(File.read(ENV.fetch("FAKE_GH_COMMENTS_FILE")))})'
     ;;
   'issue edit')
     remove='' add=''
@@ -193,9 +193,32 @@ rm "$clone/.artifacts/issues/42/state.json"
 cmp -s "$claim_result" "$workspace/resume.json"
 [[ -f "$clone/.artifacts/issues/42/state.json" ]]
 
+cp "$comments_file" "$workspace/claim-comments.json"
+
+# Resume must rebuild the canonical candidate names from the current title and
+# must reject only the newest transition marker when it is not usable.
+export FAKE_GH_ISSUE_TITLE='Renamed Settings screen'
+assert_fails 'resume rejects a stale-title Branch and worktree' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+unset FAKE_GH_ISSUE_TITLE
+
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"claimed\",\"resumeState\":null,\"timestamp\":\"2026-08-24T00:00:01Z\",\"to\":\"in-progress\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
+assert_fails 'resume rejects a newer marker whose state disagrees with the label' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+cp "$workspace/claim-comments.json" "$comments_file"
+
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"approved\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
+assert_fails 'resume rejects a malformed newest marker' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+cp "$workspace/claim-comments.json" "$comments_file"
+
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); marker = "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"approved\",\"resumeState\":null,\"timestamp\":\"2026-08-24T00:00:02Z\",\"to\":\"claimed\"} -->"; comments << {"body" => "#{marker}\n#{marker}"}; File.write(path, JSON.generate(comments))' "$comments_file"
+assert_fails 'resume rejects duplicate newest markers' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+cp "$workspace/claim-comments.json" "$comments_file"
+
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"done\",\"resumeState\":null,\"timestamp\":\"2026-08-24T00:00:03Z\",\"to\":\"claimed\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
+assert_fails 'resume rejects an invalid workflow transition marker' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+cp "$workspace/claim-comments.json" "$comments_file"
+
 # Resume refuses an absent marker and a second Issue branch without attempting a
 # GitHub transition or changing the existing canonical worktree.
-cp "$comments_file" "$workspace/claim-comments.json"
 printf '%s' '[]' > "$comments_file"
 assert_fails 'resume requires a state-transition marker' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
 assert_json "$labels_file" 'abort unless JSON.parse(File.read(ARGV[0])) == ["type:feature", "state:claimed"]'

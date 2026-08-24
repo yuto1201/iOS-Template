@@ -15,6 +15,14 @@ done
 [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$issue" =~ ^[1-9][0-9]*$ ]] || usage
 
 blocked() { echo "blocked:conflict: $*" >&2; exit 1; }
+canonical_title_slug() {
+  ruby -e '
+    title = ARGV.fetch(0).encode("ASCII", invalid: :replace, undef: :replace, replace: "")
+    slug = title.downcase.gsub(/[^a-z0-9]+/, "-").gsub(/\A-+|-+\z/, "").gsub(/-+/, "-")
+    abort "Issue title has no ASCII branch slug" if slug.empty?
+    puts slug
+  ' "$1"
+}
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" >/dev/null
 issue_json=$(gh issue view "$issue" --repo "$repo" --json title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
 
@@ -28,32 +36,46 @@ marker=$(printf '%s' "$issue_json" | ruby -rjson -e '
   document.fetch("comments").reverse_each do |comment|
     body = comment.is_a?(Hash) ? comment["body"] : nil
     next unless body.is_a?(String)
-    matches = body.scan(/<!-- ios-template-state (\{.*?\}) -->/m)
-    next if matches.empty?
-    candidates = matches.map do |match|
-      begin
-        value = JSON.parse(match.fetch(0))
-        value if value.is_a?(Hash) && value.keys.sort == %w[executor from resumeState timestamp to] && value["executor"] == "codex" && value["from"].is_a?(String) && value["to"] == current && (value["resumeState"].nil? || value["resumeState"].is_a?(String)) && value["timestamp"].is_a?(String)
-      rescue JSON::ParserError
-        nil
-      end
-    end.compact
-    abort "multiple current-state markers in one comment" if candidates.length > 1
-    next if candidates.empty?
-    found = candidates.fetch(0)
+    next unless body.include?("<!-- ios-template-state")
+    matches = body.scan(/<!-- ios-template-state (.*?) -->/m)
+    abort "latest state-transition marker is malformed or ambiguous" unless matches.length == 1
+    begin
+      value = JSON.parse(matches.fetch(0).fetch(0))
+    rescue JSON::ParserError
+      abort "latest state-transition marker is malformed or ambiguous"
+    end
+    abort "latest state-transition marker is malformed or ambiguous" unless value.is_a?(Hash) && value.keys.sort == %w[executor from resumeState timestamp to] && value["executor"] == "codex" && value["from"].is_a?(String) && value["to"].is_a?(String) && (value["resumeState"].nil? || value["resumeState"].is_a?(String)) && value["timestamp"].is_a?(String)
+    found = value
     break
   end
   abort "no current-state transition marker" unless found
-  puts JSON.generate({"state" => current, "previousState" => found.fetch("from"), "resumeState" => found.fetch("resumeState")})
+  puts JSON.generate({"state" => current, "from" => found.fetch("from"), "to" => found.fetch("to"), "resumeState" => found.fetch("resumeState")})
 ') || blocked 'required state-transition marker is missing or ambiguous'
 state=$(printf '%s' "$marker" | jq -er '.state')
 workflow_is_state "$state" || blocked 'Issue has an unknown current state label'
+marker_from=$(printf '%s' "$marker" | jq -er '.from')
+marker_to=$(printf '%s' "$marker" | jq -er '.to')
+resume_state=$(printf '%s' "$marker" | jq -c '.resumeState')
+[[ "$marker_to" == "$state" ]] || blocked 'latest state-transition marker does not match the current Issue state'
+workflow_is_state "$marker_from" && workflow_is_state "$marker_to" && workflow_transition_allowed "$marker_from" "$marker_to" || blocked 'state-transition marker is not a legal workflow transition'
+if workflow_is_blocked "$marker_from" || [[ "$marker_from" == paused ]]; then
+  if [[ "$marker_to" != paused && "$marker_to" != superseded ]]; then
+    [[ "$resume_state" != null && "$marker_to" == "$resume_state" ]] || blocked 'state-transition marker has an invalid blocked or paused resume state'
+  fi
+fi
+if workflow_is_blocked "$marker_to" || [[ "$marker_to" == paused ]]; then
+  [[ "$resume_state" == "\"$marker_from\"" ]] || blocked 'state-transition marker has an invalid blocked or paused resume state'
+fi
+
+title=$(printf '%s' "$issue_json" | ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("title")')
+slug=$(canonical_title_slug "$title")
+worktree_relative=".worktrees/$issue-$slug"
 
 branches=()
 while IFS= read -r ref; do
   branch=$ref
   [[ "$branch" == origin/* ]] && branch=${branch#origin/}
-  [[ "$branch" =~ ^(codex|claude)/${issue}-[a-z0-9][a-z0-9-]*$ ]] && branches+=("$branch")
+  [[ "$branch" =~ ^(codex|claude)/${issue}-${slug}$ ]] && branches+=("$branch")
 done < <(git -C "$repo_root" for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin)
 unique_branches=$(printf '%s\n' "${branches[@]:-}" | sed '/^$/d' | sort -u)
 [[ $(printf '%s\n' "$unique_branches" | sed '/^$/d' | wc -l | tr -d ' ') == 1 ]] || blocked 'expected exactly one local or remote Issue branch candidate'
@@ -76,17 +98,14 @@ while IFS= read -r line; do
       ;;
   esac
 done < <(git -C "$repo_root" worktree list --porcelain)
-[[ "$worktree_count" == 1 && "$worktree_path" == "$repo_root/.worktrees/${issue}-"* ]] || blocked 'expected exactly one canonical Issue worktree candidate'
+[[ "$worktree_count" == 1 && "$worktree_path" == "$repo_root/$worktree_relative" ]] || blocked 'expected exactly one canonical Issue worktree candidate'
 worktree_relative=${worktree_path#"$repo_root/"}
 base_sha=$(git -C "$repo_root" merge-base "$branch" origin/main) || blocked 'cannot reconstruct Base SHA from Branch and origin/main'
 contract_path="$repo_root/.artifacts/issues/$issue/issue-contract.json"
 [[ -f "$contract_path" && ! -L "$contract_path" ]] || blocked 'canonical Issue contract is missing'
 contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$contract_path")"
 agent=${branch%%/*}
-previous_state=$(printf '%s' "$marker" | jq -er '.previousState')
-resume_state=$(printf '%s' "$marker" | jq -c '.resumeState')
-workflow_is_state "$previous_state" || blocked 'state-transition marker has an invalid previous state'
-if [[ "$resume_state" != null ]]; then workflow_is_state "$resume_state" || blocked 'state-transition marker has an invalid resume state'; fi
+previous_state=$marker_from
 
 ruby -rjson -e '
   def canonical(value)
