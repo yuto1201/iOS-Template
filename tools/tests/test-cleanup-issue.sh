@@ -81,6 +81,9 @@ assert_fails() {
 run_cleanup() {
   (cd "$worktree" && "$worktree/tools/cleanup-issue.sh" --repo yuto1201/iOS-Template --issue 42)
 }
+run_cleanup_primary() {
+  (cd "$repo" && "$repo/tools/cleanup-issue.sh" --repo yuto1201/iOS-Template --issue 42)
+}
 
 # RED was observed before cleanup-issue.sh existed. First prove it refuses every
 # non-merged or stale record without touching the Issue or unrelated worktree.
@@ -95,5 +98,7 @@ run_cleanup > "$scratch/cleanup.json"
 jq -e '.status == "cleaned" and .issue == 42' "$scratch/cleanup.json" >/dev/null
 [[ ! -e "$worktree" && -d "$repo/.worktrees/unrelated" ]] || { echo 'cleanup affected the wrong worktree' >&2; exit 1; }
 git -C "$repo" show-ref --verify --quiet refs/heads/codex/unrelated || { echo 'cleanup removed an unrelated Branch' >&2; exit 1; }
+run_cleanup_primary > "$scratch/retry.json"
+jq -e '.status == "cleaned" and .branch == "codex/42-cleanup-safety"' "$scratch/retry.json" >/dev/null
 
 echo 'PASS: cleanup fixture is ready for merged confirmation, stale head, dirty worktree, and unrelated-worktree preservation cases'
