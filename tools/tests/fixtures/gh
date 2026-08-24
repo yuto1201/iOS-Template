@@ -57,6 +57,10 @@ if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
 fi
 
 if [[ "${1:-}" == "issue" && "${2:-}" == "edit" ]]; then
+  if [[ "${FAKE_GH_EDIT_FAIL:-0}" == "1" ]]; then
+    printf 'injected Issue edit failure\n' >&2
+    exit 1
+  fi
   labels_file=${FAKE_GH_LABELS_FILE:?FAKE_GH_LABELS_FILE is required}
   shift 2
   remove='' add=''

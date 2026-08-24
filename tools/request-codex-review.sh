@@ -72,12 +72,15 @@ trap 'rm -rf "$review_home"' EXIT
 ruby -rtimeout - "$review_home" "$review_bin" "$review_codex_home" "$codex_bin" --ask-for-approval never exec --ignore-user-config --ignore-rules --strict-config -c 'default_permissions="reviewer"' -c 'permissions.reviewer.extends=":read-only"' -c "$filesystem_profile" -c 'permissions.reviewer.network={enabled=false}' -c 'mcp_servers={}' -c 'features.web_search=false' -c 'features.plugins=false' -c 'features.apps=false' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'shell_environment_policy.inherit="none"' --ephemeral -- "$prompt" <<'RUBY'
   review_home, review_bin, codex_home, *command = ARGV
   environment = {"PATH" => "#{review_bin}:/bin", "HOME" => review_home, "CODEX_HOME" => codex_home, "LANG" => "C", "LC_ALL" => "C"}
+  timeout_seconds = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "600"), 10)
+  term_grace = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TERM_GRACE_SECONDS", "5"), 10)
+  exit 2 unless (1..600).cover?(timeout_seconds) && (1..5).cover?(term_grace)
   pid = Process.spawn(environment, *command, in: File::NULL, unsetenv_others: true)
   begin
-    Timeout.timeout(600) { Process.wait(pid) }
+    Timeout.timeout(timeout_seconds) { Process.wait(pid) }
   rescue Timeout::Error
     Process.kill("TERM", pid) rescue nil
-    begin; Timeout.timeout(5) { Process.wait(pid) }; rescue Timeout::Error; Process.kill("KILL", pid) rescue nil; Process.wait(pid) rescue nil; end
+    begin; Timeout.timeout(term_grace) { Process.wait(pid) }; rescue Timeout::Error; Process.kill("KILL", pid) rescue nil; Process.wait(pid) rescue nil; end
     exit 124
   end
   exit($?.exitstatus || 1)

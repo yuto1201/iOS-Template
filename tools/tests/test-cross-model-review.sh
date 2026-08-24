@@ -70,9 +70,13 @@ assert_fails() {
   fi
 }
 
-cat > "$artifact_issue/issue-contract.json" <<'JSON'
-{"schemaVersion":1,"issue":424243,"repository":"yuto1201/iOS-Template","goal":"Review automation","specAnchors":["specs/acceptance.md#1"],"fetchedAt":"2026-08-24T00:00:00Z","dependencies":[],"externalOperations":[],"acceptanceCriteria":[{"id":"AC-1","text":"A result is tied to the reviewed Head"}]}
-JSON
+ruby -rjson -e '
+  def canonical(value)
+    value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value.is_a?(Array) ? value.map { |entry| canonical(entry) } : value
+  end
+  value = {"schemaVersion" => 1, "issue" => 424243, "repository" => "yuto1201/iOS-Template", "goal" => "Review automation", "specAnchors" => ["specs/acceptance.md#1"], "fetchedAt" => "2026-08-24T00:00:00Z", "dependencies" => [], "externalOperations" => ["github.read_issue", "github.update_issue"], "externalOperationDetailsDigest" => "sha256:6d9186ad00006772ce084a4e31fc52313470939dc1b4d978ed6fe10858a9be1f", "acceptanceCriteria" => [{"id" => "AC-1", "text" => "A result is tied to the reviewed Head"}]}
+  File.binwrite(ARGV.fetch(0), JSON.generate(canonical(value)))
+' "$artifact_issue/issue-contract.json"
 contract_digest=$(digest "$artifact_issue/issue-contract.json")
 printf 'diff\n' > "$artifact_root/review.diff"
 printf 'image\n' > "$artifact_root/iphone-en.png"
@@ -123,6 +127,9 @@ set_anchor() {
   ANCHOR="$review_anchor" CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -e 'path = ENV.fetch("CONTRACT"); value = JSON.parse(File.read(path)); value["specAnchors"] = [ENV.fetch("ANCHOR")]; File.write(path, JSON.generate(value))'
   contract_digest=$(digest "$artifact_issue/issue-contract.json")
   DIGEST="$contract_digest" VERIFY="$artifact_root/verify.json" ruby -rjson -e 'path = ENV.fetch("VERIFY"); value = JSON.parse(File.read(path)); value.fetch("issueContract")["digest"] = ENV.fetch("DIGEST"); File.write(path, JSON.generate(value))'
+  if [[ -f "$artifact_issue/state.json" ]]; then
+    DIGEST="$contract_digest" STATE="$artifact_issue/state.json" ruby -rjson -e 'path = ENV.fetch("STATE"); value = JSON.parse(File.binread(path)); value.fetch("issueContract")["digest"] = ENV.fetch("DIGEST"); File.binwrite(path, JSON.generate(value))'
+  fi
 }
 
 write_result() {
@@ -142,6 +149,27 @@ run_review() {
 
 clear_published_review() {
   rm -f "$artifact_root/review.json" "$artifact_root/review-receipt.json"
+}
+
+reset_review_requested() {
+  clear_published_review
+  rm -f "$artifact_issue/state-transition.pending.json"
+  ISSUE="$issue" BASE="$base_sha" HEAD="$head_sha" DIGEST="$contract_digest" STATE="$artifact_issue/state.json" ruby -rjson -e '
+    value = {
+      "schemaVersion" => 1, "issue" => ENV.fetch("ISSUE").to_i,
+      "repository" => "yuto1201/iOS-Template",
+      "branch" => "codex/#{ENV.fetch("ISSUE")}-review-fixture",
+      "worktree" => ".worktrees/#{ENV.fetch("ISSUE")}-review-fixture",
+      "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"),
+      "primaryImplementer" => "codex",
+      "issueContract" => {"path" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/issue-contract.json", "digest" => ENV.fetch("DIGEST")},
+      "state" => "review-requested", "previousState" => "verify-passed",
+      "resumeState" => nil, "executor" => "codex"
+    }
+    File.binwrite(ENV.fetch("STATE"), JSON.generate(value))
+  '
+  printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+  printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 }
 
 script_launcher_bin="$workspace/script-launcher"
@@ -164,15 +192,13 @@ ISSUE="$issue" HEAD="$head_sha" PACKET_DIGEST="$(digest "$artifact_root/review-p
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
 [[ "$(cat "$FAKE_REVIEWER_LOG")" == *"--print"* ]] || { echo 'Claude was not invoked noninteractively' >&2; exit 1; }
 
-clear_published_review
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+reset_review_requested
 export FAKE_REVIEWER_MODE=envelope
 write_result approved
 run_review
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value.keys.sort == %w[acceptanceAssessment baseSha findings headSha issue issueContractDigest reviewedAt reviewerModel schemaVersion verdict verifySha].sort'
 
-clear_published_review
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+reset_review_requested
 : > "$FAKE_REVIEWER_LOG"
 export FAKE_REVIEWER_MODE=changes
 write_result changes-requested
@@ -180,8 +206,7 @@ run_review
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["verdict"] == "changes-requested" && value["findings"].length == 1'
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:changes-requested"]'
 
-clear_published_review
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+reset_review_requested
 export FAKE_REVIEWER_MODE=malformed
 printf '{not json' > "$workspace/result.json"
 export FAKE_REVIEWER_RESULT="$workspace/result.json"
@@ -189,22 +214,29 @@ assert_fails 'malformed reviewer JSON is rejected' run_review
 [[ ! -e "$artifact_root/review.json" ]]
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:review-requested"]'
 
-clear_published_review
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+reset_review_requested
 export FAKE_REVIEWER_MODE=mismatch
 write_result approved
 HEAD="$head_sha" RESULT="$workspace/result.json" ruby -rjson -e 'path = ENV.fetch("RESULT"); value = JSON.parse(File.read(path)); value["headSha"] = "0" * 40; File.write(path, JSON.generate(value))'
 assert_fails 'mismatched reviewer Head SHA is rejected' run_review
 [[ ! -e "$artifact_root/review.json" ]]
 
-clear_published_review
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
-export FAKE_REVIEWER_MODE=timeout
-assert_fails 'reviewer timeout becomes blocked review' run_review
+reset_review_requested
+export FAKE_REVIEWER_MODE=hang
+export FAKE_REVIEWER_PID_FILE="$workspace/hanging-reviewer.pid"
+export FAKE_REVIEWER_SIGNAL_FILE="$workspace/hanging-reviewer.signal"
+IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS=1 IOS_TEMPLATE_REVIEW_TERM_GRACE_SECONDS=1 \
+  assert_fails 'reviewer watchdog terminates a real hanging child and becomes blocked review' run_review
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:review"]'
+[[ "$(cat "$FAKE_REVIEWER_SIGNAL_FILE")" == TERM ]] || { echo 'hanging reviewer did not receive TERM' >&2; exit 1; }
+reviewer_pid=$(cat "$FAKE_REVIEWER_PID_FILE")
+if kill -0 "$reviewer_pid" 2>/dev/null; then
+  echo 'hanging reviewer survived the watchdog' >&2
+  exit 1
+fi
+unset FAKE_REVIEWER_PID_FILE FAKE_REVIEWER_SIGNAL_FILE
 
-clear_published_review
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+reset_review_requested
 export FAKE_REVIEWER_MODE=write
 export FAKE_REVIEWER_WRITE_PATH="$artifact_root/reviewer-write.txt"
 write_result approved
@@ -213,8 +245,7 @@ assert_fails 'reviewer write attempt is rejected' run_review
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:review-requested"]'
 unset FAKE_REVIEWER_WRITE_PATH
 
-clear_published_review
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+reset_review_requested
 set_anchor external-attempt
 write_packet claude codex
 export GH_TOKEN=must-not-reach-reviewer
@@ -224,13 +255,12 @@ unset GH_TOKEN SUPABASE_ACCESS_TOKEN
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["reviewerModel"] == "codex" && value["verdict"] == "approved"'
 assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["primaryModel"] == "claude" && value["reviewerModel"] == "codex" && value["reviewerLauncher"] == "tools/request-codex-review.sh"'
 
-clear_published_review
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+reset_review_requested
 set_anchor 'specs/acceptance.md#1'
 write_packet claude codex
-export FAKE_GH_ISSUE_MISSING=1
+export FAKE_GH_EDIT_FAIL=1
 assert_fails 'transition failure leaves a reusable canonical review' run_review claude
-unset FAKE_GH_ISSUE_MISSING
+unset FAKE_GH_EDIT_FAIL
 [[ -f "$artifact_root/review.json" ]]
 cp "$repo_root/tools/tests/fixtures/cross-model-review/codex-must-not-run" "$fake_bin/codex"
 chmod +x "$fake_bin/codex"

@@ -103,12 +103,15 @@ if [[ "$primary" == codex ]]; then
   instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. Return only one JSON object conforming exactly to docs/agent-contracts/review-packet.md Result schema, including the exact reviewPacketDigest from the schema v2 packet bytes.'
   if ruby -rtimeout -e '
     command = ARGV
+    timeout_seconds = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "600"), 10)
+    term_grace = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TERM_GRACE_SECONDS", "5"), 10)
+    exit 2 unless (1..600).cover?(timeout_seconds) && (1..5).cover?(term_grace)
     pid = Process.spawn(*command, in: File::NULL)
     begin
-      Timeout.timeout(600) { Process.wait(pid) }
+      Timeout.timeout(timeout_seconds) { Process.wait(pid) }
     rescue Timeout::Error
       Process.kill("TERM", pid) rescue nil
-      begin; Timeout.timeout(5) { Process.wait(pid) }; rescue Timeout::Error; Process.kill("KILL", pid) rescue nil; Process.wait(pid) rescue nil; end
+      begin; Timeout.timeout(term_grace) { Process.wait(pid) }; rescue Timeout::Error; Process.kill("KILL", pid) rescue nil; Process.wait(pid) rescue nil; end
       exit 124
     end
     exit($?.exitstatus || 1)
