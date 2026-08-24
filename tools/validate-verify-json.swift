@@ -16,6 +16,10 @@ struct ValidationFailure: Error, CustomStringConvertible {
 
 typealias JSONObject = [String: Any]
 var heldValidatedCandidateFileDescriptor: Int32?
+// The repository descriptor is always the physical Issue worktree.  A separate
+// descriptor is registered only for its canonical artifact store so helpers
+// cannot accidentally traverse the worktree's `.artifacts` symlink.
+var artifactRootDescriptors: [Int32: Int32] = [:]
 
 let shaPattern = try! NSRegularExpression(pattern: "^[0-9a-f]{40}$")
 let digestPattern = try! NSRegularExpression(pattern: "^sha256:[0-9a-f]{64}$")
@@ -201,18 +205,27 @@ func readBoundRegularFile(
     components: [String],
     at path: String
 ) throws -> Data {
-    guard !components.isEmpty,
-          components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/") }) else {
+    let boundRoot: Int32
+    let boundComponents: [String]
+    if components.first == ".artifacts", let artifactRoot = artifactRootDescriptors[rootFileDescriptor] {
+        boundRoot = artifactRoot
+        boundComponents = Array(components.dropFirst())
+    } else {
+        boundRoot = rootFileDescriptor
+        boundComponents = components
+    }
+    guard !boundComponents.isEmpty,
+          boundComponents.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/") }) else {
         throw ValidationFailure("\(path) must be lexically contained")
     }
 
-    var directory = dup(rootFileDescriptor)
+    var directory = dup(boundRoot)
     guard directory >= 0 else {
         throw ValidationFailure("unable to bind repository directory")
     }
     defer { close(directory) }
 
-    for component in components.dropLast() {
+    for component in boundComponents.dropLast() {
         let next = openat(directory, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard next >= 0 else {
             throw ValidationFailure("\(path) is unavailable or contains a symbolic link")
@@ -226,7 +239,7 @@ func readBoundRegularFile(
         directory = next
     }
 
-    let fileDescriptor = openat(directory, components.last!, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    let fileDescriptor = openat(directory, boundComponents.last!, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
     guard fileDescriptor >= 0 else {
         throw ValidationFailure("\(path) is unavailable or contains a symbolic link")
     }
@@ -242,9 +255,18 @@ func readBoundRegularFile(
 }
 
 func openBoundDirectory(rootFileDescriptor: Int32, components: [String], at path: String) throws -> Int32 {
-    var directory = dup(rootFileDescriptor)
+    let boundRoot: Int32
+    let boundComponents: [String]
+    if components.first == ".artifacts", let artifactRoot = artifactRootDescriptors[rootFileDescriptor] {
+        boundRoot = artifactRoot
+        boundComponents = Array(components.dropFirst())
+    } else {
+        boundRoot = rootFileDescriptor
+        boundComponents = components
+    }
+    var directory = dup(boundRoot)
     guard directory >= 0 else { throw ValidationFailure("unable to bind repository directory") }
-    for component in components {
+    for component in boundComponents {
         let next = openat(directory, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         close(directory)
         guard next >= 0 else {
@@ -424,9 +446,172 @@ func runGitString(_ arguments: [String], failure: String) throws -> String {
 struct TrustedRepository {
     let rootPath: String
     let rootFileDescriptor: Int32
+    let artifactRootFileDescriptor: Int32
 }
 
-func validateFailureRepository(expectedHead: String) throws -> TrustedRepository {
+func closeTrustedRepository(_ repository: TrustedRepository) {
+    artifactRootDescriptors.removeValue(forKey: repository.rootFileDescriptor)
+    close(repository.artifactRootFileDescriptor)
+    close(repository.rootFileDescriptor)
+}
+
+func readRawLink(_ directory: Int32, name: String, at path: String) throws -> String {
+    var bytes = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+    let count = readlinkat(directory, name, &bytes, bytes.count - 1)
+    guard count >= 0 else { throw ValidationFailure("\(path) could not be read") }
+    return String(bytes: bytes.prefix(Int(count)).map { UInt8(bitPattern: $0) }, encoding: .utf8)
+        ?? "\u{0}"
+}
+
+func openOwnedRegularDirectory(_ directory: Int32, name: String, at path: String) throws -> Int32 {
+    let descriptor = openat(directory, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard descriptor >= 0 else { throw ValidationFailure("\(path) is unavailable or a symbolic link") }
+    var info = stat()
+    guard fstat(descriptor, &info) == 0,
+          (info.st_mode & S_IFMT) == S_IFDIR else {
+        close(descriptor)
+        throw ValidationFailure("\(path) is not a regular directory")
+    }
+    return descriptor
+}
+
+func canonicalPath(_ path: String, relativeTo directory: String? = nil) -> String {
+    let raw = path.hasPrefix("/") ? path : (directory ?? FileManager.default.currentDirectoryPath) + "/" + path
+    return URL(fileURLWithPath: raw, isDirectory: true).resolvingSymlinksInPath().standardizedFileURL.path
+}
+
+func validateSharedArtifactState(
+    artifactRoot: Int32, issue: Int, branch: String,
+    worktree: String, currentHead: String
+) throws {
+    let data = try readBoundRegularFile(
+        rootFileDescriptor: artifactRoot,
+        components: ["issues", String(issue), "state.json"], at: "shared artifact state"
+    )
+    let state = try readJSONObject(data: data, at: "shared artifact state")
+    let required: Set<String> = [
+        "schemaVersion", "issue", "repository", "branch", "worktree", "baseSha", "primaryImplementer",
+        "issueContract", "state", "previousState", "resumeState", "executor"
+    ]
+    let optional: Set<String> = ["headSha", "pullRequest", "from", "to", "transitionedAt"]
+    guard required.isSubset(of: Set(state.keys)), Set(state.keys).subtracting(required.union(optional)).isEmpty else {
+        throw ValidationFailure("shared artifact state does not match schema v1")
+    }
+    guard try requireInteger(state["schemaVersion"]!, at: "shared artifact state.schemaVersion") == 1 else {
+        throw ValidationFailure("shared artifact state schemaVersion is invalid")
+    }
+    guard try requireInteger(state["issue"]!, at: "shared artifact state.issue", minimum: 1) == issue else {
+        throw ValidationFailure("shared artifact state Issue does not match requested Issue")
+    }
+    let contractData = try readBoundRegularFile(
+        rootFileDescriptor: artifactRoot,
+        components: ["issues", String(issue), "issue-contract.json"], at: "shared artifact contract"
+    )
+    let contract = try readJSONObject(data: contractData, at: "shared artifact contract")
+    guard try requireInteger(contract["schemaVersion"]!, at: "shared artifact contract.schemaVersion") == 1,
+          try requireInteger(contract["issue"]!, at: "shared artifact contract.issue", minimum: 1) == issue else {
+        throw ValidationFailure("shared artifact state contract identity is invalid")
+    }
+    let repository = try requireString(state["repository"]!, at: "shared artifact state.repository")
+    guard repository == (try requireString(contract["repository"]!, at: "shared artifact contract.repository")) else {
+        throw ValidationFailure("shared artifact state repository does not match contract")
+    }
+    let stateBranch = try requireString(state["branch"]!, at: "shared artifact state.branch")
+    guard stateBranch == branch else {
+        throw ValidationFailure("shared artifact state Branch does not match current Branch")
+    }
+    let stateWorktree = try requireString(state["worktree"]!, at: "shared artifact state.worktree")
+    guard stateWorktree == ".worktrees/\(worktree)" else {
+        throw ValidationFailure("shared artifact state worktree is not canonical")
+    }
+    let slug = branch.split(separator: "/", maxSplits: 1).last.map(String.init) ?? ""
+    guard stateWorktree == ".worktrees/\(slug)" else {
+        throw ValidationFailure("shared artifact state worktree and Branch disagree")
+    }
+    guard matches(try requireString(state["baseSha"]!, at: "shared artifact state.baseSha"), regex: shaPattern),
+          try requireString(state["primaryImplementer"]!, at: "shared artifact state.primaryImplementer") == String(branch.split(separator: "/", maxSplits: 1)[0]),
+          try requireString(state["executor"]!, at: "shared artifact state.executor") == "codex" else {
+        throw ValidationFailure("shared artifact state does not match schema v1")
+    }
+    let workflowStates: Set<String> = [
+        "proposed", "approved", "claimed", "in-progress", "verify-passed", "review-requested",
+        "changes-requested", "approved-for-merge", "merged", "done", "paused", "superseded",
+        "blocked:user", "blocked:ops", "blocked:review", "blocked:conflict", "blocked:dependency",
+        "blocked:environment", "blocked:repeated-failure"
+    ]
+    for key in ["state", "previousState", "resumeState"] {
+        let value = state[key]!
+        if value is NSNull { continue }
+        guard workflowStates.contains(try requireString(value, at: "shared artifact state.\(key)")) else {
+            throw ValidationFailure("shared artifact state \(key) is invalid")
+        }
+    }
+    let reference = try requireObject(state["issueContract"]!, at: "shared artifact state.issueContract")
+    try requireExactKeys(reference, ["path", "digest"], at: "shared artifact state.issueContract")
+    guard try requireString(reference["path"]!, at: "shared artifact state.issueContract.path") == ".artifacts/issues/\(issue)/issue-contract.json",
+          try requireString(reference["digest"]!, at: "shared artifact state.issueContract.digest") == "sha256:\(sha256(data: contractData))" else {
+        throw ValidationFailure("shared artifact state contract does not match durable artifact")
+    }
+    if let head = state["headSha"] {
+        guard try requireString(head, at: "shared artifact state.headSha") == currentHead else {
+            throw ValidationFailure("shared artifact state Head does not match current Git HEAD")
+        }
+    }
+}
+
+func openArtifactRoot(
+    root: Int32, gitRoot: String, expectedIssue: Int?, currentHead: String
+) throws -> Int32 {
+    var info = stat()
+    guard fstatat(root, ".artifacts", &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+        throw ValidationFailure("artifact root is unavailable")
+    }
+    if (info.st_mode & S_IFMT) == S_IFDIR {
+        return try openOwnedRegularDirectory(root, name: ".artifacts", at: "artifact root")
+    }
+    guard (info.st_mode & S_IFMT) == S_IFLNK else {
+        throw ValidationFailure("artifact root is not a directory")
+    }
+    guard let issue = expectedIssue else {
+        throw ValidationFailure("shared artifact root requires an Issue identity")
+    }
+    guard try readRawLink(root, name: ".artifacts", at: "shared artifact link") == "../../.artifacts" else {
+        throw ValidationFailure("shared artifact link target is not canonical")
+    }
+    let worktreeURL = URL(fileURLWithPath: gitRoot, isDirectory: true)
+    let worktreeName = worktreeURL.lastPathComponent
+    let worktreesURL = worktreeURL.deletingLastPathComponent()
+    let primaryURL = worktreesURL.deletingLastPathComponent()
+    guard worktreesURL.lastPathComponent == ".worktrees",
+          worktreeName.range(of: "^\(issue)-[a-z0-9][a-z0-9-]*$", options: .regularExpression) != nil else {
+        throw ValidationFailure("shared artifact worktree path is not canonical")
+    }
+    let primary = canonicalPath(primaryURL.path)
+    guard canonicalPath(gitRoot + "/.artifacts") == primary + "/.artifacts" else {
+        throw ValidationFailure("shared artifact link does not resolve to the primary artifact root")
+    }
+    let branch = try runGitString(["branch", "--show-current"], failure: "unable to resolve current Git Branch")
+    guard branch.range(of: "^(codex|claude)/\(worktreeName)$", options: .regularExpression) != nil else {
+        throw ValidationFailure("shared artifact Branch is not canonical")
+    }
+    let primaryFD = try openRepositoryRoot(primary)
+    defer { close(primaryFD) }
+    let primaryArtifacts = try openOwnedRegularDirectory(primaryFD, name: ".artifacts", at: "shared primary artifact root")
+    let common = canonicalPath(try runGitString(["rev-parse", "--git-common-dir"], failure: "unable to resolve Git common directory"), relativeTo: gitRoot)
+    guard common == primary + "/.git" else {
+        close(primaryArtifacts)
+        throw ValidationFailure("shared artifact Git common directory is unrelated")
+    }
+    let primaryGit = try openOwnedRegularDirectory(primaryFD, name: ".git", at: "shared primary Git directory")
+    close(primaryGit)
+    try validateSharedArtifactState(
+        artifactRoot: primaryArtifacts, issue: issue,
+        branch: branch, worktree: worktreeName, currentHead: currentHead
+    )
+    return primaryArtifacts
+}
+
+func validateFailureRepository(expectedHead: String, expectedIssue: Int? = nil) throws -> TrustedRepository {
     guard matches(expectedHead, regex: shaPattern) else {
         throw ValidationFailure("failure evidence Head is invalid")
     }
@@ -447,10 +632,13 @@ func validateFailureRepository(expectedHead: String) throws -> TrustedRepository
     guard currentHead == expectedHead else {
         throw ValidationFailure("failure evidence Head does not match current Git HEAD")
     }
-    return TrustedRepository(rootPath: gitRoot, rootFileDescriptor: try openRepositoryRoot(gitRoot))
+    let root = try openRepositoryRoot(gitRoot)
+    let artifacts = try openArtifactRoot(root: root, gitRoot: gitRoot, expectedIssue: expectedIssue, currentHead: currentHead)
+    artifactRootDescriptors[root] = artifacts
+    return TrustedRepository(rootPath: gitRoot, rootFileDescriptor: root, artifactRootFileDescriptor: artifacts)
 }
 
-func validateTrustedRepository(expectedBase: String, expectedHead: String) throws -> TrustedRepository {
+func validateTrustedRepository(expectedBase: String, expectedHead: String, expectedIssue: Int? = nil) throws -> TrustedRepository {
     let topLevel = try runGitString(
         ["rev-parse", "--show-toplevel"],
         failure: "current directory is not a Git worktree"
@@ -485,7 +673,10 @@ func validateTrustedRepository(expectedBase: String, expectedHead: String) throw
     guard ancestor.status == 0 else {
         throw ValidationFailure("expected Base is not an ancestor of expected Head")
     }
-    return TrustedRepository(rootPath: gitRoot, rootFileDescriptor: try openRepositoryRoot(gitRoot))
+    let root = try openRepositoryRoot(gitRoot)
+    let artifacts = try openArtifactRoot(root: root, gitRoot: gitRoot, expectedIssue: expectedIssue, currentHead: currentHead)
+    artifactRootDescriptors[root] = artifacts
+    return TrustedRepository(rootPath: gitRoot, rootFileDescriptor: root, artifactRootFileDescriptor: artifacts)
 }
 
 struct XcodeIdentity: Equatable {
@@ -1510,9 +1701,10 @@ func parseRunnerSnapshotOptions(_ arguments: [String]) throws -> RunnerSnapshotO
 func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
     let repository = try validateTrustedRepository(
         expectedBase: options.expectedBase,
-        expectedHead: options.expectedHead
+        expectedHead: options.expectedHead,
+        expectedIssue: options.issue
     )
-    defer { close(repository.rootFileDescriptor) }
+    defer { closeTrustedRepository(repository) }
     let entries = try headTreeEntries(head: options.expectedHead)
     try validateWorkingTree(entries: entries, repository: repository)
     let evidenceDirectory = try ensureCanonicalEvidenceDirectory(
@@ -1644,9 +1836,10 @@ func verifyRunnerInputs(
     }
     let repository = try validateTrustedRepository(
         expectedBase: options.expectedBase,
-        expectedHead: options.expectedHead
+        expectedHead: options.expectedHead,
+        expectedIssue: options.issue
     )
-    defer { close(repository.rootFileDescriptor) }
+    defer { closeTrustedRepository(repository) }
     let entries = try headTreeEntries(head: options.expectedHead)
     try validateWorkingTree(entries: entries, repository: repository)
     let contractComponents = try relativeComponents(options.issueContract, at: "issue contract")
@@ -2666,11 +2859,10 @@ func ensureCanonicalEvidenceDirectory(
     guard issue > 0, matches(head, regex: shaPattern) else {
         throw ValidationFailure("canonical evidence directory identity is invalid")
     }
-    var current = dup(repository.rootFileDescriptor)
+    var current = dup(repository.artifactRootFileDescriptor)
     guard current >= 0 else { throw ValidationFailure("unable to bind repository directory") }
     do {
         for (name, isPrivate, label) in [
-            (".artifacts", false, "artifact root"),
             ("issues", false, "Issue evidence root"),
             (String(issue), false, "Issue evidence directory"),
             (head, true, "Head evidence directory")
@@ -2727,8 +2919,10 @@ func recoverRunnerPublication(
     expectedHead: String
 ) throws -> String? {
     let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: configDigest)
-    let repository = try validateTrustedRepository(expectedBase: expectedBase, expectedHead: expectedHead)
-    defer { close(repository.rootFileDescriptor) }
+    let repository = try validateTrustedRepository(
+        expectedBase: expectedBase, expectedHead: expectedHead, expectedIssue: issue
+    )
+    defer { closeTrustedRepository(repository) }
     guard try requireString(config["repositoryRoot"]!, at: "runner config repositoryRoot") == repository.rootPath else {
         throw ValidationFailure("runner publication recovery repository mismatch")
     }
@@ -2846,8 +3040,8 @@ func recordRunnerFailure(_ options: RunnerFailureOptions) throws -> String {
           !options.message.contains("\n"), !options.message.contains("\r"), !options.message.contains("\0") else {
         throw ValidationFailure("runner failure inputs are invalid")
     }
-    let repository = try validateFailureRepository(expectedHead: options.expectedHead)
-    defer { close(repository.rootFileDescriptor) }
+    let repository = try validateFailureRepository(expectedHead: options.expectedHead, expectedIssue: options.issue)
+    defer { closeTrustedRepository(repository) }
     let evidenceDirectory = try ensureCanonicalEvidenceDirectory(
         repository: repository, issue: options.issue, head: options.expectedHead
     )
@@ -2886,8 +3080,10 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
         throw ValidationFailure("runner draft inputs are invalid")
     }
     let config = try readSealedRunnerConfig(configPath: options.configPath, expectedDigest: options.configDigest)
-    let repository = try validateTrustedRepository(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
-    defer { close(repository.rootFileDescriptor) }
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead, expectedIssue: options.issue
+    )
+    defer { closeTrustedRepository(repository) }
     guard try requireString(config["repositoryRoot"]!, at: "runner config repositoryRoot") == repository.rootPath else {
         throw ValidationFailure("runner config repository identity mismatch")
     }
@@ -3320,9 +3516,9 @@ func validateCanonicalVisualResult(
 
 func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     let repository = try validateTrustedRepository(
-        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead, expectedIssue: options.issue
     )
-    defer { close(repository.rootFileDescriptor) }
+    defer { closeTrustedRepository(repository) }
     let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
     let expectedDraft = (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
     let expectedVisual = (evidenceComponents + ["visual-result.json"]).joined(separator: "/")
@@ -3684,8 +3880,10 @@ func createVisualReviewPacketCanonical(
     guard options.outputPath == expectedOutput else {
         throw ValidationFailure("output must use the canonical Issue/Head visual-packet.json path")
     }
-    let repository = try validateTrustedRepository(expectedBase: options.expectedBase, expectedHead: expectedHead)
-    defer { close(repository.rootFileDescriptor) }
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: expectedHead, expectedIssue: options.issue
+    )
+    defer { closeTrustedRepository(repository) }
     let evidenceComponents = Array(draftComponents.dropLast())
 
     let validatedDraft = try validateCanonicalRunnerDraft(
@@ -3957,9 +4155,9 @@ func parseDocumentationPublishOptions(_ arguments: [String]) throws -> Documenta
 
 func publishDocumentationEvidence(_ options: DocumentationPublishOptions) throws -> String {
     let repository = try validateTrustedRepository(
-        expectedBase: options.expectedBase, expectedHead: options.expectedHead
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead, expectedIssue: options.issue
     )
-    defer { close(repository.rootFileDescriptor) }
+    defer { closeTrustedRepository(repository) }
 
     let inputData = try readBoundRegularFile(
         rootFileDescriptor: repository.rootFileDescriptor,
@@ -4140,9 +4338,10 @@ func absoluteStandardizedPath(_ path: String) -> String {
 func validate(options: Options) throws {
     let repository = try validateTrustedRepository(
         expectedBase: options.expectedBase,
-        expectedHead: options.expectedHead
+        expectedHead: options.expectedHead,
+        expectedIssue: options.expectedIssue
     )
-    defer { close(repository.rootFileDescriptor) }
+    defer { closeTrustedRepository(repository) }
 
     let evidenceComponents = [
         ".artifacts", "issues", String(options.expectedIssue), options.expectedHead, "verify.json"
