@@ -3,318 +3,154 @@ set -euo pipefail
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-merge.XXXXXX")
+scratch=$(cd "$scratch" && pwd -P)
 trap 'rm -rf "$scratch"' EXIT
-
 repo_name='yuto1201/iOS-Template'
 issue=42
 branch='codex/42-merge-e2e'
 worktree_relative='.worktrees/42-merge-e2e'
-pr_number=57
+pr=57
 merge_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
-fail_test() {
-  echo "FAIL: $*" >&2
-  exit 1
-}
-
-assert_fails() {
-  local label=$1
-  shift
-  if "$@" >"$scratch/command.out" 2>"$scratch/command.err"; then
-    fail_test "expected failure: $label"
-  fi
-}
-
-write_fake_gh() {
-  local destination=$1
-  cat > "$scratch/fake-gh.patch-source" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-state_dir=${FAKE_GH_STATE:?}
-log=${FAKE_OPERATION_LOG:?}
-head=${FAKE_HEAD:?}
-branch=${FAKE_BRANCH:?}
-repo=${FAKE_REPO:?}
-issue=${FAKE_ISSUE:?}
-pr_number=${FAKE_PR_NUMBER:?}
-merge_sha=${FAKE_MERGE_SHA:?}
-
-die() { echo "unexpected fake gh invocation: $*" >&2; exit 2; }
-expect_args() {
-  local expected=$1
-  shift
-  [[ "$*" == "$expected" ]] || die "expected [$expected], got [$*]"
-}
-log_line() { printf '%s\n' "$1" >> "$log"; }
-read_prs() { cat "$state_dir/prs.json"; }
-current_pr_state() { jq -er 'if length == 1 then .[0].state else "NONE" end' "$state_dir/prs.json"; }
-
-case "${1:-} ${2:-}" in
-  'pr list')
-    if [[ "$*" == "pr list --repo $repo --head $branch --state all --json number,state,headRefName,headRefOid" ]]; then
-      log_line "gh pr list --repo $repo --head $branch --state all --json number,state,headRefName,headRefOid"
-      read_prs
-    elif [[ "$*" == "pr list --repo $repo --head $branch --state open --json number,state,headRefName,headRefOid" ]]; then
-      log_line "gh pr list --repo $repo --head $branch --state open --json number,state,headRefName,headRefOid"
-      if [[ "$(current_pr_state)" == OPEN ]]; then read_prs; else printf '[]\n'; fi
-    else
-      die 'invalid PR list arguments'
-    fi
-    ;;
-  'pr create')
-    [[ $# == 10 && $3 == --repo && $4 == "$repo" && $5 == --base && $6 == main && $7 == --head && $8 == "$branch" && $9 == --body ]] || die 'invalid PR create arguments'
-    body_digest=$(printf '%s' "${10}" | shasum -a 256 | awk '{print $1}')
-    [[ "$body_digest" == "${FAKE_EXPECTED_BODY_DIGEST:?}" ]] || die 'PR body differs from deterministic renderer output'
-    [[ "$(current_pr_state)" == NONE ]] || die 'PR create was not idempotent'
-    log_line "gh pr create --repo $repo --base main --head $branch --body sha256:$body_digest"
-    HEAD_SHA="$head" BRANCH="$branch" PR="$pr_number" ruby -rjson -e 'puts JSON.generate([{"number" => Integer(ENV.fetch("PR")), "state" => "OPEN", "headRefName" => ENV.fetch("BRANCH"), "headRefOid" => ENV.fetch("HEAD_SHA")}])' > "$state_dir/prs.json"
-    printf 'https://github.com/%s/pull/%s\n' "$repo" "$pr_number"
-    ;;
-  'pr merge')
-    expect_args "pr merge $pr_number --repo $repo --squash --match-head-commit $head" "$@"
-    [[ "$(current_pr_state)" == OPEN ]] || die 'only an open PR may be merged'
-    log_line "gh pr merge $pr_number --repo $repo --squash --match-head-commit $head"
-    HEAD_SHA="$head" BRANCH="$branch" PR="$pr_number" ruby -rjson -e 'puts JSON.generate([{"number" => Integer(ENV.fetch("PR")), "state" => "MERGED", "headRefName" => ENV.fetch("BRANCH"), "headRefOid" => ENV.fetch("HEAD_SHA")}])' > "$state_dir/prs.json"
-    printf 'CLOSED\n' > "$state_dir/issue-state"
-    ;;
-  'pr view')
-    expect_args "pr view $pr_number --repo $repo --json state,headRefOid,mergeCommit" "$@"
-    [[ "$(current_pr_state)" == MERGED ]] || die 'PR confirmation requested for an unmerged PR'
-    log_line "gh pr view $pr_number --repo $repo --json state,headRefOid,mergeCommit"
-    HEAD_SHA="$head" MERGE_SHA="$merge_sha" ruby -rjson -e 'puts JSON.generate({"state" => "MERGED", "headRefOid" => ENV.fetch("HEAD_SHA"), "mergeCommit" => {"oid" => ENV.fetch("MERGE_SHA")}})'
-    ;;
-  'issue view')
-    if [[ "$*" == "issue view $issue --repo $repo --json state" ]]; then
-      log_line "gh issue view $issue --repo $repo --json state"
-      jq -cn --arg state "$(cat "$state_dir/issue-state")" '{state:$state}'
-    elif [[ "$*" == "issue view $issue --repo $repo --json labels" ]]; then
-      log_line "gh issue view $issue --repo $repo --json labels"
-      jq -cn --arg label "$(cat "$state_dir/issue-label")" '{labels:[{name:$label}]}'
-    elif [[ "$*" == "issue view $issue --repo $repo --json labels,comments" ]]; then
-      log_line "gh issue view $issue --repo $repo --json labels,comments"
-      jq -cn --arg label "$(cat "$state_dir/issue-label")" '{labels:[{name:$label}],comments:[]}'
-    else
-      die 'invalid Issue view arguments'
-    fi
-    ;;
-  'issue edit')
-    expect_args "issue edit $issue --repo $repo --remove-label state:approved-for-merge --add-label state:merged" "$@"
-    [[ "$(cat "$state_dir/issue-label")" == state:approved-for-merge ]] || die 'Issue transition started from the wrong label'
-    log_line "gh issue edit $issue --repo $repo --remove-label state:approved-for-merge --add-label state:merged"
-    printf 'state:merged\n' > "$state_dir/issue-label"
-    ;;
-  'issue comment')
-    [[ $# == 7 && $3 == "$issue" && $4 == --repo && $5 == "$repo" && $6 == --body ]] || die 'invalid Issue comment arguments'
-    MARKER=$7 ruby -rjson -e '
-      match = ENV.fetch("MARKER").match(/\A<!-- ios-template-state (\{.*\}) -->\z/) or abort "invalid state marker"
-      value = JSON.parse(match[1]); abort "wrong state marker" unless value["executor"] == "codex" && value["from"] == "approved-for-merge" && value["to"] == "merged" && value["resumeState"].nil? && value["timestamp"].is_a?(String)
-    '
-    log_line "gh issue comment $issue --repo $repo --body <approved-for-merge-to-merged-marker>"
-    ;;
-  *) die "$*" ;;
-esac
-EOF
-  cp "$scratch/fake-gh.patch-source" "$destination"
-  chmod +x "$destination"
-}
-
-write_preflight_stub() {
-  local destination=$1
-  cat > "$scratch/preflight-stub.patch-source" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ $# == 8 && $1 == --repo && $2 == "${FAKE_REPO:?}" && $3 == --issue && $4 == "${FAKE_ISSUE:?}" && $5 == --intended-operation && $7 == --expected-head && $8 == "${FAKE_HEAD:?}" ]] || { echo "preflight arguments differ: [$*]" >&2; exit 2; }
-case "$6" in github.push_branch|github.create_pr|github.merge_pr) ;; *) echo "unexpected preflight operation: $6" >&2; exit 2 ;; esac
-printf 'preflight %s\n' "$*" >> "${FAKE_OPERATION_LOG:?}"
-EOF
-  cp "$scratch/preflight-stub.patch-source" "$destination"
-  chmod +x "$destination"
-}
-
-write_gate_stub() {
-  local destination=$1
-  cat > "$scratch/gate-stub.patch-source" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-expected="--issue ${FAKE_ISSUE:?} --head-sha ${FAKE_HEAD:?}"
-[[ "$*" == "$expected" ]] || { echo "gate arguments differ: [$*]" >&2; exit 2; }
-printf 'gate %s\n' "$*" >> "${FAKE_OPERATION_LOG:?}"
-printf '{"status":"passed"}\n'
-EOF
-  cp "$scratch/gate-stub.patch-source" "$destination"
-  chmod +x "$destination"
-}
+fail_test() { echo "FAIL: $*" >&2; exit 1; }
+assert_fails() { local label=$1; shift; if "$@" >"$CASE_ROOT/out" 2>"$CASE_ROOT/err"; then fail_test "expected failure: $label"; fi; }
+assert_no_mutation() { [[ ! -s "$CASE_MUTATIONS" ]] || { cat "$CASE_MUTATIONS" >&2; fail_test "$1 performed an external mutation"; }; }
 
 make_case() {
-  local name=$1 initial_pr_state=$2 expected_body
-  CASE_ROOT="$scratch/$name"
-  CASE_PRIMARY="$CASE_ROOT/repo"
-  CASE_REMOTE="$CASE_ROOT/remote.git"
-  CASE_WORKTREE="$CASE_PRIMARY/$worktree_relative"
-  CASE_STATE="$CASE_PRIMARY/.artifacts/issues/$issue/state.json"
-  CASE_GH_STATE="$CASE_ROOT/gh-state"
-  CASE_LOG="$CASE_ROOT/operations.log"
-  CASE_BIN="$CASE_ROOT/bin"
-  mkdir -p "$CASE_ROOT" "$CASE_GH_STATE" "$CASE_BIN"
-
+  local name=$1 state_name=${2:-approved-for-merge} persisted_pr=${3:-none}
+  CASE_ROOT="$scratch/$name"; CASE_PRIMARY="$CASE_ROOT/repo"; CASE_REMOTE="$CASE_ROOT/remote.git"
+  CASE_WORKTREE="$CASE_PRIMARY/$worktree_relative"; CASE_GH="$CASE_ROOT/gh"; CASE_BIN="$CASE_ROOT/bin"
+  CASE_LOG="$CASE_ROOT/operations.log"; CASE_MUTATIONS="$CASE_ROOT/mutations.log"
+  mkdir -p "$CASE_ROOT" "$CASE_GH" "$CASE_BIN"
   git init --bare "$CASE_REMOTE" >/dev/null
   git init -b main "$CASE_PRIMARY" >/dev/null
-  git -C "$CASE_PRIMARY" config user.name 'Merge Fixture'
-  git -C "$CASE_PRIMARY" config user.email 'merge-fixture@example.invalid'
-  printf 'base\n' > "$CASE_PRIMARY/README.md"
-  git -C "$CASE_PRIMARY" add README.md
-  git -C "$CASE_PRIMARY" commit -m base >/dev/null
+  git -C "$CASE_PRIMARY" config user.name Fixture
+  git -C "$CASE_PRIMARY" config user.email fixture@example.invalid
+  printf 'base\n' >"$CASE_PRIMARY/README.md"
+  git -C "$CASE_PRIMARY" add README.md && git -C "$CASE_PRIMARY" commit -m base >/dev/null
   CASE_BASE=$(git -C "$CASE_PRIMARY" rev-parse HEAD)
   git -C "$CASE_PRIMARY" remote add origin "$CASE_REMOTE"
   git -C "$CASE_PRIMARY" push origin main >/dev/null
   mkdir -p "$CASE_PRIMARY/.worktrees"
   git -C "$CASE_PRIMARY" worktree add -b "$branch" "$CASE_WORKTREE" main >/dev/null
-
   mkdir -p "$CASE_WORKTREE/tools/lib" "$CASE_PRIMARY/.artifacts/issues/$issue"
   cp "$source_root/tools/merge-issue.sh" "$source_root/tools/render-pr-body.sh" "$source_root/tools/issue-state.sh" "$CASE_WORKTREE/tools/"
-  cp "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$CASE_WORKTREE/tools/lib/"
-  write_preflight_stub "$CASE_WORKTREE/tools/github-account-preflight.sh"
-  write_gate_stub "$CASE_WORKTREE/tools/premerge-gate.sh"
+  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$CASE_WORKTREE/tools/lib/"
   ln -s ../../.artifacts "$CASE_WORKTREE/.artifacts"
-  git -C "$CASE_WORKTREE" add tools
-  git -C "$CASE_WORKTREE" commit -m 'install merge workflow' >/dev/null
+  printf '.artifacts\n' >>"$(git -C "$CASE_WORKTREE" rev-parse --git-path info/exclude)"
+
+  cat >"$CASE_WORKTREE/tools/github-account-preflight.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'preflight %s\n' "$*" >>"${FAKE_LOG:?}"
+if [[ "${FAIL_PREFLIGHT:-}" == "$*" ]]; then exit 41; fi
+EOF
+  cat >"$CASE_WORKTREE/tools/premerge-gate.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'gate %s\n' "$*" >>"${FAKE_LOG:?}"
+[[ "${FAIL_GATE:-0}" != 1 ]]
+EOF
+  chmod +x "$CASE_WORKTREE/tools/"*.sh "$CASE_WORKTREE/tools/lib/merge-state.rb"
+  git -C "$CASE_WORKTREE" add tools && git -C "$CASE_WORKTREE" commit -m tools >/dev/null
   CASE_HEAD=$(git -C "$CASE_WORKTREE" rev-parse HEAD)
-
   mkdir -p "$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD"
-  CONTRACT_PATH="$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" ruby -rjson -e '
-    value = {"schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template", "goal" => "Merge verified work.", "specAnchors" => ["docs/workflow.md"], "acceptanceCriteria" => [{"id" => "AC-1", "text" => "Merge the exact verified Head."}], "dependencies" => [], "externalOperations" => [], "fetchedAt" => "2026-08-24T00:00:00Z"}
-    File.binwrite(ENV.fetch("CONTRACT_PATH"), JSON.generate(value))
-  '
+  CONTRACT="$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" ruby -rjson -e '
+    File.binwrite(ENV.fetch("CONTRACT"), JSON.generate({"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","goal"=>"Merge exact verified work.","specAnchors"=>["docs/workflow.md#6-pr-body"],"acceptanceCriteria"=>[{"id"=>"AC-1","text"=>"Merge exact Head."}],"dependencies"=>[],"externalOperations"=>["github.push_branch","github.create_pr","github.merge_pr"],"fetchedAt"=>"2026-08-24T00:00:00Z"}))'
   CASE_DIGEST="sha256:$(shasum -a 256 "$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" | awk '{print $1}')"
-  HEAD_SHA="$CASE_HEAD" BASE_SHA="$CASE_BASE" DIGEST="$CASE_DIGEST" VERIFY_PATH="$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD/verify.json" ruby -rjson -e '
-    value = {"status" => "not-applicable", "headSha" => ENV.fetch("HEAD_SHA"), "baseSha" => ENV.fetch("BASE_SHA"), "issueContract" => {"digest" => ENV.fetch("DIGEST")}, "matrixFile" => nil, "matrixDigest" => nil, "acceptanceEvidence" => [{"id" => "AC-1", "status" => "passed", "evidence" => ["documents:workflow"]}]}
-    File.binwrite(ENV.fetch("VERIFY_PATH"), JSON.generate(value))
-  '
-  HEAD_SHA="$CASE_HEAD" DIGEST="$CASE_DIGEST" REVIEW_PATH="$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD/review.json" ruby -rjson -e '
-    value = {"headSha" => ENV.fetch("HEAD_SHA"), "verifySha" => ENV.fetch("HEAD_SHA"), "issueContractDigest" => ENV.fetch("DIGEST"), "verdict" => "approved", "findings" => []}
-    File.binwrite(ENV.fetch("REVIEW_PATH"), JSON.generate(value))
-  '
-  HEAD_SHA="$CASE_HEAD" BASE_SHA="$CASE_BASE" DIGEST="$CASE_DIGEST" STATE_PATH="$CASE_STATE" ruby -rjson -e '
-    value = {"schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template", "branch" => "codex/42-merge-e2e", "worktree" => ".worktrees/42-merge-e2e", "baseSha" => ENV.fetch("BASE_SHA"), "primaryImplementer" => "codex", "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "state" => "approved-for-merge", "previousState" => "review-requested", "resumeState" => nil, "executor" => "codex", "headSha" => ENV.fetch("HEAD_SHA"), "from" => "review-requested", "to" => "approved-for-merge", "transitionedAt" => "2026-08-24T00:02:30Z"}
-    File.binwrite(ENV.fetch("STATE_PATH"), JSON.generate(value))
-  '
+  VERIFY="$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD/verify.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" ruby -rjson -e '
+    value={"schemaVersion"=>1,"status"=>"not-applicable","changeClassification"=>"documentation-only","reason"=>"Only allowlisted Markdown documentation changed","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"matrixFile"=>nil,"matrixDigest"=>nil,"executionRoute"=>"none","xcode"=>nil,"build"=>{"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil},"tests"=>{"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil},"cases"=>[],"visualEvaluation"=>{"status"=>"not-applicable","findings"=>[]},"acceptanceEvidence"=>[{"id"=>"AC-1","status"=>"passed","evidence"=>["documents:workflow"]}],"completedAt"=>"2026-08-24T00:01:00Z"}; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(value))'
+  REVIEW="$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD/review.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" ruby -rjson -e '
+    value={"schemaVersion"=>1,"issue"=>42,"reviewerModel"=>"claude","baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"verifySha"=>ENV.fetch("HEAD"),"issueContractDigest"=>ENV.fetch("DIGEST"),"verdict"=>"approved","findings"=>[],"acceptanceAssessment"=>[{"id"=>"AC-1","status"=>"supported","evidence"=>["review.diff"]}],"reviewedAt"=>"2026-08-24T00:02:00Z"}; File.binwrite(ENV.fetch("REVIEW"),JSON.generate(value))'
+  STATE="$CASE_PRIMARY/.artifacts/issues/$issue/state.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" NAME="$state_name" PR="$persisted_pr" ruby -rjson -e '
+    name=ENV.fetch("NAME"); value={"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","branch"=>"codex/42-merge-e2e","worktree"=>".worktrees/42-merge-e2e","baseSha"=>ENV.fetch("BASE"),"primaryImplementer"=>"codex","issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"state"=>name,"previousState"=>name=="merged" ? "approved-for-merge" : "review-requested","resumeState"=>nil,"executor"=>"codex","headSha"=>ENV.fetch("HEAD"),"from"=>name=="merged" ? "approved-for-merge" : "review-requested","to"=>name,"transitionedAt"=>"2026-08-24T00:03:00Z"}; value["pullRequest"]=Integer(ENV.fetch("PR")) unless ENV.fetch("PR")=="none"; File.binwrite(ENV.fetch("STATE"),JSON.generate(value))'
+  printf '[]\n' >"$CASE_GH/prs.json"; printf 'OPEN\n' >"$CASE_GH/issue-state"; printf 'state:approved-for-merge\n' >"$CASE_GH/issue-label"
+  : >"$CASE_LOG"; : >"$CASE_MUTATIONS"
 
-  case "$initial_pr_state" in
-    NONE) printf '[]\n' > "$CASE_GH_STATE/prs.json" ;;
-    OPEN|CLOSED|MERGED)
-      STATE="$initial_pr_state" HEAD_SHA="$CASE_HEAD" BRANCH="$branch" PR="$pr_number" ruby -rjson -e 'puts JSON.generate([{"number" => Integer(ENV.fetch("PR")), "state" => ENV.fetch("STATE"), "headRefName" => ENV.fetch("BRANCH"), "headRefOid" => ENV.fetch("HEAD_SHA")}])' > "$CASE_GH_STATE/prs.json"
-      ;;
-    *) fail_test "invalid fixture PR state: $initial_pr_state" ;;
-  esac
-  if [[ "$initial_pr_state" == MERGED ]]; then printf 'CLOSED\n' > "$CASE_GH_STATE/issue-state"; else printf 'OPEN\n' > "$CASE_GH_STATE/issue-state"; fi
-  printf 'state:approved-for-merge\n' > "$CASE_GH_STATE/issue-label"
-  : > "$CASE_LOG"
-  write_fake_gh "$CASE_BIN/gh"
-
-  expected_body=$("$CASE_WORKTREE/tools/render-pr-body.sh" --issue "$issue" --head-sha "$CASE_HEAD")
-  printf '%s' "$expected_body" > "$CASE_ROOT/expected-body.md"
-  CASE_BODY_DIGEST=$(shasum -a 256 "$CASE_ROOT/expected-body.md" | awk '{print $1}')
+  cat >"$CASE_BIN/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+log=${FAKE_LOG:?}; mutations=${FAKE_MUTATIONS:?}; state=${FAKE_GH:?}; repo=${FAKE_REPO:?}; issue=${FAKE_ISSUE:?}; branch=${FAKE_BRANCH:?}; head=${FAKE_HEAD:?}; pr=${FAKE_PR:?}
+printf 'gh %s\n' "$*" >>"$log"
+pr_json() { local status=$1; PR_STATE="$status" ruby -rjson -e 'state=ENV.fetch("PR_STATE"); puts JSON.generate({"number"=>Integer(ENV.fetch("FAKE_PR")),"state"=>state,"baseRefName"=>"main","headRefName"=>ENV.fetch("FAKE_BRANCH"),"headRefOid"=>ENV.fetch("FAKE_HEAD"),"mergeCommit"=>state=="MERGED" ? {"oid"=>ENV.fetch("FAKE_MERGE")} : nil,"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/pull/#{ENV.fetch("FAKE_PR")}"})'; }
+case "$1 $2" in
+  'pr list') cat "$state/prs.json" ;;
+  'pr create')
+    [[ "$*" == *"--title Issue #42: Merge exact verified work."* && "$*" == *"--body "* ]] || { echo 'missing deterministic title/body' >&2; exit 2; }
+    printf 'pr-create\n' >>"$mutations"; pr_json OPEN | jq -s . >"$state/prs.json" ;;
+  'pr view') jq -e 'length==1' "$state/prs.json" >/dev/null; jq '.[0]' "$state/prs.json" ;;
+  'pr merge') printf 'pr-merge\n' >>"$mutations"; pr_json MERGED | jq -s . >"$state/prs.json"; printf 'CLOSED\n' >"$state/issue-state" ;;
+  'issue view')
+    if [[ "$*" == *'--json number,state,url' ]]; then jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" '{number:$number,state:$state,url:$url}'
+    elif [[ "$*" == *'--json labels,comments' ]]; then jq -cn --arg label "$(cat "$state/issue-label")" '{labels:[{name:$label}],comments:[]}'
+    else jq -cn --arg label "$(cat "$state/issue-label")" '{labels:[{name:$label}]}' ; fi ;;
+  'issue edit') printf 'issue-edit\n' >>"$mutations"; printf 'state:merged\n' >"$state/issue-label" ;;
+  'issue comment') printf 'issue-comment\n' >>"$mutations" ;;
+  *) echo "unexpected gh: $*" >&2; exit 2 ;;
+esac
+EOF
+  chmod +x "$CASE_BIN/gh"
+  REAL_GIT=$(command -v git)
+  cat >"$CASE_BIN/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "-C ${FAKE_WORKTREE:?} remote get-url origin" ]]; then printf 'https://github.com/%s.git\n' "${FAKE_REPO:?}"; exit 0; fi
+if [[ "$*" == *' push origin refs/heads/'* ]]; then printf 'git-push\n' >>"${FAKE_MUTATIONS:?}"; printf 'git %s\n' "$*" >>"${FAKE_LOG:?}"; fi
+exec "${REAL_GIT:?}" "$@"
+EOF
+  chmod +x "$CASE_BIN/git"
 }
 
 run_merge() {
-  FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR_NUMBER="$pr_number" FAKE_MERGE_SHA="$merge_sha" FAKE_GH_STATE="$CASE_GH_STATE" FAKE_OPERATION_LOG="$CASE_LOG" FAKE_EXPECTED_BODY_DIGEST="$CASE_BODY_DIGEST" GIT_TERMINAL_PROMPT=0 PATH="$CASE_BIN:$PATH" \
-    "$CASE_WORKTREE/tools/merge-issue.sh" --repo "$repo_name" --issue "$issue"
+  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_GATE="${FAIL_GATE:-0}" "$CASE_WORKTREE/tools/merge-issue.sh" --repo "$repo_name" --issue "$issue"
 }
 
-assert_merged_state() {
-  jq -e --arg head "$CASE_HEAD" --argjson pr "$pr_number" '
-    .state == "merged" and .previousState == "approved-for-merge" and .from == "approved-for-merge" and .to == "merged" and
-    (.transitionedAt | type == "string") and .headSha == $head and .pullRequest == $pr
-  ' "$CASE_STATE" >/dev/null || fail_test 'durable merged state did not persist exact transition, Head, and PR identity'
-}
+make_case new
+body=$("$CASE_WORKTREE/tools/render-pr-body.sh" --issue 42 --head-sha "$CASE_HEAD")
+grep -Fq 'Verify digest: `sha256:' <<<"$body" || fail_test 'PR body omits verify digest'
+grep -Fq 'Reviewer model: `claude`' <<<"$body" || fail_test 'PR body omits reviewer model'
+grep -Fq 'iPhone Pro / English: `not-applicable`' <<<"$body" || fail_test 'PR body omits iPhone English matrix result'
+grep -Fq '`docs/workflow.md#6-pr-body`' <<<"$body" || fail_test 'PR body omits spec anchors'
+run_merge >"$CASE_ROOT/result.json"
+jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/result.json" >/dev/null
+jq -e '.state=="merged" and .pullRequest==57' "$CASE_PRIMARY/.artifacts/issues/42/state.json" >/dev/null
+first=$(head -1 "$CASE_LOG"); [[ "$first" == "preflight --repo $repo_name" ]] || fail_test 'account/repository inspect was not first'
+gate_line=$(grep -n '^gate ' "$CASE_LOG" | head -1 | cut -d: -f1); push_line=$(grep -n '^git .* push ' "$CASE_LOG" | head -1 | cut -d: -f1); create_line=$(grep -n '^gh pr create ' "$CASE_LOG" | cut -d: -f1)
+[[ "$gate_line" -lt "$push_line" && "$gate_line" -lt "$create_line" ]] || fail_test 'gate did not precede push and PR creation'
 
-assert_log() {
-  local expected=$1
-  diff -u "$expected" "$CASE_LOG" || fail_test 'operation log order or arguments differed'
-}
+make_case gate-failure
+FAIL_GATE=1 assert_fails 'gate before publication' run_merge
+assert_no_mutation 'gate failure'
 
-make_case new-pr NONE
-run_merge > "$CASE_ROOT/result.json"
-jq -e --arg head "$CASE_HEAD" --argjson pr "$pr_number" '.status == "merged" and .issue == 42 and .pullRequest == $pr and .headSha == $head' "$CASE_ROOT/result.json" >/dev/null
-assert_merged_state
-cat > "$CASE_ROOT/expected.log" <<EOF
-gh pr list --repo $repo_name --head $branch --state all --json number,state,headRefName,headRefOid
-preflight --repo $repo_name --issue $issue --intended-operation github.push_branch --expected-head $CASE_HEAD
-preflight --repo $repo_name --issue $issue --intended-operation github.create_pr --expected-head $CASE_HEAD
-gh pr create --repo $repo_name --base main --head $branch --body sha256:$CASE_BODY_DIGEST
-gh pr list --repo $repo_name --head $branch --state open --json number,state,headRefName,headRefOid
-preflight --repo $repo_name --issue $issue --intended-operation github.merge_pr --expected-head $CASE_HEAD
-gate --issue $issue --head-sha $CASE_HEAD
-gh pr merge $pr_number --repo $repo_name --squash --match-head-commit $CASE_HEAD
-gh pr view $pr_number --repo $repo_name --json state,headRefOid,mergeCommit
-gh issue view $issue --repo $repo_name --json state
-gh issue view $issue --repo $repo_name --json labels
-gh issue view $issue --repo $repo_name --json labels,comments
-gh issue view $issue --repo $repo_name --json labels,comments
-gh issue edit $issue --repo $repo_name --remove-label state:approved-for-merge --add-label state:merged
-gh issue view $issue --repo $repo_name --json labels,comments
-gh issue comment $issue --repo $repo_name --body <approved-for-merge-to-merged-marker>
-EOF
-assert_log "$CASE_ROOT/expected.log"
+make_case invalid-state in-progress
+assert_fails 'non-approved normal state' run_merge
+[[ ! -s "$CASE_LOG" ]] || fail_test 'invalid durable state reached an external call'
+assert_no_mutation 'invalid durable state'
 
-make_case existing-open OPEN
-run_merge > "$CASE_ROOT/result.json"
-assert_merged_state
-cat > "$CASE_ROOT/expected.log" <<EOF
-gh pr list --repo $repo_name --head $branch --state all --json number,state,headRefName,headRefOid
-preflight --repo $repo_name --issue $issue --intended-operation github.push_branch --expected-head $CASE_HEAD
-preflight --repo $repo_name --issue $issue --intended-operation github.merge_pr --expected-head $CASE_HEAD
-gate --issue $issue --head-sha $CASE_HEAD
-gh pr merge $pr_number --repo $repo_name --squash --match-head-commit $CASE_HEAD
-gh pr view $pr_number --repo $repo_name --json state,headRefOid,mergeCommit
-gh issue view $issue --repo $repo_name --json state
-gh issue view $issue --repo $repo_name --json labels
-gh issue view $issue --repo $repo_name --json labels,comments
-gh issue view $issue --repo $repo_name --json labels,comments
-gh issue edit $issue --repo $repo_name --remove-label state:approved-for-merge --add-label state:merged
-gh issue view $issue --repo $repo_name --json labels,comments
-gh issue comment $issue --repo $repo_name --body <approved-for-merge-to-merged-marker>
-EOF
-assert_log "$CASE_ROOT/expected.log"
+make_case bad-digest
+cp "$CASE_PRIMARY/.artifacts/issues/42/state.json" "$CASE_ROOT/state.good"
+ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v["issueContract"]["digest"]="sha256:"+"0"*64;File.binwrite(p,JSON.generate(v))' "$CASE_PRIMARY/.artifacts/issues/42/state.json"
+assert_fails 'contract digest mismatch' run_merge
+[[ ! -s "$CASE_LOG" ]] || fail_test 'contract mismatch reached external calls'
+assert_no_mutation 'contract mismatch'
 
-make_case closed-unmerged CLOSED
-state_before=$(shasum -a 256 "$CASE_STATE" | awk '{print $1}')
-assert_fails 'closed-unmerged PR is refused' run_merge
-[[ "$(shasum -a 256 "$CASE_STATE" | awk '{print $1}')" == "$state_before" ]] || fail_test 'closed-unmerged refusal changed durable state'
-cat > "$CASE_ROOT/expected.log" <<EOF
-gh pr list --repo $repo_name --head $branch --state all --json number,state,headRefName,headRefOid
-EOF
-assert_log "$CASE_ROOT/expected.log"
+make_case bad-link
+rm "$CASE_WORKTREE/.artifacts" && ln -s ../../../.artifacts "$CASE_WORKTREE/.artifacts"
+assert_fails 'raw artifact link mismatch' run_merge
+[[ ! -s "$CASE_LOG" ]] || fail_test 'artifact-link mismatch reached external calls'
+assert_no_mutation 'artifact-link mismatch'
 
-make_case already-merged MERGED
-run_merge > "$CASE_ROOT/result.json"
-jq -e --arg head "$CASE_HEAD" --argjson pr "$pr_number" '.status == "already-merged" and .pullRequest == $pr and .headSha == $head' "$CASE_ROOT/result.json" >/dev/null
-assert_merged_state
-cat > "$CASE_ROOT/expected.log" <<EOF
-gh pr list --repo $repo_name --head $branch --state all --json number,state,headRefName,headRefOid
-gh pr view $pr_number --repo $repo_name --json state,headRefOid,mergeCommit
-gh issue view $issue --repo $repo_name --json state
-gh issue view $issue --repo $repo_name --json labels
-gh issue view $issue --repo $repo_name --json labels,comments
-gh issue view $issue --repo $repo_name --json labels,comments
-gh issue edit $issue --repo $repo_name --remove-label state:approved-for-merge --add-label state:merged
-gh issue view $issue --repo $repo_name --json labels,comments
-gh issue comment $issue --repo $repo_name --body <approved-for-merge-to-merged-marker>
-EOF
-assert_log "$CASE_ROOT/expected.log"
+make_case merged-recovery merged 57
+PR_STATE=MERGED FAKE_PR="$pr" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_MERGE="$merge_sha" FAKE_REPO="$repo_name" ruby -rjson -e 's=ENV.fetch("PR_STATE");puts JSON.generate([{"number"=>Integer(ENV.fetch("FAKE_PR")),"state"=>s,"baseRefName"=>"main","headRefName"=>ENV.fetch("FAKE_BRANCH"),"headRefOid"=>ENV.fetch("FAKE_HEAD"),"mergeCommit"=>{"oid"=>ENV.fetch("FAKE_MERGE")},"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/pull/#{ENV.fetch("FAKE_PR")}"}])' >"$CASE_GH/prs.json"
+printf 'CLOSED\n' >"$CASE_GH/issue-state"; printf 'state:merged\n' >"$CASE_GH/issue-label"
+run_merge >"$CASE_ROOT/recovery.json"
+jq -e '.status=="already-merged" and .pullRequest==57' "$CASE_ROOT/recovery.json" >/dev/null
+[[ "$(head -1 "$CASE_LOG")" == "preflight --repo $repo_name" ]] || fail_test 'recovery skipped account preflight'
+assert_no_mutation 'already-merged recovery'
 
-make_case already-merged-remote-state MERGED
-printf 'state:merged\n' > "$CASE_GH_STATE/issue-label"
-run_merge > "$CASE_ROOT/result.json"
-jq -e --arg head "$CASE_HEAD" --argjson pr "$pr_number" '.status == "already-merged" and .pullRequest == $pr and .headSha == $head' "$CASE_ROOT/result.json" >/dev/null
-assert_merged_state
-cat > "$CASE_ROOT/expected.log" <<EOF
-gh pr list --repo $repo_name --head $branch --state all --json number,state,headRefName,headRefOid
-gh pr view $pr_number --repo $repo_name --json state,headRefOid,mergeCommit
-gh issue view $issue --repo $repo_name --json state
-gh issue view $issue --repo $repo_name --json labels
-EOF
-assert_log "$CASE_ROOT/expected.log"
+make_case merged-without-pr merged none
+assert_fails 'merged state without persisted PR' run_merge
+[[ ! -s "$CASE_LOG" ]] || fail_test 'invalid merged state reached external calls'
+assert_no_mutation 'merged state without PR'
 
-echo 'PASS: merge workflow covers new, open, closed-unmerged, and both already-merged convergence paths'
+echo 'PASS: merge binds durable identity, gates before publication, uses deterministic PR metadata, and safely recovers exact merged PRs'

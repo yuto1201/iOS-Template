@@ -12,31 +12,117 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ "$issue" =~ ^[1-9][0-9]*$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || usage
-[[ -L "$repo_root/.artifacts" ]] || { echo 'Issue worktree lacks the canonical .artifacts link' >&2; exit 1; }
-primary_root=$(cd "$repo_root/../.." && pwd -P)
-artifacts_root=$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$repo_root/.artifacts") || { echo 'canonical .artifacts link is broken' >&2; exit 1; }
-[[ "$artifacts_root" == "$primary_root/.artifacts" ]] || { echo 'canonical .artifacts link does not resolve to the primary checkout' >&2; exit 1; }
 
-contract="$repo_root/.artifacts/issues/$issue/issue-contract.json"
-verify="$repo_root/.artifacts/issues/$issue/$head_sha/verify.json"
-review="$repo_root/.artifacts/issues/$issue/$head_sha/review.json"
-for file in "$contract" "$verify" "$review"; do [[ -f "$file" && ! -L "$file" ]] || { echo "missing canonical artifact: $file" >&2; exit 1; }; done
+ruby -rjson -rdigest - "$repo_root" "$issue" "$head_sha" <<'RUBY'
+repo, issue_text, head = ARGV
+issue = Integer(issue_text)
 
-CONTRACT="$contract" VERIFY="$verify" REVIEW="$review" ISSUE="$issue" HEAD="$head_sha" ruby -rjson -rdigest -e '
-  contract = JSON.parse(File.binread(ENV.fetch("CONTRACT"))); verify = JSON.parse(File.binread(ENV.fetch("VERIFY"))); review = JSON.parse(File.binread(ENV.fetch("REVIEW")))
-  issue = Integer(ENV.fetch("ISSUE")); head = ENV.fetch("HEAD"); digest = "sha256:#{Digest::SHA256.hexdigest(File.binread(ENV.fetch("CONTRACT")))}"
-  abort "artifact identity mismatch" unless contract["issue"] == issue && verify["headSha"] == head && review["headSha"] == head && review["verifySha"] == head && verify.dig("issueContract", "digest") == digest && review["issueContractDigest"] == digest
-  puts "## Summary\n\nCloses ##{issue}.\n\n## Specification\n\n- Issue contract digest: `#{digest}`\n- Head SHA: `#{head}`\n\n## Verification\n\n- verify.json status: `#{verify["status"]}`\n- Matrix: `#{verify["matrixFile"] || "not-applicable"}`\n- Matrix digest: `#{verify["matrixDigest"] || "not-applicable"}`\n"
-  contract.fetch("acceptanceCriteria").each do |criterion|
-    evidence = verify.fetch("acceptanceEvidence").find { |entry| entry["id"] == criterion["id"] }
-    abort "missing acceptance evidence" unless evidence
-    puts "- #{criterion["id"]}: #{evidence.fetch("status")} — #{evidence.fetch("evidence").join(", ")}"
+def reject(message)
+  warn "PR body rendering refused: #{message}"
+  exit 1
+end
+
+def read_owned(path, at)
+  before = File.lstat(path)
+  reject("#{at} must be a single-link regular file") unless before.file? && !before.symlink? && before.nlink == 1
+  flags = File::RDONLY
+  flags |= File::NOFOLLOW if defined?(File::NOFOLLOW)
+  File.open(path, flags) do |file|
+    opened = file.stat
+    reject("#{at} changed while opening") unless opened.dev == before.dev && opened.ino == before.ino && opened.nlink == 1
+    bytes = file.read
+    final = file.stat
+    reject("#{at} changed while reading") unless final.dev == opened.dev && final.ino == opened.ino && final.nlink == 1 && final.size == bytes.bytesize
+    bytes
   end
-  blocking = review.fetch("findings").count { |finding| %w[critical high medium].include?(finding["severity"]) }
-  puts "\n## Opposite-model review\n\n- Verdict: `#{review["verdict"]}`\n- Review Head SHA: `#{review["headSha"]}`\n- Blocking findings: #{blocking}\n\n## Remaining work\n"
-  if %w[passed not-applicable].include?(verify["status"]) && review["verdict"] == "approved" && blocking.zero?
-    puts "\n- Pre-merge gate is pending.\n"
-  else
-    puts "\n- Verification or opposite-model review is not merge-ready.\n"
+rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP => error
+  reject("#{at} is unavailable: #{error.message}")
+end
+
+def parse_owned(path, at)
+  bytes = read_owned(path, at)
+  [JSON.parse(bytes), bytes]
+rescue JSON::ParserError => error
+  reject("#{at} is invalid JSON: #{error.message}")
+end
+
+repo = File.realpath(repo)
+link = File.join(repo, ".artifacts")
+reject(".artifacts is not the canonical raw link") unless File.symlink?(link) && File.readlink(link) == "../../.artifacts"
+primary = File.realpath(File.join(repo, "..", ".."))
+reject("Issue worktree is outside .worktrees") unless repo.start_with?(File.join(primary, ".worktrees") + File::SEPARATOR)
+reject("canonical artifact link escapes the primary store") unless File.realpath(link) == File.join(primary, ".artifacts") && !File.symlink?(File.join(primary, ".artifacts"))
+issue_root = File.join(primary, ".artifacts", "issues", issue.to_s)
+head_root = File.join(issue_root, head)
+contract, contract_bytes = parse_owned(File.join(issue_root, "issue-contract.json"), "Issue contract")
+verify, verify_bytes = parse_owned(File.join(head_root, "verify.json"), "verify.json")
+review, = parse_owned(File.join(head_root, "review.json"), "review.json")
+contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
+verify_digest = "sha256:#{Digest::SHA256.hexdigest(verify_bytes)}"
+reject("contract identity mismatch") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue
+reject("verification identity mismatch") unless verify.is_a?(Hash) && verify["schemaVersion"] == 1 && verify["issue"] == issue && verify["headSha"] == head && verify.dig("issueContract", "path") == ".artifacts/issues/#{issue}/issue-contract.json" && verify.dig("issueContract", "digest") == contract_digest
+reject("review identity mismatch") unless review.is_a?(Hash) && review["schemaVersion"] == 1 && review["issue"] == issue && review["baseSha"] == verify["baseSha"] && review["headSha"] == head && review["verifySha"] == head && review["issueContractDigest"] == contract_digest
+reviewer = review["reviewerModel"]
+reject("reviewer model is invalid") unless %w[codex claude].include?(reviewer)
+reject("review verdict is not approved") unless review["verdict"] == "approved" && review["findings"] == []
+anchors = contract["specAnchors"]
+reject("spec anchors are missing") unless anchors.is_a?(Array) && !anchors.empty? && anchors.all? { |entry| entry.is_a?(String) && !entry.empty? }
+criteria = contract["acceptanceCriteria"]
+evidence = verify["acceptanceEvidence"]
+reject("acceptance evidence is malformed") unless criteria.is_a?(Array) && evidence.is_a?(Array)
+
+puts "Closes ##{issue}"
+puts
+puts "## Summary"
+puts
+puts "- #{contract.fetch("goal")}"
+puts
+puts "## Specification"
+puts
+anchors.each { |anchor| puts "- `#{anchor}`" }
+puts "- Issue contract digest: `#{contract_digest}`"
+puts
+puts "## Verification"
+puts
+puts "- Head SHA: `#{head}`"
+puts "- Verify status: `#{verify["status"]}`"
+puts "- Verify digest: `#{verify_digest}`"
+build = verify["build"] || {}
+tests = verify["tests"] || {}
+puts "- Build: `#{build["status"]}` (scheme: `#{build["scheme"] || "not-applicable"}`, warnings added: `#{build["warningsAdded"].nil? ? "not-applicable" : build["warningsAdded"]}`)"
+puts "- Tests: `#{tests["status"]}` (passed: `#{tests["passed"].nil? ? "not-applicable" : tests["passed"]}`, failed: `#{tests["failed"].nil? ? "not-applicable" : tests["failed"]}`, skipped: `#{tests["skipped"].nil? ? "not-applicable" : tests["skipped"]}`)"
+puts "- Matrix file: `#{verify["matrixFile"] || "not-applicable"}`"
+puts "- Matrix digest: `#{verify["matrixDigest"] || "not-applicable"}`"
+case_labels = {"iphone-en" => "iPhone Pro / English", "iphone-ja" => "iPhone Pro / Japanese", "ipad-en" => "iPad Air / English", "ipad-ja" => "iPad Air / Japanese"}
+cases = verify["cases"]
+if cases.is_a?(Array) && !cases.empty?
+  case_labels.each do |id, label|
+    item = cases.find { |entry| entry.is_a?(Hash) && entry["id"] == id }
+    reject("matrix result is missing #{id}") unless item
+    puts "  - #{label} (`#{id}`): `#{item["status"]}`"
   end
-'
+else
+  case_labels.each_value { |label| puts "  - #{label}: `not-applicable` (#{verify["changeClassification"]})" }
+end
+puts
+puts "### Acceptance evidence"
+puts
+criteria.each do |criterion|
+  item = evidence.find { |entry| entry.is_a?(Hash) && entry["id"] == criterion["id"] }
+  reject("acceptance evidence is missing #{criterion["id"]}") unless item && item["evidence"].is_a?(Array) && !item["evidence"].empty?
+  puts "- #{criterion["id"]}: `#{item["status"]}` — #{item["evidence"].join(", ")}"
+end
+puts
+puts "## Opposite-model review"
+puts
+puts "- Reviewer: `#{reviewer}`"
+puts "- Reviewer model: `#{reviewer}`"
+puts "- Reviewed Head SHA: `#{review["headSha"]}`"
+puts "- Verified SHA: `#{review["verifySha"]}`"
+puts "- Verdict: `#{review["verdict"]}`"
+puts "- Blocking findings: `0`"
+puts
+puts "## Remaining work"
+puts
+puts "- None for this Issue."
+RUBY

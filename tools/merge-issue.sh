@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd -P)
+identity_tool="$repo_root/tools/lib/merge-state.rb"
 usage() { echo 'usage: merge-issue.sh --repo OWNER/REPO --issue NUMBER' >&2; exit 2; }
 repo='' issue=''
 while [[ $# -gt 0 ]]; do
@@ -13,90 +14,157 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$issue" =~ ^[1-9][0-9]*$ ]] || usage
 fail() { echo "merge refused: $*" >&2; exit 1; }
-[[ -L "$repo_root/.artifacts" ]] || fail 'Issue worktree lacks the canonical .artifacts link'
-primary_root=$(cd "$repo_root/../.." && pwd -P)
-artifacts_root=$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$repo_root/.artifacts") || fail 'canonical .artifacts link is broken'
-[[ "$artifacts_root" == "$primary_root/.artifacts" ]] || fail 'canonical .artifacts link does not resolve to the primary checkout'
-state="$repo_root/.artifacts/issues/$issue/state.json"
-[[ -f "$state" && ! -L "$state" ]] || fail 'durable Issue state is missing'
-branch=$(jq -er '.branch | strings' "$state") || fail 'state Branch is invalid'
-worktree_relative=$(jq -er '.worktree | strings' "$state") || fail 'state worktree is invalid'
-[[ "$branch" =~ ^(codex|claude)/${issue}-[a-z0-9][a-z0-9-]*$ && "$worktree_relative" =~ ^\.worktrees/${issue}-[a-z0-9][a-z0-9-]*$ ]] || fail 'durable targets are noncanonical'
-worktree="$primary_root/$worktree_relative"
-[[ "$repo_root" == "$worktree" && -d "$worktree" && ! -L "$worktree" ]] || fail 'merge must run in the exact recorded Issue worktree'
-head_sha=$(git -C "$repo_root" rev-parse HEAD)
 
-persist_merged_state() {
-  local pull_request=$1 transition_from=$2 remote_document remote_state recovered=false transition_time
+identity=$(ruby "$identity_tool" validate-worktree "$repo_root" "$repo" "$issue") || fail 'durable Issue identity is invalid'
+branch=$(jq -er '.branch | strings' <<<"$identity") || fail 'durable Branch is invalid'
+base_sha=$(jq -er '.baseSha | strings' <<<"$identity") || fail 'durable Base is invalid'
+head_sha=$(jq -er '.headSha | strings' <<<"$identity") || fail 'durable Head is invalid'
+state_name=$(jq -er '.state | strings' <<<"$identity") || fail 'durable workflow state is invalid'
+pull_request=$(jq -er '.pullRequest // empty' <<<"$identity") || true
+title=$(jq -er '.title | strings' <<<"$identity") || fail 'deterministic PR title is invalid'
+primary_root=$(jq -er '.primaryRoot | strings' <<<"$identity") || fail 'primary checkout identity is invalid'
+
+[[ "$(git -C "$repo_root" rev-parse --show-toplevel)" == "$repo_root" ]] || fail 'Git top-level differs from the Issue worktree'
+[[ "$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)" == "$primary_root/.git" ]] || fail 'Git common directory differs from the primary checkout'
+[[ "$(git -C "$repo_root" branch --show-current)" == "$branch" ]] || fail 'current Branch differs from durable state'
+[[ "$(git -C "$repo_root" rev-parse HEAD)" == "$head_sha" ]] || fail 'current Head differs from durable state'
+[[ "$(git -C "$repo_root" rev-parse "refs/heads/$branch")" == "$head_sha" ]] || fail 'raw Branch ref differs from durable Head'
+[[ "$(git -C "$repo_root" cat-file -t "$base_sha")" == commit && "$(git -C "$repo_root" cat-file -t "$head_sha")" == commit ]] || fail 'Base or Head is not a commit'
+git -C "$repo_root" merge-base --is-ancestor "$base_sha" "$head_sha" || fail 'durable Base is not an ancestor of Head'
+[[ -z "$(git -C "$repo_root" status --porcelain)" ]] || fail 'Issue worktree is dirty'
+require_origin() {
+  local origin_url
+  origin_url=$(git -C "$repo_root" remote get-url origin) || fail 'origin remote is missing'
+  case "$origin_url" in
+    "https://github.com/$repo"|"https://github.com/$repo.git"|"git@github.com:$repo"|"git@github.com:$repo.git"|"ssh://git@github.com/$repo"|"ssh://git@github.com/$repo.git") ;;
+    *) fail 'origin remote does not match requested repository' ;;
+  esac
+}
+require_origin
+
+validate_pr() {
+  local expected_state=$1 document=$2 expected_pr=$3
+  PR_JSON="$document" REPO="$repo" PR="$expected_pr" BRANCH="$branch" HEAD="$head_sha" EXPECTED_STATE="$expected_state" ruby -rjson -e '
+    pr = JSON.parse(ENV.fetch("PR_JSON")); abort "PR must be an object" unless pr.is_a?(Hash)
+    required = %w[number state baseRefName headRefName headRefOid mergeCommit url]
+    abort "PR fields differ" unless pr.keys.sort == required.sort
+    abort "PR number differs" unless pr["number"] == Integer(ENV.fetch("PR"))
+    abort "PR repository differs" unless pr["url"] == "https://github.com/#{ENV.fetch("REPO")}/pull/#{ENV.fetch("PR")}"
+    abort "PR Base differs" unless pr["baseRefName"] == "main"
+    abort "PR Branch or Head differs" unless pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD")
+    expected = ENV.fetch("EXPECTED_STATE")
+    abort "PR state differs" unless expected == "ANY" ? %w[OPEN CLOSED MERGED].include?(pr["state"]) : pr["state"] == expected
+    if pr["state"] == "MERGED"
+      oid = pr.dig("mergeCommit", "oid"); abort "merged PR lacks merge commit" unless oid.is_a?(String) && oid.match?(/\A[0-9a-f]{40}\z/)
+    else
+      abort "unmerged PR unexpectedly has merge commit" unless pr["mergeCommit"].nil?
+    end
+    puts pr["state"]
+  ' || fail 'PR identity is stale or mismatched'
+}
+
+view_exact_pr() {
+  gh pr view "$1" --repo "$repo" --json number,state,baseRefName,headRefName,headRefOid,mergeCommit,url
+}
+
+confirm_issue_closed() {
+  local issue_json
+  issue_json=$(gh issue view "$issue" --repo "$repo" --json number,state,url) || fail 'Issue close confirmation failed'
+  ISSUE_JSON="$issue_json" REPO="$repo" ISSUE="$issue" ruby -rjson -e '
+    value = JSON.parse(ENV.fetch("ISSUE_JSON")); expected = Integer(ENV.fetch("ISSUE"))
+    abort unless value.keys.sort == %w[number state url].sort && value["number"] == expected && value["state"] == "CLOSED" && value["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{expected}"
+  ' || fail 'Issue was not closed with exact identity'
+}
+
+confirm_remote_merged_workflow() {
+  local workflow_json workflow_state
+  workflow_json=$(gh issue view "$issue" --repo "$repo" --json labels) || fail 'Issue workflow confirmation failed'
+  workflow_state=$(printf '%s' "$workflow_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || fail 'Issue workflow labels are invalid'
+  [[ "$workflow_state" == merged ]] || fail 'Issue workflow state is not merged'
+}
+
+converge_merged_state() {
+  local pr=$1 remote_document remote_state transition_time durable_state
   remote_document=$(gh issue view "$issue" --repo "$repo" --json labels) || fail 'Issue workflow state could not be confirmed'
   remote_state=$(printf '%s' "$remote_document" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || fail 'Issue workflow state is invalid'
-  if [[ "$transition_from" == approved-for-merge ]]; then
-    if [[ "$remote_state" == approved-for-merge ]]; then
-      "$repo_root/tools/issue-state.sh" transition --repo "$repo" --issue "$issue" --from approved-for-merge --to merged >/dev/null
-    elif [[ "$remote_state" == merged ]]; then
-      recovered=true
-    else
-      fail 'remote Issue workflow state cannot converge to merged'
-    fi
-  elif [[ "$transition_from" != merged ]]; then
-    fail 'durable Issue state cannot converge to merged'
-  elif [[ "$remote_state" != merged ]]; then
-    fail 'remote Issue workflow state differs from merged durable state'
+  durable_state=$(ruby "$identity_tool" validate-worktree "$repo_root" "$repo" "$issue" | jq -er '.state') || fail 'durable state changed before convergence'
+  if [[ "$durable_state" == approved-for-merge && "$remote_state" == approved-for-merge ]]; then
+    "$repo_root/tools/issue-state.sh" transition --repo "$repo" --issue "$issue" --from approved-for-merge --to merged >/dev/null
+  elif [[ "$remote_state" != merged || ( "$durable_state" != approved-for-merge && "$durable_state" != merged ) ]]; then
+    fail 'remote and durable workflow states cannot converge to merged'
   fi
-  local temporary="$state.tmp.$$"
   transition_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  HEAD="$head_sha" PR="$pull_request" RECOVERED="$recovered" TRANSITION_TIME="$transition_time" ruby -rjson -e '
-    path, output = ARGV; value = JSON.parse(File.binread(path))
-    required = %w[baseSha branch executor issue issueContract previousState primaryImplementer repository resumeState schemaVersion state worktree]
-    optional = %w[from headSha pullRequest to transitionedAt]
-    abort "state has unknown or missing fields" unless (value.keys - required - optional).empty? && required.all? { |key| value.key?(key) }
-    if ENV.fetch("RECOVERED") == "true"
-      abort "unexpected local state for recovery" unless value["state"] == "approved-for-merge"
-      value["state"] = "merged"; value["previousState"] = "approved-for-merge"; value["resumeState"] = nil
-      value["from"] = "approved-for-merge"; value["to"] = "merged"; value["transitionedAt"] = ENV.fetch("TRANSITION_TIME")
-    end
-    abort "state transition did not converge" unless value["state"] == "merged" && value["previousState"] == "approved-for-merge"
-    value["headSha"] = ENV.fetch("HEAD"); value["pullRequest"] = Integer(ENV.fetch("PR"))
-    File.binwrite(output, JSON.generate(value))
-  ' "$state" "$temporary" || { rm -f "$temporary"; fail 'merged state persistence validation failed'; }
-  chmod 600 "$temporary"
-  mv -f "$temporary" "$state"
+  ruby "$identity_tool" mark-merged "$repo_root" "$repo" "$issue" "$pr" "$head_sha" "$transition_time" >/dev/null || fail 'merged state persistence failed'
 }
 
-confirm_merged_pr_and_issue() {
-  local number=$1 confirmation issue_state
-  confirmation=$(gh pr view "$number" --repo "$repo" --json state,headRefOid,mergeCommit) || fail 'merged PR could not be confirmed'
-  CONFIRMATION="$confirmation" HEAD="$head_sha" ruby -rjson -e 'pr = JSON.parse(ENV.fetch("CONFIRMATION")); abort "PR was not merged" unless pr["state"] == "MERGED" && pr["headRefOid"] == ENV.fetch("HEAD") && pr.dig("mergeCommit", "oid").is_a?(String) && pr.dig("mergeCommit", "oid").match?(/\A[0-9a-f]{40}\z/)' || fail 'merged PR confirmation mismatched'
-  issue_state=$(gh issue view "$issue" --repo "$repo" --json state | jq -er '.state') || fail 'Issue close confirmation failed'
-  [[ "$issue_state" == CLOSED ]] || fail 'Issue was not closed'
-}
+"$repo_root/tools/github-account-preflight.sh" --repo "$repo" >/dev/null || fail 'personal GitHub account or repository preflight failed'
 
-body=$("$repo_root/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head_sha")
-prs=$(gh pr list --repo "$repo" --head "$branch" --state all --json number,state,headRefName,headRefOid) || fail 'PR lookup failed'
-pr_record=$(PRS="$prs" BRANCH="$branch" HEAD="$head_sha" ruby -rjson -e 'items = JSON.parse(ENV.fetch("PRS")); abort "ambiguous PR" if items.length > 1; if items.length == 1; item = items.fetch(0); abort "existing PR differs from Issue Head" unless item["headRefName"] == ENV.fetch("BRANCH") && item["headRefOid"] == ENV.fetch("HEAD"); puts JSON.generate(item); end') || fail 'existing PR is ambiguous or stale'
+if [[ "$state_name" == merged ]]; then
+  [[ "$pull_request" =~ ^[1-9][0-9]*$ ]] || fail 'merged recovery requires a positive persisted pullRequest'
+  pr_document=$(view_exact_pr "$pull_request") || fail 'persisted merged PR could not be read'
+  [[ "$(validate_pr MERGED "$pr_document" "$pull_request")" == MERGED ]] || fail 'persisted PR is not merged'
+  confirm_issue_closed
+  confirm_remote_merged_workflow
+  jq -cn --argjson issue "$issue" --argjson pr "$pull_request" --arg headSha "$head_sha" '{status:"already-merged",issue:$issue,pullRequest:$pr,headSha:$headSha}'
+  exit 0
+fi
+[[ "$state_name" == approved-for-merge ]] || fail 'normal merge requires approved-for-merge state'
+
+"$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null || fail 'initial merge evidence preflight failed'
+"$repo_root/tools/premerge-gate.sh" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed before publication'
+body=$("$repo_root/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head_sha") || fail 'PR body rendering failed'
+
 pr_number=''
-if [[ -n "$pr_record" ]]; then
-  pr_number=$(printf '%s' "$pr_record" | jq -er '.number')
-  pr_state=$(printf '%s' "$pr_record" | jq -er '.state')
-  if [[ "$pr_state" == MERGED ]]; then
-    confirm_merged_pr_and_issue "$pr_number"
-    persist_merged_state "$pr_number" "$(jq -er '.state | strings' "$state")"
-    jq -cn --argjson issue "$issue" --argjson pr "$pr_number" --arg headSha "$head_sha" '{status:"already-merged",issue:$issue,pullRequest:$pr,headSha:$headSha}'
-    exit 0
+pr_state=''
+if [[ -n "$pull_request" ]]; then
+  pr_number=$pull_request
+  pr_document=$(view_exact_pr "$pr_number") || fail 'persisted PR could not be read'
+  pr_state=$(validate_pr ANY "$pr_document" "$pr_number")
+else
+  candidates=$(gh pr list --repo "$repo" --head "$branch" --state all --json number,state,baseRefName,headRefName,headRefOid,mergeCommit,url) || fail 'PR discovery failed'
+  selected=$(PRS="$candidates" REPO="$repo" BRANCH="$branch" HEAD="$head_sha" ruby -rjson -e '
+    records = JSON.parse(ENV.fetch("PRS")); abort "PR discovery must return an array" unless records.is_a?(Array); abort "ambiguous PR discovery" if records.length > 1
+    if records.length == 1
+      pr = records.fetch(0); abort "discovered PR fields differ" unless pr.keys.sort == %w[number state baseRefName headRefName headRefOid mergeCommit url].sort
+      abort "discovered PR identity differs" unless pr["number"].is_a?(Integer) && pr["number"].positive? && pr["url"] == "https://github.com/#{ENV.fetch("REPO")}/pull/#{pr["number"]}" && pr["baseRefName"] == "main" && pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD")
+      puts JSON.generate(pr)
+    end
+  ') || fail 'PR discovery was ambiguous or mismatched'
+  if [[ -n "$selected" ]]; then
+    pr_number=$(jq -er '.number' <<<"$selected")
+    pr_state=$(validate_pr ANY "$selected" "$pr_number")
+    ruby "$identity_tool" persist-pr "$repo_root" "$repo" "$issue" "$pr_number" >/dev/null || fail 'discovered PR identity could not be persisted'
   fi
-  [[ "$pr_state" == OPEN ]] || fail 'existing PR is closed without merge'
 fi
-"$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.push_branch --expected-head "$head_sha" >/dev/null
-git -C "$repo_root" push origin "$branch"
+
+if [[ "$pr_state" == MERGED ]]; then
+  [[ -n "$pull_request" ]] || fail 'merged recovery requires a previously persisted pullRequest'
+  confirm_issue_closed
+  converge_merged_state "$pr_number"
+  jq -cn --argjson issue "$issue" --argjson pr "$pr_number" --arg headSha "$head_sha" '{status:"already-merged",issue:$issue,pullRequest:$pr,headSha:$headSha}'
+  exit 0
+fi
+[[ -z "$pr_state" || "$pr_state" == OPEN ]] || fail 'persisted or discovered PR is closed without merge'
+
+"$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.push_branch --expected-head "$head_sha" >/dev/null || fail 'push preflight failed'
+require_origin
+git -C "$repo_root" push origin "refs/heads/$branch:refs/heads/$branch" || fail 'exact Branch push failed'
+
 if [[ -z "$pr_number" ]]; then
-  "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.create_pr --expected-head "$head_sha" >/dev/null
-  gh pr create --repo "$repo" --base main --head "$branch" --body "$body" >/dev/null || fail 'PR creation failed'
-  created=$(gh pr list --repo "$repo" --head "$branch" --state open --json number,state,headRefName,headRefOid) || fail 'created PR could not be resolved'
-  pr_number=$(PRS="$created" BRANCH="$branch" HEAD="$head_sha" ruby -rjson -e 'items = JSON.parse(ENV.fetch("PRS")); abort "created PR is ambiguous" unless items.length == 1; item = items.fetch(0); abort "created PR differs from Issue Head" unless item["state"] == "OPEN" && item["headRefName"] == ENV.fetch("BRANCH") && item["headRefOid"] == ENV.fetch("HEAD"); puts item.fetch("number")') || fail 'created PR is ambiguous or stale'
+  "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.create_pr --expected-head "$head_sha" >/dev/null || fail 'PR creation preflight failed'
+  gh pr create --repo "$repo" --base main --head "$branch" --title "$title" --body "$body" >/dev/null || fail 'PR creation failed'
+  created=$(gh pr list --repo "$repo" --head "$branch" --state open --json number,state,baseRefName,headRefName,headRefOid,mergeCommit,url) || fail 'created PR could not be resolved'
+  selected=$(PRS="$created" ruby -rjson -e 'items = JSON.parse(ENV.fetch("PRS")); abort unless items.is_a?(Array) && items.length == 1; puts JSON.generate(items.fetch(0))') || fail 'created PR is ambiguous'
+  pr_number=$(jq -er '.number' <<<"$selected") || fail 'created PR number is invalid'
+  [[ "$(validate_pr OPEN "$selected" "$pr_number")" == OPEN ]] || fail 'created PR identity differs'
+  ruby "$identity_tool" persist-pr "$repo_root" "$repo" "$issue" "$pr_number" >/dev/null || fail 'created PR identity could not be persisted'
 fi
-"$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null
-"$repo_root/tools/premerge-gate.sh" --issue "$issue" --head-sha "$head_sha" >/dev/null
-gh pr merge "$pr_number" --repo "$repo" --squash --match-head-commit "$head_sha"
-confirm_merged_pr_and_issue "$pr_number"
-persist_merged_state "$pr_number" "$(jq -er '.state | strings' "$state")"
+
+"$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null || fail 'merge preflight failed'
+"$repo_root/tools/premerge-gate.sh" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed'
+gh pr merge "$pr_number" --repo "$repo" --squash --match-head-commit "$head_sha" || fail 'Squash Merge failed'
+pr_document=$(view_exact_pr "$pr_number") || fail 'merged PR could not be confirmed'
+[[ "$(validate_pr MERGED "$pr_document" "$pr_number")" == MERGED ]] || fail 'merged PR confirmation mismatched'
+confirm_issue_closed
+converge_merged_state "$pr_number"
 jq -cn --argjson issue "$issue" --argjson pr "$pr_number" --arg headSha "$head_sha" '{status:"merged",issue:$issue,pullRequest:$pr,headSha:$headSha}'
