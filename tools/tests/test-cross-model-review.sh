@@ -8,7 +8,8 @@ head_sha=$(git -C "$repo_root" rev-parse HEAD)
 base_sha=$(git -C "$repo_root" rev-parse HEAD~1)
 artifact_issue="$repo_root/.artifacts/issues/$issue"
 artifact_root="$artifact_issue/$head_sha"
-trap 'rm -rf "$workspace" "$artifact_issue"' EXIT
+artifact_sibling="$repo_root/.artifacts/issues/${issue}9"
+trap 'rm -rf "$workspace" "$artifact_issue" "$artifact_sibling"' EXIT
 [[ ! -e "$artifact_issue" ]] || { echo "refusing to overwrite $artifact_issue" >&2; exit 1; }
 
 fake_bin="$workspace/bin"
@@ -60,12 +61,16 @@ JSON
 
 git_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --absolute-git-dir)
 git_common=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
-sandbox_filesystem="permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$repo_root\"=\"read\",\"$git_dir\"=\"read\",\"$git_common\"=\"read\"}"
+artifact_issue_physical=$(cd "$artifact_issue" && pwd -P)
+sandbox_filesystem="permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$repo_root\"=\"read\",\"$git_dir\"=\"read\",\"$git_common\"=\"read\",\"$artifact_issue_physical\"=\"read\"}"
 reviewer_sandbox() {
   "$real_codex" sandbox -c 'default_permissions="reviewer"' -c 'permissions.reviewer.extends=":read-only"' -c "$sandbox_filesystem" -c 'permissions.reviewer.network={enabled=false}' -P reviewer -- "$@"
 }
 reviewer_sandbox /bin/cat "$artifact_root/review-packet.json" >/dev/null
 reviewer_sandbox /bin/cat "$repo_root/README.md" >/dev/null
+mkdir -p "$artifact_sibling"
+printf 'must-not-be-readable-by-reviewer\n' > "$artifact_sibling/sentinel"
+assert_fails 'custom reviewer profile denies sibling Issue artifacts' reviewer_sandbox /bin/cat "$artifact_sibling/sentinel"
 assert_fails 'custom reviewer profile denies the retained CODEX_HOME sentinel' reviewer_sandbox /bin/cat "$fake_codex_home/sentinel"
 assert_fails 'custom reviewer profile denies absolute executable socket creation' reviewer_sandbox /usr/bin/ruby -rsocket -e 'Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0); exit 0'
 

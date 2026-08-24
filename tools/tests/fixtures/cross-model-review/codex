@@ -8,7 +8,13 @@ set -euo pipefail
 repo_root=$(pwd -P)
 git_dir=$(/usr/bin/git -C "$repo_root" rev-parse --path-format=absolute --absolute-git-dir)
 git_common=$(/usr/bin/git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
-expected_filesystem="permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$repo_root\"=\"read\",\"$git_dir\"=\"read\",\"$git_common\"=\"read\"}"
+primary_root=${git_common%/.git}
+prompt=${!#}
+packet_path=${prompt##*Validated review packet: }
+packet_head=${packet_path%/*}
+artifact_issue_root=${packet_head%/*}
+[[ "$artifact_issue_root" == "$primary_root/.artifacts/issues/"* && "$artifact_issue_root" != "$primary_root/.artifacts/issues" ]] || exit 98
+expected_filesystem="permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$repo_root\"=\"read\",\"$git_dir\"=\"read\",\"$git_common\"=\"read\",\"$artifact_issue_root\"=\"read\"}"
 [[ "${11:-}" == -c && "${12:-}" == "$expected_filesystem" ]] || exit 98
 [[ "${13:-}" == -c && "${14:-}" == 'permissions.reviewer.network={enabled=false}' ]] || exit 99
 [[ "${15:-}" == -c && "${16:-}" == 'mcp_servers={}' ]] || exit 100
@@ -29,7 +35,6 @@ for forbidden in GH_TOKEN GITHUB_TOKEN SUPABASE_ACCESS_TOKEN CLOUDFLARE_API_TOKE
   [[ -z "${!forbidden:-}" ]] || exit 110
 done
 
-prompt=${!#}
 [[ "$prompt" == *'Validated review packet: '* ]] || exit 111
 if [[ "$prompt" == *external-attempt* ]]; then
   command -v gh >/dev/null 2>&1 && exit 112

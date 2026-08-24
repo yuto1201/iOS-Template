@@ -15,8 +15,9 @@ while [[ $# -gt 0 ]]; do
 done
 [[ ( "$primary" == codex || "$primary" == claude ) && -n "$packet" ]] || usage
 
-ruby -rjson -rdigest -rtime - "$repo_root" "$primary" "$packet" "$result" <<'RUBY'
-repo, primary, packet_input, result_input = ARGV
+topology=$(ruby "$repo_root/tools/lib/review-artifacts.rb" "$repo_root") || exit 1
+ruby -rjson -rdigest -rtime -rfiddle/import - "$topology" "$primary" "$packet" "$result" <<'RUBY'
+topology_json, primary, packet_input, result_input = ARGV
 
 def reject(message)
   warn "review validation failed: #{message}"
@@ -47,39 +48,88 @@ def digest!(value, at)
   value
 end
 
-def json_file!(path, at)
-  data = File.binread(path)
-  JSON.parse(data)
-rescue Errno::ENOENT, Errno::EACCES, JSON::ParserError => error
+def json_file!(file, at)
+  JSON.parse(file.fetch(:bytes))
+rescue JSON::ParserError => error
   reject("#{at} is not readable JSON: #{error.message}")
 end
 
-def no_symlink_components!(repo, path, at)
-  relative = path.delete_prefix(repo + "/")
-  reject("#{at} escapes repository") if relative == path || relative.empty?
-  current = repo
-  relative.split("/").each do |component|
-    current = File.join(current, component)
-    reject("#{at} contains a symlink") if File.lstat(current).symlink?
-  rescue Errno::ENOENT
-    reject("#{at} does not exist")
-  end
+module NativeOpen
+  extend Fiddle::Importer
+  dlload Fiddle.dlopen(nil)
+  extern "int openat(int, const char*, int)"
 end
 
-def regular_inside!(repo, input, root, at)
-  reject("#{at} must be repository-relative") if input.start_with?("/")
-  path = File.expand_path(input, repo)
-  root = File.expand_path(root, repo)
-  reject("#{at} escapes its canonical directory") unless path.start_with?(root + "/")
-  no_symlink_components!(repo, path, at)
-  stat = File.lstat(path)
-  reject("#{at} must be a regular file") unless stat.file?
-  real_root = File.realpath(root)
-  real_path = File.realpath(path)
-  reject("#{at} escapes its canonical directory") unless real_path.start_with?(real_root + "/")
-  path
-rescue Errno::ENOENT, Errno::EACCES => error
+def secure_file!(path, root, at, expected_root_identity = nil)
+  reject("#{at} path is not absolute") unless path.start_with?("/") && root.start_with?("/")
+  reject("#{at} escapes its physical root") unless path.start_with?(root + "/")
+  relative = path.delete_prefix(root + "/")
+  reject("#{at} has an empty or unsafe path") if relative.empty? || relative.split("/").any? { |component| component.empty? || component == "." || component == ".." }
+  components = relative.split("/")
+  flags = File::RDONLY
+  flags |= File::NOFOLLOW if File.const_defined?(:NOFOLLOW)
+  descriptors = []
+  file = nil
+  root_file = File.open(root, flags)
+  descriptors << root_file
+  root_stat = root_file.stat
+  reject("#{at} root must be a physical directory") unless root_stat.directory? && File.realpath(root) == root
+  if expected_root_identity
+    reject("#{at} physical root identity changed") unless [root_stat.dev, root_stat.ino] == expected_root_identity
+  end
+  current = root_file
+  components.each_with_index do |component, index|
+    fd = NativeOpen.openat(current.fileno, component, flags)
+    if fd.negative?
+      error = SystemCallError.new("openat", Fiddle.last_error)
+      reject("#{at} is not readable without following links: #{error.message}")
+    end
+    opened = IO.for_fd(fd, autoclose: true)
+    descriptors << opened
+    stat = opened.stat
+    if index < components.length - 1
+      reject("#{at} has a non-directory component") unless stat.directory?
+      current = opened
+    else
+      file = opened
+    end
+  end
+  reject("#{at} did not resolve to a file") unless file
+  descriptor_stat = file.stat
+  reject("#{at} must be a regular single-link file") unless descriptor_stat.file? && descriptor_stat.nlink == 1
+  bytes = file.read
+  current_path = root
+  components.each_with_index do |component, index|
+    current_path = File.join(current_path, component)
+    stat = File.lstat(current_path)
+    reject("#{at} contains a symlink") if stat.symlink?
+    reject("#{at} has a non-directory component") if index < components.length - 1 && !stat.directory?
+    if index == components.length - 1
+      reject("#{at} changed while it was read") unless stat.file? && stat.nlink == 1 && stat.dev == descriptor_stat.dev && stat.ino == descriptor_stat.ino
+    end
+  end
+  {path: path, bytes: bytes}
+rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP => error
   reject("#{at} is not readable: #{error.message}")
+ensure
+  descriptors&.reverse_each { |descriptor| descriptor.close unless descriptor.closed? }
+end
+
+def regular_inside!(repo, input, root, at, root_identity)
+  reject("#{at} must be repository-relative") if input.start_with?("/")
+  reject("#{at} contains an unsafe component") if input.split("/").any? { |component| component.empty? || component == "." || component == ".." }
+  path = File.join(repo, input)
+  secure_file!(path, root, at, root_identity)
+end
+
+def artifact_file!(artifacts, input, canonical_root, at, artifacts_identity)
+  reject("#{at} must be a canonical artifact path") unless input.is_a?(String) && input.start_with?(".artifacts/")
+  components = input.split("/")
+  reject("#{at} contains an unsafe component") if components.any? { |component| component.empty? || component == "." || component == ".." }
+  suffix = components.drop(1).join("/")
+  path = File.join(artifacts, suffix)
+  reject("#{at} escapes its canonical directory") unless path.start_with?(canonical_root + "/")
+  secure_file!(path, artifacts, at, artifacts_identity)
 end
 
 def relative_artifact!(value, root, at)
@@ -88,11 +138,14 @@ def relative_artifact!(value, root, at)
   File.join(root, value)
 end
 
-repo = File.realpath(repo)
-artifacts = File.join(repo, ".artifacts")
-reject(".artifacts must not be a symlink") if File.symlink?(artifacts)
-packet_path = regular_inside!(repo, packet_input, File.join(artifacts, "issues"), "packet")
-packet = json_file!(packet_path, "packet")
+topology = JSON.parse(topology_json)
+repo = topology.fetch("repositoryRoot")
+artifacts = topology.fetch("artifactsRoot")
+repo_identity = [topology.fetch("repositoryDevice"), topology.fetch("repositoryInode")]
+artifacts_identity = [topology.fetch("artifactsDevice"), topology.fetch("artifactsInode")]
+issues_root = File.join(artifacts, "issues")
+packet_file = artifact_file!(artifacts, packet_input, issues_root, "packet", artifacts_identity)
+packet = json_file!(packet_file, "packet")
 packet_keys = %w[schemaVersion issue primaryModel reviewerModel baseSha headSha verifySha issueContract specAnchors acceptanceCriteria diffFile verifyFile imageFiles]
 exact_keys!(packet, packet_keys, "packet")
 reject("packet.schemaVersion must be 1") unless packet["schemaVersion"] == 1
@@ -108,15 +161,17 @@ reject("packet.headSha must equal packet.verifySha") unless head_sha == verify_s
 
 issue_root = File.join(artifacts, "issues", issue.to_s)
 head_root = File.join(issue_root, head_sha)
-regular_inside!(repo, packet_input, head_root, "packet")
+expected_packet_path = ".artifacts/issues/#{issue}/#{head_sha}/review-packet.json"
+reject("packet path is not canonical") unless packet_input == expected_packet_path
+packet_file = artifact_file!(artifacts, packet_input, head_root, "packet", artifacts_identity)
 exact_keys!(packet["issueContract"], %w[path digest], "packet.issueContract")
 expected_contract_path = ".artifacts/issues/#{issue}/issue-contract.json"
 reject("packet.issueContract.path is not canonical") unless packet["issueContract"]["path"] == expected_contract_path
-contract_path = regular_inside!(repo, expected_contract_path, issue_root, "packet.issueContract.path")
+contract_file = artifact_file!(artifacts, expected_contract_path, issue_root, "packet.issueContract.path", artifacts_identity)
 contract_digest = digest!(packet["issueContract"]["digest"], "packet.issueContract.digest")
-actual_contract_digest = "sha256:#{Digest::SHA256.file(contract_path).hexdigest}"
+actual_contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_file.fetch(:bytes))}"
 reject("packet.issueContract.digest does not match exact file bytes") unless contract_digest == actual_contract_digest
-contract = json_file!(contract_path, "issue contract")
+contract = json_file!(contract_file, "issue contract")
 reject("issue contract identity does not match packet") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue
 repository = string!(contract["repository"], "issue contract.repository")
 reject("issue contract.repository is invalid") unless repository.match?(/\A[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\z/)
@@ -138,30 +193,33 @@ expected_prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
 %w[diffFile verifyFile].each do |field|
   value = string!(packet[field], "packet.#{field}")
   reject("packet.#{field} is not inside the Issue/Head artifact directory") unless value.start_with?(expected_prefix)
-  regular_inside!(repo, value, head_root, "packet.#{field}")
+  artifact_file!(artifacts, value, head_root, "packet.#{field}", artifacts_identity)
 end
 images = packet["imageFiles"]
 reject("packet.imageFiles must be an array") unless images.is_a?(Array) && images.all? { |entry| entry.is_a?(String) } && images.uniq == images
 images.each_with_index do |image, index|
   artifact_path = relative_artifact!(image, head_root, "packet.imageFiles[#{index}]")
-  regular_inside!(repo, artifact_path.delete_prefix(repo + "/"), head_root, "packet.imageFiles[#{index}]")
+  relative_path = artifact_path.delete_prefix(artifacts + "/")
+  artifact_file!(artifacts, ".artifacts/#{relative_path}", head_root, "packet.imageFiles[#{index}]", artifacts_identity)
 end
 
-verify_path = regular_inside!(repo, packet["verifyFile"], head_root, "packet.verifyFile")
-verify = json_file!(verify_path, "verify file")
+verify_file = artifact_file!(artifacts, packet["verifyFile"], head_root, "packet.verifyFile", artifacts_identity)
+verify = json_file!(verify_file, "verify file")
 reject("verify file must be an object") unless verify.is_a?(Hash)
 reject("verify file identity does not match packet") unless verify["schemaVersion"] == 1 && verify["issue"] == issue && verify["baseSha"] == base_sha && verify["headSha"] == verify_sha
 exact_keys!(verify["issueContract"], %w[path digest], "verify.issueContract")
 reject("verify issue-contract reference does not match packet") unless verify["issueContract"]["path"] == expected_contract_path && verify["issueContract"]["digest"] == contract_digest
 
 if result_input.empty?
-  puts JSON.generate(packet)
+  puts JSON.generate(packet.merge("issueContractRepository" => repository))
   exit 0
 end
 
-result_path = File.expand_path(result_input, Dir.pwd)
-reject("result must be a regular file") unless File.lstat(result_path).file? && !File.lstat(result_path).symlink?
-result = json_file!(result_path, "result")
+result_input_path = File.expand_path(result_input, Dir.pwd)
+result_parent = File.realpath(File.dirname(result_input_path))
+result_path = File.join(result_parent, File.basename(result_input_path))
+result_file = secure_file!(result_path, result_parent, "result")
+result = json_file!(result_file, "result")
 result_keys = %w[schemaVersion issue reviewerModel baseSha headSha verifySha issueContractDigest verdict findings acceptanceAssessment reviewedAt]
 exact_keys!(result, result_keys, "result")
 reject("result.schemaVersion must be 1") unless result["schemaVersion"] == 1
@@ -176,7 +234,7 @@ findings.each_with_index do |finding, index|
   reject("result.findings[#{index}].severity is invalid") unless %w[critical high medium low].include?(finding["severity"])
   reject("result.findings[#{index}].category is invalid") unless string!(finding["category"], "result.findings[#{index}].category").match?(/\A[a-z][a-z-]*\z/)
   file = string!(finding["file"], "result.findings[#{index}].file")
-  regular_inside!(repo, file, repo, "result.findings[#{index}].file")
+  regular_inside!(repo, file, repo, "result.findings[#{index}].file", repo_identity)
   reject("result.findings[#{index}].line must be positive") unless finding["line"].is_a?(Integer) && finding["line"].positive?
   %w[title evidence requiredChange].each { |field| string!(finding[field], "result.findings[#{index}].#{field}") }
 end
@@ -192,7 +250,8 @@ assessments.each_with_index do |assessment, index|
     local_path = reference.split("#", 2).first
     next if local_path.include?(":")
     artifact_path = relative_artifact!(local_path, head_root, "result.acceptanceAssessment[#{index}].evidence[#{evidence_index}]")
-    regular_inside!(repo, artifact_path.delete_prefix(repo + "/"), head_root, "result.acceptanceAssessment[#{index}].evidence[#{evidence_index}]")
+    relative_path = artifact_path.delete_prefix(artifacts + "/")
+    artifact_file!(artifacts, ".artifacts/#{relative_path}", head_root, "result.acceptanceAssessment[#{index}].evidence[#{evidence_index}]", artifacts_identity)
   end
 end
 begin

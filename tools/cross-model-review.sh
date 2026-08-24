@@ -18,14 +18,14 @@ packet_json=$("$repo_root/tools/validate-review-result.sh" --primary "$primary" 
 issue=$(jq -er '.issue' <<<"$packet_json")
 head_sha=$(jq -er '.headSha' <<<"$packet_json")
 base_sha=$(jq -er '.baseSha' <<<"$packet_json")
-repository=$(jq -er '.issueContractRepository // empty' <<<"$packet_json" 2>/dev/null || true)
-if [[ -z "$repository" ]]; then
-  contract_path=$(jq -er '.issueContract.path' <<<"$packet_json")
-  repository=$(jq -er '.repository' "$repo_root/$contract_path")
-fi
+topology=$(ruby "$repo_root/tools/lib/review-artifacts.rb" "$repo_root") || exit 1
+artifacts_root=$(jq -er '.artifactsRoot' <<<"$topology")
+artifact_issue_root="$artifacts_root/issues/$issue"
+repository=$(jq -er '.issueContractRepository' <<<"$packet_json")
 expected_output=".artifacts/issues/$issue/$head_sha/review.json"
 [[ "$output" == "$expected_output" ]] || { echo 'review output must be canonical Issue/Head review.json' >&2; exit 1; }
-output_absolute="$repo_root/$output"
+output_absolute="$artifact_issue_root/$head_sha/review.json"
+packet_absolute="$artifact_issue_root/$head_sha/review-packet.json"
 git -C "$repo_root" cat-file -e "$head_sha^{commit}" && git -C "$repo_root" merge-base --is-ancestor "$base_sha" "$head_sha" || { echo 'packet Base/Head is not a valid commit range' >&2; exit 1; }
 [[ "$(git -C "$repo_root" rev-parse HEAD)" == "$head_sha" ]] || { echo 'current Head does not match the review packet' >&2; exit 1; }
 
@@ -65,24 +65,27 @@ if [[ -e "$output_absolute" || -L "$output_absolute" ]]; then
 fi
 
 snapshot_repository() {
-  ruby -rdigest -rfind - "$repo_root" <<'RUBY'
-root = File.realpath(ARGV.fetch(0))
-Find.find(root) do |path|
-  relative = path.delete_prefix(root + "/")
-  if relative == ".git" || relative.start_with?(".git/")
-    Find.prune if File.directory?(path)
-    next
-  end
-  next if path == root
-  stat = File.lstat(path)
-  if stat.directory?
-    puts "d\t#{relative}\t#{stat.mode & 0o7777}"
-  elsif stat.file?
-    puts "f\t#{relative}\t#{stat.mode & 0o7777}\t#{stat.size}\t#{Digest::SHA256.file(path).hexdigest}"
-  elsif stat.symlink?
-    puts "l\t#{relative}\t#{File.readlink(path)}"
-  else
-    puts "o\t#{relative}\t#{stat.ftype}"
+  ruby -rdigest -rfind - "$repo_root" "$artifact_issue_root" <<'RUBY'
+repository = File.realpath(ARGV.fetch(0))
+artifact_issue = File.realpath(ARGV.fetch(1))
+[[repository, "repository"], [artifact_issue, "artifacts"]].each do |root, label|
+  Find.find(root) do |path|
+    relative = path.delete_prefix(root + "/")
+    if label == "repository" && (relative == ".git" || relative.start_with?(".git/") || relative == ".artifacts" || relative.start_with?(".artifacts/"))
+      Find.prune if File.directory?(path)
+      next
+    end
+    next if path == root
+    stat = File.lstat(path)
+    if stat.directory?
+      puts "#{label}:d\t#{relative}\t#{stat.mode & 0o7777}"
+    elsif stat.file?
+      puts "#{label}:f\t#{relative}\t#{stat.mode & 0o7777}\t#{stat.size}\t#{Digest::SHA256.file(path).hexdigest}"
+    elsif stat.symlink?
+      puts "#{label}:l\t#{relative}\t#{File.readlink(path)}"
+    else
+      puts "#{label}:o\t#{relative}\t#{stat.ftype}"
+    end
   end
 end
 RUBY
@@ -92,7 +95,6 @@ snapshot_repository > "$snapshot_before"
 review_status=0
 if [[ "$primary" == codex ]]; then
   instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. Return only one JSON object conforming exactly to docs/agent-contracts/review-packet.md Result schema.'
-  packet_absolute="$repo_root/$packet"
   if ruby -rtimeout -e '
     command = ARGV
     pid = Process.spawn(*command, in: File::NULL)
@@ -143,7 +145,6 @@ File.binwrite(normalized, JSON.generate(value))
 RUBY
 "$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$normalized_output" > "$validated"
 
-mkdir -p "$(dirname "$output_absolute")"
 ruby - "$output_absolute" "$validated" <<'RUBY'
 output, source = ARGV
 data = File.binread(source)
@@ -158,6 +159,7 @@ rescue Errno::EEXIST
   exit 1
 end
 RUBY
+"$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$output_absolute" > "$validated"
 verdict=$(jq -er '.verdict' "$validated")
 next_state=$([[ "$verdict" == approved ]] && echo approved-for-merge || echo changes-requested)
 "$repo_root/tools/issue-state.sh" transition --repo "$repository" --issue "$issue" --from review-requested --to "$next_state" >/dev/null
