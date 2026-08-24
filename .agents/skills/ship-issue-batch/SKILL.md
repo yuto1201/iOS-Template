@@ -17,7 +17,16 @@ Schedule the graph produced by `plan-issue-batch`; use `ship-issue` for each nod
 
 ## Retry boundary
 
-Count a failure as identical only when `(Issue, stage, exact tool argv, exit status, SHA-256 of exact captured stderr bytes)` is byte-for-byte unchanged. Do not normalize timestamps or messages to manufacture equality. A success or a different tuple starts a new count. On the third consecutive identical tuple, do not run a fourth attempt: ask the Codex controller to call `tools/issue-state.sh transition` from the current state to `blocked:repeated-failure`. That tool owns `resumeState`; never pass or hand-edit it. Do not relabel the failure flaky or bypass verification/review.
+Count a failure as identical only when `(Issue, stage, exact tool argv, exit status, SHA-256 of exact captured stderr bytes)` is byte-for-byte unchanged. Do not normalize timestamps or messages to manufacture equality. A success or a different tuple starts a new count. Never run a fourth identical attempt.
+
+The current state machine permits `blocked:repeated-failure` only from `in-progress`:
+
+- At `in-progress`, the third identical failure transitions directly to `blocked:repeated-failure` through `tools/issue-state.sh transition`.
+- At `changes-requested`, `verify-passed`, or `approved-for-merge`, first use their explicit allowed transition to `in-progress`, then transition to `blocked:repeated-failure`. This abandons the stale later-stage readiness; resumption must repeat the affected verification/review.
+- At `review-requested`, do not invent an `in-progress` or repeated-failure transition. Reviewer unavailability uses the allowed `blocked:review` path; a real changes-requested result follows `changes-requested -> in-progress`.
+- At `claimed`, `merged`, or `done`, do not manufacture a repeated-failure state. Preserve the current state and surface the unsupported recovery to the Codex controller.
+
+`tools/issue-state.sh` owns `resumeState`; never pass or hand-edit it. Do not relabel a failure flaky or bypass verification/review.
 
 ## Batch-wide stops
 
