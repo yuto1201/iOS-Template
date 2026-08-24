@@ -56,6 +56,12 @@ normalized_command=${normalized_command//$'\t'/ }
 normalized_command=${normalized_command//\\/}
 normalized_command=$(builtin printf '%s' "$normalized_command" | /usr/bin/tr '[:upper:]' '[:lower:]')
 
+shell_indirection_pattern='(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?(bash|sh|zsh|dash|fish)[[:space:]]+(-[[:alpha:]]*c[[:alpha:]]*|--command)(=|[[:space:]])'
+if [[ "$normalized_command" =~ $shell_indirection_pattern ]]; then
+  deny
+  exit 0
+fi
+
 is_fixed_op_wrapper=false
 if [[ "$normalized_command" =~ ^tools/request-codex-op\.sh[[:space:]]+--request[[:space:]]+\.artifacts/ops-requests/[a-z0-9][a-z0-9-]*\.json[[:space:]]+--result[[:space:]]+\.artifacts/ops-results/[a-z0-9][a-z0-9-]*\.json$ ]]; then
   is_fixed_op_wrapper=true
@@ -90,7 +96,9 @@ if [[ "$normalized_command" =~ (^|[[:space:];\|&])security[[:space:]]+find-gener
   exit 0
 fi
 
-if [[ "$normalized_command" =~ (^|[[:space:];\|&])git([[:space:];\|&]|$) ]] && [[ "$normalized_command" =~ (^|[[:space:];\|&])(push|pull|fetch)([[:space:];\|&]|$) ]]; then
+git_token_pattern='(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?git([[:space:]]|$)'
+remote_git_verb_pattern='(^|[^[:alnum:]_-])(push|pull|fetch|clone|ls-remote|remote|submodule|archive)([^[:alnum:]_-]|$)'
+if [[ "$normalized_command" =~ $git_token_pattern ]] && [[ "$normalized_command" =~ $remote_git_verb_pattern ]]; then
   deny
   exit 0
 fi
@@ -108,7 +116,7 @@ if [[ -n "$script_path" ]]; then
     deny
     exit 0
   fi
-  if /usr/bin/grep -Eqi '(^|[^[:alnum:]_])(gh|supabase|wrangler|elevenlabs|fastlane|codex|security[[:space:]]+find-generic-password)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])git[[:space:]].*(push|pull|fetch)([^[:alnum:]_]|$)|Library/Application[[:space:]]+Support/iOS-Template/secrets/' "$project_dir/$script_path"; then
+  if /usr/bin/grep -Eqi '(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?(bash|sh|zsh|dash|fish)[[:space:]]+(-[[:alpha:]]*c[[:alpha:]]*|--command)(=|[[:space:]])|(^|[^[:alnum:]_])(gh|supabase|wrangler|elevenlabs|fastlane|codex|security[[:space:]]+find-generic-password)([^[:alnum:]_]|$)|(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?git[[:space:]].*(push|pull|fetch|clone|ls-remote|remote|submodule|archive)([^[:alnum:]_]|$)|Library/Application[[:space:]]+Support/iOS-Template/secrets/' "$project_dir/$script_path"; then
     deny
     exit 0
   fi

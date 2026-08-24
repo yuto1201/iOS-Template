@@ -28,6 +28,11 @@ deny_cases=(
   deny-git-c-push
   deny-git-dir-fetch
   deny-git-pull
+  deny-nested-git-push
+  deny-absolute-nested-git-push
+  deny-git-clone
+  deny-absolute-git-clone
+  deny-git-remote-add
   deny-direct-codex
   deny-supabase
   deny-wrangler
