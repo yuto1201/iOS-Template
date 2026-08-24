@@ -1,0 +1,1 @@
+{"tool_name":"Bash","tool_input":{"command":"tools/request-codex-review.sh --packet .artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/review-packet.json --output .artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/review.json"}}
