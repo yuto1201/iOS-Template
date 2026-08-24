@@ -352,7 +352,8 @@ gateはprimary checkoutのartifactをpathごとに読み直しません。`.arti
 - 現在のHead SHA = review.jsonのheadSha
 - verify status = passedまたは正当なnot-applicable
 - review verdict = approved
-- `review-packet.json` と `review.json` のexact schema、Base/Head/Verify SHA、primary/opposite model、Issue contract digestが一致
+- schema v2 `review-packet.json` がexact verify bytes、決定論的なactual Base..Head `review.diff`、canonical visual evidenceのordered image bytes/digestを固定し、`review.json.reviewPacketDigest` がpacketのexact bytesと一致（schema v1はgateで拒否）
+- `review-packet.json` と `review.json` のBase/Head/Verify SHA、primary/opposite model、Issue contract digestが一致
 - approved reviewのFinding = 0、全Acceptance criteria = supported、`reviewedAt` がverify完了後かつ未来でない
 - Acceptance criteriaの証拠欠落 = 0
 - `gh issue view` のfixed fields `number,url,body,labels` がcaller Issueと一致し、`type:feature` または `type:regression` がちょうど一つ存在

@@ -38,7 +38,7 @@ mkdir -p "$artifact_head"
 
 digest() { shasum -a 256 "$1" | awk '{print "sha256:" $1}'; }
 cat > "$artifact_issue/issue-contract.json" <<JSON
-{"schemaVersion":1,"issue":$issue,"repository":"yuto1201/iOS-Template","goal":"Shared review artifacts","specAnchors":["specs/acceptance.md#1"],"fetchedAt":"2026-08-24T00:00:00Z","dependencies":[],"externalOperations":[],"acceptanceCriteria":[{"id":"AC-1","text":"Review reads the canonical shared evidence"}]}
+{"schemaVersion":1,"issue":$issue,"repository":"yuto1201/iOS-Template","goal":"Shared review artifacts","specAnchors":["specs/acceptance.md#1"],"fetchedAt":"2026-08-24T00:00:00Z","dependencies":[],"externalOperations":[],"externalOperationDetailsDigest":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","acceptanceCriteria":[{"id":"AC-1","text":"Review reads the canonical shared evidence"}]}
 JSON
 contract_digest=$(digest "$artifact_issue/issue-contract.json")
 printf 'diff\n' > "$artifact_head/review.diff"

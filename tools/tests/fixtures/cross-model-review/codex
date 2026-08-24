@@ -44,15 +44,16 @@ if [[ "$prompt" == *external-attempt* ]]; then
   command -v curl >/dev/null 2>&1 && exit 113
 fi
 
-PROMPT="$prompt" /usr/bin/ruby -rjson -e '
+PROMPT="$prompt" /usr/bin/ruby -rjson -rdigest -e '
   packet_path = ENV.fetch("PROMPT")[/Validated review packet:\s*(\S+)/, 1] or abort "packet missing"
   packet = JSON.parse(File.read(packet_path))
   result = {
-    "schemaVersion" => 1, "issue" => packet.fetch("issue"), "reviewerModel" => "codex",
+    "schemaVersion" => packet.fetch("schemaVersion"), "issue" => packet.fetch("issue"), "reviewerModel" => "codex",
     "baseSha" => packet.fetch("baseSha"), "headSha" => packet.fetch("headSha"), "verifySha" => packet.fetch("verifySha"),
     "issueContractDigest" => packet.fetch("issueContract").fetch("digest"), "verdict" => "approved", "findings" => [],
     "acceptanceAssessment" => packet.fetch("acceptanceCriteria").map { |entry| {"id" => entry.fetch("id"), "status" => "supported", "evidence" => ["verify.json#acceptanceEvidence/0"]} },
     "reviewedAt" => "2026-08-24T00:01:00Z"
   }
+  result["reviewPacketDigest"] = "sha256:#{Digest::SHA256.file(packet_path).hexdigest}" if packet.fetch("schemaVersion") == 2
   puts JSON.generate(result)
 '

@@ -2,6 +2,7 @@
 
 require "digest"
 require "json"
+require "open3"
 require "time"
 
 module IOSTemplate
@@ -10,37 +11,154 @@ module IOSTemplate
 
     module_function
 
-    PACKET_KEYS = %w[
+    PACKET_V1_KEYS = %w[
       schemaVersion issue primaryModel reviewerModel baseSha headSha verifySha
       issueContract specAnchors acceptanceCriteria diffFile verifyFile imageFiles
     ].freeze
-    RESULT_KEYS = %w[
+    PACKET_V2_KEYS = %w[
+      schemaVersion issue primaryModel reviewerModel baseSha headSha verifySha
+      issueContract specAnchors acceptanceCriteria diff verify imageFiles
+    ].freeze
+    RESULT_V1_KEYS = %w[
       schemaVersion issue reviewerModel baseSha headSha verifySha
       issueContractDigest verdict findings acceptanceAssessment reviewedAt
     ].freeze
+    RESULT_V2_KEYS = (RESULT_V1_KEYS + %w[reviewPacketDigest]).freeze
+    CONTRACT_KEYS = %w[
+      schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
+      externalOperations externalOperationDetailsDigest fetchedAt
+    ].freeze
+    LEGACY_CONTRACT_KEYS = (CONTRACT_KEYS - %w[externalOperationDetailsDigest]).freeze
+    REFERENCE_KEYS = %w[path digest].freeze
+    DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
 
-    def validate!(packet_bytes:, result_bytes:, verify_bytes:, contract_bytes:, primary:, issue:, base_sha:, head_sha:, now: Time.now.utc, require_temporal_order: false)
+    # Pure validation entry point. strict: true is the merge-ready v2 contract.
+    # Gate callers pass bytes from already-held descriptors. This method never
+    # opens an artifact path. actual_diff_bytes must be independently generated
+    # from the exact Base..Head commits by the caller (or with actual_diff()).
+    def validate!(packet_bytes:, result_bytes:, verify_bytes:, contract_bytes:, primary:, issue:, base_sha:, head_sha:,
+                  now: Time.now.utc, require_temporal_order: false, strict: false,
+                  diff_bytes: nil, image_bytes: nil, actual_diff_bytes: nil)
       reject("primary model is invalid") unless %w[codex claude].include?(primary)
       reviewer = primary == "codex" ? "claude" : "codex"
       packet = parse_object(packet_bytes, "packet")
       result = parse_object(result_bytes, "result")
       verify = parse_object(verify_bytes, "verify")
       contract = parse_object(contract_bytes, "issue contract")
-      digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
+      contract_digest = digest(contract_bytes)
 
-      exact_keys!(packet, PACKET_KEYS, "packet")
-      reject("packet.schemaVersion must be 1") unless packet["schemaVersion"] == 1
+      schema = packet["schemaVersion"]
+      reject("merge-ready review requires packet schemaVersion 2") if strict && schema != 2
+      reject("packet.schemaVersion is unsupported") unless [1, 2].include?(schema)
+      validate_packet_identity!(packet, schema, primary, reviewer, issue, base_sha, head_sha)
+      validate_contract!(packet, contract, contract_digest, issue, schema: schema)
+      criteria = validate_scope!(packet, contract)
+      completed_at = validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, require_temporal_order)
+
+      if schema == 2
+        validate_strict_closure!(
+          packet: packet, packet_bytes: packet_bytes, verify: verify, verify_bytes: verify_bytes,
+          issue: issue, head_sha: head_sha, diff_bytes: diff_bytes, image_bytes: image_bytes,
+          actual_diff_bytes: actual_diff_bytes
+        )
+      elsif strict
+        reject("merge-ready review requires packet schemaVersion 2")
+      end
+
+      validate_result!(
+        result, schema, packet_bytes, reviewer, issue, base_sha, head_sha,
+        contract_digest, criteria, completed_at, now, require_temporal_order
+      )
+      {"packet" => packet, "result" => result, "verify" => verify, "contract" => contract}
+    end
+
+    # First phase for descriptor-owning Gate callers. It validates only enough
+    # untrusted packet structure to determine the exact canonical leaves to hold.
+    # Call validate!(strict: true, ...) with those held bytes before approving.
+    def strict_references!(packet_bytes:, issue:, head_sha:)
+      packet = parse_object(packet_bytes, "packet")
+      exact_keys!(packet, PACKET_V2_KEYS, "packet")
+      reject("merge-ready review requires packet schemaVersion 2") unless packet["schemaVersion"] == 2
+      reject("packet identity differs from caller") unless packet["issue"] == issue && packet["headSha"] == head_sha
+      prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
+      diff = reference!(packet["diff"], "packet.diff")
+      verify = reference!(packet["verify"], "packet.verify")
+      reject("packet.diff.path is not canonical") unless diff["path"] == "#{prefix}review.diff"
+      reject("packet.verify.path is not canonical") unless verify["path"] == "#{prefix}verify.json"
+      images = packet["imageFiles"]
+      reject("packet.imageFiles must be an array") unless images.is_a?(Array)
+      images.each_with_index do |entry, index|
+        reference!(entry, "packet.imageFiles[#{index}]")
+        reject("packet.imageFiles[#{index}].path is outside the exact Issue/Head") unless entry["path"].start_with?(prefix)
+      end
+      reject("packet.imageFiles paths must be unique") unless images.map { |entry| entry["path"] }.uniq.length == images.length
+      {"diff" => diff, "verify" => verify, "imageFiles" => images}
+    end
+
+    def actual_diff(repo:, base_sha:, head_sha:)
+      reject("repository root must be physical") unless repo.is_a?(String) && repo.start_with?("/") && File.realpath(repo) == repo
+      [base_sha, head_sha].each { |sha| sha!(sha, "Git SHA") }
+      environment = {
+        "GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil,
+        "GIT_CONFIG_GLOBAL" => "/dev/null", "GIT_CONFIG_SYSTEM" => "/dev/null",
+        "LANG" => "C", "LC_ALL" => "C"
+      }
+      command = [
+        "/usr/bin/git", "-C", repo, "-c", "core.quotepath=true", "-c", "diff.noprefix=false",
+        "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames",
+        "--src-prefix=a/", "--dst-prefix=b/", base_sha, head_sha, "--"
+      ]
+      bytes, error, status = Open3.capture3(environment, *command)
+      reject("actual Base..Head diff could not be generated: #{error.strip}") unless status.success?
+      bytes.b
+    rescue Errno::ENOENT, Errno::EACCES => error
+      reject("actual Base..Head diff could not be generated: #{error.message}")
+    end
+
+    def verified_image_references!(verify, issue:, head_sha:)
+      prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
+      visual = verify["visualEvaluation"]
+      return [] if visual.is_a?(Hash) && visual["status"] == "not-applicable"
+      reject("verify.visualEvaluation must contain canonical cases") unless visual.is_a?(Hash) && visual["status"] == "passed" && visual["cases"].is_a?(Array)
+      references = []
+      visual["cases"].each_with_index do |review_case, case_index|
+        reject("verify.visualEvaluation.cases[#{case_index}] must be an object") unless review_case.is_a?(Hash)
+        images = review_case["images"]
+        reject("verify visual case images must be a nonempty array") unless images.is_a?(Array) && !images.empty?
+        images.each do |image|
+          reject("verify visual image must be an object") unless image.is_a?(Hash)
+          path = string!(image["path"], "verify visual image path")
+          safe_relative!(path, "verify visual image path")
+          digest!(image["digest"], "verify visual image digest")
+          references << {"path" => "#{prefix}#{path}", "digest" => image["digest"]}
+        end
+      end
+      reject("verified visual image paths must be unique") unless references.map { |entry| entry["path"] }.uniq.length == references.length
+      references
+    end
+
+    def validate_packet_identity!(packet, schema, primary, reviewer, issue, base_sha, head_sha)
+      exact_keys!(packet, schema == 2 ? PACKET_V2_KEYS : PACKET_V1_KEYS, "packet")
       reject("packet identity does not match the merge identity") unless
         packet["issue"] == issue && packet["primaryModel"] == primary &&
         packet["reviewerModel"] == reviewer && packet["baseSha"] == base_sha &&
         packet["headSha"] == head_sha && packet["verifySha"] == head_sha
-      exact_keys!(packet["issueContract"], %w[path digest], "packet.issueContract")
+      sha!(base_sha, "base SHA")
+      sha!(head_sha, "head SHA")
+    end
+
+    def validate_contract!(packet, contract, contract_digest, issue, schema: packet["schemaVersion"])
+      exact_keys!(packet["issueContract"], REFERENCE_KEYS, "packet.issueContract")
       expected_contract_path = ".artifacts/issues/#{issue}/issue-contract.json"
       reject("packet issue contract does not match exact bytes") unless
-        packet["issueContract"] == {"path" => expected_contract_path, "digest" => digest}
-
-      exact_keys!(contract, %w[schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies externalOperations fetchedAt], "issue contract")
+        packet["issueContract"] == {"path" => expected_contract_path, "digest" => contract_digest}
+      allowed_contract_keys = schema == 1 ? [CONTRACT_KEYS.sort, LEGACY_CONTRACT_KEYS.sort] : [CONTRACT_KEYS.sort]
+      reject("issue contract: unexpected or missing keys") unless contract.is_a?(Hash) && allowed_contract_keys.include?(contract.keys.sort)
       reject("issue contract identity is invalid") unless contract["schemaVersion"] == 1 && contract["issue"] == issue
+      digest!(contract["externalOperationDetailsDigest"], "issue contract.externalOperationDetailsDigest") if contract.key?("externalOperationDetailsDigest")
+    end
+
+    def validate_scope!(packet, contract)
       anchors = unique_nonempty_strings!(packet["specAnchors"], "packet.specAnchors", require_nonempty: true)
       reject("packet spec anchors do not match issue contract") unless anchors == contract["specAnchors"]
       criteria = packet["acceptanceCriteria"]
@@ -51,25 +169,55 @@ module IOSTemplate
         string!(criterion["text"], "packet.acceptanceCriteria[#{index}].text")
       end
       reject("packet acceptance criteria do not match issue contract") unless criteria == contract["acceptanceCriteria"]
-      expected_prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
-      reject("packet.diffFile is not canonical") unless packet["diffFile"] == "#{expected_prefix}review.diff"
-      reject("packet.verifyFile is not canonical") unless packet["verifyFile"] == "#{expected_prefix}verify.json"
-      images = unique_nonempty_strings!(packet["imageFiles"], "packet.imageFiles")
-      images.each { |path| safe_relative!(path, "packet.imageFiles") }
+      criteria
+    end
 
+    def validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, require_temporal_order)
+      if schema == 1
+        prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
+        reject("packet.diffFile is not canonical") unless packet["diffFile"] == "#{prefix}review.diff"
+        reject("packet.verifyFile is not canonical") unless packet["verifyFile"] == "#{prefix}verify.json"
+        images = unique_nonempty_strings!(packet["imageFiles"], "packet.imageFiles")
+        images.each { |path| safe_relative!(path, "packet.imageFiles") }
+      end
       reject("verify identity does not match packet") unless
         verify.is_a?(Hash) && verify["schemaVersion"] == 1 && verify["issue"] == issue &&
         verify["baseSha"] == base_sha && verify["headSha"] == head_sha
-      exact_keys!(verify["issueContract"], %w[path digest], "verify.issueContract")
-      reject("verify issue contract does not match packet") unless verify["issueContract"] == packet["issueContract"]
-      completed_at = iso8601!(verify["completedAt"], "verify.completedAt") if require_temporal_order
+      exact_keys!(verify["issueContract"], REFERENCE_KEYS, "verify.issueContract")
+      reject("verify issue contract does not match packet") unless
+        verify["issueContract"] == {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => contract_digest}
+      iso8601!(verify["completedAt"], "verify.completedAt") if require_temporal_order
+    end
 
-      exact_keys!(result, RESULT_KEYS, "result")
-      reject("result.schemaVersion must be 1") unless result["schemaVersion"] == 1
+    def validate_strict_closure!(packet:, packet_bytes:, verify:, verify_bytes:, issue:, head_sha:, diff_bytes:, image_bytes:, actual_diff_bytes:)
+      references = strict_references!(packet_bytes: packet_bytes, issue: issue, head_sha: head_sha)
+      reject("strict review validation requires held diff bytes") unless diff_bytes.is_a?(String)
+      reject("strict review validation requires independently generated actual diff bytes") unless actual_diff_bytes.is_a?(String)
+      reject("review.diff bytes are not the deterministic actual Base..Head diff") unless diff_bytes.b == actual_diff_bytes.b
+      reject("packet.diff.digest does not match held review.diff bytes") unless references["diff"]["digest"] == digest(diff_bytes)
+      reject("packet.verify.digest does not match held verify.json bytes") unless references["verify"]["digest"] == digest(verify_bytes)
+      expected_images = verified_image_references!(verify, issue: issue, head_sha: head_sha)
+      reject("packet.imageFiles are not the ordered canonical verified visual evidence") unless packet["imageFiles"] == expected_images
+      reject("strict review validation requires held image bytes") unless image_bytes.is_a?(Hash)
+      reject("held image set differs from the packet") unless image_bytes.keys == expected_images.map { |entry| entry["path"] }
+      expected_images.each do |entry|
+        bytes = image_bytes[entry["path"]]
+        reject("held image bytes are unavailable: #{entry['path']}") unless bytes.is_a?(String)
+        reject("held image digest differs from packet: #{entry['path']}") unless digest(bytes) == entry["digest"]
+      end
+    end
+
+    def validate_result!(result, schema, packet_bytes, reviewer, issue, base_sha, head_sha, contract_digest, criteria, completed_at, now, require_temporal_order)
+      exact_keys!(result, schema == 2 ? RESULT_V2_KEYS : RESULT_V1_KEYS, "result")
+      reject("result.schemaVersion must equal packet.schemaVersion") unless result["schemaVersion"] == schema
       reject("result identity does not match packet") unless
         result["issue"] == issue && result["reviewerModel"] == reviewer &&
         result["baseSha"] == base_sha && result["headSha"] == head_sha &&
-        result["verifySha"] == head_sha && result["issueContractDigest"] == digest
+        result["verifySha"] == head_sha && result["issueContractDigest"] == contract_digest
+      if schema == 2
+        digest!(result["reviewPacketDigest"], "result.reviewPacketDigest")
+        reject("result.reviewPacketDigest does not match exact packet bytes") unless result["reviewPacketDigest"] == digest(packet_bytes)
+      end
       verdict = result["verdict"]
       reject("result.verdict is invalid") unless %w[approved changes-requested].include?(verdict)
       findings = result["findings"]
@@ -101,7 +249,6 @@ module IOSTemplate
         blocking = findings.any? { |finding| %w[critical high medium].include?(finding["severity"]) } || assessments.any? { |entry| entry["status"] == "unsupported" }
         reject("changes-requested result must contain a blocking finding or unsupported criterion") unless blocking
       end
-      {"packet" => packet, "result" => result, "verify" => verify, "contract" => contract}
     end
 
     def parse_object(bytes, at)
@@ -119,6 +266,27 @@ module IOSTemplate
 
     def string!(value, at)
       reject("#{at} must be a nonempty string") unless value.is_a?(String) && !value.empty? && !value.include?("\0")
+      value
+    end
+
+    def sha!(value, at)
+      reject("#{at} must be a lowercase 40-character SHA") unless value.is_a?(String) && value.match?(/\A[0-9a-f]{40}\z/)
+      value
+    end
+
+    def digest(value)
+      "sha256:#{Digest::SHA256.hexdigest(value)}"
+    end
+
+    def digest!(value, at)
+      reject("#{at} must be a sha256 digest") unless value.is_a?(String) && value.match?(DIGEST_PATTERN)
+      value
+    end
+
+    def reference!(value, at)
+      exact_keys!(value, REFERENCE_KEYS, at)
+      safe_relative!(string!(value["path"], "#{at}.path"), "#{at}.path")
+      digest!(value["digest"], "#{at}.digest")
       value
     end
 

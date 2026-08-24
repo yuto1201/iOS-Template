@@ -97,7 +97,7 @@ RUBY
 snapshot_repository > "$snapshot_before"
 review_status=0
 if [[ "$primary" == codex ]]; then
-  instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. Return only one JSON object conforming exactly to docs/agent-contracts/review-packet.md Result schema.'
+  instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. Return only one JSON object conforming exactly to docs/agent-contracts/review-packet.md Result schema, including the exact reviewPacketDigest from the schema v2 packet bytes.'
   if ruby -rtimeout -e '
     command = ARGV
     pid = Process.spawn(*command, in: File::NULL)
@@ -150,7 +150,7 @@ RUBY
 
 publication_packet=$("$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet")
 [[ $(jq -er '.issue' <<<"$publication_packet") == "$issue" && $(jq -er '.headSha' <<<"$publication_packet") == "$head_sha" ]] || { echo 'review packet identity changed before publication' >&2; exit 1; }
-publication=$("$repo_root/tools/lib/publish-review-result.rb" "$repo_root" "$issue" "$head_sha" "$validated")
+publication=$("$repo_root/tools/lib/publish-review-result.rb" "$repo_root" "$issue" "$head_sha" "$validated" "$packet_absolute")
 [[ $(jq -er '.path' <<<"$publication") == "$output_absolute" ]] || { echo 'review publication returned an unexpected path' >&2; exit 1; }
 "$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$output_absolute" > "$validated"
 verdict=$(jq -er '.verdict' "$validated")

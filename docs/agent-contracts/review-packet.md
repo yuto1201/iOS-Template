@@ -6,11 +6,11 @@
 
 ## 2. Review packet
 
-`cross-model-review` は次の情報を一つのpacketへまとめます。Acceptance criteriaとspec anchorsは、同じpacket内のIssue contractから読み、digest一致を検証します。
+`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。schema v1は通常レビューの既存成果物を読む場合に限る互換形式で、pre-merge gateは受理しません。
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "issue": 42,
   "primaryModel": "codex",
   "reviewerModel": "claude",
@@ -26,13 +26,19 @@
     {"id": "AC-1", "text": "通知時刻を保存できる"},
     {"id": "AC-2", "text": "日本語と英語で時刻が正しく表示される"}
   ],
-  "diffFile": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/review.diff",
-  "verifyFile": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify.json",
+  "diff": {
+    "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/review.diff",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "verify": {
+    "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify.json",
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
   "imageFiles": [
-    "iphone-en/settings.png",
-    "iphone-ja/settings.png",
-    "ipad-en/settings.png",
-    "ipad-ja/settings.png"
+    {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/iphone-en/settings.png", "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/iphone-ja/settings.png", "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+    {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/ipad-en/settings.png", "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+    {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/ipad-ja/settings.png", "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
   ]
 }
 ```
@@ -57,13 +63,14 @@
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "issue": 42,
   "reviewerModel": "claude",
   "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
   "headSha": "0123456789abcdef0123456789abcdef01234567",
   "verifySha": "0123456789abcdef0123456789abcdef01234567",
   "issueContractDigest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e",
+  "reviewPacketDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
   "verdict": "approved",
   "findings": [],
   "acceptanceAssessment": [
@@ -101,7 +108,50 @@ Severity:
 
 Reviewerは各 `AC-*` について `supported` または `unsupported` と証拠参照を返します。`unsupported` が一つでもあれば `approved` にできません。
 
-## 5. 呼び出し
+`reviewPacketDigest` はreviewerが実際に読んだ `review-packet.json` の全byte列に対するSHA-256です。result publicationはこのdigestとcanonical packetのexact bytesが一致する間だけ行い、packet path、inode、bytesがpublication中に変われば失敗します。
+
+## 5. Sealing interface
+
+Packetは次で準備します。
+
+```bash
+tools/prepare-review-packet.sh \
+  --primary codex \
+  --issue 42 \
+  --base-sha "${BASE_SHA}" \
+  --head-sha "${HEAD_SHA}"
+```
+
+producerは `/usr/bin/git diff --binary --full-index --no-ext-diff --no-textconv --no-renames` の固定形でexact Base..Head `review.diff` を生成します。verifyの `visualEvaluation.cases[].images[]` をcase/image順に平坦化したpath/digestだけが `imageFiles` です。文書例外では空配列です。verify、画像、contractをsingle-linkかつno-followで開いたdescriptorをpublication完了まで保持し、path/inode/bytes、Git Head、actual diffをpublication前後で再検証します。
+
+pre-merge gateのdescriptor-owning callerは、まず次を呼びます。
+
+```ruby
+references = IOSTemplate::ReviewContract.strict_references!(
+  packet_bytes: held_packet.bytes, issue: issue, head_sha: head_sha
+)
+```
+
+返されたcanonical diff/verify/image leafをcaller自身が開いたまま保持し、最後に次を呼びます。
+
+```ruby
+IOSTemplate::ReviewContract.validate!(
+  strict: true,
+  packet_bytes: held_packet.bytes,
+  result_bytes: held_result.bytes,
+  verify_bytes: held_verify.bytes,
+  contract_bytes: held_contract.bytes,
+  diff_bytes: held_diff.bytes,
+  image_bytes: ordered_held_image_bytes,
+  actual_diff_bytes: independently_generated_base_head_diff,
+  primary: primary, issue: issue, base_sha: base_sha, head_sha: head_sha,
+  require_temporal_order: true
+)
+```
+
+このpure validation interfaceはartifact pathを再openしません。callerは戻り値を利用し終えるまでdescriptorを保持し、終了直前に各path identity/bytesを再検証します。strict modeはschema v1、bogus/empty diff、same-Head verify差し替え、画像差し替え、packet/result不一致をすべて拒否します。
+
+## 6. 呼び出し
 
 - Codex primary -> Claudeを非対話read-onlyで呼ぶ
 - Claude primary -> Codexをread-only sandboxで呼ぶ

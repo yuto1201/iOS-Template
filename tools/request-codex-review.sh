@@ -16,7 +16,7 @@ artifact_issue_root="$artifacts_root/issues/$issue"
 artifact_head_root="$artifact_issue_root/$head_sha"
 artifact_contract="$artifact_issue_root/issue-contract.json"
 
-instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. Return only one JSON object conforming exactly to docs/agent-contracts/review-packet.md Result schema.'
+instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. Return only one JSON object conforming exactly to docs/agent-contracts/review-packet.md Result schema, including the exact reviewPacketDigest from the schema v2 packet bytes.'
 packet_absolute="$artifact_issue_root/$head_sha/review-packet.json"
 prompt="$instruction
 Validated review packet: $packet_absolute

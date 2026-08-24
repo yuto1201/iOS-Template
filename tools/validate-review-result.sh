@@ -146,9 +146,10 @@ artifacts_identity = [topology.fetch("artifactsDevice"), topology.fetch("artifac
 issues_root = File.join(artifacts, "issues")
 packet_file = artifact_file!(artifacts, packet_input, issues_root, "packet", artifacts_identity)
 packet = json_file!(packet_file, "packet")
-packet_keys = %w[schemaVersion issue primaryModel reviewerModel baseSha headSha verifySha issueContract specAnchors acceptanceCriteria diffFile verifyFile imageFiles]
+schema = packet["schemaVersion"]
+packet_keys = schema == 2 ? IOSTemplate::ReviewContract::PACKET_V2_KEYS : IOSTemplate::ReviewContract::PACKET_V1_KEYS
 exact_keys!(packet, packet_keys, "packet")
-reject("packet.schemaVersion must be 1") unless packet["schemaVersion"] == 1
+reject("packet.schemaVersion is unsupported") unless [1, 2].include?(schema)
 issue = packet["issue"]
 reject("packet.issue must be a positive integer") unless issue.is_a?(Integer) && issue.positive?
 expected_reviewer = primary == "codex" ? "claude" : "codex"
@@ -189,25 +190,51 @@ reject("packet acceptance criteria do not match issue contract") unless contract
 reject("packet spec anchors do not match issue contract") unless contract["specAnchors"] == anchors
 
 expected_prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
-%w[diffFile verifyFile].each do |field|
-  value = string!(packet[field], "packet.#{field}")
-  reject("packet.#{field} is not inside the Issue/Head artifact directory") unless value.start_with?(expected_prefix)
-  artifact_file!(artifacts, value, head_root, "packet.#{field}", artifacts_identity)
+if schema == 1
+  %w[diffFile verifyFile].each do |field|
+    value = string!(packet[field], "packet.#{field}")
+    reject("packet.#{field} is not inside the Issue/Head artifact directory") unless value.start_with?(expected_prefix)
+    artifact_file!(artifacts, value, head_root, "packet.#{field}", artifacts_identity)
+  end
+  images = packet["imageFiles"]
+  reject("packet.imageFiles must be an array") unless images.is_a?(Array) && images.all? { |entry| entry.is_a?(String) } && images.uniq == images
+  images.each_with_index do |image, index|
+    artifact_path = relative_artifact!(image, head_root, "packet.imageFiles[#{index}]")
+    relative_path = artifact_path.delete_prefix(artifacts + "/")
+    artifact_file!(artifacts, ".artifacts/#{relative_path}", head_root, "packet.imageFiles[#{index}]", artifacts_identity)
+  end
+  diff_file = artifact_file!(artifacts, packet["diffFile"], head_root, "packet.diffFile", artifacts_identity)
+  verify_file = artifact_file!(artifacts, packet["verifyFile"], head_root, "packet.verifyFile", artifacts_identity)
+  image_files = {}
+else
+  references = IOSTemplate::ReviewContract.strict_references!(packet_bytes: packet_file.fetch(:bytes), issue: issue, head_sha: head_sha)
+  diff_file = artifact_file!(artifacts, references.fetch("diff").fetch("path"), head_root, "packet.diff.path", artifacts_identity)
+  verify_file = artifact_file!(artifacts, references.fetch("verify").fetch("path"), head_root, "packet.verify.path", artifacts_identity)
+  image_files = references.fetch("imageFiles").to_h do |reference|
+    [reference.fetch("path"), artifact_file!(artifacts, reference.fetch("path"), head_root, "packet.imageFiles", artifacts_identity).fetch(:bytes)]
+  end
 end
-images = packet["imageFiles"]
-reject("packet.imageFiles must be an array") unless images.is_a?(Array) && images.all? { |entry| entry.is_a?(String) } && images.uniq == images
-images.each_with_index do |image, index|
-  artifact_path = relative_artifact!(image, head_root, "packet.imageFiles[#{index}]")
-  relative_path = artifact_path.delete_prefix(artifacts + "/")
-  artifact_file!(artifacts, ".artifacts/#{relative_path}", head_root, "packet.imageFiles[#{index}]", artifacts_identity)
-end
-
-verify_file = artifact_file!(artifacts, packet["verifyFile"], head_root, "packet.verifyFile", artifacts_identity)
 verify = json_file!(verify_file, "verify file")
 reject("verify file must be an object") unless verify.is_a?(Hash)
 reject("verify file identity does not match packet") unless verify["schemaVersion"] == 1 && verify["issue"] == issue && verify["baseSha"] == base_sha && verify["headSha"] == verify_sha
 exact_keys!(verify["issueContract"], %w[path digest], "verify.issueContract")
 reject("verify issue-contract reference does not match packet") unless verify["issueContract"]["path"] == expected_contract_path && verify["issueContract"]["digest"] == contract_digest
+
+begin
+  IOSTemplate::ReviewContract.validate_contract!(packet, contract, contract_digest, issue)
+  IOSTemplate::ReviewContract.validate_scope!(packet, contract)
+  IOSTemplate::ReviewContract.validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, false)
+  if schema == 2
+    IOSTemplate::ReviewContract.validate_strict_closure!(
+      packet: packet, packet_bytes: packet_file.fetch(:bytes), verify: verify,
+      verify_bytes: verify_file.fetch(:bytes), issue: issue, head_sha: head_sha,
+      diff_bytes: diff_file.fetch(:bytes), image_bytes: image_files,
+      actual_diff_bytes: IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: base_sha, head_sha: head_sha)
+    )
+  end
+rescue IOSTemplate::ReviewContract::ValidationError => error
+  reject(error.message)
+end
 
 if result_input.empty?
   puts JSON.generate(packet.merge("issueContractRepository" => repository))
@@ -232,11 +259,15 @@ else
   result_file = secure_file!(File.join(result_root, result_input), result_root, "result")
 end
 result = json_file!(result_file, "result")
-result_keys = %w[schemaVersion issue reviewerModel baseSha headSha verifySha issueContractDigest verdict findings acceptanceAssessment reviewedAt]
+result_keys = schema == 2 ? IOSTemplate::ReviewContract::RESULT_V2_KEYS : IOSTemplate::ReviewContract::RESULT_V1_KEYS
 exact_keys!(result, result_keys, "result")
-reject("result.schemaVersion must be 1") unless result["schemaVersion"] == 1
+reject("result.schemaVersion must equal packet.schemaVersion") unless result["schemaVersion"] == schema
 reject("result identity does not match packet") unless result["issue"] == issue && result["reviewerModel"] == expected_reviewer && result["baseSha"] == base_sha && result["headSha"] == head_sha && result["verifySha"] == verify_sha
 reject("result issueContractDigest does not match packet") unless digest!(result["issueContractDigest"], "result.issueContractDigest") == contract_digest
+if schema == 2
+  expected_packet_digest = "sha256:#{Digest::SHA256.hexdigest(packet_file.fetch(:bytes))}"
+  reject("result.reviewPacketDigest does not match exact packet bytes") unless digest!(result["reviewPacketDigest"], "result.reviewPacketDigest") == expected_packet_digest
+end
 verdict = result["verdict"]
 reject("result.verdict is invalid") unless %w[approved changes-requested].include?(verdict)
 findings = result["findings"]
@@ -283,7 +314,9 @@ begin
   IOSTemplate::ReviewContract.validate!(
     packet_bytes: packet_file.fetch(:bytes), result_bytes: result_file.fetch(:bytes),
     verify_bytes: verify_file.fetch(:bytes), contract_bytes: contract_file.fetch(:bytes),
-    primary: primary, issue: issue, base_sha: base_sha, head_sha: head_sha
+    primary: primary, issue: issue, base_sha: base_sha, head_sha: head_sha,
+    strict: schema == 2, diff_bytes: diff_file.fetch(:bytes), image_bytes: image_files,
+    actual_diff_bytes: (schema == 2 ? IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: base_sha, head_sha: head_sha) : nil)
   )
 rescue IOSTemplate::ReviewContract::ValidationError => error
   reject(error.message)
