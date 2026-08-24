@@ -21,7 +21,7 @@ def exact_keys(value, keys, name)
 end
 
 def nonempty_string(value, name)
-  fail_closed("#{name} must be a non-empty string") unless value.is_a?(String) && !value.empty? && !value.include?("\0")
+  fail_closed("#{name} must be a non-empty string") unless value.is_a?(String) && !value.empty? && !value.match?(/[\x00-\x1f\x7f]/)
 end
 
 def canonical(value)
@@ -65,7 +65,26 @@ OPERATIONS = {
   'appstore.submit_review' => ['appstore-app', %w[version]]
 }.freeze
 
-def validate_inputs(operation, inputs)
+def contained_path(value, name, repo_root, allowed, required_type)
+  nonempty_string(value, name)
+  fail_closed("#{name} must be repository-relative") if value.start_with?('/') || value.split('/').any? { |component| component.empty? || component == '.' || component == '..' }
+  components = value.split('/')
+  fail_closed("#{name} is outside its allowed root") unless allowed.call(components)
+  current = repo_root
+  components.each do |component|
+    current = File.join(current, component)
+    next unless File.exist?(current) || File.symlink?(current)
+    fail_closed("#{name} must not traverse a symlink") if File.symlink?(current)
+    resolved = File.realpath(current)
+    fail_closed("#{name} escapes the repository") unless resolved.start_with?(repo_root + '/') || resolved == repo_root
+  end
+  return if required_type == :output
+  fail_closed("#{name} does not exist") unless File.exist?(current)
+  fail_closed("#{name} must be a regular file") if required_type == :file && !File.file?(current)
+  fail_closed("#{name} must be a file or directory") if required_type == :source && !(File.file?(current) || File.directory?(current))
+end
+
+def validate_inputs(operation, inputs, repo_root)
   expected = OPERATIONS.fetch(operation)[1]
   exact_keys(inputs, expected, 'inputs')
   inputs.each do |key, value|
@@ -74,17 +93,26 @@ def validate_inputs(operation, inputs)
       fail_closed("inputs.#{key} must be a positive integer") unless value.is_a?(Integer) && value.positive?
     when 'labels', 'migrations'
       fail_closed("inputs.#{key} must be a non-empty array") unless value.is_a?(Array) && !value.empty?
-      value.each { |entry| nonempty_string(entry, "inputs.#{key}") }
+      value.each do |entry|
+        nonempty_string(entry, "inputs.#{key}")
+        fail_closed('inputs.migrations must contain migration filenames only') if key == 'migrations' && !entry.match?(/\A[0-9][A-Za-z0-9_.-]*\.sql\z/)
+      end
     when 'metadata'
       object(value, 'inputs.metadata')
       fail_closed('inputs.metadata must not be empty') if value.empty?
+    when 'source'
+      contained_path(value, 'inputs.source', repo_root, ->(parts) { parts.first != '.artifacts' }, :source)
+    when 'outputPath'
+      contained_path(value, 'inputs.outputPath', repo_root, ->(parts) { parts.length >= 3 && parts[1] == 'Resources' }, :output)
+    when 'buildPath'
+      contained_path(value, 'inputs.buildPath', repo_root, ->(parts) { parts.length >= 3 && parts[0] == '.artifacts' && parts[1] == 'appstore-builds' }, :file)
     else
       nonempty_string(value, "inputs.#{key}")
     end
   end
 end
 
-def validate_request(request, expected_account)
+def validate_request(request, expected_account, repo_root)
   exact_keys(request, %w[environment expectedAccount inputs issue operation reason requestId requestVersion target], 'request')
   fail_closed('requestVersion must be 1') unless request['requestVersion'] == 1
   fail_closed('requestId is invalid') unless request['requestId'].is_a?(String) && request['requestId'].match?(/\A[a-z0-9][a-z0-9-]*\z/)
@@ -99,19 +127,40 @@ def validate_request(request, expected_account)
   nonempty_string(request['expectedAccount'], 'expectedAccount')
   fail_closed('expectedAccount does not match configured account') unless request['expectedAccount'] == expected_account
   nonempty_string(request['reason'], 'reason')
-  validate_inputs(request['operation'], request['inputs'])
+  validate_inputs(request['operation'], request['inputs'], repo_root)
   request
 end
 
 case ARGV.shift
 when 'validate-request'
-  path, artifacts_root, expected_account = ARGV
-  fail_closed('validate-request arguments are invalid') unless ARGV.length == 3
+  path, artifacts_root, expected_account, repo_root = ARGV
+  fail_closed('validate-request arguments are invalid') unless ARGV.length == 4
   root = File.realpath(artifacts_root)
   request_path = File.realpath(path)
   fail_closed('request is outside .artifacts/ops-requests') unless request_path.start_with?(File.join(root, 'ops-requests') + '/')
-  request = validate_request(read_json(request_path), expected_account)
+  request = validate_request(read_json(request_path), expected_account, File.realpath(repo_root))
   puts canonical_json(request)
+when 'verify-request-snapshot'
+  path, expected_digest, expected_account, repo_root = ARGV
+  fail_closed('verify-request-snapshot arguments are invalid') unless ARGV.length == 4 && expected_digest.match?(/\Asha256:[0-9a-f]{64}\z/)
+  bytes = File.binread(path)
+  fail_closed('request snapshot digest changed') unless "sha256:#{Digest::SHA256.hexdigest(bytes)}" == expected_digest
+  request = validate_request(JSON.parse(bytes), expected_account, File.realpath(repo_root))
+  fail_closed('request snapshot is not canonical') unless bytes == canonical_json(request)
+  puts canonical_json(request)
+when 'merge-freshness'
+  verify_path, review_path, checked_at = ARGV
+  fail_closed('merge-freshness arguments are invalid') unless ARGV.length == 3
+  verify = read_json(verify_path)
+  review = read_json(review_path)
+  begin
+    completed_at = Time.iso8601(verify.fetch('completedAt'))
+    reviewed_at = Time.iso8601(review.fetch('reviewedAt'))
+    checked = Time.iso8601(checked_at)
+  rescue KeyError, ArgumentError
+    fail_closed('merge evidence timestamps are missing or invalid')
+  end
+  fail_closed('merge preflight is not fresher than canonical evidence') unless checked > completed_at && checked > reviewed_at
 when 'preflight'
   account, repository, default_branch, url, intended_operation, issue, head_sha, checked_at = ARGV
   fail_closed('preflight arguments are invalid') unless ARGV.length == 8

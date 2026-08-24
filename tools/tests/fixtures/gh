@@ -28,6 +28,15 @@ if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
   fi
   labels_file=${FAKE_GH_LABELS_FILE:?FAKE_GH_LABELS_FILE is required}
   comments_file=${FAKE_GH_COMMENTS_FILE:?FAKE_GH_COMMENTS_FILE is required}
+  if [[ -n "${FAKE_GH_VIEW_COUNT_FILE:-}" ]]; then
+    count=0
+    [[ -f "$FAKE_GH_VIEW_COUNT_FILE" ]] && count=$(cat "$FAKE_GH_VIEW_COUNT_FILE")
+    count=$((count + 1))
+    printf '%s' "$count" > "$FAKE_GH_VIEW_COUNT_FILE"
+    if [[ "${FAKE_GH_RACE_BEFORE_EDIT_VIEW:-}" == "$count" ]]; then
+      printf '%s' "${FAKE_GH_RACE_BEFORE_EDIT_LABELS:?FAKE_GH_RACE_BEFORE_EDIT_LABELS is required}" > "$labels_file"
+    fi
+  fi
   labels=$(cat "$labels_file")
   comments=$(cat "$comments_file")
   ruby -rjson -e 'puts JSON.generate({"labels" => JSON.parse(ARGV[0]).map { |name| {"name" => name} }, "comments" => JSON.parse(ARGV[1])})' "$labels" "$comments"
@@ -46,6 +55,9 @@ if [[ "${1:-}" == "issue" && "${2:-}" == "edit" ]]; then
     esac
   done
   ruby -rjson -e 'labels = JSON.parse(File.read(ARGV[0])); labels.delete(ARGV[1]); labels << ARGV[2] unless labels.include?(ARGV[2]); File.write(ARGV[0], JSON.generate(labels))' "$labels_file" "$remove" "$add"
+  if [[ -n "${FAKE_GH_RACE_AFTER_EDIT_LABELS:-}" ]]; then
+    printf '%s' "$FAKE_GH_RACE_AFTER_EDIT_LABELS" > "$labels_file"
+  fi
   exit 0
 fi
 

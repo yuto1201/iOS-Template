@@ -44,13 +44,20 @@ fi
 local_head=$(git -C "$repo_root" rev-parse HEAD)
 [[ "$local_head" == "$expected_head" ]] || { echo 'local Head does not match expected Head' >&2; exit 1; }
 checked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-document=$(ruby "$json_tool" preflight "$active_account" "$actual_repo" "$default_branch" "$url" "$intended_operation" "$issue" "$local_head" "$checked_at")
 destination="$artifacts_root/issues/$issue/github-preflight.json"
 mkdir -p "$(dirname "$destination")"
 artifacts_real=$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$artifacts_root")
 destination_parent_real=$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$(dirname "$destination")")
 [[ "$destination_parent_real" == "$artifacts_real/issues/"* ]] || { echo 'preflight artifact path escapes .artifacts' >&2; exit 1; }
 destination="$destination_parent_real/github-preflight.json"
+if [[ "$intended_operation" == github.merge_pr ]]; then
+  evidence_directory="$artifacts_real/issues/$issue/$local_head"
+  [[ -d "$evidence_directory" ]] || { echo 'canonical merge evidence is missing' >&2; exit 1; }
+  evidence_directory_real=$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$evidence_directory")
+  [[ "$evidence_directory_real" == "$evidence_directory" ]] || { echo 'canonical merge evidence path escapes .artifacts' >&2; exit 1; }
+  ruby "$json_tool" merge-freshness "$evidence_directory_real/verify.json" "$evidence_directory_real/review.json" "$checked_at" >/dev/null
+fi
+document=$(ruby "$json_tool" preflight "$active_account" "$actual_repo" "$default_branch" "$url" "$intended_operation" "$issue" "$local_head" "$checked_at")
 temporary=$(mktemp "${destination}.tmp.XXXXXX")
 trap 'rm -f "$temporary"' EXIT
 printf '%s\n' "$document" > "$temporary"
