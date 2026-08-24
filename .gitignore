@@ -1,7 +1,7 @@
 .DS_Store
 xcuserdata/
 DerivedData/
-.artifacts/
+/.artifacts
 .worktrees/
 Config/Local.xcconfig
 *.p8

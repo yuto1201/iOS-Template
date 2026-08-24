@@ -215,3 +215,49 @@ Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/produc
 - ユーザーによる実機確認は、AI の Definition of Done の後に行う最終確認とする。
 - 外部アカウント操作は常に Codex が行う。
 - 秘密値は Git、Issue、PR、ログ、スクリーンショット、AI プロンプトに残さない。
+
+## Issue 自動運用とリカバリー
+
+次のコマンドは `OWNER/REPO`、Issue番号、担当モデルを確定してから実行します。Claim は承認済みIssueに正規Branch/worktreeと共有証拠領域を一度だけ作り、同じ担当者による再実行は Resume になります。明示的な再開だけを行う場合は `resume-issue.sh` を使います。
+
+```sh
+REPO='OWNER/REPO'
+ISSUE=42
+
+tools/issue-state.sh get --repo "$REPO" --issue "$ISSUE"
+tools/claim-issue.sh --repo "$REPO" --issue "$ISSUE" --agent codex
+tools/resume-issue.sh --repo "$REPO" --issue "$ISSUE"
+```
+
+Issue worktreeで検証を終えたら、現在のcommitを直接解決し、その同じSHAへVerify、review packet、反対モデルreviewを順に結び付けます。ドキュメントだけの変更は `publish-documentation-verify.sh`、アプリ変更は [iOS verification](./docs/verification.md) のSimulator matrixを使用します。ドキュメント経路はSimulator成功を意味しません。
+
+```sh
+HEAD_SHA="$(git rev-parse HEAD)"
+BASE_SHA="$(jq -r '.baseSha' ".artifacts/issues/$ISSUE/state.json")"
+
+tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
+  --from in-progress --to verify-passed --head-sha "$HEAD_SHA"
+tools/prepare-review-packet.sh --primary codex --issue "$ISSUE" \
+  --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
+tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
+  --from verify-passed --to review-requested
+tools/cross-model-review.sh --primary codex \
+  --packet ".artifacts/issues/$ISSUE/$HEAD_SHA/review-packet.json" \
+  --output ".artifacts/issues/$ISSUE/$HEAD_SHA/review.json"
+```
+
+マージ診断はmutationを行わないGateを先に実行します。承認済みreviewと最新のaccount preflightが同じHeadへ揃った後、CodexがPR作成、Squash Merge、正確なBranch/worktree cleanup、`done` 遷移まで行います。
+
+```sh
+tools/github-account-preflight.sh --repo "$REPO" --issue "$ISSUE" \
+  --intended-operation github.merge_pr --expected-head "$HEAD_SHA"
+tools/premerge-gate.sh --repo "$REPO" --issue "$ISSUE" --head-sha "$HEAD_SHA"
+tools/merge-issue.sh --repo "$REPO" --issue "$ISSUE"
+
+# primary checkoutで実行
+tools/cleanup-issue.sh --repo "$REPO" --issue "$ISSUE"
+tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
+  --from merged --to done
+```
+
+`blocked:*` または `paused` は失敗の隠蔽ではなく、直前状態を `resumeState` としてmarkerへ残す停止状態です。原因を直した後は担当者を変えず `resume-issue.sh` を実行し、成功が不明な外部操作は別コマンドへ進まず同じコマンドを再実行します。Headを変更した場合は `approved-for-merge`、`changes-requested`、または `verify-passed` から `in-progress` へ戻し、新しいHeadのVerifyとreviewを両方作り直します。
