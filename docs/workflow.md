@@ -44,9 +44,12 @@ CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/iss
   ],
   "dependencies": [],
   "externalOperations": ["github.push_branch", "github.create_pr", "github.merge_pr"],
+  "externalOperationDetailsDigest": "sha256:948c57dcd48bcede8fc5ad4707bd140ab260564f2c1960891e00959a4236c92c",
   "fetchedAt": "2026-08-21T12:00:00+09:00"
 }
 ```
+
+`externalOperations` は順序付きの操作ID配列です。`externalOperationDetailsDigest` はIssue本文の各五field blockを `operation`、`service`、`environment`、`executor`、`approvalRequired`、正規化したnullまたはstringの`approvalReference`へ変換し、同じ順序のcanonical JSONへ計算したSHA-256です。したがってIDが同じでもservice、environment、executor、承認条件または承認参照が変わればsnapshot bytesとdigestが変わります。
 
 検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。ClaudeはGitHubから取得せず、このCodex生成snapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用でき、Issue本文が変わった場合はCodexが再取得してdigestを更新します。
 
@@ -106,7 +109,9 @@ proposed
 | 任意の`blocked:*` | 直前の非blocked状態、`paused`, `superseded` |
 | `paused` | 停止前の状態、`superseded` |
 
-Head SHAが変わった場合、`verify-passed`、`review-requested`、`approved-for-merge` から `in-progress` へ戻し、検証とレビューをやり直します。`done` と `superseded` は終端状態です。
+`in-progress -> verify-passed` だけは、canonical Issue worktreeの現在値を明示する `tools/issue-state.sh transition ... --head-sha ${HEAD_SHA}` が必須です。遷移処理はdurable stateのBranch/worktreeとGit top-level/common directory、current Head、raw Branch refをGitHub mutation前、各remote step後、durable write直前に再照合し、一致したHeadを`state.json`へ保存します。Primary checkoutからHeadを推測しません。他の遷移で`--head-sha`は拒否します。
+
+Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approved-for-merge` から `in-progress` へ戻し、検証とレビューをやり直します。これらの遷移は古い`headSha`を削除し、次の`in-progress -> verify-passed`で明示した現在Headへ置き換えます。それ以降のforward遷移は同じ`headSha`を保持します。`done` と `superseded` は終端状態です。
 
 各遷移commentには機械可読markerとして `from`、`to`、`resumeState`、executor、timestampを保存します。`blocked:*` または`paused`へ入るときの`resumeState`は遷移前状態です。復帰時は最新markerの`resumeState`だけを使用し、存在しない場合は推測せず`blocked:conflict`にします。ローカル`state.json`にも同じfieldsを保存し、失われた場合はGitHub commentから再構築します。
 
@@ -154,6 +159,7 @@ ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変
 4. スクリーンショットと機械判定を保存する。
 5. AIが見た目と受け入れ条件を評価する。
 6. `verify.json` にHead SHAを記録する。
+7. 同じHeadを明示して`in-progress -> verify-passed`へ遷移し、durable stateへ固定する。
 
 ### 5.4 Opposite-model review
 
@@ -178,6 +184,8 @@ ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変
 10. remote Branch、worktree、local Branchの順に対象を再確認して後片付けする。
 
 `gh pr merge --delete-branch` に後片付け全体を任せません。各対象を明示して、別worktreeやユーザーBranchを削除しないようにします。
+
+認証済みmutationはIssue contractに同じoperation IDが宣言されている場合だけ実行します。Gateとmergeには`github.merge_pr`、Push直前には`github.push_branch`、新しいPRを作る経路だけ`github.create_pr`、remote Branch削除直前には`github.delete_branch`が必要です。新規PR経路では`github.create_pr`の欠落をPushより前にも検査し、必要宣言が一つでも欠ける場合は外部mutationをゼロのまま拒否します。既存の正確なPRを再利用する経路は`github.create_pr`を要求しません。
 
 Squash Merge後は元Branch tipが`main`の祖先にならないため、`git branch --merged` を完了判定に使いません。Codexは対象PRの`state == MERGED`、`headRefOid`が記録済みHead SHAと一致すること、`mergeCommit`が存在することをGitHubから確認します。必要に応じてpatch-idでSquash commitとの差分同等性も確認します。
 

@@ -5,6 +5,7 @@ require "digest"
 require "json"
 require "time"
 require_relative "descriptor-files"
+require_relative "issue-contract"
 
 def refuse(message)
   warn "merge identity refused: #{message}"
@@ -104,10 +105,7 @@ def validate_state(root, repository, issue, mode)
   contract_bytes = DescriptorFiles.read_opened(contract_io, contract_stat)
   refuse("state issue-contract digest differs from exact bytes") unless contract_digest == "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
   contract = JSON.parse(contract_bytes)
-  refuse("Issue contract identity differs from durable state") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue && contract["repository"] == repository
-  refuse("Issue contract goal is missing") unless contract["goal"].is_a?(String) && !contract["goal"].strip.empty?
-  anchors = contract["specAnchors"]
-  refuse("Issue contract spec anchors are missing") unless anchors.is_a?(Array) && !anchors.empty? && anchors.all? { |entry| entry.is_a?(String) && !entry.empty? } && anchors.uniq == anchors
+  IOSTemplate::IssueContract.validate_snapshot!(contract, issue: issue, repository: repository)
 
   state_name = state["state"]
   case state_name
@@ -152,14 +150,18 @@ def validate_state(root, repository, issue, mode)
     "issue" => issue,
     "branch" => branch,
     "worktree" => worktree,
+    "primaryImplementer" => state.fetch("primaryImplementer"),
     "baseSha" => base,
     "headSha" => head,
     "pullRequest" => state["pullRequest"],
     "contractDigest" => contract_digest,
+    "externalOperations" => contract.fetch("externalOperations"),
     "title" => "Issue ##{issue}: #{title_goal}"
   }
   handles.reverse_each { |handle| handle.close unless handle.closed? }
   result
+rescue IOSTemplate::IssueContract::ValidationError => error
+  refuse("Issue contract is invalid: #{error.failures.join('; ')}")
 rescue JSON::ParserError => error
   refuse("Issue contract is not valid JSON: #{error.message}")
 rescue IOError, SystemCallError, ArgumentError => error

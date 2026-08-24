@@ -636,6 +636,11 @@ FUTURE="$future_timestamp" mutate_json "$fixture_root/.artifacts/issues/42/issue
 refresh_contract_digest
 expect_failure future-fetched-at "issueContract.fetchedAt is implausibly in the future"
 
+prepare_fixture invalid-operation-details-digest
+mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" 'document["externalOperationDetailsDigest"] = "sha256:" + "0" * 63'
+refresh_contract_digest
+expect_failure invalid-operation-details-digest "issueContract.externalOperationDetailsDigest must be a SHA-256 digest"
+
 prepare_fixture arbitrary-verify-root
 cp "$evidence_file" "$fixture_root/verify.json"
 expect_failure arbitrary-verify-root "--file must be the canonical evidence path" "$base_sha" "$head_sha" "$fixture_root/verify.json"

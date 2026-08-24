@@ -8,7 +8,13 @@ artifact_issue="$repo_root/.artifacts/issues/$test_issue"
 request_dir="$repo_root/.artifacts/ops-requests"
 result_dir="$repo_root/.artifacts/ops-results"
 [[ ! -e "$artifact_issue" ]] || { echo "refusing to overwrite existing $artifact_issue" >&2; exit 1; }
-trap 'rm -rf "$workspace" "$artifact_issue" "$request_dir/issue-424242-create-pr-1.json" "$request_dir/create-issue.json" "$request_dir/bad.json" "$request_dir/cloudflare-deploy.json" "$request_dir/elevenlabs-audio.json" "$request_dir/appstore-build.json" "$request_dir/supabase-migrations.json" "$request_dir/path-link" "$result_dir/issue-424242-create-pr-1.json"' EXIT
+state_worktree=''
+cleanup() {
+  if [[ -n "$state_worktree" && -e "$state_worktree" ]]; then git -C "$repo_root" worktree remove --force "$state_worktree" >/dev/null 2>&1 || true; fi
+  git -C "$repo_root" branch -D "codex/$test_issue-workflow-state" >/dev/null 2>&1 || true
+  rm -rf "$workspace" "$artifact_issue" "$request_dir/issue-424242-create-pr-1.json" "$request_dir/create-issue.json" "$request_dir/bad.json" "$request_dir/cloudflare-deploy.json" "$request_dir/elevenlabs-audio.json" "$request_dir/appstore-build.json" "$request_dir/supabase-migrations.json" "$request_dir/path-link" "$result_dir/issue-424242-create-pr-1.json"
+}
+trap cleanup EXIT
 
 fake_bin="$workspace/bin"
 mkdir -p "$fake_bin" "$request_dir" "$result_dir"
@@ -26,12 +32,25 @@ fi
 printf '%s\n' '{"status":"succeeded","executor":"codex","verifiedAccount":"yuto1201","target":"yuto1201/iOS-Template","operation":"github.create_pr","resultReference":"https://github.com/yuto1201/iOS-Template/pull/424242","executedAt":"2026-08-24T00:00:00Z","token":"must-not-survive"}'
 EOF
 chmod +x "$fake_bin/codex"
+real_git=$(command -v git)
+cat > "$fake_bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${FAKE_GIT_HEAD_WORKTREE:-}" && "$*" == "-C $FAKE_GIT_HEAD_WORKTREE rev-parse HEAD" ]]; then
+  count_file=${FAKE_GIT_HEAD_COUNT_FILE:?}; count=$(($(cat "$count_file" 2>/dev/null || printf 0)+1)); printf '%s' "$count" >"$count_file"
+  if [[ -n "${FAKE_GIT_HEAD_CHANGE_AFTER_EDIT:-}" ]] && rg -q '^issue edit ' "${FAKE_GH_LOG:?}"; then printf '0000000000000000000000000000000000000000\n'; exit 0; fi
+  if [[ -n "${FAKE_GIT_HEAD_RACE_AFTER:-}" && "$count" -gt "$FAKE_GIT_HEAD_RACE_AFTER" ]]; then printf '0000000000000000000000000000000000000000\n'; exit 0; fi
+fi
+exec "${REAL_GIT:?}" "$@"
+EOF
+chmod +x "$fake_bin/git"
 
 export PATH="$fake_bin:$PATH"
 export FAKE_GH_LOG="$workspace/gh.log"
 export FAKE_GH_LABELS_FILE="$workspace/labels.json"
 export FAKE_GH_COMMENTS_FILE="$workspace/comments.json"
 export FAKE_GH_VIEW_COUNT_FILE="$workspace/issue-view-count"
+export REAL_GIT="$real_git"
 printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 
@@ -127,14 +146,56 @@ assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) 
 # Once Claim has created the full Task 4 identity record, every Task 2
 # transition must retain it exactly while changing only transition metadata.
 head_sha=$(git -C "$repo_root" rev-parse HEAD)
+state_worktree="$repo_root/.worktrees/$test_issue-workflow-state"
+git -C "$repo_root" worktree add -b "codex/$test_issue-workflow-state" "$state_worktree" "$head_sha" >/dev/null
+ln -s ../../.artifacts "$state_worktree/.artifacts"
+cp "$repo_root/tools/issue-state.sh" "$state_worktree/tools/issue-state.sh"
+cp "$repo_root/tools/lib/workflow-json.rb" "$repo_root/tools/lib/workflow.sh" "$state_worktree/tools/lib/"
+export FAKE_GIT_HEAD_WORKTREE="$state_worktree" FAKE_GIT_HEAD_COUNT_FILE="$workspace/head-count"
 cat > ".artifacts/issues/$test_issue/state.json" <<EOF
-{"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$head_sha","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"state":"claimed","previousState":"approved","resumeState":null,"executor":"codex","headSha":"$head_sha","pullRequest":424242}
+{"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$head_sha","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"state":"claimed","previousState":"approved","resumeState":null,"executor":"codex","pullRequest":424242}
 EOF
 printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
-for transition in 'claimed in-progress' 'in-progress verify-passed' 'verify-passed review-requested' 'review-requested approved-for-merge' 'approved-for-merge merged'; do
+assert_fails 'Head argument is forbidden outside in-progress to verify-passed' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from claimed --to in-progress --head-sha "$head_sha"
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from claimed --to in-progress >/dev/null
+
+: > "$FAKE_GH_LOG"
+cp ".artifacts/issues/$test_issue/state.json" "$workspace/in-progress-state.json"
+assert_fails 'verify-passed requires an explicit Head' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed
+assert_fails 'verify-passed rejects a wrong explicit Head' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha 0000000000000000000000000000000000000000
+cmp -s "$workspace/in-progress-state.json" ".artifacts/issues/$test_issue/state.json"
+! rg -q '^issue edit ' "$FAKE_GH_LOG"
+
+printf '0' > "$FAKE_GIT_HEAD_COUNT_FILE"
+export FAKE_GIT_HEAD_RACE_AFTER=1
+assert_fails 'Head change before GitHub mutation is rejected' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha"
+unset FAKE_GIT_HEAD_RACE_AFTER
+cmp -s "$workspace/in-progress-state.json" ".artifacts/issues/$test_issue/state.json"
+! rg -q '^issue edit ' "$FAKE_GH_LOG"
+
+printf '0' > "$FAKE_GIT_HEAD_COUNT_FILE"
+: > "$FAKE_GH_LOG"
+cp "$FAKE_GH_COMMENTS_FILE" "$workspace/comments-before-head-race.json"
+export FAKE_GIT_HEAD_CHANGE_AFTER_EDIT=1
+assert_fails 'Head change after label mutation stops comment and durable write' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha"
+unset FAKE_GIT_HEAD_CHANGE_AFTER_EDIT
+rg -q '^issue edit ' "$FAKE_GH_LOG"
+cmp -s "$workspace/comments-before-head-race.json" "$FAKE_GH_COMMENTS_FILE"
+cmp -s "$workspace/in-progress-state.json" ".artifacts/issues/$test_issue/state.json"
+printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
+
+printf '0' > "$FAKE_GIT_HEAD_COUNT_FILE"
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha" >/dev/null
+EXPECTED_HEAD="$head_sha" assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="verify-passed" && value["headSha"]==ENV.fetch("EXPECTED_HEAD")'
+
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to in-progress >/dev/null
+assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="in-progress" && !value.key?("headSha")'
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha" >/dev/null
+
+for transition in 'verify-passed review-requested' 'review-requested approved-for-merge'; do
   read -r from to <<< "$transition"
-  "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$from" --to "$to" >/dev/null
+  "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$from" --to "$to" >/dev/null
   EXPECTED_STATE="$to" EXPECTED_HEAD="$head_sha" assert_json ".artifacts/issues/$test_issue/state.json" '
     value = JSON.parse(File.read(ARGV[0]))
     abort unless value["schemaVersion"] == 1 && value["issue"] == 424242 && value["repository"] == "yuto1201/iOS-Template"
@@ -145,15 +206,35 @@ for transition in 'claimed in-progress' 'in-progress verify-passed' 'verify-pass
     abort unless value["state"] == ENV.fetch("EXPECTED_STATE") && value["previousState"]
   '
 done
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved-for-merge --to in-progress >/dev/null
+assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="in-progress" && !value.key?("headSha")'
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha" >/dev/null
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to review-requested >/dev/null
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from review-requested --to approved-for-merge >/dev/null
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved-for-merge --to merged >/dev/null
 
 # Blocked/resume recovery uses the durable marker and retains the same identity.
-"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from merged --to done >/dev/null
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from merged --to done >/dev/null
 printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
-ruby -rjson -e 'path, head = ARGV; value = JSON.parse(File.read(path)); value["state"] = "in-progress"; value["previousState"] = "claimed"; File.write(path, JSON.generate(value))' ".artifacts/issues/$test_issue/state.json" "$head_sha"
+ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.read(path)); value["state"] = "in-progress"; value["previousState"] = "claimed"; value.delete("headSha"); File.write(path, JSON.generate(value))' ".artifacts/issues/$test_issue/state.json"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
-"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to blocked:ops >/dev/null
-"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress >/dev/null
-EXPECTED_HEAD="$head_sha" assert_json ".artifacts/issues/$test_issue/state.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "blocked:ops" && value["resumeState"] == "in-progress" && value["headSha"] == ENV.fetch("EXPECTED_HEAD") && value["pullRequest"] == 424242'
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to blocked:ops >/dev/null
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress >/dev/null
+assert_json ".artifacts/issues/$test_issue/state.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "blocked:ops" && value["resumeState"] == "in-progress" && !value.key?("headSha") && value["pullRequest"] == 424242'
+
+# A review-fix cycle preserves the old verified Head while returning to
+# in-progress, then the next explicit verification replaces it with current HEAD.
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="changes-requested"; value["previousState"]="review-requested"; value["from"]="review-requested"; value["to"]="changes-requested"; File.binwrite(path,JSON.generate(value))' ".artifacts/issues/$test_issue/state.json"
+printf '["state:changes-requested"]' > "$FAKE_GH_LABELS_FILE"
+printf 'review fix\n' > "$state_worktree/review-fix.txt"
+git -C "$state_worktree" add tools review-fix.txt
+git -C "$state_worktree" -c user.name=Fixture -c user.email=fixture@example.invalid commit -m 'review fix' >/dev/null
+updated_head=$(git -C "$state_worktree" rev-parse HEAD)
+[[ "$updated_head" != "$head_sha" ]]
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from changes-requested --to in-progress >/dev/null
+assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="in-progress" && !value.key?("headSha")'
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$updated_head" >/dev/null
+EXPECTED_HEAD="$updated_head" assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="verify-passed" && value["headSha"]==ENV.fetch("EXPECTED_HEAD")'
 
 # A malformed identity is rejected before an external state-label mutation.
 printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"

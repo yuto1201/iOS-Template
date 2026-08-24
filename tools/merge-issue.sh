@@ -21,9 +21,28 @@ base_sha=$(jq -er '.baseSha | strings' <<<"$identity") || fail 'durable Base is 
 head_sha=$(jq -er '.headSha | strings' <<<"$identity") || fail 'durable Head is invalid'
 state_name=$(jq -er '.state | strings' <<<"$identity") || fail 'durable workflow state is invalid'
 pull_request=$(jq -er '.pullRequest // empty' <<<"$identity") || true
+external_operations=$(jq -ce '.externalOperations | arrays' <<<"$identity") || fail 'durable external-operation declarations are invalid'
+contract_digest=$(jq -er '.contractDigest | strings' <<<"$identity") || fail 'durable Issue contract digest is invalid'
+primary_implementer=$(jq -er '.primaryImplementer | strings' <<<"$identity") || fail 'durable primary implementer is invalid'
 title=$(jq -er '.title | strings' <<<"$identity") || fail 'deterministic PR title is invalid'
 primary_root=$(jq -er '.primaryRoot | strings' <<<"$identity") || fail 'primary checkout identity is invalid'
 pr_fields='number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url'
+
+require_declared_operation() {
+  local operation=$1
+  jq -e --arg operation "$operation" 'index($operation) != null' <<<"$external_operations" >/dev/null || fail "Issue contract does not declare $operation"
+}
+
+require_current_declared_operation() {
+  local operation=$1 current
+  current=$(ruby "$identity_tool" validate-worktree "$repo_root" "$repo" "$issue") || fail "durable identity changed before $operation"
+  jq -e --arg branch "$branch" --arg base "$base_sha" --arg head "$head_sha" --arg state "$state_name" \
+    --arg contract "$contract_digest" --arg primary "$primary_implementer" --arg operation "$operation" '
+    .branch == $branch and .baseSha == $base and .headSha == $head and .state == $state and
+    .contractDigest == $contract and .primaryImplementer == $primary and
+    (.externalOperations | index($operation) != null)
+  ' <<<"$current" >/dev/null || fail "current Issue contract does not declare $operation"
+}
 
 [[ "$(git -C "$repo_root" rev-parse --show-toplevel)" == "$repo_root" ]] || fail 'Git top-level differs from the Issue worktree'
 [[ "$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)" == "$primary_root/.git" ]] || fail 'Git common directory differs from the primary checkout'
@@ -113,6 +132,7 @@ if [[ "$state_name" == merged ]]; then
   exit 0
 fi
 [[ "$state_name" == approved-for-merge ]] || fail 'normal merge requires approved-for-merge state'
+require_declared_operation github.merge_pr
 
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null || fail 'initial merge evidence preflight failed'
 "$repo_root/tools/premerge-gate.sh" --repo "$repo" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed before publication'
@@ -152,8 +172,13 @@ if [[ "$pr_state" == MERGED ]]; then
 fi
 [[ -z "$pr_state" || "$pr_state" == OPEN ]] || fail 'persisted or discovered PR is closed without merge'
 
+if [[ -z "$pr_number" ]]; then
+  require_declared_operation github.create_pr
+fi
+require_declared_operation github.push_branch
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.push_branch --expected-head "$head_sha" >/dev/null || fail 'push preflight failed'
 require_origin
+require_current_declared_operation github.push_branch
 git -C "$repo_root" push origin "$head_sha:refs/heads/$branch" || fail 'exact Head push failed'
 
 if [[ -z "$pr_number" ]]; then
@@ -163,7 +188,9 @@ if [[ -z "$pr_number" ]]; then
     match = lines[0].match(/\A([0-9a-f]{40})\trefs\/heads\/(.+)\z/) or abort
     abort unless match[1] == ENV.fetch("HEAD") && match[2] == ENV.fetch("BRANCH")
   ' || fail 'remote Branch moved after exact Head push'
+  require_declared_operation github.create_pr
   "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.create_pr --expected-head "$head_sha" >/dev/null || fail 'PR creation preflight failed'
+  require_current_declared_operation github.create_pr
   gh pr create --repo "$repo" --base main --head "$branch" --title "$title" --body "$body" >/dev/null || fail 'PR creation failed'
   created=$(gh pr list --repo "$repo" --head "$branch" --state open --json "$pr_fields") || fail 'created PR could not be resolved'
   selected=$(PRS="$created" ruby -rjson -e 'items = JSON.parse(ENV.fetch("PRS")); abort unless items.is_a?(Array) && items.length == 1; puts JSON.generate(items.fetch(0))') || fail 'created PR is ambiguous'
@@ -172,10 +199,12 @@ if [[ -z "$pr_number" ]]; then
   ruby "$identity_tool" persist-pr "$repo_root" "$repo" "$issue" "$pr_number" >/dev/null || fail 'created PR identity could not be persisted'
 fi
 
+require_declared_operation github.merge_pr
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null || fail 'merge preflight failed'
 "$repo_root/tools/premerge-gate.sh" --repo "$repo" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed'
 pr_document=$(view_exact_pr "$pr_number") || fail 'PR identity could not be refreshed before merge'
 [[ "$(validate_pr OPEN "$pr_document" "$pr_number")" == OPEN ]] || fail 'PR identity changed before merge'
+require_current_declared_operation github.merge_pr
 gh pr merge "$pr_number" --repo "$repo" --squash --match-head-commit "$head_sha" || fail 'Squash Merge failed'
 pr_document=$(view_exact_pr "$pr_number") || fail 'merged PR could not be confirmed'
 [[ "$(validate_pr MERGED "$pr_document" "$pr_number")" == MERGED ]] || fail 'merged PR confirmation mismatched'

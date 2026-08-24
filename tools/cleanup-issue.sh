@@ -23,6 +23,9 @@ worktree=$(jq -er '.worktreePath | strings' <<<"$identity")
 head_sha=$(jq -er '.headSha | strings' <<<"$identity")
 pull_request=$(jq -er '.pullRequest' <<<"$identity") || fail 'cleanup requires a positive persisted pullRequest'
 worktree_present=$(jq -r '.worktreePresent' <<<"$identity")
+external_operations=$(jq -ce '.externalOperations | arrays' <<<"$identity") || fail 'durable external-operation declarations are invalid'
+contract_digest=$(jq -er '.contractDigest | strings' <<<"$identity") || fail 'durable Issue contract digest is invalid'
+primary_implementer=$(jq -er '.primaryImplementer | strings' <<<"$identity") || fail 'durable primary implementer is invalid'
 pr_fields='number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url'
 
 [[ "$(git -C "$repo_root" rev-parse --show-toplevel)" == "$repo_root" ]] || fail 'Git top-level differs from primary checkout'
@@ -72,12 +75,20 @@ if remote_output=$(git -C "$repo_root" ls-remote --exit-code --heads origin "ref
   ') || fail 'remote Branch lookup returned an invalid identity'
   [[ "$remote_sha" == "$head_sha" ]] || fail 'remote Branch was reused at a different Head'
   [[ -e "$worktree" && ! -L "$worktree" ]] || fail 'remote Branch still exists but exact-head worktree preflight cannot rerun'
+  jq -e 'index("github.delete_branch") != null' <<<"$external_operations" >/dev/null || fail 'Issue contract does not declare github.delete_branch'
   "$worktree/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.delete_branch --expected-head "$head_sha" >/dev/null || fail 'remote Branch deletion preflight failed'
   require_origin
   refreshed=$(git -C "$repo_root" ls-remote --exit-code --heads origin "refs/heads/$branch") || fail 'remote Branch disappeared during deletion preflight'
   refreshed_sha=$(printf '%s' "$refreshed" | awk 'NF == 2 { print $1 }')
   refreshed_ref=$(printf '%s' "$refreshed" | awk 'NF == 2 { print $2 }')
   [[ "$refreshed_sha" == "$head_sha" && "$refreshed_ref" == "refs/heads/$branch" ]] || fail 'remote Branch changed during deletion preflight'
+  current_identity=$(ruby "$identity_tool" validate-primary "$repo_root" "$repo" "$issue") || fail 'durable identity changed before remote Branch deletion'
+  jq -e --arg branch "$branch" --arg base "$base_sha" --arg head "$head_sha" \
+    --arg contract "$contract_digest" --arg primary "$primary_implementer" --argjson pr "$pull_request" '
+    .state == "merged" and .branch == $branch and .baseSha == $base and .headSha == $head and
+    .pullRequest == $pr and .contractDigest == $contract and .primaryImplementer == $primary and
+    (.externalOperations | index("github.delete_branch") != null)
+  ' <<<"$current_identity" >/dev/null || fail 'current Issue contract does not declare github.delete_branch'
   git -C "$repo_root" push --force-with-lease="refs/heads/$branch:$head_sha" origin ":refs/heads/$branch" >/dev/null || fail 'exact remote Branch deletion failed'
 else
   remote_status=$?

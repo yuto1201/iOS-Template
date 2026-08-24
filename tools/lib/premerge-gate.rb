@@ -7,6 +7,7 @@ require "open3"
 require "time"
 require_relative "descriptor-files"
 require_relative "issue-contract"
+require_relative "ownership"
 require_relative "review-contract"
 
 def refuse(message)
@@ -61,6 +62,13 @@ class HeldSnapshots
 
   attr_reader :root
 
+  def self.metadata(stat)
+    [
+      stat.dev, stat.ino, stat.size, stat.mode, stat.nlink,
+      stat.mtime.to_i, stat.mtime.nsec, stat.ctime.to_i, stat.ctime.nsec
+    ]
+  end
+
   def directory(parent, name, at)
     io = DescriptorFiles.open_directory_at(parent.io, name)
     value = Directory.new(io: io, parent: parent, name: name, stat: io.stat, at: at)
@@ -92,14 +100,15 @@ class HeldSnapshots
     end
     @leaves.each do |leaf|
       stat = leaf.io.stat
-      refuse("#{leaf.at} descriptor identity changed") unless stat.file? && stat.nlink == 1 && [stat.dev, stat.ino] == [leaf.stat.dev, leaf.stat.ino]
+      refuse("#{leaf.at} descriptor identity or metadata changed") unless
+        stat.file? && stat.nlink == 1 && self.class.metadata(stat) == self.class.metadata(leaf.stat)
       leaf.io.rewind
       refuse("#{leaf.at} bytes changed while held") unless leaf.io.read == leaf.bytes
       current, current_stat = DescriptorFiles.open_regular_at(leaf.parent.io, leaf.name)
       current.binmode
       current_bytes = current.read
       current.close
-      refuse("#{leaf.at} path identity changed") unless [current_stat.dev, current_stat.ino] == [leaf.stat.dev, leaf.stat.ino]
+      refuse("#{leaf.at} path identity or metadata changed") unless self.class.metadata(current_stat) == self.class.metadata(leaf.stat)
       refuse("#{leaf.at} path bytes changed") unless current_bytes == leaf.bytes
     rescue SystemCallError, IOError => error
       refuse("#{leaf.at} path identity changed: #{error.message}")
@@ -133,11 +142,22 @@ begin
   preflight_file = artifact_snapshots.leaf(issue_directory, "github-preflight.json", "github-preflight.json")
   config = source_snapshots.directory(source_snapshots.root, "Config", "Config")
   ownership_file = source_snapshots.leaf(config, "ownership.yml", "Config/ownership.yml")
+  ownership = IOSTemplate::Ownership.parse(ownership_file.bytes)
 
   state = parse_object(state_file.bytes, "state.json")
+  state_digest = "sha256:#{Digest::SHA256.hexdigest(state_file.bytes)}"
+  state_metadata = {
+    "dev" => state_file.stat.dev, "ino" => state_file.stat.ino, "size" => state_file.stat.size,
+    "mode" => state_file.stat.mode, "nlink" => state_file.stat.nlink,
+    "mtimeSec" => state_file.stat.mtime.to_i, "mtimeNsec" => state_file.stat.mtime.nsec,
+    "ctimeSec" => state_file.stat.ctime.to_i, "ctimeNsec" => state_file.stat.ctime.nsec
+  }
+  refuse("held state bytes or metadata differ from validated identity") unless
+    identity["stateDigest"] == state_digest && identity["stateMetadata"] == state_metadata
   refuse("held state differs from validated identity") unless
     state["state"] == "approved-for-merge" && state["issue"] == issue && state["repository"] == repository &&
     state["branch"] == identity["branch"] && state["worktree"] == identity["worktree"] &&
+    state["primaryImplementer"] == identity["primaryImplementer"] &&
     state["baseSha"] == identity["baseSha"] && state["headSha"] == head_sha &&
     state.dig("issueContract", "digest") == identity["contractDigest"]
   transitioned_at = iso8601!(state["transitionedAt"], "state.transitionedAt")
@@ -146,6 +166,7 @@ begin
   refuse("contract bytes differ from validated identity") unless contract_digest == identity["contractDigest"]
 
   operation_details = contract.fetch("externalOperations", []).map { |operation| [operation, nil] }.to_h
+  refuse("Issue contract does not declare github.merge_pr") unless operation_details.key?("github.merge_pr")
   provider_files = {}
   non_github_operations = operation_details.keys.reject { |operation| operation.start_with?("github.") }
   unless non_github_operations.empty?
@@ -187,6 +208,9 @@ begin
     refuse("#{provider} provider identity is invalid") unless value["schemaVersion"] == 1 && value["issue"] == issue && value["provider"] == provider && value["health"] == "healthy"
     safe_identifier!(value["account"], "#{provider} provider account")
     safe_identifier!(value["target"], "#{provider} provider target")
+    expected_provider_identity = IOSTemplate::Ownership.provider_identity!(ownership, provider)
+    refuse("#{provider} provider account differs from Config ownership") unless value["account"] == expected_provider_identity.fetch("account")
+    refuse("#{provider} provider target differs from Config ownership") unless value["target"] == expected_provider_identity.fetch("target")
     refuse("#{provider} provider environment differs from the Issue contract") unless value["environment"] == detail.fetch("environment")
     checked_at = iso8601!(value["checkedAt"], "#{provider} provider checkedAt")
     refuse("#{provider} provider preflight predates the Issue contract") if checked_at < iso8601!(contract["fetchedAt"], "issue contract fetchedAt")
@@ -216,9 +240,7 @@ begin
   reviewed_at = iso8601!(review_values.fetch("result").fetch("reviewedAt"), "review.reviewedAt")
   completed_at = iso8601!(verify.fetch("completedAt"), "verify.completedAt")
 
-  ownership_matches = ownership_file.bytes.lines.map { |line| line[/^\s*login:\s*([A-Za-z0-9-]+)\s*$/, 1] }.compact
-  refuse("Config ownership must contain exactly one GitHub login") unless ownership_matches.length == 1
-  expected_account = ownership_matches.first
+  expected_account = IOSTemplate::Ownership.github_login!(ownership)
   refuse("configured GitHub account is not the approved personal account") unless expected_account == "yuto1201"
   preflight = parse_object(preflight_file.bytes, "github-preflight.json")
   exact_keys!(preflight, %w[account repository defaultBranch url intendedOperation issue headSha checkedAt digest], "github-preflight.json")
@@ -238,6 +260,8 @@ begin
   puts JSON.generate({"status" => "passed", "issue" => issue, "headSha" => head_sha, "issueContractDigest" => contract_digest})
 rescue IOSTemplate::IssueContract::ValidationError => error
   refuse("live Issue is invalid: #{error.failures.join('; ')}")
+rescue IOSTemplate::Ownership::ValidationError => error
+  refuse("Config ownership is invalid: #{error.message}")
 rescue IOSTemplate::ReviewContract::ValidationError => error
   refuse("review contract is invalid: #{error.message}")
 rescue KeyError, JSON::ParserError, SystemCallError, IOError, ArgumentError => error

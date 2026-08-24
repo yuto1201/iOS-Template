@@ -344,7 +344,7 @@ gateはprimary checkoutのartifactをpathごとに読み直しません。`.arti
 - contractが要求する各provider preflight
 - Issue worktreeの `Config/ownership.yml`
 
-同じdescriptor bytesを最後まで使い、終了前にheld descriptor、現在のpath inode、component identity、bytesが変わっていないことを再確認します。Swift validatorは `--expected-file-digest sha256:...` を受け取り、別processであってもgateが保持した `verify.json` のexact bytesを読んだことを証明します。
+同じdescriptor bytesを最後まで使い、終了前にheld descriptor、現在のpath inode、component identity、bytesとmetadataが変わっていないことを再確認します。特に`state.json`は`validate-worktree`が返したexact bytes digestとdev、inode、size、mode、nlink、mtime、ctimeをGate helperが`gh`より前に照合し、descriptorを終了まで保持します。検証直後のinode swap、same-inode rewrite、primary implementerまたはtransition timestamp変更に加え、保持中のsame-byte rewriteによるmetadata変更も拒否します。Swift validatorは `--expected-file-digest sha256:...` を受け取り、別processであってもgateが保持した `verify.json` のexact bytesを読んだことを証明します。
 
 そのうえで次を検査します。
 
@@ -359,6 +359,8 @@ gateはprimary checkoutのartifactをpathごとに読み直しません。`.arti
 - `gh issue view` のfixed fields `number,url,body,labels` がcaller Issueと一致し、`type:feature` または `type:regression` がちょうど一つ存在
 - live Issue本文をshared Issue parserで再構成したcanonical contract bytesが `issue-contract.json` と完全一致
 - Provider外部操作はproviderごとに一つ以下で、exact operationとenvironmentがIssueの五field operation blockに一致し、account/target、health、timestamp、digestが安全
+- Providerのaccount/targetは`Config/ownership.yml`のexact case-sensitive値と一致する。Supabaseは`organization`/`projectRef`、Cloudflareは`accountId`/`target`、ElevenLabsは`accountId`/`workspaceId`、App Store Connectは`teamId`/`bundleId`へ対応し、nullまたは未設定ならfail closed
+- Issue contractが`github.merge_pr`を宣言し、live Issueから再構成した構造化operation details digestもcanonical snapshotと一致
 - `github-preflight.json` のaccountが `Config/ownership.yml` の `yuto1201` と一致し、repository、`main`、URL、`github.merge_pr`、Issue、Head、digestが完全一致
 - GitHub preflightがverify完了、review完了、`approved-for-merge` transitionのすべてより新しく、許容未来時刻を超えない
 

@@ -9,6 +9,11 @@ supabase:
 
 cloudflare:
   accountId: null
+  target: null
+
+elevenlabs:
+  accountId: null
+  workspaceId: null
 
 appStore:
   teamId: null

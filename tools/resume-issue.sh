@@ -122,7 +122,7 @@ state_parent_real=$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$(dirname "$sta
 state_file="$state_parent_real/state.json"
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 if [[ -e "$state_file" || -L "$state_file" ]]; then
-  record=$(ruby "$repo_root/tools/lib/workflow-json.rb" transition-state-record "$state_file" "$issue" "$repo" "$state" "$previous_state" "$state" "$state_resume" "$timestamp") || blocked 'existing durable state identity is malformed or mismatched'
+  record=$(ruby "$repo_root/tools/lib/workflow-json.rb" transition-state-record "$state_file" "$issue" "$repo" "$state" "$previous_state" "$state" "$state_resume" "$timestamp" null) || blocked 'existing durable state identity is malformed or mismatched'
 else
   record=$(ruby -rjson -e '
     def canonical(value)

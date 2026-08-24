@@ -25,7 +25,7 @@ make_case() {
   mkdir -p "$CASE_PRIMARY/.worktrees"; git -C "$CASE_PRIMARY" worktree add -b "$branch" "$CASE_WORKTREE" main >/dev/null
   mkdir -p "$CASE_PRIMARY/tools/lib" "$CASE_WORKTREE/tools" "$CASE_PRIMARY/.artifacts/issues/$issue"
   cp "$source_root/tools/cleanup-issue.sh" "$CASE_PRIMARY/tools/"
-  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$CASE_PRIMARY/tools/lib/"
+  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$CASE_PRIMARY/tools/lib/"
   cat >"$CASE_PRIMARY/tools/github-account-preflight.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -40,7 +40,7 @@ EOF
   printf 'issue work\n' >"$CASE_WORKTREE/issue.md"; git -C "$CASE_WORKTREE" add issue.md tools; git -C "$CASE_WORKTREE" commit -m issue >/dev/null
   CASE_HEAD=$(git -C "$CASE_WORKTREE" rev-parse HEAD); git -C "$CASE_WORKTREE" push origin "$branch" >/dev/null
   ln -s ../../.artifacts "$CASE_WORKTREE/.artifacts"; printf '.artifacts\n' >>"$(git -C "$CASE_WORKTREE" rev-parse --git-path info/exclude)"
-  CONTRACT="$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" ruby -rjson -e 'File.binwrite(ENV.fetch("CONTRACT"),JSON.generate({"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","goal"=>"Clean exact merged work.","specAnchors"=>["docs/workflow.md"],"acceptanceCriteria"=>[{"id"=>"AC-1","text"=>"Clean safely."}],"dependencies"=>[],"externalOperations"=>["github.delete_branch"],"fetchedAt"=>"2026-08-24T00:00:00Z"}))'
+  CONTRACT="$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" ruby -rjson -rdigest -e 'details=[{"operation"=>"github.delete_branch","service"=>"GitHub","environment"=>"production","executor"=>"Codex","approvalRequired"=>false,"approvalReference"=>nil}]; def c(v); v.is_a?(Hash) ? v.keys.sort.to_h{|k|[k,c(v[k])]} : v.is_a?(Array) ? v.map{|e|c(e)} : v; end; digest="sha256:#{Digest::SHA256.hexdigest(JSON.generate(c(details)))}"; File.binwrite(ENV.fetch("CONTRACT"),JSON.generate({"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","goal"=>"Clean exact merged work.","specAnchors"=>["docs/workflow.md"],"acceptanceCriteria"=>[{"id"=>"AC-1","text"=>"Clean safely."}],"dependencies"=>[],"externalOperations"=>["github.delete_branch"],"externalOperationDetailsDigest"=>digest,"fetchedAt"=>"2026-08-24T00:00:00Z"}))'
   CASE_DIGEST="sha256:$(shasum -a 256 "$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" | awk '{print $1}')"
   STATE="$CASE_PRIMARY/.artifacts/issues/$issue/state.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" ruby -rjson -e 'value={"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","branch"=>"codex/42-cleanup-safety","worktree"=>".worktrees/42-cleanup-safety","baseSha"=>ENV.fetch("BASE"),"primaryImplementer"=>"codex","issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"state"=>"merged","previousState"=>"approved-for-merge","resumeState"=>nil,"executor"=>"codex","headSha"=>ENV.fetch("HEAD"),"pullRequest"=>57,"from"=>"approved-for-merge","to"=>"merged","transitionedAt"=>"2026-08-24T00:03:00Z"};File.binwrite(ENV.fetch("STATE"),JSON.generate(value))'
   : >"$CASE_LOG"; : >"$CASE_MUTATIONS"
@@ -115,6 +115,11 @@ make_case remote-reused
 git -C "$CASE_REMOTE" update-ref "refs/heads/$branch" "$CASE_BASE"
 assert_fails 'remote Branch reused at another SHA' run_cleanup
 assert_no_mutation 'reused remote Branch'
+
+make_case missing-delete-declaration
+ruby -rjson -rdigest -e 'contract_path,state_path=ARGV; value=JSON.parse(File.binread(contract_path)); value["externalOperations"]=[]; value["externalOperationDetailsDigest"]="sha256:#{Digest::SHA256.hexdigest("[]")}"; File.binwrite(contract_path,JSON.generate(value)); state=JSON.parse(File.binread(state_path)); state["issueContract"]["digest"]="sha256:#{Digest::SHA256.file(contract_path).hexdigest}"; File.binwrite(state_path,JSON.generate(state))' "$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" "$CASE_PRIMARY/.artifacts/issues/42/state.json"
+assert_fails 'missing delete declaration before remote delete' run_cleanup
+assert_no_mutation 'missing delete declaration'
 
 make_case retry
 FAIL_STEP=remote-delete assert_fails 'remote deletion interruption' run_cleanup

@@ -125,10 +125,43 @@ assert_json "$workspace/multi-provider.json" '
   value = JSON.parse(File.read(ARGV[0]))
   abort unless value.fetch("contract").fetch("externalOperations") == ["github.push_branch", "supabase.inspect_project"]
   abort unless value.fetch("externalOperationDetails") == [
-    {"operation" => "github.push_branch", "service" => "GitHub", "environment" => "production", "executor" => "Codex", "approvalRequired" => false},
-    {"operation" => "supabase.inspect_project", "service" => "Supabase", "environment" => "staging", "executor" => "Codex", "approvalRequired" => false}
+    {"operation" => "github.push_branch", "service" => "GitHub", "environment" => "production", "executor" => "Codex", "approvalRequired" => false, "approvalReference" => nil},
+    {"operation" => "supabase.inspect_project", "service" => "Supabase", "environment" => "staging", "executor" => "Codex", "approvalRequired" => false, "approvalReference" => nil}
   ]
+  abort unless value.fetch("contract").fetch("externalOperationDetailsDigest") == "sha256:5151021cb8aa2e91cfdbb3276015aa29e28d507fcb261be4e0a539e7a62743ee"
 '
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/multi-provider.md" --type feature --format envelope \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > "$workspace/multi-provider-repeat.json"
+cmp -s "$workspace/multi-provider.json" "$workspace/multi-provider-repeat.json" || {
+  echo 'unchanged structured operation details were not deterministic' >&2
+  exit 1
+}
+
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/approved-external-operation.md" --type feature --format envelope \
+  --issue 73 --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > "$workspace/approved-external-operation.json"
+assert_json "$workspace/approved-external-operation.json" '
+  value = JSON.parse(File.read(ARGV[0]))
+  details = value.fetch("externalOperationDetails")
+  abort unless details == [{"operation" => "appstore.submit_review", "service" => "App Store Connect", "environment" => "production", "executor" => "Codex", "approvalRequired" => true, "approvalReference" => "Approval reference: #73"}]
+  abort unless value.dig("contract", "externalOperationDetailsDigest") == "sha256:1cd2bd746c9c77fc9fe9b4c367beca33cb25a8a2ad3038ba8fef8818cbdc685b"
+'
+
+cp "$workspace/multi-provider.md" "$workspace/multi-provider-detail-change.md"
+sed -i '' 's/- Environment: staging/- Environment: preview/' "$workspace/multi-provider-detail-change.md"
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/multi-provider-detail-change.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > "$workspace/multi-provider-detail-change.json"
+ruby -rjson -e '
+  original = JSON.parse(File.read(ARGV[0])).fetch("contract")
+  changed = JSON.parse(File.read(ARGV[1]))
+  abort unless original["externalOperations"] == changed["externalOperations"]
+  abort if original["externalOperationDetailsDigest"] == changed["externalOperationDetailsDigest"]
+' "$workspace/multi-provider.json" "$workspace/multi-provider-detail-change.json"
 
 "$repo_root/tools/validate-issue-body.sh" --type feature "$workspace/feature.md"
 

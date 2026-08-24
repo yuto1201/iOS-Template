@@ -834,7 +834,7 @@ func validateIssueContract(
     let contract = try readJSONObject(data: data, at: "issueContract file")
     let requiredContractKeys: Set<String> = [
         "schemaVersion", "issue", "repository", "goal", "specAnchors", "acceptanceCriteria",
-        "dependencies", "externalOperations", "fetchedAt"
+        "dependencies", "externalOperations", "externalOperationDetailsDigest", "fetchedAt"
     ]
     let allowedContractKeys = requiredContractKeys.union(["verification"])
     let actualContractKeys = Set(contract.keys)
@@ -877,6 +877,12 @@ func validateIssueContract(
     _ = try requireStringArray(
         contract["externalOperations"]!, at: "issueContract.externalOperations", unique: true
     )
+    let operationDetailsDigest = try requireString(
+        contract["externalOperationDetailsDigest"]!, at: "issueContract.externalOperationDetailsDigest"
+    )
+    guard matches(operationDetailsDigest, regex: digestPattern) else {
+        throw ValidationFailure("issueContract.externalOperationDetailsDigest must be a SHA-256 digest")
+    }
     let rawCriteria = try requireArray(contract["acceptanceCriteria"]!, at: "issueContract.acceptanceCriteria")
     guard !rawCriteria.isEmpty else {
         throw ValidationFailure("issueContract.acceptanceCriteria must not be empty")

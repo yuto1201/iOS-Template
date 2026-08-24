@@ -4,6 +4,7 @@
 require "json"
 require "optparse"
 require "time"
+require "digest"
 
 module IOSTemplate
   module IssueContract
@@ -55,6 +56,11 @@ module IOSTemplate
     ].freeze
 
     ENVIRONMENTS = %w[local preview staging production].freeze
+    SNAPSHOT_REQUIRED_KEYS = %w[
+      schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
+      externalOperations externalOperationDetailsDigest fetchedAt
+    ].freeze
+    SNAPSHOT_OPTIONAL_KEYS = %w[verification].freeze
 
     Result = Struct.new(:contract, :external_operation_details, keyword_init: true)
 
@@ -187,6 +193,7 @@ module IOSTemplate
           "acceptanceCriteria" => numeric_acceptance,
           "dependencies" => dependencies,
           "externalOperations" => external_details.map { |detail| detail.fetch("operation") },
+          "externalOperationDetailsDigest" => "sha256:#{Digest::SHA256.hexdigest(canonical_json(external_details))}",
           "fetchedAt" => fetched_at
         }
       end
@@ -199,6 +206,7 @@ module IOSTemplate
     def parse_external_operations(external_section, approvals_section, failures)
       no_additional_approval = no_additional_approval?(approvals_section)
       approval_reference = approval_reference?(approvals_section)
+      normalized_approval_reference = normalize_approval_reference(approvals_section)
 
       if none_value?(external_section)
         failures << "External operations None requires User approvals to be None or No additional approval" unless no_additional_approval
@@ -254,7 +262,8 @@ module IOSTemplate
           "service" => service,
           "environment" => environment,
           "executor" => executor,
-          "approvalRequired" => approval_value == "yes"
+          "approvalRequired" => approval_value == "yes",
+          "approvalReference" => approval_value == "yes" ? normalized_approval_reference : nil
         }
       end
 
@@ -270,6 +279,44 @@ module IOSTemplate
       details
     end
 
+    def validate_snapshot!(value, issue:, repository:)
+      failures = []
+      unless value.is_a?(Hash)
+        raise ValidationError, ["Issue contract must be an object"]
+      end
+      unknown = value.keys - SNAPSHOT_REQUIRED_KEYS - SNAPSHOT_OPTIONAL_KEYS
+      missing = SNAPSHOT_REQUIRED_KEYS - value.keys
+      failures << "Issue contract has unknown fields: #{unknown.join(', ')}" unless unknown.empty?
+      failures << "Issue contract is missing fields: #{missing.join(', ')}" unless missing.empty?
+      failures << "Issue contract schemaVersion must be 1" unless value["schemaVersion"] == 1
+      failures << "Issue contract identity differs from requested Issue" unless value["issue"] == issue && value["repository"] == repository
+      failures << "Issue contract goal is missing" unless value["goal"].is_a?(String) && !value["goal"].strip.empty?
+      anchors = value["specAnchors"]
+      failures << "Issue contract spec anchors are invalid" unless anchors.is_a?(Array) && !anchors.empty? && anchors.all? { |entry| entry.is_a?(String) && !entry.empty? } && anchors.uniq == anchors
+      criteria = value["acceptanceCriteria"]
+      valid_criteria = criteria.is_a?(Array) && !criteria.empty? && criteria.each_with_index.all? do |entry, index|
+        entry.is_a?(Hash) && entry.keys.sort == %w[id text] && entry["id"] == "AC-#{index + 1}" && entry["text"].is_a?(String) && !entry["text"].strip.empty?
+      end
+      failures << "Issue contract acceptance criteria are invalid" unless valid_criteria
+      dependencies = value["dependencies"]
+      failures << "Issue contract dependencies are invalid" unless dependencies.is_a?(Array) && dependencies.all? { |entry| entry.is_a?(Integer) && entry.positive? } && dependencies.uniq == dependencies
+      operations = value["externalOperations"]
+      failures << "Issue contract external operations are invalid" unless operations.is_a?(Array) && operations.all? { |entry| entry.is_a?(String) && ALLOWED_OPERATIONS.include?(entry) } && operations.uniq == operations
+      failures << "Issue contract operation-details digest is invalid" unless value["externalOperationDetailsDigest"].is_a?(String) && value["externalOperationDetailsDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
+      begin
+        Time.iso8601(value["fetchedAt"].to_s)
+      rescue ArgumentError
+        failures << "Issue contract fetchedAt is invalid"
+      end
+      raise ValidationError, failures unless failures.empty?
+
+      value
+    end
+
+    def operation_declared?(contract, operation)
+      contract.fetch("externalOperations").include?(operation)
+    end
+
     def none_value?(value)
       value.match?(/\A\s*(?:[-*]\s*)?None\.?\s*\z/i)
     end
@@ -280,6 +327,12 @@ module IOSTemplate
 
     def approval_reference?(value)
       value.match?(/(?:https?:\/\/\S+|\B#\d+\b|\bD-\d+\b|\bapproval(?:\s+reference)?\s*:\s*\S+)/i)
+    end
+
+    def normalize_approval_reference(value)
+      value.each_line.map do |line|
+        line.strip.sub(/\A[-*]\s+/, "").gsub(/[ \t]+/, " ")
+      end.reject(&:empty?).join("\n")
     end
 
     def canonical(value)

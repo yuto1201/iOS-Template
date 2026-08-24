@@ -111,10 +111,12 @@ fi
 ruby -ryaml -rjson -e '
   data = YAML.safe_load(File.read("Config/ownership.yml"), permitted_classes: [], aliases: false)
   abort "unexpected schema version" unless data["schemaVersion"] == 1
+  abort "ownership top-level schema differs" unless data.keys.sort == %w[appStore cloudflare elevenlabs github schemaVersion supabase].sort
   abort "unexpected GitHub login" unless data.dig("github", "login") == "yuto1201"
   abort "unexpected Supabase organization" unless data.dig("supabase", "organization") == "YUTO1201"
   %w[projectRef].each { |key| abort "#{key} must be null" unless data.dig("supabase", key).nil? }
-  abort "Cloudflare accountId must be null" unless data.dig("cloudflare", "accountId").nil?
+  %w[accountId target].each { |key| abort "Cloudflare #{key} must be null" unless data.dig("cloudflare", key).nil? }
+  %w[accountId workspaceId].each { |key| abort "ElevenLabs #{key} must be null" unless data.dig("elevenlabs", key).nil? }
   abort "App Store teamId must be null" unless data.dig("appStore", "teamId").nil?
   if File.exist?("Config/app-identity.json")
     identity = JSON.parse(File.read("Config/app-identity.json"))

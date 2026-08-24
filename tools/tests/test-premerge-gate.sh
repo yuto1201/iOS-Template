@@ -18,6 +18,7 @@ cp -R "$repo_root/tools/lib" "$repo/tools/"
 cp -R "$repo_root/.agents" "$repo/"
 cp -R "$repo_root/specs" "$repo/"
 cp "$repo_root/Config/ownership.yml" "$repo/Config/"
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
 printf '.artifacts\n' > "$repo/.gitignore"
 printf 'fixture\n' > "$repo/README.md"
 git -C "$repo" add .gitignore README.md Config tools .agents specs
@@ -66,7 +67,11 @@ Keep merge safety deterministic.
 
 ## External operations
 
-- None.
+- Operation: github.merge_pr
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
 
 ## User approvals
 
@@ -74,13 +79,8 @@ Keep merge safety deterministic.
 EOF
 
 canonical_contract() {
-  FETCHED_AT="$contract_at" ruby -rjson -e '
-    def canonical(value)
-      value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value[key])] } : value.is_a?(Array) ? value.map { |item| canonical(item) } : value
-    end
-    value = {"schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template", "goal" => "Keep merge safety deterministic.", "specAnchors" => ["specs/README.md#spec-index"], "acceptanceCriteria" => [{"id" => "AC-1", "text" => "The verified Head is current."}, {"id" => "AC-2", "text" => "Every acceptance criterion has one evidence mapping."}], "dependencies" => [], "externalOperations" => [], "fetchedAt" => ENV.fetch("FETCHED_AT")}
-    print JSON.generate(canonical(value))
-  '
+  ruby "$repo/tools/lib/issue-contract.rb" --body "$issue_body" --type feature --format contract \
+    --issue 42 --repo yuto1201/iOS-Template --fetched-at "$contract_at"
 }
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
@@ -129,11 +129,15 @@ mutate_signed_preflight() {
 fake_bin="$scratch/bin"
 mkdir "$fake_bin"
 real_swift=$(command -v swift)
+real_ruby=$(command -v ruby)
 cat > "$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${FAKE_GH_LOG:?}"
 if [[ "$1 $2" == 'issue view' ]]; then
+  if [[ -n "${REWRITE_HELD_TARGET:-}" ]]; then
+    TARGET="${REWRITE_HELD_TARGET:?}" "${REAL_RUBY:?}" -e 'path=ENV.fetch("TARGET"); bytes=File.binread(path); File.open(path,"r+b"){|io|io.write(bytes);io.flush;io.fsync}'
+  fi
   ruby -rjson -e 'labels = [{"name" => ENV.fetch("FAKE_TYPE_LABEL", "type:feature"), "color" => "", "description" => ""}]; labels << {"name" => ENV["FAKE_SECOND_TYPE"], "color" => "", "description" => ""} if ENV["FAKE_SECOND_TYPE"]; puts JSON.generate({"number" => 42, "url" => "https://github.com/yuto1201/iOS-Template/issues/42", "body" => File.read(ENV.fetch("FAKE_ISSUE_BODY")), "labels" => labels})'
   exit 0
 fi
@@ -149,14 +153,38 @@ if [[ -n "${SWAP_TARGET:-}" ]]; then
 fi
 exec "${REAL_SWIFT:?}" "$@"
 EOF
-chmod +x "$fake_bin/gh" "$fake_bin/swift"
-export PATH="$fake_bin:$PATH" REAL_SWIFT="$real_swift" FAKE_GH_LOG="$scratch/gh.log" FAKE_ISSUE_BODY="$issue_body"
+cat > "$fake_bin/ruby" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *'/tools/lib/merge-state.rb validate-worktree '* && -n "${STATE_AFTER_VALIDATE_MODE:-}" ]]; then
+  output=$("${REAL_RUBY:?}" "$@")
+  case "$STATE_AFTER_VALIDATE_MODE" in
+    swap)
+      cp "${FAKE_STATE_PATH:?}" "${FAKE_STATE_PATH}.replacement"
+      mv -f "${FAKE_STATE_PATH}.replacement" "$FAKE_STATE_PATH"
+      ;;
+    primary)
+      STATE_PATH="${FAKE_STATE_PATH:?}" "${REAL_RUBY:?}" -e 'path=ENV.fetch("STATE_PATH"); bytes=File.binread(path); changed=bytes.sub(%q{"primaryImplementer":"codex"},%q{"primaryImplementer":"claud"}); abort if changed==bytes || changed.bytesize!=bytes.bytesize; File.open(path,"r+b"){|io|io.write(changed);io.flush;io.fsync}'
+      ;;
+    timestamp)
+      STATE_PATH="${FAKE_STATE_PATH:?}" "${REAL_RUBY:?}" -e 'path=ENV.fetch("STATE_PATH"); bytes=File.binread(path); changed=bytes.sub(/("transitionedAt":"[^"]*?)(\d)(Z")/){"#{$1}#{(Integer($2)+1)%10}#{$3}"}; abort if changed==bytes || changed.bytesize!=bytes.bytesize; File.open(path,"r+b"){|io|io.write(changed);io.flush;io.fsync}'
+      ;;
+    *) exit 97 ;;
+  esac
+  printf '%s\n' "$output"
+  exit 0
+fi
+exec "${REAL_RUBY:?}" "$@"
+EOF
+chmod +x "$fake_bin/gh" "$fake_bin/swift" "$fake_bin/ruby"
+export PATH="$fake_bin:$PATH" REAL_SWIFT="$real_swift" REAL_RUBY="$real_ruby" FAKE_GH_LOG="$scratch/gh.log" FAKE_ISSUE_BODY="$issue_body"
 
 issue_worktree="$repo/.worktrees/42-gate-evidence"
 mkdir -p "$repo/.worktrees"
 git -C "$repo" worktree add -b codex/42-gate-evidence "$issue_worktree" "$head_sha" >/dev/null
 ln -s ../../.artifacts "$issue_worktree/.artifacts"
 HEAD="$head_sha" BASE="$base_sha" DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'puts JSON.generate({"schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template", "branch" => "codex/42-gate-evidence", "worktree" => ".worktrees/42-gate-evidence", "baseSha" => ENV.fetch("BASE"), "primaryImplementer" => "codex", "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "state" => "approved-for-merge", "previousState" => "review-requested", "resumeState" => nil, "executor" => "codex", "headSha" => ENV.fetch("HEAD"), "pullRequest" => 57, "from" => "review-requested", "to" => "approved-for-merge", "transitionedAt" => ENV.fetch("TRANSITIONED_AT")})' > "$repo/.artifacts/issues/42/state.json"
+export FAKE_STATE_PATH="$repo/.artifacts/issues/42/state.json"
 
 assert_fails() {
   local label=$1
@@ -182,6 +210,24 @@ run_gate > "$scratch/gate.json"
 jq -e --arg head "$head_sha" '.status == "passed" and .headSha == $head' "$scratch/gate.json" >/dev/null
 expected_gh="issue view 42 --repo yuto1201/iOS-Template --json number,url,body,labels"
 [[ "$(tail -n 1 "$FAKE_GH_LOG")" == "$expected_gh" ]] || { echo 'gate used an unexpected gh command' >&2; exit 1; }
+
+: > "$FAKE_GH_LOG"
+cp "$repo/.artifacts/issues/42/issue-contract.json" "$scratch/contract.with-merge"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["externalOperations"]=[]; value["externalOperationDetailsDigest"]="sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"; File.binwrite(path,JSON.generate(value.sort.to_h))' "$repo/.artifacts/issues/42/issue-contract.json"
+missing_merge_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+DIGEST="$missing_merge_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+assert_fails 'missing github.merge_pr declaration is rejected before gh' run_gate
+[[ ! -s "$FAKE_GH_LOG" ]] || { echo 'missing merge declaration reached gh' >&2; exit 1; }
+cp "$scratch/contract.with-merge" "$repo/.artifacts/issues/42/issue-contract.json"
+DIGEST="$contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+
+cp "$repo/.artifacts/issues/42/state.json" "$scratch/state.before-identity-races"
+for race in swap primary timestamp; do
+  : > "$FAKE_GH_LOG"
+  STATE_AFTER_VALIDATE_MODE="$race" assert_fails "state $race after validate-worktree is rejected before gh" run_gate
+  [[ ! -s "$FAKE_GH_LOG" ]] || { echo "state $race reached gh" >&2; exit 1; }
+  cp "$scratch/state.before-identity-races" "$repo/.artifacts/issues/42/state.json"
+done
 
 : > "$FAKE_GH_LOG"
 assert_fails 'caller repository mismatch is rejected before gh' \
@@ -276,8 +322,8 @@ FAKE_TYPE_LABEL=state:approved-for-merge assert_fails 'missing Issue type label 
 FAKE_SECOND_TYPE=type:regression assert_fails 'ambiguous Issue type labels are rejected' run_gate
 
 enable_supabase_preflight() {
-  ruby -e 'path = ARGV.fetch(0); text = File.read(path); replacement = "## External operations\n\n- Operation: supabase.inspect_project\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: no"; text.sub!("## External operations\n\n- None.", replacement) or abort "external operations fixture section missing"; File.write(path, text)' "$issue_body"
-  ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["externalOperations"] = ["supabase.inspect_project"]; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/issue-contract.json"
+  ruby -e 'path = ARGV.fetch(0); text = File.read(path); anchor = "- Approval required: no\n\n## User approvals"; replacement = "- Approval required: no\n\n- Operation: supabase.inspect_project\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n## User approvals"; text.sub!(anchor, replacement) or abort "external operations fixture section missing"; File.write(path, text)' "$issue_body"
+  canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
   contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
   DIGEST="$contract_digest" ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["issueContract"]["digest"] = ENV.fetch("DIGEST"); File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
   write_verify
@@ -287,7 +333,7 @@ enable_supabase_preflight() {
 }
 
 write_supabase_preflight() {
-  local account=${1:-personal-account} target=${2:-project-ref} environment=${3:-production}
+  local account=${1:-YUTO1201} target=${2:-personal-project} environment=${3:-production}
   mkdir -p "$repo/.artifacts/issues/42/provider-preflights"
   ACCOUNT="$account" TARGET="$target" ENVIRONMENT="$environment" CHECKED_AT="$preflight_at" ruby -rjson -rdigest -e '
     def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value; end
@@ -302,18 +348,26 @@ enable_supabase_preflight
 write_supabase_preflight
 run_gate >/dev/null
 
+write_supabase_preflight 'Company'
+assert_fails 'company provider account is rejected' run_gate
+write_supabase_preflight 'yuto1201'
+assert_fails 'case-mismatched provider account is rejected' run_gate
+write_supabase_preflight YUTO1201 'other-project'
+assert_fails 'wrong provider target is rejected' run_gate
+write_supabase_preflight YUTO1201 'Personal-project'
+assert_fails 'case-mismatched provider target is rejected' run_gate
 write_supabase_preflight '   '
 assert_fails 'blank provider account is rejected' run_gate
-write_supabase_preflight personal-account ' project-ref '
+write_supabase_preflight YUTO1201 ' personal-project '
 assert_fails 'untrimmed provider target is rejected' run_gate
-write_supabase_preflight personal-account project-ref ' production '
+write_supabase_preflight YUTO1201 personal-project ' production '
 assert_fails 'untrimmed provider environment is rejected' run_gate
 long_account=$(printf 'a%.0s' {1..257})
 write_supabase_preflight "$long_account"
 assert_fails 'overlong provider account is rejected' run_gate
-write_supabase_preflight personal-account '<project-ref>'
+write_supabase_preflight YUTO1201 '<project-ref>'
 assert_fails 'unsafe provider target characters are rejected' run_gate
-write_supabase_preflight personal-account project-ref qa
+write_supabase_preflight YUTO1201 personal-project qa
 assert_fails 'unknown provider environment is rejected' run_gate
 write_supabase_preflight
 
@@ -361,6 +415,7 @@ rm "$repo/.artifacts/issues/42/$head_sha"
 mv "$repo/.artifacts/issues/42/$head_sha-real" "$repo/.artifacts/issues/42/$head_sha"
 
 SWAP_TARGET="$repo/.artifacts/issues/42/$head_sha/verify.json" assert_fails 'same-byte atomic swap callback is rejected' run_gate
+REWRITE_HELD_TARGET="$repo/.artifacts/issues/42/state.json" assert_fails 'same-inode same-byte state rewrite while held is rejected' run_gate
 run_gate >/dev/null
 
 echo 'PASS: gate binds caller identity, live Issue, descriptor snapshots, review, provider, and GitHub preflight evidence'

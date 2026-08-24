@@ -105,7 +105,7 @@ Codexが期待アカウントと実際のアカウントの不一致を検出し
 
 ## 4. Codexの外部操作前チェック
 
-Identityの期待値は `Config/ownership.yml` を正本とします。GitHub login以外のアプリ固有Project Ref、Account ID、Team ID、Bundle IDが未設定なら、対象操作を始めません。
+Identityの期待値は `Config/ownership.yml` を正本とします。GitHub login以外のアプリ固有Project Ref、Account ID、target、Workspace ID、Team ID、Bundle IDが未設定なら、対象操作を始めません。Provider preflightのaccount/targetは、Supabase=`organization`/`projectRef`、Cloudflare=`accountId`/`target`、ElevenLabs=`accountId`/`workspaceId`、App Store Connect=`teamId`/`bundleId`へcase-sensitiveに一致させます。
 
 ### GitHub
 
@@ -129,7 +129,7 @@ Identityの期待値は `Config/ownership.yml` を正本とします。GitHub lo
 
 ### ElevenLabs
 
-- 個人用認証状態
+- 個人用Account IDとWorkspace ID、および認証状態
 - 実行する生成種別と契約上の利用可否
 - 出力先がRepository内の許可された素材ディレクトリであること
 

@@ -115,14 +115,19 @@ def full_state_record(value, issue, repository)
   value
 end
 
-def transition_state_record(path, issue, repository, state, from, to, resume_state, timestamp)
+def transition_state_record(path, issue, repository, state, from, to, resume_state, timestamp, head_sha)
   workflow_state(state, 'new state')
   workflow_state(from, 'new from', nullable: true)
   workflow_state(to, 'new to')
   workflow_state(resume_state, 'new resumeState', nullable: true)
   Time.iso8601(timestamp)
+  verification_binding = from == 'in-progress' && to == 'verify-passed'
+  fail_closed('verification transition requires an explicit Head') if verification_binding && head_sha.nil?
+  fail_closed('Head binding is forbidden for this transition') if !verification_binding && !head_sha.nil?
+  sha(head_sha, 'verification transition headSha') unless head_sha.nil?
   fail_closed('state record path is a symlink') if File.symlink?(path)
   unless File.exist?(path)
+    fail_closed('verification Head requires a full durable state record') unless head_sha.nil?
     return {
       'state' => state, 'from' => from, 'to' => to,
       'resumeState' => resume_state, 'executor' => 'codex', 'timestamp' => timestamp
@@ -132,6 +137,7 @@ def transition_state_record(path, issue, repository, state, from, to, resume_sta
   value = read_json(path)
   minimal_keys = %w[executor from resumeState state timestamp to]
   if value.is_a?(Hash) && value.keys.sort == minimal_keys
+    fail_closed('verification Head requires a full durable state record') unless head_sha.nil?
     workflow_state(value['state'], 'minimal state record state')
     return {
       'state' => state, 'from' => from, 'to' => to,
@@ -151,6 +157,10 @@ def transition_state_record(path, issue, repository, state, from, to, resume_sta
     value['to'] = to
     value['transitionedAt'] = timestamp
   end
+  if to == 'in-progress' && %w[verify-passed changes-requested approved-for-merge].include?(from)
+    value.delete('headSha')
+  end
+  value['headSha'] = head_sha unless head_sha.nil?
   canonical(value)
 rescue ArgumentError
   fail_closed('state record timestamp is invalid')
@@ -303,10 +313,17 @@ when 'state-record'
   }
   puts canonical_json(record)
 when 'transition-state-record'
-  path, issue, repository, state, from, to, resume_state, timestamp = ARGV
-  fail_closed('transition-state-record arguments are invalid') unless ARGV.length == 8 && issue.match?(/\A[1-9][0-9]*\z/)
-  record = transition_state_record(path, Integer(issue), repository, state, from == 'null' ? nil : from, to, resume_state == 'null' ? nil : resume_state, timestamp)
+  path, issue, repository, state, from, to, resume_state, timestamp, head_sha = ARGV
+  fail_closed('transition-state-record arguments are invalid') unless ARGV.length == 9 && issue.match?(/\A[1-9][0-9]*\z/)
+  record = transition_state_record(path, Integer(issue), repository, state, from == 'null' ? nil : from, to, resume_state == 'null' ? nil : resume_state, timestamp, head_sha == 'null' ? nil : head_sha)
   puts canonical_json(record)
+when 'state-head-identity'
+  path, issue, repository = ARGV
+  fail_closed('state-head-identity arguments are invalid') unless ARGV.length == 3 && issue.match?(/\A[1-9][0-9]*\z/)
+  fail_closed('state record path is a symlink') if File.symlink?(path)
+  value = full_state_record(read_json(path), Integer(issue), repository)
+  fail_closed('verification Head can be bound only from in-progress state') unless value['state'] == 'in-progress'
+  puts canonical_json('branch' => value.fetch('branch'), 'worktree' => value.fetch('worktree'))
 when 'state-marker'
   from, to, resume_state, timestamp = ARGV
   fail_closed('state-marker arguments are invalid') unless ARGV.length == 4

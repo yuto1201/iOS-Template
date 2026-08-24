@@ -34,8 +34,8 @@ make_case() {
   mkdir -p "$CASE_PRIMARY/.worktrees"
   git -C "$CASE_PRIMARY" worktree add -b "$branch" "$CASE_WORKTREE" main >/dev/null
   mkdir -p "$CASE_WORKTREE/tools/lib" "$CASE_PRIMARY/.artifacts/issues/$issue"
-  cp "$source_root/tools/merge-issue.sh" "$source_root/tools/render-pr-body.sh" "$source_root/tools/issue-state.sh" "$CASE_WORKTREE/tools/"
-  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$CASE_WORKTREE/tools/lib/"
+  cp "$source_root/tools/merge-issue.sh" "$source_root/tools/render-pr-body.sh" "$source_root/tools/issue-state.sh" "$source_root/tools/validate-verify-json.swift" "$CASE_WORKTREE/tools/"
+  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$CASE_WORKTREE/tools/lib/"
   ln -s ../../.artifacts "$CASE_WORKTREE/.artifacts"
   printf '.artifacts\n' >>"$(git -C "$CASE_WORKTREE" rev-parse --git-path info/exclude)"
 
@@ -62,8 +62,12 @@ EOF
   git -C "$CASE_WORKTREE" add tools && git -C "$CASE_WORKTREE" commit -m tools >/dev/null
   CASE_HEAD=$(git -C "$CASE_WORKTREE" rev-parse HEAD)
   mkdir -p "$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD"
-  CONTRACT="$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" ruby -rjson -e '
-    File.binwrite(ENV.fetch("CONTRACT"), JSON.generate({"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","goal"=>"Merge exact verified work.","specAnchors"=>["docs/workflow.md#6-pr-body"],"acceptanceCriteria"=>[{"id"=>"AC-1","text"=>"Merge exact Head."}],"dependencies"=>[],"externalOperations"=>["github.push_branch","github.create_pr","github.merge_pr"],"fetchedAt"=>"2026-08-24T00:00:00Z"}))'
+  CONTRACT="$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" ruby -rjson -rdigest -e '
+    operations=["github.push_branch","github.create_pr","github.merge_pr"]
+    details=operations.map{|operation|{"operation"=>operation,"service"=>"GitHub","environment"=>"production","executor"=>"Codex","approvalRequired"=>false,"approvalReference"=>nil}}
+    def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h{|key|[key,canonical(value[key])]} : value.is_a?(Array) ? value.map{|entry|canonical(entry)} : value; end
+    detail_digest="sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(details)))}"
+    File.binwrite(ENV.fetch("CONTRACT"), JSON.generate({"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","goal"=>"Merge exact verified work.","specAnchors"=>["docs/workflow.md#6-pr-body"],"acceptanceCriteria"=>[{"id"=>"AC-1","text"=>"Merge exact Head."}],"dependencies"=>[],"externalOperations"=>operations,"externalOperationDetailsDigest"=>detail_digest,"fetchedAt"=>"2026-08-24T00:00:00Z"}))'
   CASE_DIGEST="sha256:$(shasum -a 256 "$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" | awk '{print $1}')"
   VERIFY="$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD/verify.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" ruby -rjson -e '
     value={"schemaVersion"=>1,"status"=>"not-applicable","changeClassification"=>"documentation-only","reason"=>"Only allowlisted Markdown documentation changed","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"matrixFile"=>nil,"matrixDigest"=>nil,"executionRoute"=>"none","xcode"=>nil,"build"=>{"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil},"tests"=>{"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil},"cases"=>[],"visualEvaluation"=>{"status"=>"not-applicable","findings"=>[]},"acceptanceEvidence"=>[{"id"=>"AC-1","status"=>"passed","evidence"=>["documents:workflow"]}],"completedAt"=>"2026-08-24T00:01:00Z"}; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(value))'
@@ -129,6 +133,20 @@ write_pr() {
     state=ENV.fetch("STATE"); source=ENV.fetch("SOURCE_REPO"); closing=Integer(ENV.fetch("CLOSING_ISSUE")); repo=ENV.fetch("REPO")
     value={"number"=>Integer(ENV.fetch("PR")),"state"=>state,"baseRefName"=>"main","headRefName"=>ENV.fetch("BRANCH"),"headRefOid"=>ENV.fetch("HEAD"),"headRepository"=>{"nameWithOwner"=>source},"headRepositoryOwner"=>{"login"=>source.split("/",2).first},"isCrossRepository"=>ENV.fetch("CROSS")=="true","closingIssuesReferences"=>[{"number"=>closing,"url"=>"https://github.com/#{repo}/issues/#{closing}","repository"=>{"nameWithOwner"=>repo}}],"mergeCommit"=>state=="MERGED" ? {"oid"=>ENV.fetch("MERGE")} : nil,"url"=>"https://github.com/#{repo}/pull/#{ENV.fetch("PR")}"}; puts JSON.generate([value])
   ' >"$CASE_GH/prs.json"
+}
+
+set_contract_operations() {
+  OPERATIONS_JSON="$1" CONTRACT="$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" STATE="$CASE_PRIMARY/.artifacts/issues/42/state.json" VERIFY="$CASE_PRIMARY/.artifacts/issues/42/$CASE_HEAD/verify.json" REVIEW="$CASE_PRIMARY/.artifacts/issues/42/$CASE_HEAD/review.json" ruby -rjson -rdigest -e '
+    operations=JSON.parse(ENV.fetch("OPERATIONS_JSON")); contract_path=ENV.fetch("CONTRACT")
+    contract=JSON.parse(File.binread(contract_path)); contract["externalOperations"]=operations
+    details=operations.map{|operation|{"operation"=>operation,"service"=>"GitHub","environment"=>"production","executor"=>"Codex","approvalRequired"=>false,"approvalReference"=>nil}}
+    def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h{|key|[key,canonical(value[key])]} : value.is_a?(Array) ? value.map{|entry|canonical(entry)} : value; end
+    contract["externalOperationDetailsDigest"]="sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(details)))}"
+    File.binwrite(contract_path,JSON.generate(contract)); digest="sha256:#{Digest::SHA256.file(contract_path).hexdigest}"
+    state=JSON.parse(File.binread(ENV.fetch("STATE"))); state["issueContract"]["digest"]=digest; File.binwrite(ENV.fetch("STATE"),JSON.generate(state))
+    verify=JSON.parse(File.binread(ENV.fetch("VERIFY"))); verify["issueContract"]["digest"]=digest; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(verify))
+    review=JSON.parse(File.binread(ENV.fetch("REVIEW"))); review["issueContractDigest"]=digest; File.binwrite(ENV.fetch("REVIEW"),JSON.generate(review))
+  '
 }
 
 write_cas_patch() {
@@ -217,6 +235,28 @@ gh issue view labels-comments
 gh issue comment transition
 EOF
 diff -u "$CASE_ROOT/expected-new.log" "$CASE_LOG" || fail_test 'complete new-PR operation order differed'
+
+make_case missing-merge-declaration
+set_contract_operations '["github.push_branch","github.create_pr"]'
+assert_fails 'missing merge declaration' run_merge
+assert_no_mutation 'missing merge declaration'
+
+make_case missing-push-declaration
+set_contract_operations '["github.create_pr","github.merge_pr"]'
+assert_fails 'missing push declaration' run_merge
+assert_no_mutation 'missing push declaration'
+
+make_case missing-create-declaration
+set_contract_operations '["github.push_branch","github.merge_pr"]'
+assert_fails 'missing create declaration for new PR path' run_merge
+assert_no_mutation 'missing create declaration for new PR path'
+
+make_case existing-pr-without-create approved-for-merge 57
+set_contract_operations '["github.push_branch","github.merge_pr"]'
+write_pr OPEN
+run_merge >"$CASE_ROOT/existing-without-create.json"
+jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/existing-without-create.json" >/dev/null
+if grep -Fxq 'pr-create' "$CASE_MUTATIONS"; then fail_test 'persisted PR path created another PR'; fi
 
 make_case gate-failure
 FAIL_GATE=initial assert_fails 'initial gate before publication' run_merge
