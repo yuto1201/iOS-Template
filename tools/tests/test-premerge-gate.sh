@@ -66,6 +66,10 @@ Keep merge safety deterministic.
 
 - None.
 
+## UI verification
+
+- Not applicable.
+
 ## External operations
 
 - Operation: github.merge_pr

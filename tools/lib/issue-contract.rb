@@ -15,6 +15,7 @@ module IOSTemplate
       "Acceptance criteria",
       "Spec anchors",
       "Dependencies",
+      "UI verification",
       "External operations",
       "User approvals"
     ].freeze
@@ -136,6 +137,18 @@ module IOSTemplate
       spec_anchor_section = sections.fetch("Spec anchors", "")
       unless spec_anchor_section.match?(/\[[^\]]+\]\((?:<)?(?:\.\/)?specs\/[^)\s]+\.md#[^)\s]+(?:>)?\)/)
         failures << "Spec anchors must contain a local Markdown link to specs/ with a section anchor"
+      end
+
+      ui_verification = sections.fetch("UI verification", "")
+      unless ui_verification.match?(/\A\s*(?:[-*]\s*)?Not applicable\.?\s*\z/i)
+        ui_fields = ui_verification.each_line.map do |line|
+          match = line.match(/^\s*[-*]\s+(Target screens\/states|English expectations|Japanese expectations):\s*(\S.*?)\s*$/)
+          match&.captures
+        end.compact
+        expected_ui_fields = ["Target screens/states", "English expectations", "Japanese expectations"]
+        if ui_fields.map(&:first) != expected_ui_fields || ui_fields.any? { |_, value| value.strip.empty? }
+          failures << "UI verification must be Not applicable or contain Target screens/states, English expectations, and Japanese expectations in order"
+        end
       end
 
       external_details = parse_external_operations(

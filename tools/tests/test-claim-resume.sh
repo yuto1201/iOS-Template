@@ -57,13 +57,15 @@ printf '%s\n' "$*" >> "${FAKE_GH_LOG:?}"
 
 case "${1:-} ${2:-}" in
   'auth status')
-    printf 'Logged in to github.com account yuto1201 (keychain)\n  - Active account: true\n'
+    login=${FAKE_GH_LOGIN:-yuto1201}
+    if [[ -n "${FAKE_GH_LOGIN_AFTER_ISSUE_READ:-}" ]] && rg -q '^issue view ' "${FAKE_GH_LOG:?}"; then login=$FAKE_GH_LOGIN_AFTER_ISSUE_READ; fi
+    printf 'Logged in to github.com account %s (keychain)\n  - Active account: true\n' "$login"
     ;;
   'repo view')
-    printf '%s\n' '{"nameWithOwner":"yuto1201/iOS-Template","defaultBranchRef":{"name":"main"},"url":"https://github.com/yuto1201/iOS-Template"}'
+    printf '%s\n' "{\"nameWithOwner\":\"${FAKE_GH_REPOSITORY:-yuto1201/iOS-Template}\",\"defaultBranchRef\":{\"name\":\"main\"},\"url\":\"https://github.com/${FAKE_GH_REPOSITORY:-yuto1201/iOS-Template}\"}"
     ;;
   'issue view')
-    ruby -rjson -e 'puts JSON.generate({"title" => ENV.fetch("FAKE_GH_ISSUE_TITLE", "Settings screen"), "body" => File.read(ENV.fetch("FAKE_GH_ISSUE_BODY")), "labels" => JSON.parse(File.read(ENV.fetch("FAKE_GH_LABELS_FILE"))).map { |name| {"name" => name} }, "comments" => JSON.parse(File.read(ENV.fetch("FAKE_GH_COMMENTS_FILE")))})'
+    ruby -rjson -e 'comments = JSON.parse(File.read(ENV.fetch("FAKE_GH_COMMENTS_FILE"))).map { |comment| value=comment.dup; value["author"] ||= {"login"=>"yuto1201"}; value["createdAt"] ||= value.fetch("body", "")[/"timestamp":"([^"]+)"/, 1] || "2026-08-24T00:00:00Z"; value }; puts JSON.generate({"title" => ENV.fetch("FAKE_GH_ISSUE_TITLE", "Settings screen"), "body" => File.read(ENV.fetch("FAKE_GH_ISSUE_BODY")), "labels" => JSON.parse(File.read(ENV.fetch("FAKE_GH_LABELS_FILE"))).map { |name| {"name" => name} }, "comments" => comments})'
     ;;
   'issue edit')
     remove='' add=''
@@ -84,7 +86,7 @@ case "${1:-} ${2:-}" in
         next=$((index + 1)); body=${!next}; break
       fi
     done
-    ruby -rjson -e 'path, body = ARGV; comments = JSON.parse(File.read(path)); comments << {"body" => body}; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE" "$body"
+    ruby -rjson -e 'path, body = ARGV; comments = JSON.parse(File.read(path)); timestamp=body[/"timestamp":"([^"]+)"/, 1] || "2026-08-24T00:00:00Z"; comments << {"body" => body, "author" => {"login" => "yuto1201"}, "createdAt" => timestamp}; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE" "$body"
     ;;
   *)
     echo "unexpected fake gh invocation: $*" >&2
@@ -120,9 +122,43 @@ Make the Settings screen deterministic.
 
 - #5
 
+## UI verification
+
+- Not applicable.
+
 ## External operations
 
+- Operation: github.read_issue
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+- Operation: github.update_issue
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
 - Operation: github.push_branch
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+- Operation: github.create_pr
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+- Operation: github.merge_pr
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+- Operation: github.delete_branch
 - Service: GitHub
 - Environment: production
 - Executor: Codex
@@ -155,6 +191,34 @@ before_status=$(git -C "$clone" status --porcelain)
 claim="$clone/tools/claim-issue.sh"
 resume="$clone/tools/resume-issue.sh"
 
+# Identity and contract failures happen before Branch, worktree, sealed
+# contract, durable state, label, or comment mutation.
+export FAKE_GH_LOGIN=company-account
+assert_fails 'Claim rejects the company GitHub account before reading the Issue' bash -c "cd '$clone' && '$claim' --repo yuto1201/iOS-Template --issue 42 --agent codex"
+unset FAKE_GH_LOGIN
+[[ -z "$(git -C "$clone" branch --list 'codex/42-*')" && ! -e "$clone/.worktrees/42-settings-screen" ]]
+
+export FAKE_GH_REPOSITORY=other/iOS-Template
+assert_fails 'Claim rejects a different repository before reading the Issue' bash -c "cd '$clone' && '$claim' --repo yuto1201/iOS-Template --issue 42 --agent codex"
+unset FAKE_GH_REPOSITORY
+[[ -z "$(git -C "$clone" branch --list 'codex/42-*')" && ! -e "$clone/.artifacts/issues/42/issue-contract.json" ]]
+
+cp "$issue_body_file" "$workspace/issue-body.valid"
+ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.read_issue\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n/, ""); File.write(path,text)' "$issue_body_file"
+assert_fails 'Claim rejects a live Issue without github.read_issue' bash -c "cd '$clone' && '$claim' --repo yuto1201/iOS-Template --issue 42 --agent codex"
+[[ -z "$(git -C "$clone" branch --list 'codex/42-*')" && ! -e "$clone/.artifacts/issues/42/state.json" ]]
+cp "$workspace/issue-body.valid" "$issue_body_file"
+
+export FAKE_GH_LOGIN_AFTER_ISSUE_READ=company-account
+assert_fails 'Claim account change before update leaves no Branch, worktree, contract, or durable state' bash -c "cd '$clone' && '$claim' --repo yuto1201/iOS-Template --issue 42 --agent codex"
+unset FAKE_GH_LOGIN_AFTER_ISSUE_READ
+[[ -z "$(git -C "$clone" branch --list 'codex/42-*')" && ! -e "$clone/.worktrees/42-settings-screen" && ! -e "$clone/.artifacts/issues/42/issue-contract.json" && ! -e "$clone/.artifacts/issues/42/state.json" ]]
+
+ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.merge_pr\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n/, ""); File.write(path,text)' "$issue_body_file"
+assert_fails 'Claim rejects a non-shippable Issue before local publication' bash -c "cd '$clone' && '$claim' --repo yuto1201/iOS-Template --issue 42 --agent codex"
+[[ -z "$(git -C "$clone" branch --list 'codex/42-*')" && ! -e "$clone/.artifacts/issues/42/issue-contract.json" ]]
+cp "$workspace/issue-body.valid" "$issue_body_file"
+
 claim_result="$workspace/claim.json"
 (cd "$clone" && "$claim" --repo yuto1201/iOS-Template --issue 42 --agent codex) > "$claim_result"
 assert_json "$claim_result" '
@@ -173,7 +237,7 @@ assert_json "$clone/.artifacts/issues/42/issue-contract.json" '
   abort unless value["specAnchors"] == ["specs/acceptance.md#2-issue-definition-of-ready"]
   abort unless value["acceptanceCriteria"].map { |entry| entry["id"] } == ["AC-1", "AC-2"]
   abort unless value["dependencies"] == [5]
-  abort unless value["externalOperations"] == ["github.push_branch", "supabase.inspect_project"]
+  abort unless value["externalOperations"] == ["github.read_issue", "github.update_issue", "github.push_branch", "github.create_pr", "github.merge_pr", "github.delete_branch", "supabase.inspect_project"]
 '
 ruby -rjson -rdigest -e '
   def canonical(value)
@@ -255,6 +319,15 @@ assert_json "$clone/.artifacts/issues/42/state.json" 'value = JSON.parse(File.re
 
 printf '%s' '["type:feature","state:in-progress"]' > "$labels_file"
 cp "$workspace/claim-comments.json" "$comments_file"
+
+# A later third-party marker cannot redirect or deny Resume. Only markers by
+# the configured personal owner participate in deterministic history recovery.
+printf '%s' '["type:feature","state:claimed"]' > "$labels_file"
+ruby -rjson -e 'path=ARGV.fetch(0); comments=JSON.parse(File.read(path)); comments << {"body"=>"<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"blocked:user\",\"resumeState\":\"claimed\",\"timestamp\":\"2026-08-24T23:59:59Z\",\"to\":\"claimed\"} -->", "author"=>{"login"=>"attacker"}, "createdAt"=>"2026-08-24T23:59:59Z"}; File.write(path,JSON.generate(comments))' "$comments_file"
+(cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/third-party-marker.json"
+assert_json "$workspace/third-party-marker.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="claimed" && value["previousState"]=="approved" && value["resumeState"].nil?'
+cp "$workspace/claim-comments.json" "$comments_file"
+printf '%s' '["type:feature","state:in-progress"]' > "$labels_file"
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"paused\",\"resumeState\":\"in-progress\",\"timestamp\":\"2026-08-24T00:00:01Z\",\"to\":\"in-progress\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
 (cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/paused-resume.json"
 assert_json "$workspace/paused-resume.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "paused" && value["resumeState"] == "in-progress"'
@@ -275,19 +348,24 @@ assert_fails 'resume rejects a stale-title Branch and worktree' bash -c "cd '$cl
 unset FAKE_GH_ISSUE_TITLE
 
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"claimed\",\"resumeState\":null,\"timestamp\":\"2026-08-24T00:00:01Z\",\"to\":\"in-progress\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
-assert_fails 'resume rejects a newer marker whose state disagrees with the label' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+(cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/ignores-other-state-marker.json"
+assert_json "$workspace/ignores-other-state-marker.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="claimed" && value["previousState"]=="approved"'
 cp "$workspace/claim-comments.json" "$comments_file"
 
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"approved\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
-assert_fails 'resume rejects a malformed newest marker' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+(cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/ignores-malformed-marker.json"
 cp "$workspace/claim-comments.json" "$comments_file"
 
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); marker = "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"approved\",\"resumeState\":null,\"timestamp\":\"2026-08-24T00:00:02Z\",\"to\":\"claimed\"} -->"; comments << {"body" => "#{marker}\n#{marker}"}; File.write(path, JSON.generate(comments))' "$comments_file"
-assert_fails 'resume rejects duplicate newest markers' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+(cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/ignores-malformed-duplicate-comment.json"
 cp "$workspace/claim-comments.json" "$comments_file"
 
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"done\",\"resumeState\":null,\"timestamp\":\"2026-08-24T00:00:03Z\",\"to\":\"claimed\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
-assert_fails 'resume rejects an invalid workflow transition marker' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+(cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/ignores-invalid-transition-marker.json"
+cp "$workspace/claim-comments.json" "$comments_file"
+
+ruby -rjson -e 'path=ARGV.fetch(0); comments=JSON.parse(File.read(path)); timestamp="2099-08-24T12:34:56Z"; comments << {"body"=>"<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"approved\",\"resumeState\":null,\"timestamp\":\"#{timestamp}\",\"to\":\"claimed\"} -->", "author"=>{"login"=>"yuto1201"}, "createdAt"=>timestamp}; comments << {"body"=>"<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"blocked:user\",\"resumeState\":\"claimed\",\"timestamp\":\"#{timestamp}\",\"to\":\"claimed\"} -->", "author"=>{"login"=>"yuto1201"}, "createdAt"=>timestamp}; File.write(path,JSON.generate(comments))' "$comments_file"
+assert_fails 'resume fails closed when two owned current-state markers share the latest timestamp' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
 cp "$workspace/claim-comments.json" "$comments_file"
 
 # Resume refuses an absent marker and a second Issue branch without attempting a

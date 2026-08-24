@@ -23,36 +23,14 @@ canonical_title_slug() {
     puts slug
   ' "$1"
 }
-"$repo_root/tools/github-account-preflight.sh" --repo "$repo" >/dev/null
+workflow_github_preflight "$repo_root" "$repo" "$issue" github.read_issue || { echo 'GitHub account preflight failed before Issue read' >&2; exit 1; }
 issue_json=$(gh issue view "$issue" --repo "$repo" --json title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
-
-marker=$(printf '%s' "$issue_json" | ruby -rjson -e '
-  document = JSON.parse(STDIN.read)
-  states = document.fetch("labels").map { |label| name = label.is_a?(Hash) ? label["name"] : nil; name&.start_with?("state:") ? name.delete_prefix("state:") : nil }.compact
-  abort "Issue has no current state label" if states.empty?
-  abort "Issue has ambiguous current state labels" unless states.length == 1
-  current = states.fetch(0)
-  found = nil
-  document.fetch("comments").reverse_each do |comment|
-    body = comment.is_a?(Hash) ? comment["body"] : nil
-    next unless body.is_a?(String)
-    next unless body.include?("<!-- ios-template-state")
-    matches = body.scan(/<!-- ios-template-state (.*?) -->/m)
-    abort "latest state-transition marker is malformed or ambiguous" unless matches.length == 1
-    begin
-      value = JSON.parse(matches.fetch(0).fetch(0))
-    rescue JSON::ParserError
-      abort "latest state-transition marker is malformed or ambiguous"
-    end
-    abort "latest state-transition marker is malformed or ambiguous" unless value.is_a?(Hash) && value.keys.sort == %w[executor from resumeState timestamp to] && value["executor"] == "codex" && value["from"].is_a?(String) && value["to"].is_a?(String) && (value["resumeState"].nil? || value["resumeState"].is_a?(String)) && value["timestamp"].is_a?(String)
-    found = value
-    break
-  end
-  abort "no current-state transition marker" unless found
-  puts JSON.generate({"state" => current, "from" => found.fetch("from"), "to" => found.fetch("to"), "resumeState" => found.fetch("resumeState")})
-') || blocked 'required state-transition marker is missing or ambiguous'
-state=$(printf '%s' "$marker" | jq -er '.state')
+workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" github.read_issue || blocked 'sealed Issue contract does not authorize Issue reads'
+state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || blocked 'Issue has no unambiguous current state'
 workflow_is_state "$state" || blocked 'Issue has an unknown current state label'
+expected_owner=$(ruby -ne 'puts $1 if /^\s*login:\s*([A-Za-z0-9-]+)\s*$/' "$repo_root/Config/ownership.yml")
+[[ -n "$expected_owner" ]] || blocked 'configured GitHub login is missing'
+marker=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" latest-state-marker "$state" "$expected_owner") || blocked 'required owned state-transition marker is missing or ambiguous'
 marker_from=$(printf '%s' "$marker" | jq -er '.from')
 marker_to=$(printf '%s' "$marker" | jq -er '.to')
 resume_state_json=$(printf '%s' "$marker" | jq -c '.resumeState')

@@ -260,4 +260,4 @@ tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
   --from merged --to done
 ```
 
-`blocked:*` または `paused` は失敗の隠蔽ではなく、直前状態を `resumeState` としてmarkerへ残す停止状態です。原因を直した後は担当者を変えず `resume-issue.sh` を実行し、成功が不明な外部操作は別コマンドへ進まず同じコマンドを再実行します。Headを変更した場合は `approved-for-merge`、`changes-requested`、または `verify-passed` から `in-progress` へ戻し、新しいHeadのVerifyとreviewを両方作り直します。
+`blocked:*` または `paused` は失敗の隠蔽ではなく、直前状態を `resumeState` としてmarkerへ残す停止状態です。原因を直した後は担当者を変えず、まず `issue-state.sh get` が返すexact `resumeState`へ `issue-state.sh transition --from <current> --to <resumeState>` で明示的に復帰し、その後 `resume-issue.sh` でlocal stateを再構築して同じstateを再dispatchします。`resume-issue.sh` 自体はGitHub labelを変えません。成功が不明な外部操作は別コマンドへ進まず同じコマンドを再実行します。Headを変更した場合は `approved-for-merge`、`changes-requested`、または `verify-passed` から `in-progress` へ戻し、新しいHeadのVerifyとreviewを両方作り直します。

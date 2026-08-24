@@ -11,6 +11,69 @@ workflow_is_blocked() {
   [[ "$1" == blocked:* ]] && workflow_is_state "$1"
 }
 
+workflow_github_preflight() {
+  local repo_root=$1 repo=$2 issue=$3 operation=$4 head
+  head=$(git -C "$repo_root" rev-parse HEAD) || return 1
+  "$repo_root/tools/github-account-preflight.sh" \
+    --repo "$repo" --issue "$issue" --intended-operation "$operation" --expected-head "$head" >/dev/null
+}
+
+workflow_issue_type_from_json() {
+  ruby -rjson -e '
+    labels = JSON.parse(STDIN.read).fetch("labels")
+    types = labels.map { |label| name = label.is_a?(Hash) ? label["name"] : nil; name&.start_with?("type:") ? name.delete_prefix("type:") : nil }.compact
+    abort "Issue has ambiguous type labels" if types.length > 1
+    type = types.fetch(0, "feature")
+    abort "Issue type is not supported" unless %w[feature regression].include?(type)
+    puts type
+  '
+}
+
+workflow_require_live_issue_operation() {
+  local repo_root=$1 repo=$2 issue=$3 issue_json=$4 operation=$5 issue_type body_file envelope
+  issue_type=$(printf '%s' "$issue_json" | workflow_issue_type_from_json) || return 1
+  body_file=$(mktemp "${TMPDIR:-/tmp}/ios-template-live-issue.XXXXXX") || return 1
+  printf '%s' "$issue_json" | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("body")' > "$body_file" || { rm -f "$body_file"; return 1; }
+  envelope=$(ruby "$repo_root/tools/lib/issue-contract.rb" \
+    --body "$body_file" --type "$issue_type" --format envelope \
+    --issue "$issue" --repo "$repo" --fetched-at 2000-01-01T00:00:00Z) || { rm -f "$body_file"; return 1; }
+  rm -f "$body_file"
+  OPERATION="$operation" ruby -rjson -e '
+    value = JSON.parse(STDIN.read).fetch("contract").fetch("externalOperations")
+    abort "required external operation is not declared: #{ENV.fetch("OPERATION")}" unless value.include?(ENV.fetch("OPERATION"))
+  ' <<< "$envelope"
+}
+
+workflow_require_sealed_issue_operation() {
+  local repo_root=$1 repo=$2 issue=$3 operation=$4 contract="$repo_root/.artifacts/issues/$issue/issue-contract.json"
+  [[ -f "$contract" && ! -L "$contract" ]] || { echo 'sealed Issue contract is missing or unsafe' >&2; return 1; }
+  ruby -I"$repo_root/tools/lib" -rissue-contract -rjson -rdigest -e '
+    path, issue, repo, operation = ARGV
+    bytes = File.binread(path)
+    value = JSON.parse(bytes)
+    IOSTemplate::IssueContract.validate_snapshot!(value, issue: Integer(issue), repository: repo)
+    abort "sealed Issue contract is not canonical" unless bytes == IOSTemplate::IssueContract.canonical_json(value)
+    abort "required external operation is not declared: #{operation}" unless IOSTemplate::IssueContract.operation_declared?(value, operation)
+  ' "$contract" "$issue" "$repo" "$operation"
+  local state_file="$repo_root/.artifacts/issues/$issue/state.json"
+  if [[ -f "$state_file" && ! -L "$state_file" ]]; then
+    local expected_digest actual_digest
+    expected_digest=$(jq -er '.issueContract.digest | strings' "$state_file") || return 1
+    actual_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$contract")"
+    [[ "$expected_digest" == "$actual_digest" ]] || { echo 'sealed Issue contract digest differs from durable state' >&2; return 1; }
+  fi
+}
+
+workflow_require_issue_operation() {
+  local repo_root=$1 repo=$2 issue=$3 issue_json=$4 operation=$5 state
+  state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
+  if [[ "${WORKFLOW_USE_LIVE_ISSUE_CONTRACT:-0}" == 1 || "$state" == proposed || "$state" == approved ]]; then
+    workflow_require_live_issue_operation "$repo_root" "$repo" "$issue" "$issue_json" "$operation"
+  else
+    workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation"
+  fi
+}
+
 # A linked Issue worktree executes at its own Git Head, while durable evidence
 # stays in the primary checkout. The link target is intentionally fixed by the
 # canonical .worktrees/<issue>-<slug> layout; callers never supply a path.

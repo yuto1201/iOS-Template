@@ -84,6 +84,73 @@ def workflow_state(value, name, nullable: false)
   fail_closed("#{name} must be a workflow state") unless value.is_a?(String) && WORKFLOW_STATES.include?(value)
 end
 
+def blocked_state?(value)
+  value.is_a?(String) && value.start_with?('blocked:') && WORKFLOW_STATES.include?(value)
+end
+
+def transition_allowed?(from, to)
+  return false unless WORKFLOW_STATES.include?(from) && WORKFLOW_STATES.include?(to)
+  exact = %w[
+    proposed:approved proposed:blocked:user proposed:superseded
+    approved:claimed approved:blocked:dependency approved:paused approved:superseded
+    claimed:in-progress claimed:blocked:conflict claimed:paused
+    in-progress:verify-passed in-progress:paused
+    verify-passed:review-requested verify-passed:in-progress verify-passed:blocked:review
+    review-requested:changes-requested review-requested:approved-for-merge review-requested:blocked:review
+    changes-requested:in-progress changes-requested:blocked:user changes-requested:paused
+    approved-for-merge:merged approved-for-merge:in-progress approved-for-merge:blocked:conflict approved-for-merge:blocked:ops
+    merged:done
+  ]
+  return true if exact.include?("#{from}:#{to}")
+  return blocked_state?(to) if from == 'in-progress'
+  return to == 'paused' || to == 'superseded' || WORKFLOW_STATES.include?(to) if blocked_state?(from)
+  return to == 'superseded' || WORKFLOW_STATES.include?(to) if from == 'paused'
+  false
+end
+
+def latest_owned_state_marker(document, current, owner)
+  comments = document.fetch('comments')
+  fail_closed('Issue comments are invalid') unless comments.is_a?(Array)
+  candidates = []
+  comments.each_with_index do |comment, index|
+    next unless comment.is_a?(Hash) && comment.dig('author', 'login') == owner
+    body = comment['body']
+    created_at_raw = comment['createdAt']
+    next unless body.is_a?(String) && created_at_raw.is_a?(String)
+    matches = body.scan(/<!-- ios-template-state (.*?) -->/m)
+    next unless matches.length == 1
+    begin
+      marker = JSON.parse(matches.fetch(0).fetch(0))
+      next unless marker.is_a?(Hash) && marker.keys.sort == %w[executor from resumeState timestamp to]
+      next unless marker['executor'] == 'codex'
+      next unless marker['from'].is_a?(String) && marker['to'].is_a?(String)
+      next unless marker['resumeState'].nil? || marker['resumeState'].is_a?(String)
+      marker_time = Time.iso8601(marker['timestamp'])
+      created_at = Time.iso8601(created_at_raw)
+      next unless marker_time.utc.iso8601 == marker['timestamp'] && created_at.utc.iso8601 == created_at_raw
+      next unless created_at >= marker_time && created_at - marker_time <= 300
+      next unless marker['to'] == current && transition_allowed?(marker['from'], marker['to'])
+      if blocked_state?(marker['to']) || marker['to'] == 'paused'
+        next unless marker['resumeState'] == marker['from']
+      elsif blocked_state?(marker['from']) || marker['from'] == 'paused'
+        next unless marker['to'] == 'superseded' || marker['to'] == 'paused' || marker['resumeState'] == marker['to']
+      else
+        next unless marker['resumeState'].nil?
+      end
+      candidates << [marker_time, created_at, index, marker]
+    rescue JSON::ParserError, ArgumentError
+      next
+    end
+  end
+  fail_closed('no valid owned current-state transition marker exists') if candidates.empty?
+  newest_time = candidates.map(&:first).max
+  newest = candidates.select { |entry| entry.first == newest_time }
+  fail_closed('owned current-state transition marker history is ambiguous') unless newest.length == 1
+  newest.fetch(0).fetch(3)
+rescue KeyError
+  fail_closed('Issue comments are invalid')
+end
+
 def sha(value, name)
   fail_closed("#{name} must be a SHA-1") unless value.is_a?(String) && value.match?(/\A[0-9a-f]{40}\z/)
 end
@@ -676,27 +743,14 @@ when 'state-from-issue'
   fail_closed('Issue has ambiguous current state labels') unless states.length == 1
   puts states.first
 when 'resume-from-comments'
-  current = ARGV.fetch(0)
-  comments = JSON.parse(STDIN.read).fetch('comments')
-  fail_closed('Issue comments are invalid') unless comments.is_a?(Array)
-  marker = nil
-  comments.reverse_each do |comment|
-    body = comment.is_a?(Hash) ? comment['body'] : nil
-    next unless body.is_a?(String)
-    match = body.match(/<!-- ios-template-state (\{.*\}) -->/m)
-    next unless match
-    begin
-      parsed = JSON.parse(match[1])
-      if parsed.is_a?(Hash) && parsed.keys.sort == %w[executor from resumeState timestamp to] && parsed['executor'] == 'codex' && parsed['from'].is_a?(String) && parsed['to'] == current && parsed['resumeState'].is_a?(String) && parsed['timestamp'].is_a?(String)
-        marker = parsed
-        break
-      end
-    rescue JSON::ParserError
-      nil
-    end
-  end
-  fail_closed('no unambiguous resume marker exists') unless marker
+  current, owner = ARGV
+  fail_closed('resume-from-comments arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)
+  marker = latest_owned_state_marker(JSON.parse(STDIN.read), current, owner)
   puts marker.fetch('resumeState')
+when 'latest-state-marker'
+  current, owner = ARGV
+  fail_closed('latest-state-marker arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)
+  puts canonical_json(latest_owned_state_marker(JSON.parse(STDIN.read), current, owner))
 when 'state-record'
   state, from, to, resume_state, timestamp = ARGV
   fail_closed('state-record arguments are invalid') unless ARGV.length == 5
@@ -718,6 +772,18 @@ when 'state-head-identity'
   value = full_state_record(read_json(path), Integer(issue), repository)
   fail_closed('verification Head can be bound only from in-progress state') unless value['state'] == 'in-progress'
   puts canonical_json('branch' => value.fetch('branch'), 'worktree' => value.fetch('worktree'))
+when 'validate-claim-state'
+  path, issue, repository, branch, worktree, base_sha, agent, contract_digest = ARGV
+  fail_closed('validate-claim-state arguments are invalid') unless ARGV.length == 8 && issue.match?(/\A[1-9][0-9]*\z/)
+  fail_closed('state record path is a symlink') if File.symlink?(path)
+  value = full_state_record(read_json(path), Integer(issue), repository)
+  fail_closed('Claim state Branch differs') unless value['branch'] == branch
+  fail_closed('Claim state worktree differs') unless value['worktree'] == worktree
+  fail_closed('Claim state Base differs') unless value['baseSha'] == base_sha
+  fail_closed('Claim state agent differs') unless value['primaryImplementer'] == agent
+  fail_closed('Claim state contract differs') unless value.dig('issueContract', 'digest') == contract_digest
+  fail_closed('Claim state is not recoverable') unless %w[approved claimed].include?(value['state'])
+  puts canonical_json(value)
 when 'state-marker'
   from, to, resume_state, timestamp = ARGV
   fail_closed('state-marker arguments are invalid') unless ARGV.length == 4
@@ -726,6 +792,41 @@ when 'state-marker'
     'executor' => 'codex', 'timestamp' => timestamp
   }
   puts "<!-- ios-template-state #{canonical_json(marker)} -->"
+when 'state-transition-pending'
+  issue, repository, from, to, resume_state, timestamp, head_sha = ARGV
+  fail_closed('state-transition-pending arguments are invalid') unless ARGV.length == 7 && issue.match?(/\A[1-9][0-9]*\z/)
+  workflow_state(from, 'pending from')
+  workflow_state(to, 'pending to')
+  workflow_state(resume_state, 'pending resumeState', nullable: true) unless resume_state == 'null'
+  begin
+    Time.iso8601(timestamp)
+  rescue ArgumentError
+    fail_closed('pending timestamp is invalid')
+  end
+  sha(head_sha, 'pending headSha') unless head_sha == 'null'
+  puts canonical_json(
+    'schemaVersion' => 1, 'issue' => Integer(issue), 'repository' => repository,
+    'from' => from, 'to' => to, 'resumeState' => (resume_state == 'null' ? nil : resume_state),
+    'executor' => 'codex', 'timestamp' => timestamp, 'headSha' => (head_sha == 'null' ? nil : head_sha)
+  )
+when 'validate-state-transition-pending'
+  path, issue, repository, from, to, head_sha = ARGV
+  fail_closed('validate-state-transition-pending arguments are invalid') unless ARGV.length == 6 && issue.match?(/\A[1-9][0-9]*\z/)
+  fail_closed('pending transition path is a symlink') if File.symlink?(path)
+  bytes = File.binread(path)
+  value = JSON.parse(bytes)
+  exact_keys(value, %w[executor from headSha issue repository resumeState schemaVersion timestamp to], 'pending transition')
+  fail_closed('pending transition identity differs') unless value['schemaVersion'] == 1 && value['issue'] == Integer(issue) && value['repository'] == repository && value['from'] == from && value['to'] == to && value['executor'] == 'codex'
+  expected_head = head_sha == 'null' ? nil : head_sha
+  fail_closed('pending transition Head differs') unless value['headSha'] == expected_head
+  workflow_state(value['resumeState'], 'pending resumeState', nullable: true)
+  begin
+    Time.iso8601(value.fetch('timestamp'))
+  rescue ArgumentError, KeyError
+    fail_closed('pending timestamp is invalid')
+  end
+  fail_closed('pending transition is not canonical') unless bytes == canonical_json(value)
+  puts canonical_json(value)
 when 'sanitize-result'
   path, request_path = ARGV
   fail_closed('sanitize-result arguments are invalid') unless ARGV.length == 2

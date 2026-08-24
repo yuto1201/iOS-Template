@@ -36,7 +36,17 @@ Dispatch from that returned state; do not replay from the beginning:
 - `in-progress`: run Resume and continue local implementation; do not call Claim again.
 - `changes-requested`: run Resume, then before editing run `tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" --from changes-requested --to in-progress`; repeat verification/review after the fix.
 - `verify-passed`, `review-requested`, or `approved-for-merge`: run Resume and continue that exact stage. Do not edit until an allowed state-machine transition returns the Issue to `in-progress`; `verify-passed` and `approved-for-merge` permit that transition, while `review-requested` requires the review result to move to `changes-requested` first.
-- `blocked:*` or `paused`: Resume only to the exact durable `resumeState`, then dispatch again from the returned state.
+- `blocked:*` or `paused`: read the exact durable `resumeState` returned by `issue-state.sh get`, execute that explicit state transition, then reconstruct local state and redispatch. `resume-issue.sh` never changes a GitHub label:
+
+```sh
+STATE_JSON="$(tools/issue-state.sh get --repo "$REPO" --issue "$ISSUE")"
+CURRENT_STATE="$(jq -er '.state' <<<"$STATE_JSON")"
+RESUME_STATE="$(jq -er '.resumeState | strings' <<<"$STATE_JSON")"
+tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" --from "$CURRENT_STATE" --to "$RESUME_STATE"
+tools/resume-issue.sh --repo "$REPO" --issue "$ISSUE"
+```
+
+Dispatch again from `RESUME_STATE`; do not imply that Resume performed the transition.
 - `merged`: perform the cleanup stage below. `done`: return idempotent success without Claim or Resume.
 
 Transition only through `tools/issue-state.sh`; do not hand-edit labels, markers, or state JSON.

@@ -49,6 +49,10 @@ Make the workflow contract testable.
 
 - None.
 
+## UI verification
+
+- Not applicable.
+
 ## External operations
 
 $external_operations
@@ -165,6 +169,12 @@ ruby -rjson -e '
 
 "$repo_root/tools/validate-issue-body.sh" --type feature "$workspace/feature.md"
 
+sed 's/- Not applicable\./- Target screens\/states: Settings loaded\./' "$workspace/feature.md" > "$workspace/incomplete-ui.md"
+assert_fails 'UI verification requires both English and Japanese expectations' "$repo_root/tools/validate-issue-body.sh" "$workspace/incomplete-ui.md"
+
+sed 's/- Not applicable\./- Target screens\/states: Settings loaded.\n- English expectations: The title is Settings.\n- Japanese expectations: The title is 設定。/' "$workspace/feature.md" > "$workspace/ui-feature.md"
+"$repo_root/tools/validate-issue-body.sh" "$workspace/ui-feature.md"
+
 cat > "$workspace/regression.md" <<'EOF'
 ## Goal
 
@@ -189,6 +199,10 @@ Prevent a merged bug from recurring.
 ## Dependencies
 
 - Original PR: #42
+
+## UI verification
+
+- Not applicable.
 
 ## External operations
 
@@ -227,8 +241,12 @@ for required in \
   [[ -f "$repo_root/$required" ]] || { echo "missing required workflow file: $required" >&2; exit 1; }
 done
 
-for heading in Goal 'In scope' 'Out of scope' 'Acceptance criteria' 'Spec anchors' Dependencies 'External operations' 'User approvals'; do
+for heading in Goal 'In scope' 'Out of scope' 'Acceptance criteria' 'Spec anchors' Dependencies 'UI verification' 'External operations' 'User approvals'; do
   rg -Fq "label: $heading" "$repo_root/.github/ISSUE_TEMPLATE/feature.yml" || { echo "feature form lacks $heading" >&2; exit 1; }
+done
+for operation in github.read_issue github.update_issue github.push_branch github.create_pr github.merge_pr github.delete_branch; do
+  rg -Fq -- "Operation: $operation" "$repo_root/.github/ISSUE_TEMPLATE/feature.yml" || { echo "feature form lacks standard operation $operation" >&2; exit 1; }
+  rg -Fq -- "Operation: $operation" "$repo_root/.github/ISSUE_TEMPLATE/regression.yml" || { echo "regression form lacks standard operation $operation" >&2; exit 1; }
 done
 rg -Fq 'Original PR' "$repo_root/.github/ISSUE_TEMPLATE/regression.yml"
 rg -Fq 'Reproduction steps' "$repo_root/.github/ISSUE_TEMPLATE/regression.yml"

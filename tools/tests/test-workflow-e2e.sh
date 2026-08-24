@@ -98,6 +98,10 @@ Exercise the complete documentation-only Issue shipping workflow.
 
 - None.
 
+## UI verification
+
+- Not applicable.
+
 ## External operations
 
 - Operation: github.read_issue
@@ -194,7 +198,7 @@ case "${1:-} ${2:-}" in
       labels = JSON.parse(File.binread(ENV.fetch("FAKE_LABELS_FILE"))).map { |name| {"name" => name} }
       all = {
         "title" => "Documentation workflow E2E", "body" => File.binread(ENV.fetch("FAKE_ISSUE_BODY")),
-        "labels" => labels, "comments" => JSON.parse(File.binread(ENV.fetch("FAKE_COMMENTS_FILE"))),
+        "labels" => labels, "comments" => JSON.parse(File.binread(ENV.fetch("FAKE_COMMENTS_FILE"))).map { |comment| value=comment.dup; value["author"] ||= {"login"=>"yuto1201"}; value["createdAt"] ||= value.fetch("body", "")[/"timestamp":"([^"]+)"/, 1] || "2026-08-24T00:00:00Z"; value },
         "number" => Integer(ENV.fetch("FAKE_ISSUE")), "state" => File.binread(ENV.fetch("FAKE_ISSUE_STATUS")),
         "url" => "https://github.com/#{ENV.fetch("FAKE_REPOSITORY")}/issues/#{ENV.fetch("FAKE_ISSUE")}"
       }
@@ -210,7 +214,7 @@ case "${1:-} ${2:-}" in
     ;;
   'issue comment')
     body=$(field_after --body "$@")
-    /usr/bin/ruby -rjson -e 'path, body = ARGV; comments = JSON.parse(File.binread(path)); comments << {"body" => body}; File.binwrite(path, JSON.generate(comments))' "$FAKE_COMMENTS_FILE" "$body"
+    /usr/bin/ruby -rjson -e 'path, body = ARGV; timestamp=body[/"timestamp":"([^"]+)"/, 1] || "2026-08-24T00:00:00Z"; comments = JSON.parse(File.binread(path)); comments << {"body" => body, "author"=>{"login"=>"yuto1201"}, "createdAt"=>timestamp}; File.binwrite(path, JSON.generate(comments))' "$FAKE_COMMENTS_FILE" "$body"
     ;;
   'pr list')
     if [[ "$(cat "$FAKE_PR_STATE")" == NONE ]]; then

@@ -113,7 +113,7 @@ proposed
 
 Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approved-for-merge` から `in-progress` へ戻し、検証とレビューをやり直します。これらの遷移は古い`headSha`を削除し、次の`in-progress -> verify-passed`で明示した現在Headへ置き換えます。それ以降のforward遷移は同じ`headSha`を保持します。`done` と `superseded` は終端状態です。
 
-各遷移commentには機械可読markerとして `from`、`to`、`resumeState`、executor、timestampを保存します。`blocked:*` または`paused`へ入るときの`resumeState`は遷移前状態です。復帰時は最新markerの`resumeState`だけを使用し、存在しない場合は推測せず`blocked:conflict`にします。ローカル`state.json`にも同じfieldsを保存し、失われた場合はGitHub commentから再構築します。
+各遷移commentには機械可読markerとして `from`、`to`、`resumeState`、executor、timestampを保存します。markerは `Config/ownership.yml` の個人GitHub loginが投稿したcommentだけを信頼し、comment author、marker timestamp、comment作成時刻、合法な遷移履歴を結び付けます。第三者または不正なmarkerを除外した最新の有効markerをtimestampで決定し、同時刻に複数の有効候補があれば推測せず失敗します。`blocked:*` または`paused`へ入るときの`resumeState`は遷移前状態です。復帰時は `issue-state.sh transition --from <current> --to <resumeState>` を明示実行してから `resume-issue.sh` でlocal stateを再構築します。`resume-issue.sh` 自体はlabelを変更しません。存在しない場合は推測せず`blocked:conflict`にします。ローカル`state.json`にも同じfieldsを保存し、失われた場合はGitHub commentから再構築します。
 
 中断状態:
 
@@ -133,12 +133,12 @@ Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approve
 
 ### 5.1 Claim
 
-1. Codexがアクティブな個人GitHubアカウントとRepositoryを確認する。
+1. CodexがIssue読取の直前にアクティブな個人GitHubアカウントとRepositoryを確認し、live Issue contractの`github.read_issue`宣言を検証する。
 2. IssueのGoal、Scope、Acceptance criteria、Dependenciesを読む。
 3. Definition of Readyを満たさなければ作業を開始しない。
-4. `issue-contract.json` を作成し、digestを記録する。
+4. 通常のshippingに必要な`github.read_issue`、`github.update_issue`、`github.push_branch`、`github.create_pr`、`github.merge_pr`、`github.delete_branch`がすべてlive Issue contractへ宣言されていることを確認し、`issue-contract.json` を作成してdigestを記録する。
 5. Primary agentをIssueへ記録する。
-6. Branchとworktreeを作成する。
+6. Branch、worktree、共有artifact link、sealed contract、durable stateを順に作成してからremoteの`claimed` labelと所有者markerを公開する。各境界はjournalで再開可能にし、同じagentとexact contractだけが続行できる。
 
 ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変更はCodexへ委託します。
 

@@ -52,12 +52,53 @@ body:
     validations:
       required: true
   - type: textarea
+    id: ui-verification
+    attributes:
+      label: UI verification
+      description: "Write `Not applicable`, or list target screens/states plus exact English and Japanese expectations."
+      placeholder: |
+        - Target screens/states: Settings screen, loaded state
+        - English expectations: Title and controls are complete in English.
+        - Japanese expectations: Title and controls are complete in Japanese.
+    validations:
+      required: true
+  - type: textarea
     id: external-operations
     attributes:
       label: External operations
       description: "Write `None`, or one or more exact five-field blocks in this order. Operation must be an exact ID from `docs/AUTHORITY.md`; repeat the block for each operation."
       placeholder: |
+        - Operation: github.read_issue
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.update_issue
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
         - Operation: github.push_branch
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.create_pr
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.merge_pr
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.delete_branch
         - Service: GitHub
         - Environment: production
         - Executor: Codex

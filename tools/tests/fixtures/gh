@@ -39,7 +39,20 @@ if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
   fi
   labels=$(cat "$labels_file")
   comments=$(cat "$comments_file")
-  ruby -rjson -e 'puts JSON.generate({"labels" => JSON.parse(ARGV[0]).map { |name| {"name" => name} }, "comments" => JSON.parse(ARGV[1])})' "$labels" "$comments"
+  body=''
+  [[ -z "${FAKE_GH_ISSUE_BODY:-}" ]] || body=$(cat "$FAKE_GH_ISSUE_BODY")
+  ruby -rjson -rtime -e '
+    comments = JSON.parse(ARGV[1]).map do |comment|
+      value = comment.dup
+      value["author"] ||= {"login" => "yuto1201"}
+      unless value["createdAt"]
+        timestamp = value.fetch("body", "")[/"timestamp":"([^"]+)"/, 1]
+        value["createdAt"] = timestamp || "2026-08-24T00:00:00Z"
+      end
+      value
+    end
+    puts JSON.generate({"title" => ENV.fetch("FAKE_GH_ISSUE_TITLE", "Workflow state"), "body" => ARGV[2], "labels" => JSON.parse(ARGV[0]).map { |name| {"name" => name} }, "comments" => comments})
+  ' "$labels" "$comments" "$body"
   exit 0
 fi
 
@@ -69,7 +82,7 @@ if [[ "${1:-}" == "issue" && "${2:-}" == "comment" ]]; then
       j=$((i + 1)); body=${!j}; break
     fi
   done
-  ruby -rjson -e 'comments = JSON.parse(File.read(ARGV[0])); comments << {"body" => ARGV[1]}; File.write(ARGV[0], JSON.generate(comments))' "$comments_file" "$body"
+  ruby -rjson -e 'comments = JSON.parse(File.read(ARGV[0])); timestamp = ARGV[1][/"timestamp":"([^"]+)"/, 1] || "2026-08-24T00:00:00Z"; comments << {"body" => ARGV[1], "author" => {"login" => "yuto1201"}, "createdAt" => timestamp}; File.write(ARGV[0], JSON.generate(comments))' "$comments_file" "$body"
   exit 0
 fi
 

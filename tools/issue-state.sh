@@ -32,7 +32,11 @@ else
 fi
 
 read_issue() {
-  gh issue view "$issue" --repo "$repo" --json labels,comments || { echo 'Issue could not be read' >&2; exit 1; }
+  local document
+  workflow_github_preflight "$repo_root" "$repo" "$issue" github.read_issue || { echo 'GitHub account preflight failed before Issue read' >&2; exit 1; }
+  document=$(gh issue view "$issue" --repo "$repo" --json title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
+  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$document" github.read_issue || { echo 'Issue contract does not authorize Issue reads' >&2; exit 1; }
+  printf '%s\n' "$document"
 }
 state_from_issue() {
   local document=$1 state
@@ -50,6 +54,13 @@ require_current_state() {
 
 issue_json=$(read_issue)
 current=$(state_from_issue "$issue_json")
+expected_owner=$(ruby -ne 'puts $1 if /^\s*login:\s*([A-Za-z0-9-]+)\s*$/' "$repo_root/Config/ownership.yml")
+[[ -n "$expected_owner" ]] || { echo 'configured GitHub login is missing' >&2; exit 1; }
+if [[ "$command" == transition && "$current" == approved && "$from" == approved && "$to" == claimed ]]; then
+  # Claim has already validated the exact live body and may be publishing its
+  # sealed snapshot while this compare-and-set crosses the remote boundary.
+  export WORKFLOW_USE_LIVE_ISSUE_CONTRACT=1
+fi
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 state_file="$repo_root/.artifacts/issues/$issue/state.json"
 prepare_state() {
@@ -102,20 +113,32 @@ write_state() {
   mv -f "$temporary" "$state_file"
   printf '%s\n' "$record"
 }
+mutate_labels() {
+  local document=$1 remove=$2 add=$3
+  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$document" github.update_issue || { echo 'Issue contract does not authorize Issue state mutation' >&2; exit 1; }
+  workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || { echo 'GitHub account preflight failed before Issue mutation' >&2; exit 1; }
+  gh issue edit "$issue" --repo "$repo" --remove-label "$remove" --add-label "$add"
+}
+post_marker() {
+  local document=$1 marker=$2
+  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$document" github.update_issue || { echo 'Issue contract does not authorize Issue state comment' >&2; exit 1; }
+  workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || { echo 'GitHub account preflight failed before Issue comment' >&2; exit 1; }
+  gh issue comment "$issue" --repo "$repo" --body "$marker"
+}
 
 if [[ "$command" == get ]]; then
   resume_state=null
   if workflow_is_blocked "$current" || [[ "$current" == paused ]]; then
-    resume_state=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-from-comments "$current" 2>/dev/null || true)
+    resume_state=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-from-comments "$current" "$expected_owner" 2>/dev/null || true)
     [[ -n "$resume_state" ]] || resume_state=null
   fi
   record=$(prepare_state "$current" null "$current" "$resume_state")
   write_state "$record" >/dev/null
-  jq -cn --arg repository "$repo" --argjson issue "$issue" --arg state "$current" '{repository:$repository,issue:$issue,state:$state}'
+  if [[ "$resume_state" == null ]]; then resume_state_json=null; else resume_state_json=$(jq -cn --arg value "$resume_state" '$value'); fi
+  jq -cn --arg repository "$repo" --argjson issue "$issue" --arg state "$current" --argjson resumeState "$resume_state_json" '{repository:$repository,issue:$issue,state:$state,resumeState:$resumeState}'
   exit 0
 fi
 
-[[ "$current" == "$from" ]] || { echo "compare-and-set failed: expected state:$from, found state:$current" >&2; exit 1; }
 workflow_transition_allowed "$from" "$to" || { echo "invalid transition: $from -> $to" >&2; exit 1; }
 # Validate the durable record before any GitHub mutation. This preserves Task 4
 # identity records and makes malformed or escaping state fail closed.
@@ -123,29 +146,92 @@ prepare_state "$current" null "$current" null >/dev/null
 require_transition_head
 resume_state=null
 if workflow_is_blocked "$from" || [[ "$from" == paused ]]; then
-  resume_state=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-from-comments "$from" 2>/dev/null || true)
+  resume_state=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-from-comments "$from" "$expected_owner" 2>/dev/null || true)
   if [[ "$to" != paused && "$to" != superseded && ( -z "$resume_state" || "$to" != "$resume_state" ) ]]; then
     conflict=blocked:conflict
     conflict_record=$(prepare_state "$conflict" "$from" "$conflict" null)
-    require_current_state "$from" >/dev/null
-    gh issue edit "$issue" --repo "$repo" --remove-label "state:$from" --add-label "state:$conflict"
-    require_current_state "$conflict" >/dev/null
+    from_document=$(require_current_state "$from")
+    mutate_labels "$from_document" "state:$from" "state:$conflict"
+    conflict_document=$(require_current_state "$conflict")
     marker=$(ruby "$json_tool" state-marker "$from" "$conflict" null "$timestamp")
-    gh issue comment "$issue" --repo "$repo" --body "$marker"
+    post_marker "$conflict_document" "$marker"
     write_state "$conflict_record" >/dev/null
     echo 'blocked resume history is missing or ambiguous; moved to blocked:conflict' >&2
     exit 1
   fi
 fi
 if workflow_is_blocked "$to" || [[ "$to" == paused ]]; then resume_state=$from; fi
+
+pending_path="$(dirname "$state_file")/state-transition.pending.json"
+load_pending() {
+  ruby "$json_tool" validate-state-transition-pending "$pending_path" "$issue" "$repo" "$from" "$to" "${head_sha:-null}"
+}
+write_pending() {
+  local document=$1 temporary
+  [[ ! -L "$pending_path" ]] || { echo 'pending state transition path is a symlink' >&2; exit 1; }
+  temporary=$(mktemp "${pending_path}.tmp.XXXXXX")
+  printf '%s' "$document" > "$temporary"
+  chmod 600 "$temporary"
+  mv -f "$temporary" "$pending_path"
+}
+finish_pending() {
+  [[ ! -L "$pending_path" ]] || { echo 'pending state transition path became a symlink' >&2; exit 1; }
+  rm -f "$pending_path"
+}
+
+preauthorized_from_document=''
+if [[ -e "$pending_path" || -L "$pending_path" ]]; then
+  pending=$(load_pending) || { echo 'pending state transition is malformed or belongs to another transition' >&2; exit 1; }
+  timestamp=$(jq -er '.timestamp' <<< "$pending")
+  pending_resume=$(jq -r '.resumeState // "null"' <<< "$pending")
+  [[ "$pending_resume" == "$resume_state" ]] || { echo 'pending state transition resume state differs' >&2; exit 1; }
+else
+  [[ "$current" == "$from" ]] || { echo "compare-and-set failed: expected state:$from, found state:$current" >&2; exit 1; }
+  preauthorized_from_document=$(require_current_state "$from")
+  workflow_require_issue_operation "$repo_root" "$repo" "$issue" "$preauthorized_from_document" github.update_issue || { echo 'Issue contract does not authorize Issue state mutation' >&2; exit 1; }
+  workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || { echo 'GitHub account preflight failed before Issue mutation' >&2; exit 1; }
+  pending=$(ruby "$json_tool" state-transition-pending "$issue" "$repo" "$from" "$to" "$resume_state" "$timestamp" "${head_sha:-null}")
+  write_pending "$pending"
+fi
+
 transition_record=$(prepare_state "$to" "$from" "$to" "$resume_state" "${head_sha:-null}")
-require_current_state "$from" >/dev/null
+
+if [[ "$current" == "$to" ]]; then
+  existing_marker=$(printf '%s' "$issue_json" | ruby "$json_tool" latest-state-marker "$to" "$expected_owner" 2>/dev/null || true)
+  if [[ -n "$existing_marker" ]]; then
+    PENDING="$pending" ruby -rjson -e '
+      pending=JSON.parse(ENV.fetch("PENDING")); marker=JSON.parse(STDIN.read)
+      expected={"executor"=>"codex","from"=>pending.fetch("from"),"to"=>pending.fetch("to"),"resumeState"=>pending.fetch("resumeState"),"timestamp"=>pending.fetch("timestamp")}
+      abort "existing owned marker differs from pending transition" unless marker==expected
+    ' <<< "$existing_marker" || exit 1
+  else
+    marker=$(ruby "$json_tool" state-marker "$from" "$to" "$resume_state" "$timestamp")
+    post_marker "$issue_json" "$marker"
+    [[ "${IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT:-0}" != 1 ]] || { echo 'injected failure after state comment' >&2; exit 97; }
+  fi
+  require_transition_head
+  result=$(write_state "$transition_record")
+  finish_pending
+  printf '%s\n' "$result"
+  exit 0
+fi
+
+[[ "$current" == "$from" ]] || { echo "compare-and-set failed: expected state:$from, found state:$current" >&2; exit 1; }
 require_transition_head
-gh issue edit "$issue" --repo "$repo" --remove-label "state:$from" --add-label "state:$to"
+if [[ -n "$preauthorized_from_document" ]]; then
+  gh issue edit "$issue" --repo "$repo" --remove-label "state:$from" --add-label "state:$to"
+else
+  from_document=$(require_current_state "$from")
+  mutate_labels "$from_document" "state:$from" "state:$to"
+fi
+[[ "${IOS_TEMPLATE_STATE_FAIL_AFTER_LABEL:-0}" != 1 ]] || { echo 'injected failure after state label' >&2; exit 97; }
 require_transition_head
-require_current_state "$to" >/dev/null
+to_document=$(require_current_state "$to")
 require_transition_head
 marker=$(ruby "$json_tool" state-marker "$from" "$to" "$resume_state" "$timestamp")
-gh issue comment "$issue" --repo "$repo" --body "$marker"
+post_marker "$to_document" "$marker"
+[[ "${IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT:-0}" != 1 ]] || { echo 'injected failure after state comment' >&2; exit 97; }
 require_transition_head
-write_state "$transition_record"
+result=$(write_state "$transition_record")
+finish_pending
+printf '%s\n' "$result"
