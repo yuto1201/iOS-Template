@@ -27,18 +27,34 @@ worktree="$primary_root/$worktree_relative"
 head_sha=$(git -C "$repo_root" rev-parse HEAD)
 
 persist_merged_state() {
-  local pull_request=$1 transition_from=$2
+  local pull_request=$1 transition_from=$2 remote_document remote_state recovered=false transition_time
+  remote_document=$(gh issue view "$issue" --repo "$repo" --json labels) || fail 'Issue workflow state could not be confirmed'
+  remote_state=$(printf '%s' "$remote_document" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || fail 'Issue workflow state is invalid'
   if [[ "$transition_from" == approved-for-merge ]]; then
-    "$repo_root/tools/issue-state.sh" transition --repo "$repo" --issue "$issue" --from approved-for-merge --to merged >/dev/null
+    if [[ "$remote_state" == approved-for-merge ]]; then
+      "$repo_root/tools/issue-state.sh" transition --repo "$repo" --issue "$issue" --from approved-for-merge --to merged >/dev/null
+    elif [[ "$remote_state" == merged ]]; then
+      recovered=true
+    else
+      fail 'remote Issue workflow state cannot converge to merged'
+    fi
   elif [[ "$transition_from" != merged ]]; then
     fail 'durable Issue state cannot converge to merged'
+  elif [[ "$remote_state" != merged ]]; then
+    fail 'remote Issue workflow state differs from merged durable state'
   fi
   local temporary="$state.tmp.$$"
-  HEAD="$head_sha" PR="$pull_request" ruby -rjson -e '
+  transition_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  HEAD="$head_sha" PR="$pull_request" RECOVERED="$recovered" TRANSITION_TIME="$transition_time" ruby -rjson -e '
     path, output = ARGV; value = JSON.parse(File.binread(path))
     required = %w[baseSha branch executor issue issueContract previousState primaryImplementer repository resumeState schemaVersion state worktree]
     optional = %w[from headSha pullRequest to transitionedAt]
     abort "state has unknown or missing fields" unless (value.keys - required - optional).empty? && required.all? { |key| value.key?(key) }
+    if ENV.fetch("RECOVERED") == "true"
+      abort "unexpected local state for recovery" unless value["state"] == "approved-for-merge"
+      value["state"] = "merged"; value["previousState"] = "approved-for-merge"; value["resumeState"] = nil
+      value["from"] = "approved-for-merge"; value["to"] = "merged"; value["transitionedAt"] = ENV.fetch("TRANSITION_TIME")
+    end
     abort "state transition did not converge" unless value["state"] == "merged" && value["previousState"] == "approved-for-merge"
     value["headSha"] = ENV.fetch("HEAD"); value["pullRequest"] = Integer(ENV.fetch("PR"))
     File.binwrite(output, JSON.generate(value))

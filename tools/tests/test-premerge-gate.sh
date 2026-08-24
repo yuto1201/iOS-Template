@@ -200,4 +200,52 @@ assert_fails 'stale merge preflight is rejected' run_gate
 write_preflight
 run_gate >/dev/null
 
-echo 'PASS: gate fixture is ready for matching, stale-SHA, verdict, matrix, contract, preflight, and documentation-only cases'
+enable_supabase_preflight() {
+  ruby -e 'path = ARGV.fetch(0); text = File.read(path); text.sub!("## External operations\n\n- None.", "## External operations\n\n- supabase.inspect_project") or abort "external operations fixture section missing"; File.write(path, text)' "$issue_body"
+  ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["externalOperations"] = ["supabase.inspect_project"]; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/issue-contract.json"
+  contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+  DIGEST="$contract_digest" ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["issueContract"]["digest"] = ENV.fetch("DIGEST"); File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+  write_verify
+  write_review
+  write_preflight
+}
+
+write_supabase_preflight() {
+  local account=${1:-personal-account} target=${2:-project-ref} environment=${3:-production}
+  mkdir -p "$repo/.artifacts/issues/42/provider-preflights"
+  ACCOUNT="$account" TARGET="$target" ENVIRONMENT="$environment" ruby -rjson -rdigest -e '
+    def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value; end
+    path = ARGV.fetch(0)
+    value = {"schemaVersion" => 1, "issue" => 42, "provider" => "supabase", "account" => ENV.fetch("ACCOUNT"), "target" => ENV.fetch("TARGET"), "environment" => ENV.fetch("ENVIRONMENT"), "operation" => "supabase.inspect_project", "health" => "healthy", "checkedAt" => "2026-08-24T00:03:00Z"}
+    value["digest"] = "sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(value)))}"
+    File.binwrite(path, JSON.generate(canonical(value)))
+  ' "$repo/.artifacts/issues/42/provider-preflights/supabase.json"
+}
+
+enable_supabase_preflight
+write_supabase_preflight
+run_gate >/dev/null
+
+write_supabase_preflight '   '
+assert_fails 'blank provider account is rejected' run_gate
+write_supabase_preflight personal-account ' project-ref '
+assert_fails 'untrimmed provider target is rejected' run_gate
+write_supabase_preflight personal-account project-ref ' production '
+assert_fails 'untrimmed provider environment is rejected' run_gate
+long_account=$(printf 'a%.0s' {1..257})
+write_supabase_preflight "$long_account"
+assert_fails 'overlong provider account is rejected' run_gate
+write_supabase_preflight personal-account '<project-ref>'
+assert_fails 'unsafe provider target characters are rejected' run_gate
+write_supabase_preflight personal-account project-ref qa
+assert_fails 'unknown provider environment is rejected' run_gate
+write_supabase_preflight
+
+mv "$repo/.artifacts/issues/42/provider-preflights" "$repo/.artifacts/issues/42/provider-preflights-real"
+ln -s provider-preflights-real "$repo/.artifacts/issues/42/provider-preflights"
+assert_fails 'provider preflight symlink component is rejected' run_gate
+rm "$repo/.artifacts/issues/42/provider-preflights"
+mv "$repo/.artifacts/issues/42/provider-preflights-real" "$repo/.artifacts/issues/42/provider-preflights"
+run_gate >/dev/null
+
+echo 'PASS: gate covers canonical evidence, strict provider fields, provider containment, and documentation-only cases'

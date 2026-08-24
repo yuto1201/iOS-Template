@@ -23,6 +23,7 @@ elif [[ -d "$repo_root/.artifacts" && ! -L "$repo_root/.artifacts" ]]; then
 else
   fail 'canonical artifacts are unavailable'
 fi
+[[ "$repo_root" == "$primary_root" ]] || fail 'cleanup must run in the primary checkout'
 state="$repo_root/.artifacts/issues/$issue/state.json"
 [[ -f "$state" && ! -L "$state" ]] || fail 'durable Issue state is missing or unsafe'
 state_fields=$(jq -er '[.schemaVersion, .issue, .repository, .branch, .worktree, .state, .headSha] | @tsv' "$state") || fail 'durable Issue state is malformed'
@@ -30,7 +31,6 @@ IFS=$'\t' read -r schema_version state_issue state_repo branch worktree_relative
 [[ "$schema_version" == 1 && "$state_issue" == "$issue" && "$state_repo" == "$repo" && "$state_name" == merged ]] || fail 'durable Issue state is not a merged record'
 [[ "$branch" =~ ^(codex|claude)/${issue}-[a-z0-9][a-z0-9-]*$ && "$worktree_relative" =~ ^\.worktrees/${issue}-[a-z0-9][a-z0-9-]*$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'durable targets are noncanonical'
 worktree="$primary_root/$worktree_relative"
-[[ "$repo_root" == "$primary_root" || "$repo_root" == "$worktree" ]] || fail 'cleanup must run in the primary or exact Issue worktree'
 if [[ -e "$worktree" ]]; then
   [[ -d "$worktree" && ! -L "$worktree" ]] || fail 'recorded worktree is unsafe'
   [[ "$(git -C "$worktree" branch --show-current)" == "$branch" && "$(git -C "$worktree" rev-parse HEAD)" == "$head_sha" ]] || fail 'worktree Branch or Head differs from durable state'

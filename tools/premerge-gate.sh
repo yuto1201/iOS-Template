@@ -85,6 +85,24 @@ CONTRACT="$contract" ARTIFACTS="$artifacts_root" ISSUE="$issue" ruby -rjson -rdi
     abort("provider preflight validation failed: #{message}")
   end
   def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value.is_a?(Array) ? value.map { |entry| canonical(entry) } : value; end
+  def require_contained_regular_file(root, components, provider)
+    current = root
+    components.each_with_index do |component, index|
+      current = File.join(current, component)
+      status = File.lstat(current)
+      die("unsafe #{provider} preflight path") if status.symlink?
+      if index == components.length - 1
+        die("unsafe #{provider} preflight file") unless status.file?
+      else
+        die("unsafe #{provider} preflight directory") unless status.directory?
+      end
+    end
+    resolved = File.realpath(current)
+    die("escaping #{provider} preflight path") unless resolved.start_with?(root + File::SEPARATOR)
+    current
+  rescue Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR
+    die("missing #{provider} preflight")
+  end
   contract = JSON.parse(File.binread(ENV.fetch("CONTRACT"))); issue = Integer(ENV.fetch("ISSUE")); root = ENV.fetch("ARTIFACTS")
   allowed = %w[github.read_issue github.create_issue github.update_issue github.push_branch github.create_pr github.merge_pr github.delete_branch github.sync_labels supabase.inspect_project supabase.apply_migrations cloudflare.inspect_account cloudflare.deploy elevenlabs.generate_audio appstore.inspect_app appstore.upload_build appstore.update_metadata appstore.submit_review]
   operations = contract.fetch("externalOperations")
@@ -94,11 +112,14 @@ CONTRACT="$contract" ARTIFACTS="$artifacts_root" ISSUE="$issue" ruby -rjson -rdi
     matching = operations.select { |operation| operation.start_with?(prefix + ".") }
     next if matching.empty?
     die("multiple operations for #{provider}") unless matching.length == 1
-    path = File.join(root, "issues", issue.to_s, "provider-preflights", "#{provider}.json")
-    die("missing #{provider} preflight") unless File.file?(path) && !File.symlink?(path)
+    path = require_contained_regular_file(root, ["issues", issue.to_s, "provider-preflights", "#{provider}.json"], provider)
     value = JSON.parse(File.binread(path)); keys = %w[schemaVersion issue provider account target environment operation health checkedAt digest]
     die("#{provider} schema") unless value.is_a?(Hash) && value.keys.sort == keys.sort && value["schemaVersion"] == 1 && value["issue"] == issue && value["provider"] == provider && value["operation"] == matching.fetch(0) && value["health"] == "healthy"
-    %w[account target environment operation].each { |key| die("#{provider} #{key}") unless value[key].is_a?(String) && value[key].match?(/\A[^\x00-\x1f\x7f]+\z/) }
+    %w[account target operation].each do |key|
+      field = value[key]
+      die("#{provider} #{key}") unless field.is_a?(String) && field.bytesize.between?(1, 256) && field == field.strip && field.match?(/\A[A-Za-z0-9][A-Za-z0-9 ._:@\/-]*\z/)
+    end
+    die("#{provider} environment") unless %w[local preview staging production].include?(value["environment"])
     checked = Time.iso8601(value.fetch("checkedAt")); fetched = Time.iso8601(contract.fetch("fetchedAt")); die("#{provider} freshness") if checked < fetched || checked > Time.now.utc + 300
     unsigned = value.reject { |key, _| key == "digest" }; die("#{provider} digest") unless value["digest"] == "sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(unsigned)))}"
   end
