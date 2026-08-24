@@ -23,6 +23,7 @@ worktree=$(jq -er '.worktreePath | strings' <<<"$identity")
 head_sha=$(jq -er '.headSha | strings' <<<"$identity")
 pull_request=$(jq -er '.pullRequest' <<<"$identity") || fail 'cleanup requires a positive persisted pullRequest'
 worktree_present=$(jq -r '.worktreePresent' <<<"$identity")
+pr_fields='number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url'
 
 [[ "$(git -C "$repo_root" rev-parse --show-toplevel)" == "$repo_root" ]] || fail 'Git top-level differs from primary checkout'
 [[ "$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)" == "$repo_root/.git" ]] || fail 'Git common directory differs from primary checkout'
@@ -51,11 +52,13 @@ else
 fi
 
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" >/dev/null || fail 'personal GitHub account or repository preflight failed'
-pr_json=$(gh pr view "$pull_request" --repo "$repo" --json number,state,baseRefName,headRefName,headRefOid,mergeCommit,url) || fail 'persisted PR could not be read'
-merge_commit=$(PR_JSON="$pr_json" REPO="$repo" PR="$pull_request" BRANCH="$branch" HEAD="$head_sha" ruby -rjson -e '
-  pr = JSON.parse(ENV.fetch("PR_JSON")); abort unless pr.is_a?(Hash) && pr.keys.sort == %w[number state baseRefName headRefName headRefOid mergeCommit url].sort
+pr_json=$(gh pr view "$pull_request" --repo "$repo" --json "$pr_fields") || fail 'persisted PR could not be read'
+merge_commit=$(PR_JSON="$pr_json" REPO="$repo" ISSUE="$issue" PR="$pull_request" BRANCH="$branch" HEAD="$head_sha" ruby -rjson -e '
+  pr = JSON.parse(ENV.fetch("PR_JSON")); abort unless pr.is_a?(Hash) && pr.keys.sort == %w[number state baseRefName headRefName headRefOid headRepository headRepositoryOwner isCrossRepository closingIssuesReferences mergeCommit url].sort
   abort unless pr["number"] == Integer(ENV.fetch("PR")) && pr["url"] == "https://github.com/#{ENV.fetch("REPO")}/pull/#{ENV.fetch("PR")}" && pr["state"] == "MERGED"
   abort unless pr["baseRefName"] == "main" && pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD")
+  abort unless pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == ENV.fetch("REPO") && pr.dig("headRepositoryOwner", "login") == ENV.fetch("REPO").split("/", 2).first
+  closing = pr["closingIssuesReferences"]; abort unless closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing[0].dig("repository", "nameWithOwner") == ENV.fetch("REPO")
   oid = pr.dig("mergeCommit", "oid"); abort unless oid.is_a?(String) && oid.match?(/\A[0-9a-f]{40}\z/); puts oid
 ') || fail 'persisted PR identity is open, unmerged, stale, or mismatched'
 [[ "$merge_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'persisted PR merge commit is invalid'

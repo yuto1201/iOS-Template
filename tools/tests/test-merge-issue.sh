@@ -35,7 +35,7 @@ make_case() {
   git -C "$CASE_PRIMARY" worktree add -b "$branch" "$CASE_WORKTREE" main >/dev/null
   mkdir -p "$CASE_WORKTREE/tools/lib" "$CASE_PRIMARY/.artifacts/issues/$issue"
   cp "$source_root/tools/merge-issue.sh" "$source_root/tools/render-pr-body.sh" "$source_root/tools/issue-state.sh" "$CASE_WORKTREE/tools/"
-  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$CASE_WORKTREE/tools/lib/"
+  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$CASE_WORKTREE/tools/lib/"
   ln -s ../../.artifacts "$CASE_WORKTREE/.artifacts"
   printf '.artifacts\n' >>"$(git -C "$CASE_WORKTREE" rev-parse --git-path info/exclude)"
 
@@ -72,14 +72,17 @@ EOF
 set -euo pipefail
 log=${FAKE_LOG:?}; mutations=${FAKE_MUTATIONS:?}; state=${FAKE_GH:?}; repo=${FAKE_REPO:?}; issue=${FAKE_ISSUE:?}; branch=${FAKE_BRANCH:?}; head=${FAKE_HEAD:?}; pr=${FAKE_PR:?}
 printf 'gh %s\n' "$*" >>"$log"
-pr_json() { local status=$1; PR_STATE="$status" ruby -rjson -e 'state=ENV.fetch("PR_STATE"); puts JSON.generate({"number"=>Integer(ENV.fetch("FAKE_PR")),"state"=>state,"baseRefName"=>"main","headRefName"=>ENV.fetch("FAKE_BRANCH"),"headRefOid"=>ENV.fetch("FAKE_HEAD"),"mergeCommit"=>state=="MERGED" ? {"oid"=>ENV.fetch("FAKE_MERGE")} : nil,"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/pull/#{ENV.fetch("FAKE_PR")}"})'; }
+fields='number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url'
+pr_json() { local status=$1; PR_STATE="$status" ruby -rjson -e 'state=ENV.fetch("PR_STATE"); repo=ENV.fetch("FAKE_SOURCE_REPO",ENV.fetch("FAKE_REPO")); owner=repo.split("/",2).first; issue=Integer(ENV.fetch("FAKE_CLOSING_ISSUE",ENV.fetch("FAKE_ISSUE"))); puts JSON.generate({"number"=>Integer(ENV.fetch("FAKE_PR")),"state"=>state,"baseRefName"=>"main","headRefName"=>ENV.fetch("FAKE_BRANCH"),"headRefOid"=>ENV.fetch("FAKE_HEAD"),"headRepository"=>{"nameWithOwner"=>repo},"headRepositoryOwner"=>{"login"=>owner},"isCrossRepository"=>ENV.fetch("FAKE_CROSS_REPO","false")=="true","closingIssuesReferences"=>[{"number"=>issue,"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/issues/#{issue}","repository"=>{"nameWithOwner"=>ENV.fetch("FAKE_REPO")}}],"mergeCommit"=>state=="MERGED" ? {"oid"=>ENV.fetch("FAKE_MERGE")} : nil,"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/pull/#{ENV.fetch("FAKE_PR")}"})'; }
 case "$1 $2" in
-  'pr list') cat "$state/prs.json" ;;
+  'pr list')
+    [[ "$*" == "pr list --repo $repo --head $branch --state all --json $fields" || "$*" == "pr list --repo $repo --head $branch --state open --json $fields" ]] || { echo 'invalid pr list argv' >&2; exit 2; }
+    cat "$state/prs.json" ;;
   'pr create')
-    [[ "$*" == *"--title Issue #42: Merge exact verified work."* && "$*" == *"--body "* ]] || { echo 'missing deterministic title/body' >&2; exit 2; }
+    [[ $# == 12 && $3 == --repo && $4 == "$repo" && $5 == --base && $6 == main && $7 == --head && $8 == "$branch" && $9 == --title && ${10} == 'Issue #42: Merge exact verified work.' && ${11} == --body && ${12} == *'Closes #42'* ]] || { echo 'invalid deterministic pr create argv' >&2; exit 2; }
     printf 'pr-create\n' >>"$mutations"; pr_json OPEN | jq -s . >"$state/prs.json" ;;
-  'pr view') jq -e 'length==1' "$state/prs.json" >/dev/null; jq '.[0]' "$state/prs.json" ;;
-  'pr merge') printf 'pr-merge\n' >>"$mutations"; pr_json MERGED | jq -s . >"$state/prs.json"; printf 'CLOSED\n' >"$state/issue-state" ;;
+  'pr view') [[ "$*" == "pr view $pr --repo $repo --json $fields" ]] || { echo 'invalid pr view argv' >&2; exit 2; }; jq -e 'length==1' "$state/prs.json" >/dev/null; jq '.[0]' "$state/prs.json" ;;
+  'pr merge') [[ "$*" == "pr merge $pr --repo $repo --squash --match-head-commit $head" ]] || { echo 'invalid pr merge argv' >&2; exit 2; }; printf 'pr-merge\n' >>"$mutations"; pr_json MERGED | jq -s . >"$state/prs.json"; printf 'CLOSED\n' >"$state/issue-state" ;;
   'issue view')
     if [[ "$*" == *'--json number,state,url' ]]; then jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" '{number:$number,state:$state,url:$url}'
     elif [[ "$*" == *'--json labels,comments' ]]; then jq -cn --arg label "$(cat "$state/issue-label")" '{labels:[{name:$label}],comments:[]}'
@@ -95,14 +98,28 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == "-C ${FAKE_WORKTREE:?} remote get-url origin" ]]; then printf 'https://github.com/%s.git\n' "${FAKE_REPO:?}"; exit 0; fi
-if [[ "$*" == *' push origin refs/heads/'* ]]; then printf 'git-push\n' >>"${FAKE_MUTATIONS:?}"; printf 'git %s\n' "$*" >>"${FAKE_LOG:?}"; fi
+if [[ "$*" == *' push origin '* ]]; then
+  [[ "$*" == "-C ${FAKE_WORKTREE:?} push origin ${FAKE_HEAD:?}:refs/heads/${FAKE_BRANCH:?}" ]] || { echo 'push did not bind exact Head' >&2; exit 2; }
+  printf 'git-push\n' >>"${FAKE_MUTATIONS:?}"; printf 'git %s\n' "$*" >>"${FAKE_LOG:?}"
+fi
+if [[ "$*" == "-C ${FAKE_WORKTREE:?} ls-remote --exit-code --heads origin refs/heads/${FAKE_BRANCH:?}" && -n "${FAKE_REMOTE_HEAD_OVERRIDE:-}" ]]; then
+  printf '%s\trefs/heads/%s\n' "$FAKE_REMOTE_HEAD_OVERRIDE" "$FAKE_BRANCH"; exit 0
+fi
 exec "${REAL_GIT:?}" "$@"
 EOF
   chmod +x "$CASE_BIN/git"
 }
 
 run_merge() {
-  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_GATE="${FAIL_GATE:-0}" "$CASE_WORKTREE/tools/merge-issue.sh" --repo "$repo_name" --issue "$issue"
+  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_GATE="${FAIL_GATE:-0}" FAKE_SOURCE_REPO="${FAKE_SOURCE_REPO:-$repo_name}" FAKE_CROSS_REPO="${FAKE_CROSS_REPO:-false}" FAKE_CLOSING_ISSUE="${FAKE_CLOSING_ISSUE:-$issue}" FAKE_REMOTE_HEAD_OVERRIDE="${FAKE_REMOTE_HEAD_OVERRIDE:-}" "$CASE_WORKTREE/tools/merge-issue.sh" --repo "$repo_name" --issue "$issue"
+}
+
+write_pr() {
+  local state=$1 source_repo=${2:-$repo_name} cross=${3:-false} closing_issue=${4:-$issue}
+  STATE="$state" SOURCE_REPO="$source_repo" CROSS="$cross" CLOSING_ISSUE="$closing_issue" REPO="$repo_name" PR="$pr" BRANCH="$branch" HEAD="$CASE_HEAD" MERGE="$merge_sha" ruby -rjson -e '
+    state=ENV.fetch("STATE"); source=ENV.fetch("SOURCE_REPO"); closing=Integer(ENV.fetch("CLOSING_ISSUE")); repo=ENV.fetch("REPO")
+    value={"number"=>Integer(ENV.fetch("PR")),"state"=>state,"baseRefName"=>"main","headRefName"=>ENV.fetch("BRANCH"),"headRefOid"=>ENV.fetch("HEAD"),"headRepository"=>{"nameWithOwner"=>source},"headRepositoryOwner"=>{"login"=>source.split("/",2).first},"isCrossRepository"=>ENV.fetch("CROSS")=="true","closingIssuesReferences"=>[{"number"=>closing,"url"=>"https://github.com/#{repo}/issues/#{closing}","repository"=>{"nameWithOwner"=>repo}}],"mergeCommit"=>state=="MERGED" ? {"oid"=>ENV.fetch("MERGE")} : nil,"url"=>"https://github.com/#{repo}/pull/#{ENV.fetch("PR")}"}; puts JSON.generate([value])
+  ' >"$CASE_GH/prs.json"
 }
 
 make_case new
@@ -122,6 +139,39 @@ make_case gate-failure
 FAIL_GATE=1 assert_fails 'gate before publication' run_merge
 assert_no_mutation 'gate failure'
 
+make_case persisted-open approved-for-merge 57
+write_pr OPEN
+run_merge >"$CASE_ROOT/open-result.json"
+jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/open-result.json" >/dev/null
+
+make_case persisted-closed approved-for-merge 57
+write_pr CLOSED
+assert_fails 'persisted closed-unmerged PR' run_merge
+assert_no_mutation 'persisted closed-unmerged PR'
+
+make_case foreign-fork approved-for-merge 57
+write_pr OPEN 'foreign/project' true
+assert_fails 'foreign-fork PR source' run_merge
+assert_no_mutation 'foreign-fork PR source'
+
+make_case wrong-closing-issue approved-for-merge 57
+write_pr OPEN "$repo_name" false 43
+assert_fails 'PR closes wrong Issue' run_merge
+assert_no_mutation 'wrong closing Issue'
+
+make_case discovered-merged
+write_pr MERGED
+cp "$CASE_PRIMARY/.artifacts/issues/42/state.json" "$CASE_ROOT/state.before"
+assert_fails 'discovered merged PR without durable identity first run' run_merge
+cmp -s "$CASE_ROOT/state.before" "$CASE_PRIMARY/.artifacts/issues/42/state.json" || fail_test 'first discovered-merged refusal changed state bytes'
+assert_fails 'discovered merged PR without durable identity second run' run_merge
+cmp -s "$CASE_ROOT/state.before" "$CASE_PRIMARY/.artifacts/issues/42/state.json" || fail_test 'second discovered-merged refusal changed state bytes'
+assert_no_mutation 'discovered merged PR without durable identity'
+
+make_case remote-ref-race
+FAKE_REMOTE_HEAD_OVERRIDE=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb assert_fails 'remote ref moved after exact push' run_merge
+if grep -Eq '^(pr-create|pr-merge)$' "$CASE_MUTATIONS"; then fail_test 'ref move race created or merged a PR'; fi
+
 make_case invalid-state in-progress
 assert_fails 'non-approved normal state' run_merge
 [[ ! -s "$CASE_LOG" ]] || fail_test 'invalid durable state reached an external call'
@@ -134,6 +184,18 @@ assert_fails 'contract digest mismatch' run_merge
 [[ ! -s "$CASE_LOG" ]] || fail_test 'contract mismatch reached external calls'
 assert_no_mutation 'contract mismatch'
 
+make_case mismatched-slug
+ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v["worktree"]=".worktrees/42-other-slug";File.binwrite(p,JSON.generate(v))' "$CASE_PRIMARY/.artifacts/issues/42/state.json"
+assert_fails 'Branch/worktree slug mismatch' run_merge
+[[ ! -s "$CASE_LOG" ]] || fail_test 'slug mismatch reached external calls'
+assert_no_mutation 'Branch/worktree slug mismatch'
+
+make_case missing-transition-time
+ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v.delete("transitionedAt");File.binwrite(p,JSON.generate(v))' "$CASE_PRIMARY/.artifacts/issues/42/state.json"
+assert_fails 'approved state missing transition timestamp' run_merge
+[[ ! -s "$CASE_LOG" ]] || fail_test 'missing transition timestamp reached external calls'
+assert_no_mutation 'missing transition timestamp'
+
 make_case bad-link
 rm "$CASE_WORKTREE/.artifacts" && ln -s ../../../.artifacts "$CASE_WORKTREE/.artifacts"
 assert_fails 'raw artifact link mismatch' run_merge
@@ -141,7 +203,7 @@ assert_fails 'raw artifact link mismatch' run_merge
 assert_no_mutation 'artifact-link mismatch'
 
 make_case merged-recovery merged 57
-PR_STATE=MERGED FAKE_PR="$pr" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_MERGE="$merge_sha" FAKE_REPO="$repo_name" ruby -rjson -e 's=ENV.fetch("PR_STATE");puts JSON.generate([{"number"=>Integer(ENV.fetch("FAKE_PR")),"state"=>s,"baseRefName"=>"main","headRefName"=>ENV.fetch("FAKE_BRANCH"),"headRefOid"=>ENV.fetch("FAKE_HEAD"),"mergeCommit"=>{"oid"=>ENV.fetch("FAKE_MERGE")},"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/pull/#{ENV.fetch("FAKE_PR")}"}])' >"$CASE_GH/prs.json"
+write_pr MERGED
 printf 'CLOSED\n' >"$CASE_GH/issue-state"; printf 'state:merged\n' >"$CASE_GH/issue-label"
 run_merge >"$CASE_ROOT/recovery.json"
 jq -e '.status=="already-merged" and .pullRequest==57' "$CASE_ROOT/recovery.json" >/dev/null

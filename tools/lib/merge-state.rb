@@ -4,6 +4,7 @@
 require "digest"
 require "json"
 require "time"
+require_relative "descriptor-files"
 
 def refuse(message)
   warn "merge identity refused: #{message}"
@@ -14,29 +15,6 @@ def exact_keys!(value, required, optional, at)
   refuse("#{at} must be an object") unless value.is_a?(Hash)
   keys = value.keys
   refuse("#{at} has unknown or missing fields") unless (keys - required - optional).empty? && required.all? { |key| value.key?(key) }
-end
-
-def owned_bytes(path, at)
-  stat = File.lstat(path)
-  refuse("#{at} must be a single-link regular file") unless stat.file? && !stat.symlink? && stat.nlink == 1
-  flags = File::RDONLY
-  flags |= File::NOFOLLOW if defined?(File::NOFOLLOW)
-  File.open(path, flags) do |file|
-    opened = file.stat
-    refuse("#{at} changed while opening") unless opened.file? && opened.nlink == 1 && opened.dev == stat.dev && opened.ino == stat.ino
-    bytes = file.read
-    final = file.stat
-    refuse("#{at} changed while reading") unless final.dev == opened.dev && final.ino == opened.ino && final.size == bytes.bytesize && final.nlink == 1
-    bytes
-  end
-rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP => error
-  refuse("#{at} is unavailable: #{error.message}")
-end
-
-def owned_json(path, at)
-  JSON.parse(owned_bytes(path, at))
-rescue JSON::ParserError => error
-  refuse("#{at} is not valid JSON: #{error.message}")
 end
 
 def ensure_plain_directory!(path, at)
@@ -84,17 +62,18 @@ def canonical_topology(root, issue, mode)
     ensure_plain_directory!(File.join(primary, ".worktrees"), "primary .worktrees")
   end
   issue_dir = File.join(primary, ".artifacts", "issues", issue.to_s)
-  ensure_plain_directory!(File.join(primary, ".artifacts", "issues"), "artifact issues directory")
-  ensure_plain_directory!(issue_dir, "Issue artifact directory")
-  [root, primary, issue_dir]
+  handles = DescriptorFiles.open_components(primary, [".artifacts", "issues", issue.to_s])
+  [root, primary, issue_dir, handles]
 end
 
 def validate_state(root, repository, issue, mode)
   repository!(repository, "requested repository")
   positive_integer!(issue, "requested Issue")
-  root, primary, issue_dir = canonical_topology(root, issue, mode)
+  root, primary, issue_dir, handles = canonical_topology(root, issue, mode)
+  issue_handle = handles.last
   state_path = File.join(issue_dir, "state.json")
-  state = owned_json(state_path, "durable Issue state")
+  state_bytes, = DescriptorFiles.read_regular_at(issue_handle, "state.json")
+  state = JSON.parse(state_bytes)
   required = %w[schemaVersion issue repository branch worktree baseSha primaryImplementer issueContract state previousState resumeState executor]
   optional = %w[headSha pullRequest from to transitionedAt]
   exact_keys!(state, required, optional, "durable Issue state")
@@ -102,8 +81,11 @@ def validate_state(root, repository, issue, mode)
   refuse("state Issue or repository differs from the request") unless state["issue"] == issue && state["repository"] == repository
   branch = state["branch"]
   worktree = state["worktree"]
-  refuse("state Branch is noncanonical") unless branch.is_a?(String) && branch.match?(%r{\A(codex|claude)/#{issue}-[a-z0-9][a-z0-9-]*\z})
-  refuse("state worktree is noncanonical") unless worktree.is_a?(String) && worktree.match?(%r{\A\.worktrees/#{issue}-[a-z0-9][a-z0-9-]*\z})
+  branch_match = branch.match(%r{\A(codex|claude)/#{issue}-([a-z0-9][a-z0-9-]*)\z}) if branch.is_a?(String)
+  worktree_match = worktree.match(%r{\A\.worktrees/#{issue}-([a-z0-9][a-z0-9-]*)\z}) if worktree.is_a?(String)
+  refuse("state Branch is noncanonical") unless branch_match
+  refuse("state worktree is noncanonical") unless worktree_match
+  refuse("state Branch and worktree slugs differ") unless branch_match[2] == worktree_match[1]
   expected_model = branch.start_with?("codex/") ? "codex" : "claude"
   refuse("state primary implementer differs from Branch ownership") unless state["primaryImplementer"] == expected_model
   refuse("state executor must be Codex") unless state["executor"] == "codex"
@@ -115,7 +97,7 @@ def validate_state(root, repository, issue, mode)
   refuse("state issue-contract path is noncanonical") unless contract_ref["path"] == expected_contract_path
   contract_digest = digest!(contract_ref["digest"], "state issue-contract digest")
   contract_path = File.join(issue_dir, "issue-contract.json")
-  contract_bytes = owned_bytes(contract_path, "Issue contract")
+  contract_bytes, = DescriptorFiles.read_regular_at(issue_handle, "issue-contract.json")
   refuse("state issue-contract digest differs from exact bytes") unless contract_digest == "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
   contract = JSON.parse(contract_bytes)
   refuse("Issue contract identity differs from durable state") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue && contract["repository"] == repository
@@ -133,6 +115,7 @@ def validate_state(root, repository, issue, mode)
   else
     refuse("state must be approved-for-merge or merged")
   end
+  refuse("state transition timestamp is missing") unless state.key?("transitionedAt")
   if state.key?("pullRequest") && !state["pullRequest"].nil?
     positive_integer!(state["pullRequest"], "state.pullRequest")
   end
@@ -153,7 +136,7 @@ def validate_state(root, repository, issue, mode)
   end
   title_goal = contract["goal"].gsub(/\s+/, " ").strip
   title_goal = title_goal.byteslice(0, 180).to_s.scrub
-  {
+  result = {
     "statePath" => state_path,
     "primaryRoot" => primary,
     "worktreePath" => expected_worktree,
@@ -169,31 +152,28 @@ def validate_state(root, repository, issue, mode)
     "contractDigest" => contract_digest,
     "title" => "Issue ##{issue}: #{title_goal}"
   }
+  handles.reverse_each { |handle| handle.close unless handle.closed? }
+  result
 rescue JSON::ParserError => error
   refuse("Issue contract is not valid JSON: #{error.message}")
+rescue IOError, SystemCallError, ArgumentError => error
+  refuse("descriptor-bound Issue identity is unavailable: #{error.message}")
+ensure
+  handles&.reverse_each { |handle| handle.close unless handle.closed? }
 end
 
-def atomic_update_state(path)
-  original_stat = File.lstat(path)
-  refuse("durable Issue state became unsafe") unless original_stat.file? && !original_stat.symlink? && original_stat.nlink == 1
-  value = owned_json(path, "durable Issue state")
+def atomic_update_state(primary, issue)
+  handles = DescriptorFiles.open_components(primary, [".artifacts", "issues", issue.to_s])
+  directory = handles.last
+  bytes, original_stat = DescriptorFiles.read_regular_at(directory, "state.json")
+  value = JSON.parse(bytes)
   yield value
-  parent = File.dirname(path)
-  ensure_plain_directory!(parent, "Issue artifact directory")
-  temporary = File.join(parent, ".state.json.tmp.#{Process.pid}.#{rand(1 << 32)}")
-  flags = File::WRONLY | File::CREAT | File::EXCL
-  File.open(temporary, flags, 0o600) do |file|
-    file.write(JSON.generate(value))
-    file.flush
-    file.fsync
-  end
-  current = File.lstat(path)
-  refuse("durable Issue state changed before publication") unless current.dev == original_stat.dev && current.ino == original_stat.ino && current.nlink == 1
-  File.rename(temporary, path)
-  File.open(parent, File::RDONLY) { |directory| directory.fsync }
+  DescriptorFiles.atomic_replace_at(directory, "state.json", JSON.generate(value), original_stat)
   value
+rescue JSON::ParserError, IOError, SystemCallError, ArgumentError => error
+  refuse("descriptor-bound state publication failed: #{error.message}")
 ensure
-  File.unlink(temporary) if defined?(temporary) && temporary && File.exist?(temporary)
+  handles&.reverse_each { |handle| handle.close unless handle.closed? }
 end
 
 command = ARGV.shift
@@ -207,7 +187,7 @@ when "persist-pr"
   refuse("invalid arguments") unless issue_text&.match?(/\A[1-9][0-9]*\z/) && pr_text&.match?(/\A[1-9][0-9]*\z/)
   identity = validate_state(root, repository, Integer(issue_text), "worktree")
   refuse("pullRequest cannot first be persisted after durable merged state") if identity["state"] == "merged" && identity["pullRequest"] != Integer(pr_text)
-  value = atomic_update_state(identity["statePath"]) do |state|
+  value = atomic_update_state(identity["primaryRoot"], identity["issue"]) do |state|
     refuse("durable identity changed before pullRequest persistence") unless state["schemaVersion"] == 1 && state["issue"] == identity["issue"] && state["repository"] == identity["repository"] && state["branch"] == identity["branch"] && state["worktree"] == identity["worktree"] && state["baseSha"] == identity["baseSha"] && state["headSha"] == identity["headSha"] && state.dig("issueContract", "digest") == identity["contractDigest"] && state["state"] == identity["state"]
     existing = state["pullRequest"]
     refuse("persisted pullRequest differs from exact PR") if existing && existing != Integer(pr_text)
@@ -219,7 +199,7 @@ when "mark-merged"
   refuse("invalid arguments") unless issue_text&.match?(/\A[1-9][0-9]*\z/) && pr_text&.match?(/\A[1-9][0-9]*\z/)
   identity = validate_state(root, repository, Integer(issue_text), "worktree")
   refuse("merged Head differs from durable Head") unless identity["headSha"] == head
-  value = atomic_update_state(identity["statePath"]) do |state|
+  value = atomic_update_state(identity["primaryRoot"], identity["issue"]) do |state|
     refuse("durable identity changed before merged persistence") unless state["schemaVersion"] == 1 && state["issue"] == identity["issue"] && state["repository"] == identity["repository"] && state["branch"] == identity["branch"] && state["worktree"] == identity["worktree"] && state["baseSha"] == identity["baseSha"] && state["headSha"] == identity["headSha"] && state.dig("issueContract", "digest") == identity["contractDigest"] && state["state"] == identity["state"]
     refuse("persisted pullRequest differs from merged PR") if state["pullRequest"] && state["pullRequest"] != Integer(pr_text)
     if state["state"] == "approved-for-merge"

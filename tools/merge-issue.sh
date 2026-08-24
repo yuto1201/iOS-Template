@@ -23,6 +23,7 @@ state_name=$(jq -er '.state | strings' <<<"$identity") || fail 'durable workflow
 pull_request=$(jq -er '.pullRequest // empty' <<<"$identity") || true
 title=$(jq -er '.title | strings' <<<"$identity") || fail 'deterministic PR title is invalid'
 primary_root=$(jq -er '.primaryRoot | strings' <<<"$identity") || fail 'primary checkout identity is invalid'
+pr_fields='number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url'
 
 [[ "$(git -C "$repo_root" rev-parse --show-toplevel)" == "$repo_root" ]] || fail 'Git top-level differs from the Issue worktree'
 [[ "$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)" == "$primary_root/.git" ]] || fail 'Git common directory differs from the primary checkout'
@@ -44,14 +45,17 @@ require_origin
 
 validate_pr() {
   local expected_state=$1 document=$2 expected_pr=$3
-  PR_JSON="$document" REPO="$repo" PR="$expected_pr" BRANCH="$branch" HEAD="$head_sha" EXPECTED_STATE="$expected_state" ruby -rjson -e '
+  PR_JSON="$document" REPO="$repo" ISSUE="$issue" PR="$expected_pr" BRANCH="$branch" HEAD="$head_sha" EXPECTED_STATE="$expected_state" ruby -rjson -e '
     pr = JSON.parse(ENV.fetch("PR_JSON")); abort "PR must be an object" unless pr.is_a?(Hash)
-    required = %w[number state baseRefName headRefName headRefOid mergeCommit url]
+    required = %w[number state baseRefName headRefName headRefOid headRepository headRepositoryOwner isCrossRepository closingIssuesReferences mergeCommit url]
     abort "PR fields differ" unless pr.keys.sort == required.sort
     abort "PR number differs" unless pr["number"] == Integer(ENV.fetch("PR"))
     abort "PR repository differs" unless pr["url"] == "https://github.com/#{ENV.fetch("REPO")}/pull/#{ENV.fetch("PR")}"
     abort "PR Base differs" unless pr["baseRefName"] == "main"
     abort "PR Branch or Head differs" unless pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD")
+    abort "PR source repository differs" unless pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == ENV.fetch("REPO") && pr.dig("headRepositoryOwner", "login") == ENV.fetch("REPO").split("/", 2).first
+    closing = pr["closingIssuesReferences"]
+    abort "PR does not close the exact Issue" unless closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing[0].dig("repository", "nameWithOwner") == ENV.fetch("REPO")
     expected = ENV.fetch("EXPECTED_STATE")
     abort "PR state differs" unless expected == "ANY" ? %w[OPEN CLOSED MERGED].include?(pr["state"]) : pr["state"] == expected
     if pr["state"] == "MERGED"
@@ -64,7 +68,7 @@ validate_pr() {
 }
 
 view_exact_pr() {
-  gh pr view "$1" --repo "$repo" --json number,state,baseRefName,headRefName,headRefOid,mergeCommit,url
+  gh pr view "$1" --repo "$repo" --json "$pr_fields"
 }
 
 confirm_issue_closed() {
@@ -121,18 +125,20 @@ if [[ -n "$pull_request" ]]; then
   pr_document=$(view_exact_pr "$pr_number") || fail 'persisted PR could not be read'
   pr_state=$(validate_pr ANY "$pr_document" "$pr_number")
 else
-  candidates=$(gh pr list --repo "$repo" --head "$branch" --state all --json number,state,baseRefName,headRefName,headRefOid,mergeCommit,url) || fail 'PR discovery failed'
-  selected=$(PRS="$candidates" REPO="$repo" BRANCH="$branch" HEAD="$head_sha" ruby -rjson -e '
+  candidates=$(gh pr list --repo "$repo" --head "$branch" --state all --json "$pr_fields") || fail 'PR discovery failed'
+  selected=$(PRS="$candidates" REPO="$repo" ISSUE="$issue" BRANCH="$branch" HEAD="$head_sha" ruby -rjson -e '
     records = JSON.parse(ENV.fetch("PRS")); abort "PR discovery must return an array" unless records.is_a?(Array); abort "ambiguous PR discovery" if records.length > 1
     if records.length == 1
-      pr = records.fetch(0); abort "discovered PR fields differ" unless pr.keys.sort == %w[number state baseRefName headRefName headRefOid mergeCommit url].sort
-      abort "discovered PR identity differs" unless pr["number"].is_a?(Integer) && pr["number"].positive? && pr["url"] == "https://github.com/#{ENV.fetch("REPO")}/pull/#{pr["number"]}" && pr["baseRefName"] == "main" && pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD")
+      pr = records.fetch(0); abort "discovered PR fields differ" unless pr.keys.sort == %w[number state baseRefName headRefName headRefOid headRepository headRepositoryOwner isCrossRepository closingIssuesReferences mergeCommit url].sort
+      closing = pr["closingIssuesReferences"]
+      abort "discovered PR identity differs" unless pr["number"].is_a?(Integer) && pr["number"].positive? && pr["url"] == "https://github.com/#{ENV.fetch("REPO")}/pull/#{pr["number"]}" && pr["baseRefName"] == "main" && pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD") && pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == ENV.fetch("REPO") && pr.dig("headRepositoryOwner", "login") == ENV.fetch("REPO").split("/", 2).first && closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing[0].dig("repository", "nameWithOwner") == ENV.fetch("REPO")
       puts JSON.generate(pr)
     end
   ') || fail 'PR discovery was ambiguous or mismatched'
   if [[ -n "$selected" ]]; then
     pr_number=$(jq -er '.number' <<<"$selected")
     pr_state=$(validate_pr ANY "$selected" "$pr_number")
+    [[ "$pr_state" != MERGED ]] || fail 'discovered merged PR requires a previously persisted pullRequest'
     ruby "$identity_tool" persist-pr "$repo_root" "$repo" "$issue" "$pr_number" >/dev/null || fail 'discovered PR identity could not be persisted'
   fi
 fi
@@ -148,12 +154,18 @@ fi
 
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.push_branch --expected-head "$head_sha" >/dev/null || fail 'push preflight failed'
 require_origin
-git -C "$repo_root" push origin "refs/heads/$branch:refs/heads/$branch" || fail 'exact Branch push failed'
+git -C "$repo_root" push origin "$head_sha:refs/heads/$branch" || fail 'exact Head push failed'
 
 if [[ -z "$pr_number" ]]; then
+  remote_head=$(git -C "$repo_root" ls-remote --exit-code --heads origin "refs/heads/$branch") || fail 'pushed remote Branch could not be confirmed'
+  REMOTE_HEAD="$remote_head" BRANCH="$branch" HEAD="$head_sha" ruby -e '
+    lines = ENV.fetch("REMOTE_HEAD").lines.map(&:strip).reject(&:empty?); abort unless lines.length == 1
+    match = lines[0].match(/\A([0-9a-f]{40})\trefs\/heads\/(.+)\z/) or abort
+    abort unless match[1] == ENV.fetch("HEAD") && match[2] == ENV.fetch("BRANCH")
+  ' || fail 'remote Branch moved after exact Head push'
   "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.create_pr --expected-head "$head_sha" >/dev/null || fail 'PR creation preflight failed'
   gh pr create --repo "$repo" --base main --head "$branch" --title "$title" --body "$body" >/dev/null || fail 'PR creation failed'
-  created=$(gh pr list --repo "$repo" --head "$branch" --state open --json number,state,baseRefName,headRefName,headRefOid,mergeCommit,url) || fail 'created PR could not be resolved'
+  created=$(gh pr list --repo "$repo" --head "$branch" --state open --json "$pr_fields") || fail 'created PR could not be resolved'
   selected=$(PRS="$created" ruby -rjson -e 'items = JSON.parse(ENV.fetch("PRS")); abort unless items.is_a?(Array) && items.length == 1; puts JSON.generate(items.fetch(0))') || fail 'created PR is ambiguous'
   pr_number=$(jq -er '.number' <<<"$selected") || fail 'created PR number is invalid'
   [[ "$(validate_pr OPEN "$selected" "$pr_number")" == OPEN ]] || fail 'created PR identity differs'
@@ -162,6 +174,8 @@ fi
 
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null || fail 'merge preflight failed'
 "$repo_root/tools/premerge-gate.sh" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed'
+pr_document=$(view_exact_pr "$pr_number") || fail 'PR identity could not be refreshed before merge'
+[[ "$(validate_pr OPEN "$pr_document" "$pr_number")" == OPEN ]] || fail 'PR identity changed before merge'
 gh pr merge "$pr_number" --repo "$repo" --squash --match-head-commit "$head_sha" || fail 'Squash Merge failed'
 pr_document=$(view_exact_pr "$pr_number") || fail 'merged PR could not be confirmed'
 [[ "$(validate_pr MERGED "$pr_document" "$pr_number")" == MERGED ]] || fail 'merged PR confirmation mismatched'

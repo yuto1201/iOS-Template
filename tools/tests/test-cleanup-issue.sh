@@ -25,7 +25,7 @@ make_case() {
   mkdir -p "$CASE_PRIMARY/.worktrees"; git -C "$CASE_PRIMARY" worktree add -b "$branch" "$CASE_WORKTREE" main >/dev/null
   mkdir -p "$CASE_PRIMARY/tools/lib" "$CASE_WORKTREE/tools" "$CASE_PRIMARY/.artifacts/issues/$issue"
   cp "$source_root/tools/cleanup-issue.sh" "$CASE_PRIMARY/tools/"
-  cp "$source_root/tools/lib/merge-state.rb" "$CASE_PRIMARY/tools/lib/"
+  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$CASE_PRIMARY/tools/lib/"
   cat >"$CASE_PRIMARY/tools/github-account-preflight.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -48,8 +48,9 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'gh %s\n' "$*" >>"${FAKE_LOG:?}"
-[[ "$*" == "pr view ${FAKE_PR:?} --repo ${FAKE_REPO:?} --json number,state,baseRefName,headRefName,headRefOid,mergeCommit,url" ]] || { echo 'unexpected gh' >&2; exit 2; }
-ruby -rjson -e 'state=ENV.fetch("FAKE_PR_STATE"); puts JSON.generate({"number"=>Integer(ENV.fetch("FAKE_PR_NUMBER",ENV.fetch("FAKE_PR"))),"state"=>state,"baseRefName"=>ENV.fetch("FAKE_BASE_REF","main"),"headRefName"=>ENV.fetch("FAKE_BRANCH"),"headRefOid"=>ENV.fetch("FAKE_PR_HEAD",ENV.fetch("FAKE_HEAD")),"mergeCommit"=>ENV.fetch("FAKE_MERGE")=="null" ? nil : {"oid"=>ENV.fetch("FAKE_MERGE")},"url"=>ENV.fetch("FAKE_PR_URL","https://github.com/#{ENV.fetch("FAKE_REPO")}/pull/#{ENV.fetch("FAKE_PR")}")})'
+fields='number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url'
+[[ "$*" == "pr view ${FAKE_PR:?} --repo ${FAKE_REPO:?} --json $fields" ]] || { echo 'unexpected gh' >&2; exit 2; }
+ruby -rjson -e 'state=ENV.fetch("FAKE_PR_STATE"); repo=ENV.fetch("FAKE_REPO"); source=ENV.fetch("FAKE_SOURCE_REPO",repo); issue=Integer(ENV.fetch("FAKE_CLOSING_ISSUE",ENV.fetch("FAKE_ISSUE"))); puts JSON.generate({"number"=>Integer(ENV.fetch("FAKE_PR_NUMBER",ENV.fetch("FAKE_PR"))),"state"=>state,"baseRefName"=>ENV.fetch("FAKE_BASE_REF","main"),"headRefName"=>ENV.fetch("FAKE_BRANCH"),"headRefOid"=>ENV.fetch("FAKE_PR_HEAD",ENV.fetch("FAKE_HEAD")),"headRepository"=>{"nameWithOwner"=>source},"headRepositoryOwner"=>{"login"=>source.split("/",2).first},"isCrossRepository"=>ENV.fetch("FAKE_CROSS_REPO","false")=="true","closingIssuesReferences"=>[{"number"=>issue,"url"=>"https://github.com/#{repo}/issues/#{issue}","repository"=>{"nameWithOwner"=>repo}}],"mergeCommit"=>ENV.fetch("FAKE_MERGE")=="null" ? nil : {"oid"=>ENV.fetch("FAKE_MERGE")},"url"=>ENV.fetch("FAKE_PR_URL","https://github.com/#{repo}/pull/#{ENV.fetch("FAKE_PR")}")})'
 EOF
   chmod +x "$CASE_BIN/gh"
   REAL_GIT=$(command -v git)
@@ -67,7 +68,7 @@ EOF
 }
 
 run_cleanup() {
-  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_PRIMARY="$CASE_PRIMARY" FAKE_REPO="$repo_name" FAKE_PR="$pr" FAKE_PR_NUMBER="${FAKE_PR_NUMBER:-$pr}" FAKE_PR_STATE="${FAKE_PR_STATE:-MERGED}" FAKE_BASE_REF="${FAKE_BASE_REF:-main}" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR_HEAD="${FAKE_PR_HEAD:-$CASE_HEAD}" FAKE_MERGE="${FAKE_MERGE:-$merge_sha}" FAKE_PR_URL="${FAKE_PR_URL:-https://github.com/$repo_name/pull/$pr}" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_STEP="${FAIL_STEP:-}" "$CASE_PRIMARY/tools/cleanup-issue.sh" --repo "$repo_name" --issue "$issue"
+  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_PRIMARY="$CASE_PRIMARY" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_PR="$pr" FAKE_PR_NUMBER="${FAKE_PR_NUMBER:-$pr}" FAKE_PR_STATE="${FAKE_PR_STATE:-MERGED}" FAKE_BASE_REF="${FAKE_BASE_REF:-main}" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR_HEAD="${FAKE_PR_HEAD:-$CASE_HEAD}" FAKE_SOURCE_REPO="${FAKE_SOURCE_REPO:-$repo_name}" FAKE_CROSS_REPO="${FAKE_CROSS_REPO:-false}" FAKE_CLOSING_ISSUE="${FAKE_CLOSING_ISSUE:-$issue}" FAKE_MERGE="${FAKE_MERGE:-$merge_sha}" FAKE_PR_URL="${FAKE_PR_URL:-https://github.com/$repo_name/pull/$pr}" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_STEP="${FAIL_STEP:-}" "$CASE_PRIMARY/tools/cleanup-issue.sh" --repo "$repo_name" --issue "$issue"
 }
 
 make_case open-pr
@@ -77,6 +78,14 @@ assert_no_mutation 'open PR mismatch'
 make_case wrong-pr-head
 FAKE_PR_HEAD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb assert_fails 'stale exact PR Head' run_cleanup
 assert_no_mutation 'stale PR Head'
+
+make_case foreign-fork
+FAKE_SOURCE_REPO='foreign/project' FAKE_CROSS_REPO=true assert_fails 'foreign-fork persisted PR' run_cleanup
+assert_no_mutation 'foreign-fork persisted PR'
+
+make_case wrong-closing-issue
+FAKE_CLOSING_ISSUE=43 assert_fails 'persisted PR closes wrong Issue' run_cleanup
+assert_no_mutation 'persisted PR wrong closing Issue'
 
 make_case missing-pr
 ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v.delete("pullRequest");File.binwrite(p,JSON.generate(v))' "$CASE_PRIMARY/.artifacts/issues/42/state.json"

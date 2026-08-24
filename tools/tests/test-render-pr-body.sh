@@ -7,8 +7,9 @@ scratch=$(cd "$scratch" && pwd -P)
 trap 'rm -rf "$scratch"' EXIT
 primary="$scratch/repo"; worktree="$primary/.worktrees/42-render"; issue=42
 head=0123456789abcdef0123456789abcdef01234567; base=fedcba9876543210fedcba9876543210fedcba98
-mkdir -p "$worktree/tools" "$primary/.artifacts/issues/$issue/$head"
+mkdir -p "$worktree/tools/lib" "$primary/.artifacts/issues/$issue/$head"
 cp "$source_root/tools/render-pr-body.sh" "$worktree/tools/"
+cp "$source_root/tools/lib/descriptor-files.rb" "$worktree/tools/lib/"
 ln -s ../../.artifacts "$worktree/.artifacts"
 contract="$primary/.artifacts/issues/$issue/issue-contract.json"
 verify="$primary/.artifacts/issues/$issue/$head/verify.json"
@@ -44,5 +45,28 @@ if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$sc
   exit 1
 fi
 grep -Fq 'single-link regular file' "$scratch/hardlink.err" || { echo 'hardlink refusal was not explicit' >&2; exit 1; }
+rm "$verify.hardlink"
+
+cp "$verify" "$scratch/verify.good"
+ruby -rjson -e 'path=ARGV[0];value=JSON.parse(File.binread(path));value["build"]["status"]="failed";File.binwrite(path,JSON.generate(value))' "$verify"
+if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/failed-build.out" 2>"$scratch/failed-build.err"; then
+  echo 'failed Build was rendered as merge-ready' >&2; exit 1
+fi
+if grep -Fq 'None for this Issue' "$scratch/failed-build.out"; then echo 'failed Build overclaimed Remaining work' >&2; exit 1; fi
+cp "$scratch/verify.good" "$verify"
+
+cp "$review" "$scratch/review.good"
+ruby -rjson -e 'path=ARGV[0];value=JSON.parse(File.binread(path));value["acceptanceAssessment"][0]["status"]="unsupported";File.binwrite(path,JSON.generate(value))' "$review"
+if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/unsupported.out" 2>"$scratch/unsupported.err"; then
+  echo 'unsupported review assessment was rendered as merge-ready' >&2; exit 1
+fi
+cp "$scratch/review.good" "$review"
+
+mv "$primary/.artifacts/issues/$issue/$head" "$primary/.artifacts/issues/$issue/$head.real"
+ln -s "$head.real" "$primary/.artifacts/issues/$issue/$head"
+if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/symlink.out" 2>"$scratch/symlink.err"; then
+  echo 'symlinked Head artifact directory was accepted' >&2; exit 1
+fi
+grep -Fq 'descriptor' "$scratch/symlink.err" || { echo 'symlink component refusal was not explicit' >&2; exit 1; }
 
 echo 'PASS: PR body reports exact verify/review identity, tests, all four matrix cases, and specification anchors'
