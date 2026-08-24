@@ -2,19 +2,21 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd -P)
-usage() { echo 'usage: premerge-gate.sh --repo OWNER/REPO --issue NUMBER --head-sha SHA' >&2; exit 2; }
+usage() { echo 'usage: premerge-gate.sh --repo OWNER/REPO --issue NUMBER --head-sha SHA [--merge-pr NUMBER]' >&2; exit 2; }
 fail() { echo "pre-merge gate failed: $*" >&2; exit 1; }
 
-repo='' issue='' head_sha=''
+repo='' issue='' head_sha='' merge_pr=''
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) [[ -z "$repo" && $# -ge 2 ]] || usage; repo=$2; shift 2 ;;
     --issue) [[ -z "$issue" && $# -ge 2 ]] || usage; issue=$2; shift 2 ;;
     --head-sha) [[ -z "$head_sha" && $# -ge 2 ]] || usage; head_sha=$2; shift 2 ;;
+    --merge-pr) [[ -z "$merge_pr" && $# -ge 2 ]] || usage; merge_pr=$2; shift 2 ;;
     *) usage ;;
   esac
 done
 [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$issue" =~ ^[1-9][0-9]*$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || usage
+[[ -z "$merge_pr" || "$merge_pr" =~ ^[1-9][0-9]*$ ]] || usage
 
 # Durable identity is the first operation. It uses descriptor-bound state and
 # contract reads and must complete before any provider CLI can be reached.
@@ -36,4 +38,4 @@ git_value() { "${git_clean_env[@]}" /usr/bin/git -C "$repo_root" "$@"; }
 git_value merge-base --is-ancestor "$base_sha" "$head_sha" || fail 'durable Base is not an ancestor of Head'
 [[ -z "$(git_value status --porcelain=v1 --untracked-files=all)" ]] || fail 'Issue worktree must be clean'
 
-PREMERGE_IDENTITY_JSON="$identity_json" ruby "$repo_root/tools/lib/premerge-gate.rb" "$repo_root" "$repo" "$issue" "$head_sha"
+PREMERGE_IDENTITY_JSON="$identity_json" ruby "$repo_root/tools/lib/premerge-gate.rb" "$repo_root" "$repo" "$issue" "$head_sha" "$merge_pr"

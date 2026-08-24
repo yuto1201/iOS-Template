@@ -107,17 +107,20 @@ printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 (cd "$linked" && tools/cross-model-review.sh --primary codex --packet "$packet_relative" --output "$output_relative" >/dev/null)
 [[ -f "$artifact_head/review.json" && ! -L "$artifact_head/review.json" ]]
 [[ $(stat -f '%l' "$artifact_head/review.json") == 1 ]]
+[[ -f "$artifact_head/review-receipt.json" && ! -L "$artifact_head/review-receipt.json" ]]
+[[ $(stat -f '%l' "$artifact_head/review-receipt.json") == 1 ]]
 
-rm "$artifact_head/review.json"
+rm "$artifact_head/review.json" "$artifact_head/review-receipt.json"
 write_packet claude codex
 write_result codex
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 (cd "$linked" && tools/cross-model-review.sh --primary claude --packet "$packet_relative" --output "$output_relative" >/dev/null)
 [[ -f "$artifact_head/review.json" && ! -L "$artifact_head/review.json" ]]
+[[ -f "$artifact_head/review-receipt.json" && ! -L "$artifact_head/review-receipt.json" ]]
 # The strict Codex fixture rejects any permission profile other than the exact
 # Issue root, so reaching a valid output proves the store-wide root was absent.
 
-rm "$artifact_head/review.json"
+rm "$artifact_head/review.json" "$artifact_head/review-receipt.json"
 write_packet codex claude
 
 cp "$artifact_head/review-packet.json" "$artifact_head/alternate-packet.json"

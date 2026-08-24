@@ -201,11 +201,8 @@ fi
 
 require_declared_operation github.merge_pr
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null || fail 'merge preflight failed'
-"$repo_root/tools/premerge-gate.sh" --repo "$repo" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed'
-pr_document=$(view_exact_pr "$pr_number") || fail 'PR identity could not be refreshed before merge'
-[[ "$(validate_pr OPEN "$pr_document" "$pr_number")" == OPEN ]] || fail 'PR identity changed before merge'
 require_current_declared_operation github.merge_pr
-gh pr merge "$pr_number" --repo "$repo" --squash --match-head-commit "$head_sha" || fail 'Squash Merge failed'
+"$repo_root/tools/premerge-gate.sh" --repo "$repo" --issue "$issue" --head-sha "$head_sha" --merge-pr "$pr_number" >/dev/null || fail 'final pre-merge lease or Squash Merge failed'
 pr_document=$(view_exact_pr "$pr_number") || fail 'merged PR could not be confirmed'
 [[ "$(validate_pr MERGED "$pr_document" "$pr_number")" == MERGED ]] || fail 'merged PR confirmation mismatched'
 confirm_issue_closed

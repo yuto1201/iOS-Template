@@ -13,6 +13,7 @@ mkdir -p "$repo/tools" "$repo/.artifacts/issues/42" "$repo/Config"
 cp "$repo_root/tools/validate-issue-body.sh" "$repo/tools/"
 cp "$repo_root/tools/validate-verify-json.swift" "$repo/tools/"
 cp "$repo_root/tools/premerge-gate.sh" "$repo/tools/"
+cp "$repo_root/tools/cross-model-review.sh" "$repo/tools/"
 cp "$repo_root/tools/prepare-review-packet.sh" "$repo/tools/"
 cp "$repo_root/tools/render-pr-body.sh" "$repo/tools/"
 cp -R "$repo_root/tools/lib" "$repo/tools/"
@@ -105,6 +106,18 @@ write_review() {
     assessments = ["AC-1", "AC-2"].map { |id| {"id" => id, "status" => ENV.fetch("VERDICT") == "approved" ? "supported" : "unsupported", "evidence" => ["verify.json#acceptanceEvidence"]} }
     puts JSON.generate({"schemaVersion" => 2, "issue" => 42, "reviewerModel" => "claude", "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContractDigest" => ENV.fetch("ISSUE_CONTRACT_DIGEST"), "reviewPacketDigest" => ENV.fetch("REVIEW_PACKET_DIGEST"), "verdict" => ENV.fetch("VERDICT"), "findings" => findings, "acceptanceAssessment" => assessments, "reviewedAt" => ENV.fetch("REVIEWED_AT")})
   ' > "$repo/.artifacts/issues/42/$head_sha/review.json"
+  write_receipt
+}
+
+write_receipt() {
+  local packet="$repo/.artifacts/issues/42/$head_sha/review-packet.json"
+  local review="$repo/.artifacts/issues/42/$head_sha/review.json"
+  local launcher="$repo/tools/cross-model-review.sh"
+  RECEIPT="$repo/.artifacts/issues/42/$head_sha/review-receipt.json" ISSUE=42 HEAD="$head_sha" PACKET="$packet" REVIEW="$review" LAUNCHER="$launcher" STARTED_AT="$review_at" COMPLETED_AT="$review_at" ruby -rjson -rdigest -e '
+    digest = ->(path) { "sha256:#{Digest::SHA256.file(path).hexdigest}" }
+    value={"schemaVersion"=>1,"issue"=>Integer(ENV.fetch("ISSUE")),"headSha"=>ENV.fetch("HEAD"),"primaryModel"=>"codex","reviewerModel"=>"claude","launcher"=>"tools/cross-model-review.sh","launcherDigest"=>digest.call(ENV.fetch("LAUNCHER")),"reviewerLauncher"=>"tools/cross-model-review.sh","reviewerLauncherDigest"=>digest.call(ENV.fetch("LAUNCHER")),"reviewPacketDigest"=>digest.call(ENV.fetch("PACKET")),"validatedResultDigest"=>digest.call(ENV.fetch("REVIEW")),"publishedReviewDigest"=>digest.call(ENV.fetch("REVIEW")),"startedAt"=>ENV.fetch("STARTED_AT"),"completedAt"=>ENV.fetch("COMPLETED_AT"),"exitStatus"=>0}
+    File.binwrite(ENV.fetch("RECEIPT"),JSON.generate(value))
+  '
 }
 
 write_review_packet() {
@@ -138,11 +151,31 @@ cat > "$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${FAKE_GH_LOG:?}"
+if [[ "$1 $2" == 'auth status' ]]; then
+  printf 'Logged in to github.com account %s (keychain)\n  - Active account: true\n' "${FAKE_ACTIVE_ACCOUNT:-yuto1201}"
+  exit 0
+fi
+if [[ "$1 $2" == 'repo view' ]]; then
+  REPOSITORY="${FAKE_REPOSITORY_ID:-yuto1201/iOS-Template}" ruby -rjson -e 'repo=ENV.fetch("REPOSITORY"); puts JSON.generate({"nameWithOwner"=>repo,"defaultBranchRef"=>{"name"=>"main"},"url"=>"https://github.com/#{repo}"})'
+  exit 0
+fi
 if [[ "$1 $2" == 'issue view' ]]; then
   if [[ -n "${REWRITE_HELD_TARGET:-}" ]]; then
     TARGET="${REWRITE_HELD_TARGET:?}" "${REAL_RUBY:?}" -e 'path=ENV.fetch("TARGET"); bytes=File.binread(path); File.open(path,"r+b"){|io|io.write(bytes);io.flush;io.fsync}'
   fi
   ruby -rjson -e 'labels = [{"name" => ENV.fetch("FAKE_TYPE_LABEL", "type:feature"), "color" => "", "description" => ""}]; labels << {"name" => ENV["FAKE_SECOND_TYPE"], "color" => "", "description" => ""} if ENV["FAKE_SECOND_TYPE"]; puts JSON.generate({"number" => 42, "url" => "https://github.com/yuto1201/iOS-Template/issues/42", "body" => File.read(ENV.fetch("FAKE_ISSUE_BODY")), "labels" => labels})'
+  exit 0
+fi
+if [[ "$1 $2" == 'pr view' ]]; then
+  if [[ -n "${FINAL_GATE_SWAP_TARGET:-}" ]]; then
+    cp "$FINAL_GATE_SWAP_TARGET" "$FINAL_GATE_SWAP_TARGET.swap"
+    mv -f "$FINAL_GATE_SWAP_TARGET.swap" "$FINAL_GATE_SWAP_TARGET"
+  fi
+  HEAD="${FAKE_HEAD:?}" ruby -rjson -e 'puts JSON.generate({"number"=>57,"state"=>"OPEN","baseRefName"=>"main","headRefName"=>"codex/42-gate-evidence","headRefOid"=>ENV.fetch("HEAD"),"headRepository"=>{"nameWithOwner"=>"yuto1201/iOS-Template"},"headRepositoryOwner"=>{"login"=>"yuto1201"},"isCrossRepository"=>false,"closingIssuesReferences"=>[{"number"=>42,"url"=>"https://github.com/yuto1201/iOS-Template/issues/42","repository"=>{"nameWithOwner"=>"yuto1201/iOS-Template"}}],"mergeCommit"=>nil,"url"=>"https://github.com/yuto1201/iOS-Template/pull/57"})'
+  exit 0
+fi
+if [[ "$1 $2" == 'pr merge' ]]; then
+  printf 'merged\n' >> "${FAKE_MERGE_MUTATIONS:?}"
   exit 0
 fi
 echo "unexpected gh command: $*" >&2
@@ -154,6 +187,9 @@ set -euo pipefail
 if [[ -n "${SWAP_TARGET:-}" ]]; then
   cp "$SWAP_TARGET" "$SWAP_TARGET.swap"
   mv -f "$SWAP_TARGET.swap" "$SWAP_TARGET"
+fi
+if [[ "${FAKE_SKIP_SWIFT:-0}" == 1 ]]; then
+  exit 0
 fi
 exec "${REAL_SWIFT:?}" "$@"
 EOF
@@ -181,7 +217,7 @@ fi
 exec "${REAL_RUBY:?}" "$@"
 EOF
 chmod +x "$fake_bin/gh" "$fake_bin/swift" "$fake_bin/ruby"
-export PATH="$fake_bin:$PATH" REAL_SWIFT="$real_swift" REAL_RUBY="$real_ruby" FAKE_GH_LOG="$scratch/gh.log" FAKE_ISSUE_BODY="$issue_body"
+export PATH="$fake_bin:$PATH" REAL_SWIFT="$real_swift" REAL_RUBY="$real_ruby" FAKE_GH_LOG="$scratch/gh.log" FAKE_ISSUE_BODY="$issue_body" FAKE_MERGE_MUTATIONS="$scratch/merge-mutations.log" FAKE_HEAD="$head_sha"
 
 issue_worktree="$repo/.worktrees/42-gate-evidence"
 mkdir -p "$repo/.worktrees"
@@ -214,6 +250,10 @@ run_gate() {
   (cd "$issue_worktree" && "$issue_worktree/tools/premerge-gate.sh" --repo yuto1201/iOS-Template --issue 42 --head-sha "$head_sha")
 }
 
+run_gate_merge() {
+  (cd "$issue_worktree" && "$issue_worktree/tools/premerge-gate.sh" --repo yuto1201/iOS-Template --issue 42 --head-sha "$head_sha" --merge-pr 57)
+}
+
 write_verify
 write_review_packet
 write_review
@@ -225,6 +265,36 @@ run_gate > "$scratch/gate.json"
 jq -e --arg head "$head_sha" '.status == "passed" and .headSha == $head' "$scratch/gate.json" >/dev/null
 expected_gh="issue view 42 --repo yuto1201/iOS-Template --json number,url,body,labels"
 [[ "$(tail -n 1 "$FAKE_GH_LOG")" == "$expected_gh" ]] || { echo 'gate used an unexpected gh command' >&2; exit 1; }
+
+rm "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
+assert_fails 'approved review without an opposite-model execution receipt is rejected' run_gate
+write_receipt
+
+: > "$FAKE_GH_LOG"
+: > "$FAKE_MERGE_MUTATIONS"
+FINAL_GATE_SWAP_TARGET="$repo/.artifacts/issues/42/state.json" assert_fails 'state swap after final validation is rejected before merge' run_gate_merge
+grep -Fxq 'pr view 57 --repo yuto1201/iOS-Template --json number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url' "$FAKE_GH_LOG" || { echo 'final Gate did not reach the exact PR refresh' >&2; exit 1; }
+[[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'final Gate merged after its held state was swapped' >&2; exit 1; }
+mv "$repo/.artifacts/issues/42/state.json.swap" "$repo/.artifacts/issues/42/state.json" 2>/dev/null || true
+: > "$FAKE_GH_LOG"
+run_gate_merge >/dev/null
+expected_final_gate=$(cat <<EOF
+issue view 42 --repo yuto1201/iOS-Template --json number,url,body,labels
+auth status --active
+repo view yuto1201/iOS-Template --json nameWithOwner,defaultBranchRef,url
+pr view 57 --repo yuto1201/iOS-Template --json number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url
+pr merge 57 --repo yuto1201/iOS-Template --squash --match-head-commit $head_sha
+EOF
+)
+[[ "$(cat "$FAKE_GH_LOG")" == "$expected_final_gate" ]] || { echo 'final Gate PR refresh and merge argv/order differed' >&2; diff -u <(printf '%s\n' "$expected_final_gate") "$FAKE_GH_LOG" >&2; exit 1; }
+: > "$FAKE_MERGE_MUTATIONS"
+FAKE_ACTIVE_ACCOUNT=company assert_fails 'active account change inside final lease is rejected' run_gate_merge
+[[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'wrong active account reached merge' >&2; exit 1; }
+FAKE_REPOSITORY_ID=company/iOS-Template assert_fails 'repository change inside final lease is rejected' run_gate_merge
+[[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'wrong repository identity reached merge' >&2; exit 1; }
+RECEIPT="$repo/.artifacts/issues/42/$head_sha/review-receipt.json" ruby -rjson -e 'path=ENV.fetch("RECEIPT"); value=JSON.parse(File.binread(path)); value["publishedReviewDigest"]="sha256:"+("0"*64); File.binwrite(path,JSON.generate(value))'
+assert_fails 'forged review receipt is rejected' run_gate
+write_receipt
 
 # Application contracts add one canonical verification object to the exact
 # live-Issue snapshot. The strict Gate must preserve that optional object while
@@ -484,6 +554,7 @@ artifact_leaves=(
   "$repo/.artifacts/issues/42/$head_sha/review-packet.json"
   "$repo/.artifacts/issues/42/$head_sha/review.diff"
   "$repo/.artifacts/issues/42/$head_sha/review.json"
+  "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
   "$repo/.artifacts/issues/42/github-preflight.json"
   "$repo/.artifacts/issues/42/provider-preflights/supabase.json"
 )
@@ -518,5 +589,57 @@ SWAP_TARGET="$repo/.artifacts/issues/42/$head_sha/verify.json" assert_fails 'sam
 REWRITE_HELD_TARGET="$repo/.artifacts/issues/42/$head_sha/review.diff" assert_fails 'same-inode same-byte review diff rewrite while held is rejected' run_gate
 REWRITE_HELD_TARGET="$repo/.artifacts/issues/42/state.json" assert_fails 'same-inode same-byte state rewrite while held is rejected' run_gate
 run_gate >/dev/null
+
+# The final PR refresh occurs inside the Gate process. Replacing any held merge
+# input from that refresh boundary must prevent the merge command itself.
+final_lease_leaves=(
+  "$repo/.artifacts/issues/42/state.json"
+  "$repo/.artifacts/issues/42/issue-contract.json"
+  "$repo/.artifacts/issues/42/$head_sha/verify.json"
+  "$repo/.artifacts/issues/42/$head_sha/review-packet.json"
+  "$repo/.artifacts/issues/42/$head_sha/review.diff"
+  "$repo/.artifacts/issues/42/$head_sha/review.json"
+  "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
+  "$repo/.artifacts/issues/42/github-preflight.json"
+  "$repo/.artifacts/issues/42/provider-preflights/supabase.json"
+)
+for artifact in "${final_lease_leaves[@]}"; do
+  cp "$artifact" "$scratch/final-lease.saved"
+  : > "$FAKE_GH_LOG"
+  : > "$FAKE_MERGE_MUTATIONS"
+  FINAL_GATE_SWAP_TARGET="$artifact" assert_fails "$(basename "$artifact") swap after final PR validation" run_gate_merge
+  grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo "final lease fixture did not reach PR refresh for $artifact" >&2; exit 1; }
+  [[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo "final lease merged after $artifact changed" >&2; exit 1; }
+  cp "$scratch/final-lease.saved" "$artifact"
+done
+: > "$FAKE_MERGE_MUTATIONS"
+run_gate_merge >/dev/null
+[[ $(cat "$FAKE_MERGE_MUTATIONS") == merged ]] || { echo 'valid final lease did not perform exactly one merge' >&2; exit 1; }
+
+# Exercise the same final-refresh lease with a packet-bound image. The full
+# visual-evidence validator has its own canonical packet/result tests; this
+# focused case supplies the already-validated visual closure so it can isolate
+# the descriptor lifetime between final PR read and merge.
+final_image="$repo/.artifacts/issues/42/$head_sha/final-review-image.png"
+printf 'final review image fixture\n' > "$final_image"
+final_image_digest="sha256:$(shasum -a 256 "$final_image" | awk '{print $1}')"
+VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" IMAGE_DIGEST="$final_image_digest" ruby -rjson -e '
+  path=ENV.fetch("VERIFY"); value=JSON.parse(File.binread(path));
+  value["visualEvaluation"]={"status"=>"passed","cases"=>[{"id"=>"lease-image","images"=>[{"path"=>"final-review-image.png","digest"=>ENV.fetch("IMAGE_DIGEST")}]}],"findings"=>[]};
+  File.binwrite(path,JSON.generate(value))
+'
+verify_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/$head_sha/verify.json" | awk '{print $1}')"
+PACKET="$repo/.artifacts/issues/42/$head_sha/review-packet.json" VERIFY_DIGEST="$verify_digest" IMAGE_DIGEST="$final_image_digest" ruby -rjson -e '
+  path=ENV.fetch("PACKET"); value=JSON.parse(File.binread(path));
+  value.fetch("verify")["digest"]=ENV.fetch("VERIFY_DIGEST");
+  value["imageFiles"]=[{"path"=>".artifacts/issues/42/#{value.fetch("headSha")}/final-review-image.png","digest"=>ENV.fetch("IMAGE_DIGEST")}];
+  File.binwrite(path,JSON.generate(value))
+'
+write_review
+: > "$FAKE_GH_LOG"
+: > "$FAKE_MERGE_MUTATIONS"
+FAKE_SKIP_SWIFT=1 FINAL_GATE_SWAP_TARGET="$final_image" assert_fails 'packet-bound image swap after final PR validation' run_gate_merge
+grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo 'final image lease fixture did not reach PR refresh' >&2; exit 1; }
+[[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'final lease merged after packet-bound image changed' >&2; exit 1; }
 
 echo 'PASS: gate binds caller identity, live Issue, descriptor snapshots, review, provider, and GitHub preflight evidence'

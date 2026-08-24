@@ -110,6 +110,8 @@ Reviewerは各 `AC-*` について `supported` または `unsupported` と証拠
 
 `reviewPacketDigest` はreviewerが実際に読んだ `review-packet.json` の全byte列に対するSHA-256です。result publicationはこのdigestとcanonical packetのexact bytesが一致する間だけ行い、packet path、inode、bytesがpublication中に変われば失敗します。
 
+Result schemaにrequester-controlledな「実行済み」fieldは追加しません。固定launcherはchild process完了とResult検証の後、別artifact `review-receipt.json` を発行します。receiptはschema version、Issue/Head、primary/opposite model、`cross-model-review.sh` と実際のreviewer launcherのpath/exact bytes digest、packet exact digest、validated result exact digest、published `review.json` exact digest、started/completed timestamp、exit status 0だけを持ちます。canonical reviewが先に存在しても、このexact receiptがなければレビュー実行済みとは扱いません。
+
 ## 5. Sealing interface
 
 Packetは次で準備します。
@@ -149,7 +151,7 @@ IOSTemplate::ReviewContract.validate!(
 )
 ```
 
-このpure validation interfaceはartifact pathを再openしません。callerは戻り値を利用し終えるまでdescriptorを保持し、終了直前に各path identity/bytesを再検証します。strict modeはschema v1、bogus/empty diff、same-Head verify差し替え、画像差し替え、packet/result不一致をすべて拒否します。
+このpure validation interfaceはartifact pathを再openしません。callerは戻り値を利用し終えるまでdescriptorを保持し、終了直前に各path identity/bytesを再検証します。strict modeはschema v1、bogus/empty diff、same-Head verify差し替え、画像差し替え、packet/result不一致をすべて拒否します。Gateはさらに `review-receipt.json` をsingle-link/no-followで保持し、current packet/review bytesとlauncher identityを照合します。
 
 ## 6. 呼び出し
 

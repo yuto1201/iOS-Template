@@ -313,7 +313,7 @@ validatorは `--expected-head` が現在のGit Headと一致し、BaseとHeadが
 
 `issueContract.fetchedAt` と `completedAt` は有効なISO 8601で、どちらも検証時刻から5分を超えて未来であってはいけません。さらに、`completedAt` は `fetchedAt` 以後でなければなりません。
 
-PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。反対モデルレビューの正本は `.artifacts/issues/${issueNumber}/${headSha}/review.json` です。
+PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。反対モデルレビューの正本は `.artifacts/issues/${issueNumber}/${headSha}/review.json` で、固定launcherの実行証明は同じdirectoryの `review-receipt.json` です。どちらか一方だけでは再利用もmergeもできません。
 
 ## 5. 実行手段
 
@@ -333,13 +333,14 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 
 `tools/premerge-gate.sh --repo OWNER/REPO --issue NUMBER --head-sha SHA` は、最初にdescriptor-boundな `merge-state.rb validate-worktree` を再利用し、durable stateが `approved-for-merge` であることを確認します。その後、caller repository、Issue、Branch、symbolic ref、Head、Base ancestry、canonical worktree、clean状態が一致するまで `gh` を実行しません。
 
-gateはprimary checkoutのartifactをpathごとに読み直しません。Issue artifact directoryをshared lockしたうえで、`.artifacts`、`issues`、Issue、Head、`provider-preflights` とreview imageの各componentを `openat` と `NOFOLLOW` で開いたままにし、次のleafをregularかつsingle-linkとしてsnapshotします。
+gateはprimary checkoutのartifactをpathごとに読み直しません。Issue artifact directoryを診断modeではshared lock、`--merge-pr` modeではexclusive lockしたうえで、`.artifacts`、`issues`、Issue、Head、`provider-preflights` とreview imageの各componentを `openat` と `NOFOLLOW` で開いたままにし、次のleafをregularかつsingle-linkとしてsnapshotします。
 
 - `state.json`
 - `issue-contract.json`
 - `${headSha}/verify.json`
 - `${headSha}/review-packet.json`
 - `${headSha}/review.json`
+- `${headSha}/review-receipt.json`
 - `${headSha}/review.diff`
 - schema v2 packetが列挙するordered review image
 - `github-preflight.json`
@@ -356,6 +357,7 @@ gateはprimary checkoutのartifactをpathごとに読み直しません。Issue 
 - review verdict = approved
 - schema v2 `review-packet.json` がexact verify bytes、決定論的なactual Base..Head `review.diff`、canonical visual evidenceのordered image bytes/digestを固定し、`review.json.reviewPacketDigest` がpacketのexact bytesと一致（schema v1はgateで拒否）
 - `review-packet.json` と `review.json` のBase/Head/Verify SHA、primary/opposite model、Issue contract digestが一致
+- `review-receipt.json` がfixed launcherとreviewer launcherのexact bytes digest、opposite-model identity、packet digest、validated result digest、published review digest、開始/完了時刻、成功exit statusを固定し、現在のpacket/review bytesと一致
 - approved reviewのFinding = 0、全Acceptance criteria = supported、`reviewedAt` がverify完了後かつ未来でない
 - Acceptance criteriaの証拠欠落 = 0
 - `gh issue view` のfixed fields `number,url,body,labels` がcaller Issueと一致し、`type:feature` または `type:regression` がちょうど一つ存在
@@ -367,3 +369,5 @@ gateはprimary checkoutのartifactをpathごとに読み直しません。Issue 
 - GitHub preflightがverify完了、review完了、`approved-for-merge` transitionのすべてより新しく、許容未来時刻を超えない
 
 一つでも不一致ならマージしません。
+
+診断用の上記commandはread-onlyです。最終mergeだけは `tools/premerge-gate.sh --repo OWNER/REPO --issue NUMBER --head-sha SHA --merge-pr PR_NUMBER` を使います。このmodeは全artifact descriptorとIssue directory lockを保持した同一process内でactive personal account、repository identity、fixed-field PR identityを再取得し、再度held path/inode/bytes/metadataとactual diffを照合してから、exact `gh pr merge PR_NUMBER --repo OWNER/REPO --squash --match-head-commit SHA` を実行します。Gate成功後に別processでPRを読み直してmergeする経路は禁止です。

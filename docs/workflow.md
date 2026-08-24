@@ -172,6 +172,8 @@ ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変
 
 レビューのタイムアウトは10分です。利用不能時は `blocked:review` とし、独立Issueを進めます。自己承認はしません。
 
+固定launcherはchild完了後にcanonical `review.json` と `review-receipt.json` をdescriptor-boundで対として発行します。receiptはprimary/opposite model、fixed launcher bytes、exact packet/result/review digest、開始/完了時刻、exit statusを固定します。既存reviewだけ、偽造または不一致receipt、自己承認は再利用しません。review publication後のstate transitionだけが失敗した場合は、exact review/receipt pairを検証した再実行だけがreviewerを再起動せず遷移を再開できます。
+
 ### 5.5 PR and merge
 
 1. Codexが個人GitHubアカウントを再確認する。
@@ -180,8 +182,8 @@ ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変
 4. approvedな固定snapshotからPR本文をrenderする。`changes-requested` は本文を生成せず拒否する。
 5. exact HeadをBranchへPushし、PRを作成または既存OPEN PRを再確認して、正確なPR番号をdurable stateへ保存する。
 6. `github.merge_pr` のaccount preflightを現在のIssue/Headに対して更新する。
-7. 同じ引数でpre-merge gateを最終実行し、現在のHead SHA、検証、review、live Issue、provider、GitHub preflightが同じ固定snapshotへ結び付くことを確認する。
-8. PR identityを再取得し、`gh pr merge ${PR_NUMBER} --repo ${OWNER_REPO} --squash --match-head-commit ${HEAD_SHA}` を実行する。
+7. `tools/premerge-gate.sh --repo ${OWNER_REPO} --issue ${ISSUE_NUMBER} --head-sha ${HEAD_SHA} --merge-pr ${PR_NUMBER}` を実行する。このfinal modeが全descriptor/lockを保持したままPR identityを再取得し、exact `gh pr merge --squash --match-head-commit` まで一続きで実行する。
+8. Gate外でPR identityを再取得してmergeする経路は使わない。
 9. PRのマージ状態とIssueのCloseを確認する。
 10. remote Branch、worktree、local Branchの順に対象を再確認して後片付けする。
 

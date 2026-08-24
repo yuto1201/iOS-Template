@@ -22,6 +22,8 @@ required_files=(
   tools/tests/test-app-bootstrap.sh
   tools/check-markdown-links.swift
   tools/publish-documentation-verify.sh
+  tools/lib/review-receipt.rb
+  tools/lib/validate-review-receipt.rb
   tools/with-ios-simulator-lock.sh
   .agents/skills/app-bootstrap/SKILL.md
   .agents/skills/cross-model-review/SKILL.md
@@ -269,6 +271,7 @@ review_required = (
     'tools/cross-model-review.sh',
     '--packet "$REVIEW_PACKET"',
     "reviewPacketDigest",
+    "review-receipt.json",
 )
 review_missing = [value for value in review_required if value not in review_skill]
 if review_missing:

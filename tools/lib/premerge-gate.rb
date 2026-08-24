@@ -9,6 +9,7 @@ require_relative "descriptor-files"
 require_relative "issue-contract"
 require_relative "ownership"
 require_relative "review-contract"
+require_relative "review-receipt"
 
 def refuse(message)
   warn "pre-merge gate failed: #{message}"
@@ -130,11 +131,13 @@ class HeldSnapshots
   end
 end
 
-root, repository, issue_text, head_sha = ARGV
-refuse("invalid gate helper arguments") unless root&.start_with?("/") && repository&.match?(%r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z}) && issue_text&.match?(/\A[1-9][0-9]*\z/) && head_sha&.match?(/\A[0-9a-f]{40}\z/)
+root, repository, issue_text, head_sha, merge_pr_text = ARGV
+refuse("invalid gate helper arguments") unless root&.start_with?("/") && repository&.match?(%r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z}) && issue_text&.match?(/\A[1-9][0-9]*\z/) && head_sha&.match?(/\A[0-9a-f]{40}\z/) && (merge_pr_text.nil? || merge_pr_text.empty? || merge_pr_text.match?(/\A[1-9][0-9]*\z/))
 issue = Integer(issue_text)
+merge_pr = merge_pr_text.nil? || merge_pr_text.empty? ? nil : Integer(merge_pr_text)
 identity = parse_object(ENV.fetch("PREMERGE_IDENTITY_JSON", ""), "merge identity")
 refuse("merge identity differs from caller") unless identity["repository"] == repository && identity["issue"] == issue && identity["headSha"] == head_sha && identity["state"] == "approved-for-merge"
+refuse("merge PR differs from durable identity") if merge_pr && identity["pullRequest"] != merge_pr
 primary = identity.fetch("primaryRoot")
 
 artifact_snapshots = HeldSnapshots.new(primary, "primary checkout")
@@ -143,13 +146,15 @@ begin
   artifacts = artifact_snapshots.directory(artifact_snapshots.root, ".artifacts", ".artifacts")
   issues = artifact_snapshots.directory(artifacts, "issues", ".artifacts/issues")
   issue_directory = artifact_snapshots.directory(issues, issue.to_s, "Issue artifact directory")
-  refuse("Issue artifact directory is locked by a writer") unless issue_directory.io.flock(File::LOCK_SH | File::LOCK_NB)
+  lock_mode = merge_pr ? File::LOCK_EX : File::LOCK_SH
+  refuse("Issue artifact directory is locked by another workflow") unless issue_directory.io.flock(lock_mode | File::LOCK_NB)
   head_directory = artifact_snapshots.directory(issue_directory, head_sha, "Head artifact directory")
   state_file = artifact_snapshots.leaf(issue_directory, "state.json", "state.json")
   contract_file = artifact_snapshots.leaf(issue_directory, "issue-contract.json", "issue-contract.json")
   verify_file = artifact_snapshots.leaf(head_directory, "verify.json", "verify.json")
   packet_file = artifact_snapshots.leaf(head_directory, "review-packet.json", "review-packet.json")
   review_file = artifact_snapshots.leaf(head_directory, "review.json", "review.json")
+  receipt_file = artifact_snapshots.leaf(head_directory, "review-receipt.json", "review-receipt.json")
   preflight_file = artifact_snapshots.leaf(issue_directory, "github-preflight.json", "github-preflight.json")
   config = source_snapshots.directory(source_snapshots.root, "Config", "Config")
   ownership_file = source_snapshots.leaf(config, "ownership.yml", "Config/ownership.yml")
@@ -267,6 +272,10 @@ begin
     actual_diff_bytes: actual_diff_bytes
   )
   refuse("opposite-model review is not approved") unless review_values.fetch("result").fetch("verdict") == "approved"
+  IOSTemplate::ReviewReceipt.validate!(
+    receipt_bytes: receipt_file.bytes, packet_bytes: packet_file.bytes, review_bytes: review_file.bytes,
+    repo: root, primary: state.fetch("primaryImplementer"), issue: issue, head_sha: head_sha
+  )
   reviewed_at = iso8601!(review_values.fetch("result").fetch("reviewedAt"), "review.reviewedAt")
   completed_at = iso8601!(verify.fetch("completedAt"), "verify.completedAt")
 
@@ -285,17 +294,59 @@ begin
   refuse("GitHub preflight is not fresher than merge evidence and approval") unless preflight_at > completed_at && preflight_at > reviewed_at && preflight_at > transitioned_at
   refuse("GitHub preflight is implausibly in the future") if preflight_at > Time.now.utc + 300
 
-  refuse("actual Base..Head diff changed while Gate was running") unless
-    IOSTemplate::ReviewContract.actual_diff(repo: root, base_sha: base_sha, head_sha: head_sha) == actual_diff_bytes
-  artifact_snapshots.verify!
-  source_snapshots.verify!
-  puts JSON.generate({"status" => "passed", "issue" => issue, "headSha" => head_sha, "issueContractDigest" => contract_digest})
+  verify_lease = lambda do
+    refuse("actual Base..Head diff changed while Gate was running") unless
+      IOSTemplate::ReviewContract.actual_diff(repo: root, base_sha: base_sha, head_sha: head_sha) == actual_diff_bytes
+    artifact_snapshots.verify!
+    source_snapshots.verify!
+  end
+  verify_lease.call
+
+  if merge_pr
+    auth_output, auth_status = Open3.capture2e("gh", "auth", "status", "--active")
+    refuse("active GitHub authentication could not be refreshed inside the merge lease") unless auth_status.success?
+    active_account = auth_output[/account\s+([^\s(]+)/, 1]
+    refuse("active GitHub account changed inside the merge lease") unless active_account == expected_account
+    repo_output, repo_status = Open3.capture2e("gh", "repo", "view", repository, "--json", "nameWithOwner,defaultBranchRef,url")
+    refuse("repository identity could not be refreshed inside the merge lease") unless repo_status.success?
+    live_repository = parse_object(repo_output, "merge-lease repository")
+    exact_keys!(live_repository, %w[nameWithOwner defaultBranchRef url], "merge-lease repository")
+    exact_keys!(live_repository["defaultBranchRef"], %w[name], "merge-lease repository.defaultBranchRef")
+    refuse("repository identity changed inside the merge lease") unless live_repository["nameWithOwner"] == repository && live_repository.dig("defaultBranchRef", "name") == "main" && live_repository["url"] == "https://github.com/#{repository}"
+    pr_fields = "number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url"
+    pr_output, pr_status = Open3.capture2e("gh", "pr", "view", merge_pr.to_s, "--repo", repository, "--json", pr_fields)
+    refuse("final PR identity could not be refreshed") unless pr_status.success?
+    pr = parse_object(pr_output, "final PR")
+    exact_keys!(pr, pr_fields.split(","), "final PR")
+    closing = pr["closingIssuesReferences"]
+    exact_keys!(pr["headRepository"], %w[nameWithOwner], "final PR.headRepository")
+    exact_keys!(pr["headRepositoryOwner"], %w[login], "final PR.headRepositoryOwner")
+    refuse("final PR closing Issue shape differs") unless closing.is_a?(Array) && closing.length == 1
+    exact_keys!(closing[0], %w[number url repository], "final PR.closingIssuesReferences[0]")
+    exact_keys!(closing[0]["repository"], %w[nameWithOwner], "final PR.closingIssuesReferences[0].repository")
+    refuse("final PR identity differs from the merge lease") unless
+      pr["number"] == merge_pr && pr["state"] == "OPEN" && pr["baseRefName"] == "main" &&
+      pr["headRefName"] == identity.fetch("branch") && pr["headRefOid"] == head_sha &&
+      pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == repository &&
+      pr.dig("headRepositoryOwner", "login") == repository.split("/", 2).first && pr["mergeCommit"].nil? &&
+      pr["url"] == "https://github.com/#{repository}/pull/#{merge_pr}" &&
+      closing[0]["number"] == issue && closing[0]["url"] == "https://github.com/#{repository}/issues/#{issue}" &&
+      closing[0].dig("repository", "nameWithOwner") == repository
+    verify_lease.call
+    merged = system("gh", "pr", "merge", merge_pr.to_s, "--repo", repository, "--squash", "--match-head-commit", head_sha)
+    refuse("exact squash merge failed") unless merged
+    puts JSON.generate({"status" => "merge-submitted", "issue" => issue, "pullRequest" => merge_pr, "headSha" => head_sha, "issueContractDigest" => contract_digest})
+  else
+    puts JSON.generate({"status" => "passed", "issue" => issue, "headSha" => head_sha, "issueContractDigest" => contract_digest})
+  end
 rescue IOSTemplate::IssueContract::ValidationError => error
   refuse("live Issue is invalid: #{error.failures.join('; ')}")
 rescue IOSTemplate::Ownership::ValidationError => error
   refuse("Config ownership is invalid: #{error.message}")
 rescue IOSTemplate::ReviewContract::ValidationError => error
   refuse("review contract is invalid: #{error.message}")
+rescue IOSTemplate::ReviewReceipt::ValidationError => error
+  refuse("review receipt is invalid: #{error.message}")
 rescue KeyError, JSON::ParserError, SystemCallError, IOError, ArgumentError => error
   refuse("descriptor-bound validation failed: #{error.message}")
 ensure

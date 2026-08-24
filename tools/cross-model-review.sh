@@ -41,7 +41,9 @@ trap 'rm -rf "$review_workspace"' EXIT
 
 complete_existing_review() {
   [[ -f "$output_absolute" && ! -L "$output_absolute" ]] || { echo 'existing review output is not a regular file' >&2; exit 1; }
+  [[ -f "$artifact_issue_root/$head_sha/review-receipt.json" && ! -L "$artifact_issue_root/$head_sha/review-receipt.json" ]] || { echo 'existing review lacks an exact opposite-model execution receipt' >&2; exit 1; }
   "$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$output_absolute" > "$validated"
+  ruby "$repo_root/tools/lib/validate-review-receipt.rb" "$repo_root" "$primary" "$issue" "$head_sha" >/dev/null
   local verdict next_state state_json current_state
   verdict=$(jq -er '.verdict' "$validated")
   next_state=$([[ "$verdict" == approved ]] && echo approved-for-merge || echo changes-requested)
@@ -63,7 +65,7 @@ complete_existing_review() {
   exit 0
 }
 
-if [[ -e "$output_absolute" || -L "$output_absolute" ]]; then
+if [[ -e "$output_absolute" || -L "$output_absolute" || -e "$artifact_issue_root/$head_sha/review-receipt.json" || -L "$artifact_issue_root/$head_sha/review-receipt.json" ]]; then
   complete_existing_review
 fi
 
@@ -96,6 +98,7 @@ RUBY
 
 snapshot_repository > "$snapshot_before"
 review_status=0
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 if [[ "$primary" == codex ]]; then
   instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. Return only one JSON object conforming exactly to docs/agent-contracts/review-packet.md Result schema, including the exact reviewPacketDigest from the schema v2 packet bytes.'
   if ruby -rtimeout -e '
@@ -122,6 +125,7 @@ else
     review_status=$?
   fi
 fi
+completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 snapshot_repository > "$snapshot_after"
 if ! cmp -s "$snapshot_before" "$snapshot_after"; then
   echo 'reviewer attempted to write inside the repository; review was rejected' >&2
@@ -150,9 +154,11 @@ RUBY
 
 publication_packet=$("$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet")
 [[ $(jq -er '.issue' <<<"$publication_packet") == "$issue" && $(jq -er '.headSha' <<<"$publication_packet") == "$head_sha" ]] || { echo 'review packet identity changed before publication' >&2; exit 1; }
-publication=$("$repo_root/tools/lib/publish-review-result.rb" "$repo_root" "$issue" "$head_sha" "$validated" "$packet_absolute")
+publication=$("$repo_root/tools/lib/publish-review-result.rb" "$repo_root" "$issue" "$head_sha" "$validated" "$packet_absolute" "$primary" "$started_at" "$completed_at")
 [[ $(jq -er '.path' <<<"$publication") == "$output_absolute" ]] || { echo 'review publication returned an unexpected path' >&2; exit 1; }
+[[ $(jq -er '.receiptPath' <<<"$publication") == "$artifact_issue_root/$head_sha/review-receipt.json" ]] || { echo 'review publication returned an unexpected receipt path' >&2; exit 1; }
 "$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$output_absolute" > "$validated"
+ruby "$repo_root/tools/lib/validate-review-receipt.rb" "$repo_root" "$primary" "$issue" "$head_sha" >/dev/null
 verdict=$(jq -er '.verdict' "$validated")
 next_state=$([[ "$verdict" == approved ]] && echo approved-for-merge || echo changes-requested)
 "$repo_root/tools/issue-state.sh" transition --repo "$repository" --issue "$issue" --from review-requested --to "$next_state" >/dev/null

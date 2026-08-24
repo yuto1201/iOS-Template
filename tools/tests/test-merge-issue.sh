@@ -35,7 +35,7 @@ make_case() {
   git -C "$CASE_PRIMARY" worktree add -b "$branch" "$CASE_WORKTREE" main >/dev/null
   mkdir -p "$CASE_WORKTREE/tools/lib" "$CASE_PRIMARY/.artifacts/issues/$issue"
   cp "$source_root/tools/merge-issue.sh" "$source_root/tools/render-pr-body.sh" "$source_root/tools/issue-state.sh" "$source_root/tools/validate-verify-json.swift" "$source_root/tools/prepare-review-packet.sh" "$CASE_WORKTREE/tools/"
-  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$source_root/tools/lib/review-artifacts.rb" "$source_root/tools/lib/review-contract.rb" "$source_root/tools/lib/review-sealing.rb" "$source_root/tools/lib/prepare-review-packet.rb" "$CASE_WORKTREE/tools/lib/"
+  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/ownership.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$source_root/tools/lib/review-artifacts.rb" "$source_root/tools/lib/review-contract.rb" "$source_root/tools/lib/review-sealing.rb" "$source_root/tools/lib/prepare-review-packet.rb" "$CASE_WORKTREE/tools/lib/"
   ln -s ../../.artifacts "$CASE_WORKTREE/.artifacts"
   printf '.artifacts\n' >>"$(git -C "$CASE_WORKTREE" rev-parse --git-path info/exclude)"
 
@@ -56,7 +56,15 @@ set -euo pipefail
 count_file="${FAKE_GH:?}/gate-count"; count=$(($(cat "$count_file" 2>/dev/null || printf 0)+1)); printf '%s\n' "$count" >"$count_file"
 if [[ "$count" == 1 ]]; then label=initial; else label=final; fi
 printf 'gate %s\n' "$label" >>"${FAKE_LOG:?}"
-[[ "${FAIL_GATE:-none}" != "$label" && "${FAIL_GATE:-none}" != all ]]
+if [[ "${FAIL_GATE:-none}" == "$label" || "${FAIL_GATE:-none}" == all ]]; then exit 1; fi
+if [[ "$label" == final ]]; then
+  [[ "$*" == "--repo ${FAKE_REPO:?} --issue ${FAKE_ISSUE:?} --head-sha ${FAKE_HEAD:?} --merge-pr ${FAKE_PR:?}" ]] || { echo 'final Gate did not receive the exact merge lease identity' >&2; exit 2; }
+  fields='number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url'
+  gh auth status --active >/dev/null
+  gh repo view "$FAKE_REPO" --json nameWithOwner,defaultBranchRef,url >/dev/null
+  gh pr view "$FAKE_PR" --repo "$FAKE_REPO" --json "$fields" >/dev/null
+  gh pr merge "$FAKE_PR" --repo "$FAKE_REPO" --squash --match-head-commit "$FAKE_HEAD"
+fi
 EOF
   chmod +x "$CASE_WORKTREE/tools/"*.sh "$CASE_WORKTREE/tools/lib/merge-state.rb"
   git -C "$CASE_WORKTREE" add tools && git -C "$CASE_WORKTREE" commit -m tools >/dev/null
@@ -89,6 +97,8 @@ log=${FAKE_LOG:?}; mutations=${FAKE_MUTATIONS:?}; state=${FAKE_GH:?}; repo=${FAK
 fields='number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url'
 pr_json() { local status=$1; PR_STATE="$status" ruby -rjson -e 'state=ENV.fetch("PR_STATE"); repo=ENV.fetch("FAKE_SOURCE_REPO",ENV.fetch("FAKE_REPO")); owner=repo.split("/",2).first; issue=Integer(ENV.fetch("FAKE_CLOSING_ISSUE",ENV.fetch("FAKE_ISSUE"))); puts JSON.generate({"number"=>Integer(ENV.fetch("FAKE_PR")),"state"=>state,"baseRefName"=>"main","headRefName"=>ENV.fetch("FAKE_BRANCH"),"headRefOid"=>ENV.fetch("FAKE_HEAD"),"headRepository"=>{"nameWithOwner"=>repo},"headRepositoryOwner"=>{"login"=>owner},"isCrossRepository"=>ENV.fetch("FAKE_CROSS_REPO","false")=="true","closingIssuesReferences"=>[{"number"=>issue,"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/issues/#{issue}","repository"=>{"nameWithOwner"=>ENV.fetch("FAKE_REPO")}}],"mergeCommit"=>state=="MERGED" ? {"oid"=>ENV.fetch("FAKE_MERGE")} : nil,"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/pull/#{ENV.fetch("FAKE_PR")}"})'; }
 case "$1 $2" in
+  'auth status') [[ "$*" == 'auth status --active' ]] || exit 2; printf 'gh auth status active\n' >>"$log"; printf 'Logged in to github.com account yuto1201 (keychain)\n  - Active account: true\n' ;;
+  'repo view') [[ "$*" == "repo view $repo --json nameWithOwner,defaultBranchRef,url" ]] || exit 2; printf 'gh repo view exact\n' >>"$log"; jq -cn --arg repo "$repo" '{nameWithOwner:$repo,defaultBranchRef:{name:"main"},url:("https://github.com/"+$repo)}' ;;
   'pr list')
     [[ "$*" == "pr list --repo $repo --head $branch --state all --json $fields" || "$*" == "pr list --repo $repo --head $branch --state open --json $fields" ]] || { echo 'invalid pr list argv' >&2; exit 2; }
     printf 'gh pr list %s\n' "$8" >>"$log"
@@ -238,6 +248,8 @@ gh pr create exact
 gh pr list open
 preflight merge-final
 gate final
+gh auth status active
+gh repo view exact
 gh pr view $pr
 gh pr merge $pr exact-squash
 gh pr view $pr

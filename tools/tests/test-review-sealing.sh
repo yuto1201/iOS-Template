@@ -138,11 +138,13 @@ cp "$workspace/image.good" "$artifact_head/iphone-en/screenshot.png"
 "$repo/tools/prepare-review-packet.sh" --primary codex --issue "$issue" --base-sha "$base_sha" --head-sha "$head_sha" >/dev/null
 packet_digest=$(digest "$artifact_head/review-packet.json")
 RESULT="$workspace/result.json" DIGEST="$packet_digest" ruby -rjson -e 'path=ENV.fetch("RESULT"); value=JSON.parse(File.binread(path)); value["reviewPacketDigest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))'
-"$repo/tools/lib/publish-review-result.rb" "$repo" "$issue" "$head_sha" "$workspace/result.json" "$artifact_head/review-packet.json" >/dev/null
-[[ -f "$artifact_head/review.json" ]] || fail 'exact packet-bound result was not published'
-rm "$artifact_head/review.json"
+assert_fails 'schema-v2 publication without fixed launcher execution identity' "$repo/tools/lib/publish-review-result.rb" "$repo" "$issue" "$head_sha" "$workspace/result.json" "$artifact_head/review-packet.json"
+[[ ! -e "$artifact_head/review.json" ]] || fail 'schema-v2 result bypassed launcher receipt publication'
+"$repo/tools/lib/publish-review-result.rb" "$repo" "$issue" "$head_sha" "$workspace/result.json" "$artifact_head/review-packet.json" codex 2026-08-24T00:01:00Z 2026-08-24T00:02:00Z >/dev/null
+[[ -f "$artifact_head/review.json" && -f "$artifact_head/review-receipt.json" ]] || fail 'exact packet-bound result/receipt pair was not published'
+rm "$artifact_head/review.json" "$artifact_head/review-receipt.json"
 PACKET="$artifact_head/review-packet.json" ruby -rjson -e 'path=ENV.fetch("PACKET"); value=JSON.parse(File.binread(path)); value["verifySha"]="0"*40; File.binwrite(path,JSON.generate(value))'
-assert_fails 'publication with packet/result mismatch' "$repo/tools/lib/publish-review-result.rb" "$repo" "$issue" "$head_sha" "$workspace/result.json" "$artifact_head/review-packet.json"
+assert_fails 'publication with packet/result mismatch' "$repo/tools/lib/publish-review-result.rb" "$repo" "$issue" "$head_sha" "$workspace/result.json" "$artifact_head/review-packet.json" codex 2026-08-24T00:01:00Z 2026-08-24T00:02:00Z
 [[ ! -e "$artifact_head/review.json" ]] || fail 'mismatched packet published a review result'
 
 echo 'PASS: strict review closure rejects bogus diff, same-Head evidence swaps, packet/result mismatch, wrong actual diff, and publication swaps'

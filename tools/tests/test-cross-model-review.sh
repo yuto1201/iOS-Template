@@ -140,6 +140,10 @@ run_review() {
   "$repo_root/tools/cross-model-review.sh" --primary "$primary" --packet ".artifacts/issues/$issue/$head_sha/review-packet.json" --output ".artifacts/issues/$issue/$head_sha/review.json" >/dev/null
 }
 
+clear_published_review() {
+  rm -f "$artifact_root/review.json" "$artifact_root/review-receipt.json"
+}
+
 script_launcher_bin="$workspace/script-launcher"
 mkdir "$script_launcher_bin"
 cp "$repo_root/tools/tests/fixtures/cross-model-review/codex" "$script_launcher_bin/codex"
@@ -156,17 +160,18 @@ export FAKE_REVIEWER_MODE=approved
 write_result approved
 run_review
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["verdict"] == "approved" && value["headSha"] =~ /\A[0-9a-f]{40}\z/'
+ISSUE="$issue" HEAD="$head_sha" PACKET_DIGEST="$(digest "$artifact_root/review-packet.json")" REVIEW_DIGEST="$(digest "$artifact_root/review.json")" assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["schemaVersion"] == 1 && value["issue"] == Integer(ENV.fetch("ISSUE")) && value["headSha"] == ENV.fetch("HEAD") && value["primaryModel"] == "codex" && value["reviewerModel"] == "claude" && value["exitStatus"] == 0 && value["reviewPacketDigest"] == ENV.fetch("PACKET_DIGEST") && value["publishedReviewDigest"] == ENV.fetch("REVIEW_DIGEST") && value["validatedResultDigest"] == ENV.fetch("REVIEW_DIGEST")'
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
 [[ "$(cat "$FAKE_REVIEWER_LOG")" == *"--print"* ]] || { echo 'Claude was not invoked noninteractively' >&2; exit 1; }
 
-rm -f "$artifact_root/review.json"
+clear_published_review
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 export FAKE_REVIEWER_MODE=envelope
 write_result approved
 run_review
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value.keys.sort == %w[acceptanceAssessment baseSha findings headSha issue issueContractDigest reviewedAt reviewerModel schemaVersion verdict verifySha].sort'
 
-rm -f "$artifact_root/review.json"
+clear_published_review
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 : > "$FAKE_REVIEWER_LOG"
 export FAKE_REVIEWER_MODE=changes
@@ -175,7 +180,7 @@ run_review
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["verdict"] == "changes-requested" && value["findings"].length == 1'
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:changes-requested"]'
 
-rm -f "$artifact_root/review.json"
+clear_published_review
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 export FAKE_REVIEWER_MODE=malformed
 printf '{not json' > "$workspace/result.json"
@@ -184,7 +189,7 @@ assert_fails 'malformed reviewer JSON is rejected' run_review
 [[ ! -e "$artifact_root/review.json" ]]
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:review-requested"]'
 
-rm -f "$artifact_root/review.json"
+clear_published_review
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 export FAKE_REVIEWER_MODE=mismatch
 write_result approved
@@ -192,13 +197,13 @@ HEAD="$head_sha" RESULT="$workspace/result.json" ruby -rjson -e 'path = ENV.fetc
 assert_fails 'mismatched reviewer Head SHA is rejected' run_review
 [[ ! -e "$artifact_root/review.json" ]]
 
-rm -f "$artifact_root/review.json"
+clear_published_review
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 export FAKE_REVIEWER_MODE=timeout
 assert_fails 'reviewer timeout becomes blocked review' run_review
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:review"]'
 
-rm -f "$artifact_root/review.json"
+clear_published_review
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 export FAKE_REVIEWER_MODE=write
 export FAKE_REVIEWER_WRITE_PATH="$artifact_root/reviewer-write.txt"
@@ -208,7 +213,7 @@ assert_fails 'reviewer write attempt is rejected' run_review
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:review-requested"]'
 unset FAKE_REVIEWER_WRITE_PATH
 
-rm -f "$artifact_root/review.json"
+clear_published_review
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 set_anchor external-attempt
 write_packet claude codex
@@ -217,8 +222,9 @@ export SUPABASE_ACCESS_TOKEN=must-not-reach-reviewer
 run_review claude
 unset GH_TOKEN SUPABASE_ACCESS_TOKEN
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["reviewerModel"] == "codex" && value["verdict"] == "approved"'
+assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["primaryModel"] == "claude" && value["reviewerModel"] == "codex" && value["reviewerLauncher"] == "tools/request-codex-review.sh"'
 
-rm -f "$artifact_root/review.json"
+clear_published_review
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 set_anchor 'specs/acceptance.md#1'
 write_packet claude codex
@@ -232,4 +238,21 @@ run_review claude
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
 run_review claude
 
-echo 'PASS: approved, envelope, changes-requested, malformed, SHA mismatch, timeout, write-attempt, native hardened Codex sandbox probes, and idempotent retry cases'
+# A schema-valid result without an exact launcher receipt must never be treated
+# as proof that the opposite model ran.
+clear_published_review
+printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+write_packet codex claude
+write_result approved
+cp "$workspace/result.json" "$artifact_root/review.json"
+: > "$FAKE_REVIEWER_LOG"
+assert_fails 'a preseeded schema-valid review without a launcher receipt is rejected' run_review codex
+[[ ! -s "$FAKE_REVIEWER_LOG" ]] || { echo 'preseeded review unexpectedly launched or bypassed provenance handling' >&2; exit 1; }
+
+# A receipt whose bound review digest was forged must not enable recovery.
+cat > "$artifact_root/review-receipt.json" <<JSON
+{"schemaVersion":1,"issue":$issue,"headSha":"$head_sha","primaryModel":"codex","reviewerModel":"claude","launcher":"tools/cross-model-review.sh","launcherDigest":"sha256:$(printf '0%.0s' {1..64})","reviewerLauncher":"tools/cross-model-review.sh","reviewerLauncherDigest":"sha256:$(printf '0%.0s' {1..64})","reviewPacketDigest":"$(digest "$artifact_root/review-packet.json")","validatedResultDigest":"$(digest "$artifact_root/review.json")","publishedReviewDigest":"sha256:$(printf '0%.0s' {1..64})","startedAt":"2026-08-24T00:00:00Z","completedAt":"2026-08-24T00:01:00Z","exitStatus":0}
+JSON
+assert_fails 'a forged receipt cannot authorize an existing review' run_review codex
+
+echo 'PASS: opposite-model execution receipts, approved, envelope, changes-requested, malformed, SHA mismatch, timeout, write-attempt, native hardened Codex sandbox probes, and exact recovery cases'
