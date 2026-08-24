@@ -575,16 +575,16 @@ func openArtifactRoot(
     guard let issue = expectedIssue else {
         throw ValidationFailure("shared artifact root requires an Issue identity")
     }
-    guard try readRawLink(root, name: ".artifacts", at: "shared artifact link") == "../../.artifacts" else {
-        throw ValidationFailure("shared artifact link target is not canonical")
-    }
     let worktreeURL = URL(fileURLWithPath: gitRoot, isDirectory: true)
     let worktreeName = worktreeURL.lastPathComponent
     let worktreesURL = worktreeURL.deletingLastPathComponent()
     let primaryURL = worktreesURL.deletingLastPathComponent()
     guard worktreesURL.lastPathComponent == ".worktrees",
           worktreeName.range(of: "^\(issue)-[a-z0-9][a-z0-9-]*$", options: .regularExpression) != nil else {
-        throw ValidationFailure("shared artifact worktree path is not canonical")
+        throw ValidationFailure("verify.json is unavailable or contains a symbolic link")
+    }
+    guard try readRawLink(root, name: ".artifacts", at: "shared artifact link") == "../../.artifacts" else {
+        throw ValidationFailure("shared artifact link target is not canonical")
     }
     let primary = canonicalPath(primaryURL.path)
     guard canonicalPath(gitRoot + "/.artifacts") == primary + "/.artifacts" else {

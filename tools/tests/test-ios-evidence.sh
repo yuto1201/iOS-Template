@@ -749,7 +749,7 @@ prepare_fixture linked-deeper-worktree
 linked_worktree="$fixture_root/.worktrees/deeper/42-linked-evidence"
 git -C "$fixture_root" worktree add -q -b codex/42-linked-evidence "$linked_worktree" "$head_sha"
 ln -s ../../.artifacts "$linked_worktree/.artifacts"
-expect_linked_failure linked-deeper-worktree "shared artifact worktree path is not canonical" "$linked_worktree"
+expect_linked_failure linked-deeper-worktree "verify.json is unavailable or contains a symbolic link" "$linked_worktree"
 
 prepare_fixture linked-unrelated-common-directory
 linked_worktree="$fixture_root/.worktrees/42-unrelated"
