@@ -12,7 +12,7 @@ state_worktree=''
 cleanup() {
   if [[ -n "$state_worktree" && -e "$state_worktree" ]]; then git -C "$repo_root" worktree remove --force "$state_worktree" >/dev/null 2>&1 || true; fi
   git -C "$repo_root" branch -D "codex/$test_issue-workflow-state" >/dev/null 2>&1 || true
-  rm -rf "$workspace" "$artifact_issue" "$request_dir/issue-424242-create-pr-1.json" "$request_dir/create-issue.json" "$request_dir/bad.json" "$request_dir/cloudflare-deploy.json" "$request_dir/elevenlabs-audio.json" "$request_dir/appstore-build.json" "$request_dir/supabase-migrations.json" "$request_dir/path-link" "$result_dir/issue-424242-create-pr-1.json"
+  rm -rf "$workspace" "$artifact_issue" "$request_dir/issue-424242-create-pr-1.json" "$request_dir/create-issue.json" "$request_dir/bad.json" "$request_dir/cloudflare-deploy.json" "$request_dir/elevenlabs-audio.json" "$request_dir/appstore-build.json" "$request_dir/supabase-migrations.json" "$request_dir/path-link" "$result_dir/issue-424242-create-pr-1.json" "$repo_root/.artifacts/ops-receipts/issue-424242-create-pr-1.json" "$repo_root/.artifacts/ops-receipts/issue-424242-create-pr-1.lock"
 }
 trap cleanup EXIT
 
@@ -283,15 +283,10 @@ ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["approval"] = "app
 assert_fails 'request-selected approval is rejected' "$repo_root/tools/validate-codex-op-request.sh" --request "$request"
 sed -i '' 's/,"approval":"approved"//' "$request"
 
-cat > "$workspace/mutated-request.json" <<'EOF'
-{"requestVersion":1,"requestId":"issue-424242-create-pr-1","issue":424242,"operation":"github.delete_branch","target":{"kind":"repository","identifier":"yuto1201/iOS-Template"},"environment":"production","expectedAccount":"yuto1201","inputs":{"branch":"codex/424242-workflow"},"reason":"mutated"}
-EOF
-export FAKE_CODEX_REQUIRE_CLOSED_STDIN=1
-export FAKE_CODEX_MUTATE_REQUEST="$repo_root/$request"
-export FAKE_CODEX_MUTATION_FILE="$workspace/mutated-request.json"
-"$repo_root/tools/request-codex-op.sh" --request "$request" --result .artifacts/ops-results/issue-424242-create-pr-1.json
-unset FAKE_CODEX_REQUIRE_CLOSED_STDIN FAKE_CODEX_MUTATE_REQUEST FAKE_CODEX_MUTATION_FILE
-assert_json .artifacts/ops-results/issue-424242-create-pr-1.json 'value = JSON.parse(File.read(ARGV[0])); abort unless value.keys.sort == %w[executedAt executor operation resultReference status target verifiedAccount]; abort unless value["status"] == "succeeded"; abort if value.to_json.include?("must-not-survive")'
-assert_json "$request" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["operation"] == "github.delete_branch"'
+# The end-to-end transport contract has its own isolated fixture because it now
+# binds to an exact sealed Issue contract, a fresh live Issue reconstruction,
+# and a durable replay receipt. Keep the state tests independent of those
+# transport artifacts while still making this aggregate suite exercise them.
+"$repo_root/tools/tests/test-codex-op-transport.sh"
 
 echo 'PASS: GitHub preflight, durable state transitions, and fixed Codex operation transport'

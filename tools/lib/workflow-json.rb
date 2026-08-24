@@ -4,6 +4,13 @@
 require 'json'
 require 'digest'
 require 'time'
+require 'open3'
+require 'tempfile'
+require 'uri'
+require_relative 'descriptor-files'
+require_relative 'issue-contract'
+require_relative 'ownership'
+require_relative 'review-sealing'
 
 def fail_closed(message)
   warn "workflow validation failed: #{message}"
@@ -214,7 +221,24 @@ def validate_inputs(operation, inputs, repo_root)
   end
 end
 
-def validate_request(request, expected_account, repo_root)
+def request_provider(operation)
+  prefix = operation.split('.', 2).first
+  prefix == 'appstore' ? 'app-store' : prefix
+end
+
+def expected_request_identity(ownership, operation, repository)
+  provider = request_provider(operation)
+  if provider == 'github'
+    {
+      'account' => IOSTemplate::Ownership.github_login!(ownership),
+      'target' => repository
+    }
+  else
+    IOSTemplate::Ownership.provider_identity!(ownership, provider)
+  end
+end
+
+def validate_request(request, ownership, repo_root, repository: nil)
   exact_keys(request, %w[environment expectedAccount inputs issue operation reason requestId requestVersion target], 'request')
   fail_closed('requestVersion must be 1') unless request['requestVersion'] == 1
   fail_closed('requestId is invalid') unless request['requestId'].is_a?(String) && request['requestId'].match?(/\A[a-z0-9][a-z0-9-]*\z/)
@@ -227,29 +251,399 @@ def validate_request(request, expected_account, repo_root)
   fail_closed('target.identifier is unsafe') if request['target']['identifier'].include?('..') || request['target']['identifier'].start_with?('/')
   fail_closed('environment is invalid') unless %w[local preview staging production].include?(request['environment'])
   nonempty_string(request['expectedAccount'], 'expectedAccount')
-  fail_closed('expectedAccount does not match configured account') unless request['expectedAccount'] == expected_account
+  repository ||= request_provider(request['operation']) == 'github' ? request.dig('target', 'identifier') : nil
+  expected_identity = expected_request_identity(ownership, request['operation'], repository)
+  fail_closed('expectedAccount does not match configured account') unless request['expectedAccount'] == expected_identity.fetch('account')
+  fail_closed('target.identifier does not match Config ownership') unless request.dig('target', 'identifier') == expected_identity.fetch('target')
   nonempty_string(request['reason'], 'reason')
   validate_inputs(request['operation'], request['inputs'], repo_root)
   request
 end
 
+def request_snapshots(path, artifacts_root, repo_root)
+  repo_root = File.realpath(repo_root)
+  lexical = File.expand_path(path)
+  request_root = File.join(repo_root, '.artifacts', 'ops-requests')
+  fail_closed('request is outside .artifacts/ops-requests') unless File.dirname(lexical) == request_root
+  physical_artifacts = File.realpath(artifacts_root)
+  artifacts = IOSTemplate::ReviewSealing::SnapshotSet.new(physical_artifacts, at: '.artifacts')
+  source = IOSTemplate::ReviewSealing::SnapshotSet.new(repo_root, at: 'repository')
+  requests = artifacts.directory(artifacts.root, 'ops-requests', at: '.artifacts/ops-requests')
+  request_leaf = artifacts.leaf(requests, File.basename(lexical), at: 'operation request')
+  config = source.directory(source.root, 'Config', at: 'Config')
+  ownership_leaf = source.leaf(config, 'ownership.yml', at: 'Config/ownership.yml')
+  request = JSON.parse(request_leaf.bytes)
+  ownership = IOSTemplate::Ownership.parse(ownership_leaf.bytes)
+  validated = validate_request(request, ownership, repo_root)
+  expected_name = "#{validated.fetch('requestId')}.json"
+  fail_closed('request path must be the fixed path for this request ID') unless request_leaf.name == expected_name
+  artifacts.verify!
+  source.verify!
+  [canonical_json(validated), ownership, physical_artifacts]
+rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP, JSON::ParserError,
+       IOSTemplate::ReviewSealing::SealError, IOSTemplate::Ownership::ValidationError => error
+  fail_closed("request is not a descriptor-bound canonical file: #{error.message}")
+ensure
+  artifacts&.close
+  source&.close
+end
+
+def strict_result(result, request)
+  exact_keys(result, %w[executedAt executor operation resultReference status target verifiedAccount], 'Codex result')
+  fail_closed('Codex result executor is invalid') unless result['executor'] == 'codex'
+  fail_closed('Codex result does not match request') unless
+    result['operation'] == request['operation'] &&
+    result['target'] == request.dig('target', 'identifier') &&
+    result['verifiedAccount'] == request['expectedAccount']
+  fail_closed('Codex result status is invalid') unless %w[succeeded failed blocked:ops].include?(result['status'])
+  %w[executedAt executor operation status target verifiedAccount].each do |key|
+    nonempty_string(result[key], "result.#{key}")
+    fail_closed("result.#{key} contains unsafe characters") if result[key].match?(/[\x00-\x1f\x7f]/)
+  end
+  begin
+    executed_at = Time.iso8601(result['executedAt']).utc
+  rescue ArgumentError
+    fail_closed('result.executedAt is invalid')
+  end
+  fail_closed('result.executedAt is implausibly in the future') if executed_at > Time.now.utc + 300
+  reference = result['resultReference']
+  unless reference.nil?
+    nonempty_string(reference, 'result.resultReference')
+    fail_closed('result.resultReference contains unsafe characters') if reference.match?(/[\x00-\x1f\x7f]/)
+    fail_closed('result.resultReference is too long') if reference.bytesize > 2048
+    local_path = reference.start_with?('/', '~', 'file:') ||
+      reference.match?(%r{(?:^|[ /])(?:Users|private|tmp|var/folders)/}) ||
+      reference.include?('\\')
+    fail_closed('result.resultReference contains a local path') if local_path
+    if reference.match?(%r{\Ahttps?://})
+      uri = URI.parse(reference)
+      fail_closed('result.resultReference must be an HTTPS URL') unless uri.scheme == 'https' && uri.host && !uri.userinfo
+      fail_closed('result.resultReference contains secret-like query data') if uri.query&.match?(/(?:token|secret|password|api[_-]?key)=/i)
+    else
+      fail_closed('result.resultReference is unsafe') unless reference.match?(/\A[A-Za-z0-9][A-Za-z0-9 ._:@\/-]{0,511}\z/)
+    end
+  end
+  canonical(result)
+rescue URI::InvalidURIError
+  fail_closed('result.resultReference is invalid')
+end
+
+class CodexOperationTransport
+  def initialize(request_path:, result_path:)
+    @request_path = request_path
+    @result_path = result_path
+    @repo_root = File.realpath(File.join(__dir__, '..', '..'))
+    @instruction_path = File.join(@repo_root, 'tools', 'lib', 'codex-external-op-instruction.md')
+    @artifact_snapshots = nil
+    @source_snapshots = nil
+  end
+
+  def run
+    canonical_request, = request_snapshots(@request_path, File.join(@repo_root, '.artifacts'), @repo_root)
+    @request = JSON.parse(canonical_request)
+    @request_bytes = canonical_request
+    @request_digest = "sha256:#{Digest::SHA256.hexdigest(@request_bytes)}"
+    @request_id = @request.fetch('requestId')
+    expected_result = File.join(@repo_root, '.artifacts', 'ops-results', "#{@request_id}.json")
+    fail_closed('result path must be the fixed path for this request ID') unless File.expand_path(@result_path) == expected_result
+
+    open_transport_directories
+    lock = open_lock
+    fail_closed('operation request is already in flight') unless lock.flock(File::LOCK_EX | File::LOCK_NB)
+    @lock = lock
+    @lock_stat = lock.stat
+    verify_lock_identity
+    replay = completed_replay
+    return replay if replay
+    refuse_existing_result
+
+    authorization = authorize!
+    verify_lock_identity
+    idempotency_key = "ios-template:#{@request_id}:#{@request_digest.delete_prefix('sha256:')}"
+    in_flight = canonical_json(
+      'schemaVersion' => 1, 'requestId' => @request_id,
+      'requestDigest' => @request_digest, 'contractDigest' => authorization.fetch('contractDigest'),
+      'idempotencyKey' => idempotency_key, 'status' => 'in-flight',
+      'startedAt' => Time.now.utc.iso8601
+    )
+    receipt_leaf = @artifact_snapshots.publish_exclusive(@receipts, "#{@request_id}.json", in_flight, at: 'operation receipt')
+
+    sanitized = invoke_codex(authorization, idempotency_key)
+    @artifact_snapshots.verify!
+    @source_snapshots.verify!
+    verify_lock_identity
+    result_bytes = "#{canonical_json(sanitized)}\n"
+    result_leaf = @artifact_snapshots.publish_exclusive(@results, "#{@request_id}.json", result_bytes, at: 'operation result')
+    @artifact_snapshots.verify!
+    @source_snapshots.verify!
+    verify_lock_identity
+    result_digest = "sha256:#{Digest::SHA256.hexdigest(result_bytes)}"
+    completed = canonical_json(
+      'schemaVersion' => 1, 'requestId' => @request_id,
+      'requestDigest' => @request_digest, 'contractDigest' => authorization.fetch('contractDigest'),
+      'idempotencyKey' => idempotency_key, 'status' => 'completed',
+      'resultDigest' => result_digest, 'result' => sanitized,
+      'startedAt' => JSON.parse(in_flight).fetch('startedAt'), 'completedAt' => Time.now.utc.iso8601
+    )
+    DescriptorFiles.atomic_replace_at(
+      @receipts.io, receipt_leaf.name, completed,
+      receipt_leaf.bytes, receipt_leaf.stat
+    )
+    verify_published_result(result_leaf, result_bytes)
+    verify_lock_identity
+    canonical_json(sanitized)
+  rescue IOSTemplate::IssueContract::ValidationError => error
+    fail_closed("live Issue is invalid: #{error.failures.join('; ')}")
+  rescue IOSTemplate::Ownership::ValidationError, IOSTemplate::ReviewSealing::SealError,
+         SystemCallError, IOError, JSON::ParserError, KeyError => error
+    fail_closed("external operation transport refused: #{error.message}")
+  ensure
+    lock&.close unless lock&.closed?
+    @artifact_snapshots&.close
+    @source_snapshots&.close
+  end
+
+  private
+
+  def open_transport_directories
+    physical_artifacts = File.realpath(File.join(@repo_root, '.artifacts'))
+    @artifact_snapshots = IOSTemplate::ReviewSealing::SnapshotSet.new(physical_artifacts, at: '.artifacts')
+    @source_snapshots = IOSTemplate::ReviewSealing::SnapshotSet.new(@repo_root, at: 'repository')
+    @requests = @artifact_snapshots.directory(@artifact_snapshots.root, 'ops-requests', at: '.artifacts/ops-requests')
+    @results = directory_at(@artifact_snapshots.root, 'ops-results', '.artifacts/ops-results')
+    @receipts = directory_at(@artifact_snapshots.root, 'ops-receipts', '.artifacts/ops-receipts')
+    request_leaf = @artifact_snapshots.leaf(@requests, "#{@request_id}.json", at: 'operation request')
+    fail_closed('operation request changed after validation') unless canonical_json(JSON.parse(request_leaf.bytes)) == @request_bytes
+    config = @source_snapshots.directory(@source_snapshots.root, 'Config', at: 'Config')
+    @ownership_leaf = @source_snapshots.leaf(config, 'ownership.yml', at: 'Config/ownership.yml')
+    @ownership = IOSTemplate::Ownership.parse(@ownership_leaf.bytes)
+    validate_request(@request, @ownership, @repo_root)
+  end
+
+  def directory_at(parent, name, at)
+    @artifact_snapshots.directory(parent, name, at: at)
+  rescue IOSTemplate::ReviewSealing::SealError => error
+    raise unless error.message.include?('No such file')
+    Dir.mkdir(File.join(File.realpath(File.join(@repo_root, '.artifacts')), name), 0o700)
+    @artifact_snapshots.directory(parent, name, at: at)
+  end
+
+  def open_lock
+    name = "#{@request_id}.lock"
+    fd = IOSTemplate::ReviewSealing::Native.openat(
+      @receipts.io.fileno, name,
+      File::RDWR | File::CREAT | File::EXCL | File::NOFOLLOW, 0o600
+    )
+    created = !fd.negative?
+    if fd.negative?
+      error = SystemCallError.new('openat operation lock', Fiddle.last_error)
+      raise error unless error.is_a?(Errno::EEXIST)
+      fd = IOSTemplate::ReviewSealing::Native.openat(
+        @receipts.io.fileno, name, File::RDWR | File::NOFOLLOW, 0
+      )
+      raise SystemCallError.new('openat existing operation lock', Fiddle.last_error) if fd.negative?
+    end
+    io = File.for_fd(fd, autoclose: true)
+    if created
+      result = IOSTemplate::ReviewSealing::Native.fchmod(io.fileno, 0o600)
+      raise SystemCallError.new('fchmod operation lock', Fiddle.last_error) unless result.zero?
+      io.fsync
+      @receipts.io.fsync
+    end
+    stat = io.stat
+    fail_closed('operation lock is not a single-link 0600 regular file') unless
+      stat.file? && stat.nlink == 1 && (stat.mode & 0o777) == 0o600
+    io
+  end
+
+  def completed_replay
+    receipt_leaf = @artifact_snapshots.leaf(@receipts, "#{@request_id}.json", at: 'operation receipt')
+    fail_closed('completed receipt permissions are unsafe') unless (receipt_leaf.stat.mode & 0o777) == 0o600
+    receipt = JSON.parse(receipt_leaf.bytes)
+    fail_closed('operation receipt request identity differs') unless
+      receipt['schemaVersion'] == 1 && receipt['requestId'] == @request_id &&
+      receipt['requestDigest'] == @request_digest
+    fail_closed('an earlier operation attempt is in flight or ambiguous') unless receipt['status'] == 'completed'
+    exact_keys(
+      receipt,
+      %w[completedAt contractDigest idempotencyKey requestDigest requestId result resultDigest schemaVersion startedAt status],
+      'completed receipt'
+    )
+    fail_closed('completed receipt contract digest is invalid') unless receipt['contractDigest'].is_a?(String) && receipt['contractDigest'].match?(/\Asha256:[0-9a-f]{64}\z/)
+    expected_key = "ios-template:#{@request_id}:#{@request_digest.delete_prefix('sha256:')}"
+    fail_closed('completed receipt idempotency key differs') unless receipt['idempotencyKey'] == expected_key
+    fail_closed('completed receipt result digest is invalid') unless receipt['resultDigest'].is_a?(String) && receipt['resultDigest'].match?(/\Asha256:[0-9a-f]{64}\z/)
+    begin
+      started_at = Time.iso8601(receipt['startedAt']).utc
+      completed_at = Time.iso8601(receipt['completedAt']).utc
+    rescue ArgumentError, TypeError
+      fail_closed('completed receipt timestamps are invalid')
+    end
+    fail_closed('completed receipt timestamp order is invalid') if completed_at < started_at || completed_at > Time.now.utc + 300
+    sanitized = strict_result(receipt.fetch('result'), @request)
+    result_leaf = @artifact_snapshots.leaf(@results, "#{@request_id}.json", at: 'operation result')
+    fail_closed('completed result permissions are unsafe') unless (result_leaf.stat.mode & 0o777) == 0o600
+    result_bytes = "#{canonical_json(sanitized)}\n"
+    fail_closed('completed result bytes differ from the receipt') unless
+      result_leaf.bytes == result_bytes && receipt['resultDigest'] == "sha256:#{Digest::SHA256.hexdigest(result_bytes)}"
+    canonical_json(sanitized)
+  rescue Errno::ENOENT
+    nil
+  end
+
+  def refuse_existing_result
+    @artifact_snapshots.leaf(@results, "#{@request_id}.json", at: 'operation result')
+    fail_closed('operation result already exists without a completed receipt')
+  rescue Errno::ENOENT
+    nil
+  end
+
+  def authorize!
+    repository = @request['operation'].start_with?('github.') ? @request.dig('target', 'identifier') : contract_repository
+    preflight_out, preflight_status = Open3.capture2e(
+      File.join(@repo_root, 'tools', 'github-account-preflight.sh'), '--repo', repository,
+      chdir: @repo_root
+    )
+    fail_closed('fresh personal GitHub preflight failed') unless preflight_status.success?
+    preflight = JSON.parse(preflight_out)
+    fail_closed('fresh GitHub preflight identity differs') unless
+      preflight['account'] == IOSTemplate::Ownership.github_login!(@ownership) &&
+      preflight['repository'] == repository
+
+    issue_number = @request.fetch('issue')
+    issues = @artifact_snapshots.directory(@artifact_snapshots.root, 'issues', at: '.artifacts/issues')
+    issue_dir = @artifact_snapshots.directory(issues, issue_number.to_s, at: 'Issue artifact directory')
+    fail_closed('Issue artifact directory is locked by a writer') unless issue_dir.io.flock(File::LOCK_SH | File::LOCK_NB)
+    contract_leaf = @artifact_snapshots.leaf(issue_dir, 'issue-contract.json', at: 'Issue contract')
+    state_leaf = @artifact_snapshots.leaf(issue_dir, 'state.json', at: 'Issue state')
+    contract = JSON.parse(contract_leaf.bytes)
+    IOSTemplate::IssueContract.validate_snapshot!(contract, issue: issue_number, repository: repository)
+    contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_leaf.bytes)}"
+    state = full_state_record(JSON.parse(state_leaf.bytes), issue_number, repository)
+    fail_closed('Issue state does not bind the exact contract bytes') unless
+      state.dig('issueContract', 'path') == ".artifacts/issues/#{issue_number}/issue-contract.json" &&
+      state.dig('issueContract', 'digest') == contract_digest
+
+    issue_output, issue_status = Open3.capture2e(
+      'gh', 'issue', 'view', issue_number.to_s, '--repo', repository,
+      '--json', 'number,url,body,labels'
+    )
+    fail_closed('current live Issue could not be read') unless issue_status.success?
+    live = JSON.parse(issue_output)
+    exact_keys(live, %w[body labels number url], 'live Issue')
+    fail_closed('live Issue identity differs') unless
+      live['number'] == issue_number && live['url'] == "https://github.com/#{repository}/issues/#{issue_number}"
+    labels = live['labels']
+    fail_closed('live Issue labels are invalid') unless labels.is_a?(Array) && labels.all? { |label| label.is_a?(Hash) && label['name'].is_a?(String) }
+    types = labels.map { |label| label.fetch('name') }.select { |name| %w[type:feature type:regression].include?(name) }
+    fail_closed('live Issue must have exactly one type label') unless types.length == 1
+    parsed = IOSTemplate::IssueContract.parse(
+      live.fetch('body'), issue_type: types.first.delete_prefix('type:'),
+      issue: issue_number, repository: repository, fetched_at: contract.fetch('fetchedAt')
+    )
+    reconstructed = parsed.contract
+    reconstructed['verification'] = contract['verification'] if contract.key?('verification')
+    fail_closed('live Issue reconstruction differs from sealed contract bytes') unless
+      canonical_json(reconstructed) == contract_leaf.bytes
+    operation_detail = parsed.external_operation_details.find { |detail| detail.fetch('operation') == @request.fetch('operation') }
+    fail_closed('operation is not declared by the sealed current Issue') unless operation_detail
+    fail_closed('request environment differs from the Issue contract') unless operation_detail.fetch('environment') == @request.fetch('environment')
+    fail_closed('Issue contract executor is not Codex') unless operation_detail.fetch('executor') == 'Codex'
+    fail_closed('operation requires a separately verified Codex approval receipt') if operation_detail.fetch('approvalRequired')
+    expected = expected_request_identity(@ownership, @request.fetch('operation'), repository)
+    fail_closed('request account or target differs from Config ownership') unless
+      @request.fetch('expectedAccount') == expected.fetch('account') &&
+      @request.dig('target', 'identifier') == expected.fetch('target')
+    @artifact_snapshots.verify!
+    @source_snapshots.verify!
+    {'contractDigest' => contract_digest, 'repository' => repository, 'operationDetail' => operation_detail}
+  end
+
+  def contract_repository
+    issues = @artifact_snapshots.directory(@artifact_snapshots.root, 'issues', at: '.artifacts/issues identity')
+    issue_dir = @artifact_snapshots.directory(issues, @request.fetch('issue').to_s, at: 'Issue artifact identity')
+    contract = @artifact_snapshots.leaf(issue_dir, 'issue-contract.json', at: 'Issue contract identity')
+    JSON.parse(contract.bytes).fetch('repository')
+  end
+
+  def invoke_codex(authorization, idempotency_key)
+    instruction = File.binread(@instruction_path)
+    Tempfile.create(['ios-template-codex-request-', '.json']) do |snapshot|
+      snapshot.binmode
+      snapshot.write(@request_bytes)
+      snapshot.flush
+      snapshot.fsync
+      snapshot.chmod(0o400)
+      prompt = [
+        instruction.rstrip,
+        "Validated request snapshot: #{snapshot.path}",
+        "Request digest: #{@request_digest}",
+        "Issue contract digest: #{authorization.fetch('contractDigest')}",
+        "Provider idempotency key: #{idempotency_key}"
+      ].join("\n")
+      Tempfile.create('ios-template-codex-stdout-') do |stdout|
+        Tempfile.create('ios-template-codex-stderr-') do |stderr|
+          [stdout, stderr].each { |file| file.chmod(0o600) }
+          pid = Process.spawn(
+            'codex', 'exec', '--sandbox', 'workspace-write', '--', prompt,
+            in: File::NULL, out: stdout, err: stderr, chdir: @repo_root
+          )
+          _, status = Process.wait2(pid)
+          fail_closed('fixed Codex child did not complete successfully; replay is blocked') unless status.success?
+          stdout.rewind
+          bytes = stdout.read
+          stat = stdout.stat
+          fail_closed('Codex stdout provenance changed') unless stat.file? && stat.nlink == 1 && (stat.mode & 0o777) == 0o600 && stat.size == bytes.bytesize
+          result = JSON.parse(bytes)
+          strict_result(result, @request)
+        end
+      end
+    end
+  rescue JSON::ParserError
+    fail_closed('Codex stdout did not contain one sanitized JSON result')
+  end
+
+  def verify_published_result(result_leaf, expected_bytes)
+    current = @artifact_snapshots.leaf(@results, result_leaf.name, at: 'published operation result')
+    fail_closed('published result identity or bytes changed') unless
+      current.bytes == expected_bytes &&
+      [current.stat.dev, current.stat.ino] == [result_leaf.stat.dev, result_leaf.stat.ino]
+  end
+
+  def verify_lock_identity
+    current, stat = DescriptorFiles.open_regular_at(@receipts.io, "#{@request_id}.lock")
+    current.close
+    held = @lock.stat
+    fail_closed('operation lock path identity changed') unless
+      held.file? && held.nlink == 1 && (held.mode & 0o777) == 0o600 &&
+      [held.dev, held.ino, held.mode, held.nlink] == [@lock_stat.dev, @lock_stat.ino, @lock_stat.mode, @lock_stat.nlink] &&
+      [stat.dev, stat.ino, stat.mode, stat.nlink] == [@lock_stat.dev, @lock_stat.ino, @lock_stat.mode, @lock_stat.nlink]
+  rescue SystemCallError, IOError => error
+    fail_closed("operation lock path identity changed: #{error.message}")
+  end
+end
+
 case ARGV.shift
 when 'validate-request'
-  path, artifacts_root, expected_account, repo_root = ARGV
-  fail_closed('validate-request arguments are invalid') unless ARGV.length == 4
-  root = File.realpath(artifacts_root)
-  request_path = File.realpath(path)
-  fail_closed('request is outside .artifacts/ops-requests') unless request_path.start_with?(File.join(root, 'ops-requests') + '/')
-  request = validate_request(read_json(request_path), expected_account, File.realpath(repo_root))
-  puts canonical_json(request)
+  path, artifacts_root, repo_root = ARGV
+  fail_closed('validate-request arguments are invalid') unless ARGV.length == 3
+  canonical_request, = request_snapshots(path, artifacts_root, repo_root)
+  puts canonical_request
 when 'verify-request-snapshot'
-  path, expected_digest, expected_account, repo_root = ARGV
-  fail_closed('verify-request-snapshot arguments are invalid') unless ARGV.length == 4 && expected_digest.match?(/\Asha256:[0-9a-f]{64}\z/)
+  path, expected_digest, repo_root = ARGV
+  fail_closed('verify-request-snapshot arguments are invalid') unless ARGV.length == 3 && expected_digest.match?(/\Asha256:[0-9a-f]{64}\z/)
   bytes = File.binread(path)
   fail_closed('request snapshot digest changed') unless "sha256:#{Digest::SHA256.hexdigest(bytes)}" == expected_digest
-  request = validate_request(JSON.parse(bytes), expected_account, File.realpath(repo_root))
+  ownership = IOSTemplate::Ownership.parse(File.binread(File.join(File.realpath(repo_root), 'Config', 'ownership.yml')))
+  request = validate_request(JSON.parse(bytes), ownership, File.realpath(repo_root))
   fail_closed('request snapshot is not canonical') unless bytes == canonical_json(request)
   puts canonical_json(request)
+when 'run-codex-transport'
+  request_path, result_path = ARGV
+  fail_closed('run-codex-transport arguments are invalid') unless ARGV.length == 2
+  puts CodexOperationTransport.new(
+    request_path: request_path, result_path: result_path
+  ).run
 when 'merge-freshness'
   verify_path, review_path, checked_at = ARGV
   fail_closed('merge-freshness arguments are invalid') unless ARGV.length == 3
@@ -337,14 +731,7 @@ when 'sanitize-result'
   fail_closed('sanitize-result arguments are invalid') unless ARGV.length == 2
   result = read_json(path)
   request = read_json(request_path)
-  required = %w[executedAt executor operation status target verifiedAccount]
-  fail_closed('Codex result is malformed') unless result.is_a?(Hash) && required.all? { |key| result.key?(key) }
-  safe = result.slice(*(%w[executedAt executor operation resultReference status target verifiedAccount]))
-  fail_closed('Codex result executor is invalid') unless safe['executor'] == 'codex'
-  fail_closed('Codex result does not match request') unless safe['operation'] == request['operation'] && safe['target'] == request.dig('target', 'identifier') && safe['verifiedAccount'] == request['expectedAccount']
-  fail_closed('Codex result status is invalid') unless %w[succeeded failed blocked:ops].include?(safe['status'])
-  safe.each { |key, value| nonempty_string(value, "result.#{key}") unless key == 'resultReference' && value.nil? }
-  puts canonical_json(safe)
+  puts canonical_json(strict_result(result, request))
 else
   fail_closed('unknown workflow-json command')
 end

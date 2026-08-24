@@ -47,9 +47,10 @@ Claudeは認証済み外部操作が必要になったら、操作を試行せ�
 
 1. Claudeが `.artifacts/ops-requests/${requestId}.json` を作る。
 2. Claudeは `tools/request-codex-op.sh --request ${requestFile} --result ${resultFile}` だけを呼べる。
-3. ラッパーがschemaとパスを検証し、固定された指示でCodexを起動する。
-4. Codexが権限、承認要否、個人アカウント、対象を独立判定する。
-5. Codexが操作して `.artifacts/ops-results/${requestId}.json` へsanitized resultを書く。
+3. ラッパーがrequestをdescriptor-boundに固定し、canonical Issue contractのbytes/digest、`state.json`のbinding、個人GitHub preflight、current live Issue本文のexact reconstruction、操作詳細とConfig identityを照合する。
+4. ラッパーはrequest digestごとのnonblocking lockを取得し、外部実行より先に `.artifacts/ops-receipts/${requestId}.json` を`in-flight`としてno-replaceで記録する。
+5. Codexが権限、個人アカウント、対象を独立にpreflightし、固定requestだけを実行してsanitized result候補をstdoutへ1件だけ返す。
+6. ラッパーがexact schema、requestとのidentity一致、秘密値・local path・control character不在を再検証し、`.artifacts/ops-results/${requestId}.json`をno-replaceで公開してreceiptを`completed`へCAS更新する。
 
 Claudeによる直接の `codex` CLI、自由文prompt、別ラッパー、外部CLIは拒否します。read-only反対モデルレビューは別の `tools/request-codex-review.sh` を使い、外部操作権限を与えません。
 
@@ -75,7 +76,7 @@ Claudeによる直接の `codex` CLI、自由文prompt、別ラッパー、外�
 }
 ```
 
-依頼者は承認要否を指定できません。Codexがこの文書の規則から導出し、必要な承認記録がなければ操作を止めます。
+依頼者は承認要否を指定できません。sealed contractの`Approval required`から導出します。現行transportにはrequesterが書けないCodex-owned approval receiptの発行・検証workflowがまだないため、`Approval required: yes`はIssue本文のreferenceだけでは承認済みとみなさず常に停止します。
 
 Codexは実行結果を、秘密値を含まない次の形式で返します。
 
@@ -92,6 +93,10 @@ Codexは実行結果を、秘密値を含まない次の形式で返します。
 ```
 
 Codexが期待アカウントと実際のアカウントの不一致を検出した場合、操作せず `blocked:ops` を返します。
+
+`expectedAccount`と`target.identifier`は`Config/ownership.yml`からproviderごとに完全一致で決まります。GitHubは`login`/Issue contractの`repository`、Supabaseは`organization`/`projectRef`、Cloudflareは`accountId`/`target`、ElevenLabsは`accountId`/`workspaceId`、App Store Connectは`teamId`/`bundleId`です。未設定値、別account、別targetはCodexを起動する前に拒否します。
+
+同じ`requestId`と同じcanonical request digestでcompleted receiptがある場合、ラッパーは保存済みsanitized resultを返し、Codexやproviderを再実行しません。別digestで同じID、concurrent実行、`in-flight`のまま終了した曖昧な試行、resultだけの事前配置はfail closedです。固定promptはprovider idempotency keyを渡しますが、providerが対応しない場合まで外部side effectのuniversal exactly-onceを保証するものではありません。曖昧な試行を新しいIDや別操作として自動retryしません。
 
 `operation` は次の完全一致allowlistから選びます。各操作の `target.kind` と `inputs` は実装時のJSON Schemaでさらに制限し、未知のfieldを拒否します。
 
