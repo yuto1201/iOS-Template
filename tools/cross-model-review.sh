@@ -106,65 +106,74 @@ if [[ "$primary" == codex ]]; then
     timeout_seconds = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "600"), 10)
     term_grace = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TERM_GRACE_SECONDS", "5"), 10)
     exit 2 unless (1..600).cover?(timeout_seconds) && (1..5).cover?(term_grace)
-    # A dedicated process group lets timeout cleanup reach reviewer descendants.
-    pid = Process.spawn(*command, in: File::NULL, pgroup: true)
-    %w[INT TERM HUP].each do |signal|
-      Signal.trap(signal) do
-        begin
-          Process.kill(signal, -pid)
-        rescue Errno::ESRCH
-          nil
-        end
-        exit(128 + Signal.list.fetch(signal))
+    pid = nil
+    child_reaped = false
+    signal_group = lambda do |signal|
+      next if pid.nil?
+      begin
+        Process.kill(signal, -pid)
+      rescue Errno::ESRCH
+        nil
       end
     end
-    begin
-      Timeout.timeout(timeout_seconds) { Process.wait(pid) }
-    rescue Timeout::Error
-      signal_group = lambda do |signal|
-        begin
-          Process.kill(signal, -pid)
-        rescue Errno::ESRCH
-          nil
-        end
-      end
-      group_alive = lambda do
-        begin
-          Process.kill(0, -pid)
-          true
-        rescue Errno::ESRCH
-          false
-        end
-      end
-      child_reaped = false
-      signal_group.call("TERM")
+    group_alive = lambda do
+      next false if pid.nil?
       begin
-        Timeout.timeout(term_grace) do
-          loop do
-            begin
-              child_reaped ||= !Process.waitpid(pid, Process::WNOHANG).nil?
-            rescue Errno::ECHILD
-              child_reaped = true
-            end
-            break unless group_alive.call
-            sleep 0.05
-          end
-        end
-      rescue Timeout::Error
+        Process.kill(0, -pid)
+        true
+      rescue Errno::ESRCH, Errno::EPERM
+        # macOS may report EPERM for kill(0, -pgid) after the process-group
+        # leader has been reaped and no signalable member remains.
+        false
+      end
+    end
+    reap_child = lambda do
+      next if pid.nil? || child_reaped
+      begin
+        child_reaped = !Process.waitpid(pid, Process::WNOHANG).nil?
+      rescue Errno::ECHILD
+        child_reaped = true
+      end
+    end
+    terminate_group = lambda do |signal|
+      next if pid.nil?
+      signal_group.call(signal)
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + term_grace
+      while group_alive.call && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+        reap_child.call
+        sleep 0.05
+      end
+      if group_alive.call
         signal_group.call("KILL")
+        kill_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 1
+        while group_alive.call && Process.clock_gettime(Process::CLOCK_MONOTONIC) < kill_deadline
+          reap_child.call
+          sleep 0.05
+        end
       end
       unless child_reaped
         begin
           Process.wait(pid)
         rescue Errno::ECHILD
           nil
+        ensure
+          child_reaped = true
         end
       end
-      if group_alive.call
-        signal_group.call("KILL")
-        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 1
-        sleep 0.05 while group_alive.call && Process.clock_gettime(Process::CLOCK_MONOTONIC) < deadline
+    end
+    %w[INT TERM HUP].each do |signal|
+      Signal.trap(signal) do
+        terminate_group.call(signal)
+        exit(128 + Signal.list.fetch(signal))
       end
+    end
+    # A dedicated process group lets timeout and interrupt cleanup reach all
+    # reviewer descendants. Traps are installed before this publication point.
+    pid = Process.spawn(*command, in: File::NULL, pgroup: true)
+    begin
+      Timeout.timeout(timeout_seconds) { Process.wait(pid) }
+    rescue Timeout::Error
+      terminate_group.call("TERM")
       exit 124
     end
     exit($?.exitstatus || 1)

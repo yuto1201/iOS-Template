@@ -240,7 +240,7 @@ export FAKE_REVIEWER_DESCENDANT_PID_FILE="$workspace/hanging-reviewer-descendant
 export FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE="$workspace/hanging-reviewer-descendant.signal"
 IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS=1 IOS_TEMPLATE_REVIEW_TERM_GRACE_SECONDS=1 \
   assert_fails 'reviewer watchdog terminates a real hanging process group and becomes blocked review' run_review
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:review"]'
+OUTPUT="$workspace/output" assert_json "$FAKE_GH_LABELS_FILE" 'labels=JSON.parse(File.read(ARGV[0])); abort "timeout labels=#{labels.inspect}; output=#{File.read(ENV.fetch("OUTPUT"))}" unless labels == ["state:blocked:review"]'
 [[ "$(cat "$FAKE_REVIEWER_SIGNAL_FILE")" == TERM ]] || { echo 'hanging reviewer did not receive TERM' >&2; exit 1; }
 [[ "$(cat "$FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE")" == TERM ]] || { echo 'hanging reviewer descendant did not receive TERM' >&2; exit 1; }
 reviewer_pid=$(cat "$FAKE_REVIEWER_PID_FILE")
@@ -266,7 +266,8 @@ export FAKE_REVIEWER_SIGNAL_FILE="$workspace/interrupted-reviewer.signal"
 export FAKE_REVIEWER_DESCENDANT_PID_FILE="$workspace/interrupted-reviewer-descendant.pid"
 export FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE="$workspace/interrupted-reviewer-descendant.signal"
 export FAKE_REVIEWER_WATCHDOG_PID_FILE="$workspace/interrupted-reviewer-watchdog.pid"
-IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS=30 run_review >"$workspace/interrupted-review.out" 2>&1 &
+export FAKE_REVIEWER_IGNORE_TERM=1
+IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS=30 IOS_TEMPLATE_REVIEW_TERM_GRACE_SECONDS=1 run_review >"$workspace/interrupted-review.out" 2>&1 &
 interrupted_review_pid=$!
 for _ in {1..100}; do
   [[ -s "$FAKE_REVIEWER_WATCHDOG_PID_FILE" && -s "$FAKE_REVIEWER_DESCENDANT_PID_FILE" ]] && break
@@ -288,7 +289,7 @@ done
 [[ "$(cat "$FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE")" == TERM ]] || { echo 'interrupted reviewer descendant did not receive TERM' >&2; exit 1; }
 ! kill -0 "$reviewer_pid" 2>/dev/null || { echo 'interrupted reviewer survived' >&2; exit 1; }
 ! kill -0 "$reviewer_descendant_pid" 2>/dev/null || { echo 'interrupted reviewer descendant survived' >&2; exit 1; }
-unset FAKE_REVIEWER_PID_FILE FAKE_REVIEWER_SIGNAL_FILE FAKE_REVIEWER_DESCENDANT_PID_FILE FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE FAKE_REVIEWER_WATCHDOG_PID_FILE
+unset FAKE_REVIEWER_PID_FILE FAKE_REVIEWER_SIGNAL_FILE FAKE_REVIEWER_DESCENDANT_PID_FILE FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE FAKE_REVIEWER_WATCHDOG_PID_FILE FAKE_REVIEWER_IGNORE_TERM
 
 reset_review_requested
 export FAKE_REVIEWER_MODE=write

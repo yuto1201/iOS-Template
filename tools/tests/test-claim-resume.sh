@@ -220,6 +220,10 @@ assert_fails 'Claim rejects a non-shippable Issue before local publication' bash
 cp "$workspace/issue-body.valid" "$issue_body_file"
 
 claim_result="$workspace/claim.json"
+# The documented shipping order inspects state before Claim. Claim must upgrade
+# this exact minimal pre-Claim record instead of wedging after local publication.
+(cd "$clone" && tools/issue-state.sh get --repo yuto1201/iOS-Template --issue 42) > "$workspace/preclaim-state.json"
+assert_json "$clone/.artifacts/issues/42/state.json" 'value=JSON.parse(File.binread(ARGV.fetch(0))); abort unless value.keys.sort == %w[executor from resumeState state timestamp to] && value["state"] == "approved"'
 (cd "$clone" && "$claim" --repo yuto1201/iOS-Template --issue 42 --agent codex) > "$claim_result"
 assert_json "$claim_result" '
   value = JSON.parse(File.read(ARGV[0]))

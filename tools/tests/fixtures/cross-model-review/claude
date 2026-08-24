@@ -16,11 +16,11 @@ case "${FAKE_REVIEWER_MODE:?}" in
     fi
     /bin/bash -c '
       trap "" HUP
-      trap '\''printf "TERM\n" > "$FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE"; exit 0'\'' TERM
+      trap '\''printf "TERM\n" > "$FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE"; [[ "${FAKE_REVIEWER_IGNORE_TERM:-0}" == 1 ]] || exit 0'\'' TERM
       while :; do sleep 1; done
     ' &
     printf '%s\n' "$!" > "${FAKE_REVIEWER_DESCENDANT_PID_FILE:?}"
-    trap 'printf "TERM\n" > "${FAKE_REVIEWER_SIGNAL_FILE:?}"; exit 0' TERM
+    trap 'printf "TERM\n" > "${FAKE_REVIEWER_SIGNAL_FILE:?}"; [[ "${FAKE_REVIEWER_IGNORE_TERM:-0}" == 1 ]] || exit 0' TERM
     while :; do sleep 1; done
     ;;
   write) printf 'reviewer write\n' > "${FAKE_REVIEWER_WRITE_PATH:?}"; cat "${FAKE_REVIEWER_RESULT:?}" ;;

@@ -194,7 +194,12 @@ claim_fail_after contract
 
 state_file="$repo_root/.artifacts/issues/$issue/state.json"
 if [[ -e "$state_file" || -L "$state_file" ]]; then
-  ruby "$repo_root/tools/lib/workflow-json.rb" validate-claim-state "$state_file" "$issue" "$repo" "$branch" "$worktree_relative" "$base_sha" "$agent" "$contract_digest" >/dev/null || conflict 'durable Claim state differs from this exact agent or contract'
+  if [[ "$current_state" == approved ]] &&
+     ruby "$repo_root/tools/lib/workflow-json.rb" validate-preclaim-state "$state_file" approved >/dev/null 2>&1; then
+    write_claim_state "$branch" "$worktree_relative" "$base_sha" "$contract_digest" approved
+  else
+    ruby "$repo_root/tools/lib/workflow-json.rb" validate-claim-state "$state_file" "$issue" "$repo" "$branch" "$worktree_relative" "$base_sha" "$agent" "$contract_digest" >/dev/null || conflict 'durable Claim state differs from this exact agent or contract'
+  fi
 else
   write_claim_state "$branch" "$worktree_relative" "$base_sha" "$contract_digest" approved
 fi

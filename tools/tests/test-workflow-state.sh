@@ -125,6 +125,17 @@ printf '["state:proposed"]' > "$FAKE_GH_LABELS_FILE"
 "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
 "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from proposed --to approved >/dev/null
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["timestamp"]="not-a-time"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
+assert_fails 'malformed unsealed pre-Claim state cannot authorize a live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+cat > "$artifact_issue/state.json" <<EOF
+{"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$(git -C "$repo_root" rev-parse HEAD)","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"sha256:$(printf '0%.0s' {1..64})"},"state":"approved","previousState":null,"resumeState":null,"executor":"codex"}
+EOF
+assert_fails 'full state without its sealed contract cannot fall back to the live Issue' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+rm -f "$artifact_issue/state.json"
+printf '["state:blocked:review"]' > "$FAKE_GH_LABELS_FILE"
+assert_fails 'post-Claim state without durable evidence cannot recreate live authorization' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
 rm -f "$artifact_issue/state.json" "$artifact_issue/state-transition.pending.json"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 

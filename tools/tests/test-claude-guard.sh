@@ -178,6 +178,8 @@ assert_inline_deny deny-unlisted-mcp mcp__calendar__list_events calendarId local
 assert_inline_deny deny-near-match-xcode-mcp mcp__xcodebuildx__build_sim projectPath "$repo_root/TemplateApp.xcodeproj"
 assert_inline_deny deny-unknown-xcode-action mcp__xcodebuild__archive_upload projectPath "$repo_root/TemplateApp.xcodeproj"
 assert_inline_deny deny-xcode-device-default mcp__xcodebuild__session_set_defaults deviceId "00000000-0000-0000-0000-000000000000"
+assert_inline_deny deny-xcode-persisted-profile mcp__xcodebuild__session_use_defaults_profile profile device
+assert_inline_deny deny-xcode-arbitrary-lldb mcp__xcodebuildmcp__debug_lldb_command command "platform shell gh issue list"
 
 assert_inline_deny deny-dot-tools-script Bash command "./tools/tests/fixtures/claude-hook/unapproved-external.sh"
 assert_inline_deny deny-sh-tools-script Bash command "sh tools/tests/fixtures/claude-hook/unapproved-external.sh"

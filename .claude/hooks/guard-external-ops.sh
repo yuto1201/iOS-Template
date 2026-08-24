@@ -14,9 +14,9 @@ normalize_text() {
 xcode_mcp_action_is_allowed() {
   case "$1" in
     boot_sim|build_run_sim|build_sim|clean|discover_projs|get_app_bundle_id|get_coverage_report|get_file_coverage|get_sim_app_path|install_app_sim|launch_app_sim|list_schemes|list_sims|open_sim|record_sim_video|screenshot|show_build_settings|snapshot_ui|stop_app_sim|test_sim) return 0 ;;
-    session_clear_defaults|session_set_defaults|session_show_defaults|session_use_defaults_profile) return 0 ;;
+    session_clear_defaults|session_set_defaults|session_show_defaults) return 0 ;;
     batch|button|drag|gesture|key_press|key_sequence|long_press|swipe|tap|touch|type_text|wait_for_ui) return 0 ;;
-    debug_attach_sim|debug_breakpoint_add|debug_breakpoint_remove|debug_continue|debug_detach|debug_lldb_command|debug_stack|debug_variables) return 0 ;;
+    debug_attach_sim|debug_breakpoint_add|debug_breakpoint_remove|debug_continue|debug_detach|debug_stack|debug_variables) return 0 ;;
     *) return 1 ;;
   esac
 }

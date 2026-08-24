@@ -78,20 +78,10 @@ workflow_issue_has_sealed_identity() {
   # Only the exact minimal record produced before Claim may continue to use the
   # live Issue contract. Any full or malformed record requires sealed evidence
   # and therefore fails closed when the contract is absent.
-  ruby -rjson -rtime -e '
-    begin
-      value = JSON.parse(File.binread(ARGV.fetch(0)))
-      minimal = %w[executor from resumeState state timestamp to]
-      states = %w[proposed approved claimed in-progress verify-passed review-requested changes-requested approved-for-merge merged done paused superseded blocked:user blocked:ops blocked:review blocked:conflict blocked:dependency blocked:environment blocked:repeated-failure]
-      valid = value.is_a?(Hash) && value.keys.sort == minimal && value["executor"] == "codex" &&
-        states.include?(value["state"]) && (value["from"].nil? || states.include?(value["from"])) &&
-        states.include?(value["to"]) && (value["resumeState"].nil? || states.include?(value["resumeState"]))
-      Time.iso8601(value["timestamp"]) if valid
-      exit(valid ? 1 : 0)
-    rescue JSON::ParserError, Errno::ENOENT, Errno::EACCES, ArgumentError, TypeError
-      exit 0
-    end
-  ' "$state_file"
+  if ruby "$repo_root/tools/lib/workflow-json.rb" validate-preclaim-state "$state_file" >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
 }
 
 workflow_require_issue_operation() {
@@ -108,9 +98,9 @@ workflow_require_issue_operation() {
       fi
       state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
       workflow_is_state "$state" || return 1
-      [[ "$state" != claimed && "$state" != in-progress && "$state" != verify-passed &&
-         "$state" != review-requested && "$state" != changes-requested &&
-         "$state" != approved-for-merge && "$state" != merged && "$state" != done ]] || return 1
+      if [[ ! -e "$repo_root/.artifacts/issues/$issue/state.json" ]]; then
+        [[ "$state" == proposed || "$state" == approved ]] || return 1
+      fi
       workflow_require_live_issue_operation "$repo_root" "$repo" "$issue" "$issue_json" "$operation"
       ;;
     transition)

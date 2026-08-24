@@ -189,6 +189,22 @@ def full_state_record(value, issue, repository)
   value
 end
 
+def minimal_state_record(value, expected_state: nil)
+  exact_keys(value, %w[executor from resumeState state timestamp to], 'minimal state record')
+  workflow_state(value['state'], 'minimal state record state')
+  fail_closed('minimal state record state differs from the live Issue') if expected_state && value['state'] != expected_state
+  workflow_state(value['from'], 'minimal state record from', nullable: true)
+  workflow_state(value['to'], 'minimal state record to')
+  workflow_state(value['resumeState'], 'minimal state record resumeState', nullable: true)
+  fail_closed('minimal state record executor is invalid') unless value['executor'] == 'codex'
+  begin
+    Time.iso8601(value['timestamp'])
+  rescue ArgumentError, TypeError
+    fail_closed('minimal state record timestamp is invalid')
+  end
+  value
+end
+
 def transition_state_record(path, issue, repository, state, from, to, resume_state, timestamp, head_sha)
   workflow_state(state, 'new state')
   workflow_state(from, 'new from', nullable: true)
@@ -212,7 +228,7 @@ def transition_state_record(path, issue, repository, state, from, to, resume_sta
   minimal_keys = %w[executor from resumeState state timestamp to]
   if value.is_a?(Hash) && value.keys.sort == minimal_keys
     fail_closed('verification Head requires a full durable state record') unless head_sha.nil?
-    workflow_state(value['state'], 'minimal state record state')
+    minimal_state_record(value)
     return {
       'state' => state, 'from' => from, 'to' => to,
       'resumeState' => resume_state, 'executor' => 'codex', 'timestamp' => timestamp
@@ -760,6 +776,11 @@ when 'state-record'
     'executor' => 'codex', 'timestamp' => timestamp
   }
   puts canonical_json(record)
+when 'validate-preclaim-state'
+  path, expected_state = ARGV
+  fail_closed('validate-preclaim-state arguments are invalid') unless ARGV.length.between?(1, 2)
+  fail_closed('pre-Claim state record path is a symlink') if File.symlink?(path)
+  puts canonical_json(minimal_state_record(read_json(path), expected_state: expected_state))
 when 'transition-state-record'
   path, issue, repository, state, from, to, resume_state, timestamp, head_sha = ARGV
   fail_closed('transition-state-record arguments are invalid') unless ARGV.length == 9 && issue.match?(/\A[1-9][0-9]*\z/)
