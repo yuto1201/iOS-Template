@@ -56,7 +56,7 @@ normalized_command=${normalized_command//$'\t'/ }
 normalized_command=${normalized_command//\\/}
 normalized_command=$(builtin printf '%s' "$normalized_command" | /usr/bin/tr '[:upper:]' '[:lower:]')
 
-shell_indirection_pattern='(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?(bash|sh|zsh|dash|fish)[[:space:]]+(-[[:alpha:]]*c[[:alpha:]]*|--command)(=|[[:space:]])'
+shell_indirection_pattern='(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?(bash|sh|zsh|dash|fish)[[:space:]]+(-[[:alpha:]]*c[[:alpha:]]*|--command)($|[^[:alnum:]_-])'
 if [[ "$normalized_command" =~ $shell_indirection_pattern ]]; then
   deny
   exit 0
@@ -116,7 +116,7 @@ if [[ -n "$script_path" ]]; then
     deny
     exit 0
   fi
-  if /usr/bin/grep -Eqi '(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?(bash|sh|zsh|dash|fish)[[:space:]]+(-[[:alpha:]]*c[[:alpha:]]*|--command)(=|[[:space:]])|(^|[^[:alnum:]_])(gh|supabase|wrangler|elevenlabs|fastlane|codex|security[[:space:]]+find-generic-password)([^[:alnum:]_]|$)|(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?git[[:space:]].*(push|pull|fetch|clone|ls-remote|remote|submodule|archive)([^[:alnum:]_]|$)|Library/Application[[:space:]]+Support/iOS-Template/secrets/' "$project_dir/$script_path"; then
+  if /usr/bin/grep -Eqi '(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?(bash|sh|zsh|dash|fish)[[:space:]]+(-[[:alpha:]]*c[[:alpha:]]*|--command)($|[^[:alnum:]_-])|(^|[^[:alnum:]_])(gh|supabase|wrangler|elevenlabs|fastlane|codex|security[[:space:]]+find-generic-password)([^[:alnum:]_]|$)|(^|[^[:alnum:]_.-])(/[^[:space:]]*/)?git[[:space:]].*(push|pull|fetch|clone|ls-remote|remote|submodule|archive)([^[:alnum:]_]|$)|Library/Application[[:space:]]+Support/iOS-Template/secrets/' "$project_dir/$script_path"; then
     deny
     exit 0
   fi

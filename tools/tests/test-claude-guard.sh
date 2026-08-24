@@ -29,6 +29,7 @@ deny_cases=(
   deny-git-dir-fetch
   deny-git-pull
   deny-nested-git-push
+  deny-nested-git-push-no-space
   deny-absolute-nested-git-push
   deny-git-clone
   deny-absolute-git-clone
