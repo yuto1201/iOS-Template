@@ -331,16 +331,34 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 
 ## 7. Pre-merge条件
 
-`tools/premerge-gate.sh` は次を検査します。
+`tools/premerge-gate.sh --repo OWNER/REPO --issue NUMBER --head-sha SHA` は、最初にdescriptor-boundな `merge-state.rb validate-worktree` を再利用し、durable stateが `approved-for-merge` であることを確認します。その後、caller repository、Issue、Branch、symbolic ref、Head、Base ancestry、canonical worktree、clean状態が一致するまで `gh` を実行しません。
+
+gateはprimary checkoutのartifactをpathごとに読み直しません。`.artifacts`、`issues`、Issue、Head、`provider-preflights` の各componentを `openat` と `NOFOLLOW` で開いたままにし、次のleafをregularかつsingle-linkとしてsnapshotします。
+
+- `state.json`
+- `issue-contract.json`
+- `${headSha}/verify.json`
+- `${headSha}/review-packet.json`
+- `${headSha}/review.json`
+- `github-preflight.json`
+- contractが要求する各provider preflight
+- Issue worktreeの `Config/ownership.yml`
+
+同じdescriptor bytesを最後まで使い、終了前にheld descriptor、現在のpath inode、component identity、bytesが変わっていないことを再確認します。Swift validatorは `--expected-file-digest sha256:...` を受け取り、別processであってもgateが保持した `verify.json` のexact bytesを読んだことを証明します。
+
+そのうえで次を検査します。
 
 - 現在のHead SHA = verify.jsonのheadSha
 - 現在のHead SHA = review.jsonのheadSha
 - verify status = passedまたは正当なnot-applicable
 - review verdict = approved
-- 重大Finding = 0
+- `review-packet.json` と `review.json` のexact schema、Base/Head/Verify SHA、primary/opposite model、Issue contract digestが一致
+- approved reviewのFinding = 0、全Acceptance criteria = supported、`reviewedAt` がverify完了後かつ未来でない
 - Acceptance criteriaの証拠欠落 = 0
-- `issue-contract.json` の全 `AC-*` が `acceptanceEvidence` に一度ずつ存在し、Codexが再取得したIssue本文から計算したcontract digestとも一致
-- Codexがmerge直前に更新した `.artifacts/issues/${issueNumber}/github-preflight.json` が `intendedOperation: github.merge_pr` と現在のHead SHAを持ち、そのcanonical payload digestとfreshness条件を満たす
-- Provider外部操作がある場合、`.artifacts/issues/${issueNumber}/provider-preflights/${provider}.json` とそのdigestが存在
+- `gh issue view` のfixed fields `number,url,body,labels` がcaller Issueと一致し、`type:feature` または `type:regression` がちょうど一つ存在
+- live Issue本文をshared Issue parserで再構成したcanonical contract bytesが `issue-contract.json` と完全一致
+- Provider外部操作はproviderごとに一つ以下で、exact operationとenvironmentがIssueの五field operation blockに一致し、account/target、health、timestamp、digestが安全
+- `github-preflight.json` のaccountが `Config/ownership.yml` の `yuto1201` と一致し、repository、`main`、URL、`github.merge_pr`、Issue、Head、digestが完全一致
+- GitHub preflightがverify完了、review完了、`approved-for-merge` transitionのすべてより新しく、許容未来時刻を超えない
 
 一つでも不一致ならマージしません。

@@ -1336,6 +1336,7 @@ func validateDocumentationDiff(expectedBase: String, expectedHead: String) throw
 struct Options {
     let file: String
     let candidateFile: String?
+    let expectedFileDigest: String?
     let expectedIssue: Int
     let expectedBase: String
     let expectedHead: String
@@ -3603,7 +3604,7 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     let finalPath = repository.rootPath + "/" + (evidenceComponents + ["verify.json"]).joined(separator: "/")
     let candidatePath = repository.rootPath + "/" + (evidenceComponents + [candidateName]).joined(separator: "/")
     try validate(options: Options(
-        file: finalPath, candidateFile: candidatePath, expectedIssue: options.issue,
+        file: finalPath, candidateFile: candidatePath, expectedFileDigest: nil, expectedIssue: options.issue,
         expectedBase: options.expectedBase, expectedHead: options.expectedHead,
         initialVisualResultData: visualData, initialVisualResultDigest: visualDigest
     ))
@@ -4262,6 +4263,7 @@ func publishDocumentationEvidence(_ options: DocumentationPublishOptions) throws
     try validate(options: Options(
         file: repository.rootPath + "/" + relativePath,
         candidateFile: repository.rootPath + "/" + (evidenceComponents + [candidateName]).joined(separator: "/"),
+        expectedFileDigest: nil,
         expectedIssue: options.issue,
         expectedBase: options.expectedBase,
         expectedHead: options.expectedHead,
@@ -4277,9 +4279,10 @@ func parseOptions(_ arguments: [String]) throws -> Options {
     var expectedBase: String?
     var expectedHead: String?
     var candidateFile: String?
+    var expectedFileDigest: String?
     var index = 0
     var seen = Set<String>()
-    let allowed = ["--file", "--candidate-file", "--expected-issue", "--expected-base", "--expected-head"]
+    let allowed = ["--file", "--candidate-file", "--expected-file-digest", "--expected-issue", "--expected-base", "--expected-head"]
     while index < arguments.count {
         let option = arguments[index]
         guard allowed.contains(option) else { throw ValidationFailure("unknown argument: \(option)") }
@@ -4294,6 +4297,11 @@ func parseOptions(_ arguments: [String]) throws -> Options {
         case "--candidate-file":
             guard !value.isEmpty else { throw ValidationFailure("--candidate-file must not be empty") }
             candidateFile = value
+        case "--expected-file-digest":
+            guard value.range(of: "^sha256:[0-9a-f]{64}$", options: .regularExpression) != nil else {
+                throw ValidationFailure("--expected-file-digest must be a sha256 digest")
+            }
+            expectedFileDigest = value
         case "--expected-issue":
             guard let parsed = Int(value), parsed > 0 else {
                 throw ValidationFailure("--expected-issue must be a positive integer")
@@ -4322,6 +4330,7 @@ func parseOptions(_ arguments: [String]) throws -> Options {
     return Options(
         file: file,
         candidateFile: candidateFile,
+        expectedFileDigest: expectedFileDigest,
         expectedIssue: expectedIssue,
         expectedBase: expectedBase,
         expectedHead: expectedHead,
@@ -4373,6 +4382,12 @@ func validate(options: Options) throws {
         components: sourceComponents,
         at: candidateName == nil ? "verify.json" : "verify.json candidate"
     )
+    if let expectedFileDigest = options.expectedFileDigest {
+        let actualFileDigest = "sha256:\(sha256(data: evidenceData))"
+        guard actualFileDigest == expectedFileDigest else {
+            throw ValidationFailure("verify.json bytes do not match --expected-file-digest")
+        }
+    }
     let root = try readJSONObject(data: evidenceData, at: "verify.json")
     try requireExactKeys(
         root,

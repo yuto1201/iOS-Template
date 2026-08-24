@@ -335,6 +335,21 @@ make_documentation_only() {
 
 prepare_fixture valid-passed
 run_validator
+expected_file_digest="sha256:$(shasum -a 256 "$evidence_file" | awk '{print $1}')"
+(
+  cd "$fixture_root"
+  "$validator" --file "$evidence_file" --expected-file-digest "$expected_file_digest" \
+    --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha"
+)
+if (
+  cd "$fixture_root"
+  "$validator" --file "$evidence_file" --expected-file-digest "sha256:$(printf '0%.0s' {1..64})" \
+    --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha"
+) >"$scratch/wrong-file-digest.stdout" 2>"$scratch/wrong-file-digest.stderr"; then
+  echo 'validator accepted bytes that did not match --expected-file-digest' >&2
+  exit 1
+fi
+grep -Fq 'verify.json bytes do not match --expected-file-digest' "$scratch/wrong-file-digest.stderr"
 (
   cd "$fixture_root"
   PATH="$poison_bin:$PATH" POISON_LOG="$poison_log" \

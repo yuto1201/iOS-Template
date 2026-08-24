@@ -17,7 +17,7 @@ Closes #
 
 - Reviewer: _Codex or Claude_
 - Reviewed SHA: _paste reviewed SHA_
-- Verdict: _approved or changes-requested_
+- Verdict: approved _(changes-requested evidence is not renderable as a merge-ready PR body)_
 
 ## Remaining work
 

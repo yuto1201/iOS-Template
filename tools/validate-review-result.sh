@@ -16,7 +16,7 @@ done
 [[ ( "$primary" == codex || "$primary" == claude ) && -n "$packet" ]] || usage
 
 topology=$(ruby "$repo_root/tools/lib/review-artifacts.rb" "$repo_root") || exit 1
-ruby -rjson -rdigest -rtime -rfiddle/import - "$topology" "$primary" "$packet" "$result" <<'RUBY'
+ruby -I "$repo_root/tools/lib" -rjson -rdigest -rtime -rfiddle/import -rreview-contract - "$topology" "$primary" "$packet" "$result" <<'RUBY'
 topology_json, primary, packet_input, result_input = ARGV
 
 def reject(message)
@@ -278,6 +278,15 @@ if verdict == "approved"
 else
   blocking = findings.any? { |finding| %w[critical high medium].include?(finding["severity"]) } || assessments.any? { |entry| entry["status"] == "unsupported" }
   reject("changes-requested result must contain a blocking finding or unsupported criterion") unless blocking
+end
+begin
+  IOSTemplate::ReviewContract.validate!(
+    packet_bytes: packet_file.fetch(:bytes), result_bytes: result_file.fetch(:bytes),
+    verify_bytes: verify_file.fetch(:bytes), contract_bytes: contract_file.fetch(:bytes),
+    primary: primary, issue: issue, base_sha: base_sha, head_sha: head_sha
+  )
+rescue IOSTemplate::ReviewContract::ValidationError => error
+  reject(error.message)
 end
 puts JSON.generate(result)
 RUBY

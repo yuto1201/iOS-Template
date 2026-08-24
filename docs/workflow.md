@@ -167,13 +167,15 @@ ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変
 ### 5.5 PR and merge
 
 1. Codexが個人GitHubアカウントを再確認する。
-2. BranchをPushする。
-3. PRを作成し、Issueを `Closes #${ISSUE_NUMBER}` で関連付ける。
-4. `tools/premerge-gate.sh` を実行する。
-5. 現在のHead SHAと検証・レビューSHAが一致することを確認する。
-6. `gh pr merge --squash --match-head-commit ${HEAD_SHA}` を実行する。
-7. PRのマージ状態とIssueのCloseを確認する。
-8. remote Branch、worktree、local Branchの順に対象を再確認して後片付けする。
+2. durable stateのrepository、Issue、Branch、worktree、Base、Head、contract digestと、callerの `--repo`、現在のGit branch/ref/Head/Base/clean状態を一致させる。
+3. `tools/premerge-gate.sh --repo ${OWNER_REPO} --issue ${ISSUE_NUMBER} --head-sha ${HEAD_SHA}` を初回実行する。
+4. approvedな固定snapshotからPR本文をrenderする。`changes-requested` は本文を生成せず拒否する。
+5. exact HeadをBranchへPushし、PRを作成または既存OPEN PRを再確認して、正確なPR番号をdurable stateへ保存する。
+6. `github.merge_pr` のaccount preflightを現在のIssue/Headに対して更新する。
+7. 同じ引数でpre-merge gateを最終実行し、現在のHead SHA、検証、review、live Issue、provider、GitHub preflightが同じ固定snapshotへ結び付くことを確認する。
+8. PR identityを再取得し、`gh pr merge ${PR_NUMBER} --repo ${OWNER_REPO} --squash --match-head-commit ${HEAD_SHA}` を実行する。
+9. PRのマージ状態とIssueのCloseを確認する。
+10. remote Branch、worktree、local Branchの順に対象を再確認して後片付けする。
 
 `gh pr merge --delete-branch` に後片付け全体を任せません。各対象を明示して、別worktreeやユーザーBranchを削除しないようにします。
 

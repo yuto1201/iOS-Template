@@ -115,7 +115,7 @@ fi
 [[ "$state_name" == approved-for-merge ]] || fail 'normal merge requires approved-for-merge state'
 
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null || fail 'initial merge evidence preflight failed'
-"$repo_root/tools/premerge-gate.sh" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed before publication'
+"$repo_root/tools/premerge-gate.sh" --repo "$repo" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed before publication'
 body=$("$repo_root/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head_sha") || fail 'PR body rendering failed'
 
 pr_number=''
@@ -173,7 +173,7 @@ if [[ -z "$pr_number" ]]; then
 fi
 
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null || fail 'merge preflight failed'
-"$repo_root/tools/premerge-gate.sh" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed'
+"$repo_root/tools/premerge-gate.sh" --repo "$repo" --issue "$issue" --head-sha "$head_sha" >/dev/null || fail 'pre-merge gate failed'
 pr_document=$(view_exact_pr "$pr_number") || fail 'PR identity could not be refreshed before merge'
 [[ "$(validate_pr OPEN "$pr_document" "$pr_number")" == OPEN ]] || fail 'PR identity changed before merge'
 gh pr merge "$pr_number" --repo "$repo" --squash --match-head-commit "$head_sha" || fail 'Squash Merge failed'
