@@ -15,7 +15,10 @@ assert_fails() {
 }
 
 write_feature_issue() {
-  cat > "$1" <<'EOF'
+  local path=$1
+  local external_operations=${2:-- None.}
+  local user_approvals=${3:-None.}
+  cat > "$path" <<EOF
 ## Goal
 
 Make the workflow contract testable.
@@ -43,11 +46,11 @@ Make the workflow contract testable.
 
 ## External operations
 
-- None.
+$external_operations
 
 ## User approvals
 
-- Not required.
+- $user_approvals
 EOF
 }
 
@@ -65,8 +68,28 @@ assert_fails 'duplicate acceptance criteria ID is rejected' "$repo_root/tools/va
 sed '/## Spec anchors/,/## Dependencies/d' "$workspace/feature.md" > "$workspace/missing-anchor.md"
 assert_fails 'missing specification anchors are rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/missing-anchor.md"
 
-sed 's/- None\./- Production database deletion./' "$workspace/feature.md" > "$workspace/approval-required.md"
-assert_fails 'approval-required operation without approval reference is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/approval-required.md"
+write_feature_issue "$workspace/missing-service.md" $'- Environment: staging\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+assert_fails 'external operation without a service is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/missing-service.md"
+
+write_feature_issue "$workspace/unknown-approval-classification.md" $'- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: maybe' 'None.'
+assert_fails 'unknown approval classification is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-approval-classification.md"
+
+write_feature_issue "$workspace/missing-approval-classification.md" $'- Service: GitHub\n- Environment: production\n- Executor: Codex' 'None.'
+assert_fails 'missing approval classification is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/missing-approval-classification.md"
+
+write_feature_issue "$workspace/app-store-legal-claim.md" $'- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'None.'
+assert_fails 'final App Store legal claim requires an approval reference' "$repo_root/tools/validate-issue-body.sh" "$workspace/app-store-legal-claim.md"
+
+write_feature_issue "$workspace/irreversible-production-transform.md" $'- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'None.'
+assert_fails 'irreversible production transform requires an approval reference' "$repo_root/tools/validate-issue-body.sh" "$workspace/irreversible-production-transform.md"
+
+write_feature_issue "$workspace/normal-repo-operation.md" $'- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+"$repo_root/tools/validate-issue-body.sh" "$workspace/normal-repo-operation.md"
+
+write_feature_issue "$workspace/approved-external-operation.md" $'- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73'
+"$repo_root/tools/validate-issue-body.sh" "$workspace/approved-external-operation.md"
+
+"$repo_root/tools/validate-issue-body.sh" --type feature "$workspace/feature.md"
 
 cat > "$workspace/regression.md" <<'EOF'
 ## Goal
@@ -99,7 +122,7 @@ Prevent a merged bug from recurring.
 
 ## User approvals
 
-- Not required.
+- None.
 
 ## Original PR
 
@@ -110,7 +133,16 @@ Prevent a merged bug from recurring.
 1. Launch the app.
 2. Open Settings.
 EOF
-"$repo_root/tools/validate-issue-body.sh" "$workspace/regression.md"
+"$repo_root/tools/validate-issue-body.sh" --type regression "$workspace/regression.md"
+
+sed -e 's/^## Original PR$/## Original Reference/' -e 's/^## Reproduction steps$/## Steps/' "$workspace/regression.md" > "$workspace/regression-missing-both.md"
+assert_fails 'Regression Issue without both regression fields is rejected' "$repo_root/tools/validate-issue-body.sh" --type regression "$workspace/regression-missing-both.md"
+
+sed 's/^## Original PR$/## Original Reference/' "$workspace/regression.md" > "$workspace/regression-missing-original-pr.md"
+assert_fails 'Regression Issue without Original PR is rejected' "$repo_root/tools/validate-issue-body.sh" --type regression "$workspace/regression-missing-original-pr.md"
+
+sed 's/^## Reproduction steps$/## Steps/' "$workspace/regression.md" > "$workspace/regression-missing-reproduction.md"
+assert_fails 'Regression Issue without reproduction steps is rejected' "$repo_root/tools/validate-issue-body.sh" --type regression "$workspace/regression-missing-reproduction.md"
 
 for required in \
   '.github/ISSUE_TEMPLATE/feature.yml' \

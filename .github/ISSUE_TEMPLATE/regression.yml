@@ -54,14 +54,19 @@ body:
     id: external-operations
     attributes:
       label: External operations
-      description: List external operations with service, environment, and `Codex` executor, or write `None`.
+      description: "Write `None`, or use the exact Service, Environment, Executor, and Approval required fields."
+      placeholder: |
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
     validations:
       required: true
   - type: textarea
     id: user-approvals
     attributes:
       label: User approvals
-      description: Cite the approval reference when required; otherwise write `Not required`.
+      description: "When Approval required is yes, cite an approval Issue, decision, or URL; otherwise write `None` or `No additional approval`."
     validations:
       required: true
   - type: input
