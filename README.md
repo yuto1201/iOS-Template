@@ -73,11 +73,11 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 
 ### ライブ Simulator 検証記録
 
-`template-foundation-live` バッチでは、次のインストール済み環境を一度だけ解決し、4条件で固定しました。matrixのSHA-256は`8ce34262933128fef09a61c146dca4db8098dfe77eb2936ed147899c51d0b3dd`です。
+`template-foundation-live` バッチでは、次のインストール済み環境を一度だけ解決し、4条件で固定しました。matrixのSHA-256は`e4c2e3cc3a11344133b18dbaea6690f98b3bf3e45ebf87ca8bbbc831e450a82d`です。
 
 | 項目 | 解決値 |
 | --- | --- |
-| Xcode | `/Applications/Xcode.app/Contents/Developer`、version `26.5`、build `17F42` |
+| Xcode | `/Applications/Xcode.app/Contents/Developer`、version `26.6`、build `17F113` |
 | iOS Runtime | `com.apple.CoreSimulator.SimRuntime.iOS-26-5`、version `26.5` |
 | iPhone | `iPhone 17 Pro` (`com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro`、Pro Maxを除外) |
 | iPad | `iPad Air 13-inch (M4)` (`com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M4`) |
