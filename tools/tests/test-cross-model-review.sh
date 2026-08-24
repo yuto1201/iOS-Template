@@ -13,10 +13,13 @@ trap 'rm -rf "$workspace" "$artifact_issue"' EXIT
 
 fake_bin="$workspace/bin"
 mkdir -p "$fake_bin" "$artifact_root"
+real_codex=$(command -v codex)
+[[ "$real_codex" == /* && $(/usr/bin/file -b "$real_codex") == Mach-O* ]] || { echo 'installed Codex must be a native Mach-O executable for sandbox probes' >&2; exit 1; }
 cp "$repo_root/tools/tests/fixtures/cross-model-review/claude" "$fake_bin/claude"
-cp "$repo_root/tools/tests/fixtures/cross-model-review/codex" "$fake_bin/codex"
+cp "$repo_root/tools/tests/fixtures/cross-model-review/codex" "$fake_bin/codex-fixture"
+"${CC:-cc}" -Wall -Werror "$repo_root/tools/tests/fixtures/cross-model-review/codex-native.c" -o "$fake_bin/codex"
 cp "$repo_root/tools/tests/fixtures/gh" "$fake_bin/gh"
-chmod +x "$fake_bin/claude" "$fake_bin/codex" "$fake_bin/gh"
+chmod +x "$fake_bin/claude" "$fake_bin/codex" "$fake_bin/codex-fixture" "$fake_bin/gh"
 export PATH="$fake_bin:$PATH"
 export FAKE_REVIEWER_LOG="$workspace/reviewer.log"
 export FAKE_REVIEWER_REQUIRE_CLOSED_STDIN=1
@@ -25,6 +28,11 @@ export FAKE_GH_LABELS_FILE="$workspace/labels.json"
 export FAKE_GH_COMMENTS_FILE="$workspace/comments.json"
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+fake_codex_home="$workspace/fake-codex-home"
+mkdir -p "$fake_codex_home"
+fake_codex_home=$(cd "$fake_codex_home" && pwd -P)
+printf 'must-not-be-readable-by-reviewer\n' > "$fake_codex_home/sentinel"
+export CODEX_HOME="$fake_codex_home"
 
 digest() { shasum -a 256 "$1" | awk '{print "sha256:" $1}'; }
 assert_json() { ruby -rjson -e "$2" "$1"; }
@@ -49,6 +57,17 @@ JSON
 cat > "$artifact_root/review-packet.json" <<JSON
 {"schemaVersion":1,"issue":$issue,"primaryModel":"codex","reviewerModel":"claude","baseSha":"$base_sha","headSha":"$head_sha","verifySha":"$head_sha","issueContract":{"path":".artifacts/issues/$issue/issue-contract.json","digest":"$contract_digest"},"specAnchors":["specs/acceptance.md#1"],"acceptanceCriteria":[{"id":"AC-1","text":"A result is tied to the reviewed Head"}],"diffFile":".artifacts/issues/$issue/$head_sha/review.diff","verifyFile":".artifacts/issues/$issue/$head_sha/verify.json","imageFiles":["iphone-en.png"]}
 JSON
+
+git_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --absolute-git-dir)
+git_common=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
+sandbox_filesystem="permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$repo_root\"=\"read\",\"$git_dir\"=\"read\",\"$git_common\"=\"read\"}"
+reviewer_sandbox() {
+  "$real_codex" sandbox -c 'default_permissions="reviewer"' -c 'permissions.reviewer.extends=":read-only"' -c "$sandbox_filesystem" -c 'permissions.reviewer.network={enabled=false}' -P reviewer -- "$@"
+}
+reviewer_sandbox /bin/cat "$artifact_root/review-packet.json" >/dev/null
+reviewer_sandbox /bin/cat "$repo_root/README.md" >/dev/null
+assert_fails 'custom reviewer profile denies the retained CODEX_HOME sentinel' reviewer_sandbox /bin/cat "$fake_codex_home/sentinel"
+assert_fails 'custom reviewer profile denies absolute executable socket creation' reviewer_sandbox /usr/bin/ruby -rsocket -e 'Socket.new(Socket::AF_INET, Socket::SOCK_STREAM, 0); exit 0'
 
 review_anchor='specs/acceptance.md#1'
 write_packet() {
@@ -79,6 +98,17 @@ run_review() {
   local primary=${1:-codex}
   "$repo_root/tools/cross-model-review.sh" --primary "$primary" --packet ".artifacts/issues/$issue/$head_sha/review-packet.json" --output ".artifacts/issues/$issue/$head_sha/review.json" >/dev/null
 }
+
+script_launcher_bin="$workspace/script-launcher"
+mkdir "$script_launcher_bin"
+cp "$repo_root/tools/tests/fixtures/cross-model-review/codex" "$script_launcher_bin/codex"
+chmod +x "$script_launcher_bin/codex"
+write_packet claude codex
+CODEX_HOME="$repo_root" assert_fails 'CODEX_HOME overlapping the allowed worktree fails closed' "$repo_root/tools/request-codex-review.sh" --packet ".artifacts/issues/$issue/$head_sha/review-packet.json" --output ".artifacts/issues/$issue/$head_sha/review.json"
+[[ $(cat "$workspace/output") == *'blocked:environment:'* ]] || { echo 'overlapping CODEX_HOME did not fail as blocked:environment' >&2; exit 1; }
+PATH="$script_launcher_bin:$fake_bin:$PATH" assert_fails 'script Codex launchers fail closed before review' "$repo_root/tools/request-codex-review.sh" --packet ".artifacts/issues/$issue/$head_sha/review-packet.json" --output ".artifacts/issues/$issue/$head_sha/review.json"
+[[ $(cat "$workspace/output") == *'blocked:environment:'* ]] || { echo 'script Codex launcher did not fail as blocked:environment' >&2; exit 1; }
+write_packet codex claude
 
 # RED was observed with the previous assertion while the production tool was absent.
 export FAKE_REVIEWER_MODE=approved
@@ -161,4 +191,4 @@ run_review claude
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
 run_review claude
 
-echo 'PASS: approved, envelope, changes-requested, malformed, SHA mismatch, timeout, write-attempt, hardened Codex, and idempotent retry cases'
+echo 'PASS: approved, envelope, changes-requested, malformed, SHA mismatch, timeout, write-attempt, native hardened Codex sandbox probes, and idempotent retry cases'

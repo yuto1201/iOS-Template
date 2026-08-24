@@ -15,16 +15,48 @@ instruction='You are the opposite-model acceptance auditor. Read only the suppli
 packet_absolute="$repo_root/$packet"
 prompt="$instruction
 Validated review packet: $packet_absolute"
-codex_bin=$(command -v codex)
-[[ "$codex_bin" == /* && -x "$codex_bin" ]] || { echo 'Codex executable is unavailable' >&2; exit 1; }
+blocked_environment() { echo "blocked:environment: $*" >&2; exit 1; }
+physical_directory() {
+  local path=$1 resolved
+  [[ "$path" == /* && -d "$path" && ! -L "$path" ]] || blocked_environment "unsafe directory: $path"
+  resolved=$(cd "$path" && pwd -P)
+  [[ "$resolved" == "$path" && "$resolved" != / ]] || blocked_environment "non-physical or broad directory: $path"
+  printf '%s\n' "$resolved"
+}
+safe_profile_path() {
+  [[ "$1" != *'"'* && "$1" != *\\* && "$1" != *$'\n'* && "$1" != *$'\r'* ]] || blocked_environment "unsafe profile path"
+}
+
+repo_root=$(physical_directory "$repo_root")
+git_file="$repo_root/.git"
+[[ -f "$git_file" && ! -L "$git_file" ]] || blocked_environment 'review worktree must use a physical linked .git file'
+git_dir_raw=$(/usr/bin/env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR /usr/bin/git -C "$repo_root" rev-parse --path-format=absolute --absolute-git-dir 2>/dev/null) || blocked_environment 'unable to resolve linked-worktree Git metadata'
+git_common_raw=$(/usr/bin/env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR /usr/bin/git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || blocked_environment 'unable to resolve common Git metadata'
+git_dir=$(physical_directory "$git_dir_raw")
+git_common=$(physical_directory "$git_common_raw")
+[[ "$git_common" == */.git && "$git_dir" == "$git_common"/worktrees/* && "${git_dir#"$git_common"/worktrees/}" != */* ]] || blocked_environment 'linked-worktree Git metadata is outside its exact worktree directory'
+[[ $(sed -n '1p' "$git_file") == "gitdir: $git_dir" && $(sed -n '2p' "$git_file") == '' ]] || blocked_environment 'linked-worktree .git metadata is not canonical'
+review_codex_home_candidate=${CODEX_HOME:-"$HOME/.codex"}
+review_codex_home=$(physical_directory "$review_codex_home_candidate")
+for profile_path in "$repo_root" "$git_dir" "$git_common"; do safe_profile_path "$profile_path"; done
+for profile_path in "$repo_root" "$git_dir" "$git_common"; do
+  [[ "$review_codex_home" != "$profile_path" && "$review_codex_home" != "$profile_path"/* && "$profile_path" != "$review_codex_home"/* ]] || blocked_environment 'CODEX_HOME overlaps a reviewer-readable profile root'
+done
+
+codex_candidate=$(command -v codex 2>/dev/null || true)
+[[ "$codex_candidate" == /* && -x "$codex_candidate" ]] || blocked_environment 'Codex executable is unavailable'
+codex_bin=$(ruby -e 'print File.realpath(ARGV.fetch(0))' "$codex_candidate" 2>/dev/null) || blocked_environment 'Codex launcher cannot be resolved'
+[[ -f "$codex_bin" && ! -L "$codex_bin" && -x "$codex_bin" ]] || blocked_environment 'Codex launcher is not a regular executable'
+[[ $(/usr/bin/file -b "$codex_bin") == Mach-O* ]] || blocked_environment 'Codex launcher must be a native Mach-O executable'
+
+filesystem_profile="permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$repo_root\"=\"read\",\"$git_dir\"=\"read\",\"$git_common\"=\"read\"}"
 review_home=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-codex-review.XXXXXX")
 chmod 700 "$review_home"
 review_bin="$review_home/bin"
 mkdir "$review_bin"
 ln -s /usr/bin/uname "$review_bin/uname"
-review_codex_home=${CODEX_HOME:-"$HOME/.codex"}
 trap 'rm -rf "$review_home"' EXIT
-ruby -rtimeout - "$review_home" "$review_bin" "$review_codex_home" "$codex_bin" --ask-for-approval never exec --ignore-user-config --ignore-rules --strict-config -c 'mcp_servers={}' -c 'features.web_search=false' -c 'features.plugins=false' -c 'shell_environment_policy.inherit="none"' --sandbox read-only --ephemeral -- "$prompt" <<'RUBY'
+ruby -rtimeout - "$review_home" "$review_bin" "$review_codex_home" "$codex_bin" --ask-for-approval never exec --ignore-user-config --ignore-rules --strict-config -c 'default_permissions="reviewer"' -c 'permissions.reviewer.extends=":read-only"' -c "$filesystem_profile" -c 'permissions.reviewer.network={enabled=false}' -c 'mcp_servers={}' -c 'features.web_search=false' -c 'features.plugins=false' -c 'features.apps=false' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'shell_environment_policy.inherit="none"' --ephemeral -- "$prompt" <<'RUBY'
   review_home, review_bin, codex_home, *command = ARGV
   environment = {"PATH" => "#{review_bin}:/bin", "HOME" => review_home, "CODEX_HOME" => codex_home, "LANG" => "C", "LC_ALL" => "C"}
   pid = Process.spawn(environment, *command, in: File::NULL, unsetenv_others: true)
