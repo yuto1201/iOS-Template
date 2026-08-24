@@ -498,7 +498,7 @@ func preflightSourceContract(root: URL, manifest: TemplateManifest) throws {
         "\(source)/ContentView.swift": 1,
         "\(source)Tests/\(source)Tests.swift": 4,
         "\(source)UITests/\(source)UITests.swift": 3,
-        "README.md": 19,
+        "README.md": 27,
         "specs/architecture.md": 8,
         "docs/verification.md": 2,
         "docs/agent-contracts/review-packet.md": 1,
@@ -857,8 +857,8 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
     try require("\"\(identity.appSlug).welcome-title\"", count: 1, in: uiPath)
 
     try require("# \(identity.displayName) agent contract", count: 1, in: "AGENTS.md")
-    try require("-project \(identity.moduleName).xcodeproj", count: 5, in: "README.md")
-    try require("-scheme \(identity.moduleName)", count: 5, in: "README.md")
+    try require("-project \(identity.moduleName).xcodeproj", count: 6, in: "README.md")
+    try require("-scheme \(identity.moduleName)", count: 6, in: "README.md")
     try require("  bundleId: \(identity.bundleId)", count: 1, in: "Config/ownership.yml")
     try require("\"scheme\": \"\(identity.moduleName)\"", count: 1, in: "docs/verification.md")
     try require("tests:\(identity.moduleName)Tests/", count: 1, in: "docs/verification.md")
