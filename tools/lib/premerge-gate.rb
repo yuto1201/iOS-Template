@@ -211,8 +211,8 @@ begin
   refuse("live Issue number or URL differs from caller") unless live_issue["number"] == issue && live_issue["url"] == "https://github.com/#{repository}/issues/#{issue}"
   labels = live_issue["labels"]
   refuse("live Issue labels must be an array") unless labels.is_a?(Array) && labels.all? { |label| label.is_a?(Hash) && label["name"].is_a?(String) }
-  type_labels = labels.map { |label| label["name"] }.select { |name| %w[type:feature type:regression].include?(name) }
-  refuse("live Issue must have exactly one feature or regression type label") unless type_labels.length == 1
+  type_labels = labels.map { |label| label["name"] }.select { |name| %w[type:feature type:regression type:docs type:release].include?(name) }
+  refuse("live Issue must have exactly one supported type label") unless type_labels.length == 1
   issue_type = type_labels.first.delete_prefix("type:")
   parsed_contract = IOSTemplate::IssueContract.parse(
     live_issue["body"], issue_type: issue_type, issue: issue,

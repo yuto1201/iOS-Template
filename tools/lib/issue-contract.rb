@@ -93,8 +93,8 @@ module IOSTemplate
 
     def parse(body, issue_type: "feature", issue: nil, repository: nil, fetched_at: nil)
       failures = []
-      unless %w[feature regression].include?(issue_type)
-        failures << "Issue type must be feature or regression"
+      unless %w[feature regression docs release].include?(issue_type)
+        failures << "Issue type must be feature, regression, docs, or release"
       end
 
       lines = body.lines
@@ -368,7 +368,7 @@ end
 if $PROGRAM_NAME == __FILE__
   options = {"type" => "feature", "format" => "validate"}
   parser = OptionParser.new do |cli|
-    cli.banner = "usage: issue-contract.rb --body PATH [--type feature|regression] [--format validate|contract|envelope] [snapshot options]"
+    cli.banner = "usage: issue-contract.rb --body PATH [--type feature|regression|docs|release] [--format validate|contract|envelope] [snapshot options]"
     cli.on("--body PATH") { |value| options["body"] = value }
     cli.on("--type TYPE") { |value| options["type"] = value }
     cli.on("--format FORMAT") { |value| options["format"] = value }

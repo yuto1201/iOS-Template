@@ -602,7 +602,7 @@ class CodexOperationTransport
       live['number'] == issue_number && live['url'] == "https://github.com/#{repository}/issues/#{issue_number}"
     labels = live['labels']
     fail_closed('live Issue labels are invalid') unless labels.is_a?(Array) && labels.all? { |label| label.is_a?(Hash) && label['name'].is_a?(String) }
-    types = labels.map { |label| label.fetch('name') }.select { |name| %w[type:feature type:regression].include?(name) }
+    types = labels.map { |label| label.fetch('name') }.select { |name| %w[type:feature type:regression type:docs type:release].include?(name) }
     fail_closed('live Issue must have exactly one type label') unless types.length == 1
     parsed = IOSTemplate::IssueContract.parse(
       live.fetch('body'), issue_type: types.first.delete_prefix('type:'),

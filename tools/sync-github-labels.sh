@@ -25,43 +25,63 @@ manifest="$repo_root/.github/labels.yml"
 # This identity and repository check must complete before this script mutates GitHub.
 "$repo_root/tools/github-account-preflight.sh" --repo "$repo" >/dev/null
 
-ruby -rjson -ryaml - "$manifest" <<'RUBY' | while IFS=$'\t' read -r name color description; do
+workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-label-sync.XXXXXX")
+trap 'rm -rf "$workspace"' EXIT
+existing_file="$workspace/existing.json"
+actions_file="$workspace/actions.tsv"
+
+# gh paginates internally until this deliberately high bound. One snapshot is
+# used for the whole reconciliation so repositories with more than 100 labels
+# do not create duplicates and the script does not relist once per manifest row.
+gh label list --repo "$repo" --limit 1000 --json name,color,description > "$existing_file"
+
+ruby -rjson -ryaml - "$manifest" "$existing_file" > "$actions_file" <<'RUBY'
 manifest_path = ARGV.fetch(0)
+existing_path = ARGV.fetch(1)
 document = YAML.safe_load(File.read(manifest_path), permitted_classes: [], aliases: false)
 labels = document.is_a?(Hash) ? document["labels"] : nil
 abort "labels.yml must contain a labels array" unless labels.is_a?(Array) && !labels.empty?
 names = {}
-labels.each do |label|
+manifest_labels = labels.map do |label|
   abort "each label must be a mapping" unless label.is_a?(Hash) && label.keys.sort == %w[color description name]
   name = label["name"]
   color = label["color"].to_s
   description = label["description"]
   abort "invalid label name" unless name.is_a?(String) && name.match?(/\A[a-z]+:[a-z][a-z-]*(?::[a-z][a-z-]*)?\z/)
   abort "invalid label color for #{name}" unless color.match?(/\A[0-9A-Fa-f]{6}\z/)
-  abort "invalid label description for #{name}" unless description.is_a?(String) && !description.empty? && !description.include?("\n")
+  abort "invalid label description for #{name}" unless description.is_a?(String) && !description.empty? && !description.match?(/[\n\t]/)
   abort "duplicate label name: #{name}" if names[name]
   names[name] = true
-  puts [name, color.upcase, description].join("\t")
+  {"name" => name, "color" => color.upcase, "description" => description}
+end
+
+existing = JSON.parse(File.binread(existing_path))
+abort "GitHub label response must be an array" unless existing.is_a?(Array)
+existing_by_name = {}
+existing.each do |label|
+  abort "GitHub label response is malformed" unless label.is_a?(Hash) && label["name"].is_a?(String)
+  abort "GitHub returned a duplicate label name: #{label["name"]}" if existing_by_name.key?(label["name"])
+  existing_by_name[label["name"]] = label
+end
+
+manifest_labels.each do |label|
+  current = existing_by_name[label.fetch("name")]
+  action = if current.nil?
+    "create"
+  elsif current["color"].to_s.upcase != label.fetch("color") || current["description"].to_s != label.fetch("description")
+    "edit"
+  else
+    "skip"
+  end
+  puts [action, label.fetch("name"), label.fetch("color"), label.fetch("description")].join("\t")
 end
 RUBY
-  existing=$(gh label list --repo "$repo" --limit 100 --json name,color,description)
-  action=$(ruby -rjson - "$existing" "$name" "$color" "$description" <<'RUBY'
-labels = JSON.parse(ARGV.fetch(0))
-name, color, description = ARGV.drop(1)
-current = labels.find { |label| label["name"] == name }
-if current.nil?
-  puts "create"
-elsif current["color"].to_s.upcase != color || current["description"].to_s != description
-  puts "edit"
-else
-  puts "skip"
-end
-RUBY
-)
+
+while IFS=$'\t' read -r action name color description; do
   case "$action" in
     create) gh label create "$name" --repo "$repo" --color "$color" --description "$description" ;;
     edit) gh label edit "$name" --repo "$repo" --color "$color" --description "$description" ;;
     skip) ;;
     *) echo "unexpected label action: $action" >&2; exit 1 ;;
   esac
-done
+done < "$actions_file"

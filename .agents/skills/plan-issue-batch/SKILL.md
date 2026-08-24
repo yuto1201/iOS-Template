@@ -10,10 +10,11 @@ Produce a reviewable Issue graph before Claim. Keep setup with its first useful 
 ## Required planning pass
 
 1. Read `specs/README.md`, affected specifications, and `specs/decisions.md`. Classify relevant choices through `spec-workflow`.
-2. Split by independently verifiable outcome. Give every Issue Goal, In/Out of scope, ordered `AC-1..n`, exact spec anchors, dependencies, External operations, User approvals, and an expected write-set.
-3. Run `tools/validate-issue-body.sh` on each proposed body. An Issue is Definition of Ready only when that validator passes and every acceptance-affecting decision is confirmed.
-4. Draw directed edges `prerequisite -> dependent`. Reject cycles. A dependency is an ordering constraint, not a reason to combine otherwise independent outcomes.
-5. Add serialization edges when expected write-sets overlap. Treat Xcode project/configuration edits as conflicts even when paths are generated indirectly.
+2. Before the first authenticated Issue creation in a new repository, have the Codex controller run `tools/sync-github-labels.sh --repo "$REPO" --executor codex`. Never run label sync from Claude and never create the first Issue against an uninitialized label set.
+3. Split by independently verifiable outcome. Give every Issue Goal, In/Out of scope, ordered `AC-1..n`, exact spec anchors, dependencies, UI verification, External operations, User approvals, and an expected write-set. Use exactly one of `type:feature`, `type:regression`, `type:docs`, or `type:release`.
+4. Run `tools/validate-issue-body.sh --type "$TYPE"` on each proposed body. An Issue is Definition of Ready only when that validator passes and every acceptance-affecting decision is confirmed.
+5. Draw directed edges `prerequisite -> dependent`. Reject cycles. A dependency is an ordering constraint, not a reason to combine otherwise independent outcomes.
+6. Add serialization edges when expected write-sets overlap. Treat Xcode project/configuration edits as conflicts even when paths are generated indirectly.
 
 Return one table in dependency order:
 

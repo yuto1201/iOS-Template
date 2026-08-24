@@ -415,6 +415,8 @@ write_preflight "$contract_at"
 assert_fails 'stale merge preflight is rejected' run_gate
 write_preflight
 run_gate >/dev/null
+FAKE_TYPE_LABEL=type:docs run_gate >/dev/null
+FAKE_TYPE_LABEL=type:release run_gate >/dev/null
 FAKE_TYPE_LABEL=state:approved-for-merge assert_fails 'missing Issue type label is rejected' run_gate
 FAKE_SECOND_TYPE=type:regression assert_fails 'ambiguous Issue type labels are rejected' run_gate
 

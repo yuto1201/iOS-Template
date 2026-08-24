@@ -168,6 +168,9 @@ ruby -rjson -e '
 ' "$workspace/multi-provider.json" "$workspace/multi-provider-detail-change.json"
 
 "$repo_root/tools/validate-issue-body.sh" --type feature "$workspace/feature.md"
+"$repo_root/tools/validate-issue-body.sh" --type docs "$workspace/feature.md"
+"$repo_root/tools/validate-issue-body.sh" --type release "$workspace/feature.md"
+assert_fails 'an unknown Issue type is rejected' "$repo_root/tools/validate-issue-body.sh" --type maintenance "$workspace/feature.md"
 
 sed 's/- Not applicable\./- Target screens\/states: Settings loaded\./' "$workspace/feature.md" > "$workspace/incomplete-ui.md"
 assert_fails 'UI verification requires both English and Japanese expectations' "$repo_root/tools/validate-issue-body.sh" "$workspace/incomplete-ui.md"
@@ -274,7 +277,7 @@ printf '%s\n' "$*" >> "${FAKE_GH_LOG:?}"
 case "$1 $2" in
   'auth status') printf 'Logged in to github.com account yuto1201 (keychain)\n  - Active account: true\n' ;;
   'repo view') printf '%s\n' '{"nameWithOwner":"yuto1201/iOS-Template","defaultBranchRef":{"name":"main"},"url":"https://github.com/yuto1201/iOS-Template"}' ;;
-  'label list') printf '%s\n' '[{"name":"state:proposed","color":"ffffff","description":"wrong"}]' ;;
+  'label list') ruby -rjson -e 'labels = 130.times.map { |index| {"name" => "legacy:label-#{index}", "color" => "ABCDEF", "description" => "legacy"} }; labels << {"name" => "state:proposed", "color" => "ffffff", "description" => "wrong"}; puts JSON.generate(labels)' ;;
   'label edit'|'label create') exit 0 ;;
   *) echo "unexpected fake gh invocation: $*" >&2; exit 2 ;;
 esac
@@ -285,5 +288,7 @@ export FAKE_GH_LOG="$workspace/gh.log"
 "$repo_root/tools/sync-github-labels.sh" --repo yuto1201/iOS-Template --executor codex
 rg -q '^label edit state:proposed ' "$FAKE_GH_LOG"
 rg -q '^label create agent:codex ' "$FAKE_GH_LOG"
+[[ "$(rg -c '^label list ' "$FAKE_GH_LOG")" == 1 ]] || { echo 'label sync did not use one repository snapshot' >&2; exit 1; }
+rg -q '^label list --repo yuto1201/iOS-Template --limit 1000 --json name,color,description$' "$FAKE_GH_LOG"
 
 echo 'PASS: Issue forms, Definition of Ready validator, PR template, labels, and Codex label sync'

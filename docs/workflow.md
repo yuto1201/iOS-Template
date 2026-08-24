@@ -31,6 +31,8 @@ Issue数を増やすこと自体を目的にしません。セットアップと
 
 CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/issue-contract.json` へ次のsanitized snapshotを保存します。Bootstrap IssueではCodexが同じ形式を手動生成します。
 
+`type:feature`、`type:docs`、`type:release`は同じ基本contract schemaを使い、`type:regression`だけ`Original PR`と`Reproduction steps`を追加必須にします。4種類のうちexact 1 labelが必要で、複数または未知のtypeはClaimとGateで拒否します。
+
 ```json
 {
   "schemaVersion": 1,
@@ -239,6 +241,6 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 
 ## 9. Bootstrap
 
-FoundationとSimulator verificationの2件は、Issue自動化が未実装のためCodexが同じ手順を手動実行します。手動であってもIssue、Branch、PR、4条件Simulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。
+Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むためCodexが同じ手順を手動実行します。手動であってもIssue、Branch、PR、4条件Simulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。
 
 Bootstrap IssueのPRには、各受け入れ条件IDと証拠、GitHub account preflightのsanitized要約、Verify対象SHA、Review対象SHAを記載します。Simulator verificationが入った後は`verify.json`を使用し、Security and workflowが入った後は全Issueを自動状態機械へ移行します。

@@ -287,7 +287,7 @@ git commit -m "feat: automate opposite-model review"
 - Create: `tools/tests/test-cleanup-issue.sh`
 
 **Interfaces:**
-- `premerge-gate.sh --issue 42 --head-sha 0123456789abcdef0123456789abcdef01234567`
+- `premerge-gate.sh --repo OWNER/REPO --issue 42 --head-sha 0123456789abcdef0123456789abcdef01234567`
 - `merge-issue.sh --repo OWNER/REPO --issue 42`
 - `cleanup-issue.sh --repo OWNER/REPO --issue 42`
 
@@ -377,11 +377,11 @@ git commit -m "feat: add autonomous Issue shipping skills"
 
 - [ ] **Step 1: Write the end-to-end fixture**
 
-Create a complete fake Issue with `AC-1` and `AC-2`, Claim it, create a commit, attach passed Verify and approved Review files with the same SHA and criterion mappings, render a PR body, invoke fake merge, and cleanup.
+Create a complete fake Issue with `AC-1` and `AC-2`, Claim it, create a commit, publish passed Verify, produce the canonical schema-v2 review packet with `prepare-review-packet.sh`, publish the approved opposite-model result and reviewer receipt for the same SHA and criterion mappings, render a PR body, invoke fake merge, and cleanup.
 
 - [ ] **Step 2: Add a stale-review regression case**
 
-Create one additional commit after review and assert the gate fails until both verification and review are rerun for the new SHA.
+Create one additional commit after review and assert the gate fails until verification, the schema-v2 packet, opposite-model review, and reviewer receipt are all reproduced for the new SHA.
 
 - [ ] **Step 3: Run the complete tool suite**
 

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'usage: validate-issue-body.sh [--type feature|regression] ISSUE_BODY.md' >&2
+  echo 'usage: validate-issue-body.sh [--type feature|regression|docs|release] ISSUE_BODY.md' >&2
   exit 2
 }
 
@@ -13,7 +13,7 @@ while [[ $# -gt 0 ]]; do
     *) break ;;
   esac
 done
-[[ "$issue_type" == feature || "$issue_type" == regression ]] || usage
+[[ "$issue_type" == feature || "$issue_type" == regression || "$issue_type" == docs || "$issue_type" == release ]] || usage
 [[ $# -eq 1 ]] || usage
 issue_body=$1
 [[ -f "$issue_body" ]] || { echo "Issue body file not found: $issue_body" >&2; exit 2; }

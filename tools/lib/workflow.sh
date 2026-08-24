@@ -24,7 +24,7 @@ workflow_issue_type_from_json() {
     types = labels.map { |label| name = label.is_a?(Hash) ? label["name"] : nil; name&.start_with?("type:") ? name.delete_prefix("type:") : nil }.compact
     abort "Issue has ambiguous type labels" if types.length > 1
     type = types.fetch(0, "feature")
-    abort "Issue type is not supported" unless %w[feature regression].include?(type)
+    abort "Issue type is not supported" unless %w[feature regression docs release].include?(type)
     puts type
   '
 }

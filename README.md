@@ -150,6 +150,17 @@ swift tools/validate-verify-json.swift \
 - Deployment Targetはテンプレート生成時のXcode既定値です。対象ユーザーと必要APIを決め、実装Issueを始める前にアプリ固有の最小OSを仕様とXcode設定へ固定します。
 - ローカル設定は `Config/Local.xcconfig.example` を参考に、Git管理外の `Config/Local.xcconfig` へ置きます。秘密値はxcconfigへも保存せず、Keychainまたは各サービスの秘密管理を使います。
 
+### GitHub workflow initialization
+
+テンプレートから個人用リポジトリを作成した直後、最初のIssueを起票する前にCodexが個人GitHubアカウントと対象リポジトリを確認し、workflow labelsを一度同期します。この操作は冪等で、既存の正しいlabelは変更しません。Claudeからは実行せずCodexへ委託します。
+
+```sh
+REPO='OWNER/REPO'
+tools/sync-github-labels.sh --repo "$REPO" --executor codex
+```
+
+その後、アプリ固有の最小仕様を`specs/`で確定し、Foundation、Identity bootstrap、Simulator verificationの3つのBootstrap Issueを依存順に起票します。Issue作成後にだけ各Branch/worktreeを作り、Identity bootstrapが完了するまでFeature実装を開始しません。
+
 ### Identity bootstrap
 
 機能開発より先に、表示名、Swiftモジュール名、lowercase kebab-caseのアプリSlug、逆DNS形式のBundle IDという4つのIdentity入力を確定します。Deployment Targetはこれらと分けてアプリ仕様とXcode設定へ確定します。承認済みのIdentity Bootstrap Issueに対応するクリーンな非default Branch/worktreeで、リポジトリルートから次を実行します。

@@ -46,7 +46,9 @@ issue_type_from_json() {
     labels = JSON.parse(STDIN.read).fetch("labels")
     types = labels.map { |label| name = label.is_a?(Hash) ? label["name"] : nil; name&.start_with?("type:") ? name.delete_prefix("type:") : nil }.compact
     abort "Issue has ambiguous type labels" if types.length > 1
-    puts(types.fetch(0, "feature"))
+    type = types.fetch(0, "feature")
+    abort "Issue type is not supported" unless %w[feature regression docs release].include?(type)
+    puts type
   '
 }
 
@@ -120,11 +122,7 @@ cleanup_claim_temps() {
 }
 printf '%s' "$issue_json" | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("body")' > "$body"
 issue_type=$(printf '%s' "$issue_json" | issue_type_from_json)
-if [[ "$issue_type" == regression ]]; then
-  "$repo_root/tools/validate-issue-body.sh" --type regression "$body" >/dev/null
-else
-  "$repo_root/tools/validate-issue-body.sh" --type feature "$body" >/dev/null
-fi
+"$repo_root/tools/validate-issue-body.sh" --type "$issue_type" "$body" >/dev/null
 
 slug=$(canonical_title_slug "$title")
 branch="$agent/$issue-$slug"
