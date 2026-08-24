@@ -444,6 +444,8 @@ mkdir -p "$spec_fixture_dir"
 cat > "$spec_fixture_dir/spec.md" <<'EOF'
 # Decisions
 
+Status: 確定
+
 ## Confirmed choice
 
 Status: 確定
