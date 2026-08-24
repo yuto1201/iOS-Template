@@ -60,6 +60,11 @@ printf 'gate %s\n' "$label" >>"${FAKE_LOG:?}"
 EOF
   chmod +x "$CASE_WORKTREE/tools/"*.sh "$CASE_WORKTREE/tools/lib/merge-state.rb"
   git -C "$CASE_WORKTREE" add tools && git -C "$CASE_WORKTREE" commit -m tools >/dev/null
+  CASE_BASE=$(git -C "$CASE_WORKTREE" rev-parse HEAD)
+  git -C "$CASE_PRIMARY" merge --ff-only "$branch" >/dev/null
+  git -C "$CASE_PRIMARY" push origin main >/dev/null
+  printf 'documentation change\n' >> "$CASE_WORKTREE/README.md"
+  git -C "$CASE_WORKTREE" add README.md && git -C "$CASE_WORKTREE" commit -m documentation >/dev/null
   CASE_HEAD=$(git -C "$CASE_WORKTREE" rev-parse HEAD)
   mkdir -p "$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD"
   CONTRACT="$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" ruby -rjson -rdigest -e '
