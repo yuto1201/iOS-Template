@@ -26,7 +26,6 @@ fi
 expected_output=".artifacts/issues/$issue/$head_sha/review.json"
 [[ "$output" == "$expected_output" ]] || { echo 'review output must be canonical Issue/Head review.json' >&2; exit 1; }
 output_absolute="$repo_root/$output"
-[[ ! -e "$output_absolute" && ! -L "$output_absolute" ]] || { echo 'review output already exists' >&2; exit 1; }
 git -C "$repo_root" cat-file -e "$head_sha^{commit}" && git -C "$repo_root" merge-base --is-ancestor "$base_sha" "$head_sha" || { echo 'packet Base/Head is not a valid commit range' >&2; exit 1; }
 [[ "$(git -C "$repo_root" rev-parse HEAD)" == "$head_sha" ]] || { echo 'current Head does not match the review packet' >&2; exit 1; }
 
@@ -36,6 +35,34 @@ raw_output=$(mktemp "${TMPDIR:-/tmp}/ios-template-review-output.XXXXXX")
 normalized_output=$(mktemp "${TMPDIR:-/tmp}/ios-template-review-normalized.XXXXXX")
 validated=$(mktemp "${TMPDIR:-/tmp}/ios-template-review-validated.XXXXXX")
 trap 'rm -f "$snapshot_before" "$snapshot_after" "$raw_output" "$normalized_output" "$validated"' EXIT
+
+complete_existing_review() {
+  [[ -f "$output_absolute" && ! -L "$output_absolute" ]] || { echo 'existing review output is not a regular file' >&2; exit 1; }
+  "$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$output_absolute" > "$validated"
+  local verdict next_state state_json current_state
+  verdict=$(jq -er '.verdict' "$validated")
+  next_state=$([[ "$verdict" == approved ]] && echo approved-for-merge || echo changes-requested)
+  state_json=$("$repo_root/tools/issue-state.sh" get --repo "$repository" --issue "$issue")
+  current_state=$(jq -er '.state' <<<"$state_json")
+  case "$current_state" in
+    review-requested)
+      "$repo_root/tools/issue-state.sh" transition --repo "$repository" --issue "$issue" --from review-requested --to "$next_state" >/dev/null
+      ;;
+    "$next_state")
+      ;;
+    *)
+      echo "existing valid review cannot transition Issue from state:$current_state" >&2
+      exit 1
+      ;;
+  esac
+  cat "$validated"
+  printf '\n'
+  exit 0
+}
+
+if [[ -e "$output_absolute" || -L "$output_absolute" ]]; then
+  complete_existing_review
+fi
 
 snapshot_repository() {
   ruby -rdigest -rfind - "$repo_root" <<'RUBY'
@@ -101,7 +128,7 @@ if [[ "$review_status" -ne 0 ]]; then
     "$repo_root/tools/issue-state.sh" transition --repo "$repository" --issue "$issue" --from review-requested --to blocked:review >/dev/null
     echo 'opposite-model review timed out; moved to blocked:review' >&2
   else
-    echo 'opposite-model reviewer failed; no review was published' >&2
+    echo "opposite-model reviewer failed with status:$review_status; no review was published" >&2
   fi
   exit "$review_status"
 fi

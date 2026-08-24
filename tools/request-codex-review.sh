@@ -15,9 +15,19 @@ instruction='You are the opposite-model acceptance auditor. Read only the suppli
 packet_absolute="$repo_root/$packet"
 prompt="$instruction
 Validated review packet: $packet_absolute"
-ruby -rtimeout -e '
-  command = ARGV
-  pid = Process.spawn(*command, in: File::NULL)
+codex_bin=$(command -v codex)
+[[ "$codex_bin" == /* && -x "$codex_bin" ]] || { echo 'Codex executable is unavailable' >&2; exit 1; }
+review_home=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-codex-review.XXXXXX")
+chmod 700 "$review_home"
+review_bin="$review_home/bin"
+mkdir "$review_bin"
+ln -s /usr/bin/uname "$review_bin/uname"
+review_codex_home=${CODEX_HOME:-"$HOME/.codex"}
+trap 'rm -rf "$review_home"' EXIT
+ruby -rtimeout - "$review_home" "$review_bin" "$review_codex_home" "$codex_bin" --ask-for-approval never exec --ignore-user-config --ignore-rules --strict-config -c 'mcp_servers={}' -c 'features.web_search=false' -c 'features.plugins=false' -c 'shell_environment_policy.inherit="none"' --sandbox read-only --ephemeral -- "$prompt" <<'RUBY'
+  review_home, review_bin, codex_home, *command = ARGV
+  environment = {"PATH" => "#{review_bin}:/bin", "HOME" => review_home, "CODEX_HOME" => codex_home, "LANG" => "C", "LC_ALL" => "C"}
+  pid = Process.spawn(environment, *command, in: File::NULL, unsetenv_others: true)
   begin
     Timeout.timeout(600) { Process.wait(pid) }
   rescue Timeout::Error
@@ -26,4 +36,4 @@ ruby -rtimeout -e '
     exit 124
   end
   exit($?.exitstatus || 1)
-' codex exec --sandbox read-only --ephemeral -- "$prompt"
+RUBY

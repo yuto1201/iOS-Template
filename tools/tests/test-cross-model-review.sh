@@ -50,11 +50,19 @@ cat > "$artifact_root/review-packet.json" <<JSON
 {"schemaVersion":1,"issue":$issue,"primaryModel":"codex","reviewerModel":"claude","baseSha":"$base_sha","headSha":"$head_sha","verifySha":"$head_sha","issueContract":{"path":".artifacts/issues/$issue/issue-contract.json","digest":"$contract_digest"},"specAnchors":["specs/acceptance.md#1"],"acceptanceCriteria":[{"id":"AC-1","text":"A result is tied to the reviewed Head"}],"diffFile":".artifacts/issues/$issue/$head_sha/review.diff","verifyFile":".artifacts/issues/$issue/$head_sha/verify.json","imageFiles":["iphone-en.png"]}
 JSON
 
+review_anchor='specs/acceptance.md#1'
 write_packet() {
   local primary=$1 reviewer=$2
-  PRIMARY="$primary" REVIEWER="$reviewer" PACKET="$artifact_root/review-packet.json" ISSUE="$issue" BASE="$base_sha" HEAD="$head_sha" DIGEST="$contract_digest" ruby -rjson -e '
-    File.write(ENV.fetch("PACKET"), JSON.generate({"schemaVersion" => 1, "issue" => ENV.fetch("ISSUE").to_i, "primaryModel" => ENV.fetch("PRIMARY"), "reviewerModel" => ENV.fetch("REVIEWER"), "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContract" => {"path" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "specAnchors" => ["specs/acceptance.md#1"], "acceptanceCriteria" => [{"id" => "AC-1", "text" => "A result is tied to the reviewed Head"}], "diffFile" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/#{ENV.fetch("HEAD")}/review.diff", "verifyFile" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/#{ENV.fetch("HEAD")}/verify.json", "imageFiles" => ["iphone-en.png"]}))
+  PRIMARY="$primary" REVIEWER="$reviewer" PACKET="$artifact_root/review-packet.json" ISSUE="$issue" BASE="$base_sha" HEAD="$head_sha" DIGEST="$contract_digest" ANCHOR="$review_anchor" ruby -rjson -e '
+    File.write(ENV.fetch("PACKET"), JSON.generate({"schemaVersion" => 1, "issue" => ENV.fetch("ISSUE").to_i, "primaryModel" => ENV.fetch("PRIMARY"), "reviewerModel" => ENV.fetch("REVIEWER"), "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContract" => {"path" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "specAnchors" => [ENV.fetch("ANCHOR")], "acceptanceCriteria" => [{"id" => "AC-1", "text" => "A result is tied to the reviewed Head"}], "diffFile" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/#{ENV.fetch("HEAD")}/review.diff", "verifyFile" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/#{ENV.fetch("HEAD")}/verify.json", "imageFiles" => ["iphone-en.png"]}))
   '
+}
+
+set_anchor() {
+  review_anchor=$1
+  ANCHOR="$review_anchor" CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -e 'path = ENV.fetch("CONTRACT"); value = JSON.parse(File.read(path)); value["specAnchors"] = [ENV.fetch("ANCHOR")]; File.write(path, JSON.generate(value))'
+  contract_digest=$(digest "$artifact_issue/issue-contract.json")
+  DIGEST="$contract_digest" VERIFY="$artifact_root/verify.json" ruby -rjson -e 'path = ENV.fetch("VERIFY"); value = JSON.parse(File.read(path)); value.fetch("issueContract")["digest"] = ENV.fetch("DIGEST"); File.write(path, JSON.generate(value))'
 }
 
 write_result() {
@@ -131,11 +139,26 @@ unset FAKE_REVIEWER_WRITE_PATH
 
 rm -f "$artifact_root/review.json"
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+set_anchor external-attempt
 write_packet claude codex
-export FAKE_REVIEWER_MODE=approved
-write_result approved codex
+export GH_TOKEN=must-not-reach-reviewer
+export SUPABASE_ACCESS_TOKEN=must-not-reach-reviewer
 run_review claude
+unset GH_TOKEN SUPABASE_ACCESS_TOKEN
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["reviewerModel"] == "codex" && value["verdict"] == "approved"'
-[[ "$(cat "$FAKE_REVIEWER_LOG")" == *"exec --sandbox read-only --ephemeral --"* ]] || { echo 'fixed Codex read-only wrapper was not invoked' >&2; exit 1; }
 
-echo 'PASS: approved, changes-requested, malformed, SHA mismatch, timeout, write-attempt, and fixed Codex review cases'
+rm -f "$artifact_root/review.json"
+printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+set_anchor 'specs/acceptance.md#1'
+write_packet claude codex
+export FAKE_GH_ISSUE_MISSING=1
+assert_fails 'transition failure leaves a reusable canonical review' run_review claude
+unset FAKE_GH_ISSUE_MISSING
+[[ -f "$artifact_root/review.json" ]]
+cp "$repo_root/tools/tests/fixtures/cross-model-review/codex-must-not-run" "$fake_bin/codex"
+chmod +x "$fake_bin/codex"
+run_review claude
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
+run_review claude
+
+echo 'PASS: approved, envelope, changes-requested, malformed, SHA mismatch, timeout, write-attempt, hardened Codex, and idempotent retry cases'

@@ -1,12 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-printf '%s\n' "$*" >> "${FAKE_REVIEWER_LOG:?}"
-[[ "${FAKE_REVIEWER_REQUIRE_CLOSED_STDIN:-0}" != 1 ]] || ruby -e 'exit(STDIN.stat.rdev == File.stat("/dev/null").rdev ? 0 : 1)'
-[[ "${1:-}" == exec && "${2:-}" == --sandbox && "${3:-}" == read-only && "${4:-}" == --ephemeral && "${5:-}" == -- ]] || exit 94
-case "${FAKE_REVIEWER_MODE:?}" in
-  approved|changes|mismatch|malformed) cat "${FAKE_REVIEWER_RESULT:?}" ;;
-  timeout) exit 124 ;;
-  write) printf 'reviewer write\n' > "${FAKE_REVIEWER_WRITE_PATH:?}"; cat "${FAKE_REVIEWER_RESULT:?}" ;;
-  *) exit 95 ;;
-esac
+[[ "${1:-}" == --ask-for-approval && "${2:-}" == never && "${3:-}" == exec ]] || exit 94
+[[ "${4:-}" == --ignore-user-config && "${5:-}" == --ignore-rules && "${6:-}" == --strict-config ]] || exit 95
+[[ "${7:-}" == -c && "${8:-}" == 'mcp_servers={}' ]] || exit 96
+[[ "${9:-}" == -c && "${10:-}" == 'features.web_search=false' ]] || exit 97
+[[ "${11:-}" == -c && "${12:-}" == 'features.plugins=false' ]] || exit 98
+[[ "${13:-}" == -c && "${14:-}" == 'shell_environment_policy.inherit="none"' ]] || exit 99
+[[ "${15:-}" == --sandbox && "${16:-}" == read-only && "${17:-}" == --ephemeral && "${18:-}" == -- ]] || exit 100
+ /usr/bin/ruby -e 'exit(STDIN.stat.rdev == File.stat("/dev/null").rdev ? 0 : 1)' || exit 101
+[[ "${PATH:-}" == *ios-template-codex-review*/bin:/bin && -n "${CODEX_HOME:-}" && "${HOME:-}" == *ios-template-codex-review* ]] || exit 102
+for forbidden in GH_TOKEN GITHUB_TOKEN SUPABASE_ACCESS_TOKEN CLOUDFLARE_API_TOKEN ELEVENLABS_API_KEY OPENAI_API_KEY FAKE_REVIEWER_RESULT FAKE_REVIEWER_MODE; do
+  [[ -z "${!forbidden:-}" ]] || exit 103
+done
+
+prompt=${!#}
+[[ "$prompt" == *'Validated review packet: '* ]] || exit 104
+if [[ "$prompt" == *external-attempt* ]]; then
+  command -v gh >/dev/null 2>&1 && exit 105
+  command -v curl >/dev/null 2>&1 && exit 106
+fi
+
+PROMPT="$prompt" /usr/bin/ruby -rjson -e '
+  packet_path = ENV.fetch("PROMPT")[/Validated review packet:\s*(\S+)/, 1] or abort "packet missing"
+  packet = JSON.parse(File.read(packet_path))
+  result = {
+    "schemaVersion" => 1, "issue" => packet.fetch("issue"), "reviewerModel" => "codex",
+    "baseSha" => packet.fetch("baseSha"), "headSha" => packet.fetch("headSha"), "verifySha" => packet.fetch("verifySha"),
+    "issueContractDigest" => packet.fetch("issueContract").fetch("digest"), "verdict" => "approved", "findings" => [],
+    "acceptanceAssessment" => packet.fetch("acceptanceCriteria").map { |entry| {"id" => entry.fetch("id"), "status" => "supported", "evidence" => ["verify.json#acceptanceEvidence/0"]} },
+    "reviewedAt" => "2026-08-24T00:01:00Z"
+  }
+  puts JSON.generate(result)
+'
