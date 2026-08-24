@@ -128,6 +128,8 @@ assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) 
 
 printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"
 assert_fails 'stale minimal pre-Claim state cannot authorize a post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
+assert_fails 'stale minimal pre-Claim state cannot authorize a blocked post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
 printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
 ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["timestamp"]="not-a-time"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
 assert_fails 'malformed unsealed pre-Claim state cannot authorize a live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
