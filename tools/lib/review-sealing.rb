@@ -166,12 +166,13 @@ module IOSTemplate
       end
 
       def stable_identity?(expected, actual)
-        expected.dev == actual.dev && expected.ino == actual.ino && expected.mode == actual.mode && expected.nlink == actual.nlink
+        expected.dev == actual.dev && expected.ino == actual.ino && expected.mode == actual.mode &&
+          expected.nlink == actual.nlink && expected.uid == actual.uid && expected.gid == actual.gid
       end
 
       def metadata_equal?(expected, actual)
         stable_identity?(expected, actual) && expected.size == actual.size &&
-          expected.mtime.to_r == actual.mtime.to_r && expected.ctime.to_r == actual.ctime.to_r
+          expected.mtime.to_r == actual.mtime.to_r
       end
 
       def system_error!(operation)

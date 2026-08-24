@@ -77,11 +77,13 @@ module DescriptorFiles
 
   def metadata_equal?(expected, actual)
     stable_identity_equal?(expected, actual) &&
-      expected.mtime.to_r == actual.mtime.to_r && expected.ctime.to_r == actual.ctime.to_r
+      expected.mtime.to_r == actual.mtime.to_r
   end
 
   def stable_identity_equal?(expected, actual)
-    expected.dev == actual.dev && expected.ino == actual.ino && expected.size == actual.size && expected.mode == actual.mode && expected.nlink == actual.nlink
+    expected.dev == actual.dev && expected.ino == actual.ino && expected.size == actual.size &&
+      expected.mode == actual.mode && expected.nlink == actual.nlink &&
+      expected.uid == actual.uid && expected.gid == actual.gid
   end
 
   def open_components(root, components)

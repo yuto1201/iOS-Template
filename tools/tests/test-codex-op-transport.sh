@@ -70,6 +70,10 @@ Exercise one exact external-operation transport.
 
 - None.
 
+## UI verification
+
+- Not applicable.
+
 ## External operations
 
 - Operation: github.create_pr
@@ -278,7 +282,11 @@ if "$repo_root/tools/request-codex-op.sh" --request "$request" --result "$result
 fi
 rg -q 'already in flight' "$workspace/concurrent.err" || fail 'concurrent duplicate failed for the wrong reason'
 rm "$workspace/block-codex"
-wait "$first_pid"
+if ! wait "$first_pid"; then
+  echo 'original concurrent request failed:' >&2
+  cat "$workspace/first.err" >&2
+  fail 'the original concurrent request did not complete'
+fi
 [[ "$(invocations)" == 1 ]] || fail 'concurrent duplicate caused another Codex invocation'
 
 # Once execution becomes ambiguous, the durable in-flight receipt blocks every
