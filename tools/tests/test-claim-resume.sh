@@ -201,16 +201,20 @@ printf '%s' '["type:feature","state:in-progress"]' > "$labels_file"
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"blocked:user\",\"resumeState\":\"in-progress\",\"timestamp\":\"2026-08-24T00:00:00Z\",\"to\":\"in-progress\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
 (cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/blocked-resume.json"
 assert_json "$workspace/blocked-resume.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "blocked:user" && value["resumeState"] == "in-progress"'
+assert_json "$clone/.artifacts/issues/42/state.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "blocked:user" && value["resumeState"] == "in-progress"'
 
 printf '%s' '["type:feature","state:in-progress"]' > "$labels_file"
 cp "$workspace/claim-comments.json" "$comments_file"
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"paused\",\"resumeState\":\"in-progress\",\"timestamp\":\"2026-08-24T00:00:01Z\",\"to\":\"in-progress\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
 (cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/paused-resume.json"
 assert_json "$workspace/paused-resume.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "paused" && value["resumeState"] == "in-progress"'
+assert_json "$clone/.artifacts/issues/42/state.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "paused" && value["resumeState"] == "in-progress"'
 
 cp "$workspace/claim-comments.json" "$comments_file"
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"blocked:user\",\"resumeState\":\"verify-passed\",\"timestamp\":\"2026-08-24T00:00:02Z\",\"to\":\"in-progress\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
+cp "$clone/.artifacts/issues/42/state.json" "$workspace/state-before-mismatched-resume.json"
 assert_fails 'resume rejects a blocked recovery whose resumeState does not match' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+cmp -s "$workspace/state-before-mismatched-resume.json" "$clone/.artifacts/issues/42/state.json"
 printf '%s' '["type:feature","state:claimed"]' > "$labels_file"
 cp "$workspace/claim-comments.json" "$comments_file"
 

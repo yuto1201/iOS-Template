@@ -93,3 +93,32 @@
 - Verified raw string comparison is now used only after JSON null handling and `workflow_is_state` validation.
 - Verified JSON null is still retained as null in the reconstructed state record/output.
 - The deferred `type:docs` / `type:release` Minor remains unchanged.
+
+---
+
+## Fix round 3: raw resumeState persistence
+
+### Implementation
+
+- `resume-issue.sh` now keeps two forms of `resumeState`: JSON (`resume_state_json`) for stdout and raw validated state (`state_resume`) for `state.json`. Null continues to persist as JSON null; non-null values persist as the exact raw state string.
+
+### TDD evidence
+
+- RED command: `bash tools/tests/test-claim-resume.sh`
+- RED output: the command exited non-zero immediately after `Preparing worktree (new branch 'codex/42-settings-screen')`, when the new blocked fixture asserted `state.json.resumeState == "in-progress"`.
+- GREEN command: `bash tools/tests/test-claim-resume.sh`
+- GREEN output: `PASS: deterministic Issue claim, idempotency, conflict refusal, dirty-main preservation, and marker-based resume`.
+
+### Covering verification
+
+- `bash tools/tests/test-claim-resume.sh` — PASS. Both valid blocked and paused recoveries assert stdout and `.artifacts/issues/42/state.json` use raw `"in-progress"`; the mismatched recovery asserts `state.json` bytes remain unchanged.
+- `bash tools/tests/test-workflow-state.sh` — PASS: `PASS: GitHub preflight, durable state transitions, and fixed Codex operation transport`.
+- `bash tools/tests/test-issue-contract.sh` — PASS: `PASS: Issue forms, Definition of Ready validator, PR template, labels, and Codex label sync`.
+- `bash -n tools/claim-issue.sh tools/resume-issue.sh tools/tests/test-claim-resume.sh` — PASS.
+- `git diff --check` — PASS.
+
+### Self-review
+
+- Verified only the state-file handoff changed; canonical slug, latest-marker, transition, and stdout `--argjson` checks remain intact.
+- Verified a rejected resume still reaches no state-file writer, and the fixture compares the bytes of the pre-existing record.
+- The deferred `type:docs` / `type:release` Minor remains unchanged.
