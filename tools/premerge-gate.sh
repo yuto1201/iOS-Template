@@ -47,7 +47,7 @@ worktree_relative=$(jq -er '.worktree | strings' "$state") || fail 'state worktr
 
 base_sha=$(jq -er '.baseSha | strings' "$verify") || fail 'verify.json baseSha is invalid'
 [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'verify.json baseSha is invalid'
-git -C "$repo_root" merge-base --is-ancestor "$base_sha" "$head_sha" || fail 'verify.json Base is not an ancestor of Head'
+(cd "$repo_root" && swift tools/validate-verify-json.swift --file ".artifacts/issues/$issue/$head_sha/verify.json" --expected-issue "$issue" --expected-base "$base_sha" --expected-head "$head_sha") >/dev/null || fail 'verify.json does not satisfy the canonical verification contract'
 
 contract_digest="sha256:$(shasum -a 256 "$contract" | awk '{print $1}')"
 issue_json=$(gh issue view "$issue" --repo "$(jq -er '.repository | strings' "$contract")" --json body) || fail 'live Issue body could not be fetched'
@@ -77,23 +77,32 @@ CONTRACT="$contract" ISSUE_JSON="$issue_json" EXPECTED_ISSUE="$issue" ruby -rjso
   fail("immutable fields changed") unless actual == expected
 ' || fail 'live Issue body differs from the canonical Issue contract'
 
-# Every non-GitHub provider operation needs a canonical, digest-bound preflight.
-# Unknown operation names fail closed rather than being silently ignored.
-providers=$(jq -r 'if (.externalOperations | type) != "array" then error("externalOperations must be an array") else .externalOperations[]? | strings | capture("^(?<provider>[a-z]+)\\.").provider end' "$contract" | sort -u) || fail 'Issue contract has an unknown external operation'
-while IFS= read -r provider; do
-  [[ -n "$provider" && "$provider" != github ]] || continue
-  provider_preflight="$repo_root/.artifacts/issues/$issue/provider-preflights/$provider.json"
-  safe_file "$provider_preflight"
-  PROVIDER_PREFLIGHT="$provider_preflight" ruby -rjson -rdigest -e '
-    def canonical(value)
-      value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value.is_a?(Array) ? value.map { |entry| canonical(entry) } : value
-    end
-    value = JSON.parse(File.binread(ENV.fetch("PROVIDER_PREFLIGHT")))
-    abort "provider preflight must be an object with digest" unless value.is_a?(Hash) && value["digest"].is_a?(String)
-    unsigned = value.reject { |key, _| key == "digest" }
-    abort "provider preflight digest mismatch" unless value["digest"] == "sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(unsigned)))}"
-  ' || fail "provider preflight is invalid: $provider"
-done <<< "$providers"
+# Consume the sealed Issue #8 provider-preflight schema exactly.  The contract
+# permits at most one operation per provider because its canonical artifact is
+# one provider.json, rather than a mutable collection.
+CONTRACT="$contract" ARTIFACTS="$artifacts_root" ISSUE="$issue" ruby -rjson -rdigest -rtime -e '
+  def die(message)
+    abort("provider preflight validation failed: #{message}")
+  end
+  def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value.is_a?(Array) ? value.map { |entry| canonical(entry) } : value; end
+  contract = JSON.parse(File.binread(ENV.fetch("CONTRACT"))); issue = Integer(ENV.fetch("ISSUE")); root = ENV.fetch("ARTIFACTS")
+  allowed = %w[github.read_issue github.create_issue github.update_issue github.push_branch github.create_pr github.merge_pr github.delete_branch github.sync_labels supabase.inspect_project supabase.apply_migrations cloudflare.inspect_account cloudflare.deploy elevenlabs.generate_audio appstore.inspect_app appstore.upload_build appstore.update_metadata appstore.submit_review]
+  operations = contract.fetch("externalOperations")
+  die("external operations") unless operations.is_a?(Array) && operations.uniq == operations && operations.all? { |value| allowed.include?(value) }
+  map = {"supabase" => "supabase", "cloudflare" => "cloudflare", "elevenlabs" => "elevenlabs", "app-store" => "appstore"}
+  map.each do |provider, prefix|
+    matching = operations.select { |operation| operation.start_with?(prefix + ".") }
+    next if matching.empty?
+    die("multiple operations for #{provider}") unless matching.length == 1
+    path = File.join(root, "issues", issue.to_s, "provider-preflights", "#{provider}.json")
+    die("missing #{provider} preflight") unless File.file?(path) && !File.symlink?(path)
+    value = JSON.parse(File.binread(path)); keys = %w[schemaVersion issue provider account target environment operation health checkedAt digest]
+    die("#{provider} schema") unless value.is_a?(Hash) && value.keys.sort == keys.sort && value["schemaVersion"] == 1 && value["issue"] == issue && value["provider"] == provider && value["operation"] == matching.fetch(0) && value["health"] == "healthy"
+    %w[account target environment operation].each { |key| die("#{provider} #{key}") unless value[key].is_a?(String) && value[key].match?(/\A[^\x00-\x1f\x7f]+\z/) }
+    checked = Time.iso8601(value.fetch("checkedAt")); fetched = Time.iso8601(contract.fetch("fetchedAt")); die("#{provider} freshness") if checked < fetched || checked > Time.now.utc + 300
+    unsigned = value.reject { |key, _| key == "digest" }; die("#{provider} digest") unless value["digest"] == "sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(unsigned)))}"
+  end
+' || fail 'provider preflight is invalid'
 
 VERIFY="$verify" REVIEW="$review" PREFLIGHT="$preflight" DIGEST="$contract_digest" ISSUE="$issue" HEAD="$head_sha" ROOT="$repo_root" ruby -rjson -rdigest -rtime -e '
   def die(message)
@@ -107,17 +116,6 @@ VERIFY="$verify" REVIEW="$review" PREFLIGHT="$preflight" DIGEST="$contract_diges
   preflight = JSON.parse(File.binread(ENV.fetch("PREFLIGHT")))
   issue = Integer(ENV.fetch("ISSUE")); head = ENV.fetch("HEAD"); digest = ENV.fetch("DIGEST")
   die("verify identity") unless verify["issue"] == issue && verify["headSha"] == head && verify.dig("issueContract", "digest") == digest && %w[passed not-applicable].include?(verify["status"])
-  die("verify schema") unless verify["schemaVersion"] == 1 && %w[application-code documentation-only].include?(verify["changeClassification"])
-  if verify["changeClassification"] == "documentation-only"
-    die("documentation-only representation") unless verify["status"] == "not-applicable" && verify["matrixFile"].nil? && verify["matrixDigest"].nil? && verify["executionRoute"] == "none" && verify["cases"] == [] && verify.dig("build", "status") == "not-applicable" && verify.dig("tests", "status") == "not-applicable"
-  else
-    die("application matrix") unless verify["status"] == "passed" && verify["matrixFile"].is_a?(String) && verify["matrixDigest"].is_a?(String) && verify.dig("tests", "status") == "passed" && Array(verify["cases"]).all? { |entry| entry["status"] == "passed" }
-    matrix_path = verify.fetch("matrixFile")
-    die("matrix path") unless matrix_path.match?(%r{\A\.artifacts/batches/[A-Za-z0-9._-]+/simulator-matrix\.json\z})
-    matrix = File.join(ENV.fetch("ROOT"), matrix_path)
-    die("matrix missing") unless File.file?(matrix) && !File.symlink?(matrix)
-    die("matrix digest") unless verify["matrixDigest"] == "sha256:#{Digest::SHA256.hexdigest(File.binread(matrix))}"
-  end
   evidence = verify["acceptanceEvidence"]
   ids = JSON.parse(File.binread(ENV.fetch("VERIFY").sub(%r{/[^/]+/verify\.json\z}, "/issue-contract.json")))["acceptanceCriteria"].map { |entry| entry.fetch("id") }
   die("acceptance evidence") unless evidence.is_a?(Array) && evidence.map { |entry| entry["id"] } == ids && evidence.all? { |entry| entry["status"] == "passed" && entry["evidence"].is_a?(Array) && !entry["evidence"].empty? }

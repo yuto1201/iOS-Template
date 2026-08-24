@@ -123,7 +123,7 @@ git -C "$repo" worktree add -b codex/42-gate-evidence "$issue_worktree" "$head_s
 ln -s ../../.artifacts "$issue_worktree/.artifacts"
 cp -R "$repo/tools" "$issue_worktree/"
 cp -R "$repo/.agents" "$issue_worktree/"
-HEAD="$head_sha" ruby -rjson -e 'puts JSON.generate({"worktree" => ".worktrees/42-gate-evidence", "headSha" => ENV.fetch("HEAD")})' > "$repo/.artifacts/issues/42/state.json"
+HEAD="$head_sha" BASE="$base_sha" DIGEST="$contract_digest" ruby -rjson -e 'puts JSON.generate({"schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template", "branch" => "codex/42-gate-evidence", "worktree" => ".worktrees/42-gate-evidence", "baseSha" => ENV.fetch("BASE"), "primaryImplementer" => "codex", "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "state" => "approved-for-merge", "previousState" => "review-requested", "resumeState" => nil, "executor" => "codex", "headSha" => ENV.fetch("HEAD"), "pullRequest" => 57, "from" => "review-requested", "to" => "approved-for-merge", "transitionedAt" => "2026-08-24T00:02:30Z"})' > "$repo/.artifacts/issues/42/state.json"
 
 assert_fails() {
   local label=$1
@@ -160,6 +160,12 @@ assert_fails 'stale Review SHA is rejected' run_gate
 write_review
 write_review changes-requested
 assert_fails 'changes-requested review is rejected' run_gate
+"$issue_worktree/tools/render-pr-body.sh" --issue 42 --head-sha "$head_sha" > "$scratch/failed-pr-body.md"
+grep -Fq 'Verification or opposite-model review is not merge-ready.' "$scratch/failed-pr-body.md"
+if grep -Fq -- '- None.' "$scratch/failed-pr-body.md"; then
+  echo 'rendered PR body overclaimed Remaining work' >&2
+  exit 1
+fi
 write_review
 cp "$issue_body" "$scratch/issue-body.original"
 ruby -e 'path = ARGV.fetch(0); text = File.read(path); text.sub!("- AC-2: Every acceptance criterion has one evidence mapping.\n", "- AC-2: Every acceptance criterion has one evidence mapping.\n- AC-3: A live Issue edit invalidates the snapshot.\n"); File.write(path, text)' "$issue_body"
@@ -170,6 +176,7 @@ run_gate >/dev/null
 grep -Fq "Closes #42." "$scratch/pr-body.md"
 grep -Fq "Head SHA: \`$head_sha\`" "$scratch/pr-body.md"
 grep -Fq 'AC-1: passed' "$scratch/pr-body.md"
+grep -Fq 'Pre-merge gate is pending.' "$scratch/pr-body.md"
 HEAD="$head_sha" ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.read(path)); value["acceptanceEvidence"].pop; File.write(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/verify.json"
 assert_fails 'missing AC evidence is rejected' run_gate
 write_verify

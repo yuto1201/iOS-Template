@@ -35,7 +35,13 @@ PR_JSON="$pr_json" BRANCH="$branch" HEAD="$head_sha" ruby -rjson -e '
   pr = records.fetch(0); abort "PR is not merged" unless pr["state"] == "MERGED"; abort "PR Branch mismatch" unless pr["headRefName"] == ENV.fetch("BRANCH"); abort "PR Head mismatch" unless pr["headRefOid"] == ENV.fetch("HEAD"); abort "PR has no merge commit" unless pr.dig("mergeCommit", "oid").is_a?(String) && pr.dig("mergeCommit", "oid").match?(/\A[0-9a-f]{40}\z/)
 ' || fail 'PR is open, unmerged, stale, or ambiguous'
 
-git -C "$primary_root" push origin --delete "$branch" >/dev/null
+"$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.delete_branch --expected-head "$head_sha" >/dev/null
+if git -C "$primary_root" ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+  git -C "$primary_root" push origin --delete "$branch" >/dev/null
+else
+  remote_status=$?
+  [[ "$remote_status" == 2 ]] || fail 'remote Branch lookup failed'
+fi
 git -C "$primary_root" worktree remove "$worktree" >/dev/null
 git -C "$primary_root" branch -D -- "$branch" >/dev/null
 jq -cn --argjson issue "$issue" --arg branch "$branch" '{status:"cleaned",issue:$issue,branch:$branch}'

@@ -22,3 +22,15 @@
 ## Adjacent concern
 
 - `bash tools/tests/test-cross-model-review.sh` returned non-zero after reporting the expected reviewer-write rejection. This is an existing Task 5 adjacent-suite result and no Task 5 file was modified by Task 6.
+
+## Fix round 1 (in progress)
+
+- Added truthful PR-body remaining-work status and a regression assertion for changes-requested review output.
+- Gate now delegates canonical verify.json validation to `validate-verify-json.swift`; its linked-worktree artifact-root support is being repaired by the authorized validator owner.
+- Added the ruled sealed provider-preflight consumer schema and strengthened merge retry state convergence plus delete-branch preflight/remote-absence handling.
+- Final focused rerun and commit remain pending validator integration and the required full merge E2E/restart-boundary coverage.
+
+### Current evidence
+
+- After validator repair `d2656495`, `bash tools/tests/test-premerge-gate.sh && bash tools/tests/test-cleanup-issue.sh` passed, as did Task 6 shell syntax and `git diff --check`.
+- The remaining full fake-GitHub merge E2E and primary-entrypoint post-worktree-removal retry coverage require a follow-up; they are not claimed as complete in this round.

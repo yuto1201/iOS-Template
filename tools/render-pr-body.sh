@@ -32,5 +32,11 @@ CONTRACT="$contract" VERIFY="$verify" REVIEW="$review" ISSUE="$issue" HEAD="$hea
     abort "missing acceptance evidence" unless evidence
     puts "- #{criterion["id"]}: #{evidence.fetch("status")} — #{evidence.fetch("evidence").join(", ")}"
   end
-  puts "\n## Opposite-model review\n\n- Verdict: `#{review["verdict"]}`\n- Review Head SHA: `#{review["headSha"]}`\n- Blocking findings: #{review.fetch("findings").count { |finding| %w[critical high medium].include?(finding["severity"]) }}\n\n## Remaining work\n\n- None.\n"
+  blocking = review.fetch("findings").count { |finding| %w[critical high medium].include?(finding["severity"]) }
+  puts "\n## Opposite-model review\n\n- Verdict: `#{review["verdict"]}`\n- Review Head SHA: `#{review["headSha"]}`\n- Blocking findings: #{blocking}\n\n## Remaining work\n"
+  if %w[passed not-applicable].include?(verify["status"]) && review["verdict"] == "approved" && blocking.zero?
+    puts "\n- Pre-merge gate is pending.\n"
+  else
+    puts "\n- Verification or opposite-model review is not merge-ready.\n"
+  end
 '
