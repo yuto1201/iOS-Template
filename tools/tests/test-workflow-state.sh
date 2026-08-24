@@ -8,7 +8,7 @@ artifact_issue="$repo_root/.artifacts/issues/$test_issue"
 request_dir="$repo_root/.artifacts/ops-requests"
 result_dir="$repo_root/.artifacts/ops-results"
 [[ ! -e "$artifact_issue" ]] || { echo "refusing to overwrite existing $artifact_issue" >&2; exit 1; }
-trap 'rm -rf "$workspace" "$artifact_issue" "$request_dir/issue-424242-create-pr-1.json" "$request_dir/bad.json" "$request_dir/cloudflare-deploy.json" "$request_dir/elevenlabs-audio.json" "$request_dir/appstore-build.json" "$request_dir/supabase-migrations.json" "$request_dir/path-link" "$result_dir/issue-424242-create-pr-1.json"' EXIT
+trap 'rm -rf "$workspace" "$artifact_issue" "$request_dir/issue-424242-create-pr-1.json" "$request_dir/create-issue.json" "$request_dir/bad.json" "$request_dir/cloudflare-deploy.json" "$request_dir/elevenlabs-audio.json" "$request_dir/appstore-build.json" "$request_dir/supabase-migrations.json" "$request_dir/path-link" "$result_dir/issue-424242-create-pr-1.json"' EXIT
 
 fake_bin="$workspace/bin"
 mkdir -p "$fake_bin" "$request_dir" "$result_dir"
@@ -129,6 +129,12 @@ cat > "$request" <<'EOF'
 {"requestVersion":1,"requestId":"issue-424242-create-pr-1","issue":424242,"operation":"github.create_pr","target":{"kind":"repository","identifier":"yuto1201/iOS-Template"},"environment":"production","expectedAccount":"yuto1201","inputs":{"base":"main","head":"codex/424242-workflow"},"reason":"ready"}
 EOF
 "$repo_root/tools/validate-codex-op-request.sh" --request "$request"
+
+cat > "$request_dir/create-issue.json" <<'EOF'
+{"requestVersion":1,"requestId":"create-issue","issue":424242,"operation":"github.create_issue","target":{"kind":"repository","identifier":"yuto1201/iOS-Template"},"environment":"production","expectedAccount":"yuto1201","inputs":{"title":"Release notes","body":"First paragraph.\n\n- A Markdown item\n- Another item"},"reason":"document release"}
+EOF
+"$repo_root/tools/validate-codex-op-request.sh" --request "$request_dir/create-issue.json" > "$workspace/create-issue.json"
+assert_json "$workspace/create-issue.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value.dig("inputs", "body") == "First paragraph.\n\n- A Markdown item\n- Another item"'
 
 cat > "$request_dir/cloudflare-deploy.json" <<'EOF'
 {"requestVersion":1,"requestId":"cloudflare-deploy","issue":424242,"operation":"cloudflare.deploy","target":{"kind":"cloudflare-project","identifier":"example"},"environment":"production","expectedAccount":"yuto1201","inputs":{"source":"/tmp/escape"},"reason":"deploy"}

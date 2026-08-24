@@ -21,7 +21,7 @@ def exact_keys(value, keys, name)
 end
 
 def nonempty_string(value, name)
-  fail_closed("#{name} must be a non-empty string") unless value.is_a?(String) && !value.empty? && !value.match?(/[\x00-\x1f\x7f]/)
+  fail_closed("#{name} must be a non-empty string") unless value.is_a?(String) && !value.empty? && !value.include?("\0")
 end
 
 def canonical(value)
@@ -67,6 +67,7 @@ OPERATIONS = {
 
 def contained_path(value, name, repo_root, allowed, required_type)
   nonempty_string(value, name)
+  fail_closed("#{name} contains unsafe characters") if value.match?(/[\x00-\x1f\x7f]/)
   fail_closed("#{name} must be repository-relative") if value.start_with?('/') || value.split('/').any? { |component| component.empty? || component == '.' || component == '..' }
   components = value.split('/')
   fail_closed("#{name} is outside its allowed root") unless allowed.call(components)
