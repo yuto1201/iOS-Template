@@ -30,6 +30,17 @@ required_files=(
   .agents/skills/spec-workflow/scripts/check-spec-state.sh
 )
 
+shipping_skills=(
+  plan-issue-batch
+  ship-issue
+  ship-issue-batch
+  codex-external-ops
+)
+
+for skill in "${shipping_skills[@]}"; do
+  required_files+=(".agents/skills/$skill/SKILL.md")
+done
+
 evaluator_agents=(
   spec-reviewer
   ios-reviewer
@@ -288,6 +299,36 @@ if [[ ! -f "$claude_skill/SKILL.md" ]]; then
   echo "Claude specification skill link does not resolve" >&2
   exit 1
 fi
+
+for skill in "${shipping_skills[@]}"; do
+  shared_skill=".agents/skills/$skill/SKILL.md"
+  claude_shipping_skill=".claude/skills/$skill"
+  expected_shipping_target="../../.agents/skills/$skill"
+
+  ruby -ryaml - "$shared_skill" "$skill" <<'RUBY'
+path, expected_name = ARGV
+text = File.read(path)
+frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
+abort "missing shared shipping skill frontmatter: #{path}" unless frontmatter
+data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
+abort "unexpected shared shipping skill name: #{path}" unless data["name"] == expected_name
+description = data["description"]
+abort "missing shared shipping skill description: #{path}" unless description.is_a?(String) && description.start_with?("Use when")
+RUBY
+
+  if [[ ! -L "$claude_shipping_skill" ]]; then
+    echo "Claude shipping skill must be a symbolic link, not a copied directory: $claude_shipping_skill" >&2
+    exit 1
+  fi
+  if [[ $(readlink "$claude_shipping_skill") != "$expected_shipping_target" ]]; then
+    echo "Claude shipping skill has a nonportable or incorrect target: $claude_shipping_skill" >&2
+    exit 1
+  fi
+  if [[ ! -f "$claude_shipping_skill/SKILL.md" ]]; then
+    echo "Claude shipping skill link does not resolve: $claude_shipping_skill" >&2
+    exit 1
+  fi
+done
 
 for agent in "${evaluator_agents[@]}"; do
   codex_agent=".codex/agents/$agent.toml"
