@@ -73,7 +73,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 
 ### ライブ Simulator 検証記録
 
-`template-foundation-live` バッチでは、次のインストール済み環境を一度だけ解決し、4条件で固定しました。matrixのSHA-256は`e4c2e3cc3a11344133b18dbaea6690f98b3bf3e45ebf87ca8bbbc831e450a82d`です。
+`template-foundation-live` バッチでは、次のインストール済み環境を一度だけ解決し、4条件で固定しました。matrixのSHA-256は`0401013f6aa579ac81c077629d43e109308e908bdec365e01845865f7a531457`です。
 
 | 項目 | 解決値 |
 | --- | --- |
