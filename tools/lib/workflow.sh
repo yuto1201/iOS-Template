@@ -99,10 +99,7 @@ workflow_require_issue_operation() {
       state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
       workflow_is_state "$state" || return 1
       if [[ -e "$repo_root/.artifacts/issues/$issue/state.json" ]]; then
-        case "$state" in
-          claimed|in-progress|verify-passed|review-requested|changes-requested|approved-for-merge|merged|done) return 1 ;;
-        esac
-        ruby "$repo_root/tools/lib/workflow-json.rb" validate-preclaim-state \
+        ruby "$repo_root/tools/lib/workflow-json.rb" validate-live-preclaim-state \
           "$repo_root/.artifacts/issues/$issue/state.json" "$state" >/dev/null || return 1
       else
         [[ "$state" == proposed || "$state" == approved ]] || return 1
@@ -124,6 +121,9 @@ workflow_require_issue_operation() {
       fi
       state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
       [[ "$state" == "$expected_from" || "$state" == "$expected_to" ]] || return 1
+      case "$expected_from:$expected_to" in
+        *:claimed|claimed:*|*:in-progress|in-progress:*|*:verify-passed|verify-passed:*|*:review-requested|review-requested:*|*:changes-requested|changes-requested:*|*:approved-for-merge|approved-for-merge:*|*:merged|merged:*|*:done|done:*) return 1 ;;
+      esac
       if [[ ! -e "$repo_root/.artifacts/issues/$issue/state.json" &&
             "$expected_from" != proposed && "$expected_from" != approved ]]; then
         return 1

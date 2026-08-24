@@ -205,6 +205,14 @@ def minimal_state_record(value, expected_state: nil)
   value
 end
 
+def live_preclaim_state_record(value, expected_state)
+  value = minimal_state_record(value, expected_state: expected_state)
+  post_claim = %w[claimed in-progress verify-passed review-requested changes-requested approved-for-merge merged done]
+  history = %w[state from to resumeState].map { |key| value[key] }.compact
+  fail_closed('minimal state record contains post-Claim history') unless (history & post_claim).empty?
+  value
+end
+
 def transition_state_record(path, issue, repository, state, from, to, resume_state, timestamp, head_sha)
   workflow_state(state, 'new state')
   workflow_state(from, 'new from', nullable: true)
@@ -781,6 +789,11 @@ when 'validate-preclaim-state'
   fail_closed('validate-preclaim-state arguments are invalid') unless ARGV.length.between?(1, 2)
   fail_closed('pre-Claim state record path is a symlink') if File.symlink?(path)
   puts canonical_json(minimal_state_record(read_json(path), expected_state: expected_state))
+when 'validate-live-preclaim-state'
+  path, expected_state = ARGV
+  fail_closed('validate-live-preclaim-state arguments are invalid') unless ARGV.length == 2
+  fail_closed('live pre-Claim state record path is a symlink') if File.symlink?(path)
+  puts canonical_json(live_preclaim_state_record(read_json(path), expected_state))
 when 'transition-state-record'
   path, issue, repository, state, from, to, resume_state, timestamp, head_sha = ARGV
   fail_closed('transition-state-record arguments are invalid') unless ARGV.length == 9 && issue.match?(/\A[1-9][0-9]*\z/)

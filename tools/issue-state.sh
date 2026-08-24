@@ -138,8 +138,12 @@ if [[ "$command" == get ]]; then
     resume_state=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-from-comments "$current" "$expected_owner" 2>/dev/null || true)
     [[ -n "$resume_state" ]] || resume_state=null
   fi
-  record=$(prepare_state "$current" null "$current" "$resume_state")
-  write_state "$record" >/dev/null
+  # A sealed Issue whose full identity was lost must not be downgraded into a
+  # six-key live-authorized record. Claim/Resume owns full-state recovery.
+  if ! workflow_issue_has_sealed_identity "$repo_root" "$issue" || [[ -e "$state_file" || -L "$state_file" ]]; then
+    record=$(prepare_state "$current" null "$current" "$resume_state")
+    write_state "$record" >/dev/null
+  fi
   if [[ "$resume_state" == null ]]; then resume_state_json=null; else resume_state_json=$(jq -cn --arg value "$resume_state" '$value'); fi
   jq -cn --arg repository "$repo" --argjson issue "$issue" --arg state "$current" --argjson resumeState "$resume_state_json" '{repository:$repository,issue:$issue,state:$state,resumeState:$resumeState}'
   exit 0

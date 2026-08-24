@@ -125,11 +125,16 @@ printf '["state:proposed"]' > "$FAKE_GH_LABELS_FILE"
 "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
 "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from proposed --to approved >/dev/null
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+assert_fails 'approved to claimed cannot run before Claim seals identity' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
 
 printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"
 assert_fails 'stale minimal pre-Claim state cannot authorize a post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
 ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="claimed"; value["to"]="claimed"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
 assert_fails 'minimal claimed state cannot authorize any unsealed post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="blocked:conflict"; value["from"]="claimed"; value["to"]="blocked:conflict"; value["resumeState"]="claimed"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
+printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
+assert_fails 'matching blocked state with post-Claim history cannot authorize an unsealed live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
 ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="approved"; value["to"]="approved"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
 printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
 assert_fails 'stale minimal pre-Claim state cannot authorize a blocked post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
@@ -150,6 +155,12 @@ printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
   --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
   > "$artifact_issue/issue-contract.json"
+
+printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
+rm -f "$artifact_issue/state.json"
+"$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
+[[ ! -e "$artifact_issue/state.json" ]] || { echo 'sealed get downgraded missing full state to a minimal record' >&2; exit 1; }
+printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
 
 # A wrong account must prevent the preflight artifact from being written.
 export FAKE_GH_LOGIN=company-account
