@@ -24,6 +24,7 @@ required_files=(
   tools/publish-documentation-verify.sh
   tools/with-ios-simulator-lock.sh
   .agents/skills/app-bootstrap/SKILL.md
+  .agents/skills/cross-model-review/SKILL.md
   .agents/skills/ios-verify/SKILL.md
   .agents/skills/spec-workflow/SKILL.md
   .agents/skills/spec-workflow/templates/decision.md
@@ -246,6 +247,8 @@ required = (
     "tools/with-ios-simulator-lock.sh",
     "tools/publish-documentation-verify.sh",
     "No canonical XcodeBuildMCP evidence producer exists",
+    "tools/prepare-review-packet.sh",
+    "--primary \"$PRIMARY_MODEL\" --issue \"$ISSUE\" --base-sha \"$BASE_SHA\" --head-sha \"$HEAD_SHA\"",
     "printf '%s %s\\n' \"$EVIDENCE\" \"$DIGEST\"",
 )
 missing = [value for value in required if value not in skill]
@@ -255,6 +258,24 @@ if 'executionRoute: "xcodebuild-mcp"' in skill:
     raise SystemExit("iOS verification skill advertises an unsupported MCP evidence route")
 if "SHA256_OF_THAT_EXACT_FILE" in skill:
     raise SystemExit("iOS verification skill leaves an unresolved digest placeholder")
+
+review_skill = Path(".agents/skills/cross-model-review/SKILL.md").read_text()
+review_required = (
+    "tools/prepare-review-packet.sh",
+    "--primary \"$PRIMARY_MODEL\" --issue \"$ISSUE\" --base-sha \"$BASE_SHA\" --head-sha \"$HEAD_SHA\"",
+    "jq -er '.path'",
+    'tools/cross-model-review.sh',
+    '--packet "$REVIEW_PACKET"',
+    "reviewPacketDigest",
+)
+review_missing = [value for value in review_required if value not in review_skill]
+if review_missing:
+    raise SystemExit(f"cross-model review skill lacks the sealed v2 producer route: {review_missing!r}")
+for path, content in (("ios-verify", skill), ("cross-model-review", review_skill)):
+    if "git diff --binary" in content:
+        raise SystemExit(f"{path} skill manually produces review.diff")
+if "claude --print" in review_skill or "request-codex-review.sh" in review_skill:
+    raise SystemExit("cross-model review skill bypasses the canonical review orchestrator")
 PYTHON
 
 bootstrap_validation=$(swift tools/bootstrap-app.swift validate \

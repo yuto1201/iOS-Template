@@ -1,6 +1,6 @@
 ---
 name: ios-verify
-description: Use when verifying an iOS Issue for completion, producing current-Head Simulator evidence, handling the documentation-only verification exception, or preparing evidence for opposite-model review.
+description: Use when verifying an iOS Issue for completion, producing current-Head Simulator evidence, handling the documentation-only verification exception, or sealing schema-v2 evidence for opposite-model review.
 ---
 
 # iOS Verification
@@ -106,20 +106,9 @@ For either path, set the canonical evidence path before preparing the review han
 EVIDENCE=".artifacts/issues/${ISSUE}/${HEAD_SHA}/verify.json"
 ```
 
-Create the read-only opposite-model review handoff from `docs/agent-contracts/review-packet.md`:
-
-```sh
-REVIEW_ROOT=".artifacts/issues/${ISSUE}/${HEAD_SHA}"
-REVIEW_DIFF="${REVIEW_ROOT}/review.diff"
-REVIEW_PACKET="${REVIEW_ROOT}/review-packet.json"
-git diff --binary --no-ext-diff --no-renames "$BASE_SHA" "$HEAD_SHA" -- >"$REVIEW_DIFF"
-```
-
-Write `REVIEW_PACKET` with the contract's exact schema: set `headSha` and `verifySha` to `HEAD_SHA`; copy the canonical Issue-contract path/digest, spec anchors, and ordered acceptance criteria; reference `REVIEW_DIFF` and this `verify.json`; and include every final visual image path for application evidence (an empty image list for documentation-only). Re-read current Head before dispatch. A changed Head restarts verification and review; an unavailable opposite model is `blocked:review`, never self-approval.
-
 External account/provider preflights are separate Codex-only merge-time artifacts. This skill does not authorize GitHub, provider, signing-account, App Store Connect, or other authenticated operations.
 
-After packet creation, independently validate the exact canonical evidence, derive its digest only after validation exits zero, and make the final Head/evidence recheck the last operation before returning:
+Independently validate the exact canonical evidence and derive its digest only after validation exits zero. Then use the single deterministic producer to seal the actual Base-to-Head diff, canonical verify bytes, and ordered visual evidence into the schema-v2 review packet. Never run the producer before verification succeeds, hand-author either review artifact, or substitute another packet schema.
 
 ```sh
 swift tools/validate-verify-json.swift \
@@ -128,9 +117,16 @@ swift tools/validate-verify-json.swift \
   --expected-base "$BASE_SHA" \
   --expected-head "$HEAD_SHA"
 DIGEST="sha256:$(shasum -a 256 "$EVIDENCE" | awk '{print $1}')"
+
+REVIEW_PREPARATION="$(tools/prepare-review-packet.sh --primary "$PRIMARY_MODEL" --issue "$ISSUE" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA")"
+REVIEW_PACKET="$(jq -er '.path' <<<"$REVIEW_PREPARATION")"
+
 FINAL_HEAD="$(git rev-parse HEAD)"
 [[ "$FINAL_HEAD" == "$HEAD_SHA" ]] || { echo "Head changed after verification" >&2; exit 1; }
 FINAL_DIGEST="sha256:$(shasum -a 256 "$EVIDENCE" | awk '{print $1}')"
 [[ "$FINAL_DIGEST" == "$DIGEST" ]] || { echo "verify.json changed after validation" >&2; exit 1; }
 printf '%s %s\n' "$EVIDENCE" "$DIGEST"
+printf '%s\n' "$REVIEW_PACKET"
 ```
+
+Pass that exact `REVIEW_PACKET` path to the next `cross-model-review` invocation. The canonical review tools own schema-v2 and `reviewPacketDigest` validation; do not recompute, translate, or edit their output. A changed Head restarts verification and review; an unavailable opposite model is `blocked:review`, never self-approval.
