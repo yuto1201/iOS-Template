@@ -95,6 +95,8 @@ Claudeはmigrationファイルを作成し、ローカルDBで検証できます
 - 外部MCP・プラグイン
 - `.env`、private key、Tokenを表示するコマンド
 
+Read、Glob、Grep、Computer Useを含む非shell Toolでも、専用秘密ディレクトリ、Keychain、`.env`、credential・Token・private-key形式のパスは拒否します。シンボリックリンクは解決後の物理パスで再検査します。Bashではprovider CLIやremote Gitを絶対パス、interpreter、wrapper、または管理対象helper経由で呼び出しても同じく拒否します。
+
 Hookは誤操作の防止策で、同一OSユーザー上の暗号学的な分離ではありません。
 
 App Store Connectのmulti-line `.p8` private keyはKeychainの1行secret interfaceへ入れません。リポジトリ外の専用ディレクトリへ`0600`で保存し、Codexが必要な子processへ渡す間だけ使用します。Key IDとIssuer IDはKeychainまたは公開ownership設定へ分けます。

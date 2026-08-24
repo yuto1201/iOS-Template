@@ -157,7 +157,9 @@ Identityの期待値は `Config/ownership.yml` を正本とします。GitHub lo
 
 ## 6. Claudeガード
 
-`.claude/settings.json` の `PreToolUse` から `.claude/hooks/guard-external-ops.sh` を呼び、Bash、MCP、外部プラグイン、秘密取得を検査します。拒否時は、Codexへ委託すべき操作であることをClaudeへ返します。
+`.claude/settings.json` の `PreToolUse` から `.claude/hooks/guard-external-ops.sh` を呼び、すべてのTool inputについて秘密パスを検査し、Bash、MCP、外部プラグイン、秘密取得を検査します。Bashでは実行ファイルの絶対パス、shell・interpreter・`env`・`xargs`・`find -exec`を介した間接実行、remote Gitのporcelainとplumbingも同じ境界として扱います。拒否時は、Codexへ委託すべき操作であることをClaudeへ返します。
+
+Repository内のshell scriptをClaudeが起動するときは、物理パスがRepository内かつGit管理対象であることを確認し、参照する管理対象helperを有界・cycle-safeにたどって検査します。固定されたCodex依頼とread-onlyレビューの2ラッパーだけは、文書化された完全一致argvで直接起動できます。
 
 このガードは同一macOSユーザー内の誤操作防止であり、OSレベルの完全な分離ではありません。完全分離が必要になった場合はClaude専用OSユーザーまたは隔離実行環境へ移行します。
 

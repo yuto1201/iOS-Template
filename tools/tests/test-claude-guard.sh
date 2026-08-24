@@ -7,7 +7,12 @@ cd "$repo_root"
 guard="$repo_root/.claude/hooks/guard-external-ops.sh"
 fixtures="$repo_root/tools/tests/fixtures/claude-hook"
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-claude-guard.XXXXXX")
-trap 'rm -rf "$workspace"' EXIT
+runtime_link="$repo_root/tools/tests/fixtures/claude-hook/runtime-link.sh"
+cleanup() {
+  rm -f "$runtime_link"
+  rm -rf "$workspace"
+}
+trap cleanup EXIT
 
 allow_cases=(
   allow-git-status
@@ -67,6 +72,10 @@ assert_allow() {
 assert_deny() {
   local name=$1 output="$workspace/$1.out" decision reason
   "$guard" < "$fixtures/$name.json" > "$output"
+  if [[ ! -s "$output" ]]; then
+    echo "expected denied fixture $name to return a decision" >&2
+    exit 1
+  fi
   decision=$(/usr/bin/plutil -extract hookSpecificOutput.permissionDecision raw -o - "$output")
   reason=$(/usr/bin/plutil -extract hookSpecificOutput.permissionDecisionReason raw -o - "$output")
   if [[ "$decision" != "deny" ]]; then
@@ -79,6 +88,30 @@ assert_deny() {
   fi
 }
 
+write_fixture() {
+  local output=$1 tool_name=$2 input_key=$3 input_value=$4
+  /usr/bin/ruby -rjson -e '
+    path, tool, key, value = ARGV
+    File.write(path, JSON.generate({"tool_name" => tool, "tool_input" => {key => value}}))
+  ' "$output" "$tool_name" "$input_key" "$input_value"
+}
+
+assert_inline_allow() {
+  local name=$1 tool_name=$2 input_key=$3 input_value=$4 fixture
+  fixture="$workspace/$name.json"
+  write_fixture "$fixture" "$tool_name" "$input_key" "$input_value"
+  fixtures="$workspace" assert_allow "$name"
+  fixtures="$repo_root/tools/tests/fixtures/claude-hook"
+}
+
+assert_inline_deny() {
+  local name=$1 tool_name=$2 input_key=$3 input_value=$4 fixture
+  fixture="$workspace/$name.json"
+  write_fixture "$fixture" "$tool_name" "$input_key" "$input_value"
+  fixtures="$workspace" assert_deny "$name"
+  fixtures="$repo_root/tools/tests/fixtures/claude-hook"
+}
+
 for case_name in "${allow_cases[@]}"; do
   assert_allow "$case_name"
 done
@@ -87,4 +120,71 @@ for case_name in "${deny_cases[@]}"; do
   assert_deny "$case_name"
 done
 
-echo "PASS: ${#allow_cases[@]} allowed and ${#deny_cases[@]} denied Claude guard fixtures"
+assert_inline_allow allow-read-public-source Read file_path "$repo_root/docs/security.md"
+assert_inline_allow allow-read-environment-example Read file_path "$repo_root/Config/Local.xcconfig.example"
+assert_inline_allow allow-safe-environment-build Bash command "env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -version"
+assert_inline_allow allow-safe-transitive-cycle Bash command "tools/tests/fixtures/claude-hook/safe-cycle-entry.sh"
+assert_inline_allow allow-sh-safe-transitive-cycle Bash command "sh ./tools/tests/fixtures/claude-hook/safe-cycle-entry.sh"
+assert_inline_allow allow-bash-stdin-safe-transitive-cycle Bash command "bash<tools/tests/fixtures/claude-hook/safe-cycle-entry.sh"
+assert_inline_allow allow-absolute-safe-transitive-cycle Bash command "$repo_root/tools/tests/fixtures/claude-hook/safe-cycle-entry.sh"
+assert_inline_allow allow-chained-safe-transitive-cycle Bash command "cd '$repo_root' && ./tools/tests/fixtures/claude-hook/safe-cycle-entry.sh"
+assert_inline_allow allow-local-git-worktree Bash command "git worktree list --porcelain"
+assert_inline_allow allow-local-git-diff-script-path Bash command "git diff -- tools/request-codex-op.sh"
+assert_inline_allow allow-safe-find Bash command "find docs -type f -name '*.md' -print"
+assert_inline_allow allow-safe-python-file Bash command "python3 tools/tests/fixtures/local-check.py"
+
+assert_inline_deny deny-read-dedicated-secret Read file_path "$HOME/Library/Application Support/iOS-Template/secrets/example/key.p8"
+assert_inline_deny deny-glob-environment-secret Glob pattern "$HOME/projects/example/.env.local"
+assert_inline_deny deny-grep-token-path Grep path "$HOME/.config/example/api-token.txt"
+assert_inline_deny deny-computer-keychain Computer prompt "Open ~/Library/Keychains/login.keychain-db"
+ln -s "$HOME/Library/Keychains/login.keychain-db" "$workspace/keychain-link"
+assert_inline_deny deny-read-secret-symlink Read file_path "$workspace/keychain-link"
+assert_inline_deny deny-bash-secret-symlink Bash command "cat '$workspace/keychain-link'"
+ln -s /opt/homebrew/bin/gh "$workspace/provider-link"
+assert_inline_deny deny-bash-provider-symlink Bash command "'$workspace/provider-link' issue list"
+assert_inline_deny deny-bash-environment-secret Bash command "cat .env"
+assert_inline_deny deny-bash-private-key Bash command "cat '$HOME/keys/AuthKey_TEST.p8'"
+assert_inline_deny deny-bash-keychain-file Bash command "cat ~/Library/Keychains/login.keychain-db"
+assert_inline_deny deny-bash-netrc Bash command "sed -n '1p' ~/.netrc"
+assert_inline_deny deny-bash-ssh-key Bash command "cat ~/.ssh/id_rsa"
+
+assert_inline_deny deny-absolute-gh Bash command "/opt/homebrew/bin/gh issue list"
+assert_inline_deny deny-absolute-supabase Bash command "'/usr/local/bin/supabase' db push"
+assert_inline_deny deny-env-provider Bash command "/usr/bin/env GH_HOST=github.com /opt/homebrew/bin/gh issue list"
+assert_inline_deny deny-env-transitive-tools-script Bash command "env SAFE_LOCAL=1 tools/tests/fixtures/claude-hook/transitive-entry.sh"
+assert_inline_deny deny-env-option-transitive-tools-script Bash command "/usr/bin/env -i SAFE_LOCAL=1 ./tools/tests/fixtures/claude-hook/transitive-entry.sh"
+assert_inline_deny deny-xargs-provider Bash command "printf 'issue list' | xargs gh"
+assert_inline_deny deny-find-exec-provider Bash command "find . -type f -exec /opt/homebrew/bin/gh issue list ';'"
+
+assert_inline_deny deny-python-command Bash command "/usr/bin/python3 -c 'import os; os.system(\"gh issue list\")'"
+assert_inline_deny deny-python-command-no-space Bash command "python3 -c'print(1)'"
+assert_inline_deny deny-python-command-after-option Bash command "python3 -I -c 'print(1)'"
+assert_inline_deny deny-ruby-eval Bash command "ruby -e 'exec \"gh\", \"issue\", \"list\"'"
+assert_inline_deny deny-perl-eval Bash command "perl -e 'system qw(gh issue list)'"
+assert_inline_deny deny-node-eval Bash command "node -e 'require(\"child_process\").execSync(\"gh issue list\")'"
+assert_inline_deny deny-node-eval-after-option Bash command "node --no-warnings -e 'console.log(1)'"
+assert_inline_deny deny-shell-command-after-option Bash command "bash --noprofile -c 'printf safe-looking'"
+
+assert_inline_deny deny-dot-tools-script Bash command "./tools/tests/fixtures/claude-hook/unapproved-external.sh"
+assert_inline_deny deny-sh-tools-script Bash command "sh tools/tests/fixtures/claude-hook/unapproved-external.sh"
+assert_inline_deny deny-absolute-sh-tools-script Bash command "/bin/sh ./tools/tests/fixtures/claude-hook/unapproved-external.sh"
+assert_inline_deny deny-bash-stdin-tools-script Bash command "bash<tools/tests/fixtures/claude-hook/unapproved-external.sh"
+assert_inline_deny deny-absolute-tools-script Bash command "$repo_root/tools/tests/fixtures/claude-hook/unapproved-external.sh"
+assert_inline_deny deny-transitive-tools-script Bash command "tools/tests/fixtures/claude-hook/transitive-entry.sh"
+assert_inline_deny deny-chained-transitive-tools-script Bash command "cd '$repo_root' && ./tools/tests/fixtures/claude-hook/transitive-entry.sh"
+assert_inline_deny deny-semicolon-transitive-tools-script Bash command "true; sh tools/tests/fixtures/claude-hook/transitive-entry.sh"
+assert_inline_deny deny-transitive-network-script Bash command "tools/tests/fixtures/claude-hook/network-entry.sh"
+ln -s unapproved-external.sh "$runtime_link"
+assert_inline_deny deny-untracked-script-symlink Bash command "tools/tests/fixtures/claude-hook/runtime-link.sh"
+rm "$runtime_link"
+
+assert_inline_deny deny-git-send-pack Bash command "git send-pack origin HEAD"
+assert_inline_deny deny-absolute-git-fetch-pack Bash command "/usr/libexec/git-core/git-fetch-pack origin"
+assert_inline_deny deny-git-http-transport Bash command "git http-fetch deadbeef https://example.com/repo.git"
+assert_inline_deny deny-git-credential-fill Bash command "printf 'protocol=https\\nhost=github.com\\n' | git credential fill"
+assert_inline_deny deny-absolute-credential-helper Bash command "/usr/libexec/git-core/git-credential-osxkeychain get"
+assert_inline_deny deny-git-exec-path Bash command "git --exec-path=/tmp status"
+assert_inline_deny deny-direct-ssh-git-plumbing Bash command "ssh git@github.com git-receive-pack yuto1201/iOS-Template.git"
+assert_inline_deny deny-direct-rsync-remote Bash command "rsync -a docs/ example@example.com:/tmp/docs/"
+
+echo "PASS: Claude guard allows local work and denies direct or hidden external/secret operations"
