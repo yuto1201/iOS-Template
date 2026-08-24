@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "${FAKE_REVIEWER_LOG:?}"
+[[ "${FAKE_REVIEWER_REQUIRE_CLOSED_STDIN:-0}" != 1 ]] || ruby -e 'exit(STDIN.stat.rdev == File.stat("/dev/null").rdev ? 0 : 1)'
+[[ "$*" == *"--print"* && "$*" == *"--output-format json"* ]] || exit 91
+[[ "$*" == *"--allowedTools Read"* && "$*" == *"--allowedTools Glob"* && "$*" == *"--allowedTools Grep"* ]] || exit 92
+case "${FAKE_REVIEWER_MODE:?}" in
+  approved|changes|mismatch|malformed) cat "${FAKE_REVIEWER_RESULT:?}" ;;
+  envelope) RESULT_FILE="${FAKE_REVIEWER_RESULT:?}" ruby -rjson -e 'puts JSON.generate({"type" => "result", "result" => File.read(ENV.fetch("RESULT_FILE"))})' ;;
+  timeout) exit 124 ;;
+  write) printf 'reviewer write\n' > "${FAKE_REVIEWER_WRITE_PATH:?}"; cat "${FAKE_REVIEWER_RESULT:?}" ;;
+  *) exit 93 ;;
+esac
