@@ -99,8 +99,11 @@ workflow_require_issue_operation() {
       state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
       workflow_is_state "$state" || return 1
       if [[ -e "$repo_root/.artifacts/issues/$issue/state.json" ]]; then
+        case "$state" in
+          claimed|in-progress|verify-passed|review-requested|changes-requested|approved-for-merge|merged|done) return 1 ;;
+        esac
         ruby "$repo_root/tools/lib/workflow-json.rb" validate-preclaim-state \
-          "$repo_root/.artifacts/issues/$issue/state.json" "$state" >/dev/null 2>&1 || return 1
+          "$repo_root/.artifacts/issues/$issue/state.json" "$state" >/dev/null || return 1
       else
         [[ "$state" == proposed || "$state" == approved ]] || return 1
       fi
