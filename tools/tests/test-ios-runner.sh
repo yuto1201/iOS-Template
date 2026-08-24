@@ -502,10 +502,24 @@ puts JSON.generate(document)
 RUBY
     ;;
   shutdown)
+    if [[ "$(state case_mode)" == term-blocked-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && -e "$state_dir/term-blocked-probe-pgid" ]]; then
+      probe_pgid="$(state term-blocked-probe-pgid)"
+      if [[ "$probe_pgid" =~ ^[1-9][0-9]*$ ]] && /bin/kill -0 -- "-$probe_pgid" >/dev/null 2>&1; then
+        : >"$state_dir/term-cleanup-before-probe-stop"
+        exit 1
+      fi
+    fi
     [[ "$(state resource_failure)" != shutdown-after-case || "${3-}" != "00000000-0000-0000-0000-000000000001" || ! -e "$state_dir/ui-ran-iphone-en" ]] || exit 1
     printf '%s\n' Shutdown >"$state_dir/device-state-${3-}"
     ;;
   erase)
+    if [[ "$(state case_mode)" == term-blocked-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && -e "$state_dir/term-blocked-probe-pgid" ]]; then
+      probe_pgid="$(state term-blocked-probe-pgid)"
+      if [[ "$probe_pgid" =~ ^[1-9][0-9]*$ ]] && /bin/kill -0 -- "-$probe_pgid" >/dev/null 2>&1; then
+        : >"$state_dir/term-cleanup-before-probe-stop"
+        exit 1
+      fi
+    fi
     [[ "$(state resource_failure)" != erase-after-case || "${3-}" != "00000000-0000-0000-0000-000000000001" || ! -e "$state_dir/ui-ran-iphone-en" ]] || exit 1
     [[ "$(state "device-state-${3-}")" == Shutdown ]] || { echo 'erase requires Shutdown' >&2; exit 1; }
     erase_count_file="$state_dir/erase-count-${3-}"
@@ -524,6 +538,13 @@ RUBY
     printf '%s\n' "/Users/fixture/$container_root/${3-}/TemplateApp.app"
     ;;
   terminate)
+    if [[ "$(state case_mode)" == term-blocked-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && -e "$state_dir/term-blocked-probe-pgid" ]]; then
+      probe_pgid="$(state term-blocked-probe-pgid)"
+      if [[ "$probe_pgid" =~ ^[1-9][0-9]*$ ]] && /bin/kill -0 -- "-$probe_pgid" >/dev/null 2>&1; then
+        : >"$state_dir/term-cleanup-before-probe-stop"
+        exit 1
+      fi
+    fi
     if [[ "$(state mutate_after_case)" =~ ^(contract|matrix)$ && "${3-}" == "00000000-0000-0000-0000-000000000001" && ! -e "$state_dir/mutate-after-case-fired" ]] && \
        /usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "io" && $5 == "00000000-0000-0000-0000-000000000001" {seen=1} END {exit seen ? 0 : 1}' "$fake_log"; then
       : >"$state_dir/mutate-after-case-fired"
@@ -565,6 +586,13 @@ RUBY
     printf '%s: %s\n' "${4-}" "$launch_pid"
     ;;
   spawn)
+    if [[ "$(state case_mode)" == term-blocked-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && "${4-}" == /bin/kill ]]; then
+      printf '%s\n' "$$" >"$state_dir/term-blocked-probe-pid"
+      /bin/ps -o pgid= -p "$$" | /usr/bin/tr -d ' ' >"$state_dir/term-blocked-probe-pgid"
+      printf '%s\n' "$PPID" >"$state_dir/term-blocked-runner-pid"
+      trap 'exit 143' TERM
+      while true; do /bin/sleep 0.05; done
+    fi
     if [[ "$(state case_mode)" == stubborn-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && "${4-}" == /bin/kill ]]; then
       printf '%s\n' "$$" >"$state_dir/stubborn-probe-pid"
       trap '' TERM
@@ -733,6 +761,7 @@ prepare_repo() {
   /bin/rm -f "$adapter_state"/publication-kill-*
   /bin/rm -f "$adapter_state"/publication-kill-after-*
   /bin/rm -f "$adapter_state/stubborn-probe-pid"
+  /bin/rm -f "$adapter_state"/term-blocked-probe-* "$adapter_state/term-blocked-runner-pid" "$adapter_state/term-cleanup-before-probe-stop"
   /bin/rm -f "$adapter_state"/device-state-* "$adapter_state"/erase-count-*
   for udid in \
     00000000-0000-0000-0000-000000000001 \
@@ -951,6 +980,65 @@ fi
   echo "Xcode Swift driver probe returned unexpected output" >&2
   exit 1
 }
+
+prepare_repo term-during-blocked-probe
+FAKE_CASE_MODE=term-blocked-probe run_execute >"$scratch/term-blocked.stdout" 2>"$scratch/term-blocked.stderr" &
+term_job_pid=$!
+term_runner_pid=""
+for _ in $(/usr/bin/jot 400); do
+  term_runner_pid="$(/bin/cat "$adapter_state/term-blocked-runner-pid" 2>/dev/null || true)"
+  [[ "$term_runner_pid" =~ ^[1-9][0-9]*$ ]] && break
+  /bin/sleep 0.05
+done
+if [[ ! "$term_runner_pid" =~ ^[1-9][0-9]*$ ]]; then
+  /bin/kill -KILL "$term_job_pid" >/dev/null 2>&1 || true
+  wait "$term_job_pid" 2>/dev/null || true
+  echo "TERM cleanup test did not reach its blocked Simulator probe" >&2
+  exit 1
+fi
+/bin/kill -TERM "$term_runner_pid"
+term_finished=0
+for _ in $(/usr/bin/jot 400); do
+  if ! /bin/kill -0 "$term_job_pid" >/dev/null 2>&1; then term_finished=1; break; fi
+  /bin/sleep 0.05
+done
+if [[ "$term_finished" != 1 ]]; then
+  /bin/kill -KILL "$term_job_pid" >/dev/null 2>&1 || true
+  wait "$term_job_pid" 2>/dev/null || true
+  echo "TERM cleanup did not finish after stopping its blocked probe" >&2
+  exit 1
+fi
+if wait "$term_job_pid"; then
+  echo "TERM-interrupted runner unexpectedly succeeded" >&2
+  exit 1
+fi
+[[ ! -e "$adapter_state/term-cleanup-before-probe-stop" ]] || {
+  echo "TERM cleanup mutated the active Simulator before its probe group stopped" >&2
+  exit 1
+}
+term_probe_pgid="$(/bin/cat "$adapter_state/term-blocked-probe-pgid" 2>/dev/null || true)"
+if [[ "$term_probe_pgid" =~ ^[1-9][0-9]*$ ]] && /bin/kill -0 -- "-$term_probe_pgid" >/dev/null 2>&1; then
+  /bin/kill -KILL -- "-$term_probe_pgid" >/dev/null 2>&1 || true
+  echo "TERM cleanup left the blocked probe process group alive" >&2
+  exit 1
+fi
+/usr/bin/ruby - "$fake_log" <<'RUBY'
+lines = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
+probe = lines.rindex do |fields|
+  fields[0] == "xcrun" && fields[2] == "simctl" && fields[3] == "spawn" &&
+    fields[4] == "00000000-0000-0000-0000-000000000001" && fields[5] == "/bin/kill"
+end
+abort "TERM cleanup did not log its blocked probe" unless probe
+mutations = lines.drop(probe + 1).select do |fields|
+  fields[0] == "xcrun" && fields[2] == "simctl" && %w[terminate shutdown erase delete].include?(fields[3])
+end
+active = "00000000-0000-0000-0000-000000000001"
+abort "TERM cleanup touched a Simulator outside the active owned case" unless mutations.all? { |fields| fields[4] == active }
+abort "TERM cleanup did not reclaim exactly the active owned Simulator" unless mutations.count { |fields| fields[3] == "shutdown" } == 1 && mutations.count { |fields| fields[3] == "erase" } == 1
+abort "TERM cleanup deleted an owned Simulator" if mutations.any? { |fields| fields[3] == "delete" }
+RUBY
+[[ ! -e "$draft" ]] || { echo "TERM-interrupted runner published a draft" >&2; exit 1; }
+assert_no_failed_attempts
 
 prepare_repo valid
 run_execute

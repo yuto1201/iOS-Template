@@ -232,8 +232,6 @@ config_check() {
   run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-config \
     --config "$config" --digest "$config_digest" --check >/dev/null
 }
-active_udid=""
-active_bundle=""
 active_case_id=""
 active_probe_pid=""
 runner_succeeded=0
@@ -258,23 +256,29 @@ stop_probe_group() {
   ! /bin/kill -0 -- "-$probe_pid" >/dev/null 2>&1
 }
 release_runner() {
-  local status="$?"
-  if [[ -n "$active_udid" && -n "$active_bundle" ]]; then
-    run_xcrun simctl terminate "$active_udid" "$active_bundle" >/dev/null 2>&1 || true
-    if [[ -n "$active_case_id" ]] && ! reclaim_owned_simulator "$active_case_id" "exit-cleanup"; then
+  local status="$?" cleanup_case_id cleanup_udid cleanup_bundle probe_stopped=1
+  if [[ -n "$active_probe_pid" ]]; then
+    if ! stop_probe_group "$active_probe_pid"; then
+      echo "iOS verification failed: bounded Simulator probe cleanup failed" >&2
+      [[ "$status" -ne 0 ]] || status=1
+      probe_stopped=0
+    fi
+    active_probe_pid=""
+  fi
+  if [[ -n "$active_case_id" && "$probe_stopped" -eq 1 ]]; then
+    cleanup_case_id="$active_case_id"
+    cleanup_udid="$(case_udid "$cleanup_case_id")" || cleanup_udid=""
+    cleanup_bundle="$(config_value bundleIdentifier)" || cleanup_bundle=""
+    if [[ -n "$cleanup_udid" && -n "$cleanup_bundle" ]]; then
+      run_xcrun simctl terminate "$cleanup_udid" "$cleanup_bundle" >/dev/null 2>&1 || true
+    fi
+    if [[ -z "$cleanup_udid" || -z "$cleanup_bundle" ]] || ! reclaim_owned_simulator "$cleanup_case_id" "exit-cleanup"; then
       run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-record-failure \
         --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
         --stage "$stage" --message "active Simulator resource reclamation failed" >/dev/null 2>&1 || true
       echo "iOS verification failed: active Simulator resource reclamation failed" >&2
       [[ "$status" -ne 0 ]] || status=1
     fi
-  fi
-  if [[ -n "$active_probe_pid" ]]; then
-    if ! stop_probe_group "$active_probe_pid"; then
-      echo "iOS verification failed: bounded Simulator probe cleanup failed" >&2
-      [[ "$status" -ne 0 ]] || status=1
-    fi
-    active_probe_pid=""
   fi
   exec 9>&- || true
   if [[ -n "$lock_holder_pid" ]]; then
@@ -299,10 +303,11 @@ trap 'exit 143' TERM
 run_xcrun_bounded() {
   local output_path="$1" error_path="$2" result=0 iteration
   shift 2
-  set -m
-  run_xcrun "$@" >"$output_path" 2>"$error_path" &
+  initialize_trusted_environment || return 1
+  /usr/bin/env -i "${TRUSTED_BASE_ENV[@]}" DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    /usr/bin/ruby --disable-gems -e 'Process.setpgrp; exec(*ARGV)' "$TRUSTED_XCRUN" "$@" \
+    9>&- >"$output_path" 2>"$error_path" &
   active_probe_pid="$!"
-  set +m
   for ((iteration = 0; iteration < 100; iteration++)); do
     if ! /bin/kill -0 "$active_probe_pid" >/dev/null 2>&1; then
       wait "$active_probe_pid" || result="$?"
@@ -362,9 +367,7 @@ reclaim_owned_simulator() {
   capture_simulator_identities "$label-shutdown" "$case_id" Shutdown || return 1
   run_xcrun simctl erase "$udid" >/dev/null 2>&1 || return 1
   capture_simulator_identities "$label-post" "$case_id" Shutdown || return 1
-  if [[ "$active_udid" == "$udid" ]]; then
-    active_udid=""
-    active_bundle=""
+  if [[ "$active_case_id" == "$case_id" ]]; then
     active_case_id=""
   fi
 }
@@ -509,8 +512,6 @@ for index in 0 1 2 3; do
   action_value="$(config_value cases.$index.value)"
   stage="case-$case_id"
   case_failed=""
-  active_udid="$udid"
-  active_bundle="$bundle_identifier"
   active_case_id="$case_id"
   if ! run_xcrun simctl boot "$udid" >/dev/null 2>&1; then
     simulator_state="$run_state/$case_id-simulator-state.json"
