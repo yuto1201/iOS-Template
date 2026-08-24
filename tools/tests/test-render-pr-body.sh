@@ -18,7 +18,9 @@ CONTRACT="$contract" ruby -rjson -e 'File.binwrite(ENV.fetch("CONTRACT"),JSON.ge
 digest="sha256:$(shasum -a 256 "$contract" | awk '{print $1}')"
 VERIFY="$verify" HEAD="$head" BASE="$base" DIGEST="$digest" ruby -rjson -e '
   cases=%w[iphone-en iphone-ja ipad-en ipad-ja].map{|id|{"id"=>id,"status"=>"passed","screenshot"=>"#{id}/screenshot.png","screenshotDigest"=>"sha256:"+"a"*64}}
-  value={"schemaVersion"=>1,"status"=>"passed","changeClassification"=>"application-code","reason"=>nil,"issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"matrixFile"=>".artifacts/batches/batch/simulator-matrix.json","matrixDigest"=>"sha256:"+"b"*64,"executionRoute"=>"xcodebuild-simctl","xcode"=>{"path"=>"/Applications/Xcode.app/Contents/Developer","version"=>"26.5","build"=>"17F42"},"build"=>{"status"=>"passed","scheme"=>"TemplateApp","warningsAdded"=>0,"project"=>{},"sourceTree"=>{}},"tests"=>{"status"=>"passed","passed"=>24,"failed"=>0,"skipped"=>0},"cases"=>cases,"visualEvaluation"=>{"status"=>"passed","findings"=>[]},"acceptanceEvidence"=>[{"id"=>"AC-1","status"=>"passed","evidence"=>["stage:build","stage:unit-tests","case:iphone-en","case:iphone-ja","case:ipad-en","case:ipad-ja"]}],"completedAt"=>"2026-08-24T00:01:00Z"};File.binwrite(ENV.fetch("VERIFY"),JSON.generate(value))'
+  visual_cases=%w[iphone-en iphone-ja ipad-en ipad-ja].map{|id|{"id"=>id,"images"=>[{"state"=>"primary","path"=>"#{id}/screenshot.png","digest"=>"sha256:"+"a"*64,"status"=>"passed","findings"=>[]}]}}
+  project={"path"=>"TemplateApp.xcodeproj","digest"=>"sha256:"+"c"*64}; source={"headSha"=>ENV.fetch("HEAD"),"digest"=>"sha256:"+"d"*64,"projectPath"=>"TemplateApp.xcodeproj"}
+  value={"schemaVersion"=>1,"status"=>"passed","changeClassification"=>"application-code","reason"=>nil,"issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"matrixFile"=>".artifacts/batches/batch/simulator-matrix.json","matrixDigest"=>"sha256:"+"b"*64,"executionRoute"=>"xcodebuild-simctl","xcode"=>{"path"=>"/Applications/Xcode.app/Contents/Developer","version"=>"26.5","build"=>"17F42"},"build"=>{"status"=>"passed","scheme"=>"TemplateApp","warningsAdded"=>0,"project"=>project,"sourceTree"=>source},"tests"=>{"status"=>"passed","passed"=>24,"failed"=>0,"skipped"=>0},"cases"=>cases,"visualEvaluation"=>{"status"=>"passed","packet"=>{"path"=>".artifacts/issues/42/#{ENV.fetch("HEAD")}/visual-packet.json","digest"=>"sha256:"+"e"*64},"cases"=>visual_cases,"findings"=>[]},"acceptanceEvidence"=>[{"id"=>"AC-1","status"=>"passed","evidence"=>["stage:build","stage:unit-tests","case:iphone-en","case:iphone-ja","case:ipad-en","case:ipad-ja"]}],"completedAt"=>"2026-08-24T00:01:00Z"};File.binwrite(ENV.fetch("VERIFY"),JSON.generate(value))'
 REVIEW="$review" HEAD="$head" BASE="$base" DIGEST="$digest" ruby -rjson -e 'File.binwrite(ENV.fetch("REVIEW"),JSON.generate({"schemaVersion"=>1,"issue"=>42,"reviewerModel"=>"claude","baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"verifySha"=>ENV.fetch("HEAD"),"issueContractDigest"=>ENV.fetch("DIGEST"),"verdict"=>"approved","findings"=>[],"acceptanceAssessment"=>[{"id"=>"AC-1","status"=>"supported","evidence"=>["review.diff"]}],"reviewedAt"=>"2026-08-24T00:02:00Z"}))'
 
 body=$("$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head")
@@ -55,10 +57,31 @@ fi
 if grep -Fq 'None for this Issue' "$scratch/failed-build.out"; then echo 'failed Build overclaimed Remaining work' >&2; exit 1; fi
 cp "$scratch/verify.good" "$verify"
 
+expect_verify_refusal() {
+  local label=$1 code=$2
+  cp "$scratch/verify.good" "$verify"
+  ruby -rjson -e "path=ARGV[0];value=JSON.parse(File.binread(path));$code;File.binwrite(path,JSON.generate(value))" "$verify"
+  if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/$label.out" 2>"$scratch/$label.err"; then
+    echo "invalid renderer evidence was accepted: $label" >&2; exit 1
+  fi
+  if grep -Fq 'None for this Issue' "$scratch/$label.out"; then echo "invalid renderer evidence overclaimed Remaining work: $label" >&2; exit 1; fi
+}
+expect_verify_refusal warnings-added 'value["build"]["warningsAdded"]=1'
+expect_verify_refusal skipped-tests 'value["tests"]["skipped"]=1'
+expect_verify_refusal missing-case 'value["cases"].pop'
+expect_verify_refusal missing-visual-case 'value["visualEvaluation"]["cases"].pop'
+expect_verify_refusal incomplete-schema 'value.delete("executionRoute")'
+cp "$scratch/verify.good" "$verify"
+
 cp "$review" "$scratch/review.good"
 ruby -rjson -e 'path=ARGV[0];value=JSON.parse(File.binread(path));value["acceptanceAssessment"][0]["status"]="unsupported";File.binwrite(path,JSON.generate(value))' "$review"
 if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/unsupported.out" 2>"$scratch/unsupported.err"; then
   echo 'unsupported review assessment was rendered as merge-ready' >&2; exit 1
+fi
+cp "$scratch/review.good" "$review"
+ruby -rjson -e 'path=ARGV[0];value=JSON.parse(File.binread(path));value["unexpected"]="field";File.binwrite(path,JSON.generate(value))' "$review"
+if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/review-schema.out" 2>"$scratch/review-schema.err"; then
+  echo 'incomplete strict review schema was accepted' >&2; exit 1
 fi
 cp "$scratch/review.good" "$review"
 

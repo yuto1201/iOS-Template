@@ -71,8 +71,11 @@ def validate_state(root, repository, issue, mode)
   positive_integer!(issue, "requested Issue")
   root, primary, issue_dir, handles = canonical_topology(root, issue, mode)
   issue_handle = handles.last
+  issue_handle.flock(File::LOCK_SH)
   state_path = File.join(issue_dir, "state.json")
-  state_bytes, = DescriptorFiles.read_regular_at(issue_handle, "state.json")
+  state_io, state_stat = DescriptorFiles.open_regular_at(issue_handle, "state.json")
+  state_io.flock(File::LOCK_SH)
+  state_bytes = DescriptorFiles.read_opened(state_io, state_stat)
   state = JSON.parse(state_bytes)
   required = %w[schemaVersion issue repository branch worktree baseSha primaryImplementer issueContract state previousState resumeState executor]
   optional = %w[headSha pullRequest from to transitionedAt]
@@ -97,7 +100,8 @@ def validate_state(root, repository, issue, mode)
   refuse("state issue-contract path is noncanonical") unless contract_ref["path"] == expected_contract_path
   contract_digest = digest!(contract_ref["digest"], "state issue-contract digest")
   contract_path = File.join(issue_dir, "issue-contract.json")
-  contract_bytes, = DescriptorFiles.read_regular_at(issue_handle, "issue-contract.json")
+  contract_io, contract_stat = DescriptorFiles.open_regular_at(issue_handle, "issue-contract.json")
+  contract_bytes = DescriptorFiles.read_opened(contract_io, contract_stat)
   refuse("state issue-contract digest differs from exact bytes") unless contract_digest == "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
   contract = JSON.parse(contract_bytes)
   refuse("Issue contract identity differs from durable state") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue && contract["repository"] == repository
@@ -138,6 +142,8 @@ def validate_state(root, repository, issue, mode)
   title_goal = title_goal.byteslice(0, 180).to_s.scrub
   result = {
     "statePath" => state_path,
+    "stateDigest" => "sha256:#{Digest::SHA256.hexdigest(state_bytes)}",
+    "stateMetadata" => {"dev" => state_stat.dev, "ino" => state_stat.ino, "size" => state_stat.size, "mode" => state_stat.mode, "nlink" => state_stat.nlink, "mtimeSec" => state_stat.mtime.to_i, "mtimeNsec" => state_stat.mtime.nsec, "ctimeSec" => state_stat.ctime.to_i, "ctimeNsec" => state_stat.ctime.nsec},
     "primaryRoot" => primary,
     "worktreePath" => expected_worktree,
     "worktreePresent" => File.directory?(expected_worktree) && !File.symlink?(expected_worktree),
@@ -159,20 +165,30 @@ rescue JSON::ParserError => error
 rescue IOError, SystemCallError, ArgumentError => error
   refuse("descriptor-bound Issue identity is unavailable: #{error.message}")
 ensure
+  contract_io&.close unless contract_io&.closed?
+  state_io&.close unless state_io&.closed?
   handles&.reverse_each { |handle| handle.close unless handle.closed? }
 end
 
-def atomic_update_state(primary, issue)
-  handles = DescriptorFiles.open_components(primary, [".artifacts", "issues", issue.to_s])
+def atomic_update_state(identity)
+  handles = DescriptorFiles.open_components(identity.fetch("primaryRoot"), [".artifacts", "issues", identity.fetch("issue").to_s])
   directory = handles.last
-  bytes, original_stat = DescriptorFiles.read_regular_at(directory, "state.json")
+  directory.flock(File::LOCK_EX)
+  state_io, original_stat = DescriptorFiles.open_regular_at(directory, "state.json")
+  state_io.flock(File::LOCK_EX)
+  bytes = DescriptorFiles.read_opened(state_io, original_stat)
+  digest = "sha256:#{Digest::SHA256.hexdigest(bytes)}"
+  metadata = identity.fetch("stateMetadata")
+  exact_metadata = metadata["dev"] == original_stat.dev && metadata["ino"] == original_stat.ino && metadata["size"] == original_stat.size && metadata["mode"] == original_stat.mode && metadata["nlink"] == original_stat.nlink && metadata["mtimeSec"] == original_stat.mtime.to_i && metadata["mtimeNsec"] == original_stat.mtime.nsec && metadata["ctimeSec"] == original_stat.ctime.to_i && metadata["ctimeNsec"] == original_stat.ctime.nsec
+  refuse("durable state bytes or metadata changed after validation") unless digest == identity.fetch("stateDigest") && exact_metadata
   value = JSON.parse(bytes)
   yield value
-  DescriptorFiles.atomic_replace_at(directory, "state.json", JSON.generate(value), original_stat)
+  DescriptorFiles.atomic_replace_at(directory, "state.json", JSON.generate(value), bytes, original_stat)
   value
 rescue JSON::ParserError, IOError, SystemCallError, ArgumentError => error
   refuse("descriptor-bound state publication failed: #{error.message}")
 ensure
+  state_io&.close unless state_io&.closed?
   handles&.reverse_each { |handle| handle.close unless handle.closed? }
 end
 
@@ -187,7 +203,7 @@ when "persist-pr"
   refuse("invalid arguments") unless issue_text&.match?(/\A[1-9][0-9]*\z/) && pr_text&.match?(/\A[1-9][0-9]*\z/)
   identity = validate_state(root, repository, Integer(issue_text), "worktree")
   refuse("pullRequest cannot first be persisted after durable merged state") if identity["state"] == "merged" && identity["pullRequest"] != Integer(pr_text)
-  value = atomic_update_state(identity["primaryRoot"], identity["issue"]) do |state|
+  value = atomic_update_state(identity) do |state|
     refuse("durable identity changed before pullRequest persistence") unless state["schemaVersion"] == 1 && state["issue"] == identity["issue"] && state["repository"] == identity["repository"] && state["branch"] == identity["branch"] && state["worktree"] == identity["worktree"] && state["baseSha"] == identity["baseSha"] && state["headSha"] == identity["headSha"] && state.dig("issueContract", "digest") == identity["contractDigest"] && state["state"] == identity["state"]
     existing = state["pullRequest"]
     refuse("persisted pullRequest differs from exact PR") if existing && existing != Integer(pr_text)
@@ -199,7 +215,7 @@ when "mark-merged"
   refuse("invalid arguments") unless issue_text&.match?(/\A[1-9][0-9]*\z/) && pr_text&.match?(/\A[1-9][0-9]*\z/)
   identity = validate_state(root, repository, Integer(issue_text), "worktree")
   refuse("merged Head differs from durable Head") unless identity["headSha"] == head
-  value = atomic_update_state(identity["primaryRoot"], identity["issue"]) do |state|
+  value = atomic_update_state(identity) do |state|
     refuse("durable identity changed before merged persistence") unless state["schemaVersion"] == 1 && state["issue"] == identity["issue"] && state["repository"] == identity["repository"] && state["branch"] == identity["branch"] && state["worktree"] == identity["worktree"] && state["baseSha"] == identity["baseSha"] && state["headSha"] == identity["headSha"] && state.dig("issueContract", "digest") == identity["contractDigest"] && state["state"] == identity["state"]
     refuse("persisted pullRequest differs from merged PR") if state["pullRequest"] && state["pullRequest"] != Integer(pr_text)
     if state["state"] == "approved-for-merge"
