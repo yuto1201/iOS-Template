@@ -34,8 +34,8 @@ make_case() {
   mkdir -p "$CASE_PRIMARY/.worktrees"
   git -C "$CASE_PRIMARY" worktree add -b "$branch" "$CASE_WORKTREE" main >/dev/null
   mkdir -p "$CASE_WORKTREE/tools/lib" "$CASE_PRIMARY/.artifacts/issues/$issue"
-  cp "$source_root/tools/merge-issue.sh" "$source_root/tools/render-pr-body.sh" "$source_root/tools/issue-state.sh" "$source_root/tools/validate-verify-json.swift" "$CASE_WORKTREE/tools/"
-  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$CASE_WORKTREE/tools/lib/"
+  cp "$source_root/tools/merge-issue.sh" "$source_root/tools/render-pr-body.sh" "$source_root/tools/issue-state.sh" "$source_root/tools/validate-verify-json.swift" "$source_root/tools/prepare-review-packet.sh" "$CASE_WORKTREE/tools/"
+  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$source_root/tools/lib/review-artifacts.rb" "$source_root/tools/lib/review-contract.rb" "$source_root/tools/lib/review-sealing.rb" "$source_root/tools/lib/prepare-review-packet.rb" "$CASE_WORKTREE/tools/lib/"
   ln -s ../../.artifacts "$CASE_WORKTREE/.artifacts"
   printf '.artifacts\n' >>"$(git -C "$CASE_WORKTREE" rev-parse --git-path info/exclude)"
 
@@ -71,8 +71,7 @@ EOF
   CASE_DIGEST="sha256:$(shasum -a 256 "$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" | awk '{print $1}')"
   VERIFY="$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD/verify.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" ruby -rjson -e '
     value={"schemaVersion"=>1,"status"=>"not-applicable","changeClassification"=>"documentation-only","reason"=>"Only allowlisted Markdown documentation changed","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"matrixFile"=>nil,"matrixDigest"=>nil,"executionRoute"=>"none","xcode"=>nil,"build"=>{"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil},"tests"=>{"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil},"cases"=>[],"visualEvaluation"=>{"status"=>"not-applicable","findings"=>[]},"acceptanceEvidence"=>[{"id"=>"AC-1","status"=>"passed","evidence"=>["documents:workflow"]}],"completedAt"=>"2026-08-24T00:01:00Z"}; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(value))'
-  REVIEW="$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD/review.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" ruby -rjson -e '
-    value={"schemaVersion"=>1,"issue"=>42,"reviewerModel"=>"claude","baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"verifySha"=>ENV.fetch("HEAD"),"issueContractDigest"=>ENV.fetch("DIGEST"),"verdict"=>"approved","findings"=>[],"acceptanceAssessment"=>[{"id"=>"AC-1","status"=>"supported","evidence"=>["review.diff"]}],"reviewedAt"=>"2026-08-24T00:02:00Z"}; File.binwrite(ENV.fetch("REVIEW"),JSON.generate(value))'
+  write_review_closure
   STATE="$CASE_PRIMARY/.artifacts/issues/$issue/state.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" NAME="$state_name" PR="$persisted_pr" ruby -rjson -e '
     name=ENV.fetch("NAME"); value={"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","branch"=>"codex/42-merge-e2e","worktree"=>".worktrees/42-merge-e2e","baseSha"=>ENV.fetch("BASE"),"primaryImplementer"=>"codex","issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"state"=>name,"previousState"=>name=="merged" ? "approved-for-merge" : "review-requested","resumeState"=>nil,"executor"=>"codex","headSha"=>ENV.fetch("HEAD"),"from"=>name=="merged" ? "approved-for-merge" : "review-requested","to"=>name,"transitionedAt"=>"2026-08-24T00:03:00Z"}; value["pullRequest"]=Integer(ENV.fetch("PR")) unless ENV.fetch("PR")=="none"; File.binwrite(ENV.fetch("STATE"),JSON.generate(value))'
   printf '[]\n' >"$CASE_GH/prs.json"; printf 'OPEN\n' >"$CASE_GH/issue-state"; printf 'state:approved-for-merge\n' >"$CASE_GH/issue-label"
@@ -123,6 +122,16 @@ EOF
   chmod +x "$CASE_BIN/git"
 }
 
+write_review_closure() {
+  local artifact_head="$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD"
+  rm -f "$artifact_head/review.diff" "$artifact_head/review-packet.json" "$artifact_head/review.json"
+  (cd "$CASE_WORKTREE" && "$CASE_WORKTREE/tools/prepare-review-packet.sh" --primary codex --issue "$issue" --base-sha "$CASE_BASE" --head-sha "$CASE_HEAD") >/dev/null
+  local packet_digest
+  packet_digest="sha256:$(shasum -a 256 "$artifact_head/review-packet.json" | awk '{print $1}')"
+  REVIEW="$artifact_head/review.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" PACKET_DIGEST="$packet_digest" ruby -rjson -e '
+    value={"schemaVersion"=>2,"issue"=>42,"reviewerModel"=>"claude","baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"verifySha"=>ENV.fetch("HEAD"),"issueContractDigest"=>ENV.fetch("DIGEST"),"verdict"=>"approved","findings"=>[],"acceptanceAssessment"=>[{"id"=>"AC-1","status"=>"supported","evidence"=>["review.diff"]}],"reviewedAt"=>"2026-08-24T00:02:00Z","reviewPacketDigest"=>ENV.fetch("PACKET_DIGEST")}; File.binwrite(ENV.fetch("REVIEW"),JSON.generate(value))'
+}
+
 run_merge() {
   env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_GATE="${FAIL_GATE:-0}" FAKE_SOURCE_REPO="${FAKE_SOURCE_REPO:-$repo_name}" FAKE_CROSS_REPO="${FAKE_CROSS_REPO:-false}" FAKE_CLOSING_ISSUE="${FAKE_CLOSING_ISSUE:-$issue}" FAKE_REMOTE_HEAD_OVERRIDE="${FAKE_REMOTE_HEAD_OVERRIDE:-}" "$CASE_WORKTREE/tools/merge-issue.sh" --repo "$repo_name" --issue "$issue"
 }
@@ -136,7 +145,7 @@ write_pr() {
 }
 
 set_contract_operations() {
-  OPERATIONS_JSON="$1" CONTRACT="$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" STATE="$CASE_PRIMARY/.artifacts/issues/42/state.json" VERIFY="$CASE_PRIMARY/.artifacts/issues/42/$CASE_HEAD/verify.json" REVIEW="$CASE_PRIMARY/.artifacts/issues/42/$CASE_HEAD/review.json" ruby -rjson -rdigest -e '
+  OPERATIONS_JSON="$1" CONTRACT="$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" STATE="$CASE_PRIMARY/.artifacts/issues/42/state.json" VERIFY="$CASE_PRIMARY/.artifacts/issues/42/$CASE_HEAD/verify.json" ruby -rjson -rdigest -e '
     operations=JSON.parse(ENV.fetch("OPERATIONS_JSON")); contract_path=ENV.fetch("CONTRACT")
     contract=JSON.parse(File.binread(contract_path)); contract["externalOperations"]=operations
     details=operations.map{|operation|{"operation"=>operation,"service"=>"GitHub","environment"=>"production","executor"=>"Codex","approvalRequired"=>false,"approvalReference"=>nil}}
@@ -145,8 +154,9 @@ set_contract_operations() {
     File.binwrite(contract_path,JSON.generate(contract)); digest="sha256:#{Digest::SHA256.file(contract_path).hexdigest}"
     state=JSON.parse(File.binread(ENV.fetch("STATE"))); state["issueContract"]["digest"]=digest; File.binwrite(ENV.fetch("STATE"),JSON.generate(state))
     verify=JSON.parse(File.binread(ENV.fetch("VERIFY"))); verify["issueContract"]["digest"]=digest; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(verify))
-    review=JSON.parse(File.binread(ENV.fetch("REVIEW"))); review["issueContractDigest"]=digest; File.binwrite(ENV.fetch("REVIEW"),JSON.generate(review))
   '
+  CASE_DIGEST="sha256:$(shasum -a 256 "$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+  write_review_closure
 }
 
 write_cas_patch() {

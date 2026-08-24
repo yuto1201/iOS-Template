@@ -89,6 +89,16 @@ class HeldSnapshots
     refuse("#{at} is not a descriptor-bound regular single-link file: #{error.message}")
   end
 
+  def relative_leaf(parent, relative, at)
+    components = relative.split("/")
+    refuse("#{at} path is unsafe") if components.empty? || components.any? { |part| part.empty? || part == "." || part == ".." }
+    current = parent
+    components[0...-1].each_with_index do |component, index|
+      current = directory(current, component, "#{at} component #{index + 1}")
+    end
+    leaf(current, components.last, at)
+  end
+
   def verify!
     @directories.drop(1).each do |directory|
       current = DescriptorFiles.open_directory_at(directory.parent.io, directory.name)
@@ -133,6 +143,7 @@ begin
   artifacts = artifact_snapshots.directory(artifact_snapshots.root, ".artifacts", ".artifacts")
   issues = artifact_snapshots.directory(artifacts, "issues", ".artifacts/issues")
   issue_directory = artifact_snapshots.directory(issues, issue.to_s, "Issue artifact directory")
+  refuse("Issue artifact directory is locked by a writer") unless issue_directory.io.flock(File::LOCK_SH | File::LOCK_NB)
   head_directory = artifact_snapshots.directory(issue_directory, head_sha, "Head artifact directory")
   state_file = artifact_snapshots.leaf(issue_directory, "state.json", "state.json")
   contract_file = artifact_snapshots.leaf(issue_directory, "issue-contract.json", "issue-contract.json")
@@ -143,6 +154,19 @@ begin
   config = source_snapshots.directory(source_snapshots.root, "Config", "Config")
   ownership_file = source_snapshots.leaf(config, "ownership.yml", "Config/ownership.yml")
   ownership = IOSTemplate::Ownership.parse(ownership_file.bytes)
+
+  review_references = IOSTemplate::ReviewContract.strict_references!(
+    packet_bytes: packet_file.bytes, issue: issue, head_sha: head_sha
+  )
+  evidence_prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
+  diff_relative = review_references.fetch("diff").fetch("path").delete_prefix(evidence_prefix)
+  diff_file = artifact_snapshots.relative_leaf(head_directory, diff_relative, "review.diff")
+  image_files = review_references.fetch("imageFiles").to_h do |reference|
+    path = reference.fetch("path")
+    relative = path.delete_prefix(evidence_prefix)
+    held = artifact_snapshots.relative_leaf(head_directory, relative, "review image #{path}")
+    [path, held]
+  end
 
   state = parse_object(state_file.bytes, "state.json")
   state_digest = "sha256:#{Digest::SHA256.hexdigest(state_file.bytes)}"
@@ -194,7 +218,9 @@ begin
     live_issue["body"], issue_type: issue_type, issue: issue,
     repository: repository, fetched_at: contract["fetchedAt"]
   )
-  reconstructed_bytes = JSON.generate(canonical(parsed_contract.contract))
+  reconstructed_contract = parsed_contract.contract
+  reconstructed_contract["verification"] = contract["verification"] if contract.key?("verification")
+  reconstructed_bytes = JSON.generate(canonical(reconstructed_contract))
   refuse("live Issue contract bytes differ from the canonical snapshot") unless reconstructed_bytes == contract_file.bytes
   parsed_contract.external_operation_details.each { |detail| operation_details[detail.fetch("operation")] = detail }
   refuse("live Issue operation details differ from the contract") if operation_details.any? { |_, detail| detail.nil? }
@@ -222,6 +248,7 @@ begin
 
   verify = parse_object(verify_file.bytes, "verify.json")
   base_sha = identity.fetch("baseSha")
+  actual_diff_bytes = IOSTemplate::ReviewContract.actual_diff(repo: root, base_sha: base_sha, head_sha: head_sha)
   verify_digest = "sha256:#{Digest::SHA256.hexdigest(verify_file.bytes)}"
   validator_output, validator_status = Open3.capture2e(
     "swift", "tools/validate-verify-json.swift", "--file", ".artifacts/issues/#{issue}/#{head_sha}/verify.json",
@@ -234,7 +261,10 @@ begin
     packet_bytes: packet_file.bytes, result_bytes: review_file.bytes,
     verify_bytes: verify_file.bytes, contract_bytes: contract_file.bytes,
     primary: state.fetch("primaryImplementer"), issue: issue, base_sha: base_sha, head_sha: head_sha,
-    require_temporal_order: true
+    require_temporal_order: true, strict: true,
+    diff_bytes: diff_file.bytes,
+    image_bytes: image_files.transform_values(&:bytes),
+    actual_diff_bytes: actual_diff_bytes
   )
   refuse("opposite-model review is not approved") unless review_values.fetch("result").fetch("verdict") == "approved"
   reviewed_at = iso8601!(review_values.fetch("result").fetch("reviewedAt"), "review.reviewedAt")
@@ -255,6 +285,8 @@ begin
   refuse("GitHub preflight is not fresher than merge evidence and approval") unless preflight_at > completed_at && preflight_at > reviewed_at && preflight_at > transitioned_at
   refuse("GitHub preflight is implausibly in the future") if preflight_at > Time.now.utc + 300
 
+  refuse("actual Base..Head diff changed while Gate was running") unless
+    IOSTemplate::ReviewContract.actual_diff(repo: root, base_sha: base_sha, head_sha: head_sha) == actual_diff_bytes
   artifact_snapshots.verify!
   source_snapshots.verify!
   puts JSON.generate({"status" => "passed", "issue" => issue, "headSha" => head_sha, "issueContractDigest" => contract_digest})

@@ -13,6 +13,7 @@ mkdir -p "$repo/tools" "$repo/.artifacts/issues/42" "$repo/Config"
 cp "$repo_root/tools/validate-issue-body.sh" "$repo/tools/"
 cp "$repo_root/tools/validate-verify-json.swift" "$repo/tools/"
 cp "$repo_root/tools/premerge-gate.sh" "$repo/tools/"
+cp "$repo_root/tools/prepare-review-packet.sh" "$repo/tools/"
 cp "$repo_root/tools/render-pr-body.sh" "$repo/tools/"
 cp -R "$repo_root/tools/lib" "$repo/tools/"
 cp -R "$repo_root/.agents" "$repo/"
@@ -94,18 +95,17 @@ write_verify() {
 
 write_review() {
   verdict=${1:-approved}
-  VERDICT="$verdict" ISSUE_CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" REVIEWED_AT="$review_at" ruby -rjson -e '
+  packet_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/$head_sha/review-packet.json" | awk '{print $1}')"
+  VERDICT="$verdict" REVIEW_PACKET_DIGEST="$packet_digest" ISSUE_CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" REVIEWED_AT="$review_at" ruby -rjson -e '
     findings = ENV.fetch("VERDICT") == "approved" ? [] : [{"severity" => "high", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "blocking", "evidence" => "fixture", "requiredChange" => "fix"}]
     assessments = ["AC-1", "AC-2"].map { |id| {"id" => id, "status" => ENV.fetch("VERDICT") == "approved" ? "supported" : "unsupported", "evidence" => ["verify.json#acceptanceEvidence"]} }
-    puts JSON.generate({"schemaVersion" => 1, "issue" => 42, "reviewerModel" => "claude", "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContractDigest" => ENV.fetch("ISSUE_CONTRACT_DIGEST"), "verdict" => ENV.fetch("VERDICT"), "findings" => findings, "acceptanceAssessment" => assessments, "reviewedAt" => ENV.fetch("REVIEWED_AT")})
+    puts JSON.generate({"schemaVersion" => 2, "issue" => 42, "reviewerModel" => "claude", "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContractDigest" => ENV.fetch("ISSUE_CONTRACT_DIGEST"), "reviewPacketDigest" => ENV.fetch("REVIEW_PACKET_DIGEST"), "verdict" => ENV.fetch("VERDICT"), "findings" => findings, "acceptanceAssessment" => assessments, "reviewedAt" => ENV.fetch("REVIEWED_AT")})
   ' > "$repo/.artifacts/issues/42/$head_sha/review.json"
 }
 
 write_review_packet() {
-  ISSUE_CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" ruby -rjson -e '
-    puts JSON.generate({"schemaVersion" => 1, "issue" => 42, "primaryModel" => "codex", "reviewerModel" => "claude", "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => ENV.fetch("ISSUE_CONTRACT_DIGEST")}, "specAnchors" => ["specs/README.md#spec-index"], "acceptanceCriteria" => [{"id" => "AC-1", "text" => "The verified Head is current."}, {"id" => "AC-2", "text" => "Every acceptance criterion has one evidence mapping."}], "diffFile" => ".artifacts/issues/42/#{ENV.fetch("HEAD")}/review.diff", "verifyFile" => ".artifacts/issues/42/#{ENV.fetch("HEAD")}/verify.json", "imageFiles" => []})
-  ' > "$repo/.artifacts/issues/42/$head_sha/review-packet.json"
-  git -C "$repo" diff "$base_sha..$head_sha" > "$repo/.artifacts/issues/42/$head_sha/review.diff"
+  rm -f "$repo/.artifacts/issues/42/$head_sha/review-packet.json" "$repo/.artifacts/issues/42/$head_sha/review.diff"
+  (cd "$issue_worktree" && "$issue_worktree/tools/prepare-review-packet.sh" --primary codex --issue 42 --base-sha "$base_sha" --head-sha "$head_sha") >/dev/null
 }
 
 write_preflight() {
@@ -195,6 +195,17 @@ assert_fails() {
   fi
 }
 
+assert_fails_with() {
+  local label=$1 diagnostic=$2
+  shift 2
+  assert_fails "$label" "$@"
+  grep -Fq "$diagnostic" "$scratch/output" || {
+    echo "unexpected diagnostic for $label" >&2
+    cat "$scratch/output" >&2
+    exit 1
+  }
+}
+
 run_gate() {
   (cd "$issue_worktree" && "$issue_worktree/tools/premerge-gate.sh" --repo yuto1201/iOS-Template --issue 42 --head-sha "$head_sha")
 }
@@ -210,6 +221,40 @@ run_gate > "$scratch/gate.json"
 jq -e --arg head "$head_sha" '.status == "passed" and .headSha == $head' "$scratch/gate.json" >/dev/null
 expected_gh="issue view 42 --repo yuto1201/iOS-Template --json number,url,body,labels"
 [[ "$(tail -n 1 "$FAKE_GH_LOG")" == "$expected_gh" ]] || { echo 'gate used an unexpected gh command' >&2; exit 1; }
+
+# Application contracts add one canonical verification object to the exact
+# live-Issue snapshot. The strict Gate must preserve that optional object while
+# still rejecting every other extra top-level field.
+CONTRACT="$repo/.artifacts/issues/42/issue-contract.json" ruby -rjson -e '
+  def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value.is_a?(Array) ? value.map { |entry| canonical(entry) } : value; end
+  path=ENV.fetch("CONTRACT"); value=JSON.parse(File.binread(path))
+  value["verification"]={"bundleIdentifier"=>"com.example.TemplateApp","unitTestIdentifier"=>"TemplateAppTests/UnitSmokeTests/testUnit","cases"=>[{"id"=>"iphone-en","testIdentifier"=>"TemplateAppUITests/SmokeTests/testLaunch"},{"id"=>"iphone-ja","assertion"=>{"kind"=>"launch-succeeded"}},{"id"=>"ipad-en","testIdentifier"=>"TemplateAppUITests/SmokeTests/testLaunch"},{"id"=>"ipad-ja","assertion"=>{"kind"=>"launch-succeeded"}}],"acceptanceMappings"=>[{"id"=>"AC-1","checks"=>["stage:build","stage:unit-tests"]},{"id"=>"AC-2","checks"=>["case:iphone-en","case:iphone-ja","case:ipad-en","case:ipad-ja","visual:iphone-en","visual:iphone-ja","visual:ipad-en","visual:ipad-ja"]}]}
+  File.binwrite(path,JSON.generate(canonical(value)))
+'
+contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+DIGEST="$contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+write_verify
+write_review_packet
+write_review
+write_preflight
+run_gate >/dev/null
+
+CONTRACT="$repo/.artifacts/issues/42/issue-contract.json" STATE="$repo/.artifacts/issues/42/state.json" VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" PACKET="$repo/.artifacts/issues/42/$head_sha/review-packet.json" REVIEW="$repo/.artifacts/issues/42/$head_sha/review.json" ruby -rjson -rdigest -e '
+  contract=JSON.parse(File.binread(ENV.fetch("CONTRACT"))); contract["unexpected"]=true; File.binwrite(ENV.fetch("CONTRACT"),JSON.generate(contract)); contract_digest="sha256:#{Digest::SHA256.file(ENV.fetch("CONTRACT")).hexdigest}"
+  state=JSON.parse(File.binread(ENV.fetch("STATE"))); state.fetch("issueContract")["digest"]=contract_digest; File.binwrite(ENV.fetch("STATE"),JSON.generate(state))
+  verify=JSON.parse(File.binread(ENV.fetch("VERIFY"))); verify.fetch("issueContract")["digest"]=contract_digest; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(verify)); verify_digest="sha256:#{Digest::SHA256.file(ENV.fetch("VERIFY")).hexdigest}"
+  packet=JSON.parse(File.binread(ENV.fetch("PACKET"))); packet.fetch("issueContract")["digest"]=contract_digest; packet.fetch("verify")["digest"]=verify_digest; File.binwrite(ENV.fetch("PACKET"),JSON.generate(packet)); packet_digest="sha256:#{Digest::SHA256.file(ENV.fetch("PACKET")).hexdigest}"
+  review=JSON.parse(File.binread(ENV.fetch("REVIEW"))); review["issueContractDigest"]=contract_digest; review["reviewPacketDigest"]=packet_digest; File.binwrite(ENV.fetch("REVIEW"),JSON.generate(review))
+'
+assert_fails_with 'unknown application contract field is rejected by strict Gate' 'Issue contract has unknown fields: unexpected' run_gate
+
+canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
+contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+DIGEST="$contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+write_verify
+write_review_packet
+write_review
+write_preflight
 
 : > "$FAKE_GH_LOG"
 cp "$repo/.artifacts/issues/42/issue-contract.json" "$scratch/contract.with-merge"
@@ -255,9 +300,57 @@ write_review
 HEAD="$head_sha" ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["baseSha"] = "0" * 40; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review-packet.json"
 assert_fails 'review packet Base mismatch is rejected' run_gate
 write_review_packet
+ruby -rjson -e '
+  packet_path, result_path = ARGV
+  packet=JSON.parse(File.binread(packet_path)); packet["schemaVersion"]=1
+  packet["diffFile"]=packet.delete("diff").fetch("path"); packet["verifyFile"]=packet.delete("verify").fetch("path"); packet["imageFiles"]=packet.fetch("imageFiles").map { |entry| entry.fetch("path") }
+  File.binwrite(packet_path,JSON.generate(packet))
+  result=JSON.parse(File.binread(result_path)); result["schemaVersion"]=1; result.delete("reviewPacketDigest"); File.binwrite(result_path,JSON.generate(result))
+' "$repo/.artifacts/issues/42/$head_sha/review-packet.json" "$repo/.artifacts/issues/42/$head_sha/review.json"
+assert_fails_with 'schema v1 review closure is never merge-ready' 'merge-ready review requires packet schemaVersion 2' run_gate
+write_review_packet
+write_review
 ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["reviewerModel"] = "codex"; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review-packet.json"
 assert_fails 'same-model review packet is rejected' run_gate
 write_review_packet
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["reviewPacketDigest"]="sha256:"+("0"*64); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
+assert_fails_with 'review result must bind exact packet bytes' 'reviewPacketDigest does not match exact packet bytes' run_gate
+write_review
+printf 'self-consistent but wrong diff\n' > "$repo/.artifacts/issues/42/$head_sha/review.diff"
+wrong_diff_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/$head_sha/review.diff" | awk '{print $1}')"
+DIGEST="$wrong_diff_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value.fetch("diff")["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review-packet.json"
+write_review
+assert_fails_with 'self-consistent wrong review diff is rejected' 'not the deterministic actual Base..Head diff' run_gate
+write_review_packet
+write_review
+
+image_target="$repo/.artifacts/issues/42/$head_sha/review-image.real"
+image_path="$repo/.artifacts/issues/42/$head_sha/review-image.png"
+printf 'review image fixture\n' > "$image_target"
+image_digest="sha256:$(shasum -a 256 "$image_target" | awk '{print $1}')"
+ln -s "$(basename "$image_target")" "$image_path"
+PATH_VALUE=".artifacts/issues/42/$head_sha/review-image.png" DIGEST="$image_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["imageFiles"]=[{"path"=>ENV.fetch("PATH_VALUE"),"digest"=>ENV.fetch("DIGEST")}]; File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review-packet.json"
+write_review
+assert_fails_with 'declared review image symlink leaf is rejected' 'not a descriptor-bound regular single-link file' run_gate
+rm "$image_path"
+ln "$image_target" "$image_path"
+assert_fails_with 'declared review image hardlink leaf is rejected' 'not a descriptor-bound regular single-link file' run_gate
+rm "$image_path" "$image_target"
+write_review_packet
+write_review
+
+mkdir "$repo/.artifacts/issues/42/$head_sha/review-images-real"
+printf 'component image fixture\n' > "$repo/.artifacts/issues/42/$head_sha/review-images-real/screenshot.png"
+component_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/$head_sha/review-images-real/screenshot.png" | awk '{print $1}')"
+ln -s review-images-real "$repo/.artifacts/issues/42/$head_sha/review-images"
+PATH_VALUE=".artifacts/issues/42/$head_sha/review-images/screenshot.png" DIGEST="$component_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["imageFiles"]=[{"path"=>ENV.fetch("PATH_VALUE"),"digest"=>ENV.fetch("DIGEST")}]; File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review-packet.json"
+write_review
+assert_fails_with 'declared review image symlink component is rejected' 'not a descriptor-bound physical directory' run_gate
+rm "$repo/.artifacts/issues/42/$head_sha/review-images"
+rm -r "$repo/.artifacts/issues/42/$head_sha/review-images-real"
+write_review_packet
+write_review
+
 ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["unexpected"] = true; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
 assert_fails 'review result schema extension is rejected' run_gate
 write_review
@@ -383,6 +476,7 @@ artifact_leaves=(
   "$repo/.artifacts/issues/42/issue-contract.json"
   "$repo/.artifacts/issues/42/$head_sha/verify.json"
   "$repo/.artifacts/issues/42/$head_sha/review-packet.json"
+  "$repo/.artifacts/issues/42/$head_sha/review.diff"
   "$repo/.artifacts/issues/42/$head_sha/review.json"
   "$repo/.artifacts/issues/42/github-preflight.json"
   "$repo/.artifacts/issues/42/provider-preflights/supabase.json"
@@ -415,6 +509,7 @@ rm "$repo/.artifacts/issues/42/$head_sha"
 mv "$repo/.artifacts/issues/42/$head_sha-real" "$repo/.artifacts/issues/42/$head_sha"
 
 SWAP_TARGET="$repo/.artifacts/issues/42/$head_sha/verify.json" assert_fails 'same-byte atomic swap callback is rejected' run_gate
+REWRITE_HELD_TARGET="$repo/.artifacts/issues/42/$head_sha/review.diff" assert_fails 'same-inode same-byte review diff rewrite while held is rejected' run_gate
 REWRITE_HELD_TARGET="$repo/.artifacts/issues/42/state.json" assert_fails 'same-inode same-byte state rewrite while held is rejected' run_gate
 run_gate >/dev/null
 

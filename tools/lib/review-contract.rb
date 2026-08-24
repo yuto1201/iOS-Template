@@ -28,6 +28,7 @@ module IOSTemplate
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
     ].freeze
+    CONTRACT_OPTIONAL_KEYS = %w[verification].freeze
     LEGACY_CONTRACT_KEYS = (CONTRACT_KEYS - %w[externalOperationDetailsDigest]).freeze
     REFERENCE_KEYS = %w[path digest].freeze
     DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
@@ -77,8 +78,8 @@ module IOSTemplate
     # Call validate!(strict: true, ...) with those held bytes before approving.
     def strict_references!(packet_bytes:, issue:, head_sha:)
       packet = parse_object(packet_bytes, "packet")
-      exact_keys!(packet, PACKET_V2_KEYS, "packet")
       reject("merge-ready review requires packet schemaVersion 2") unless packet["schemaVersion"] == 2
+      exact_keys!(packet, PACKET_V2_KEYS, "packet")
       reject("packet identity differs from caller") unless packet["issue"] == issue && packet["headSha"] == head_sha
       prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
       diff = reference!(packet["diff"], "packet.diff")
@@ -152,10 +153,19 @@ module IOSTemplate
       expected_contract_path = ".artifacts/issues/#{issue}/issue-contract.json"
       reject("packet issue contract does not match exact bytes") unless
         packet["issueContract"] == {"path" => expected_contract_path, "digest" => contract_digest}
-      allowed_contract_keys = schema == 1 ? [CONTRACT_KEYS.sort, LEGACY_CONTRACT_KEYS.sort] : [CONTRACT_KEYS.sort]
-      reject("issue contract: unexpected or missing keys") unless contract.is_a?(Hash) && allowed_contract_keys.include?(contract.keys.sort)
+      validate_contract_keys!(contract, allow_legacy: schema == 1)
       reject("issue contract identity is invalid") unless contract["schemaVersion"] == 1 && contract["issue"] == issue
       digest!(contract["externalOperationDetailsDigest"], "issue contract.externalOperationDetailsDigest") if contract.key?("externalOperationDetailsDigest")
+    end
+
+    def validate_contract_keys!(contract, allow_legacy: false)
+      required_sets = [CONTRACT_KEYS]
+      required_sets << LEGACY_CONTRACT_KEYS if allow_legacy
+      allowed_sets = required_sets.flat_map do |required|
+        [required.sort, (required + CONTRACT_OPTIONAL_KEYS).sort]
+      end
+      reject("issue contract: unexpected or missing keys") unless contract.is_a?(Hash) && allowed_sets.include?(contract.keys.sort)
+      contract
     end
 
     def validate_scope!(packet, contract)

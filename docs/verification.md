@@ -333,13 +333,15 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 
 `tools/premerge-gate.sh --repo OWNER/REPO --issue NUMBER --head-sha SHA` は、最初にdescriptor-boundな `merge-state.rb validate-worktree` を再利用し、durable stateが `approved-for-merge` であることを確認します。その後、caller repository、Issue、Branch、symbolic ref、Head、Base ancestry、canonical worktree、clean状態が一致するまで `gh` を実行しません。
 
-gateはprimary checkoutのartifactをpathごとに読み直しません。`.artifacts`、`issues`、Issue、Head、`provider-preflights` の各componentを `openat` と `NOFOLLOW` で開いたままにし、次のleafをregularかつsingle-linkとしてsnapshotします。
+gateはprimary checkoutのartifactをpathごとに読み直しません。Issue artifact directoryをshared lockしたうえで、`.artifacts`、`issues`、Issue、Head、`provider-preflights` とreview imageの各componentを `openat` と `NOFOLLOW` で開いたままにし、次のleafをregularかつsingle-linkとしてsnapshotします。
 
 - `state.json`
 - `issue-contract.json`
 - `${headSha}/verify.json`
 - `${headSha}/review-packet.json`
 - `${headSha}/review.json`
+- `${headSha}/review.diff`
+- schema v2 packetが列挙するordered review image
 - `github-preflight.json`
 - contractが要求する各provider preflight
 - Issue worktreeの `Config/ownership.yml`

@@ -40,6 +40,21 @@ image_digest=$(digest "$artifact_head/iphone-en/screenshot.png")
 cat > "$artifact_issue/issue-contract.json" <<JSON
 {"schemaVersion":1,"issue":$issue,"repository":"yuto1201/iOS-Template","goal":"Seal exact review evidence","specAnchors":["specs/acceptance.md#review-sealing"],"acceptanceCriteria":[{"id":"AC-1","text":"Review binds exact evidence"}],"dependencies":[],"externalOperations":[],"externalOperationDetailsDigest":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","fetchedAt":"2026-08-24T00:00:00Z"}
 JSON
+ruby -rjson -e '
+  path=ARGV.fetch(0); value=JSON.parse(File.binread(path))
+  value["verification"]={
+    "bundleIdentifier"=>"com.example.TemplateApp",
+    "unitTestIdentifier"=>"TemplateAppTests/UnitSmokeTests/testUnit",
+    "cases"=>[
+      {"id"=>"iphone-en","testIdentifier"=>"TemplateAppUITests/SmokeTests/testLaunch"},
+      {"id"=>"iphone-ja","assertion"=>{"kind"=>"launch-succeeded"}},
+      {"id"=>"ipad-en","testIdentifier"=>"TemplateAppUITests/SmokeTests/testLaunch"},
+      {"id"=>"ipad-ja","assertion"=>{"kind"=>"launch-succeeded"}}
+    ],
+    "acceptanceMappings"=>[{"id"=>"AC-1","checks"=>["stage:build","stage:unit-tests","case:iphone-en","case:iphone-ja","case:ipad-en","case:ipad-ja","visual:iphone-en","visual:iphone-ja","visual:ipad-en","visual:ipad-ja"]}]
+  }
+  File.binwrite(path,JSON.generate(value))
+' "$artifact_issue/issue-contract.json"
 contract_digest=$(digest "$artifact_issue/issue-contract.json")
 write_verify() {
   local marker=$1
@@ -58,6 +73,11 @@ cat > "$workspace/result.json" <<JSON
 {"schemaVersion":2,"issue":$issue,"reviewerModel":"claude","baseSha":"$base_sha","headSha":"$head_sha","verifySha":"$head_sha","issueContractDigest":"$contract_digest","verdict":"approved","findings":[],"acceptanceAssessment":[{"id":"AC-1","status":"supported","evidence":["verify.json#acceptanceEvidence/0"]}],"reviewedAt":"2026-08-24T00:02:00Z","reviewPacketDigest":"$packet_digest"}
 JSON
 "$repo/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result.json" >/dev/null
+
+cp "$artifact_issue/issue-contract.json" "$workspace/contract.good"
+CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -e 'path=ENV.fetch("CONTRACT"); value=JSON.parse(File.binread(path)); value["unexpected"]=true; File.binwrite(path,JSON.generate(value))'
+assert_fails 'unknown application contract field' "$repo/tools/prepare-review-packet.sh" --primary codex --issue "$issue" --base-sha "$base_sha" --head-sha "$head_sha"
+cp "$workspace/contract.good" "$artifact_issue/issue-contract.json"
 
 cp "$artifact_head/review.diff" "$workspace/review.diff.good"
 cp "$artifact_head/verify.json" "$workspace/verify.good"
