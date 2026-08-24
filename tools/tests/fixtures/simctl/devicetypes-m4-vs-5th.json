@@ -1,0 +1,24 @@
+{
+  "devicetypes": [
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro",
+      "name": "iPhone 10 Pro",
+      "productFamily": "iPhone"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-5th-generation",
+      "name": "iPad Air (5th generation)",
+      "productFamily": "iPad"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M4",
+      "name": "iPad Air 11-inch (M4)",
+      "productFamily": "iPad"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M4",
+      "name": "iPad Air 13-inch (M4)",
+      "productFamily": "iPad"
+    }
+  ]
+}

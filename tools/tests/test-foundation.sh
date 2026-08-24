@@ -21,7 +21,10 @@ required_files=(
   tools/bootstrap-app.swift
   tools/tests/test-app-bootstrap.sh
   tools/check-markdown-links.swift
+  tools/publish-documentation-verify.sh
+  tools/with-ios-simulator-lock.sh
   .agents/skills/app-bootstrap/SKILL.md
+  .agents/skills/ios-verify/SKILL.md
   .agents/skills/spec-workflow/SKILL.md
   .agents/skills/spec-workflow/templates/decision.md
   .agents/skills/spec-workflow/scripts/check-spec-state.sh
@@ -192,6 +195,56 @@ if [[ ! -f "$claude_app_bootstrap_skill/SKILL.md" ]]; then
   echo "Claude app bootstrap skill link does not resolve" >&2
   exit 1
 fi
+
+ios_verify_skill=.agents/skills/ios-verify/SKILL.md
+ruby -ryaml - "$ios_verify_skill" <<'RUBY'
+path = ARGV.fetch(0)
+text = File.read(path)
+frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
+abort "missing iOS verification skill frontmatter" unless frontmatter
+data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
+abort "unexpected iOS verification skill name" unless data["name"] == "ios-verify"
+abort "missing iOS verification skill description" unless data["description"].is_a?(String) && !data["description"].strip.empty?
+RUBY
+
+claude_ios_verify_skill=.claude/skills/ios-verify
+expected_ios_verify_target=../../.agents/skills/ios-verify
+if [[ ! -L "$claude_ios_verify_skill" ]]; then
+  echo "Claude iOS verification skill must be a symbolic link" >&2
+  exit 1
+fi
+if [[ $(readlink "$claude_ios_verify_skill") != "$expected_ios_verify_target" ]]; then
+  echo "Claude iOS verification skill must use the portable relative target" >&2
+  exit 1
+fi
+if [[ ! -f "$claude_ios_verify_skill/SKILL.md" ]]; then
+  echo "Claude iOS verification skill link does not resolve" >&2
+  exit 1
+fi
+
+if [[ ! -x tools/with-ios-simulator-lock.sh ]] || [[ ! -x tools/publish-documentation-verify.sh ]]; then
+  echo "iOS verification lock and documentation publisher must be executable" >&2
+  exit 1
+fi
+
+python3 - <<'PYTHON'
+from pathlib import Path
+
+skill = Path(".agents/skills/ios-verify/SKILL.md").read_text()
+required = (
+    "tools/with-ios-simulator-lock.sh",
+    "tools/publish-documentation-verify.sh",
+    "No canonical XcodeBuildMCP evidence producer exists",
+    "printf '%s %s\\n' \"$EVIDENCE\" \"$DIGEST\"",
+)
+missing = [value for value in required if value not in skill]
+if missing:
+    raise SystemExit(f"iOS verification skill lacks executable workflow elements: {missing!r}")
+if 'executionRoute: "xcodebuild-mcp"' in skill:
+    raise SystemExit("iOS verification skill advertises an unsupported MCP evidence route")
+if "SHA256_OF_THAT_EXACT_FILE" in skill:
+    raise SystemExit("iOS verification skill leaves an unresolved digest placeholder")
+PYTHON
 
 bootstrap_validation=$(swift tools/bootstrap-app.swift validate \
   --manifest Config/template-identity.json \

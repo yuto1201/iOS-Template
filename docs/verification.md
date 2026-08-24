@@ -35,10 +35,10 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
     "version": "26.5"
   },
   "cases": [
-    {"id": "iphone-en", "family": "iPhone", "deviceType": "iPhone 17 Pro", "locale": "en_US", "language": "en"},
-    {"id": "iphone-ja", "family": "iPhone", "deviceType": "iPhone 17 Pro", "locale": "ja_JP", "language": "ja"},
-    {"id": "ipad-en", "family": "iPad", "deviceType": "iPad Air 13-inch (M3)", "locale": "en_US", "language": "en"},
-    {"id": "ipad-ja", "family": "iPad", "deviceType": "iPad Air 13-inch (M3)", "locale": "ja_JP", "language": "ja"}
+    {"id": "iphone-en", "family": "iPhone", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "name": "iPhone 17 Pro"}, "locale": "en_US", "language": "en"},
+    {"id": "iphone-ja", "family": "iPhone", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "name": "iPhone 17 Pro"}, "locale": "ja_JP", "language": "ja"},
+    {"id": "ipad-en", "family": "iPad", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "name": "iPad Air 13-inch (M3)"}, "locale": "en_US", "language": "en"},
+    {"id": "ipad-ja", "family": "iPad", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "name": "iPad Air 13-inch (M3)"}, "locale": "ja_JP", "language": "ja"}
   ]
 }
 ```
@@ -57,7 +57,7 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 ### Stage B: Build and unit tests
 
 - 現在のHead SHAを取得
-- Cleanである必要はないが、ユーザーの未関連変更を含めない
+- current Headと信頼済みBaseのrangeを検証し、filterを起動しないplumbingとdescriptor readでtracked inventory、index flag、mode、bytesがexact Headに一致することを確認する
 - Issueが影響するschemeをBuild
 - Unit Testを実行
 - 失敗、Skip、件数を記録
@@ -92,6 +92,116 @@ AIはスクリーンショットごとに次を評価します。
 
 主開発モデルが一次評価し、反対モデルレビューへ画像を含めます。見た目の好みだけで仕様を増やしません。
 
+### Stage D.1: 二段階の証拠公開
+
+application検証は、実行と視覚承認を分けます。最初のcommandは現在のGit Head、信頼済みBase、canonical Issue contract、完全な固定matrixをXcode commandより先に検証します。Buildを1回、unit testを1回だけ実行し、その後4caseを直列実行します。
+historical evidence表記の`tests:TemplateAppTests/NotificationSettingsTests`はbootstrapのlive identity anchorとしてだけ保持します。Task 4 contractの`acceptanceMappings.checks`ではこの表記を許可せず、`stage:unit-tests`と実行済みcase referenceを使います。
+
+```bash
+tools/verify-ios-issue.sh \
+  --issue 42 \
+  --expected-base "${BASE_SHA}" \
+  --issue-contract .artifacts/issues/42/issue-contract.json \
+  --matrix .artifacts/batches/settings-2026-08-21/simulator-matrix.json \
+  --project ExampleApp.xcodeproj \
+  --scheme ExampleApp
+```
+
+runnerは `/tmp/ios-template-verify/${physicalWorktreeName}-${sha256OfPhysicalRoot}/issue-42/${headSha}/Attempts/attempt-${uuid}/` の `DerivedData`、`Build.xcresult`、`Tests.xcresult`、`Cases/${caseId}.xcresult`、一時Screenshotだけを使い、Repository内へDerivedDataやresult bundleを作りません。`/tmp` の各directoryは現在のuid所有、mode `0700`、symlinkなしをdescriptor-boundに確認します。失敗attemptとlock loserは、所有directoryをdescriptor-boundに再確認して`0700`へ戻し、再帰unlinkと各directory fsyncを完了してから終了します。Issue/Head単位のkernel advisory lockはrunner lifetime中だけ保持され、正常終了、signal、crashでkernelが解放します。同じIssue/Headの同時実行は一方だけが進み、失敗attemptだけを片付けるため、同じHeadを安全に再試行できます。
+
+production entrypointはprivileged modeのabsolute `/bin/bash -p` で起動し、entrypoint directoryはshell parameter expansion、`builtin cd`、absolute `/bin/pwd`だけで解決します。その後はabsolute `/usr/bin/git`、`/usr/bin/xcode-select`、`/usr/bin/xcrun` を使います。Gitは全呼び出しでRepository localのfsmonitorを無効化し、hooks pathを`/dev/null`へ固定します。`/Applications/Xcode.app/Contents/Developer` が有効なら優先し、それ以外はtrusted `xcode-select -p` のphysical pathを使います。そこからnon-symlinkの `usr/bin/xcodebuild` と同じDeveloper directory内へ解決されるSwift toolchainを固定し、`xcodebuild -version` が成功した場合だけ採用します。Git、Ruby、Swift、XcodeBuild、xcrunはvalidated HOME/TMPDIR/user/localeと固定PATHだけを入れた`env -i`から実行します。Xcode commandだけへ同じcommand-scoped `DEVELOPER_DIR` を追加し、Git、Ruby/Gem/Bundler、DYLD、Swift driver、SDK/toolchain、compiler/build-setting環境を継承しません。callerの `PATH`、`BASH_ENV`、export済みshell function、環境変数でproduction executableを差し替えるinterfaceは持ちません。
+
+`--project` はRepository-relativeなcommitted `.xcodeproj` directoryだけを許可します。runnerはtrusted Gitの`ls-tree` exact inventoryと各object IDへの`cat-file blob`だけからprivate `Source`をdescriptor-relatively構築します。regular blobは実行bitを保存し、mode `120000` はUTF-8のrelative targetがsnapshot内のcommitted file/directoryへ解決される場合だけexact symlinkとしてmaterializeします。absolute/escaping/missing target、ancestor loop、symlink chain cycleはBuild前に拒否し、snapshot全体をseal/fsyncします。Xcodeはmutable worktreeではなくこのraw-Head snapshotだけを物理cwdとしてBuild/unit/UI Testします。worktree側は`git status`やcheckoutを使わず、index inventory、assume-unchanged/skip-worktree flag、tracked mode/bytesをdescriptor-boundでHeadへ照合します。ignored/untracked fileやconversion filterはBuild入力になりません。source digestはversion label、Head、project-relative path、full Head tuple/blobをlength-prefixし、`build.sourceTree.projectPath`は`build.project.path`とexact一致させます。project subtree digestは`build.project`としてdraft/finalへ固定します。Buildはsingle destination、`-parallel-testing-enabled NO`の`build-for-testing`を1回だけ実行します。その後、contractのexact `unitTestIdentifier`を同じdestinationで`test-without-building -only-testing:`し、各`testIdentifier` caseも同じbuildを使います。Build、unit test、caseのdiagnostics/test countsはhuman-readable logをgrepせず、trusted `xcrun xcresulttool` schema `0.1.0` の`devicesAndConfigurations`とtest treeから判定します。Build/unit test/caseのwarning、analyzer warning、errorはすべて0でなければ失敗します。unit stageと各UI stageはsummary、configuration、test treeのすべてで指定した1件だけがexpected target/class/method、exact matrix UDIDとconfigurationでpassedし、failed/skipped/expected failureが0でなければ失敗します。UI caseではcontractのlocale/language引数もcommandに固定します。
+
+Build productはlocked attempt内のDerivedData `Build/Products` 配下にあるregular app directoryだけを候補にし、Bundle IDとBundle executableを検証します。runnerはbundle tree全体をdescriptor-boundに再帰走査し、symlink、special file、別uid、複数hardlinkを拒否してprivate `StagedApp`へcopy、seal、fsyncします。tree digestはrecord type、path、content length/contentをlength-prefixして構造とbytesを一意に固定します。各install直前にstaged tree、Bundle ID、executableを再読してdigest一致を要求するため、Build productやstaged pathの置換をinstallへ持ち込めません。
+
+sealed configはbatch ID、Runtime identifier/version、4caseのexact UDID、Device Type identifier/name、および`iOS-Template-${batchId}-${caseId}`形式の専用device名を固定します。runnerは最初のXcode Build前にfresh `simctl list devices --json`で4件すべてのUDID/name/Runtime/Device Type/availabilityとglobal name uniquenessを一括検証し、不一致・欠落・重複が1件でもあればshutdown/eraseを一件も行いません。検証済みの4台だけを起動時にshutdown-if-Bootedしてeraseし、unit test後にも最初のUI caseをclean stateへ戻します。各shutdown/eraseの直前とerase直後にもfresh full-set identityを再検証します。ここでの`erase`は固定UDIDを保った専用Simulator内部データのresource reclamationであり、deviceの`delete`/再createとは別です。runnerはUDIDをdelete/createせず、別deviceへ代替しません。batchの4台をdeleteするのはcanonical evidenceとopposite-model reviewが同じHeadで完了した後だけです。
+
+各case直前にlive Git Head、tracked Head inventory/bytes/flags、sealed config、canonical contract/matrix、source/project digestを再検証します。その後matrixのexact UDIDをbootし、bootstatus、staged appのinstall、Bundle IDからinstalled app containerを取得、既存processのterminate、exact language/localeでlaunch、bounded process-liveness probe、contractの機械check、もう一度のbounded liveness probe、Screenshotの順に直列実行します。`testIdentifier` はunique case xcresultを使うexact `-only-testing` です。UI testがappを再launchできるため、完了後はvalidated executableをSimulator内のbounded `pgrep`とnon-truncated `ps -ww -o comm=`で一意に再取得し、そのexecutable pathがBundle IDから取得したapp container内のexact executableであることを照合してcurrent PIDをprobeします。すべてのSimulator process queryはhost側でも5秒に制限し、timeout時は専用process groupへTERM、1秒のgrace、KILL、bounded disappearance確認の順で子孫を残しません。`launch-succeeded` はlaunchが返したPIDのlivenessまでを確認する狭いsmoke checkであり、UI内容の保証ではありません。
+
+case成功は、exact UI結果、locale relaunch、process identity/liveness、decodable PNGを確認し、PNG bytesとSHA-256 receiptをhost attemptへfsyncした後に、入力を再検証し、対象Bundle IDだけをterminate、専用deviceをshutdown/erase、identityとShutdown stateを再確認して初めて確定します。通常failure/TERMはboot/install前から記録したactive caseだけをbest-effortで同じ手順により回収し、SIGKILLで残った状態は次回runner開始時の4台一括回収で処理します。shutdown/erase/postcheckの失敗はsanitized failure recordを残し、draftを公開しません。canonical evidenceの正本はhost側の4 PNGとdigest-bound artifactであり、全4caseを毎回最初から実行して一括公開します。partial resumeや別attemptとのmergeは行いません。
+
+実行成功時はfinal結果ではなく、4枚のdecodable PNGとcanonical `.artifacts/issues/42/${headSha}/verify-draft.json` を一つのpublication transactionとして`renameatx_np(RENAME_EXCL)`でno-replace publishし、fileとdirectoryをfsyncします。全4caseとinput再検証が完了するまではcanonical Screenshotもdraftも公開しません。publication前にsealed `.verify-publication-journal.json` をdurable publishし、draft完成後にだけ削除・fsyncします。SIGKILL等で途中終了した場合、次のrunnerがIssue/Head lock取得後にjournalのexact digestを検証します。partial Screenshot transactionはrollbackして同じHeadを再試行し、4枚とdraftがすべてexact digestで揃うcomplete transactionは既存draftを成功として返し、Build/Testを再実行しません。通常のdraft衝突も同じ範囲だけをrollbackします。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceはcontractのmappingからvisual参照だけを除いたexactな実行済みstage/case参照です。sealed config digest、canonical contract/matrix/source/project、Git Headとtracked Head inventory/bytes/flagsはcaseごと、およびpublication直前にdescriptor-boundで再検証します。
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "awaiting-visual-review",
+  "issue": 42,
+  "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "issueContract": {"path": ".artifacts/issues/42/issue-contract.json", "digest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e"},
+  "matrixFile": ".artifacts/batches/settings-2026-08-21/simulator-matrix.json",
+  "matrixDigest": "sha256:490d32bf9174b57fb9b05a00e0231d22082e4a9576b0377f0df2641d96349d0b",
+  "executionRoute": "xcodebuild-simctl",
+  "xcode": {"path": "/Applications/Xcode.app/Contents/Developer", "version": "26.5", "build": "17F42"},
+  "build": {"status": "passed", "scheme": "ExampleApp", "warningsAdded": 0, "project": {"path": "ExampleApp.xcodeproj", "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"}, "sourceTree": {"headSha": "0123456789abcdef0123456789abcdef01234567", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "projectPath": "ExampleApp.xcodeproj"}},
+  "tests": {"status": "passed", "passed": 1, "failed": 0, "skipped": 0},
+  "cases": [
+    {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/screenshot.png", "screenshotDigest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9", "mechanicalCheck": "test:ExampleAppUITests/SmokeTests/testLaunch"},
+    {"id": "iphone-ja", "status": "passed", "screenshot": "iphone-ja/screenshot.png", "screenshotDigest": "sha256:fd1a5bba126762a8aee2cbfd9816ba4983c335bad13cc170e6db5940449bb4b3", "mechanicalCheck": "assertion:launch-succeeded"},
+    {"id": "ipad-en", "status": "passed", "screenshot": "ipad-en/screenshot.png", "screenshotDigest": "sha256:8f5674ac5c3bdfa4bc63bf120ee8d6a7706598557fc99b51d37de343e7091e9d", "mechanicalCheck": "test:ExampleAppUITests/SmokeTests/testLaunch"},
+    {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/screenshot.png", "screenshotDigest": "sha256:5d173426722d981121aee0251e7c64a2b25797ea3fc154c06c4aaeb433e2ee62", "mechanicalCheck": "assertion:launch-succeeded"}
+  ],
+  "acceptanceEvidence": [
+    {"id": "AC-1", "evidence": ["stage:build", "stage:unit-tests", "case:iphone-en", "case:iphone-ja"]},
+    {"id": "AC-2", "evidence": ["case:ipad-en", "case:ipad-ja"]}
+  ],
+  "workspaceArtifacts": {
+    "derivedDataPath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Attempts/attempt-uuid/DerivedData",
+    "buildResultBundlePath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Attempts/attempt-uuid/Build.xcresult",
+    "testResultBundlePath": "/tmp/ios-template-verify/worktree-name-64hex-root-digest/issue-42/0123456789abcdef0123456789abcdef01234567/Attempts/attempt-uuid/Tests.xcresult"
+  },
+  "executionCompletedAt": "2026-08-21T12:55:00+09:00"
+}
+```
+
+Task 5のAI評価はcanonical `.artifacts/issues/42/${headSha}/visual-result.json` を次のexact schemaで書きます。`draft` と `visualPacket` は同じIssue/Headのcanonical pathとexact bytesを固定します。4件すべての `images` はpacketのprimary/additional imageを同じ順序、state、path、digestで列挙し、承認時はtop-level、各case、各imageの `findings` が空です。
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "approved",
+  "issue": 42,
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "draft": {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify-draft.json", "digest": "sha256:4ae755fb899a15125dfe7db017761abe901e1de00bf266894157826c827a3f2f"},
+  "visualPacket": {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/visual-packet.json", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "cases": [
+    {"id": "iphone-en", "status": "approved", "images": [{"state": "primary", "path": "iphone-en/screenshot.png", "digest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9", "findings": []}, {"state": "settings-open", "path": "iphone-en/settings-open.png", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "findings": []}], "findings": []},
+    {"id": "iphone-ja", "status": "approved", "images": [{"state": "primary", "path": "iphone-ja/screenshot.png", "digest": "sha256:fd1a5bba126762a8aee2cbfd9816ba4983c335bad13cc170e6db5940449bb4b3", "findings": []}], "findings": []},
+    {"id": "ipad-en", "status": "approved", "images": [{"state": "primary", "path": "ipad-en/screenshot.png", "digest": "sha256:8f5674ac5c3bdfa4bc63bf120ee8d6a7706598557fc99b51d37de343e7091e9d", "findings": []}], "findings": []},
+    {"id": "ipad-ja", "status": "approved", "images": [{"state": "primary", "path": "ipad-ja/screenshot.png", "digest": "sha256:5d173426722d981121aee0251e7c64a2b25797ea3fc154c06c4aaeb433e2ee62", "findings": []}], "findings": []}
+  ],
+  "findings": [],
+  "reviewedAt": "2026-08-21T13:00:00+09:00"
+}
+```
+
+次のfinalize commandはcurrent Headとtracked Head bytes/flags、descriptor-bound canonical path、draft/packet digest、Issue、matrix、4case、全reviewed imageのpath/digest/current bytes、承認状態、時刻順序、各mechanical checkとAC mappingのcurrent canonical contract一致を再検証します。Swift finalizerがstrict Task 3 schemaのprivate sealed candidateを完成させ、同じprocess内のvalidatorがexact Base/Issue/Headで検証します。validated candidate FD/inode/digestとinitial canonical `visual-result.json` exact bytes/digestを保持し、canonical rename直前のpublication callbackでもshared draft validator、visual packet validator、canonical visual-result validator、final `visualEvaluation` validatorをdescriptor-boundで再実行します。Git/config/project/source、packet exact bytes、canonical visual-result exact bytes/approval、全PNG bytes/setのいずれかがinitial validation後に変化した場合は公開しません。これらを再検証したまま`renameatx_np(RENAME_EXCL)`でcanonical `verify.json`をatomic no-replace公開して再照合し、fileとdirectoryをfsyncします。standalone `--candidate-file` publicationは許可しません。rename直後のprocess deathから再実行した場合は、既存`verify.json`がowned sealed regular fileでcandidateとexact digest一致するときだけidempotent successとしてfsyncし、mismatched/corrupt/unsafeな既存fileは拒否して保持します。その他の衝突時も既存winnerを保持し、失敗時にpartial `verify.json` を露出しません。
+
+```bash
+tools/verify-ios-issue.sh --finalize \
+  --issue 42 \
+  --expected-base "${BASE_SHA}" \
+  --draft ".artifacts/issues/42/${HEAD_SHA}/verify-draft.json" \
+  --visual-result ".artifacts/issues/42/${HEAD_SHA}/visual-result.json"
+```
+
+Issue/current Head identityを確立した後のrange、tracked Head不一致、その他preflightを含む各失敗は既存結果を上書きせず、`.artifacts/issues/42/${headSha}/failures/failure-${uuid}.json` へ次のexact sanitized schemaでdescriptor-boundなprivate candidateからatomic no-replace publishし、fileとdirectoryをfsyncします。failure writerはGit top-levelとcurrent Headを独立再検証しますが、失敗理由になったtracked状態やBase ancestryを成功条件にはしません。`stage` と `error` はrunnerが定める非秘密の分類だけで、command output、Token、個人pathは保存しません。
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "failed",
+  "issue": 42,
+  "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "stage": "unit-tests",
+  "error": "unit tests failed, were skipped, or reported invalid counts",
+  "recordedAt": "2026-08-21T12:50:00+09:00"
+}
+```
+
 ### Stage E: Evidence
 
 `.artifacts/issues/${issueNumber}/${headSha}/verify.json` を生成します。
@@ -117,25 +227,35 @@ AIはスクリーンショットごとに次を評価します。
     "version": "26.5",
     "build": "17F42"
   },
-  "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0},
-  "tests": {"status": "passed", "passed": 24, "failed": 0, "skipped": 0},
+  "build": {"status": "passed", "scheme": "TemplateApp", "warningsAdded": 0, "project": {"path": "ExampleApp.xcodeproj", "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"}, "sourceTree": {"headSha": "0123456789abcdef0123456789abcdef01234567", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "projectPath": "ExampleApp.xcodeproj"}},
+  "tests": {"status": "passed", "passed": 1, "failed": 0, "skipped": 0},
   "cases": [
-    {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/settings.png"},
-    {"id": "iphone-ja", "status": "passed", "screenshot": "iphone-ja/settings.png"},
-    {"id": "ipad-en", "status": "passed", "screenshot": "ipad-en/settings.png"},
-    {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/settings.png"}
+    {"id": "iphone-en", "status": "passed", "screenshot": "iphone-en/screenshot.png", "screenshotDigest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9"},
+    {"id": "iphone-ja", "status": "passed", "screenshot": "iphone-ja/screenshot.png", "screenshotDigest": "sha256:fd1a5bba126762a8aee2cbfd9816ba4983c335bad13cc170e6db5940449bb4b3"},
+    {"id": "ipad-en", "status": "passed", "screenshot": "ipad-en/screenshot.png", "screenshotDigest": "sha256:8f5674ac5c3bdfa4bc63bf120ee8d6a7706598557fc99b51d37de343e7091e9d"},
+    {"id": "ipad-ja", "status": "passed", "screenshot": "ipad-ja/screenshot.png", "screenshotDigest": "sha256:5d173426722d981121aee0251e7c64a2b25797ea3fc154c06c4aaeb433e2ee62"}
   ],
-  "visualEvaluation": {"status": "passed", "findings": []},
+  "visualEvaluation": {
+    "status": "passed",
+    "packet": {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/visual-packet.json", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "cases": [
+      {"id": "iphone-en", "images": [{"state": "primary", "path": "iphone-en/screenshot.png", "digest": "sha256:54808a3902e22d616104502c99f728a3b9fb8f7d00412c2d725a03580e98b6e9", "status": "passed", "findings": []}, {"state": "settings-open", "path": "iphone-en/settings-open.png", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "passed", "findings": []}]},
+      {"id": "iphone-ja", "images": [{"state": "primary", "path": "iphone-ja/screenshot.png", "digest": "sha256:fd1a5bba126762a8aee2cbfd9816ba4983c335bad13cc170e6db5940449bb4b3", "status": "passed", "findings": []}]},
+      {"id": "ipad-en", "images": [{"state": "primary", "path": "ipad-en/screenshot.png", "digest": "sha256:8f5674ac5c3bdfa4bc63bf120ee8d6a7706598557fc99b51d37de343e7091e9d", "status": "passed", "findings": []}]},
+      {"id": "ipad-ja", "images": [{"state": "primary", "path": "ipad-ja/screenshot.png", "digest": "sha256:5d173426722d981121aee0251e7c64a2b25797ea3fc154c06c4aaeb433e2ee62", "status": "passed", "findings": []}]}
+    ],
+    "findings": []
+  },
   "acceptanceEvidence": [
     {
       "id": "AC-1",
       "status": "passed",
-      "evidence": ["tests:TemplateAppTests/NotificationSettingsTests", "cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]
+      "evidence": ["stage:build", "stage:unit-tests", "case:iphone-en", "case:iphone-ja"]
     },
     {
       "id": "AC-2",
       "status": "passed",
-      "evidence": ["cases:iphone-en,iphone-ja,ipad-en,ipad-ja"]
+      "evidence": ["case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]
     }
   ],
   "completedAt": "2026-08-21T13:00:00+09:00"
@@ -144,7 +264,54 @@ AIはスクリーンショットごとに次を評価します。
 
 `schemaVersion: 1` のapplication変更で必須となるfieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、Issue contract path/digest、matrix path/digest、execution route、Xcode、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。GitHubとproviderのpreflightは外部操作直前の証拠なのでverify.jsonへ含めず、pre-merge gateが別artifactとして検査します。
 
-文書だけの変更では `status`、Build、Tests、visual evaluationを`not-applicable`、`changeClassification`を`documentation-only`、`reason`を空でない説明、`matrixFile`と`matrixDigest`と`xcode`をnull、`executionRoute`を`none`、`cases`を空配列にします。`AC-*`にはリンク検査や文書整合性検査の証拠を対応させます。アプリコード、Xcode project、Asset、Localization、Entitlement、Configurationの変更が一つでもあれば文書例外は使えません。文書例外はSimulatorやiOS Runtimeを必要としません。
+application変更が参照するmatrixは、batch lifecycleが完成させたexact schemaのファイルです。top-levelは `schemaVersion`、`batchId`、`resolvedAt`、`xcode`、`runtime`、`cases` だけを持ち、4つのcaseは固定順で、それぞれ `id`、`family`、`deviceType`、`locale`、`language`、`udid` だけを持ちます。Evidenceの4つのcase IDと順序はこのmatrixへ一致させ、各Screenshot pathはcase IDから始まる一意な相対pathにします。
+
+検証時はGit top-levelから、Issueの信頼済みBase/HeadをJSONとは別の引数で渡します。
+
+```bash
+swift tools/validate-verify-json.swift \
+  --file ".artifacts/issues/42/${HEAD_SHA}/verify.json" \
+  --expected-issue 42 \
+  --expected-base "${BASE_SHA}" \
+  --expected-head "${HEAD_SHA}"
+```
+
+validatorは `--expected-head` が現在のGit Headと一致し、BaseとHeadが異なるcommitで、BaseがHeadの祖先であることを先に確認します。その後、verify.jsonのBase/Headが両引数と完全一致することを確認します。verify.json自身からGit検査範囲を選びません。verify.jsonは `.artifacts/issues/${issueNumber}/${headSha}/verify.json`、Issue contractは `.artifacts/issues/${issueNumber}/issue-contract.json`、matrixは `.artifacts/batches/${batchId}/simulator-matrix.json` のcanonical pathだけを許可します。
+
+文書だけの変更では、次のexact representationを使います。省略したidentity、Issue contract、acceptance evidence、completed timeのfieldはapplication例と同じく必須です。
+
+```json
+{
+  "schemaVersion": 1,
+  "status": "not-applicable",
+  "changeClassification": "documentation-only",
+  "reason": "Only allowlisted Markdown documentation changed",
+  "issue": 42,
+  "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
+  "headSha": "0123456789abcdef0123456789abcdef01234567",
+  "issueContract": {
+    "path": ".artifacts/issues/42/issue-contract.json",
+    "digest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e"
+  },
+  "matrixFile": null,
+  "matrixDigest": null,
+  "executionRoute": "none",
+  "xcode": null,
+  "build": {"status": "not-applicable", "scheme": null, "warningsAdded": null, "project": null, "sourceTree": null},
+  "tests": {"status": "not-applicable", "passed": null, "failed": null, "skipped": null},
+  "cases": [],
+  "visualEvaluation": {"status": "not-applicable", "findings": []},
+  "acceptanceEvidence": [
+    {"id": "AC-1", "status": "passed", "evidence": ["documents:spec consistency"]},
+    {"id": "AC-2", "status": "passed", "evidence": ["links:swift tools/check-markdown-links.swift"]}
+  ],
+  "completedAt": "2026-08-21T13:00:00+09:00"
+}
+```
+
+文書例外で許可する差分は、top-levelの `README.md` と `AGENTS.md`、`docs/` と `specs/` 以下のMarkdownだけです。NUL-safeなraw Git diffをrename検出なしで読み、追加・削除の両側を個別に検査します。Script、JSON、YAML、設定、asset、symlink、gitlink、実行bitを含むmode/type変更、allowlist外pathが一つでもあれば文書例外は使えません。文書例外はSimulatorやiOS Runtimeを必要としません。
+
+`issueContract.fetchedAt` と `completedAt` は有効なISO 8601で、どちらも検証時刻から5分を超えて未来であってはいけません。さらに、`completedAt` は `fetchedAt` 以後でなければなりません。
 
 PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。反対モデルレビューの正本は `.artifacts/issues/${issueNumber}/${headSha}/review.json` です。
 
@@ -153,6 +320,8 @@ PR本文にはverify.jsonの要約とdigestを記載します。巨大なログ�
 Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulatorのsession defaultsを確認したうえでBuild、Test、UI操作、Screenshotを行います。利用できない場合は `xcodebuild` と `xcrun simctl` の決定論的なtoolsスクリプトを使います。
 
 どちらの経路でも同じverify.jsonを生成し、実行経路を記録します。ツールが使えないことをTest成功へ読み替えません。
+
+`executionRoute` の列挙値は、XcodeBuildMCP経路の `xcodebuild-mcp`、決定論的CLI経路の `xcodebuild-simctl`、文書例外だけに使う `none` です。
 
 ## 6. 排他制御
 

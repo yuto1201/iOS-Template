@@ -71,6 +71,77 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   -only-testing:TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle
 ```
 
+### ライブ Simulator 検証記録
+
+`template-foundation-live` バッチでは、次のインストール済み環境を一度だけ解決し、4条件で固定しました。matrixのSHA-256は`0401013f6aa579ac81c077629d43e109308e908bdec365e01845865f7a531457`です。
+
+| 項目 | 解決値 |
+| --- | --- |
+| Xcode | `/Applications/Xcode.app/Contents/Developer`、version `26.6`、build `17F113` |
+| iOS Runtime | `com.apple.CoreSimulator.SimRuntime.iOS-26-5`、version `26.5` |
+| iPhone | `iPhone 17 Pro` (`com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro`、Pro Maxを除外) |
+| iPad | `iPad Air 13-inch (M4)` (`com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M4`) |
+
+検証ケースは `iphone-en` (`en_US`/`en`)、`iphone-ja` (`ja_JP`/`ja`)、`ipad-en` (`en_US`/`en`)、`ipad-ja` (`ja_JP`/`ja`) の固定順です。選択Testは合計5実行で、Unit Test 1件 `TemplateAppTests/TemplateAppTests/welcomeMessageLocalizations()` と、各caseでUI Test 1件ずつ（英語caseは `TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle`、日本語caseは `TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle`）を実行します。
+
+初回のmatrix解決は、Repository全体のSimulator lock下で次を実行します。
+
+```sh
+tools/with-ios-simulator-lock.sh --timeout 0 -- \
+  /usr/bin/env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  tools/resolve-simulator-matrix.sh \
+    --batch-id template-foundation-live \
+    --output .artifacts/batches/template-foundation-live/simulator-matrix.json
+```
+
+READMEを含む対象Headをcommitした後、同じlockをmatrix再検証からrunner終了まで保持し、既存matrixがbyte-for-byte不変であることを確認してから検証します。
+
+```sh
+tools/with-ios-simulator-lock.sh --timeout 0 -- \
+  /usr/bin/env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  /bin/bash -c '
+    set -euo pipefail
+    matrix=.artifacts/batches/template-foundation-live/simulator-matrix.json
+    before="$(shasum -a 256 "$matrix" | cut -d " " -f 1)"
+    tools/resolve-simulator-matrix.sh \
+      --batch-id template-foundation-live \
+      --output "$matrix"
+    after="$(shasum -a 256 "$matrix" | cut -d " " -f 1)"
+    test "$before" = "$after"
+    tools/verify-ios-issue.sh \
+      --issue 6 \
+      --expected-base b3c04853ae2e27f566fc7c3fc0a03dca87f8cfe6 \
+      --issue-contract .artifacts/issues/6/issue-contract.json \
+      --matrix "$matrix" \
+      --project TemplateApp.xcodeproj \
+      --scheme TemplateApp
+  ' ios-verify
+```
+
+runnerが現在のHeadへ公開したdraftからvisual packetを作り、全画像を評価した同じHeadのcanonical resultだけをfinalizeします。
+
+```sh
+HEAD_SHA="$(git rev-parse HEAD)"
+
+tools/visual-review-packet.sh \
+  --issue 6 \
+  --expected-base b3c04853ae2e27f566fc7c3fc0a03dca87f8cfe6 \
+  --draft ".artifacts/issues/6/${HEAD_SHA}/verify-draft.json" \
+  --output ".artifacts/issues/6/${HEAD_SHA}/visual-packet.json"
+
+tools/verify-ios-issue.sh --finalize \
+  --issue 6 \
+  --expected-base b3c04853ae2e27f566fc7c3fc0a03dca87f8cfe6 \
+  --draft ".artifacts/issues/6/${HEAD_SHA}/verify-draft.json" \
+  --visual-result ".artifacts/issues/6/${HEAD_SHA}/visual-result.json"
+
+swift tools/validate-verify-json.swift \
+  --file ".artifacts/issues/6/${HEAD_SHA}/verify.json" \
+  --expected-issue 6 \
+  --expected-base b3c04853ae2e27f566fc7c3fc0a03dca87f8cfe6 \
+  --expected-head "$HEAD_SHA"
+```
+
 証拠の形式、画像評価、Head SHA 一致条件は [iOS verification](./docs/verification.md) を正とします。Simulator のUDIDと結果ファイルは環境固有なのでGitへ追加しません。
 
 ## 新しいアプリとして使い始めるとき

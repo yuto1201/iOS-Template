@@ -1,0 +1,40 @@
+{
+  "runtimes": [
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-9-12",
+      "version": "9.12",
+      "isAvailable": true,
+      "name": "iOS 9.12"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-10-3",
+      "version": "10.3",
+      "isAvailable": true,
+      "name": "iOS 10.3"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+      "version": "27.0",
+      "isAvailable": false,
+      "name": "iOS 27.0"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.tvOS-99-0",
+      "version": "99.0",
+      "isAvailable": true,
+      "name": "tvOS 99.0"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.watchOS-100-0",
+      "version": "100.0",
+      "isAvailable": true,
+      "name": "watchOS 100.0"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimRuntime.xrOS-101-0",
+      "version": "101.0",
+      "isAvailable": true,
+      "name": "visionOS 101.0"
+    }
+  ]
+}

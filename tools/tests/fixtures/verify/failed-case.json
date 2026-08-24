@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "changeClassification": "application-code",
+  "reason": null,
+  "issue": 42,
+  "baseSha": "BASE_SHA",
+  "headSha": "HEAD_SHA",
+  "issueContract": {
+    "path": ".artifacts/issues/42/issue-contract.json",
+    "digest": "sha256:CONTRACT_DIGEST"
+  },
+  "matrixFile": ".artifacts/batches/evidence-fixture/simulator-matrix.json",
+  "matrixDigest": "sha256:MATRIX_DIGEST",
+  "executionRoute": "xcodebuild-simctl",
+  "xcode": {
+    "path": "/Applications/Xcode.app/Contents/Developer",
+    "version": "26.5",
+    "build": "17F42"
+  },
+  "build": {
+    "status": "passed",
+    "scheme": "TemplateApp",
+    "warningsAdded": 0,
+    "project": {
+      "path": "TemplateApp.xcodeproj",
+      "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"
+    },
+    "sourceTree": {"headSha": "HEAD_SHA", "digest": "sha256:SOURCE_TREE_DIGEST", "projectPath": "TemplateApp.xcodeproj"}
+  },
+  "tests": {
+    "status": "passed",
+    "passed": 24,
+    "failed": 0,
+    "skipped": 0
+  },
+  "cases": [
+    {
+      "id": "iphone-en",
+      "status": "passed",
+      "screenshot": "iphone-en/settings.png",
+      "screenshotDigest": "sha256:54808a0ac07556c8c537b0d112510e5133f12077aa3283aaf69eb3bbc45d2fbb"
+    },
+    {
+      "id": "iphone-ja",
+      "status": "failed",
+      "screenshot": "iphone-ja/settings.png",
+      "screenshotDigest": "sha256:fd1a02220ea3cd639f9ef7892fc31669e2b2022edfe15195706d1cd0f56d1cf4"
+    },
+    {
+      "id": "ipad-en",
+      "status": "passed",
+      "screenshot": "ipad-en/settings.png",
+      "screenshotDigest": "sha256:8f567719af9d1cfa716957bf32ac6df9660f7686ac9793ee6ac68a4f264a3fed"
+    },
+    {
+      "id": "ipad-ja",
+      "status": "passed",
+      "screenshot": "ipad-ja/settings.png",
+      "screenshotDigest": "sha256:5d17300fbb93ab7bc88265aaf285a1cf89e1c85aebf097932932a724c63a40ed"
+    }
+  ],
+  "visualEvaluation": {
+    "status": "passed",
+    "findings": []
+  },
+  "acceptanceEvidence": [
+    {
+      "id": "AC-1",
+      "status": "passed",
+      "evidence": ["stage:build", "stage:unit-tests"]
+    },
+    {
+      "id": "AC-2",
+      "status": "passed",
+      "evidence": ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]
+    }
+  ],
+  "completedAt": "2026-08-21T13:00:00+09:00"
+}

@@ -1,0 +1,14 @@
+{
+  "devices": {
+    "com.apple.CoreSimulator.SimRuntime.iOS-10-3": [
+      {
+        "udid": "00000000-0000-0000-0000-000000000010",
+        "name": "Existing iPhone",
+        "state": "Shutdown",
+        "isAvailable": true,
+        "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
+      }
+    ],
+    "com.apple.CoreSimulator.SimRuntime.iOS-9-12": []
+  }
+}

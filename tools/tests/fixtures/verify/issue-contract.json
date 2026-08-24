@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "issue": 42,
+  "repository": "yuto1201/iOS-Template",
+  "goal": "Validate iOS verification evidence",
+  "specAnchors": [
+    "docs/verification.md#stage-e-evidence"
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "AC-1",
+      "text": "Complete application evidence is validated"
+    },
+    {
+      "id": "AC-2",
+      "text": "Documentation-only evidence is classified without Simulator use"
+    }
+  ],
+  "dependencies": [],
+  "externalOperations": [],
+  "verification": {
+    "bundleIdentifier": "com.example.TemplateApp",
+    "unitTestIdentifier": "TemplateAppTests/UnitSmokeTests/testUnit",
+    "cases": [
+      {"id": "iphone-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+      {"id": "iphone-ja", "assertion": {"kind": "launch-succeeded"}},
+      {"id": "ipad-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+      {"id": "ipad-ja", "assertion": {"kind": "launch-succeeded"}}
+    ],
+    "acceptanceMappings": [
+      {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},
+      {"id": "AC-2", "checks": ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
+    ]
+  },
+  "fetchedAt": "2026-08-21T12:00:00+09:00"
+}
