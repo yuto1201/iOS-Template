@@ -124,6 +124,45 @@ rm -f ".artifacts/issues/$test_issue/state.json"
 assert_fails 'blocked resume without history fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
 
+# Once Claim has created the full Task 4 identity record, every Task 2
+# transition must retain it exactly while changing only transition metadata.
+head_sha=$(git -C "$repo_root" rev-parse HEAD)
+cat > ".artifacts/issues/$test_issue/state.json" <<EOF
+{"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$head_sha","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"state":"claimed","previousState":"approved","resumeState":null,"executor":"codex","headSha":"$head_sha","pullRequest":424242}
+EOF
+printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"
+printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+for transition in 'claimed in-progress' 'in-progress verify-passed' 'verify-passed review-requested' 'review-requested approved-for-merge' 'approved-for-merge merged'; do
+  read -r from to <<< "$transition"
+  "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$from" --to "$to" >/dev/null
+  EXPECTED_STATE="$to" EXPECTED_HEAD="$head_sha" assert_json ".artifacts/issues/$test_issue/state.json" '
+    value = JSON.parse(File.read(ARGV[0]))
+    abort unless value["schemaVersion"] == 1 && value["issue"] == 424242 && value["repository"] == "yuto1201/iOS-Template"
+    abort unless value["branch"] == "codex/424242-workflow-state" && value["worktree"] == ".worktrees/424242-workflow-state"
+    abort unless value["primaryImplementer"] == "codex" && value.dig("issueContract", "path") == ".artifacts/issues/424242/issue-contract.json"
+    abort unless value.dig("issueContract", "digest") == "sha256:" + "a" * 64
+    abort unless value["headSha"] == ENV.fetch("EXPECTED_HEAD") && value["pullRequest"] == 424242
+    abort unless value["state"] == ENV.fetch("EXPECTED_STATE") && value["previousState"]
+  '
+done
+
+# Blocked/resume recovery uses the durable marker and retains the same identity.
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from merged --to done >/dev/null
+printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
+ruby -rjson -e 'path, head = ARGV; value = JSON.parse(File.read(path)); value["state"] = "in-progress"; value["previousState"] = "claimed"; File.write(path, JSON.generate(value))' ".artifacts/issues/$test_issue/state.json" "$head_sha"
+printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to blocked:ops >/dev/null
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress >/dev/null
+EXPECTED_HEAD="$head_sha" assert_json ".artifacts/issues/$test_issue/state.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "blocked:ops" && value["resumeState"] == "in-progress" && value["headSha"] == ENV.fetch("EXPECTED_HEAD") && value["pullRequest"] == 424242'
+
+# A malformed identity is rejected before an external state-label mutation.
+printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"
+printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+printf '[]' > "$FAKE_GH_LOG"
+printf '{"state":"claimed","unexpected":"must-fail-closed"}' > ".artifacts/issues/$test_issue/state.json"
+assert_fails 'malformed durable identity stops before GitHub mutation' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from claimed --to in-progress
+! rg -q '^issue edit ' "$FAKE_GH_LOG"
+
 request=.artifacts/ops-requests/issue-424242-create-pr-1.json
 cat > "$request" <<'EOF'
 {"requestVersion":1,"requestId":"issue-424242-create-pr-1","issue":424242,"operation":"github.create_pr","target":{"kind":"repository","identifier":"yuto1201/iOS-Template"},"environment":"production","expectedAccount":"yuto1201","inputs":{"base":"main","head":"codex/424242-workflow"},"reason":"ready"}

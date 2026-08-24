@@ -65,6 +65,97 @@ OPERATIONS = {
   'appstore.submit_review' => ['appstore-app', %w[version]]
 }.freeze
 
+WORKFLOW_STATES = %w[
+  proposed approved claimed in-progress verify-passed review-requested changes-requested
+  approved-for-merge merged done paused superseded blocked:user blocked:ops blocked:review
+  blocked:conflict blocked:dependency blocked:environment blocked:repeated-failure
+].freeze
+
+def workflow_state(value, name, nullable: false)
+  return if nullable && value.nil?
+
+  fail_closed("#{name} must be a workflow state") unless value.is_a?(String) && WORKFLOW_STATES.include?(value)
+end
+
+def sha(value, name)
+  fail_closed("#{name} must be a SHA-1") unless value.is_a?(String) && value.match?(/\A[0-9a-f]{40}\z/)
+end
+
+def full_state_record(value, issue, repository)
+  required = %w[baseSha branch executor issue issueContract previousState primaryImplementer repository resumeState schemaVersion state worktree]
+  optional = %w[from headSha pullRequest to transitionedAt]
+  object(value, 'state record')
+  fail_closed('state record has unknown or missing fields') unless (value.keys - required - optional).empty? && required.all? { |key| value.key?(key) }
+  fail_closed('state record schemaVersion is invalid') unless value['schemaVersion'] == 1
+  fail_closed('state record Issue identity is invalid') unless value['issue'] == issue
+  fail_closed('state record repository identity is invalid') unless value['repository'] == repository
+  fail_closed('state record branch is noncanonical') unless value['branch'].is_a?(String) && value['branch'].match?(%r{\A(codex|claude)/#{issue}-[a-z0-9][a-z0-9-]*\z})
+  fail_closed('state record worktree is noncanonical') unless value['worktree'].is_a?(String) && value['worktree'].match?(%r{\A\.worktrees/#{issue}-[a-z0-9][a-z0-9-]*\z})
+  fail_closed('state record worktree and branch disagree') unless value['worktree'] == ".worktrees/#{value['branch'].split('/', 2).fetch(1)}"
+  sha(value['baseSha'], 'state record baseSha')
+  fail_closed('state record primary implementer is invalid') unless value['primaryImplementer'].is_a?(String) && %w[codex claude].include?(value['primaryImplementer']) && value['branch'].start_with?("#{value['primaryImplementer']}/")
+  exact_keys(value['issueContract'], %w[digest path], 'state record issueContract')
+  fail_closed('state record issue contract path is invalid') unless value.dig('issueContract', 'path') == ".artifacts/issues/#{issue}/issue-contract.json"
+  fail_closed('state record issue contract digest is invalid') unless value.dig('issueContract', 'digest').is_a?(String) && value.dig('issueContract', 'digest').match?(/\Asha256:[0-9a-f]{64}\z/)
+  workflow_state(value['state'], 'state record state')
+  workflow_state(value['previousState'], 'state record previousState', nullable: true)
+  workflow_state(value['resumeState'], 'state record resumeState', nullable: true)
+  fail_closed('state record executor is invalid') unless value['executor'] == 'codex'
+  sha(value['headSha'], 'state record headSha') if value.key?('headSha')
+  fail_closed('state record pull request identity is invalid') if value.key?('pullRequest') && !(value['pullRequest'].is_a?(Integer) && value['pullRequest'].positive?)
+  workflow_state(value['from'], 'state record from', nullable: true) if value.key?('from')
+  workflow_state(value['to'], 'state record to', nullable: true) if value.key?('to')
+  if value.key?('transitionedAt')
+    begin
+      Time.iso8601(value['transitionedAt'])
+    rescue ArgumentError
+      fail_closed('state record transitionedAt is invalid')
+    end
+  end
+  value
+end
+
+def transition_state_record(path, issue, repository, state, from, to, resume_state, timestamp)
+  workflow_state(state, 'new state')
+  workflow_state(from, 'new from', nullable: true)
+  workflow_state(to, 'new to')
+  workflow_state(resume_state, 'new resumeState', nullable: true)
+  Time.iso8601(timestamp)
+  fail_closed('state record path is a symlink') if File.symlink?(path)
+  unless File.exist?(path)
+    return {
+      'state' => state, 'from' => from, 'to' => to,
+      'resumeState' => resume_state, 'executor' => 'codex', 'timestamp' => timestamp
+    }
+  end
+
+  value = read_json(path)
+  minimal_keys = %w[executor from resumeState state timestamp to]
+  if value.is_a?(Hash) && value.keys.sort == minimal_keys
+    workflow_state(value['state'], 'minimal state record state')
+    return {
+      'state' => state, 'from' => from, 'to' => to,
+      'resumeState' => resume_state, 'executor' => 'codex', 'timestamp' => timestamp
+    }
+  end
+
+  value = full_state_record(value, issue, repository)
+  if from.nil?
+    value['state'] = state
+    value['resumeState'] = resume_state
+  else
+    value['state'] = state
+    value['previousState'] = from
+    value['resumeState'] = resume_state
+    value['from'] = from
+    value['to'] = to
+    value['transitionedAt'] = timestamp
+  end
+  canonical(value)
+rescue ArgumentError
+  fail_closed('state record timestamp is invalid')
+end
+
 def contained_path(value, name, repo_root, allowed, required_type)
   nonempty_string(value, name)
   fail_closed("#{name} contains unsafe characters") if value.match?(/[\x00-\x1f\x7f]/)
@@ -210,6 +301,11 @@ when 'state-record'
     'resumeState' => (resume_state == 'null' ? nil : resume_state),
     'executor' => 'codex', 'timestamp' => timestamp
   }
+  puts canonical_json(record)
+when 'transition-state-record'
+  path, issue, repository, state, from, to, resume_state, timestamp = ARGV
+  fail_closed('transition-state-record arguments are invalid') unless ARGV.length == 8 && issue.match?(/\A[1-9][0-9]*\z/)
+  record = transition_state_record(path, Integer(issue), repository, state, from == 'null' ? nil : from, to, resume_state == 'null' ? nil : resume_state, timestamp)
   puts canonical_json(record)
 when 'state-marker'
   from, to, resume_state, timestamp = ARGV

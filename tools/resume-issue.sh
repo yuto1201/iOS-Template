@@ -108,24 +108,37 @@ while IFS= read -r line; do
 done < <(git -C "$repo_root" worktree list --porcelain)
 [[ "$worktree_count" == 1 && "$worktree_path" == "$repo_root/$worktree_relative" ]] || blocked 'expected exactly one canonical Issue worktree candidate'
 worktree_relative=${worktree_path#"$repo_root/"}
+workflow_shared_artifacts_link install "$repo_root" "$worktree_path" "$issue" "$slug" "$branch" || blocked 'canonical shared artifact link is missing or unsafe'
 base_sha=$(git -C "$repo_root" merge-base "$branch" origin/main) || blocked 'cannot reconstruct Base SHA from Branch and origin/main'
 contract_path="$repo_root/.artifacts/issues/$issue/issue-contract.json"
 [[ -f "$contract_path" && ! -L "$contract_path" ]] || blocked 'canonical Issue contract is missing'
 contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$contract_path")"
 agent=${branch%%/*}
 previous_state=$marker_from
-
-ruby -rjson -e '
-  def canonical(value)
-    case value
-    when Hash then value.keys.sort.each_with_object({}) { |key, out| out[key] = canonical(value[key]) }
-    when Array then value.map { |entry| canonical(entry) }
-    else value
+state_file="$repo_root/.artifacts/issues/$issue/state.json"
+artifacts_real=$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$repo_root/.artifacts") || blocked 'canonical artifact root cannot be resolved'
+state_parent_real=$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$(dirname "$state_file")") || blocked 'canonical state directory cannot be resolved'
+[[ "$state_parent_real" == "$artifacts_real/issues/"* ]] || blocked 'state artifact path escapes the canonical store'
+state_file="$state_parent_real/state.json"
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+if [[ -e "$state_file" || -L "$state_file" ]]; then
+  record=$(ruby "$repo_root/tools/lib/workflow-json.rb" transition-state-record "$state_file" "$issue" "$repo" "$state" "$previous_state" "$state" "$state_resume" "$timestamp") || blocked 'existing durable state identity is malformed or mismatched'
+else
+  record=$(ruby -rjson -e '
+    def canonical(value)
+      case value
+      when Hash then value.keys.sort.each_with_object({}) { |key, out| out[key] = canonical(value[key]) }
+      when Array then value.map { |entry| canonical(entry) }
+      else value
+      end
     end
-  end
-  issue, repo, branch, worktree, base, agent, digest, state, previous, resume = ARGV
-  value = {"schemaVersion" => 1, "issue" => Integer(issue), "repository" => repo, "branch" => branch, "worktree" => worktree, "baseSha" => base, "primaryImplementer" => agent, "issueContract" => {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => digest}, "state" => state, "previousState" => previous, "resumeState" => (resume == "null" ? nil : resume), "executor" => "codex"}
-  puts JSON.generate(canonical(value))
-' "$issue" "$repo" "$branch" "$worktree_relative" "$base_sha" "$agent" "$contract_digest" "$state" "$previous_state" "$state_resume" > "$repo_root/.artifacts/issues/$issue/state.json"
-chmod 600 "$repo_root/.artifacts/issues/$issue/state.json"
+    issue, repo, branch, worktree, base, agent, digest, state, previous, resume, timestamp = ARGV
+    value = {"schemaVersion" => 1, "issue" => Integer(issue), "repository" => repo, "branch" => branch, "worktree" => worktree, "baseSha" => base, "primaryImplementer" => agent, "issueContract" => {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => digest}, "state" => state, "previousState" => previous, "resumeState" => (resume == "null" ? nil : resume), "executor" => "codex", "from" => previous, "to" => state, "transitionedAt" => timestamp}
+    puts JSON.generate(canonical(value))
+  ' "$issue" "$repo" "$branch" "$worktree_relative" "$base_sha" "$agent" "$contract_digest" "$state" "$previous_state" "$state_resume" "$timestamp")
+fi
+temporary=$(mktemp "${state_file}.tmp.XXXXXX")
+printf '%s\n' "$record" > "$temporary"
+chmod 600 "$temporary"
+mv -f "$temporary" "$state_file"
 jq -cn --arg repository "$repo" --argjson issue "$issue" --arg branch "$branch" --arg worktree "$worktree_relative" --arg baseSha "$base_sha" --arg agent "$agent" --arg digest "$contract_digest" --arg state "$state" --arg previousState "$previous_state" --argjson resumeState "$resume_state_json" '{repository:$repository,issue:$issue,branch:$branch,worktree:$worktree,baseSha:$baseSha,primaryImplementer:$agent,issueContract:{path:(".artifacts/issues/" + ($issue|tostring) + "/issue-contract.json"),digest:$digest},state:$state,previousState:$previousState,resumeState:$resumeState,executor:"codex"}'

@@ -172,6 +172,12 @@ base_sha=$(git -C "$repo_root" rev-parse --verify 'origin/main^{commit}') || { e
 "$repo_root/tools/issue-state.sh" transition --repo "$repo" --issue "$issue" --from approved --to claimed >/dev/null
 mkdir -p "$repo_root/.worktrees"
 git -C "$repo_root" worktree add -b "$branch" "$worktree_path" "$base_sha" >/dev/null
+if ! workflow_shared_artifacts_link install "$repo_root" "$worktree_path" "$issue" "$slug" "$branch"; then
+  git -C "$repo_root" worktree remove "$worktree_path" >/dev/null 2>&1 || true
+  git -C "$repo_root" branch -D -- "$branch" >/dev/null 2>&1 || true
+  "$repo_root/tools/issue-state.sh" transition --repo "$repo" --issue "$issue" --from claimed --to blocked:conflict >/dev/null 2>&1 || true
+  conflict 'canonical shared artifact link could not be installed; local worktree creation was rolled back'
+fi
 
 contract_path="$repo_root/.artifacts/issues/$issue/issue-contract.json"
 mkdir -p "$(dirname "$contract_path")"

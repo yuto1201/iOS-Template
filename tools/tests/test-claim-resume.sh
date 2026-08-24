@@ -174,7 +174,18 @@ assert_json "$clone/.artifacts/issues/42/state.json" '
 '
 [[ -d "$clone/.worktrees/42-settings-screen" ]]
 [[ "$(git -C "$clone/.worktrees/42-settings-screen" branch --show-current)" == 'codex/42-settings-screen' ]]
+[[ -L "$clone/.worktrees/42-settings-screen/.artifacts" ]] || { echo 'claim did not install the shared artifact link' >&2; exit 1; }
+[[ "$(readlink "$clone/.worktrees/42-settings-screen/.artifacts")" == '../../.artifacts' ]] || { echo 'claim installed a noncanonical artifact link' >&2; exit 1; }
+[[ "$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$clone/.worktrees/42-settings-screen/.artifacts")" == "$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$clone/.artifacts")" ]] || { echo 'claim artifact link does not resolve to the primary store' >&2; exit 1; }
 assert_json "$labels_file" 'abort unless JSON.parse(File.read(ARGV[0])) == ["type:feature", "state:claimed"]'
+
+# Operational tools run from the Issue worktree must bind that worktree Head
+# while publishing through its exact relative link to the primary artifact store.
+cp -R "$clone/tools" "$clone/.worktrees/42-settings-screen/"
+cp -R "$clone/Config" "$clone/.worktrees/42-settings-screen/"
+worktree_head=$(git -C "$clone/.worktrees/42-settings-screen" rev-parse HEAD)
+(cd "$clone/.worktrees/42-settings-screen" && tools/github-account-preflight.sh --repo yuto1201/iOS-Template --issue 42 --intended-operation github.create_pr --expected-head "$worktree_head") > "$workspace/worktree-preflight.json"
+EXPECTED_HEAD="$worktree_head" assert_json "$clone/.artifacts/issues/42/github-preflight.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["headSha"] == ENV.fetch("EXPECTED_HEAD")'
 
 # A later Push makes the same name visible locally and as origin/<branch>.
 # That is still one canonical candidate, so repeated Claim must remain idempotent.
@@ -192,6 +203,18 @@ rm "$clone/.artifacts/issues/42/state.json"
 (cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/resume.json"
 cmp -s "$claim_result" "$workspace/resume.json"
 [[ -f "$clone/.artifacts/issues/42/state.json" ]]
+
+# Resume recreates only a missing canonical link after it has proven the exact
+# worktree and Git-common identity. An unsafe replacement must remain untouched.
+rm "$clone/.worktrees/42-settings-screen/.artifacts"
+(cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/resume-with-link.json"
+[[ -L "$clone/.worktrees/42-settings-screen/.artifacts" && "$(readlink "$clone/.worktrees/42-settings-screen/.artifacts")" == '../../.artifacts' ]] || { echo 'resume did not restore the canonical artifact link' >&2; exit 1; }
+rm "$clone/.worktrees/42-settings-screen/.artifacts"
+ln -s ../../outside "$clone/.worktrees/42-settings-screen/.artifacts"
+assert_fails 'resume rejects an unsafe shared artifact link without replacing it' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
+[[ -L "$clone/.worktrees/42-settings-screen/.artifacts" && "$(readlink "$clone/.worktrees/42-settings-screen/.artifacts")" == '../../outside' ]] || { echo 'resume replaced an unsafe artifact link' >&2; exit 1; }
+rm "$clone/.worktrees/42-settings-screen/.artifacts"
+ln -s ../../.artifacts "$clone/.worktrees/42-settings-screen/.artifacts"
 
 cp "$comments_file" "$workspace/claim-comments.json"
 
