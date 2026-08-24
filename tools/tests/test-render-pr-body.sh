@@ -2,31 +2,158 @@
 set -euo pipefail
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
+fixtures="$source_root/tools/tests/fixtures/verify"
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-render.XXXXXX")
 scratch=$(cd "$scratch" && pwd -P)
 trap 'rm -rf "$scratch"' EXIT
-primary="$scratch/repo"; worktree="$primary/.worktrees/42-render"; issue=42
-head=0123456789abcdef0123456789abcdef01234567; base=fedcba9876543210fedcba9876543210fedcba98
-mkdir -p "$worktree/tools/lib" "$primary/.artifacts/issues/$issue/$head"
-cp "$source_root/tools/render-pr-body.sh" "$worktree/tools/"
-cp "$source_root/tools/lib/descriptor-files.rb" "$worktree/tools/lib/"
-ln -s ../../.artifacts "$worktree/.artifacts"
-contract="$primary/.artifacts/issues/$issue/issue-contract.json"
-verify="$primary/.artifacts/issues/$issue/$head/verify.json"
-review="$primary/.artifacts/issues/$issue/$head/review.json"
-CONTRACT="$contract" ruby -rjson -e 'File.binwrite(ENV.fetch("CONTRACT"),JSON.generate({"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","goal"=>"Render complete merge evidence.","specAnchors"=>["specs/features/render.md#acceptance","docs/verification.md#4-evidence"],"acceptanceCriteria"=>[{"id"=>"AC-1","text"=>"All cases pass."}],"dependencies"=>[],"externalOperations"=>[],"fetchedAt"=>"2026-08-24T00:00:00Z"}))'
-digest="sha256:$(shasum -a 256 "$contract" | awk '{print $1}')"
-VERIFY="$verify" HEAD="$head" BASE="$base" DIGEST="$digest" ruby -rjson -e '
-  cases=%w[iphone-en iphone-ja ipad-en ipad-ja].map{|id|{"id"=>id,"status"=>"passed","screenshot"=>"#{id}/screenshot.png","screenshotDigest"=>"sha256:"+"a"*64}}
-  visual_cases=%w[iphone-en iphone-ja ipad-en ipad-ja].map{|id|{"id"=>id,"images"=>[{"state"=>"primary","path"=>"#{id}/screenshot.png","digest"=>"sha256:"+"a"*64,"status"=>"passed","findings"=>[]}]}}
-  project={"path"=>"TemplateApp.xcodeproj","digest"=>"sha256:"+"c"*64}; source={"headSha"=>ENV.fetch("HEAD"),"digest"=>"sha256:"+"d"*64,"projectPath"=>"TemplateApp.xcodeproj"}
-  value={"schemaVersion"=>1,"status"=>"passed","changeClassification"=>"application-code","reason"=>nil,"issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"matrixFile"=>".artifacts/batches/batch/simulator-matrix.json","matrixDigest"=>"sha256:"+"b"*64,"executionRoute"=>"xcodebuild-simctl","xcode"=>{"path"=>"/Applications/Xcode.app/Contents/Developer","version"=>"26.5","build"=>"17F42"},"build"=>{"status"=>"passed","scheme"=>"TemplateApp","warningsAdded"=>0,"project"=>project,"sourceTree"=>source},"tests"=>{"status"=>"passed","passed"=>24,"failed"=>0,"skipped"=>0},"cases"=>cases,"visualEvaluation"=>{"status"=>"passed","packet"=>{"path"=>".artifacts/issues/42/#{ENV.fetch("HEAD")}/visual-packet.json","digest"=>"sha256:"+"e"*64},"cases"=>visual_cases,"findings"=>[]},"acceptanceEvidence"=>[{"id"=>"AC-1","status"=>"passed","evidence"=>["stage:build","stage:unit-tests","case:iphone-en","case:iphone-ja","case:ipad-en","case:ipad-ja"]}],"completedAt"=>"2026-08-24T00:01:00Z"};File.binwrite(ENV.fetch("VERIFY"),JSON.generate(value))'
-REVIEW="$review" HEAD="$head" BASE="$base" DIGEST="$digest" ruby -rjson -e 'File.binwrite(ENV.fetch("REVIEW"),JSON.generate({"schemaVersion"=>1,"issue"=>42,"reviewerModel"=>"claude","baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"verifySha"=>ENV.fetch("HEAD"),"issueContractDigest"=>ENV.fetch("DIGEST"),"verdict"=>"approved","findings"=>[],"acceptanceAssessment"=>[{"id"=>"AC-1","status"=>"supported","evidence"=>["review.diff"]}],"reviewedAt"=>"2026-08-24T00:02:00Z"}))'
 
-body=$("$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head")
+primary="$scratch/repo"
+worktree="$primary/.worktrees/42-render"
+issue=42
+mkdir -p "$primary/tools/lib" "$primary/docs" "$primary/TemplateApp.xcodeproj"
+cp "$source_root/tools/render-pr-body.sh" "$primary/tools/"
+cp "$source_root/tools/validate-verify-json.swift" "$primary/tools/"
+cp "$source_root/tools/lib/descriptor-files.rb" "$primary/tools/lib/"
+printf '%s\n' '{}' >"$primary/TemplateApp.xcodeproj/project.pbxproj"
+printf '%s\n' '# Initial' >"$primary/docs/initial.md"
+git -C "$primary" init -q
+git -C "$primary" config user.name 'Renderer Test'
+git -C "$primary" config user.email 'renderer@example.invalid'
+git -C "$primary" add -- tools docs TemplateApp.xcodeproj
+git -C "$primary" commit -q -m initial
+printf '%s\n' '# Base' >"$primary/docs/base.md"
+git -C "$primary" add -- docs/base.md
+git -C "$primary" commit -q -m base
+base=$(git -C "$primary" rev-parse HEAD)
+printf '%s\n' '# Renderer evidence' >"$primary/docs/render.md"
+git -C "$primary" add -- docs/render.md
+git -C "$primary" commit -q -m head
+head=$(git -C "$primary" rev-parse HEAD)
+git -C "$primary" worktree add -q -b codex/42-render "$worktree" "$head"
+ln -s ../../.artifacts "$worktree/.artifacts"
+
+issue_dir="$primary/.artifacts/issues/$issue"
+head_dir="$issue_dir/$head"
+matrix_dir="$primary/.artifacts/batches/evidence-fixture"
+contract="$issue_dir/issue-contract.json"
+verify="$head_dir/verify.json"
+review="$head_dir/review.json"
+draft="$head_dir/verify-draft.json"
+packet="$head_dir/visual-packet.json"
+matrix="$matrix_dir/simulator-matrix.json"
+mkdir -p "$head_dir" "$matrix_dir"
+cp "$fixtures/issue-contract.json" "$contract"
+cp -R "$fixtures/screenshots/." "$head_dir/"
+
+ruby -rjson - "$matrix" <<'RUBY'
+path = ARGV.fetch(0)
+matrix = {
+  "schemaVersion" => 1, "batchId" => "evidence-fixture",
+  "resolvedAt" => "2026-08-21T12:00:00+09:00",
+  "xcode" => {"path" => "/Applications/Xcode.app/Contents/Developer", "version" => "26.5", "build" => "17F42"},
+  "runtime" => {"identifier" => "com.apple.CoreSimulator.SimRuntime.iOS-26-5", "version" => "26.5"},
+  "cases" => [
+    ["iphone-en", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "iPhone 17 Pro", "en_US", "en", "00000000-0000-0000-0000-000000000001"],
+    ["iphone-ja", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "iPhone 17 Pro", "ja_JP", "ja", "00000000-0000-0000-0000-000000000002"],
+    ["ipad-en", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "iPad Air 13-inch (M3)", "en_US", "en", "00000000-0000-0000-0000-000000000003"],
+    ["ipad-ja", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "iPad Air 13-inch (M3)", "ja_JP", "ja", "00000000-0000-0000-0000-000000000004"]
+  ].map do |id, family, identifier, name, locale, language, udid|
+    {"id" => id, "family" => family, "deviceType" => {"identifier" => identifier, "name" => name}, "locale" => locale, "language" => language, "udid" => udid}
+  end
+}
+File.write(path, JSON.pretty_generate(matrix) + "\n")
+RUBY
+
+png_fixture="$scratch/one-pixel.png"
+printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' | /usr/bin/base64 -D >"$png_fixture"
+for id in iphone-en iphone-ja ipad-en ipad-ja; do
+  cp "$png_fixture" "$head_dir/$id/screenshot.png"
+  /usr/bin/ruby -rzlib - "$png_fixture" "$head_dir/$id/settings.png" "$id" <<'RUBY'
+source, destination, label = ARGV
+png = File.binread(source); payload = "State\0#{label}".b; type = "tEXt".b
+chunk = [payload.bytesize].pack("N") + type + payload + [Zlib.crc32(type + payload)].pack("N")
+File.binwrite(destination, png.byteslice(0, png.bytesize - 12) + chunk + png.byteslice(-12, 12))
+RUBY
+done
+
+contract_digest=$(shasum -a 256 "$contract" | awk '{print $1}')
+matrix_digest=$(shasum -a 256 "$matrix" | awk '{print $1}')
+source_tree_digest=$(/usr/bin/ruby -rdigest - "$worktree" "$head" <<'RUBY'
+repository, head = ARGV
+records = IO.popen(["/usr/bin/git", "-C", repository, "ls-tree", "-r", "-z", "--full-tree", head], "rb", &:read).split("\0", -1)
+records.pop
+digest = Digest::SHA256.new
+add = ->(value) { bytes = value.b; digest.update([bytes.bytesize].pack("Q>")); digest.update(bytes) }
+add.call("ios-template-source-tree-v1"); add.call(head); add.call("TemplateApp.xcodeproj")
+records.each do |record|
+  metadata, path = record.split("\t", 2); mode, type, object = metadata.split(" "); next unless type == "blob"
+  blob = IO.popen(["/usr/bin/git", "-C", repository, "cat-file", "blob", object], "rb", &:read)
+  [mode, object, path].each { |value| add.call(value) }; add.call(blob)
+end
+puts digest.hexdigest
+RUBY
+)
+
+ruby -rjson - "$fixtures/passed.json" "$verify" "$base" "$head" "$contract_digest" "$matrix_digest" "$source_tree_digest" <<'RUBY'
+source, destination, base, head, contract, matrix, tree = ARGV
+text = File.read(source)
+{"BASE_SHA"=>base,"HEAD_SHA"=>head,"CONTRACT_DIGEST"=>contract,"MATRIX_DIGEST"=>matrix,"SOURCE_TREE_DIGEST"=>tree}.each { |key, value| text = text.gsub(key, value) }
+File.write(destination, JSON.pretty_generate(JSON.parse(text)) + "\n")
+RUBY
+
+canonical_root=$(/usr/bin/swift -e 'import Foundation; print(URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath().standardizedFileURL.path)' "$worktree")
+root_digest=$(printf '%s' "$canonical_root" | shasum -a 256 | awk '{print $1}')
+workspace="/tmp/ios-template-verify/$(basename "$canonical_root")-$root_digest/issue-42/$head/Attempts/attempt-aaaaaaaa"
+REPOSITORY="$worktree" EVIDENCE="$verify" DRAFT="$draft" WORKSPACE="$workspace" ruby -rjson -rdigest <<'RUBY'
+final = JSON.parse(File.read(ENV.fetch("EVIDENCE")))
+root = File.dirname(ENV.fetch("EVIDENCE"))
+final.fetch("cases").each { |entry| entry["screenshotDigest"] = "sha256:#{Digest::SHA256.file(File.join(root, entry.fetch("screenshot"))).hexdigest}" }
+File.write(ENV.fetch("EVIDENCE"), JSON.pretty_generate(final) + "\n")
+ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
+draft = {
+  "schemaVersion"=>1,"status"=>"awaiting-visual-review","issue"=>42,"baseSha"=>final.fetch("baseSha"),"headSha"=>final.fetch("headSha"),
+  "issueContract"=>final.fetch("issueContract"),"matrixFile"=>final.fetch("matrixFile"),"matrixDigest"=>final.fetch("matrixDigest"),
+  "executionRoute"=>"xcodebuild-simctl","xcode"=>final.fetch("xcode"),"build"=>final.fetch("build"),"tests"=>final.fetch("tests"),
+  "cases"=>ids.map.with_index { |id,index| image=File.join(root,id,"screenshot.png"); {"id"=>id,"status"=>"passed","screenshot"=>"#{id}/screenshot.png","screenshotDigest"=>"sha256:#{Digest::SHA256.file(image).hexdigest}","mechanicalCheck"=>index.even? ? "test:TemplateAppUITests/SmokeTests/testLaunch" : "assertion:launch-succeeded"} },
+  "acceptanceEvidence"=>final.fetch("acceptanceEvidence").map { |entry| {"id"=>entry.fetch("id"),"evidence"=>entry.fetch("evidence").reject { |check| check.start_with?("visual:") }} },
+  "workspaceArtifacts"=>{"derivedDataPath"=>"#{ENV.fetch("WORKSPACE")}/DerivedData","buildResultBundlePath"=>"#{ENV.fetch("WORKSPACE")}/Build.xcresult","testResultBundlePath"=>"#{ENV.fetch("WORKSPACE")}/Tests.xcresult"},
+  "executionCompletedAt"=>"2026-08-21T12:30:00+09:00"
+}
+File.write(ENV.fetch("DRAFT"), JSON.pretty_generate(draft) + "\n")
+RUBY
+
+STATE="$issue_dir/state.json" HEAD="$head" BASE="$base" CONTRACT_DIGEST="$contract_digest" ruby -rjson -e '
+state={"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","branch"=>"codex/42-render","worktree"=>".worktrees/42-render","baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"primaryImplementer"=>"codex","issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>"sha256:#{ENV.fetch("CONTRACT_DIGEST")}"},"state"=>"in-progress","previousState"=>"claimed","resumeState"=>nil,"executor"=>"codex"};File.write(ENV.fetch("STATE"),JSON.generate(state))'
+(
+  cd "$worktree"
+  /usr/bin/swift tools/validate-verify-json.swift --visual-packet --issue 42 --expected-base "$base" --draft ".artifacts/issues/42/$head/verify-draft.json" --output ".artifacts/issues/42/$head/visual-packet.json" >/dev/null
+)
+EVIDENCE="$verify" PACKET="$packet" ruby -rjson -rdigest -e '
+path=ENV.fetch("EVIDENCE");value=JSON.parse(File.read(path));packet=JSON.parse(File.read(ENV.fetch("PACKET")));
+value["visualEvaluation"]={"status"=>"passed","packet"=>{"path"=>".artifacts/issues/42/#{value.fetch("headSha")}/visual-packet.json","digest"=>"sha256:#{Digest::SHA256.file(ENV.fetch("PACKET")).hexdigest}"},"cases"=>packet.fetch("cases").map{|entry|{"id"=>entry.fetch("id"),"images"=>entry.fetch("images").map{|image|{"state"=>image.fetch("state"),"path"=>image.fetch("path"),"digest"=>image.fetch("digest"),"status"=>"passed","findings"=>[]}}}},"findings"=>[]};File.write(path,JSON.pretty_generate(value)+"\n")'
+
+VERIFY="$verify" REVIEW="$review" HEAD="$head" BASE="$base" DIGEST="sha256:$contract_digest" ruby -rjson -e '
+verify=JSON.parse(File.read(ENV.fetch("VERIFY")));criteria=verify.fetch("acceptanceEvidence");
+value={"schemaVersion"=>1,"issue"=>42,"reviewerModel"=>"claude","baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"verifySha"=>ENV.fetch("HEAD"),"issueContractDigest"=>ENV.fetch("DIGEST"),"verdict"=>"approved","findings"=>[],"acceptanceAssessment"=>criteria.map{|item|{"id"=>item.fetch("id"),"status"=>"supported","evidence"=>["review.diff"]}},"reviewedAt"=>"2026-08-21T13:01:00+09:00"};File.write(ENV.fetch("REVIEW"),JSON.generate(value))'
+
+cp "$verify" "$scratch/verify.good"; cp "$review" "$scratch/review.good"; cp "$matrix" "$scratch/matrix.good"; cp "$packet" "$scratch/packet.good"
+for id in iphone-en iphone-ja ipad-en ipad-ja; do cp "$head_dir/$id/screenshot.png" "$scratch/$id-screenshot.good"; cp "$head_dir/$id/settings.png" "$scratch/$id-settings.good"; done
+
+run_renderer() { "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head"; }
+restore_application() {
+  cp "$scratch/verify.good" "$verify"; cp "$scratch/review.good" "$review"; cp "$scratch/matrix.good" "$matrix"; rm -f "$packet"; cp "$scratch/packet.good" "$packet"
+  for id in iphone-en iphone-ja ipad-en ipad-ja; do cp "$scratch/$id-screenshot.good" "$head_dir/$id/screenshot.png"; cp "$scratch/$id-settings.good" "$head_dir/$id/settings.png"; done
+}
+expect_refusal() {
+  local label=$1
+  if run_renderer >"$scratch/$label.out" 2>"$scratch/$label.err"; then echo "unsafe visual evidence was rendered: $label" >&2; exit 1; fi
+  if grep -Fq 'None for this Issue' "$scratch/$label.out"; then echo "unsafe evidence overclaimed Remaining work: $label" >&2; exit 1; fi
+}
+
+body=$(run_renderer)
 for expected in \
   'Closes #42' \
-  '`specs/features/render.md#acceptance`' \
+  '`docs/verification.md#stage-e-evidence`' \
   'Verify digest: `sha256:' \
   'Tests: `passed` (passed: `24`, failed: `0`, skipped: `0`)' \
   'iPhone Pro / English (`iphone-en`): `passed`' \
@@ -41,55 +168,61 @@ do
 done
 if grep -Fqi 'gate is pending' <<<"$body"; then echo 'PR body claims a pending gate' >&2; exit 1; fi
 
-ln "$verify" "$verify.hardlink"
-if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/hardlink.out" 2>"$scratch/hardlink.err"; then
-  echo 'hardlinked verify artifact was accepted' >&2
-  exit 1
-fi
-grep -Fq 'single-link regular file' "$scratch/hardlink.err" || { echo 'hardlink refusal was not explicit' >&2; exit 1; }
+printf '\n' >>"$matrix"; expect_refusal current-matrix-corruption; restore_application
+printf 'corruption' >>"$head_dir/iphone-en/screenshot.png"; expect_refusal current-primary-screenshot-corruption; restore_application
+chmod u+w "$packet"; printf '\n' >>"$packet"; expect_refusal current-packet-corruption; restore_application
+printf 'corruption' >>"$head_dir/iphone-en/settings.png"; expect_refusal current-referenced-image-corruption; restore_application
+
+# Wait until the renderer retains visual-packet.json, then atomically replace the
+# visual packet with identical bytes. A digest-only check must not hide this.
+ruby - "$packet" <<'RUBY' &
+packet = ARGV.fetch(0)
+guard = File.open(packet, "rb")
+loop do
+  if guard.flock(File::LOCK_EX | File::LOCK_NB)
+    guard.flock(File::LOCK_UN); sleep 0.001
+  else
+    replacement = "#{packet}.swap"; File.binwrite(replacement, File.binread(packet)); File.rename(replacement, packet); break
+  end
+end
+RUBY
+swapper=$!
+if run_renderer >"$scratch/same-byte-swap.out" 2>"$scratch/same-byte-swap.err"; then wait "$swapper" || true; echo 'same-byte atomic packet swap was rendered as merge-ready' >&2; exit 1; fi
+wait "$swapper"
+restore_application
+
+ln "$verify" "$verify.hardlink"; expect_refusal hardlinked-verify
+grep -Fq 'single-link regular file' "$scratch/hardlinked-verify.err" || { echo 'hardlink refusal was not explicit' >&2; exit 1; }
 rm "$verify.hardlink"
 
-cp "$verify" "$scratch/verify.good"
-ruby -rjson -e 'path=ARGV[0];value=JSON.parse(File.binread(path));value["build"]["status"]="failed";File.binwrite(path,JSON.generate(value))' "$verify"
-if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/failed-build.out" 2>"$scratch/failed-build.err"; then
-  echo 'failed Build was rendered as merge-ready' >&2; exit 1
-fi
-if grep -Fq 'None for this Issue' "$scratch/failed-build.out"; then echo 'failed Build overclaimed Remaining work' >&2; exit 1; fi
-cp "$scratch/verify.good" "$verify"
-
-expect_verify_refusal() {
+expect_verify_mutation() {
   local label=$1 code=$2
-  cp "$scratch/verify.good" "$verify"
-  ruby -rjson -e "path=ARGV[0];value=JSON.parse(File.binread(path));$code;File.binwrite(path,JSON.generate(value))" "$verify"
-  if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/$label.out" 2>"$scratch/$label.err"; then
-    echo "invalid renderer evidence was accepted: $label" >&2; exit 1
-  fi
-  if grep -Fq 'None for this Issue' "$scratch/$label.out"; then echo "invalid renderer evidence overclaimed Remaining work: $label" >&2; exit 1; fi
+  restore_application
+  MUTATION="$code" VERIFY="$verify" ruby -rjson -e 'p=ENV.fetch("VERIFY");v=JSON.parse(File.read(p));eval(ENV.fetch("MUTATION"),binding);File.write(p,JSON.generate(v))'
+  expect_refusal "$label"
 }
-expect_verify_refusal warnings-added 'value["build"]["warningsAdded"]=1'
-expect_verify_refusal skipped-tests 'value["tests"]["skipped"]=1'
-expect_verify_refusal missing-case 'value["cases"].pop'
-expect_verify_refusal missing-visual-case 'value["visualEvaluation"]["cases"].pop'
-expect_verify_refusal incomplete-schema 'value.delete("executionRoute")'
-cp "$scratch/verify.good" "$verify"
+expect_verify_mutation failed-build 'v["build"]["status"]="failed"'
+expect_verify_mutation warnings-added 'v["build"]["warningsAdded"]=1'
+expect_verify_mutation skipped-tests 'v["tests"]["skipped"]=1'
+expect_verify_mutation missing-case 'v["cases"].pop'
+expect_verify_mutation missing-visual-case 'v["visualEvaluation"]["cases"].pop'
+expect_verify_mutation incomplete-schema 'v.delete("executionRoute")'
+restore_application
 
-cp "$review" "$scratch/review.good"
-ruby -rjson -e 'path=ARGV[0];value=JSON.parse(File.binread(path));value["acceptanceAssessment"][0]["status"]="unsupported";File.binwrite(path,JSON.generate(value))' "$review"
-if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/unsupported.out" 2>"$scratch/unsupported.err"; then
-  echo 'unsupported review assessment was rendered as merge-ready' >&2; exit 1
-fi
-cp "$scratch/review.good" "$review"
-ruby -rjson -e 'path=ARGV[0];value=JSON.parse(File.binread(path));value["unexpected"]="field";File.binwrite(path,JSON.generate(value))' "$review"
-if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/review-schema.out" 2>"$scratch/review-schema.err"; then
-  echo 'incomplete strict review schema was accepted' >&2; exit 1
-fi
-cp "$scratch/review.good" "$review"
+cp "$scratch/review.good" "$review"; ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.read(p));v["acceptanceAssessment"][0]["status"]="unsupported";File.write(p,JSON.generate(v))' "$review"; expect_refusal unsupported-review; restore_application
+cp "$scratch/review.good" "$review"; ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.read(p));v["unexpected"]="field";File.write(p,JSON.generate(v))' "$review"; expect_refusal review-schema; restore_application
 
-mv "$primary/.artifacts/issues/$issue/$head" "$primary/.artifacts/issues/$issue/$head.real"
-ln -s "$head.real" "$primary/.artifacts/issues/$issue/$head"
-if "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/symlink.out" 2>"$scratch/symlink.err"; then
-  echo 'symlinked Head artifact directory was accepted' >&2; exit 1
-fi
-grep -Fq 'descriptor' "$scratch/symlink.err" || { echo 'symlink component refusal was not explicit' >&2; exit 1; }
+mv "$head_dir" "$head_dir.real"; ln -s "$head.real" "$head_dir"
+expect_refusal symlinked-head
+grep -Fq 'descriptor' "$scratch/symlinked-head.err" || { echo 'symlink component refusal was not explicit' >&2; exit 1; }
+rm "$head_dir"; mv "$head_dir.real" "$head_dir"
 
-echo 'PASS: PR body reports exact verify/review identity, tests, all four matrix cases, and specification anchors'
+# Documentation-only evidence remains valid without visual artifacts.
+VERIFY="$verify" ruby -rjson -e '
+p=ENV.fetch("VERIFY");v=JSON.parse(File.read(p));v["status"]="not-applicable";v["changeClassification"]="documentation-only";v["reason"]="Only allowlisted Markdown documentation changed";v["matrixFile"]=nil;v["matrixDigest"]=nil;v["executionRoute"]="none";v["xcode"]=nil;v["build"]={"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil};v["tests"]={"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil};v["cases"]=[];v["visualEvaluation"]={"status"=>"not-applicable","findings"=>[]};v["acceptanceEvidence"]=[{"id"=>"AC-1","status"=>"passed","evidence"=>["documents:renderer"]},{"id"=>"AC-2","status"=>"passed","evidence"=>["links:renderer"]}];File.write(p,JSON.pretty_generate(v)+"\n")'
+VERIFY="$verify" REVIEW="$review" ruby -rjson -e '
+v=JSON.parse(File.read(ENV.fetch("VERIFY")));r=JSON.parse(File.read(ENV.fetch("REVIEW")));r["acceptanceAssessment"]=v.fetch("acceptanceEvidence").map{|item|{"id"=>item.fetch("id"),"status"=>"supported","evidence"=>["review.diff"]}};File.write(ENV.fetch("REVIEW"),JSON.generate(r))'
+documentation_body=$(run_renderer)
+grep -Fq 'Verify status: `not-applicable`' <<<"$documentation_body" || { echo 'documentation-only PR body was rejected' >&2; exit 1; }
+
+echo 'PASS: PR body readiness is bound to canonical current visual evidence and documentation-only validation remains available'

@@ -13,7 +13,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$issue" =~ ^[1-9][0-9]*$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || usage
 
-ruby -rjson -rdigest -rtime -I"$repo_root/tools/lib" -rdescriptor-files - "$repo_root" "$issue" "$head_sha" <<'RUBY'
+ruby -rjson -rdigest -rtime -ropen3 -I"$repo_root/tools/lib" -rdescriptor-files - "$repo_root" "$issue" "$head_sha" <<'RUBY'
 repo, issue_text, head = ARGV
 issue = Integer(issue_text)
 
@@ -26,14 +26,119 @@ def exact_keys!(value, keys, at)
   reject("#{at} schema is incomplete") unless value.is_a?(Hash) && value.keys.sort == keys.sort
 end
 
-def parse_owned(directory, name, at, held_files)
-  file, stat = DescriptorFiles.open_regular_at(directory, name)
-  file.flock(File::LOCK_SH)
-  bytes = DescriptorFiles.read_opened(file, stat)
-  held_files << file
-  [JSON.parse(bytes), bytes]
-rescue JSON::ParserError, IOError, SystemCallError, ArgumentError => error
+class HeldEvidence
+  Directory = Struct.new(:io, :parent, :name, :stat, :at, :watch_contents, keyword_init: true)
+  Leaf = Struct.new(:io, :parent, :name, :stat, :bytes, :at, keyword_init: true)
+
+  def initialize(root)
+    io = DescriptorFiles.open_directory(root)
+    @root_path = root
+    @root = Directory.new(io: io, parent: nil, name: nil, stat: io.stat, at: "primary checkout", watch_contents: false)
+    @directories = {[] => @root}
+    @leaves = {}
+  end
+
+  def leaf(components, at)
+    components = safe_components(components, at)
+    return @leaves.fetch(components) if @leaves.key?(components)
+    parent = directory(components[0...-1], at)
+    io, stat = DescriptorFiles.open_regular_at(parent.io, components.last)
+    io.binmode
+    io.flock(File::LOCK_SH)
+    bytes = DescriptorFiles.read_opened(io, stat)
+    value = Leaf.new(io: io, parent: parent, name: components.last, stat: stat, bytes: bytes, at: at)
+    @leaves[components] = value
+  rescue SystemCallError, IOError, ArgumentError => error
+    reject("#{at} descriptor is unavailable or invalid: #{error.message}")
+  end
+
+  def watch_directory(components, at)
+    value = directory(safe_components(components, at), at)
+    value.watch_contents = true
+  end
+
+  def verify!
+    current = nil
+    current_root = nil
+    current_root = DescriptorFiles.open_directory(@root_path)
+    reject("primary checkout identity changed") unless DescriptorFiles.stable_identity_equal?(@root.stat, current_root.stat)
+    current_root.close
+    @directories.each_value do |entry|
+      next unless entry.parent
+      current = DescriptorFiles.open_directory_at(entry.parent.io, entry.name)
+      current_stat = current.stat
+      current.close
+      same = DescriptorFiles.stable_identity_equal?(entry.stat, current_stat)
+      same &&= DescriptorFiles.metadata_equal?(entry.stat, current_stat) if entry.watch_contents
+      reject("#{entry.at} component identity or contents changed") unless same
+    end
+    @leaves.each_value do |entry|
+      held_bytes = DescriptorFiles.read_opened(entry.io, entry.stat)
+      current, current_stat = DescriptorFiles.open_regular_at(entry.parent.io, entry.name)
+      current.binmode
+      current_bytes = DescriptorFiles.read_opened(current, current_stat)
+      current.close
+      held_same = held_bytes == entry.bytes
+      current_same = current_bytes == entry.bytes
+      metadata_same = DescriptorFiles.metadata_equal?(entry.stat, current_stat)
+      reject("#{entry.at} identity or bytes changed (held=#{held_same}, current=#{current_same}, identity=#{metadata_same})") unless
+        held_same && current_same && metadata_same
+    end
+  rescue SystemCallError, IOError, ArgumentError => error
+    reject("descriptor-held evidence changed: #{error.message}")
+  ensure
+    current&.close unless current&.closed?
+    current_root&.close unless current_root&.closed?
+  end
+
+  def close
+    (@leaves.values.map(&:io) + @directories.values.map(&:io)).reverse_each { |io| io.close unless io.closed? }
+  end
+
+  private
+
+  def safe_components(components, at)
+    reject("#{at} path is unsafe") unless components.is_a?(Array) && !components.empty? &&
+      components.all? { |value| value.is_a?(String) && !value.empty? && value != "." && value != ".." && !value.include?("/") && !value.include?("\0") }
+    components.freeze
+  end
+
+  def directory(components, at)
+    current = @root
+    path = []
+    components.each do |component|
+      path = (path + [component]).freeze
+      current = @directories[path] ||= begin
+        io = DescriptorFiles.open_directory_at(current.io, component)
+        Directory.new(io: io, parent: current, name: component, stat: io.stat, at: at, watch_contents: false)
+      end
+    end
+    current
+  end
+end
+
+def parse_leaf(leaf, at)
+  JSON.parse(leaf.bytes)
+rescue JSON::ParserError => error
   reject("#{at} is unavailable or invalid: #{error.message}")
+end
+
+def relative_components(path, at)
+  reject("#{at} path is invalid") unless path.is_a?(String) && !path.empty? && !path.start_with?("/")
+  components = path.split("/", -1)
+  reject("#{at} path is unsafe") unless components.all? { |value| !value.empty? && value != "." && value != ".." && !value.include?("\0") }
+  components
+end
+
+def validate_canonical_verify!(repo, issue, head, base, verify_digest)
+  output, status = Open3.capture2e(
+    "/usr/bin/swift", File.join(repo, "tools", "validate-verify-json.swift"),
+    "--file", ".artifacts/issues/#{issue}/#{head}/verify.json",
+    "--expected-file-digest", verify_digest,
+    "--expected-issue", issue.to_s, "--expected-base", base, "--expected-head", head,
+    chdir: repo
+  )
+  reject("canonical Verify validation failed: #{output.strip}") unless status.success?
 end
 
 repo = File.realpath(repo)
@@ -44,15 +149,15 @@ reject("Issue worktree is outside .worktrees") unless repo.start_with?(File.join
 reject("canonical artifact link escapes the primary store") unless File.realpath(link) == File.join(primary, ".artifacts") && !File.symlink?(File.join(primary, ".artifacts"))
 issue_root = File.join(primary, ".artifacts", "issues", issue.to_s)
 head_root = File.join(issue_root, head)
-handles = DescriptorFiles.open_components(primary, [".artifacts", "issues", issue.to_s, head])
-issue_directory = handles[-2]
-head_directory = handles[-1]
-issue_directory.flock(File::LOCK_SH)
-head_directory.flock(File::LOCK_SH)
-held_files = []
-contract, contract_bytes = parse_owned(issue_directory, "issue-contract.json", "Issue contract", held_files)
-verify, verify_bytes = parse_owned(head_directory, "verify.json", "verify.json", held_files)
-review, = parse_owned(head_directory, "review.json", "review.json", held_files)
+snapshots = HeldEvidence.new(primary)
+contract_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, "issue-contract.json"], "Issue contract")
+verify_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, head, "verify.json"], "verify.json")
+review_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, head, "review.json"], "review.json")
+contract_bytes = contract_leaf.bytes
+verify_bytes = verify_leaf.bytes
+contract = parse_leaf(contract_leaf, "Issue contract")
+verify = parse_leaf(verify_leaf, "verify.json")
+review = parse_leaf(review_leaf, "review.json")
 contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
 verify_digest = "sha256:#{Digest::SHA256.hexdigest(verify_bytes)}"
 contract_required = %w[schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies externalOperations fetchedAt]
@@ -62,6 +167,7 @@ exact_keys!(review, %w[schemaVersion issue reviewerModel baseSha headSha verifyS
 reject("contract identity mismatch") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue
 reject("contract repository is invalid") unless contract["repository"].is_a?(String) && contract["repository"].match?(%r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z})
 reject("verification identity mismatch") unless verify.is_a?(Hash) && verify["schemaVersion"] == 1 && verify["issue"] == issue && verify["headSha"] == head && verify.dig("issueContract", "path") == ".artifacts/issues/#{issue}/issue-contract.json" && verify.dig("issueContract", "digest") == contract_digest
+reject("verification Base SHA is invalid") unless verify["baseSha"].is_a?(String) && verify["baseSha"].match?(/\A[0-9a-f]{40}\z/)
 exact_keys!(verify["issueContract"], %w[path digest], "verify.issueContract")
 reject("review identity mismatch") unless review.is_a?(Hash) && review["schemaVersion"] == 1 && review["issue"] == issue && review["baseSha"] == verify["baseSha"] && review["headSha"] == head && review["verifySha"] == head && review["issueContractDigest"] == contract_digest
 begin
@@ -112,7 +218,43 @@ else
   reject("application matrix is not exactly four passed cases") unless cases.is_a?(Array) && cases.map { |item| item["id"] } == case_ids && cases.all? { |item| item.is_a?(Hash) && item.keys.sort == %w[id status screenshot screenshotDigest].sort && item["status"] == "passed" && item["screenshot"].is_a?(String) && item["screenshot"].start_with?("#{item["id"]}/") && item["screenshotDigest"].is_a?(String) && item["screenshotDigest"].match?(/\Asha256:[0-9a-f]{64}\z/) } && verify["matrixFile"].is_a?(String) && !verify["matrixFile"].empty? && verify["matrixDigest"].is_a?(String) && verify["matrixDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
   visual = verify["visualEvaluation"]
   reject("application visual evaluation is not passed") unless visual.is_a?(Hash) && visual.keys.sort == %w[status packet cases findings].sort && visual["status"] == "passed" && visual["findings"] == [] && visual["packet"].is_a?(Hash) && visual["packet"].keys.sort == %w[path digest].sort && visual["packet"]["path"].is_a?(String) && visual["packet"]["digest"].is_a?(String) && visual["packet"]["digest"].match?(/\Asha256:[0-9a-f]{64}\z/) && visual["cases"].is_a?(Array) && visual["cases"].map { |item| item["id"] } == case_ids && visual["cases"].all? { |item| item.is_a?(Hash) && item.keys.sort == %w[id images].sort && item["images"].is_a?(Array) && !item["images"].empty? && item["images"].all? { |image| image.is_a?(Hash) && image.keys.sort == %w[state path digest status findings].sort && image["state"].is_a?(String) && !image["state"].empty? && image["status"] == "passed" && image["findings"] == [] && image["path"].is_a?(String) && image["digest"].is_a?(String) && image["digest"].match?(/\Asha256:[0-9a-f]{64}\z/) } }
+
+  # Retain the complete visual input set while the canonical Swift validator
+  # proves all schema, relationship, and digest rules. Ruby only discovers and
+  # binds safe paths here; it deliberately does not duplicate those rules.
+  matrix_components = relative_components(verify["matrixFile"], "matrixFile")
+  reject("matrixFile is outside the canonical artifact store") unless matrix_components.first == ".artifacts"
+  snapshots.leaf(matrix_components, "matrixFile")
+  evidence_prefix = [".artifacts", "issues", issue.to_s, head]
+  cases.each do |item|
+    screenshot = relative_components(item["screenshot"], "case screenshot")
+    snapshots.leaf(evidence_prefix + screenshot, "case screenshot #{item["id"]}")
+  end
+  snapshots.leaf(evidence_prefix + ["verify-draft.json"], "verify-draft.json")
+  packet_components = relative_components(visual.dig("packet", "path"), "visual packet")
+  reject("visual packet is outside this Issue and Head") unless packet_components[0, 4] == evidence_prefix
+  packet_leaf = snapshots.leaf(packet_components, "visual packet")
+  packet = parse_leaf(packet_leaf, "visual packet")
+  packet_cases = packet["cases"]
+  reject("visual packet image references are incomplete") unless packet_cases.is_a?(Array)
+  packet_cases.each do |packet_case|
+    images = packet_case.is_a?(Hash) ? packet_case["images"] : nil
+    reject("visual packet image references are incomplete") unless images.is_a?(Array) && !images.empty?
+    images.each do |image|
+      path = image.is_a?(Hash) ? image["path"] : nil
+      components = relative_components(path, "visual packet image")
+      snapshots.leaf(evidence_prefix + components, "visual packet image #{path}")
+    end
+  end
+  case_ids.each { |id| snapshots.watch_directory(evidence_prefix + [id], "visual packet case directory") }
+  validate_canonical_verify!(repo, issue, head, verify["baseSha"], verify_digest)
 end
+
+if verify["changeClassification"] == "documentation-only"
+  validate_canonical_verify!(repo, issue, head, verify["baseSha"], verify_digest)
+end
+
+snapshots.verify!
 
 puts "Closes ##{issue}"
 puts
@@ -167,6 +309,5 @@ puts
 puts "## Remaining work"
 puts
 puts "- None for this Issue."
-held_files.reverse_each { |file| file.close unless file.closed? }
-handles.reverse_each { |handle| handle.close unless handle.closed? }
+snapshots.close
 RUBY
