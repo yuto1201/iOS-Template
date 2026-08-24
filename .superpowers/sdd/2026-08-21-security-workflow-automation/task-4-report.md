@@ -63,3 +63,33 @@
 - Verified a comment later than the valid Claim marker cannot be ignored merely because it is malformed or references another state.
 - Verified workflow legality is checked after structural validation and before any local state-file write.
 - The deferred `type:docs` / `type:release` Minor remains unchanged, as requested.
+
+---
+
+## Fix round 2: decoded blocked and paused resume state
+
+### Implementation
+
+- `resume-issue.sh` now retains `resumeState` as its JSON representation only for JSON/state-file output and decodes a non-null value to a raw, validated workflow state for all blocked/paused comparisons.
+- Correct `blocked:user -> in-progress` and `paused -> in-progress` markers with `resumeState: "in-progress"` are accepted; a null, unknown, or different resume state is refused before a state-file write.
+
+### TDD evidence
+
+- RED command: `bash tools/tests/test-claim-resume.sh`
+- RED output: `blocked:conflict: state-transition marker has an invalid blocked or paused resume state` for the valid blocked recovery fixture.
+- GREEN command: `bash tools/tests/test-claim-resume.sh`
+- GREEN output: `PASS: deterministic Issue claim, idempotency, conflict refusal, dirty-main preservation, and marker-based resume`.
+
+### Covering verification
+
+- `bash tools/tests/test-claim-resume.sh` — PASS, including valid blocked and paused recovery plus mismatched blocked resumeState refusal.
+- `bash tools/tests/test-workflow-state.sh` — PASS: `PASS: GitHub preflight, durable state transitions, and fixed Codex operation transport`.
+- `bash tools/tests/test-issue-contract.sh` — PASS: `PASS: Issue forms, Definition of Ready validator, PR template, labels, and Codex label sync`.
+- `bash -n tools/claim-issue.sh tools/resume-issue.sh tools/tests/test-claim-resume.sh` — PASS.
+- `git diff --check` — PASS.
+
+### Self-review
+
+- Verified raw string comparison is now used only after JSON null handling and `workflow_is_state` validation.
+- Verified JSON null is still retained as null in the reconstructed state record/output.
+- The deferred `type:docs` / `type:release` Minor remains unchanged.

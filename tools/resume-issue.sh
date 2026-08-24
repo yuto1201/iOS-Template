@@ -55,16 +55,22 @@ state=$(printf '%s' "$marker" | jq -er '.state')
 workflow_is_state "$state" || blocked 'Issue has an unknown current state label'
 marker_from=$(printf '%s' "$marker" | jq -er '.from')
 marker_to=$(printf '%s' "$marker" | jq -er '.to')
-resume_state=$(printf '%s' "$marker" | jq -c '.resumeState')
+resume_state_json=$(printf '%s' "$marker" | jq -c '.resumeState')
+if [[ "$resume_state_json" == null ]]; then
+  resume_state=''
+else
+  resume_state=$(printf '%s' "$marker" | jq -er '.resumeState')
+  workflow_is_state "$resume_state" || blocked 'state-transition marker has an invalid resume state'
+fi
 [[ "$marker_to" == "$state" ]] || blocked 'latest state-transition marker does not match the current Issue state'
 workflow_is_state "$marker_from" && workflow_is_state "$marker_to" && workflow_transition_allowed "$marker_from" "$marker_to" || blocked 'state-transition marker is not a legal workflow transition'
 if workflow_is_blocked "$marker_from" || [[ "$marker_from" == paused ]]; then
   if [[ "$marker_to" != paused && "$marker_to" != superseded ]]; then
-    [[ "$resume_state" != null && "$marker_to" == "$resume_state" ]] || blocked 'state-transition marker has an invalid blocked or paused resume state'
+    [[ -n "$resume_state" && "$marker_to" == "$resume_state" ]] || blocked 'state-transition marker has an invalid blocked or paused resume state'
   fi
 fi
 if workflow_is_blocked "$marker_to" || [[ "$marker_to" == paused ]]; then
-  [[ "$resume_state" == "\"$marker_from\"" ]] || blocked 'state-transition marker has an invalid blocked or paused resume state'
+  [[ "$resume_state" == "$marker_from" ]] || blocked 'state-transition marker has an invalid blocked or paused resume state'
 fi
 
 title=$(printf '%s' "$issue_json" | ruby -rjson -e 'puts JSON.parse(STDIN.read).fetch("title")')
@@ -118,6 +124,6 @@ ruby -rjson -e '
   issue, repo, branch, worktree, base, agent, digest, state, previous, resume = ARGV
   value = {"schemaVersion" => 1, "issue" => Integer(issue), "repository" => repo, "branch" => branch, "worktree" => worktree, "baseSha" => base, "primaryImplementer" => agent, "issueContract" => {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => digest}, "state" => state, "previousState" => previous, "resumeState" => (resume == "null" ? nil : resume), "executor" => "codex"}
   puts JSON.generate(canonical(value))
-' "$issue" "$repo" "$branch" "$worktree_relative" "$base_sha" "$agent" "$contract_digest" "$state" "$previous_state" "$resume_state" > "$repo_root/.artifacts/issues/$issue/state.json"
+' "$issue" "$repo" "$branch" "$worktree_relative" "$base_sha" "$agent" "$contract_digest" "$state" "$previous_state" "$resume_state_json" > "$repo_root/.artifacts/issues/$issue/state.json"
 chmod 600 "$repo_root/.artifacts/issues/$issue/state.json"
-jq -cn --arg repository "$repo" --argjson issue "$issue" --arg branch "$branch" --arg worktree "$worktree_relative" --arg baseSha "$base_sha" --arg agent "$agent" --arg digest "$contract_digest" --arg state "$state" --arg previousState "$previous_state" --argjson resumeState "$resume_state" '{repository:$repository,issue:$issue,branch:$branch,worktree:$worktree,baseSha:$baseSha,primaryImplementer:$agent,issueContract:{path:(".artifacts/issues/" + ($issue|tostring) + "/issue-contract.json"),digest:$digest},state:$state,previousState:$previousState,resumeState:$resumeState,executor:"codex"}'
+jq -cn --arg repository "$repo" --argjson issue "$issue" --arg branch "$branch" --arg worktree "$worktree_relative" --arg baseSha "$base_sha" --arg agent "$agent" --arg digest "$contract_digest" --arg state "$state" --arg previousState "$previous_state" --argjson resumeState "$resume_state_json" '{repository:$repository,issue:$issue,branch:$branch,worktree:$worktree,baseSha:$baseSha,primaryImplementer:$agent,issueContract:{path:(".artifacts/issues/" + ($issue|tostring) + "/issue-contract.json"),digest:$digest},state:$state,previousState:$previousState,resumeState:$resumeState,executor:"codex"}'
