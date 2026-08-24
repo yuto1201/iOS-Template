@@ -37,9 +37,15 @@ artifact_head="$artifact_issue/$head_sha"
 mkdir -p "$artifact_head"
 
 digest() { shasum -a 256 "$1" | awk '{print "sha256:" $1}'; }
-cat > "$artifact_issue/issue-contract.json" <<JSON
-{"schemaVersion":1,"issue":$issue,"repository":"yuto1201/iOS-Template","goal":"Shared review artifacts","specAnchors":["specs/acceptance.md#1"],"fetchedAt":"2026-08-24T00:00:00Z","dependencies":[],"externalOperations":[],"externalOperationDetailsDigest":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","acceptanceCriteria":[{"id":"AC-1","text":"Review reads the canonical shared evidence"}]}
-JSON
+ISSUE="$issue" CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -rdigest -e '
+  def canonical(value)
+    value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value.is_a?(Array) ? value.map { |entry| canonical(entry) } : value
+  end
+  operations = ["github.read_issue", "github.update_issue"]
+  details = operations.map { |operation| {"operation" => operation, "service" => "GitHub", "environment" => "production", "executor" => "Codex", "approvalRequired" => false, "approvalReference" => nil} }
+  value = {"schemaVersion" => 1, "issue" => ENV.fetch("ISSUE").to_i, "repository" => "yuto1201/iOS-Template", "goal" => "Shared review artifacts", "specAnchors" => ["specs/acceptance.md#1"], "fetchedAt" => "2026-08-24T00:00:00Z", "dependencies" => [], "externalOperations" => operations, "externalOperationDetailsDigest" => "sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(details)))}", "acceptanceCriteria" => [{"id" => "AC-1", "text" => "Review reads the canonical shared evidence"}]}
+  File.binwrite(ENV.fetch("CONTRACT"), JSON.generate(canonical(value)))
+'
 contract_digest=$(digest "$artifact_issue/issue-contract.json")
 printf 'diff\n' > "$artifact_head/review.diff"
 printf 'image\n' > "$artifact_head/iphone-en.png"
@@ -79,6 +85,26 @@ export CODEX_HOME="$workspace/codex-home"
 mkdir -p "$CODEX_HOME"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 
+reset_review_requested() {
+  rm -f "$artifact_issue/state-transition.pending.json"
+  ISSUE="$issue" BASE="$base_sha" HEAD="$head_sha" DIGEST="$contract_digest" STATE="$artifact_issue/state.json" ruby -rjson -e '
+    value = {
+      "schemaVersion" => 1, "issue" => ENV.fetch("ISSUE").to_i,
+      "repository" => "yuto1201/iOS-Template",
+      "branch" => "codex/#{ENV.fetch("ISSUE")}-reviewer",
+      "worktree" => ".worktrees/#{ENV.fetch("ISSUE")}-reviewer",
+      "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"),
+      "primaryImplementer" => "codex",
+      "issueContract" => {"path" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/issue-contract.json", "digest" => ENV.fetch("DIGEST")},
+      "state" => "review-requested", "previousState" => "verify-passed",
+      "resumeState" => nil, "executor" => "codex"
+    }
+    File.binwrite(ENV.fetch("STATE"), JSON.generate(value))
+  '
+  printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+  printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+}
+
 packet_relative=".artifacts/issues/$issue/$head_sha/review-packet.json"
 output_relative=".artifacts/issues/$issue/$head_sha/review.json"
 
@@ -103,7 +129,7 @@ validated_repository=$(jq -r '.issueContractRepository // "MISSING"' <<<"$valida
 
 export FAKE_REVIEWER_MODE=approved
 write_result claude
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+reset_review_requested
 (cd "$linked" && tools/cross-model-review.sh --primary codex --packet "$packet_relative" --output "$output_relative" >/dev/null)
 [[ -f "$artifact_head/review.json" && ! -L "$artifact_head/review.json" ]]
 [[ $(stat -f '%l' "$artifact_head/review.json") == 1 ]]
@@ -113,7 +139,7 @@ printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 rm "$artifact_head/review.json" "$artifact_head/review-receipt.json"
 write_packet claude codex
 write_result codex
-printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
+reset_review_requested
 (cd "$linked" && tools/cross-model-review.sh --primary claude --packet "$packet_relative" --output "$output_relative" >/dev/null)
 [[ -f "$artifact_head/review.json" && ! -L "$artifact_head/review.json" ]]
 [[ -f "$artifact_head/review-receipt.json" && ! -L "$artifact_head/review-receipt.json" ]]
