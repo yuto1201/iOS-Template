@@ -11,7 +11,13 @@ for index in "${!arguments[@]}"; do
   [[ "${arguments[$index]}" != -- ]] || terminator=$index
 done
 [[ "$terminator" -ge 0 && "$terminator" -eq $((${#arguments[@]} - 2)) ]] || exit 94
-[[ "${arguments[$((terminator + 1))]}" == *"Validated review packet:"* ]] || exit 95
+prompt="${arguments[$((terminator + 1))]}"
+[[ "$prompt" == *"Validated review packet:"* ]] || exit 95
+PROMPT="$prompt" ruby -rtime -e '
+  match = ENV.fetch("PROMPT").match(/Set reviewedAt to exactly (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/)
+  exit 1 unless match
+  Time.iso8601(match[1])
+' || exit 96
 case "${FAKE_REVIEWER_MODE:?}" in
   approved|changes|mismatch|malformed) cat "${FAKE_REVIEWER_RESULT:?}" ;;
   envelope) RESULT_FILE="${FAKE_REVIEWER_RESULT:?}" ruby -rjson -e 'puts JSON.generate({"type" => "result", "result" => File.read(ENV.fetch("RESULT_FILE"))})' ;;
