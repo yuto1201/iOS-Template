@@ -30,7 +30,9 @@ def exact_keys!(value, keys, at)
 end
 
 def parse_object(bytes, at)
-  value = JSON.parse(bytes)
+  # JSON.parse may retag its input as UTF-8. Parse a duplicate so the held
+  # descriptor snapshot remains byte-for-byte comparable for non-ASCII data.
+  value = JSON.parse(bytes.dup)
   refuse("#{at} must be an object") unless value.is_a?(Hash)
   value
 rescue JSON::ParserError => error
@@ -226,7 +228,7 @@ begin
   reconstructed_contract = parsed_contract.contract
   reconstructed_contract["verification"] = contract["verification"] if contract.key?("verification")
   reconstructed_bytes = JSON.generate(canonical(reconstructed_contract))
-  refuse("live Issue contract bytes differ from the canonical snapshot") unless reconstructed_bytes == contract_file.bytes
+  refuse("live Issue contract bytes differ from the canonical snapshot") unless reconstructed_bytes.b == contract_file.bytes.b
   parsed_contract.external_operation_details.each { |detail| operation_details[detail.fetch("operation")] = detail }
   refuse("live Issue operation details differ from the contract") if operation_details.any? { |_, detail| detail.nil? }
 

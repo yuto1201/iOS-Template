@@ -94,7 +94,7 @@ class HeldEvidence
 end
 
 def parse_leaf(leaf, at)
-  JSON.parse(leaf.bytes)
+  JSON.parse(leaf.bytes.dup)
 rescue JSON::ParserError => error
   reject("#{at} is unavailable or invalid: #{error.message}")
 end

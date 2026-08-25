@@ -331,7 +331,9 @@ module IOSTemplate
     end
 
     def parse_object(bytes, at)
-      value = JSON.parse(bytes)
+      # Preserve descriptor-held evidence strings. JSON.parse may retag its
+      # input as UTF-8 when the JSON contains non-ASCII text.
+      value = JSON.parse(bytes.dup)
       reject("#{at} must be an object") unless value.is_a?(Hash)
       value
     rescue JSON::ParserError => error

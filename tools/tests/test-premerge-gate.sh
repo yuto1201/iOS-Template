@@ -44,7 +44,7 @@ issue_body="$scratch/issue.md"
 cat > "$issue_body" <<'EOF'
 ## Goal
 
-Keep merge safety deterministic.
+マージ安全性を決定的に保つ。
 
 ## In scope
 
