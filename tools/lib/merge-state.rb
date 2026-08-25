@@ -141,7 +141,12 @@ def validate_state(root, repository, issue, mode)
   result = {
     "statePath" => state_path,
     "stateDigest" => "sha256:#{Digest::SHA256.hexdigest(state_bytes)}",
-    "stateMetadata" => {"dev" => state_stat.dev, "ino" => state_stat.ino, "size" => state_stat.size, "mode" => state_stat.mode, "nlink" => state_stat.nlink, "mtimeSec" => state_stat.mtime.to_i, "mtimeNsec" => state_stat.mtime.nsec, "ctimeSec" => state_stat.ctime.to_i, "ctimeNsec" => state_stat.ctime.nsec},
+    "stateMetadata" => {
+      "dev" => state_stat.dev, "ino" => state_stat.ino, "size" => state_stat.size,
+      "mode" => state_stat.mode, "nlink" => state_stat.nlink,
+      "uid" => state_stat.uid, "gid" => state_stat.gid,
+      "mtimeSec" => state_stat.mtime.to_i, "mtimeNsec" => state_stat.mtime.nsec
+    },
     "primaryRoot" => primary,
     "worktreePath" => expected_worktree,
     "worktreePresent" => File.directory?(expected_worktree) && !File.symlink?(expected_worktree),
@@ -181,7 +186,12 @@ def atomic_update_state(identity)
   bytes = DescriptorFiles.read_opened(state_io, original_stat)
   digest = "sha256:#{Digest::SHA256.hexdigest(bytes)}"
   metadata = identity.fetch("stateMetadata")
-  exact_metadata = metadata["dev"] == original_stat.dev && metadata["ino"] == original_stat.ino && metadata["size"] == original_stat.size && metadata["mode"] == original_stat.mode && metadata["nlink"] == original_stat.nlink && metadata["mtimeSec"] == original_stat.mtime.to_i && metadata["mtimeNsec"] == original_stat.mtime.nsec && metadata["ctimeSec"] == original_stat.ctime.to_i && metadata["ctimeNsec"] == original_stat.ctime.nsec
+  exact_metadata = metadata == {
+    "dev" => original_stat.dev, "ino" => original_stat.ino, "size" => original_stat.size,
+    "mode" => original_stat.mode, "nlink" => original_stat.nlink,
+    "uid" => original_stat.uid, "gid" => original_stat.gid,
+    "mtimeSec" => original_stat.mtime.to_i, "mtimeNsec" => original_stat.mtime.nsec
+  }
   refuse("durable state bytes or metadata changed after validation") unless digest == identity.fetch("stateDigest") && exact_metadata
   value = JSON.parse(bytes)
   yield value

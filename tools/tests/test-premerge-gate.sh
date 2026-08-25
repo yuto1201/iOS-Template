@@ -212,6 +212,9 @@ if [[ "$*" == *'/tools/lib/merge-state.rb validate-worktree '* && -n "${STATE_AF
     timestamp)
       STATE_PATH="${FAKE_STATE_PATH:?}" "${REAL_RUBY:?}" -e 'path=ENV.fetch("STATE_PATH"); bytes=File.binread(path); changed=bytes.sub(/("transitionedAt":"[^"]*?)(\d)(Z")/){"#{$1}#{(Integer($2)+1)%10}#{$3}"}; abort if changed==bytes || changed.bytesize!=bytes.bytesize; File.open(path,"r+b"){|io|io.write(changed);io.flush;io.fsync}'
       ;;
+    ctime)
+      STATE_PATH="${FAKE_STATE_PATH:?}" "${REAL_RUBY:?}" -e 'path=ENV.fetch("STATE_PATH"); before=File.stat(path); File.chmod(before.mode & 0o7777,path); after=File.stat(path); abort unless before.mode==after.mode && before.mtime==after.mtime && before.ctime!=after.ctime'
+      ;;
     *) exit 97 ;;
   esac
   printf '%s\n' "$output"
@@ -351,6 +354,7 @@ for race in swap primary timestamp; do
   [[ ! -s "$FAKE_GH_LOG" ]] || { echo "state $race reached gh" >&2; exit 1; }
   cp "$scratch/state.before-identity-races" "$repo/.artifacts/issues/42/state.json"
 done
+STATE_AFTER_VALIDATE_MODE=ctime run_gate >/dev/null
 
 : > "$FAKE_GH_LOG"
 assert_fails 'caller repository mismatch is rejected before gh' \

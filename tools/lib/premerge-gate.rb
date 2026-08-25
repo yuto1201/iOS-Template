@@ -183,8 +183,8 @@ begin
   state_metadata = {
     "dev" => state_file.stat.dev, "ino" => state_file.stat.ino, "size" => state_file.stat.size,
     "mode" => state_file.stat.mode, "nlink" => state_file.stat.nlink,
-    "mtimeSec" => state_file.stat.mtime.to_i, "mtimeNsec" => state_file.stat.mtime.nsec,
-    "ctimeSec" => state_file.stat.ctime.to_i, "ctimeNsec" => state_file.stat.ctime.nsec
+    "uid" => state_file.stat.uid, "gid" => state_file.stat.gid,
+    "mtimeSec" => state_file.stat.mtime.to_i, "mtimeNsec" => state_file.stat.mtime.nsec
   }
   refuse("held state bytes or metadata differ from validated identity") unless
     identity["stateDigest"] == state_digest && identity["stateMetadata"] == state_metadata
