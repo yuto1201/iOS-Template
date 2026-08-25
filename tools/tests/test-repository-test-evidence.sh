@@ -18,7 +18,8 @@ cp "$source_repo/tools/lib/run-repository-tests.rb" \
   "$source_repo/tools/lib/prepare-review-packet.rb" \
   "$repo/tools/lib/"
 cp "$source_repo/tools/prepare-review-packet.sh" "$repo/tools/"
-chmod +x "$repo/tools/run-repository-tests.sh" "$repo/tools/prepare-review-packet.sh"
+cp "$source_repo/tools/validate-review-result.sh" "$repo/tools/"
+chmod +x "$repo/tools/run-repository-tests.sh" "$repo/tools/prepare-review-packet.sh" "$repo/tools/validate-review-result.sh"
 
 cat > "$repo/.gitignore" <<'EOF'
 /.artifacts
@@ -88,6 +89,11 @@ PACKET="$head_dir/review-packet.json" EVIDENCE="$evidence" ruby -rjson -e '
   evidence = JSON.parse(File.binread(ENV.fetch("EVIDENCE")))
   abort "packet did not seal repository tests" unless packet.fetch("repositoryTests") == evidence
 '
+validated_packet=$(cd "$repo" && tools/validate-review-result.sh \
+  --primary codex \
+  --packet ".artifacts/issues/42/$head_sha/review-packet.json")
+jq -e '.repositoryTests.status == "passed" and .repositoryTests.suite.total == 2' \
+  <<<"$validated_packet" >/dev/null
 if PACKET="$head_dir/review-packet.json" CONTRACT="$contract" ruby -I "$repo/tools/lib" -rjson -rreview-contract -e '
   packet = JSON.parse(File.binread(ENV.fetch("PACKET")))
   contract = JSON.parse(File.binread(ENV.fetch("CONTRACT")))

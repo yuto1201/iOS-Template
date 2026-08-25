@@ -147,9 +147,12 @@ issues_root = File.join(artifacts, "issues")
 packet_file = artifact_file!(artifacts, packet_input, issues_root, "packet", artifacts_identity)
 packet = json_file!(packet_file, "packet")
 schema = packet["schemaVersion"]
-packet_keys = schema == 2 ? IOSTemplate::ReviewContract::PACKET_V2_KEYS : IOSTemplate::ReviewContract::PACKET_V1_KEYS
-exact_keys!(packet, packet_keys, "packet")
 reject("packet.schemaVersion is unsupported") unless [1, 2].include?(schema)
+if schema == 2
+  IOSTemplate::ReviewContract.exact_packet_v2_keys!(packet)
+else
+  exact_keys!(packet, IOSTemplate::ReviewContract::PACKET_V1_KEYS, "packet")
+end
 issue = packet["issue"]
 reject("packet.issue must be a positive integer") unless issue.is_a?(Integer) && issue.positive?
 expected_reviewer = primary == "codex" ? "claude" : "codex"
