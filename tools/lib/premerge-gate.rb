@@ -66,9 +66,12 @@ class HeldSnapshots
   attr_reader :root
 
   def self.metadata(stat)
+    # APFS may finalize ctime asynchronously after an atomic replacement.
+    # Compare stable identity, ownership, permissions, and content mtime; exact
+    # bytes are checked separately while the descriptor remains held.
     [
       stat.dev, stat.ino, stat.size, stat.mode, stat.nlink,
-      stat.mtime.to_i, stat.mtime.nsec, stat.ctime.to_i, stat.ctime.nsec
+      stat.uid, stat.gid, stat.mtime.to_i, stat.mtime.nsec
     ]
   end
 

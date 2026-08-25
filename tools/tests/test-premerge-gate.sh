@@ -160,6 +160,9 @@ if [[ "$1 $2" == 'repo view' ]]; then
   exit 0
 fi
 if [[ "$1 $2" == 'issue view' ]]; then
+  if [[ -n "${CTIME_ONLY_HELD_TARGET:-}" ]]; then
+    TARGET="${CTIME_ONLY_HELD_TARGET:?}" "${REAL_RUBY:?}" -e 'path=ENV.fetch("TARGET"); before=File.stat(path); File.chmod(before.mode & 0o7777,path); after=File.stat(path); abort unless before.mode==after.mode && before.mtime==after.mtime && before.ctime!=after.ctime'
+  fi
   if [[ -n "${REWRITE_HELD_TARGET:-}" ]]; then
     TARGET="${REWRITE_HELD_TARGET:?}" "${REAL_RUBY:?}" -e 'path=ENV.fetch("TARGET"); bytes=File.binread(path); File.open(path,"r+b"){|io|io.write(bytes);io.flush;io.fsync}'
   fi
@@ -265,6 +268,7 @@ run_gate > "$scratch/gate.json"
 jq -e --arg head "$head_sha" '.status == "passed" and .headSha == $head' "$scratch/gate.json" >/dev/null
 expected_gh="issue view 42 --repo yuto1201/iOS-Template --json number,url,body,labels"
 [[ "$(tail -n 1 "$FAKE_GH_LOG")" == "$expected_gh" ]] || { echo 'gate used an unexpected gh command' >&2; exit 1; }
+CTIME_ONLY_HELD_TARGET="$repo/.artifacts/issues/42/github-preflight.json" run_gate >/dev/null
 
 rm "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
 assert_fails 'approved review without an opposite-model execution receipt is rejected' run_gate
