@@ -11,3 +11,5 @@ Config/Local.xcconfig
 !.env.example
 supabase/.temp/
 supabase/.branches/
+/.secrets/
+/secret-staging/
