@@ -1,0 +1,4 @@
+interface:
+  display_name: "Submit App Store Release"
+  short_description: "Resume-safe Codex App Store submission workflow"
+  default_prompt: "Use $submit-appstore-release to submit the exact approved App Store release package."

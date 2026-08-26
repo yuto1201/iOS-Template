@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prepare App Store Assets"
+  short_description: "Build and audit App Store release assets safely"
+  default_prompt: "Use $prepare-appstore-assets to prepare an audited App Store package for this release."
