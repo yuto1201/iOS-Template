@@ -1,0 +1,15 @@
+schemaVersion: 1
+github:
+  login: yuto1201
+supabase:
+  organization: YUTO1201
+  projectRef: personal-project
+cloudflare:
+  accountId: personal-cloudflare
+  target: personal-worker
+elevenlabs:
+  accountId: personal-elevenlabs
+  workspaceId: personal-workspace
+appStore:
+  teamId: PERSONALTEAM
+  bundleId: com.yuto1201.personal

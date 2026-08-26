@@ -1,0 +1,7 @@
+#!/bin/bash
+set -euo pipefail
+
+: "${FAKE_PROVIDER_RESPONSE_FILE:?}"
+: "${FAKE_PROVIDER_ARGV:?}"
+printf '%s\0' "$@" >> "$FAKE_PROVIDER_ARGV"
+/bin/cat "$FAKE_PROVIDER_RESPONSE_FILE"
