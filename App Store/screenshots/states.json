@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "locales": [
+    {"id": "en-US", "appleLanguage": "en", "appleLocale": "en_US"},
+    {"id": "ja", "appleLanguage": "ja", "appleLocale": "ja_JP"}
+  ],
+  "states": [
+    {
+      "id": "primary",
+      "order": 1,
+      "launchArguments": ["--appstore-screenshot", "--fixture", "primary"]
+    }
+  ]
+}
