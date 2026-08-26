@@ -1,0 +1,4 @@
+interface:
+  display_name: "Supabase Operations"
+  short_description: "Activate and validate migration-first Supabase safely"
+  default_prompt: "Use $supabase-ops to add a migration-first Supabase workflow for this app."
