@@ -61,7 +61,10 @@ merge_commit=$(PR_JSON="$pr_json" REPO="$repo" ISSUE="$issue" PR="$pull_request"
   abort unless pr["number"] == Integer(ENV.fetch("PR")) && pr["url"] == "https://github.com/#{ENV.fetch("REPO")}/pull/#{ENV.fetch("PR")}" && pr["state"] == "MERGED"
   abort unless pr["baseRefName"] == "main" && pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD")
   abort unless pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == ENV.fetch("REPO") && pr.dig("headRepositoryOwner", "login") == ENV.fetch("REPO").split("/", 2).first
-  closing = pr["closingIssuesReferences"]; abort unless closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing[0].dig("repository", "nameWithOwner") == ENV.fetch("REPO")
+  closing = pr["closingIssuesReferences"]
+  target_owner, target_name = ENV.fetch("REPO").split("/", 2)
+  closing_repository = closing.is_a?(Array) && closing.length == 1 ? closing[0]["repository"] : nil
+  abort unless closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing_repository.is_a?(Hash) && closing_repository["name"] == target_name && closing_repository.dig("owner", "login") == target_owner
   oid = pr.dig("mergeCommit", "oid"); abort unless oid.is_a?(String) && oid.match?(/\A[0-9a-f]{40}\z/); puts oid
 ') || fail 'persisted PR identity is open, unmerged, stale, or mismatched'
 [[ "$merge_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'persisted PR merge commit is invalid'

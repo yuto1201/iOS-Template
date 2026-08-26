@@ -235,12 +235,12 @@ case "${1:-} ${2:-}" in
     fields=$(field_after --json "$@")
     FIELDS="$fields" /usr/bin/ruby -rjson -e '
       state = File.binread(ENV.fetch("FAKE_PR_STATE")); head = File.binread(ENV.fetch("FAKE_PR_HEAD")).strip
-      repo = ENV.fetch("FAKE_REPOSITORY"); issue = Integer(ENV.fetch("FAKE_ISSUE")); number = Integer(ENV.fetch("FAKE_PR"))
+      repo = ENV.fetch("FAKE_REPOSITORY"); owner, name = repo.split("/", 2); issue = Integer(ENV.fetch("FAKE_ISSUE")); number = Integer(ENV.fetch("FAKE_PR"))
       all = {
         "number" => number, "state" => state, "baseRefName" => "main", "headRefName" => ENV.fetch("FAKE_BRANCH"),
-        "headRefOid" => head, "headRepository" => {"nameWithOwner" => repo},
-        "headRepositoryOwner" => {"login" => repo.split("/", 2).first}, "isCrossRepository" => false,
-        "closingIssuesReferences" => [{"number" => issue, "url" => "https://github.com/#{repo}/issues/#{issue}", "repository" => {"nameWithOwner" => repo}}],
+        "headRefOid" => head, "headRepository" => {"id" => "R_fixture", "name" => name, "nameWithOwner" => repo},
+        "headRepositoryOwner" => {"id" => "U_fixture", "name" => "Fixture", "login" => owner}, "isCrossRepository" => false,
+        "closingIssuesReferences" => [{"id" => "I_fixture", "number" => issue, "url" => "https://github.com/#{repo}/issues/#{issue}", "repository" => {"id" => "R_fixture", "name" => name, "owner" => {"id" => "U_fixture", "login" => owner}}}],
         "mergeCommit" => state == "MERGED" ? {"oid" => "b" * 40} : nil,
         "url" => "https://github.com/#{repo}/pull/#{number}"
       }
