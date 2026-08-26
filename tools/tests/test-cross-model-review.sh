@@ -202,6 +202,7 @@ assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0]))
 ISSUE="$issue" HEAD="$head_sha" PACKET_DIGEST="$(digest "$artifact_root/review-packet.json")" REVIEW_DIGEST="$(digest "$artifact_root/review.json")" assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["schemaVersion"] == 1 && value["issue"] == Integer(ENV.fetch("ISSUE")) && value["headSha"] == ENV.fetch("HEAD") && value["primaryModel"] == "codex" && value["reviewerModel"] == "claude" && value["exitStatus"] == 0 && value["reviewPacketDigest"] == ENV.fetch("PACKET_DIGEST") && value["publishedReviewDigest"] == ENV.fetch("REVIEW_DIGEST") && value["validatedResultDigest"] == ENV.fetch("REVIEW_DIGEST")'
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
 [[ "$(cat "$FAKE_REVIEWER_LOG")" == *"--print"* ]] || { echo 'Claude was not invoked noninteractively' >&2; exit 1; }
+[[ "$(cat "$FAKE_REVIEWER_LOG")" == *"Evidence references must be relative to the packet's canonical Issue/Head artifact directory"* ]] || { echo 'Claude was not told how to emit validator-readable evidence references' >&2; exit 1; }
 
 reset_review_requested
 export FAKE_REVIEWER_MODE=envelope
