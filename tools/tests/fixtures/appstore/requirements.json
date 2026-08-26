@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "retrievedAt": "2026-08-26T00:00:00Z",
+  "maxAgeDays": 30,
+  "sources": [
+    "https://developer.apple.com/help/app-store-connect/reference/app-information/app-information",
+    "https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information",
+    "https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/",
+    "https://developer.apple.com/help/app-store-connect/manage-app-information/manage-app-privacy/"
+  ],
+  "fields": {
+    "name": {"minCharacters": 2, "maxCharacters": 30},
+    "subtitle": {"maxCharacters": 30},
+    "promotionalText": {"maxCharacters": 170},
+    "description": {"maxCharacters": 4000},
+    "keywords": {"maxBytes": 100}
+  },
+  "screenshots": {
+    "minimumPerFamily": 1,
+    "maximumPerFamily": 10,
+    "formats": ["png", "jpg", "jpeg"],
+    "allowAlpha": false,
+    "requiredFamilies": [
+      {
+        "id": "iphone-6.9",
+        "platform": "iphone",
+        "deviceTypes": ["iPhone Air", "iPhone 17 Pro Max", "iPhone 16 Pro Max"],
+        "portraitSizes": [[1260, 2736], [1290, 2796], [1320, 2868]],
+        "landscapeSizes": [[2736, 1260], [2796, 1290], [2868, 1320]]
+      },
+      {
+        "id": "ipad-13",
+        "platform": "ipad",
+        "deviceTypes": ["iPad Air (M4)", "iPad Pro (M5)", "iPad Pro (M4)"],
+        "portraitSizes": [[2064, 2752], [2048, 2732]],
+        "landscapeSizes": [[2752, 2064], [2732, 2048]]
+      }
+    ]
+  }
+}

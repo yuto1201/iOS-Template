@@ -1,0 +1,13 @@
+schemaVersion: 1
+bundleId: "com.yuto.TemplateApp"
+version: "1.0"
+primaryLocale: "en-US"
+platforms:
+  iphone: true
+  ipad: true
+category: "Utilities"
+copyright: "Draft — replace for the app release"
+supportURL: "https://support.example.invalid/template-app"
+privacyPolicyURL: "https://support.example.invalid/template-app/privacy"
+reviewContactReference: "keychain://app-store-connect/review-contact"
+accountsSupported: false
