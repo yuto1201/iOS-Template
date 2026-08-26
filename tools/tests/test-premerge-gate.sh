@@ -174,7 +174,7 @@ if [[ "$1 $2" == 'pr view' ]]; then
     cp "$FINAL_GATE_SWAP_TARGET" "$FINAL_GATE_SWAP_TARGET.swap"
     mv -f "$FINAL_GATE_SWAP_TARGET.swap" "$FINAL_GATE_SWAP_TARGET"
   fi
-  HEAD="${FAKE_HEAD:?}" ruby -rjson -e 'puts JSON.generate({"number"=>57,"state"=>"OPEN","baseRefName"=>"main","headRefName"=>"codex/42-gate-evidence","headRefOid"=>ENV.fetch("HEAD"),"headRepository"=>{"nameWithOwner"=>"yuto1201/iOS-Template"},"headRepositoryOwner"=>{"login"=>"yuto1201"},"isCrossRepository"=>false,"closingIssuesReferences"=>[{"number"=>42,"url"=>"https://github.com/yuto1201/iOS-Template/issues/42","repository"=>{"nameWithOwner"=>"yuto1201/iOS-Template"}}],"mergeCommit"=>nil,"url"=>"https://github.com/yuto1201/iOS-Template/pull/57"})'
+  HEAD="${FAKE_HEAD:?}" ruby -rjson -e 'puts JSON.generate({"number"=>57,"state"=>"OPEN","baseRefName"=>"main","headRefName"=>"codex/42-gate-evidence","headRefOid"=>ENV.fetch("HEAD"),"headRepository"=>{"id"=>"R_fixture","name"=>"iOS-Template","nameWithOwner"=>"yuto1201/iOS-Template"},"headRepositoryOwner"=>{"id"=>"U_fixture","name"=>"Fixture","login"=>"yuto1201"},"isCrossRepository"=>false,"closingIssuesReferences"=>[{"number"=>42,"url"=>"https://github.com/yuto1201/iOS-Template/issues/42","repository"=>{"id"=>"R_fixture","name"=>"iOS-Template","owner"=>{"id"=>"U_fixture","login"=>"yuto1201"}}}],"mergeCommit"=>nil,"url"=>"https://github.com/yuto1201/iOS-Template/pull/57"})'
   exit 0
 fi
 if [[ "$1 $2" == 'pr merge' ]]; then

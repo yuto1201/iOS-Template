@@ -324,19 +324,19 @@ begin
     pr = parse_object(pr_output, "final PR")
     exact_keys!(pr, pr_fields.split(","), "final PR")
     closing = pr["closingIssuesReferences"]
-    exact_keys!(pr["headRepository"], %w[nameWithOwner], "final PR.headRepository")
-    exact_keys!(pr["headRepositoryOwner"], %w[login], "final PR.headRepositoryOwner")
+    refuse("final PR head repository shape differs") unless pr["headRepository"].is_a?(Hash) && pr["headRepositoryOwner"].is_a?(Hash)
     refuse("final PR closing Issue shape differs") unless closing.is_a?(Array) && closing.length == 1
-    exact_keys!(closing[0], %w[number url repository], "final PR.closingIssuesReferences[0]")
-    exact_keys!(closing[0]["repository"], %w[nameWithOwner], "final PR.closingIssuesReferences[0].repository")
+    refuse("final PR closing Issue shape differs") unless closing[0].is_a?(Hash) && closing[0]["repository"].is_a?(Hash)
+    repository_owner, repository_name = repository.split("/", 2)
     refuse("final PR identity differs from the merge lease") unless
       pr["number"] == merge_pr && pr["state"] == "OPEN" && pr["baseRefName"] == "main" &&
       pr["headRefName"] == identity.fetch("branch") && pr["headRefOid"] == head_sha &&
       pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == repository &&
-      pr.dig("headRepositoryOwner", "login") == repository.split("/", 2).first && pr["mergeCommit"].nil? &&
+      pr.dig("headRepositoryOwner", "login") == repository_owner && pr["mergeCommit"].nil? &&
       pr["url"] == "https://github.com/#{repository}/pull/#{merge_pr}" &&
       closing[0]["number"] == issue && closing[0]["url"] == "https://github.com/#{repository}/issues/#{issue}" &&
-      closing[0].dig("repository", "nameWithOwner") == repository
+      closing[0].dig("repository", "name") == repository_name &&
+      closing[0].dig("repository", "owner", "login") == repository_owner
     verify_lease.call
     merged = system("gh", "pr", "merge", merge_pr.to_s, "--repo", repository, "--squash", "--match-head-commit", head_sha)
     refuse("exact squash merge failed") unless merged

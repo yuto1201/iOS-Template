@@ -74,7 +74,9 @@ validate_pr() {
     abort "PR Branch or Head differs" unless pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD")
     abort "PR source repository differs" unless pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == ENV.fetch("REPO") && pr.dig("headRepositoryOwner", "login") == ENV.fetch("REPO").split("/", 2).first
     closing = pr["closingIssuesReferences"]
-    abort "PR does not close the exact Issue" unless closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing[0].dig("repository", "nameWithOwner") == ENV.fetch("REPO")
+    target_owner, target_name = ENV.fetch("REPO").split("/", 2)
+    closing_repository = closing.is_a?(Array) && closing.length == 1 ? closing[0]["repository"] : nil
+    abort "PR does not close the exact Issue" unless closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing_repository.is_a?(Hash) && closing_repository["name"] == target_name && closing_repository.dig("owner", "login") == target_owner
     expected = ENV.fetch("EXPECTED_STATE")
     abort "PR state differs" unless expected == "ANY" ? %w[OPEN CLOSED MERGED].include?(pr["state"]) : pr["state"] == expected
     if pr["state"] == "MERGED"
@@ -151,7 +153,9 @@ else
     if records.length == 1
       pr = records.fetch(0); abort "discovered PR fields differ" unless pr.keys.sort == %w[number state baseRefName headRefName headRefOid headRepository headRepositoryOwner isCrossRepository closingIssuesReferences mergeCommit url].sort
       closing = pr["closingIssuesReferences"]
-      abort "discovered PR identity differs" unless pr["number"].is_a?(Integer) && pr["number"].positive? && pr["url"] == "https://github.com/#{ENV.fetch("REPO")}/pull/#{pr["number"]}" && pr["baseRefName"] == "main" && pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD") && pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == ENV.fetch("REPO") && pr.dig("headRepositoryOwner", "login") == ENV.fetch("REPO").split("/", 2).first && closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing[0].dig("repository", "nameWithOwner") == ENV.fetch("REPO")
+      target_owner, target_name = ENV.fetch("REPO").split("/", 2)
+      closing_repository = closing.is_a?(Array) && closing.length == 1 ? closing[0]["repository"] : nil
+      abort "discovered PR identity differs" unless pr["number"].is_a?(Integer) && pr["number"].positive? && pr["url"] == "https://github.com/#{ENV.fetch("REPO")}/pull/#{pr["number"]}" && pr["baseRefName"] == "main" && pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD") && pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == ENV.fetch("REPO") && pr.dig("headRepositoryOwner", "login") == target_owner && closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing_repository.is_a?(Hash) && closing_repository["name"] == target_name && closing_repository.dig("owner", "login") == target_owner
       puts JSON.generate(pr)
     end
   ') || fail 'PR discovery was ambiguous or mismatched'
