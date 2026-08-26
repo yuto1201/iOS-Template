@@ -1,0 +1,2 @@
+-- synthetic-only: true
+-- Add deterministic synthetic rows only after migrations define the target tables.

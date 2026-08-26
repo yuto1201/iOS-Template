@@ -38,6 +38,34 @@ required_files=(
   .agents/skills/spec-workflow/SKILL.md
   .agents/skills/spec-workflow/templates/decision.md
   .agents/skills/spec-workflow/scripts/check-spec-state.sh
+  .agents/skills/supabase-ops/SKILL.md
+  .agents/skills/supabase-ops/scripts/activate.sh
+  .agents/skills/supabase-ops/scripts/validate-migrations.sh
+  .agents/skills/ios-audio-assets/SKILL.md
+  .agents/skills/ios-audio-assets/scripts/check-elevenlabs-capability.sh
+  .agents/skills/ios-audio-assets/scripts/validate-audio.sh
+  .agents/skills/prepare-appstore-assets/SKILL.md
+  .agents/skills/prepare-appstore-assets/scripts/seal-package.sh
+  .agents/skills/submit-appstore-release/SKILL.md
+  .agents/skills/submit-appstore-release/scripts/record-section.sh
+  docs/agent-contracts/appstore-submission.md
+  "App Store/README.md"
+  "App Store/submission/requirements.json"
+  "App Store/screenshots/states.json"
+  tools/secret-store.sh
+  tools/run-with-secret.sh
+  tools/run-with-private-key.sh
+  tools/provider-preflight.sh
+  tools/validate-appstore-package.sh
+  tools/capture-appstore-screenshots.sh
+  tools/build-appstore-screenshot-set.sh
+  tools/tests/test-secret-store.sh
+  tools/tests/test-provider-preflight.sh
+  tools/tests/test-supabase-skill.sh
+  tools/tests/test-audio-skill.sh
+  tools/tests/test-appstore-package.sh
+  tools/tests/test-appstore-screenshots.sh
+  tools/tests/test-appstore-skills.sh
 )
 
 shipping_skills=(
@@ -45,6 +73,13 @@ shipping_skills=(
   ship-issue
   ship-issue-batch
   codex-external-ops
+)
+
+integration_skills=(
+  supabase-ops
+  ios-audio-assets
+  prepare-appstore-assets
+  submit-appstore-release
 )
 
 for skill in "${shipping_skills[@]}"; do
@@ -102,6 +137,8 @@ ignored_paths=(
   .env
   supabase/.temp/example
   supabase/.branches/example
+  .secrets/example
+  secret-staging/example
 )
 
 for path in "${ignored_paths[@]}"; do
@@ -116,6 +153,122 @@ if git --git-dir="$git_dir" --work-tree="$ignore_probe_root" check-ignore --no-i
   echo ".env.example must remain trackable" >&2
   exit 1
 fi
+
+for skill in "${integration_skills[@]}"; do
+  shared_skill=".agents/skills/$skill/SKILL.md"
+  claude_skill=".claude/skills/$skill"
+  expected_target="../../.agents/skills/$skill"
+  ruby -ryaml - "$shared_skill" "$skill" <<'RUBY'
+path, expected_name = ARGV
+text = File.binread(path)
+frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
+abort "missing integration skill frontmatter: #{path}" unless frontmatter
+data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
+abort "unexpected integration skill name: #{path}" unless data["name"] == expected_name
+abort "missing integration skill description: #{path}" unless data["description"].is_a?(String) && !data["description"].strip.empty?
+RUBY
+  [[ -L "$claude_skill" && $(readlink "$claude_skill") == "$expected_target" && -f "$claude_skill/SKILL.md" ]] || {
+    echo "Claude integration skill must be the portable shared symlink: $claude_skill" >&2
+    exit 1
+  }
+done
+
+for executable in \
+  tools/secret-store.sh tools/run-with-secret.sh tools/run-with-private-key.sh tools/provider-preflight.sh \
+  tools/validate-appstore-package.sh tools/capture-appstore-screenshots.sh tools/build-appstore-screenshot-set.sh \
+  .agents/skills/supabase-ops/scripts/activate.sh .agents/skills/supabase-ops/scripts/validate-migrations.sh \
+  .agents/skills/ios-audio-assets/scripts/check-elevenlabs-capability.sh .agents/skills/ios-audio-assets/scripts/validate-audio.sh \
+  .agents/skills/prepare-appstore-assets/scripts/seal-package.sh .agents/skills/submit-appstore-release/scripts/record-section.sh; do
+  [[ -x "$executable" ]] || { echo "integration executable is not executable: $executable" >&2; exit 1; }
+done
+
+if [[ -e supabase || -L supabase ]]; then
+  echo 'Supabase must remain dormant until an app specification explicitly activates it' >&2
+  exit 1
+fi
+if git ls-files --error-unmatch Package.swift Package.resolved >/dev/null 2>&1; then
+  echo 'Foundation template must not carry a root Swift package dependency surface' >&2
+  exit 1
+fi
+if git grep -n -I -E -- 'Supabase|ElevenLabs|Cloudflare|Firebase|PostHog|Mixpanel|Sentry|StoreKit|UserNotifications|XCRemoteSwiftPackageReference' -- TemplateApp TemplateApp.xcodeproj >/dev/null 2>&1; then
+  echo 'TemplateApp contains an integration SDK, entitlement, import, or package reference before activation' >&2
+  exit 1
+fi
+
+python3 - <<'PYTHON'
+from pathlib import Path
+import re
+import subprocess
+
+paths = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+files = [Path(value.decode()) for value in paths if value]
+token_patterns = (
+    re.compile(rb"ghp_[A-Za-z0-9]{12,}"),
+    re.compile(rb"github_pat_[A-Za-z0-9_]{12,}"),
+    re.compile(rb"glpat-[A-Za-z0-9_-]{12,}"),
+    re.compile(rb"xox[baprs]-[A-Za-z0-9-]{12,}"),
+    re.compile(rb"(?:^|[^A-Za-z0-9])sk-(?:proj-)?[A-Za-z0-9_-]{12,}"),
+    re.compile(rb"sb_secret_[A-Za-z0-9_-]{12,}"),
+    re.compile(rb"AIza[0-9A-Za-z_-]{20,}"),
+    re.compile(rb"AKIA[0-9A-Z]{16}"),
+    re.compile(rb"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
+)
+private_key = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")
+password_assignment = re.compile(rb"(?i)password\s*=\s*[^\s\"']{6,}")
+dedicated_filename = re.compile(rb"Library/Application Support/iOS-Template/secrets/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.(?:p8|pem|key)")
+service_role_allowed = {
+    ".agents/skills/ios-audio-assets/scripts/validate-audio.sh",
+    ".agents/skills/supabase-ops/SKILL.md",
+    ".agents/skills/supabase-ops/scripts/validate-migrations.sh",
+    "docs/security.md",
+    "docs/superpowers/plans/2026-08-21-integrations-appstore-release.md",
+    "specs/product.md",
+    "tools/tests/test-foundation.sh",
+    "tools/tests/test-supabase-skill.sh",
+}
+violations = []
+service_role_paths = set()
+for path in files:
+    try:
+        data = path.read_bytes()
+    except (OSError, IsADirectoryError):
+        continue
+    if b"\0" in data:
+        continue
+    name = path.as_posix()
+    if b"service_role" in data:
+        service_role_paths.add(name)
+    for pattern in token_patterns:
+        if pattern.search(data):
+            violations.append(f"credential token prefix in {name}")
+    if private_key.search(data):
+        violations.append(f"private-key header in {name}")
+    if password_assignment.search(data) and name != "tools/tests/test-visual-review-packet.sh":
+        violations.append(f"password assignment in {name}")
+    if dedicated_filename.search(data) and name != "tools/tests/test-claude-guard.sh":
+        violations.append(f"dedicated secret filename in {name}")
+if service_role_paths != service_role_allowed:
+    violations.append(f"service_role policy occurrence set changed: {sorted(service_role_paths)!r}")
+if violations:
+    raise SystemExit("tracked credential scan failed: " + "; ".join(violations))
+PYTHON
+
+python3 - <<'PYTHON'
+from pathlib import Path
+
+readme = Path("README.md").read_text()
+required = (
+    "## 条件付き統合と秘密管理",
+    ".agents/skills/supabase-ops/SKILL.md",
+    ".agents/skills/ios-audio-assets/SKILL.md",
+    "## App Store リリース素材",
+    "App Store/submission/requirements.json",
+    "submit-appstore-release",
+)
+missing = [value for value in required if value not in readme]
+if missing:
+    raise SystemExit(f"README lacks conditional integration and release guidance: {missing!r}")
+PYTHON
 
 ruby -ryaml -rjson -e '
   data = YAML.safe_load(File.read("Config/ownership.yml"), permitted_classes: [], aliases: false)

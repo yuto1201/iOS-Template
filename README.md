@@ -196,6 +196,23 @@ done < <(git ls-files --others --exclude-standard -z)
 
 Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに`Status: 確定`で、そのIssueの受け入れ条件と一致していることを確認します。未作成、確定前、または不一致なら、CodexがIssueを`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しません。
 
+## 条件付き統合と秘密管理
+
+Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundation のアプリ本体へ組み込まれていません。必要性を確定仕様と Issue の受け入れ条件に明記した場合だけ、別 Issue で有効化します。テンプレートの状態では root `supabase/`、外部 SDK、認証済み接続を持たず、不要なサービスの保守や権限を発生させません。
+
+- データベース、認証、同期、Storage が必要なアプリでは [Supabase operations skill](./.agents/skills/supabase-ops/SKILL.md)を使用します。`Status: 確定`かつ`Supabase: required`の仕様だけが有効化でき、`supabase/migrations/`を唯一のスキーマ履歴としてRLSとPolicyを同時に追加します。Claudeはローカルのmigration編集・検証・`supabase db reset --local`まで、個人の`YUTO1201` Organization/Projectへのlink・pull・push・SQL適用はCodexだけが行います。
+- 効果音、音楽、BGM が必要な場合は [iOS audio assets skill](./.agents/skills/ios-audio-assets/SKILL.md)から、CLI環境にインストールされた`generating-elevenlabs-audio`能力を解決します。Codexが個人アカウントと利用可能な機能を先に確認し、生成結果を長さ・形式・ハッシュ・ループ境界まで検査します。`paid_plan_required`は再試行せず`blocked:ops`として止めます。Claudeは既存音声のローカル検査だけを行えます。
+- GitHub、Supabase、Cloudflare、ElevenLabs、App Store Connectを含む認証済み外部操作は、実行直前に`tools/provider-preflight.sh`で個人アカウントと対象を照合し、Codexだけが実行します。Claudeは`codex-external-ops`へ委託します。
+- 一行の秘密値はmacOS Keychainへ保存し、`tools/run-with-secret.sh`が子プロセスの環境だけへ渡します。App Store Connectの`.p8`は`~/Library/Application Support/iOS-Template/secrets/${appSlug}/`の`0700`ディレクトリ／`0600`ファイルだけを`tools/run-with-private-key.sh`で使用します。取得値を表示するコマンドはなく、`.secrets/`と`secret-staging/`もGit管理外です。
+
+## App Store リリース素材
+
+`App Store/`は、英語・日本語metadata、privacy宣言、privacy policyとtermsの原稿、review notes、release notes、最終screenshots、提出チェックリストを一括管理する非秘密の正本です。テンプレートのURLと法務文書は未確定、画像は未生成なので、そのまま提出可能という意味ではありません。現在の公開要件は`App Store/submission/requirements.json`へ取得日時・参照元とともに固定し、準備時に期限切れならCodexがApple公式資料から更新します。
+
+リリース候補がBuild/Test済みになったら [prepare-appstore-assets skill](./.agents/skills/prepare-appstore-assets/SKILL.md)で、実際の仕様から文面を生成し、App Store専用Simulator matrixで英日・iPhone/iPad画像を撮影します。このmatrixは通常検証とは別で、表示ファミリー要件に応じてPro Maxを使用できます。全画像とprivacy/legal/metadataを`release-auditor`が同一SHA・同一build digestで承認し、初回公開時はユーザーがprivacy policyとtermsを確認した後だけ、変更検知可能なpackage manifestを作ります。
+
+提出は [submit-appstore-release skill](./.agents/skills/submit-appstore-release/SKILL.md)をCodexで実行します。Codexが個人Team、App、Bundle ID、version、buildを確認し、App Store Connectへセクション単位で入力・保存・再読込します。中断時は`App Store/submission/${VERSION}-result.json`のsanitizedな参照とdigestから再開しますが、remoteを再読込するまでは完了扱いにしません。packageまたはbuildが変わった場合は提出せず、準備と監査からやり直します。
+
 ## 最初に読む文書
 
 1. [仕様索引](./specs/README.md)

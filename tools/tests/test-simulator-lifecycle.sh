@@ -176,7 +176,7 @@ run() {
   FAKE_SIMCTL_LOG="$log" \
   FAKE_SIMCTL_STATE="$state" \
   FAKE_SIMCTL_FIXTURES="$repo_root/tools/tests/fixtures/simctl" \
-  "$@"
+  /usr/bin/env -u DEVELOPER_DIR "$@"
 }
 
 run_with_create_mode() {

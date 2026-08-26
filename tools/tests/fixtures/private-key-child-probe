@@ -1,0 +1,7 @@
+#!/bin/bash
+set -euo pipefail
+
+[[ -n "${APP_STORE_CONNECT_PRIVATE_KEY_PATH:-}" ]] || exit 70
+path_digest=$(printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY_PATH" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+file_mode=$(/usr/bin/stat -f '%Lp' "$APP_STORE_CONNECT_PRIVATE_KEY_PATH")
+printf '%s %s\n' "$path_digest" "$file_mode"

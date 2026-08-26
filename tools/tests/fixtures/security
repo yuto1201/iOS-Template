@@ -1,0 +1,31 @@
+#!/bin/bash
+set -euo pipefail
+
+: "${FAKE_SECURITY_DB:?}"
+: "${FAKE_SECURITY_ARGV:?}"
+
+printf '%s\0' "$@" >> "$FAKE_SECURITY_ARGV"
+
+operation=${1:-}
+shift || true
+
+case "$operation" in
+  add-generic-password)
+    [[ " ${*} " == *" -w " ]] || exit 64
+    IFS= read -r secret_value || exit 65
+    if IFS= read -r _extra_value; then
+      exit 66
+    fi
+    umask 077
+    printf '%s' "$secret_value" > "$FAKE_SECURITY_DB"
+    ;;
+  find-generic-password)
+    [[ -f "$FAKE_SECURITY_DB" ]] || exit 44
+    if [[ " ${*} " == *" -w " ]]; then
+      /bin/cat "$FAKE_SECURITY_DB"
+    fi
+    ;;
+  *)
+    exit 64
+    ;;
+esac

@@ -1,0 +1,9 @@
+schemaVersion: 1
+collectsData: false
+tracking: false
+dataTypes: []
+thirdPartySDKs: []
+permissions: []
+accountDeletion:
+  required: false
+  reason: "The untouched template has no accounts. Re-audit after app features are implemented."
