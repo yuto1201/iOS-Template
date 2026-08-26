@@ -28,6 +28,8 @@ contains_restricted_material() {
   safe_value=${value//.env.example/.env-example-public}
 
   if [[ "$safe_value" == *"/library/application support/ios-template/secrets"* ||
+        "$safe_value" == *"/.secrets/"* ||
+        "$safe_value" == *"/secret-staging/"* ||
         "$safe_value" == *"/library/keychains/"* ||
         "$safe_value" == *"/.config/gh/hosts.yml"* ||
         "$safe_value" == *"/.config/supabase/"* ||
@@ -36,6 +38,11 @@ contains_restricted_material() {
         "$safe_value" == *"/.netrc"* ||
         "$safe_value" == *"/.npmrc"* ||
         "$safe_value" == *"/.pypirc"* ]]; then
+    return 0
+  fi
+
+  if [[ "$safe_value" == .secrets/* || "$safe_value" == secret-staging/* ||
+        "$safe_value" == *"appstoreconnect.apple.com"* ]]; then
     return 0
   fi
 
@@ -66,15 +73,25 @@ command_is_forbidden() {
   command=${command//\'/}
   command=${command//\"/}
 
+  # Claude may use the local emulator only through this exact non-linked reset.
+  # Every other Supabase invocation remains a Codex-only provider operation.
+  if [[ "$script_mode" == false && "$command" =~ ^[[:space:]]*(/[^[:space:]]*/)?supabase[[:space:]]+db[[:space:]]+reset[[:space:]]+--local[[:space:]]*$ ]]; then
+    return 1
+  fi
+
   shell_boundary="[[:space:];|&()<>{}=!?,\`\$\"']"
   token_left="(^|/|$shell_boundary)"
   token_right="($shell_boundary|$)"
 
   contains_restricted_material "$command" && return 0
 
-  provider_pattern="${token_left}(gh|supabase|wrangler|elevenlabs|fastlane|codex|itms-transporter|transporter)${token_right}"
+  provider_pattern="${token_left}(gh|supabase|wrangler|elevenlabs|fastlane|codex|itms-transporter|transporter|security)${token_right}"
   if [[ "$command" =~ $provider_pattern ||
         "$command" =~ ${token_left}xcrun[[:space:]]+(altool|notarytool)${token_right} ]]; then
+    return 0
+  fi
+  if [[ "$command" == *check-elevenlabs-capability.sh* ||
+        "$command" == *submit-appstore-release/scripts/record-section.sh* ]]; then
     return 0
   fi
 
@@ -308,6 +325,12 @@ if ! tool_input=$(/usr/bin/plutil -extract tool_input xml1 -o - "$temporary_inpu
   exit 0
 fi
 if contains_restricted_material "$tool_input"; then
+  deny
+  exit 0
+fi
+normalized_input=$(normalize_text "$tool_input")
+if [[ ( "$normalized_tool" == *browser* || "$normalized_tool" == *computer* ) &&
+      ( "$normalized_input" == *"app store connect"* || "$normalized_input" == *"submit"*"for review"* ) ]]; then
   deny
   exit 0
 fi
