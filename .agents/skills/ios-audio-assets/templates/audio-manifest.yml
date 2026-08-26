@@ -1,0 +1,12 @@
+schemaVersion: 1
+purpose: "Describe the acceptance-criterion purpose"
+prompt: "Describe the sound in English without credentials"
+model: "eleven_text_to_sound_v2"
+durationSeconds: 1.0
+loop: false
+loopDiscontinuityThreshold: null
+format: "wav"
+assetPath: "Feature/Resources/Audio/asset.wav"
+licenseNote: "Record the ElevenLabs generation license basis"
+sha256: "sha256:replace-with-file-digest"
+generatedAt: "2000-01-01T00:00:00Z"
