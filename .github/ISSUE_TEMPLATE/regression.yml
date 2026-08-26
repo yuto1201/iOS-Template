@@ -1,0 +1,127 @@
+name: Regression
+description: Report a defect found after merge or physical-device confirmation.
+title: "[Regression]: "
+labels:
+  - type:regression
+  - state:proposed
+body:
+  - type: markdown
+    attributes:
+      value: "Use this form only for a post-merge or physical-device regression; pre-merge defects remain in the original Issue."
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One sentence describing the corrected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: in-scope
+    attributes:
+      label: In scope
+      description: List the regression correction included here.
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: List intentionally excluded work.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: "Use stable, unique IDs such as `AC-1: The regression no longer occurs`."
+    validations:
+      required: true
+  - type: textarea
+    id: spec-anchors
+    attributes:
+      label: Spec anchors
+      description: Add local Markdown links with exact section anchors.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: List prerequisite Issues and blockers, or write `None`.
+    validations:
+      required: true
+  - type: textarea
+    id: ui-verification
+    attributes:
+      label: UI verification
+      description: "Write `Not applicable`, or list target screens/states plus exact English and Japanese expectations."
+      placeholder: |
+        - Target screens/states: Settings screen, reproduced and corrected states
+        - English expectations: The corrected state is complete in English.
+        - Japanese expectations: The corrected state is complete in Japanese.
+    validations:
+      required: true
+  - type: textarea
+    id: external-operations
+    attributes:
+      label: External operations
+      description: "Write `None`, or one or more exact five-field blocks in this order. Operation must be an exact ID from `docs/AUTHORITY.md`; repeat the block for each operation."
+      placeholder: |
+        - Operation: github.read_issue
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.update_issue
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.push_branch
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.create_pr
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.merge_pr
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.delete_branch
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+    validations:
+      required: true
+  - type: textarea
+    id: user-approvals
+    attributes:
+      label: User approvals
+      description: "When Approval required is yes, cite an approval Issue, decision, or URL; otherwise write `None` or `No additional approval`."
+    validations:
+      required: true
+  - type: input
+    id: original-pr
+    attributes:
+      label: Original PR
+      description: Enter the merged PR number, for example `#42`.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Reproduction steps
+      description: Provide deterministic numbered steps and the observed result.
+    validations:
+      required: true

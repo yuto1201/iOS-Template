@@ -3,6 +3,10 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 cd "$repo_root"
+ignore_probe_root=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-ignore-probe.XXXXXX")
+trap 'rm -rf -- "$ignore_probe_root"' EXIT
+cp .gitignore "$ignore_probe_root/.gitignore"
+git_dir=$(git rev-parse --absolute-git-dir)
 
 required_files=(
   AGENTS.md
@@ -22,13 +26,30 @@ required_files=(
   tools/tests/test-app-bootstrap.sh
   tools/check-markdown-links.swift
   tools/publish-documentation-verify.sh
+  tools/run-repository-tests.sh
+  tools/lib/run-repository-tests.rb
+  tools/tests/test-repository-test-evidence.sh
+  tools/lib/review-receipt.rb
+  tools/lib/validate-review-receipt.rb
   tools/with-ios-simulator-lock.sh
   .agents/skills/app-bootstrap/SKILL.md
+  .agents/skills/cross-model-review/SKILL.md
   .agents/skills/ios-verify/SKILL.md
   .agents/skills/spec-workflow/SKILL.md
   .agents/skills/spec-workflow/templates/decision.md
   .agents/skills/spec-workflow/scripts/check-spec-state.sh
 )
+
+shipping_skills=(
+  plan-issue-batch
+  ship-issue
+  ship-issue-batch
+  codex-external-ops
+)
+
+for skill in "${shipping_skills[@]}"; do
+  required_files+=(".agents/skills/$skill/SKILL.md")
+done
 
 evaluator_agents=(
   spec-reviewer
@@ -84,14 +105,14 @@ ignored_paths=(
 )
 
 for path in "${ignored_paths[@]}"; do
-  rule_source=$(git check-ignore -v -- "$path" | cut -d: -f1)
+  rule_source=$(git --git-dir="$git_dir" --work-tree="$ignore_probe_root" check-ignore --no-index -v -- "$path" | cut -d: -f1)
   if [[ "$rule_source" != ".gitignore" ]]; then
     echo "path is not ignored by the repository .gitignore: $path" >&2
     exit 1
   fi
 done
 
-if git check-ignore -q -- .env.example; then
+if git --git-dir="$git_dir" --work-tree="$ignore_probe_root" check-ignore --no-index -q -- .env.example; then
   echo ".env.example must remain trackable" >&2
   exit 1
 fi
@@ -99,10 +120,12 @@ fi
 ruby -ryaml -rjson -e '
   data = YAML.safe_load(File.read("Config/ownership.yml"), permitted_classes: [], aliases: false)
   abort "unexpected schema version" unless data["schemaVersion"] == 1
+  abort "ownership top-level schema differs" unless data.keys.sort == %w[appStore cloudflare elevenlabs github schemaVersion supabase].sort
   abort "unexpected GitHub login" unless data.dig("github", "login") == "yuto1201"
   abort "unexpected Supabase organization" unless data.dig("supabase", "organization") == "YUTO1201"
   %w[projectRef].each { |key| abort "#{key} must be null" unless data.dig("supabase", key).nil? }
-  abort "Cloudflare accountId must be null" unless data.dig("cloudflare", "accountId").nil?
+  %w[accountId target].each { |key| abort "Cloudflare #{key} must be null" unless data.dig("cloudflare", key).nil? }
+  %w[accountId workspaceId].each { |key| abort "ElevenLabs #{key} must be null" unless data.dig("elevenlabs", key).nil? }
   abort "App Store teamId must be null" unless data.dig("appStore", "teamId").nil?
   if File.exist?("Config/app-identity.json")
     identity = JSON.parse(File.read("Config/app-identity.json"))
@@ -222,8 +245,8 @@ if [[ ! -f "$claude_ios_verify_skill/SKILL.md" ]]; then
   exit 1
 fi
 
-if [[ ! -x tools/with-ios-simulator-lock.sh ]] || [[ ! -x tools/publish-documentation-verify.sh ]]; then
-  echo "iOS verification lock and documentation publisher must be executable" >&2
+if [[ ! -x tools/with-ios-simulator-lock.sh ]] || [[ ! -x tools/publish-documentation-verify.sh ]] || [[ ! -x tools/run-repository-tests.sh ]] || [[ ! -x tools/tests/test-repository-test-evidence.sh ]]; then
+  echo "verification tools and their evidence tests must be executable" >&2
   exit 1
 fi
 
@@ -235,6 +258,8 @@ required = (
     "tools/with-ios-simulator-lock.sh",
     "tools/publish-documentation-verify.sh",
     "No canonical XcodeBuildMCP evidence producer exists",
+    "tools/prepare-review-packet.sh",
+    "--primary \"$PRIMARY_MODEL\" --issue \"$ISSUE\" --base-sha \"$BASE_SHA\" --head-sha \"$HEAD_SHA\"",
     "printf '%s %s\\n' \"$EVIDENCE\" \"$DIGEST\"",
 )
 missing = [value for value in required if value not in skill]
@@ -244,6 +269,25 @@ if 'executionRoute: "xcodebuild-mcp"' in skill:
     raise SystemExit("iOS verification skill advertises an unsupported MCP evidence route")
 if "SHA256_OF_THAT_EXACT_FILE" in skill:
     raise SystemExit("iOS verification skill leaves an unresolved digest placeholder")
+
+review_skill = Path(".agents/skills/cross-model-review/SKILL.md").read_text()
+review_required = (
+    "tools/prepare-review-packet.sh",
+    "--primary \"$PRIMARY_MODEL\" --issue \"$ISSUE\" --base-sha \"$BASE_SHA\" --head-sha \"$HEAD_SHA\"",
+    "jq -er '.path'",
+    'tools/cross-model-review.sh',
+    '--packet "$REVIEW_PACKET"',
+    "reviewPacketDigest",
+    "review-receipt.json",
+)
+review_missing = [value for value in review_required if value not in review_skill]
+if review_missing:
+    raise SystemExit(f"cross-model review skill lacks the sealed v2 producer route: {review_missing!r}")
+for path, content in (("ios-verify", skill), ("cross-model-review", review_skill)):
+    if "git diff --binary" in content:
+        raise SystemExit(f"{path} skill manually produces review.diff")
+if "claude --print" in review_skill or "request-codex-review.sh" in review_skill:
+    raise SystemExit("cross-model review skill bypasses the canonical review orchestrator")
 PYTHON
 
 bootstrap_validation=$(swift tools/bootstrap-app.swift validate \
@@ -288,6 +332,52 @@ if [[ ! -f "$claude_skill/SKILL.md" ]]; then
   echo "Claude specification skill link does not resolve" >&2
   exit 1
 fi
+
+for skill in "${shipping_skills[@]}"; do
+  shared_skill=".agents/skills/$skill/SKILL.md"
+  claude_shipping_skill=".claude/skills/$skill"
+  expected_shipping_target="../../.agents/skills/$skill"
+
+  ruby -ryaml - "$shared_skill" "$skill" <<'RUBY'
+path, expected_name = ARGV
+text = File.read(path)
+frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
+abort "missing shared shipping skill frontmatter: #{path}" unless frontmatter
+data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
+abort "unexpected shared shipping skill name: #{path}" unless data["name"] == expected_name
+description = data["description"]
+abort "missing shared shipping skill description: #{path}" unless description.is_a?(String) && description.start_with?("Use when")
+RUBY
+
+  if [[ ! -L "$claude_shipping_skill" ]]; then
+    echo "Claude shipping skill must be a symbolic link, not a copied directory: $claude_shipping_skill" >&2
+    exit 1
+  fi
+  if [[ $(readlink "$claude_shipping_skill") != "$expected_shipping_target" ]]; then
+    echo "Claude shipping skill has a nonportable or incorrect target: $claude_shipping_skill" >&2
+    exit 1
+  fi
+  if [[ ! -f "$claude_shipping_skill/SKILL.md" ]]; then
+    echo "Claude shipping skill link does not resolve: $claude_shipping_skill" >&2
+    exit 1
+  fi
+done
+
+python3 - <<'PYTHON'
+from pathlib import Path
+
+ship_issue = Path(".agents/skills/ship-issue/SKILL.md").read_text()
+required = (
+    'ISSUE_WORKTREE="$(git rev-parse --show-toplevel)"',
+    'HEAD_SHA="$(git -C "$ISSUE_WORKTREE" rev-parse HEAD)"',
+    'tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" --from in-progress --to verify-passed --head-sha "$HEAD_SHA"',
+    "clears the old durable Head binding",
+    "re-resolve the current Issue worktree Head",
+)
+missing = [value for value in required if value not in ship_issue]
+if missing:
+    raise SystemExit(f"ship-issue skill lacks current-Head verification binding: {missing!r}")
+PYTHON
 
 for agent in "${evaluator_agents[@]}"; do
   codex_agent=".codex/agents/$agent.toml"
@@ -363,6 +453,8 @@ fi
 mkdir -p "$spec_fixture_dir"
 cat > "$spec_fixture_dir/spec.md" <<'EOF'
 # Decisions
+
+Status: 確定
 
 ## Confirmed choice
 

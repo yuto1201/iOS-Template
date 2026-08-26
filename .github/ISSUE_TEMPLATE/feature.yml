@@ -1,0 +1,114 @@
+name: Feature
+description: Propose an implementation-ready feature.
+title: "[Feature]: "
+labels:
+  - type:feature
+  - state:proposed
+body:
+  - type: markdown
+    attributes:
+      value: "Complete every field. An Issue that is not Definition of Ready remains blocked:user."
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One sentence describing the outcome.
+      placeholder: Enable the user to ...
+    validations:
+      required: true
+  - type: textarea
+    id: in-scope
+    attributes:
+      label: In scope
+      description: List the changes included in this Issue.
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: List intentionally excluded work.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: "Use stable, unique IDs such as `AC-1: User can save a setting`."
+    validations:
+      required: true
+  - type: textarea
+    id: spec-anchors
+    attributes:
+      label: Spec anchors
+      description: Add local Markdown links with exact section anchors, for example `specs/acceptance.md#2-issue-definition-of-ready`.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: List prerequisite Issues and blockers, or write `None`.
+    validations:
+      required: true
+  - type: textarea
+    id: ui-verification
+    attributes:
+      label: UI verification
+      description: "Write `Not applicable`, or list target screens/states plus exact English and Japanese expectations."
+      placeholder: |
+        - Target screens/states: Settings screen, loaded state
+        - English expectations: Title and controls are complete in English.
+        - Japanese expectations: Title and controls are complete in Japanese.
+    validations:
+      required: true
+  - type: textarea
+    id: external-operations
+    attributes:
+      label: External operations
+      description: "Write `None`, or one or more exact five-field blocks in this order. Operation must be an exact ID from `docs/AUTHORITY.md`; repeat the block for each operation."
+      placeholder: |
+        - Operation: github.read_issue
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.update_issue
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.push_branch
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.create_pr
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.merge_pr
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.delete_branch
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+    validations:
+      required: true
+  - type: textarea
+    id: user-approvals
+    attributes:
+      label: User approvals
+      description: "When Approval required is yes, cite an approval Issue, decision, or URL; otherwise write `None` or `No additional approval`."
+    validations:
+      required: true

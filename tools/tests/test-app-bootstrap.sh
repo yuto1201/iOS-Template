@@ -801,6 +801,7 @@ if [[ "$mode" == "transform" ]]; then
   git clone --no-local "$root" "$fixture" >/dev/null
   git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
   cp "$root/README.md" "$fixture/README.md"
+  cp "$root/Config/ownership.yml" "$fixture/Config/ownership.yml"
   cp "$root/tools/tests/test-foundation.sh" "$fixture/tools/tests/test-foundation.sh"
   cp "$root/.agents/skills/app-bootstrap/SKILL.md" "$fixture/.agents/skills/app-bootstrap/SKILL.md"
   historical_plan="$fixture/docs/superpowers/plans/2026-08-22-app-bootstrap.md"
@@ -897,6 +898,11 @@ supabase:
 
 cloudflare:
   accountId: null
+  target: null
+
+elevenlabs:
+  accountId: null
+  workspaceId: null
 
 appStore:
   teamId: null

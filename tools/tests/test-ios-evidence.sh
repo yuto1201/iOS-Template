@@ -335,6 +335,21 @@ make_documentation_only() {
 
 prepare_fixture valid-passed
 run_validator
+expected_file_digest="sha256:$(shasum -a 256 "$evidence_file" | awk '{print $1}')"
+(
+  cd "$fixture_root"
+  "$validator" --file "$evidence_file" --expected-file-digest "$expected_file_digest" \
+    --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha"
+)
+if (
+  cd "$fixture_root"
+  "$validator" --file "$evidence_file" --expected-file-digest "sha256:$(printf '0%.0s' {1..64})" \
+    --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha"
+) >"$scratch/wrong-file-digest.stdout" 2>"$scratch/wrong-file-digest.stderr"; then
+  echo 'validator accepted bytes that did not match --expected-file-digest' >&2
+  exit 1
+fi
+grep -Fq 'verify.json bytes do not match --expected-file-digest' "$scratch/wrong-file-digest.stderr"
 (
   cd "$fixture_root"
   PATH="$poison_bin:$PATH" POISON_LOG="$poison_log" \
@@ -621,6 +636,11 @@ FUTURE="$future_timestamp" mutate_json "$fixture_root/.artifacts/issues/42/issue
 refresh_contract_digest
 expect_failure future-fetched-at "issueContract.fetchedAt is implausibly in the future"
 
+prepare_fixture invalid-operation-details-digest
+mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" 'document["externalOperationDetailsDigest"] = "sha256:" + "0" * 63'
+refresh_contract_digest
+expect_failure invalid-operation-details-digest "issueContract.externalOperationDetailsDigest must be a SHA-256 digest"
+
 prepare_fixture arbitrary-verify-root
 cp "$evidence_file" "$fixture_root/verify.json"
 expect_failure arbitrary-verify-root "--file must be the canonical evidence path" "$base_sha" "$head_sha" "$fixture_root/verify.json"
@@ -633,6 +653,173 @@ prepare_fixture symlink-verify-root
 mv "$fixture_root/.artifacts" "$fixture_root/real-artifacts"
 ln -s real-artifacts "$fixture_root/.artifacts"
 expect_failure symlink-verify-root "verify.json is unavailable or contains a symbolic link"
+
+# A canonical Issue worktree has a deliberately narrow exception: only its raw
+# ../../.artifacts link may bind evidence to the physical primary checkout.
+install_linked_worktree() {
+  local slug="42-linked-evidence"
+  local refresh_application_evidence="${1:-false}"
+  local worktree="$fixture_root/.worktrees/$slug"
+  local contract_digest
+  git -C "$fixture_root" worktree add -q -b "codex/$slug" "$worktree" "$head_sha"
+  contract_digest="$(shasum -a 256 "$fixture_root/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+  HEAD="$head_sha" CONTRACT_DIGEST="$contract_digest" ruby -rjson - "$fixture_root/.artifacts/issues/42/state.json" <<'RUBY'
+state = {
+  "schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template",
+  "branch" => "codex/42-linked-evidence", "worktree" => ".worktrees/42-linked-evidence",
+  "baseSha" => "0" * 40, "headSha" => ENV.fetch("HEAD"), "primaryImplementer" => "codex",
+  "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => "sha256:#{ENV.fetch("CONTRACT_DIGEST")}"},
+  "state" => "in-progress", "previousState" => "claimed", "resumeState" => nil, "executor" => "codex"
+}
+File.write(ARGV.fetch(0), JSON.generate(state))
+RUBY
+  ln -s ../../.artifacts "$worktree/.artifacts"
+  if [[ "$refresh_application_evidence" != true ]]; then
+    printf '%s\n' "$worktree"
+    return
+  fi
+  local canonical_root root_digest workspace_root draft packet
+  canonical_root="$("$swift_bin" -e 'import Foundation; print(URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath().standardizedFileURL.path)' "$worktree")"
+  root_digest="$(printf '%s' "$canonical_root" | shasum -a 256 | awk '{print $1}')"
+  workspace_root="/tmp/ios-template-verify/$(basename "$canonical_root")-$root_digest/issue-42/$head_sha"
+  draft="$fixture_root/.artifacts/issues/42/$head_sha/verify-draft.json"
+  packet="$fixture_root/.artifacts/issues/42/$head_sha/visual-packet.json"
+  rm "$packet"
+  WORKSPACE_ROOT="$workspace_root" DRAFT="$draft" ruby -rjson -e '
+    path = ENV.fetch("DRAFT"); value = JSON.parse(File.read(path));
+    root = ENV.fetch("WORKSPACE_ROOT") + "/Attempts/attempt-aaaaaaaa"
+    value["workspaceArtifacts"] = {
+      "derivedDataPath" => "#{root}/DerivedData",
+      "buildResultBundlePath" => "#{root}/Build.xcresult",
+      "testResultBundlePath" => "#{root}/Tests.xcresult"
+    }
+    File.write(path, JSON.pretty_generate(value) + "\n")
+  '
+  (
+    cd "$worktree"
+    "$validator" --visual-packet --issue 42 --expected-base "$base_sha" \
+      --draft ".artifacts/issues/42/$head_sha/verify-draft.json" \
+      --output ".artifacts/issues/42/$head_sha/visual-packet.json" >/dev/null
+  )
+  if EVIDENCE="$evidence_file" ruby -rjson -e 'exit(JSON.parse(File.read(ENV.fetch("EVIDENCE"))).dig("visualEvaluation", "packet") ? 0 : 1)'; then
+    EVIDENCE="$evidence_file" PACKET="$packet" ruby -rjson -rdigest -e '
+    evidence_path = ENV.fetch("EVIDENCE"); value = JSON.parse(File.read(evidence_path)); packet = JSON.parse(File.read(ENV.fetch("PACKET")))
+    value["visualEvaluation"]["packet"]["digest"] = "sha256:#{Digest::SHA256.file(ENV.fetch("PACKET")).hexdigest}"
+    value["visualEvaluation"]["cases"] = packet.fetch("cases").map do |entry|
+      {"id" => entry.fetch("id"), "images" => entry.fetch("images").map do |image|
+        {"state" => image.fetch("state"), "path" => image.fetch("path"), "digest" => image.fetch("digest"), "status" => "passed", "findings" => []}
+      end}
+    end
+    File.write(evidence_path, JSON.pretty_generate(value) + "\n")
+    '
+  fi
+  printf '%s\n' "$worktree"
+}
+
+run_linked_validator() {
+  local worktree="$1"
+  (
+    cd "$worktree"
+    PATH="$poison_bin:$PATH" POISON_LOG="$poison_log" \
+      "$validator" --file ".artifacts/issues/42/$head_sha/verify.json" \
+        --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha"
+  )
+}
+
+expect_linked_failure() {
+  local label="$1" expected="$2" worktree="$3"
+  local output
+  if output="$(run_linked_validator "$worktree" 2>&1)"; then
+    echo "expected linked fixture $label to fail" >&2
+    exit 1
+  fi
+  if [[ "$output" != *"$expected"* ]]; then
+    echo "linked fixture $label failed for the wrong reason: $output" >&2
+    exit 1
+  fi
+}
+
+prepare_fixture linked-application
+linked_worktree="$(install_linked_worktree true)"
+run_linked_validator "$linked_worktree"
+
+prepare_fixture linked-documentation passed.json normal docs/linked.md
+make_documentation_only
+linked_worktree="$(install_linked_worktree)"
+run_linked_validator "$linked_worktree"
+
+prepare_fixture linked-code-as-documentation passed.json normal scripts/linked.sh
+make_documentation_only
+linked_worktree="$(install_linked_worktree)"
+expect_linked_failure linked-code-as-documentation "documentation-only path is not allowlisted: scripts/linked.sh" "$linked_worktree"
+
+prepare_fixture linked-wrong-target
+linked_worktree="$(install_linked_worktree)"
+rm "$linked_worktree/.artifacts"
+ln -s ../.artifacts "$linked_worktree/.artifacts"
+expect_linked_failure linked-wrong-target "shared artifact link target is not canonical" "$linked_worktree"
+
+prepare_fixture linked-absolute-target
+linked_worktree="$(install_linked_worktree)"
+rm "$linked_worktree/.artifacts"
+ln -s "$fixture_root/.artifacts" "$linked_worktree/.artifacts"
+expect_linked_failure linked-absolute-target "shared artifact link target is not canonical" "$linked_worktree"
+
+prepare_fixture linked-deeper-worktree
+linked_worktree="$fixture_root/.worktrees/deeper/42-linked-evidence"
+git -C "$fixture_root" worktree add -q -b codex/42-linked-evidence "$linked_worktree" "$head_sha"
+ln -s ../../.artifacts "$linked_worktree/.artifacts"
+expect_linked_failure linked-deeper-worktree "verify.json is unavailable or contains a symbolic link" "$linked_worktree"
+
+prepare_fixture linked-unrelated-common-directory
+linked_worktree="$fixture_root/.worktrees/42-unrelated"
+git clone -q --shared "$fixture_root" "$linked_worktree"
+git -C "$linked_worktree" checkout -q -b codex/42-unrelated "$head_sha"
+contract_digest="$(shasum -a 256 "$fixture_root/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+HEAD="$head_sha" CONTRACT_DIGEST="$contract_digest" ruby -rjson - "$fixture_root/.artifacts/issues/42/state.json" <<'RUBY'
+state = {
+  "schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template",
+  "branch" => "codex/42-unrelated", "worktree" => ".worktrees/42-unrelated",
+  "baseSha" => "0" * 40, "headSha" => ENV.fetch("HEAD"), "primaryImplementer" => "codex",
+  "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => "sha256:#{ENV.fetch("CONTRACT_DIGEST")}"},
+  "state" => "in-progress", "previousState" => "claimed", "resumeState" => nil, "executor" => "codex"
+}
+File.write(ARGV.fetch(0), JSON.generate(state))
+RUBY
+ln -s ../../.artifacts "$linked_worktree/.artifacts"
+expect_linked_failure linked-unrelated-common-directory "shared artifact Git common directory is unrelated" "$linked_worktree"
+
+prepare_fixture linked-state-branch
+linked_worktree="$(install_linked_worktree)"
+STATE="$fixture_root/.artifacts/issues/42/state.json" ruby -rjson -e 'path = ENV.fetch("STATE"); value = JSON.parse(File.read(path)); value["branch"] = "claude/42-linked-evidence"; File.write(path, JSON.generate(value))'
+expect_linked_failure linked-state-branch "shared artifact state Branch does not match current Branch" "$linked_worktree"
+
+prepare_fixture linked-state-worktree
+linked_worktree="$(install_linked_worktree)"
+STATE="$fixture_root/.artifacts/issues/42/state.json" ruby -rjson -e 'path = ENV.fetch("STATE"); value = JSON.parse(File.read(path)); value["worktree"] = ".worktrees/42-other"; File.write(path, JSON.generate(value))'
+expect_linked_failure linked-state-worktree "shared artifact state worktree is not canonical" "$linked_worktree"
+
+prepare_fixture linked-state-issue
+linked_worktree="$(install_linked_worktree)"
+STATE="$fixture_root/.artifacts/issues/42/state.json" ruby -rjson -e 'path = ENV.fetch("STATE"); value = JSON.parse(File.read(path)); value["issue"] = 43; File.write(path, JSON.generate(value))'
+expect_linked_failure linked-state-issue "shared artifact state Issue does not match requested Issue" "$linked_worktree"
+
+prepare_fixture linked-state-head
+linked_worktree="$(install_linked_worktree)"
+STATE="$fixture_root/.artifacts/issues/42/state.json" ruby -rjson -e 'path = ENV.fetch("STATE"); value = JSON.parse(File.read(path)); value["headSha"] = "0" * 40; File.write(path, JSON.generate(value))'
+expect_linked_failure linked-state-head "shared artifact state Head does not match current Git HEAD" "$linked_worktree"
+
+prepare_fixture linked-primary-artifact-symlink
+linked_worktree="$(install_linked_worktree)"
+mv "$fixture_root/.artifacts" "$fixture_root/real-artifacts"
+ln -s real-artifacts "$fixture_root/.artifacts"
+expect_linked_failure linked-primary-artifact-symlink "shared artifact link does not resolve to the primary artifact root" "$linked_worktree"
+
+prepare_fixture linked-per-file-symlink
+linked_worktree="$(install_linked_worktree)"
+mv "$fixture_root/.artifacts/issues/42/$head_sha/verify.json" "$fixture_root/.artifacts/issues/42/$head_sha/real-verify.json"
+ln -s real-verify.json "$fixture_root/.artifacts/issues/42/$head_sha/verify.json"
+expect_linked_failure linked-per-file-symlink "verify.json is unavailable or contains a symbolic link" "$linked_worktree"
 
 for allowed_path in README.md AGENTS.md docs/allowed.md specs/allowed.md; do
   label="allowed-$(printf '%s' "$allowed_path" | tr '/.' '--')"

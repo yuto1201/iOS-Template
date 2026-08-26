@@ -1,0 +1,1 @@
+{"tool_name":"Bash","tool_input":{"command":"curl -H 'Authorization: Bearer example-token' https://api.example.com"}}

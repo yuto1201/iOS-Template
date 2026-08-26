@@ -1,0 +1,76 @@
+labels:
+  - name: state:proposed
+    color: 6E7781
+    description: "Workflow state: proposed"
+  - name: state:approved
+    color: 1D76DB
+    description: "Workflow state: approved"
+  - name: state:claimed
+    color: 5319E7
+    description: "Workflow state: claimed"
+  - name: state:in-progress
+    color: 0052CC
+    description: "Workflow state: in progress"
+  - name: state:verify-passed
+    color: 0E8A16
+    description: "Workflow state: verification passed"
+  - name: state:review-requested
+    color: FBCA04
+    description: "Workflow state: opposite-model review requested"
+  - name: state:changes-requested
+    color: D93F0B
+    description: "Workflow state: changes requested"
+  - name: state:approved-for-merge
+    color: 0E8A16
+    description: "Workflow state: approved for merge"
+  - name: state:merged
+    color: 8250DF
+    description: "Workflow state: merged"
+  - name: state:done
+    color: 0E8A16
+    description: "Workflow state: done"
+  - name: state:paused
+    color: C2E0C6
+    description: "Workflow state: paused by user"
+  - name: state:superseded
+    color: 6E7781
+    description: "Workflow state: superseded"
+  - name: state:blocked:user
+    color: B60205
+    description: Blocked pending user specification or approval
+  - name: state:blocked:ops
+    color: B60205
+    description: Blocked by external authentication contract or API limit
+  - name: state:blocked:review
+    color: B60205
+    description: Blocked because opposite-model review is unavailable
+  - name: state:blocked:conflict
+    color: B60205
+    description: Blocked by a file or branch conflict
+  - name: state:blocked:dependency
+    color: B60205
+    description: Blocked by an incomplete dependency Issue
+  - name: state:blocked:environment
+    color: B60205
+    description: Blocked by missing Xcode Runtime or Simulator
+  - name: state:blocked:repeated-failure
+    color: B60205
+    description: Blocked after three consecutive identical failures
+  - name: agent:codex
+    color: 5319E7
+    description: Primary implementer is Codex
+  - name: agent:claude
+    color: D4C5F9
+    description: Primary implementer is Claude
+  - name: type:feature
+    color: 1D76DB
+    description: New user-visible capability or implementation work
+  - name: type:regression
+    color: D93F0B
+    description: Post-merge or physical-device defect correction
+  - name: type:docs
+    color: 0075CA
+    description: Documentation-only work
+  - name: type:release
+    color: 0E8A16
+    description: Release preparation or submission work

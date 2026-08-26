@@ -65,6 +65,18 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 BuildとUnit Testは同じHead SHAにつき一度実行し、4つのlocaleごとに重複実行しません。
 
+Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evidence producer自体へ依存する場合は、iOSのUnit Testだけで代用しません。`tools/run-repository-tests.sh` を使い、current Headのtracked `tools/tests/test-*.sh` 全件をrunner所有のclean detached worktreeで実行します。各ACへ関連test pathをexactに一度対応付け、成功した全testのexit status、sanitized output digest、時刻、runner bytesを `.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-tests.json` へno-replaceで保存します。test本文のstdout/stderrはartifactへ保存しません。失敗、Head変更、dirty caller、contract不一致、mapping不足、既存artifact衝突のどれかがあればcanonical evidenceは発行しません。
+
+```bash
+tools/run-repository-tests.sh \
+  --issue "${ISSUE}" \
+  --expected-base "${BASE_SHA}" \
+  --map AC-1=tools/tests/test-claude-guard.sh \
+  --map AC-2=tools/tests/test-workflow-state.sh
+```
+
+`prepare-review-packet.sh` はこのcanonical evidenceが存在する場合だけ検証してpacket内の `repositoryTests` へ封印します。したがってreviewerとpre-merge gateは、iOS smoke testとは別に、現在Headで実際に通過したRepository test suiteと各ACの対応を評価できます。
+
 ### Stage C: UI and acceptance matrix
 
 4条件それぞれで次を行います。
@@ -313,7 +325,7 @@ validatorは `--expected-head` が現在のGit Headと一致し、BaseとHeadが
 
 `issueContract.fetchedAt` と `completedAt` は有効なISO 8601で、どちらも検証時刻から5分を超えて未来であってはいけません。さらに、`completedAt` は `fetchedAt` 以後でなければなりません。
 
-PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。反対モデルレビューの正本は `.artifacts/issues/${issueNumber}/${headSha}/review.json` です。
+PR本文にはverify.jsonの要約とdigestを記載します。巨大なログと一時的なSimulatorデータはGitへ入れません。反対モデルレビューの正本は `.artifacts/issues/${issueNumber}/${headSha}/review.json` で、固定launcherの実行証明は同じdirectoryの `review-receipt.json` です。どちらか一方だけでは再利用もmergeもできません。
 
 ## 5. 実行手段
 
@@ -331,16 +343,43 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 
 ## 7. Pre-merge条件
 
-`tools/premerge-gate.sh` は次を検査します。
+`tools/premerge-gate.sh --repo OWNER/REPO --issue NUMBER --head-sha SHA` は、最初にdescriptor-boundな `merge-state.rb validate-worktree` を再利用し、durable stateが `approved-for-merge` であることを確認します。その後、caller repository、Issue、Branch、symbolic ref、Head、Base ancestry、canonical worktree、clean状態が一致するまで `gh` を実行しません。
+
+gateはprimary checkoutのartifactをpathごとに読み直しません。Issue artifact directoryを診断modeではshared lock、`--merge-pr` modeではexclusive lockしたうえで、`.artifacts`、`issues`、Issue、Head、`provider-preflights` とreview imageの各componentを `openat` と `NOFOLLOW` で開いたままにし、次のleafをregularかつsingle-linkとしてsnapshotします。
+
+- `state.json`
+- `issue-contract.json`
+- `${headSha}/verify.json`
+- `${headSha}/review-packet.json`
+- `${headSha}/review.json`
+- `${headSha}/review-receipt.json`
+- `${headSha}/review.diff`
+- schema v2 packetが列挙するordered review image
+- `github-preflight.json`
+- contractが要求する各provider preflight
+- Issue worktreeの `Config/ownership.yml`
+
+同じdescriptor bytesを最後まで使い、終了前にheld descriptor、現在のpath inode、component identity、bytesとmetadataが変わっていないことを再確認します。特に`state.json`は`validate-worktree`が返したexact bytes digestとdev、inode、size、mode、nlink、mtime、ctimeをGate helperが`gh`より前に照合し、descriptorを終了まで保持します。検証直後のinode swap、same-inode rewrite、primary implementerまたはtransition timestamp変更に加え、保持中のsame-byte rewriteによるmetadata変更も拒否します。Swift validatorは `--expected-file-digest sha256:...` を受け取り、別processであってもgateが保持した `verify.json` のexact bytesを読んだことを証明します。
+
+そのうえで次を検査します。
 
 - 現在のHead SHA = verify.jsonのheadSha
 - 現在のHead SHA = review.jsonのheadSha
 - verify status = passedまたは正当なnot-applicable
 - review verdict = approved
-- 重大Finding = 0
+- schema v2 `review-packet.json` がexact verify bytes、決定論的なactual Base..Head `review.diff`、canonical visual evidenceのordered image bytes/digestを固定し、`review.json.reviewPacketDigest` がpacketのexact bytesと一致（schema v1はgateで拒否）
+- `review-packet.json` と `review.json` のBase/Head/Verify SHA、primary/opposite model、Issue contract digestが一致
+- `review-receipt.json` がfixed launcherとreviewer launcherのexact bytes digest、opposite-model identity、packet digest、validated result digest、published review digest、開始/完了時刻、成功exit statusを固定し、現在のpacket/review bytesと一致
+- approved reviewのFinding = 0、全Acceptance criteria = supported、`reviewedAt` がverify完了後かつ未来でない
 - Acceptance criteriaの証拠欠落 = 0
-- `issue-contract.json` の全 `AC-*` が `acceptanceEvidence` に一度ずつ存在し、Codexが再取得したIssue本文から計算したcontract digestとも一致
-- Codexがmerge直前に更新した `.artifacts/issues/${issueNumber}/github-preflight.json` が `intendedOperation: github.merge_pr` と現在のHead SHAを持ち、そのcanonical payload digestとfreshness条件を満たす
-- Provider外部操作がある場合、`.artifacts/issues/${issueNumber}/provider-preflights/${provider}.json` とそのdigestが存在
+- `gh issue view` のfixed fields `number,url,body,labels` がcaller Issueと一致し、`type:feature` または `type:regression` がちょうど一つ存在
+- live Issue本文をshared Issue parserで再構成したcanonical contract bytesが `issue-contract.json` と完全一致
+- Provider外部操作はproviderごとに一つ以下で、exact operationとenvironmentがIssueの五field operation blockに一致し、account/target、health、timestamp、digestが安全
+- Providerのaccount/targetは`Config/ownership.yml`のexact case-sensitive値と一致する。Supabaseは`organization`/`projectRef`、Cloudflareは`accountId`/`target`、ElevenLabsは`accountId`/`workspaceId`、App Store Connectは`teamId`/`bundleId`へ対応し、nullまたは未設定ならfail closed
+- Issue contractが`github.merge_pr`を宣言し、live Issueから再構成した構造化operation details digestもcanonical snapshotと一致
+- `github-preflight.json` のaccountが `Config/ownership.yml` の `yuto1201` と一致し、repository、`main`、URL、`github.merge_pr`、Issue、Head、digestが完全一致
+- GitHub preflightがverify完了、review完了、`approved-for-merge` transitionのすべてより新しく、許容未来時刻を超えない
 
 一つでも不一致ならマージしません。
+
+診断用の上記commandはread-onlyです。最終mergeだけは `tools/premerge-gate.sh --repo OWNER/REPO --issue NUMBER --head-sha SHA --merge-pr PR_NUMBER` を使います。このmodeは全artifact descriptorとIssue directory lockを保持した同一process内でactive personal account、repository identity、fixed-field PR identityを再取得し、再度held path/inode/bytes/metadataとactual diffを照合してから、exact `gh pr merge PR_NUMBER --repo OWNER/REPO --squash --match-head-commit SHA` を実行します。Gate成功後に別processでPRを読み直してmergeする経路は禁止です。

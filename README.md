@@ -150,6 +150,17 @@ swift tools/validate-verify-json.swift \
 - Deployment Targetはテンプレート生成時のXcode既定値です。対象ユーザーと必要APIを決め、実装Issueを始める前にアプリ固有の最小OSを仕様とXcode設定へ固定します。
 - ローカル設定は `Config/Local.xcconfig.example` を参考に、Git管理外の `Config/Local.xcconfig` へ置きます。秘密値はxcconfigへも保存せず、Keychainまたは各サービスの秘密管理を使います。
 
+### GitHub workflow initialization
+
+テンプレートから個人用リポジトリを作成した直後、最初のIssueを起票する前にCodexが個人GitHubアカウントと対象リポジトリを確認し、workflow labelsを一度同期します。この操作は冪等で、既存の正しいlabelは変更しません。Claudeからは実行せずCodexへ委託します。
+
+```sh
+REPO='OWNER/REPO'
+tools/sync-github-labels.sh --repo "$REPO" --executor codex
+```
+
+その後、アプリ固有の最小仕様を`specs/`で確定し、Foundation、Identity bootstrap、Simulator verificationの3つのBootstrap Issueを依存順に起票します。Issue作成後にだけ各Branch/worktreeを作り、Identity bootstrapが完了するまでFeature実装を開始しません。
+
 ### Identity bootstrap
 
 機能開発より先に、表示名、Swiftモジュール名、lowercase kebab-caseのアプリSlug、逆DNS形式のBundle IDという4つのIdentity入力を確定します。Deployment Targetはこれらと分けてアプリ仕様とXcode設定へ確定します。承認済みのIdentity Bootstrap Issueに対応するクリーンな非default Branch/worktreeで、リポジトリルートから次を実行します。
@@ -215,3 +226,49 @@ Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/produc
 - ユーザーによる実機確認は、AI の Definition of Done の後に行う最終確認とする。
 - 外部アカウント操作は常に Codex が行う。
 - 秘密値は Git、Issue、PR、ログ、スクリーンショット、AI プロンプトに残さない。
+
+## Issue 自動運用とリカバリー
+
+次のコマンドは `OWNER/REPO`、Issue番号、担当モデルを確定してから実行します。Claim は承認済みIssueに正規Branch/worktreeと共有証拠領域を一度だけ作り、同じ担当者による再実行は Resume になります。明示的な再開だけを行う場合は `resume-issue.sh` を使います。
+
+```sh
+REPO='OWNER/REPO'
+ISSUE=42
+
+tools/issue-state.sh get --repo "$REPO" --issue "$ISSUE"
+tools/claim-issue.sh --repo "$REPO" --issue "$ISSUE" --agent codex
+tools/resume-issue.sh --repo "$REPO" --issue "$ISSUE"
+```
+
+Issue worktreeで検証を終えたら、現在のcommitを直接解決し、その同じSHAへVerify、review packet、反対モデルreviewを順に結び付けます。ドキュメントだけの変更は `publish-documentation-verify.sh`、アプリ変更は [iOS verification](./docs/verification.md) のSimulator matrixを使用します。ドキュメント経路はSimulator成功を意味しません。
+
+```sh
+HEAD_SHA="$(git rev-parse HEAD)"
+BASE_SHA="$(jq -r '.baseSha' ".artifacts/issues/$ISSUE/state.json")"
+
+tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
+  --from in-progress --to verify-passed --head-sha "$HEAD_SHA"
+tools/prepare-review-packet.sh --primary codex --issue "$ISSUE" \
+  --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
+tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
+  --from verify-passed --to review-requested
+tools/cross-model-review.sh --primary codex \
+  --packet ".artifacts/issues/$ISSUE/$HEAD_SHA/review-packet.json" \
+  --output ".artifacts/issues/$ISSUE/$HEAD_SHA/review.json"
+```
+
+マージ診断はmutationを行わないGateを先に実行します。承認済みreviewと最新のaccount preflightが同じHeadへ揃った後、CodexがPR作成、Squash Merge、正確なBranch/worktree cleanup、`done` 遷移まで行います。
+
+```sh
+tools/github-account-preflight.sh --repo "$REPO" --issue "$ISSUE" \
+  --intended-operation github.merge_pr --expected-head "$HEAD_SHA"
+tools/premerge-gate.sh --repo "$REPO" --issue "$ISSUE" --head-sha "$HEAD_SHA"
+tools/merge-issue.sh --repo "$REPO" --issue "$ISSUE"
+
+# primary checkoutで実行
+tools/cleanup-issue.sh --repo "$REPO" --issue "$ISSUE"
+tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
+  --from merged --to done
+```
+
+`blocked:*` または `paused` は失敗の隠蔽ではなく、直前状態を `resumeState` としてmarkerへ残す停止状態です。原因を直した後は担当者を変えず、まず `issue-state.sh get` が返すexact `resumeState`へ `issue-state.sh transition --from <current> --to <resumeState>` で明示的に復帰し、その後 `resume-issue.sh` でlocal stateを再構築して同じstateを再dispatchします。`resume-issue.sh` 自体はGitHub labelを変えません。成功が不明な外部操作は別コマンドへ進まず同じコマンドを再実行します。Headを変更した場合は `approved-for-merge`、`changes-requested`、または `verify-passed` から `in-progress` へ戻し、新しいHeadのVerifyとreviewを両方作り直します。

@@ -1,0 +1,1 @@
+{"tool_name":"Bash","tool_input":{"command":"tools/request-codex-op.sh --request .artifacts/ops-requests/issue-42-create-pr-1.json --result .artifacts/ops-results/issue-42-create-pr-1.json"}}

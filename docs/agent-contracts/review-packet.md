@@ -6,11 +6,11 @@
 
 ## 2. Review packet
 
-`cross-model-review` は次の情報を一つのpacketへまとめます。Acceptance criteriaとspec anchorsは、同じpacket内のIssue contractから読み、digest一致を検証します。
+`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。`repository-tests.json` が同じIssue/Headに存在する場合は、全tracked `tools/tests/test-*.sh` の結果、runner bytes、実行時刻、AC別対応を検証し、`repositoryTests` としてpacket内へ値ごと封印します。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。schema v1は通常レビューの既存成果物を読む場合に限る互換形式で、pre-merge gateは受理しません。
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "issue": 42,
   "primaryModel": "codex",
   "reviewerModel": "claude",
@@ -26,18 +26,47 @@
     {"id": "AC-1", "text": "通知時刻を保存できる"},
     {"id": "AC-2", "text": "日本語と英語で時刻が正しく表示される"}
   ],
-  "diffFile": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/review.diff",
-  "verifyFile": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify.json",
+  "diff": {
+    "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/review.diff",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "verify": {
+    "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/verify.json",
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "repositoryTests": {
+    "schemaVersion": 1,
+    "status": "passed",
+    "issue": 42,
+    "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
+    "headSha": "0123456789abcdef0123456789abcdef01234567",
+    "issueContract": {"path": ".artifacts/issues/42/issue-contract.json", "digest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e"},
+    "runnerFiles": [
+      {"path": "tools/run-repository-tests.sh", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      {"path": "tools/lib/run-repository-tests.rb", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+    ],
+    "suite": {"path": "tools/tests", "pattern": "test-*.sh", "total": 2, "passed": 2, "failed": 0},
+    "tests": [
+      {"path": "tools/tests/test-claude-guard.sh", "arguments": [], "status": "passed", "exitStatus": 0, "outputDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "startedAt": "2026-08-21T13:00:00Z", "completedAt": "2026-08-21T13:01:00Z"},
+      {"path": "tools/tests/test-workflow-state.sh", "arguments": [], "status": "passed", "exitStatus": 0, "outputDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "startedAt": "2026-08-21T13:01:00Z", "completedAt": "2026-08-21T13:02:00Z"}
+    ],
+    "acceptanceEvidence": [
+      {"id": "AC-1", "status": "passed", "tests": ["tools/tests/test-claude-guard.sh"]},
+      {"id": "AC-2", "status": "passed", "tests": ["tools/tests/test-workflow-state.sh"]}
+    ],
+    "startedAt": "2026-08-21T13:00:00Z",
+    "completedAt": "2026-08-21T13:02:00Z"
+  },
   "imageFiles": [
-    "iphone-en/settings.png",
-    "iphone-ja/settings.png",
-    "ipad-en/settings.png",
-    "ipad-ja/settings.png"
+    {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/iphone-en/settings.png", "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/iphone-ja/settings.png", "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+    {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/ipad-en/settings.png", "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+    {"path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/ipad-ja/settings.png", "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
   ]
 }
 ```
 
-例のパスと値は形式を示します。実際のIssue、仕様、SHA、画像を使用します。
+例のパスと値は形式を示します。実際のIssue、仕様、SHA、画像を使用します。`repositoryTests` は同じHeadのcanonical `repository-tests.json` がある場合だけ存在します。reviewerは各ACについて、iOS evidenceだけでなくこのAC別test mappingも参照できます。
 
 ## 3. Reviewer questions
 
@@ -57,13 +86,14 @@
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "issue": 42,
   "reviewerModel": "claude",
   "baseSha": "fedcba9876543210fedcba9876543210fedcba98",
   "headSha": "0123456789abcdef0123456789abcdef01234567",
   "verifySha": "0123456789abcdef0123456789abcdef01234567",
   "issueContractDigest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e",
+  "reviewPacketDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
   "verdict": "approved",
   "findings": [],
   "acceptanceAssessment": [
@@ -101,7 +131,52 @@ Severity:
 
 Reviewerは各 `AC-*` について `supported` または `unsupported` と証拠参照を返します。`unsupported` が一つでもあれば `approved` にできません。
 
-## 5. 呼び出し
+`reviewPacketDigest` はreviewerが実際に読んだ `review-packet.json` の全byte列に対するSHA-256です。result publicationはこのdigestとcanonical packetのexact bytesが一致する間だけ行い、packet path、inode、bytesがpublication中に変われば失敗します。
+
+Result schemaにrequester-controlledな「実行済み」fieldは追加しません。固定launcherはchild process完了とResult検証の後、別artifact `review-receipt.json` を発行します。receiptはschema version、Issue/Head、primary/opposite model、`cross-model-review.sh` と実際のreviewer launcherのpath/exact bytes digest、packet exact digest、validated result exact digest、published `review.json` exact digest、started/completed timestamp、exit status 0だけを持ちます。canonical reviewが先に存在しても、このexact receiptがなければレビュー実行済みとは扱いません。
+
+## 5. Sealing interface
+
+Packetは次で準備します。
+
+```bash
+tools/prepare-review-packet.sh \
+  --primary codex \
+  --issue 42 \
+  --base-sha "${BASE_SHA}" \
+  --head-sha "${HEAD_SHA}"
+```
+
+producerは `/usr/bin/git diff --binary --full-index --no-ext-diff --no-textconv --no-renames` の固定形でexact Base..Head `review.diff` を生成します。verifyの `visualEvaluation.cases[].images[]` をcase/image順に平坦化したpath/digestだけが `imageFiles` です。文書例外では空配列です。verify、画像、contract、および存在するrepository test evidenceをsingle-linkかつno-followで開いたdescriptorをpublication完了まで保持し、path/inode/bytes、Git Head、actual diffをpublication前後で再検証します。`repositoryTests` はpacket内の値なので、review resultとpacketをsealする既存のexact-byte closureへそのまま含まれます。
+
+pre-merge gateのdescriptor-owning callerは、まず次を呼びます。
+
+```ruby
+references = IOSTemplate::ReviewContract.strict_references!(
+  packet_bytes: held_packet.bytes, issue: issue, head_sha: head_sha
+)
+```
+
+返されたcanonical diff/verify/image leafをcaller自身が開いたまま保持し、最後に次を呼びます。
+
+```ruby
+IOSTemplate::ReviewContract.validate!(
+  strict: true,
+  packet_bytes: held_packet.bytes,
+  result_bytes: held_result.bytes,
+  verify_bytes: held_verify.bytes,
+  contract_bytes: held_contract.bytes,
+  diff_bytes: held_diff.bytes,
+  image_bytes: ordered_held_image_bytes,
+  actual_diff_bytes: independently_generated_base_head_diff,
+  primary: primary, issue: issue, base_sha: base_sha, head_sha: head_sha,
+  require_temporal_order: true
+)
+```
+
+このpure validation interfaceはartifact pathを再openしません。callerは戻り値を利用し終えるまでdescriptorを保持し、終了直前に各path identity/bytesを再検証します。strict modeはschema v1、bogus/empty diff、same-Head verify差し替え、画像差し替え、packet/result不一致をすべて拒否します。Gateはさらに `review-receipt.json` をsingle-link/no-followで保持し、current packet/review bytesとlauncher identityを照合します。
+
+## 6. 呼び出し
 
 - Codex primary -> Claudeを非対話read-onlyで呼ぶ
 - Claude primary -> Codexをread-only sandboxで呼ぶ

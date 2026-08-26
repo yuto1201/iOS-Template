@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "${FAKE_REVIEWER_LOG:?}"
+[[ "${FAKE_REVIEWER_REQUIRE_CLOSED_STDIN:-0}" != 1 ]] || ruby -e 'exit(STDIN.stat.rdev == File.stat("/dev/null").rdev ? 0 : 1)'
+[[ "$*" == *"--print"* && "$*" == *"--output-format json"* ]] || exit 91
+[[ "$*" == *"--allowedTools Read"* && "$*" == *"--allowedTools Glob"* && "$*" == *"--allowedTools Grep"* ]] || exit 92
+arguments=("$@")
+terminator=-1
+for index in "${!arguments[@]}"; do
+  [[ "${arguments[$index]}" != -- ]] || terminator=$index
+done
+[[ "$terminator" -ge 0 && "$terminator" -eq $((${#arguments[@]} - 2)) ]] || exit 94
+prompt="${arguments[$((terminator + 1))]}"
+[[ "$prompt" == *"Validated review packet:"* ]] || exit 95
+PROMPT="$prompt" ruby -rtime -e '
+  match = ENV.fetch("PROMPT").match(/Set reviewedAt to exactly (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/)
+  exit 1 unless match
+  Time.iso8601(match[1])
+' || exit 96
+case "${FAKE_REVIEWER_MODE:?}" in
+  approved|changes|mismatch|malformed) cat "${FAKE_REVIEWER_RESULT:?}" ;;
+  envelope) RESULT_FILE="${FAKE_REVIEWER_RESULT:?}" ruby -rjson -e 'puts JSON.generate({"type" => "result", "result" => File.read(ENV.fetch("RESULT_FILE"))})' ;;
+  timeout) exit 124 ;;
+  hang)
+    printf '%s\n' "$$" > "${FAKE_REVIEWER_PID_FILE:?}"
+    if [[ -n "${FAKE_REVIEWER_WATCHDOG_PID_FILE:-}" ]]; then
+      printf '%s\n' "$PPID" > "$FAKE_REVIEWER_WATCHDOG_PID_FILE"
+    fi
+    /bin/bash -c '
+      trap "" HUP
+      trap '\''printf "TERM\n" > "$FAKE_REVIEWER_DESCENDANT_SIGNAL_FILE"; [[ "${FAKE_REVIEWER_IGNORE_TERM:-0}" == 1 ]] || exit 0'\'' TERM
+      while :; do sleep 1; done
+    ' &
+    printf '%s\n' "$!" > "${FAKE_REVIEWER_DESCENDANT_PID_FILE:?}"
+    trap 'printf "TERM\n" > "${FAKE_REVIEWER_SIGNAL_FILE:?}"; [[ "${FAKE_REVIEWER_IGNORE_TERM:-0}" == 1 ]] || exit 0' TERM
+    while :; do sleep 1; done
+    ;;
+  write) printf 'reviewer write\n' > "${FAKE_REVIEWER_WRITE_PATH:?}"; cat "${FAKE_REVIEWER_RESULT:?}" ;;
+  *) exit 93 ;;
+esac

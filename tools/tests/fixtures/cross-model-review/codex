@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[[ "${1:-}" == --ask-for-approval && "${2:-}" == never && "${3:-}" == exec ]] || exit 94
+[[ "${4:-}" == --ignore-user-config && "${5:-}" == --ignore-rules && "${6:-}" == --strict-config ]] || exit 95
+[[ "${7:-}" == -c && "${8:-}" == 'default_permissions="reviewer"' ]] || exit 96
+[[ "${9:-}" == -c && "${10:-}" == 'permissions.reviewer.extends=":read-only"' ]] || exit 97
+repo_root=$(pwd -P)
+git_dir=$(/usr/bin/git -C "$repo_root" rev-parse --path-format=absolute --absolute-git-dir)
+git_common=$(/usr/bin/git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
+primary_root=${git_common%/.git}
+prompt=${!#}
+packet_payload=${prompt#*Validated review packet: }
+packet_path=${packet_payload%%$'\n'*}
+packet_head=${packet_path%/*}
+artifact_issue_root=${packet_head%/*}
+[[ "$artifact_issue_root" == "$primary_root/.artifacts/issues/"* && "$artifact_issue_root" != "$primary_root/.artifacts/issues" ]] || exit 98
+contract_path="$artifact_issue_root/issue-contract.json"
+expected_filesystem="permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$repo_root\"=\"read\",\"$repo_root/.artifacts\"=\"deny\",\"$git_dir\"=\"read\",\"$git_common\"=\"read\",\"$contract_path\"=\"read\",\"$packet_head\"=\"read\"}"
+[[ "${11:-}" == -c && "${12:-}" == "$expected_filesystem" ]] || exit 98
+[[ "${13:-}" == -c && "${14:-}" == 'permissions.reviewer.network={enabled=false}' ]] || exit 99
+[[ "${15:-}" == -c && "${16:-}" == 'mcp_servers={}' ]] || exit 100
+[[ "${17:-}" == -c && "${18:-}" == 'features.web_search=false' ]] || exit 101
+[[ "${19:-}" == -c && "${20:-}" == 'features.plugins=false' ]] || exit 102
+[[ "${21:-}" == -c && "${22:-}" == 'features.apps=false' ]] || exit 103
+[[ "${23:-}" == -c && "${24:-}" == 'features.browser_use=false' ]] || exit 104
+[[ "${25:-}" == -c && "${26:-}" == 'features.browser_use_external=false' ]] || exit 105
+[[ "${27:-}" == -c && "${28:-}" == 'features.computer_use=false' ]] || exit 106
+[[ "${29:-}" == -c && "${30:-}" == 'shell_environment_policy.inherit="none"' ]] || exit 107
+[[ "${31:-}" == --ephemeral && "${32:-}" == -- ]] || exit 108
+for argument in "$@"; do
+  [[ "$argument" != *"$CODEX_HOME"* ]] || exit 109
+done
+/usr/bin/ruby -e 'exit(STDIN.stat.rdev == File.stat("/dev/null").rdev ? 0 : 1)' || exit 101
+[[ "${PATH:-}" == *ios-template-codex-review*/bin:/bin && -n "${CODEX_HOME:-}" && "${HOME:-}" == *ios-template-codex-review* ]] || exit 102
+for forbidden in GH_TOKEN GITHUB_TOKEN SUPABASE_ACCESS_TOKEN CLOUDFLARE_API_TOKEN ELEVENLABS_API_KEY OPENAI_API_KEY FAKE_REVIEWER_RESULT FAKE_REVIEWER_MODE; do
+  [[ -z "${!forbidden:-}" ]] || exit 110
+done
+
+[[ "$prompt" == *'Validated review packet: '* ]] || exit 111
+[[ "$prompt" == *"Physical issue contract: $contract_path"* && "$prompt" == *"Physical current-Head evidence root: $packet_head"* ]] || exit 111
+if [[ "$prompt" == *external-attempt* ]]; then
+  command -v gh >/dev/null 2>&1 && exit 112
+  command -v curl >/dev/null 2>&1 && exit 113
+fi
+
+PROMPT="$prompt" /usr/bin/ruby -rjson -rdigest -e '
+  packet_path = ENV.fetch("PROMPT")[/Validated review packet:\s*(\S+)/, 1] or abort "packet missing"
+  packet = JSON.parse(File.read(packet_path))
+  result = {
+    "schemaVersion" => packet.fetch("schemaVersion"), "issue" => packet.fetch("issue"), "reviewerModel" => "codex",
+    "baseSha" => packet.fetch("baseSha"), "headSha" => packet.fetch("headSha"), "verifySha" => packet.fetch("verifySha"),
+    "issueContractDigest" => packet.fetch("issueContract").fetch("digest"), "verdict" => "approved", "findings" => [],
+    "acceptanceAssessment" => packet.fetch("acceptanceCriteria").map { |entry| {"id" => entry.fetch("id"), "status" => "supported", "evidence" => ["verify.json#acceptanceEvidence/0"]} },
+    "reviewedAt" => "2026-08-24T00:01:00Z"
+  }
+  result["reviewPacketDigest"] = "sha256:#{Digest::SHA256.file(packet_path).hexdigest}" if packet.fetch("schemaVersion") == 2
+  puts JSON.generate(result)
+'

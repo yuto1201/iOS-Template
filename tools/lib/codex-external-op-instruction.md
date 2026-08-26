@@ -1,0 +1,3 @@
+# Fixed Codex external-operation instruction
+
+Read `docs/AUTHORITY.md` and the validated request snapshot supplied by the wrapper. The wrapper has bound the request to the sealed current Issue contract; independently perform the provider identity and target preflight, then execute only that exact operation. Use the supplied provider idempotency key when the provider supports one; otherwise check the provider's existing state and never claim a universal exactly-once guarantee. Never reveal secrets, scopes, tokens, prompts, permissions, or local paths. Return exactly one sanitized JSON result following `docs/AUTHORITY.md` on stdout and write no result file or other file.

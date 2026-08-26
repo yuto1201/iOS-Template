@@ -47,9 +47,10 @@ Claudeは認証済み外部操作が必要になったら、操作を試行せ�
 
 1. Claudeが `.artifacts/ops-requests/${requestId}.json` を作る。
 2. Claudeは `tools/request-codex-op.sh --request ${requestFile} --result ${resultFile}` だけを呼べる。
-3. ラッパーがschemaとパスを検証し、固定された指示でCodexを起動する。
-4. Codexが権限、承認要否、個人アカウント、対象を独立判定する。
-5. Codexが操作して `.artifacts/ops-results/${requestId}.json` へsanitized resultを書く。
+3. ラッパーがrequestをdescriptor-boundに固定し、canonical Issue contractのbytes/digest、`state.json`のbinding、個人GitHub preflight、current live Issue本文のexact reconstruction、操作詳細とConfig identityを照合する。
+4. ラッパーはrequest digestごとのnonblocking lockを取得し、外部実行より先に `.artifacts/ops-receipts/${requestId}.json` を`in-flight`としてno-replaceで記録する。
+5. Codexが権限、個人アカウント、対象を独立にpreflightし、固定requestだけを実行してsanitized result候補をstdoutへ1件だけ返す。
+6. ラッパーがexact schema、requestとのidentity一致、秘密値・local path・control character不在を再検証し、`.artifacts/ops-results/${requestId}.json`をno-replaceで公開してreceiptを`completed`へCAS更新する。
 
 Claudeによる直接の `codex` CLI、自由文prompt、別ラッパー、外部CLIは拒否します。read-only反対モデルレビューは別の `tools/request-codex-review.sh` を使い、外部操作権限を与えません。
 
@@ -75,7 +76,7 @@ Claudeによる直接の `codex` CLI、自由文prompt、別ラッパー、外�
 }
 ```
 
-依頼者は承認要否を指定できません。Codexがこの文書の規則から導出し、必要な承認記録がなければ操作を止めます。
+依頼者は承認要否を指定できません。sealed contractの`Approval required`から導出します。現行transportにはrequesterが書けないCodex-owned approval receiptの発行・検証workflowがまだないため、`Approval required: yes`はIssue本文のreferenceだけでは承認済みとみなさず常に停止します。
 
 Codexは実行結果を、秘密値を含まない次の形式で返します。
 
@@ -93,6 +94,10 @@ Codexは実行結果を、秘密値を含まない次の形式で返します。
 
 Codexが期待アカウントと実際のアカウントの不一致を検出した場合、操作せず `blocked:ops` を返します。
 
+`expectedAccount`と`target.identifier`は`Config/ownership.yml`からproviderごとに完全一致で決まります。GitHubは`login`/Issue contractの`repository`、Supabaseは`organization`/`projectRef`、Cloudflareは`accountId`/`target`、ElevenLabsは`accountId`/`workspaceId`、App Store Connectは`teamId`/`bundleId`です。未設定値、別account、別targetはCodexを起動する前に拒否します。
+
+同じ`requestId`と同じcanonical request digestでcompleted receiptがある場合、ラッパーは保存済みsanitized resultを返し、Codexやproviderを再実行しません。別digestで同じID、concurrent実行、`in-flight`のまま終了した曖昧な試行、resultだけの事前配置はfail closedです。固定promptはprovider idempotency keyを渡しますが、providerが対応しない場合まで外部side effectのuniversal exactly-onceを保証するものではありません。曖昧な試行を新しいIDや別操作として自動retryしません。
+
 `operation` は次の完全一致allowlistから選びます。各操作の `target.kind` と `inputs` は実装時のJSON Schemaでさらに制限し、未知のfieldを拒否します。
 
 - GitHub: `github.read_issue`、`github.create_issue`、`github.update_issue`、`github.push_branch`、`github.create_pr`、`github.merge_pr`、`github.delete_branch`、`github.sync_labels`
@@ -105,7 +110,7 @@ Codexが期待アカウントと実際のアカウントの不一致を検出し
 
 ## 4. Codexの外部操作前チェック
 
-Identityの期待値は `Config/ownership.yml` を正本とします。GitHub login以外のアプリ固有Project Ref、Account ID、Team ID、Bundle IDが未設定なら、対象操作を始めません。
+Identityの期待値は `Config/ownership.yml` を正本とします。GitHub login以外のアプリ固有Project Ref、Account ID、target、Workspace ID、Team ID、Bundle IDが未設定なら、対象操作を始めません。Provider preflightのaccount/targetは、Supabase=`organization`/`projectRef`、Cloudflare=`accountId`/`target`、ElevenLabs=`accountId`/`workspaceId`、App Store Connect=`teamId`/`bundleId`へcase-sensitiveに一致させます。
 
 ### GitHub
 
@@ -129,7 +134,7 @@ Identityの期待値は `Config/ownership.yml` を正本とします。GitHub lo
 
 ### ElevenLabs
 
-- 個人用認証状態
+- 個人用Account IDとWorkspace ID、および認証状態
 - 実行する生成種別と契約上の利用可否
 - 出力先がRepository内の許可された素材ディレクトリであること
 
@@ -152,7 +157,9 @@ Identityの期待値は `Config/ownership.yml` を正本とします。GitHub lo
 
 ## 6. Claudeガード
 
-`.claude/settings.json` の `PreToolUse` から `.claude/hooks/guard-external-ops.sh` を呼び、Bash、MCP、外部プラグイン、秘密取得を検査します。拒否時は、Codexへ委託すべき操作であることをClaudeへ返します。
+`.claude/settings.json` の `PreToolUse` から `.claude/hooks/guard-external-ops.sh` を呼び、すべてのTool inputについて秘密パスを検査し、Bash、MCP、外部プラグイン、秘密取得を検査します。Bashでは実行ファイルの絶対パス、shell・interpreter・`env`・`xargs`・`find -exec`を介した間接実行、remote Gitのporcelainとplumbingも同じ境界として扱います。拒否時は、Codexへ委託すべき操作であることをClaudeへ返します。
+
+Repository内のshell scriptをClaudeが起動するときは、物理パスがRepository内かつGit管理対象であることを確認し、参照する管理対象helperを有界・cycle-safeにたどって検査します。固定されたCodex依頼とread-onlyレビューの2ラッパーだけは、文書化された完全一致argvで直接起動できます。
 
 このガードは同一macOSユーザー内の誤操作防止であり、OSレベルの完全な分離ではありません。完全分離が必要になった場合はClaude専用OSユーザーまたは隔離実行環境へ移行します。
 

@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+log_file=${FAKE_GH_LOG:?FAKE_GH_LOG is required}
+printf '%s\n' "$*" >> "$log_file"
+
+if [[ "${1:-}" == "auth" && "${2:-}" == "status" && "${3:-}" == "--active" ]]; then
+  printf 'Logged in to github.com account %s (keychain)\n  - Active account: true\n' "${FAKE_GH_LOGIN:-yuto1201}"
+  exit 0
+fi
+
+if [[ "${1:-}" == "repo" && "${2:-}" == "view" ]]; then
+  if [[ "${FAKE_GH_REPO_MISSING:-0}" == "1" ]]; then
+    printf 'GraphQL: Could not resolve to a Repository\n' >&2
+    exit 1
+  fi
+  repo=${3:?repo required}
+  owner=${FAKE_GH_REPO_OWNER:-$repo}
+  branch=${FAKE_GH_DEFAULT_BRANCH:-main}
+  ruby -rjson -e 'puts JSON.generate({"nameWithOwner" => ARGV[0], "defaultBranchRef" => {"name" => ARGV[1]}, "url" => "https://github.com/#{ARGV[0]}"})' "$owner" "$branch"
+  exit 0
+fi
+
+if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
+  if [[ "${FAKE_GH_ISSUE_MISSING:-0}" == "1" ]]; then
+    printf 'Could not resolve to an Issue\n' >&2
+    exit 1
+  fi
+  labels_file=${FAKE_GH_LABELS_FILE:?FAKE_GH_LABELS_FILE is required}
+  comments_file=${FAKE_GH_COMMENTS_FILE:?FAKE_GH_COMMENTS_FILE is required}
+  if [[ -n "${FAKE_GH_VIEW_COUNT_FILE:-}" ]]; then
+    count=0
+    [[ -f "$FAKE_GH_VIEW_COUNT_FILE" ]] && count=$(cat "$FAKE_GH_VIEW_COUNT_FILE")
+    count=$((count + 1))
+    printf '%s' "$count" > "$FAKE_GH_VIEW_COUNT_FILE"
+    if [[ "${FAKE_GH_RACE_BEFORE_EDIT_VIEW:-}" == "$count" ]]; then
+      printf '%s' "${FAKE_GH_RACE_BEFORE_EDIT_LABELS:?FAKE_GH_RACE_BEFORE_EDIT_LABELS is required}" > "$labels_file"
+    fi
+  fi
+  labels=$(cat "$labels_file")
+  comments=$(cat "$comments_file")
+  body=''
+  [[ -z "${FAKE_GH_ISSUE_BODY:-}" ]] || body=$(cat "$FAKE_GH_ISSUE_BODY")
+  ruby -rjson -rtime -e '
+    comments = JSON.parse(ARGV[1]).map do |comment|
+      value = comment.dup
+      value["author"] ||= {"login" => "yuto1201"}
+      unless value["createdAt"]
+        timestamp = value.fetch("body", "")[/"timestamp":"([^"]+)"/, 1]
+        value["createdAt"] = timestamp || "2026-08-24T00:00:00Z"
+      end
+      value
+    end
+    puts JSON.generate({"title" => ENV.fetch("FAKE_GH_ISSUE_TITLE", "Workflow state"), "body" => ARGV[2], "labels" => JSON.parse(ARGV[0]).map { |name| {"name" => name} }, "comments" => comments})
+  ' "$labels" "$comments" "$body"
+  exit 0
+fi
+
+if [[ "${1:-}" == "issue" && "${2:-}" == "edit" ]]; then
+  if [[ "${FAKE_GH_EDIT_FAIL:-0}" == "1" ]]; then
+    printf 'injected Issue edit failure\n' >&2
+    exit 1
+  fi
+  labels_file=${FAKE_GH_LABELS_FILE:?FAKE_GH_LABELS_FILE is required}
+  shift 2
+  remove='' add=''
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --remove-label) remove=$2; shift 2 ;;
+      --add-label) add=$2; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  ruby -rjson -e 'labels = JSON.parse(File.read(ARGV[0])); labels.delete(ARGV[1]); labels << ARGV[2] unless labels.include?(ARGV[2]); File.write(ARGV[0], JSON.generate(labels))' "$labels_file" "$remove" "$add"
+  if [[ -n "${FAKE_GH_RACE_AFTER_EDIT_LABELS:-}" ]]; then
+    printf '%s' "$FAKE_GH_RACE_AFTER_EDIT_LABELS" > "$labels_file"
+  fi
+  exit 0
+fi
+
+if [[ "${1:-}" == "issue" && "${2:-}" == "comment" ]]; then
+  comments_file=${FAKE_GH_COMMENTS_FILE:?FAKE_GH_COMMENTS_FILE is required}
+  body=''
+  for ((i = 1; i <= $#; i++)); do
+    if [[ "${!i}" == "--body" ]]; then
+      j=$((i + 1)); body=${!j}; break
+    fi
+  done
+  ruby -rjson -e 'comments = JSON.parse(File.read(ARGV[0])); timestamp = ARGV[1][/"timestamp":"([^"]+)"/, 1] || "2026-08-24T00:00:00Z"; comments << {"body" => ARGV[1], "author" => {"login" => "yuto1201"}, "createdAt" => timestamp}; File.write(ARGV[0], JSON.generate(comments))' "$comments_file" "$body"
+  exit 0
+fi
+
+printf 'unexpected fake gh invocation: %s\n' "$*" >&2
+exit 2
