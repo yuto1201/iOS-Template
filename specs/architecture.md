@@ -116,7 +116,7 @@ View から Supabase SDK、SwiftData の複雑な問い合わせ、外部生成A
 | スキル | 追加条件 |
 | --- | --- |
 | `supabase-ops` | アプリ仕様でSupabase使用を確定したとき |
-| `ios-audio-assets` | 効果音またはBGMが受け入れ条件になったとき |
+| `ios-media-assets` | 音声、文字起こし、効果音、音声分離、音楽、画像または動画が受け入れ条件になったとき |
 | `prepare-appstore-assets` | App Store 提出準備を開始するとき |
 | `submit-appstore-release` | 提出情報が監査済みで、Codexが提出するとき |
 
@@ -140,7 +140,7 @@ Codex は `.codex/agents/*.toml`、Claude は `.claude/agents/*.md` を使いま
 - GitHub: Issue、PR、レビュー記録、Squash Merge
 - Supabase: 認証・DB・Storageが必要な場合だけ
 - Cloudflare: ドメイン、公開サイト、Workerが必要な場合だけ
-- ElevenLabs: 効果音・BGMが必要な場合だけ
+- ElevenLabs: 承認済みの音声・画像・動画処理が必要な場合だけ
 - App Store Connect: TestFlight、提出、審査対応
 
 認証済み操作はCodexだけが実行します。Claudeはローカルコードとマイグレーションファイルを作成できますが、リモートへ適用しません。

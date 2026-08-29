@@ -1,0 +1,11 @@
+schemaVersion: 1
+mode: "speech-to-text"
+purpose: "Describe the acceptance-criterion purpose"
+model: "scribe_v2"
+languageCode: null
+sourceSha256: "sha256:replace-with-source-file-digest"
+format: "json"
+transcriptPath: "Feature/Resources/Media/transcript.json"
+sha256: "sha256:replace-with-transcript-digest"
+licenseNote: "Record source consent, retention, and ElevenLabs use"
+processedAt: "2000-01-01T00:00:00Z"

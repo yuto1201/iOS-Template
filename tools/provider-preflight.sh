@@ -14,7 +14,7 @@ usage:
   provider-preflight.sh --issue NUMBER github --target OWNER/REPO
   provider-preflight.sh --issue NUMBER supabase --environment local|preview|staging|production
   provider-preflight.sh --issue NUMBER cloudflare --target IDENTIFIER
-  provider-preflight.sh --issue NUMBER elevenlabs --operation sound-effect|music|bgm
+  provider-preflight.sh --issue NUMBER elevenlabs --operation text-to-speech|speech-to-speech|speech-to-text|sound-effect|audio-isolation|music|image|video
   provider-preflight.sh --issue NUMBER app-store --version VERSION
 USAGE
   exit 2
@@ -32,13 +32,13 @@ esac
 
 requested_target=''
 requested_environment=''
-requested_audio_operation=''
+requested_media_operation=''
 requested_version=''
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) requested_target=${2:-}; shift 2 ;;
     --environment) requested_environment=${2:-}; shift 2 ;;
-    --operation) requested_audio_operation=${2:-}; shift 2 ;;
+    --operation) requested_media_operation=${2:-}; shift 2 ;;
     --version) requested_version=${2:-}; shift 2 ;;
     *) usage ;;
   esac
@@ -46,31 +46,31 @@ done
 
 case "$provider" in
   github)
-    [[ -n "$requested_target" && -z "$requested_environment$requested_audio_operation$requested_version" ]] || usage
+    [[ -n "$requested_target" && -z "$requested_environment$requested_media_operation$requested_version" ]] || usage
     [[ "$requested_target" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail 'GitHub target is invalid'
     evidence_environment=production
     evidence_operation=github.read_issue
     ;;
   supabase)
-    [[ -n "$requested_environment" && -z "$requested_target$requested_audio_operation$requested_version" ]] || usage
+    [[ -n "$requested_environment" && -z "$requested_target$requested_media_operation$requested_version" ]] || usage
     [[ "$requested_environment" =~ ^(local|preview|staging|production)$ ]] || fail 'Supabase environment is invalid'
     evidence_environment=$requested_environment
     evidence_operation=supabase.inspect_project
     ;;
   cloudflare)
-    [[ -n "$requested_target" && -z "$requested_environment$requested_audio_operation$requested_version" ]] || usage
+    [[ -n "$requested_target" && -z "$requested_environment$requested_media_operation$requested_version" ]] || usage
     [[ "$requested_target" =~ ^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$ ]] || fail 'Cloudflare target is invalid'
     evidence_environment=production
     evidence_operation=cloudflare.inspect_account
     ;;
   elevenlabs)
-    [[ -n "$requested_audio_operation" && -z "$requested_target$requested_environment$requested_version" ]] || usage
-    [[ "$requested_audio_operation" =~ ^(sound-effect|music|bgm)$ ]] || fail 'ElevenLabs operation is invalid'
+    [[ -n "$requested_media_operation" && -z "$requested_target$requested_environment$requested_version" ]] || usage
+    [[ "$requested_media_operation" =~ ^(text-to-speech|speech-to-speech|speech-to-text|sound-effect|audio-isolation|music|image|video)$ ]] || fail 'ElevenLabs operation is invalid'
     evidence_environment=production
-    evidence_operation=elevenlabs.generate_audio
+    evidence_operation=elevenlabs.process_media
     ;;
   app-store)
-    [[ -n "$requested_version" && -z "$requested_target$requested_environment$requested_audio_operation" ]] || usage
+    [[ -n "$requested_version" && -z "$requested_target$requested_environment$requested_media_operation" ]] || usage
     [[ "$requested_version" =~ ^[0-9]+([.][0-9]+){1,2}$ ]] || fail 'App Store version is invalid'
     evidence_environment=production
     evidence_operation=appstore.inspect_app
@@ -128,7 +128,7 @@ else
       fail 'Cloudflare target inspection requires a Codex provider adapter that is not configured'
       ;;
     elevenlabs)
-      fail 'ElevenLabs entitlement inspection requires the Codex audio capability'
+      fail 'ElevenLabs entitlement inspection requires the Codex media capability'
       ;;
     app-store)
       fail 'App Store identity inspection requires the authenticated Codex App Store workflow'
@@ -160,7 +160,7 @@ if [[ "$provider" == cloudflare && "$requested_target" != "$expected_target" ]];
 
 candidate="$temporary_directory/candidate.json"
 PROVIDER="$provider" ISSUE="$issue_number" ACCOUNT="$expected_account" TARGET="$expected_target" \
-  ENVIRONMENT="$evidence_environment" OPERATION="$evidence_operation" AUDIO_OPERATION="$requested_audio_operation" \
+  ENVIRONMENT="$evidence_environment" OPERATION="$evidence_operation" MEDIA_OPERATION="$requested_media_operation" \
   VERSION="$requested_version" CHECKED_AT="$checked_at" ruby -rjson -rdigest -rtime -e '
     def canonical(value)
       case value
@@ -178,7 +178,7 @@ PROVIDER="$provider" ISSUE="$issue_number" ACCOUNT="$expected_account" TARGET="$
       raise unless raw["account"].is_a?(String) && raw["account"].match?(safe) && raw["target"].is_a?(String) && raw["target"].match?(safe)
       raise unless raw["health"] == "healthy"
       if provider == "elevenlabs"
-        requested=ENV.fetch("AUDIO_OPERATION")
+        requested=ENV.fetch("MEDIA_OPERATION")
         capability=raw["capabilities"].is_a?(Hash) ? raw["capabilities"][requested] : nil
         if capability == "paid_plan_required"
           warn "blocked:ops: paid_plan_required"

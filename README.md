@@ -201,7 +201,7 @@ Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/produc
 Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundation のアプリ本体へ組み込まれていません。必要性を確定仕様と Issue の受け入れ条件に明記した場合だけ、別 Issue で有効化します。テンプレートの状態では root `supabase/`、外部 SDK、認証済み接続を持たず、不要なサービスの保守や権限を発生させません。
 
 - データベース、認証、同期、Storage が必要なアプリでは [Supabase operations skill](./.agents/skills/supabase-ops/SKILL.md)を使用します。`Status: 確定`かつ`Supabase: required`の仕様だけが有効化でき、`supabase/migrations/`を唯一のスキーマ履歴としてRLSとPolicyを同時に追加します。Claudeはローカルのmigration編集・検証・`supabase db reset --local`まで、個人の`YUTO1201` Organization/Projectへのlink・pull・push・SQL適用はCodexだけが行います。
-- 効果音、音楽、BGM が必要な場合は [iOS audio assets skill](./.agents/skills/ios-audio-assets/SKILL.md)から、CLI環境にインストールされた`generating-elevenlabs-audio`能力を解決します。Codexが個人アカウントと利用可能な機能を先に確認し、生成結果を長さ・形式・ハッシュ・ループ境界まで検査します。`paid_plan_required`は再試行せず`blocked:ops`として止めます。Claudeは既存音声のローカル検査だけを行えます。
+- 読み上げ、Voice Changer、文字起こし、効果音、音声分離、音楽、画像、動画が必要な場合は [iOS media assets skill](./.agents/skills/ios-media-assets/SKILL.md)を使用します。Codexが個人ElevenLabsアカウント、Workspace、モード別entitlementを先に確認し、受理した音声・transcript・PNG・MP4とsanitized manifestだけを統合します。`paid_plan_required`、権限・moderation・著作権拒否、課金成否が曖昧な試行は自動retryしません。Claudeはpromptやmanifestの準備、ローカル検証、アプリ統合だけを行います。
 - GitHub、Supabase、Cloudflare、ElevenLabs、App Store Connectを含む認証済み外部操作は、実行直前に`tools/provider-preflight.sh`で個人アカウントと対象を照合し、Codexだけが実行します。Claudeは`codex-external-ops`へ委託します。
 - 一行の秘密値はmacOS Keychainへ保存し、`tools/run-with-secret.sh`が子プロセスの環境だけへ渡します。App Store Connectの`.p8`は`~/Library/Application Support/iOS-Template/secrets/${appSlug}/`の`0700`ディレクトリ／`0600`ファイルだけを`tools/run-with-private-key.sh`で使用します。取得値を表示するコマンドはなく、`.secrets/`と`secret-staging/`もGit管理外です。
 

@@ -2,6 +2,7 @@
 xcuserdata/
 DerivedData/
 /.artifacts
+.superpowers/
 .worktrees/
 Config/Local.xcconfig
 *.p8
