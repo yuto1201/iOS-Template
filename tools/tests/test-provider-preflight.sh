@@ -79,7 +79,13 @@ assert_record cloudflare personal-cloudflare personal-worker production cloudfla
 
 rm -rf -- "$artifact_root/issues/42/provider-preflights"
 run_preflight "$fixture_root/elevenlabs-personal.json" --issue 42 elevenlabs --operation sound-effect >/dev/null
-assert_record elevenlabs personal-elevenlabs personal-workspace production elevenlabs.generate_audio
+assert_record elevenlabs personal-elevenlabs personal-workspace production elevenlabs.process_media
+
+for operation in text-to-speech speech-to-speech speech-to-text audio-isolation image; do
+  rm -rf -- "$artifact_root/issues/42/provider-preflights"
+  run_preflight "$fixture_root/elevenlabs-personal.json" --issue 42 elevenlabs --operation "$operation" >/dev/null
+  assert_record elevenlabs personal-elevenlabs personal-workspace production elevenlabs.process_media
+done
 
 rm -rf -- "$artifact_root/issues/42/provider-preflights"
 run_preflight "$fixture_root/app-store-personal.json" --issue 42 app-store --version 1.0 >/dev/null
@@ -89,6 +95,8 @@ assert_fails_without_artifact 'company Supabase identity' supabase "$fixture_roo
 assert_fails_without_artifact 'unhealthy Supabase project' supabase "$fixture_root/supabase-unhealthy.json" --environment production
 assert_fails_without_artifact 'Cloudflare target mismatch' cloudflare "$fixture_root/cloudflare-personal.json" --target another-worker
 assert_fails_without_artifact 'ElevenLabs music entitlement' elevenlabs "$fixture_root/elevenlabs-personal.json" --operation music
+assert_fails_without_artifact 'ElevenLabs video entitlement' elevenlabs "$fixture_root/elevenlabs-personal.json" --operation video
+assert_fails_without_artifact 'ElevenLabs invalid operation' elevenlabs "$fixture_root/elevenlabs-personal.json" --operation dubbing
 assert_fails_without_artifact 'App Store Team and Bundle mismatch' app-store "$fixture_root/app-store-company.json" --version 1.0
 assert_fails_without_artifact 'App Store version mismatch' app-store "$fixture_root/app-store-personal.json" --version 2.0
 

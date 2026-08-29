@@ -66,6 +66,7 @@ OPERATIONS = {
   'cloudflare.inspect_account' => ['cloudflare-account', []],
   'cloudflare.deploy' => ['cloudflare-project', %w[source]],
   'elevenlabs.generate_audio' => ['elevenlabs-project', %w[outputPath text voice]],
+  'elevenlabs.process_media' => ['elevenlabs-project', %w[mode outputPath request]],
   'appstore.inspect_app' => ['appstore-app', []],
   'appstore.upload_build' => ['appstore-app', %w[buildPath]],
   'appstore.update_metadata' => ['appstore-app', %w[metadata]],
@@ -304,6 +305,10 @@ def validate_inputs(operation, inputs, repo_root)
       contained_path(value, 'inputs.source', repo_root, ->(parts) { parts.first != '.artifacts' }, :source)
     when 'outputPath'
       contained_path(value, 'inputs.outputPath', repo_root, ->(parts) { parts.length >= 3 && parts[1] == 'Resources' }, :output)
+    when 'mode'
+      nonempty_string(value, 'inputs.mode')
+      allowed = %w[text-to-speech speech-to-speech speech-to-text sound-effect audio-isolation music image video]
+      fail_closed('inputs.mode is not an allowed ElevenLabs media mode') unless allowed.include?(value)
     when 'buildPath'
       contained_path(value, 'inputs.buildPath', repo_root, ->(parts) { parts.length >= 3 && parts[0] == '.artifacts' && parts[1] == 'appstore-builds' }, :file)
     else

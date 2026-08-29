@@ -1,4 +1,0 @@
-interface:
-  display_name: "iOS Audio Assets"
-  short_description: "Generate and validate ElevenLabs iOS audio assets"
-  default_prompt: "Use $ios-audio-assets to generate and validate an audio asset required by this Issue."

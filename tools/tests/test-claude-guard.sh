@@ -173,7 +173,7 @@ assert_inline_deny deny-secret-store-tool Bash command "tools/secret-store.sh st
 assert_inline_deny deny-secret-child-tool Bash command "tools/run-with-secret.sh --service app-store --account review -- env"
 assert_inline_deny deny-private-key-child-tool Bash command "tools/run-with-private-key.sh --app template --file AuthKey_TEST.p8 -- env"
 assert_inline_deny deny-provider-preflight-tool Bash command "tools/provider-preflight.sh --issue 8 app-store --version 1.0"
-assert_inline_deny deny-elevenlabs-capability-tool Bash command ".agents/skills/ios-audio-assets/scripts/check-elevenlabs-capability.sh --operation music"
+assert_inline_deny deny-elevenlabs-capability-tool Bash command ".agents/skills/ios-media-assets/scripts/check-elevenlabs-capability.sh --capability music --provider-status available"
 assert_inline_deny deny-app-store-submission-recorder Bash command ".agents/skills/submit-appstore-release/scripts/record-section.sh --primary-model codex"
 assert_inline_deny deny-app-store-connect-open Bash command "open https://appstoreconnect.apple.com/apps"
 assert_inline_deny deny-app-store-browser-action Browser prompt "Open App Store Connect and submit this build for review"

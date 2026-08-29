@@ -103,7 +103,7 @@ Codexが期待アカウントと実際のアカウントの不一致を検出し
 - GitHub: `github.read_issue`、`github.create_issue`、`github.update_issue`、`github.push_branch`、`github.create_pr`、`github.merge_pr`、`github.delete_branch`、`github.sync_labels`
 - Supabase: `supabase.inspect_project`、`supabase.apply_migrations`
 - Cloudflare: `cloudflare.inspect_account`、`cloudflare.deploy`
-- ElevenLabs: `elevenlabs.generate_audio`
+- ElevenLabs: `elevenlabs.process_media`。旧request互換の`elevenlabs.generate_audio`は新規Issueでは使用しない。
 - App Store Connect: `appstore.inspect_app`、`appstore.upload_build`、`appstore.update_metadata`、`appstore.submit_review`
 
 共通の `target` は `kind` と、秘密でない一意な `identifier` を持ちます。結果の `target` は同じidentifierです。
@@ -135,8 +135,9 @@ Identityの期待値は `Config/ownership.yml` を正本とします。GitHub lo
 ### ElevenLabs
 
 - 個人用Account IDとWorkspace ID、および認証状態
-- 実行する生成種別と契約上の利用可否
+- 実行する生成・変換・文字起こし種別と契約上の利用可否
 - 出力先がRepository内の許可された素材ディレクトリであること
+- アップロードするsource/referenceの権利、同意、保持方針がIssueで確定していること
 
 ### App Store Connect
 

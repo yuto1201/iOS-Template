@@ -50,6 +50,7 @@ module IOSTemplate
       cloudflare.inspect_account
       cloudflare.deploy
       elevenlabs.generate_audio
+      elevenlabs.process_media
       appstore.inspect_app
       appstore.upload_build
       appstore.update_metadata

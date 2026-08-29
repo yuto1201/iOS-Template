@@ -158,3 +158,12 @@
 - Context: GitHub Templateから作成したリポジトリで`TemplateApp`のProject、Target、Scheme、Module、Bundle IDが残ったままFeature開発を始めると、後の名称変更がコード、Test、設定、提出情報の整合性を壊す。
 - Decision: リポジトリ作成後に最小Identity仕様を確定し、Identity Bootstrap Issueを機能開発より先に完了する。変換ツールは将来のアプリ名をテンプレートへ固定せず、検証済み引数を使って隔離worktree内で変換を完成させた後、検証済みpatchだけを適用する。Foundation、Identity bootstrap、Simulator verificationの3件をBootstrap Issueとする。
 - Consequence: 新しいアプリは一貫した名前とBundle IDからFeature開発を開始できる。リモートリポジトリ名変更やBundle ID登録などの認証済み操作はbootstrap変換へ含めず、Codexの別操作として扱う。
+
+## D-023: ElevenLabsの条件付きメディア処理を一つの共有スキルへ統合する
+
+- Date: 2026-08-29
+- Status: 確定
+- Supersedes: D-013
+- Context: ElevenLabsで効果音とBGMだけでなく、テキスト読み上げ、Voice Changer、文字起こし、音声分離、画像、動画も扱い、CodexとClaudeの不足するメディア制作能力を補う必要がある。
+- Decision: 承認済みIssueが必要とする場合だけ、`ios-media-assets`が8つの明示的なモードへ振り分ける。認証済み処理はCodexだけが個人アカウントで実行し、Claudeはローカル準備・検証・統合に限定する。
+- Consequence: 重複する`ios-audio-assets`は廃止する。各モードは権利・同意・プライバシー・契約・課金境界を事前確認し、受理した出力とsanitized manifestだけをアプリへ統合する。

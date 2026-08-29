@@ -412,7 +412,7 @@ ln -s /tmp "$request_dir/path-link"
 ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["inputs"]["source"] = ".artifacts/ops-requests/path-link"; File.write(ARGV[0], JSON.generate(value))' "$request_dir/cloudflare-deploy.json"
 assert_fails 'Cloudflare source symlink escape is rejected' "$repo_root/tools/validate-codex-op-request.sh" --request "$request_dir/cloudflare-deploy.json"
 cat > "$request_dir/elevenlabs-audio.json" <<'EOF'
-{"requestVersion":1,"requestId":"elevenlabs-audio","issue":424249,"operation":"elevenlabs.generate_audio","target":{"kind":"elevenlabs-project","identifier":"example"},"environment":"production","expectedAccount":"yuto1201","inputs":{"outputPath":"/tmp/audio.mp3","text":"hello","voice":"voice"},"reason":"generate"}
+{"requestVersion":1,"requestId":"elevenlabs-audio","issue":424249,"operation":"elevenlabs.process_media","target":{"kind":"elevenlabs-project","identifier":"example"},"environment":"production","expectedAccount":"yuto1201","inputs":{"mode":"text-to-speech","outputPath":"/tmp/audio.mp3","request":"approved speech request"},"reason":"generate"}
 EOF
 assert_fails 'ElevenLabs output path must use an allowed Resource directory' "$repo_root/tools/validate-codex-op-request.sh" --request "$request_dir/elevenlabs-audio.json"
 cat > "$request_dir/appstore-build.json" <<'EOF'

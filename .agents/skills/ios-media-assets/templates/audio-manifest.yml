@@ -1,0 +1,15 @@
+schemaVersion: 2
+mode: "sound-effect"
+purpose: "Describe the acceptance-criterion purpose"
+requestSummary: "Describe the approved request without credentials or private source text"
+model: "eleven_text_to_sound_v2"
+sourceSha256: null
+voiceId: null
+durationSeconds: 1.0
+loop: false
+loopDiscontinuityThreshold: null
+format: "wav"
+assetPath: "Feature/Resources/Media/asset.wav"
+licenseNote: "Record the ElevenLabs use and source-rights basis"
+sha256: "sha256:replace-with-file-digest"
+processedAt: "2000-01-01T00:00:00Z"

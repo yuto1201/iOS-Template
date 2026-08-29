@@ -1,0 +1,14 @@
+schemaVersion: 1
+mode: "image"
+purpose: "Describe the acceptance-criterion purpose"
+prompt: "Describe the approved original visual in English"
+model: "Record the exact provider model"
+sourceDigests: []
+widthPixels: 1024
+heightPixels: 1024
+durationSeconds: null
+format: "png"
+assetPath: "Feature/Resources/Media/asset.png"
+licenseNote: "Record the ElevenLabs use and reference-rights basis"
+sha256: "sha256:replace-with-file-digest"
+processedAt: "2000-01-01T00:00:00Z"

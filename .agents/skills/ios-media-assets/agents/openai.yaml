@@ -1,0 +1,4 @@
+interface:
+  display_name: "iOS Media Assets"
+  short_description: "Create and validate conditional ElevenLabs app media"
+  default_prompt: "Use $ios-media-assets to create or transform the media asset required by this Issue."
