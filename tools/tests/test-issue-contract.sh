@@ -141,6 +141,9 @@ assert_fails 'fast profile rejects high-risk provider mutation' "$repo_root/tool
 write_feature_issue "$workspace/standard-deploy.md" $'- Operation: cloudflare.deploy\n- Service: Cloudflare\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.' $'## Delivery profile\n\n- Profile: standard\n- Reason: Incorrectly classified production deploy.'
 assert_fails 'standard profile rejects high-risk provider mutation' "$repo_root/tools/validate-issue-body.sh" "$workspace/standard-deploy.md"
 
+write_feature_issue "$workspace/standard-approval-required.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: standard\n- Reason: Incorrectly classified approval-required operation.'
+assert_fails 'standard profile rejects any approval-required operation' "$repo_root/tools/validate-issue-body.sh" "$workspace/standard-approval-required.md"
+
 write_feature_issue "$workspace/strict-release.md" $'- Operation: appstore.submit_review\n- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: strict\n- Reason: App Store submission is a release boundary.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/strict-release.md"
 

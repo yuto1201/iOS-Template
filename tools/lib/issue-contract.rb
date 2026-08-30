@@ -172,8 +172,8 @@ module IOSTemplate
         if name != "strict" && external_details.any? { |detail| DeliveryProfile.strict_operation?(detail.fetch("operation")) }
           failures << "high-risk external operations require strict delivery profile"
         end
-        if name == "fast" && external_details.any? { |detail| detail.fetch("approvalRequired") }
-          failures << "approval-required operations cannot use fast delivery profile"
+        if name != "strict" && external_details.any? { |detail| detail.fetch("approvalRequired") }
+          failures << "approval-required operations require strict delivery profile"
         end
       end
 
