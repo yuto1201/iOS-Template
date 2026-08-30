@@ -67,6 +67,17 @@ CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/iss
 
 検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。実行モデルがGitHubから取得して生成したsnapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用でき、Issue本文が変わった場合は実行モデルが再取得してdigestを更新します。
 
+application検証を実行するIssueは、本文へ`Verification mapping`節を書きます。節が無い、または`Not applicable`の場合、snapshotへ`verification`を追加せず、そのIssueはapplication検証を実行しません。節がある場合、`bundleIdentifier`、`unitTestIdentifier`、`cases`はRepository単位の事実として`Config/verification.json`から取り、`acceptanceMappings`は本文の宣言をそのまま使います。合成しません。Repository設定はIssueの主張を広げられません。
+
+```text
+## Verification mapping
+
+- AC-1: stage:build, stage:unit-tests
+- AC-2: case:iphone-en, case:iphone-ja, visual:iphone-en, visual:iphone-ja
+```
+
+Claimは`origin/main`をfetchしてBase SHAを確定した後、そのBase commitの`Config/verification.json` blobだけをproducerへ渡します。working treeの未コミット変更や照合後の差し替えをsealed contractへ入れません。Base commitに設定が無い状態で`Verification mapping`を宣言したIssueはClaim前に失敗します。
+
 application検証を実行するIssue contractだけ、上の必須fieldに加えて次のexact `verification` objectを持てます。許可するkeyは `bundleIdentifier`、`unitTestIdentifier`、固定順4件の `cases`、受け入れ条件と同じ順の `acceptanceMappings` だけです。`unitTestIdentifier` とcaseの `testIdentifier` はどちらも `Target/Class/testMethod` です。各caseは `id` に加え、`testIdentifier` または `assertion` のちょうど一方を持ちます。Task 4で許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}` です。application実行時にこのobjectがない、不完全、順序違い、両actionを持つ場合は、Build前に失敗します。
 
 `acceptanceMappings` は全 `AC-*` をexactに一度ずつ含め、各 `checks` は空でなく重複せず、次のcanonical順を守ります: `stage:build`、`stage:unit-tests`、4つの `case:<case-id>`、4つの `visual:<case-id>`。少なくとも1つのstageまたはcase checkが必要です。runnerは実行したstage/caseだけをdraftへ記録し、finalizeはAIが承認したvisual checkを加えたexact mappingをfinal evidenceへ記録します。未知または未実行の参照は許可しません。

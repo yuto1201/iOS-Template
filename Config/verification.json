@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "bundleIdentifier": "com.yuto.TemplateApp",
+  "unitTestIdentifier": "TemplateAppTests/TemplateAppTests/welcomeMessageLocalizations()",
+  "cases": [
+    {
+      "id": "iphone-en",
+      "testIdentifier": "TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle"
+    },
+    {
+      "id": "iphone-ja",
+      "testIdentifier": "TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle"
+    },
+    {
+      "id": "ipad-en",
+      "testIdentifier": "TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle"
+    },
+    {
+      "id": "ipad-ja",
+      "testIdentifier": "TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle"
+    }
+  ]
+}

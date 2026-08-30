@@ -73,6 +73,16 @@ body:
     validations:
       required: true
   - type: textarea
+    id: verification-mapping
+    attributes:
+      label: Verification mapping
+      description: "Write `Not applicable` when the Issue runs no application verification. Otherwise list every acceptance criterion exactly once, in order, with the checks that verify it. Allowed checks in this order: `stage:build`, `stage:unit-tests`, `case:iphone-en`, `case:iphone-ja`, `case:ipad-en`, `case:ipad-ja`, `visual:iphone-en`, `visual:iphone-ja`, `visual:ipad-en`, `visual:ipad-ja`. Only declare a check that actually verifies that criterion."
+      placeholder: |
+        - AC-1: stage:build, stage:unit-tests
+        - AC-2: case:iphone-en, case:iphone-ja, visual:iphone-en, visual:iphone-ja
+    validations:
+      required: false
+  - type: textarea
     id: external-operations
     attributes:
       label: External operations

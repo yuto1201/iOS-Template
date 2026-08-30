@@ -163,6 +163,13 @@ module IOSTemplate
         failures
       )
 
+      verification_mappings = parse_verification_mapping(
+        lines, headings, acceptance_items.map { |item| item.fetch("id") }, failures
+      )
+      verification_configuration = load_verification_configuration(
+        failures, required: !verification_mappings.nil?
+      )
+
       delivery_profile = parse_delivery_profile(lines, headings, failures)
       if delivery_profile
         name = delivery_profile.fetch("name")
@@ -229,6 +236,8 @@ module IOSTemplate
           "externalOperationDetailsDigest" => "sha256:#{Digest::SHA256.hexdigest(canonical_json(external_details))}",
           "fetchedAt" => fetched_at
         }
+        verification = build_verification(verification_configuration, verification_mappings)
+        contract["verification"] = verification if verification
         contract["deliveryProfile"] = delivery_profile if delivery_profile
       end
 
@@ -260,6 +269,157 @@ module IOSTemplate
       failures << "Delivery profile must be fast, standard, or strict" unless DeliveryProfile::NAMES.include?(name)
       return nil unless DeliveryProfile::NAMES.include?(name)
       {"name" => name, "reason" => reason}
+    end
+
+    VERIFICATION_CASE_IDS = %w[iphone-en iphone-ja ipad-en ipad-ja].freeze
+
+    # docs/workflow.md fixes this order. tools/validate-verify-json.swift rejects any
+    # other ordering, so keep the two lists identical.
+    CANONICAL_CHECKS = ([
+      "stage:build",
+      "stage:unit-tests"
+    ] + VERIFICATION_CASE_IDS.map { |id| "case:#{id}" } +
+      VERIFICATION_CASE_IDS.map { |id| "visual:#{id}" }).freeze
+
+    EXECUTION_CHECK_PREFIXES = %w[stage: case:].freeze
+
+    TEST_IDENTIFIER_PATTERN = %r{\A[A-Za-z0-9_]+/[A-Za-z0-9_]+/[A-Za-z0-9_]+(?:\(\))?\z}
+    BUNDLE_IDENTIFIER_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9.-]*\z/
+
+    # Claim passes the Base-commit blob so the sealed contract can never embed
+    # uncommitted or concurrently swapped working-tree bytes. Other callers fall back to
+    # the checked-out file for authoring-time validation.
+    def verification_configuration_override
+      @verification_configuration_override
+    end
+
+    def verification_configuration_override=(path)
+      @verification_configuration_override = path
+    end
+
+    def verification_configuration_path
+      verification_configuration_override || File.expand_path("../../Config/verification.json", __dir__)
+    end
+
+    # Repository-level facts that never vary per Issue. Per-Issue evidence attribution
+    # comes from the Issue body instead, so this file cannot widen what an Issue claims.
+    def load_verification_configuration(failures, required:)
+      path = verification_configuration_path
+      unless File.exist?(path) || File.symlink?(path)
+        failures << "Config/verification.json is missing" if required
+        return nil
+      end
+      unless File.file?(path) && !File.symlink?(path)
+        failures << "Config/verification.json must be a regular file"
+        return nil
+      end
+      begin
+        value = JSON.parse(File.read(path))
+      rescue JSON::ParserError
+        failures << "Config/verification.json is not valid JSON"
+        return nil
+      end
+      unless value.is_a?(Hash) && value.keys.sort == %w[bundleIdentifier cases schemaVersion unitTestIdentifier]
+        failures << "Config/verification.json must contain exactly schemaVersion, bundleIdentifier, unitTestIdentifier, and cases"
+        return nil
+      end
+      failures << "Config/verification.json schemaVersion must be 1" unless value["schemaVersion"] == 1
+      unless value["bundleIdentifier"].is_a?(String) && value["bundleIdentifier"].match?(BUNDLE_IDENTIFIER_PATTERN)
+        failures << "Config/verification.json bundleIdentifier is invalid"
+      end
+      unless value["unitTestIdentifier"].is_a?(String) && value["unitTestIdentifier"].match?(TEST_IDENTIFIER_PATTERN)
+        failures << "Config/verification.json unitTestIdentifier must be Target/Class/testMethod with optional trailing ()"
+      end
+      cases = value["cases"]
+      unless cases.is_a?(Array) && cases.length == VERIFICATION_CASE_IDS.length
+        failures << "Config/verification.json cases must contain the exact four ordered case IDs"
+        return nil
+      end
+      cases.each_with_index do |entry, index|
+        expected_id = VERIFICATION_CASE_IDS.fetch(index)
+        unless entry.is_a?(Hash) && entry["id"] == expected_id
+          failures << "Config/verification.json cases must contain the exact four ordered case IDs"
+          next
+        end
+        case entry.keys.sort
+        when %w[id testIdentifier]
+          unless entry["testIdentifier"].is_a?(String) && entry["testIdentifier"].match?(TEST_IDENTIFIER_PATTERN)
+            failures << "Config/verification.json cases[#{index}].testIdentifier must be Target/Class/testMethod with optional trailing ()"
+          end
+        when %w[assertion id]
+          assertion = entry["assertion"]
+          unless assertion.is_a?(Hash) && assertion.keys == %w[kind] && assertion["kind"] == "launch-succeeded"
+            failures << "Config/verification.json cases[#{index}].assertion must be exactly {\"kind\":\"launch-succeeded\"}"
+          end
+        else
+          failures << "Config/verification.json cases[#{index}] must contain exactly one of testIdentifier or assertion"
+        end
+      end
+      return nil if failures.any? { |failure| failure.start_with?("Config/verification.json") }
+      value
+    end
+
+    # Parses the Issue body section that attributes verification checks to each
+    # acceptance criterion. Returns nil for `Not applicable`, which is how a
+    # documentation-only Issue declares that it runs no application verification.
+    #
+    #   - AC-1: stage:build, stage:unit-tests
+    #   - AC-2: case:iphone-en, visual:iphone-en
+    def parse_verification_mapping(lines, headings, acceptance_ids, failures)
+      matches = headings.select { |heading, _| heading == "Verification mapping" }
+      return nil if matches.empty?
+      if matches.length > 1
+        failures << "duplicate optional heading: Verification mapping"
+        return nil
+      end
+      heading_index = matches.first[1]
+      next_heading = headings.find { |_, line_index| line_index > heading_index }
+      section = lines[(heading_index + 1)...(next_heading ? next_heading[1] : lines.length)].join
+      return nil if none_value?(section) || section.match?(/\A\s*(?:[-*]\s*)?Not applicable\.?\s*\z/i)
+
+      entries = section.each_line.map do |line|
+        match = line.match(/\A\s*[-*]\s+(AC-\d+)\s*:\s*(\S.*?)\s*\z/)
+        match && [match[1], match[2]]
+      end.compact
+
+      if entries.map(&:first) != acceptance_ids
+        failures << "Verification mapping must list every AC exactly once in acceptance-criteria order"
+        return nil
+      end
+
+      mappings = entries.map do |id, raw|
+        checks = raw.split(",").map(&:strip).reject(&:empty?)
+        if checks.empty?
+          failures << "Verification mapping #{id} has no checks"
+        elsif checks.uniq != checks
+          failures << "Verification mapping #{id} repeats a check"
+        elsif (unknown = checks - CANONICAL_CHECKS).any?
+          failures << "Verification mapping #{id} has unknown checks: #{unknown.join(', ')}"
+        elsif checks != checks.sort_by { |check| CANONICAL_CHECKS.index(check) }
+          failures << "Verification mapping #{id} must use canonical check order"
+        elsif checks.none? { |check| EXECUTION_CHECK_PREFIXES.any? { |prefix| check.start_with?(prefix) } }
+          failures << "Verification mapping #{id} needs at least one stage or case check"
+        end
+        {"id" => id, "checks" => checks}
+      end
+      return nil unless failures.empty?
+      mappings
+    end
+
+    def build_verification(configuration, mappings)
+      return nil if configuration.nil? || mappings.nil?
+      {
+        "bundleIdentifier" => configuration.fetch("bundleIdentifier"),
+        "unitTestIdentifier" => configuration.fetch("unitTestIdentifier"),
+        "cases" => configuration.fetch("cases").map do |entry|
+          if entry.key?("testIdentifier")
+            {"id" => entry.fetch("id"), "testIdentifier" => entry.fetch("testIdentifier")}
+          else
+            {"id" => entry.fetch("id"), "assertion" => {"kind" => "launch-succeeded"}}
+          end
+        end,
+        "acceptanceMappings" => mappings
+      }
     end
 
     def parse_external_operations(external_section, approvals_section, failures)
@@ -432,6 +592,7 @@ if $PROGRAM_NAME == __FILE__
     cli.on("--issue NUMBER") { |value| options["issue"] = value }
     cli.on("--repo OWNER/REPO") { |value| options["repo"] = value }
     cli.on("--fetched-at TIMESTAMP") { |value| options["fetched_at"] = value }
+    cli.on("--verification-config PATH") { |value| options["verification_config"] = value }
   end
 
   begin
@@ -443,6 +604,8 @@ if $PROGRAM_NAME == __FILE__
     if snapshot && [options["issue"], options["repo"], options["fetched_at"]].any?(&:nil?)
       raise OptionParser::MissingArgument, "--issue, --repo, and --fetched-at are required for snapshot output"
     end
+
+    IOSTemplate::IssueContract.verification_configuration_override = options["verification_config"]
 
     result = IOSTemplate::IssueContract.parse_file(
       options.fetch("body"),

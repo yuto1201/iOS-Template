@@ -137,7 +137,21 @@ if [[ -f "$existing_contract_path" && ! -L "$existing_contract_path" ]]; then
 else
   fetched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 fi
+# Resolve the Base before sealing so the contract embeds the verification configuration
+# from the trusted Base commit rather than a mutable working-tree copy.
+git -C "$repo_root" fetch origin main >/dev/null
+base_sha=$(git -C "$repo_root" rev-parse --verify 'origin/main^{commit}') || { echo 'origin/main is not a verified commit' >&2; exit 1; }
+base_verification=$(mktemp "${TMPDIR:-/tmp}/ios-template-verification-config.XXXXXX")
+trap 'rm -f "$body" "$contract_candidate" "$base_verification"' EXIT
+if git -C "$repo_root" cat-file -e "$base_sha:Config/verification.json" 2>/dev/null; then
+  git -C "$repo_root" cat-file blob "$base_sha:Config/verification.json" > "$base_verification"
+else
+  rm -f "$base_verification"
+  base_verification=/nonexistent/Config/verification.json
+fi
+
 ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --verification-config "$base_verification" \
   --body "$body" --type "$issue_type" --format contract \
   --issue "$issue" --repo "$repo" --fetched-at "$fetched_at" \
   > "$contract_candidate"
@@ -155,8 +169,6 @@ done
 # publication, so an account or repository mismatch leaves user Git state alone.
 workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || conflict 'GitHub account preflight failed before Claim publication'
 
-git -C "$repo_root" fetch origin main >/dev/null
-base_sha=$(git -C "$repo_root" rev-parse --verify 'origin/main^{commit}') || { echo 'origin/main is not a verified commit' >&2; exit 1; }
 
 expected_candidates=$(printf '%s\n' "$branches" | sed '/^$/d' | sort -u)
 if [[ -n "$expected_candidates" && "$expected_candidates" != "$branch" ]]; then conflict 'Issue has a conflicting Branch candidate'; fi
