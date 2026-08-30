@@ -130,6 +130,21 @@ ruby -rjson -e '
   abort "Claude settings must retain only the shared SessionStart instruction loader" unless settings.keys == ["hooks"] && settings.dig("hooks")&.keys == ["SessionStart"]
 '
 
+model_neutral_authority_files=(
+  .agents/skills/app-bootstrap/SKILL.md
+  .agents/skills/plan-issue-batch/SKILL.md
+  .agents/skills/ios-verify/SKILL.md
+  .claude/agents/release-auditor.md
+)
+if rg -n -i 'codex-only|codex only|delegate(d)? to codex|delegated to codex|codexへ委託|codex専用|never run .*from claude|do not create .*from a claude' "${model_neutral_authority_files[@]}"; then
+  echo 'active instructions must not retain model-specific external authority restrictions' >&2
+  exit 1
+fi
+if rg -n 'CodexOperationTransport|run-codex-transport|Codex result' tools/lib/workflow-json.rb; then
+  echo 'obsolete Codex-only external operation transport must not remain in shared workflow code' >&2
+  exit 1
+fi
+
 if [[ -e CLAUDE.md ]] || git ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1; then
   echo "CLAUDE.md must not exist or be tracked" >&2
   exit 1
