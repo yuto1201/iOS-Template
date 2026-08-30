@@ -185,3 +185,13 @@
 - Context: 全Headへ4条件Simulator、画像評価、反対モデルreview、exact evidence closureを適用すると、非UIのドメイン／永続化Issueでも小さな修正ごとに完全検証が失効し、実装時間より検証反復が長くなる。実運用では同一Issueに複数Head分の完全証拠が生成され、個人開発の進行速度を大きく落とした。
 - Decision: 新規Issueは`fast`、`standard`、`strict`のdelivery profileと理由を明示する。`fast`は非UI・低リスク変更を現在HeadのBuild、対象Test、必要なrepository testだけで完了でき、4条件Simulator、画像評価、blockingな反対モデルreviewを要求しない。`standard`は通常UI変更に使用し、開発中は対象Testを優先して、安定した最終候補Headにだけ4条件Simulator、画像評価、反対モデルreviewを実行する。`strict`は認証・認可、秘密、DB migration、本番データ、破壊的操作、課金、privacy・法務、App Store／TestFlight、署名、delivery gate自体へ現在の完全ゲートを適用する。未指定の既存Issueは`strict`として扱う。
 - Consequence: 日常の実装ループは短くなる一方、外部アカウント完全一致、秘密非露出、必要なユーザー承認、main直接変更禁止、1 Issue = 1 Branch = 1 PR、Squash Merge、Merge直前のHead SHA照合は全profileで維持される。strict対象operationを低いprofileへ指定した場合はfail closedになる。
+
+## D-026: AppLibraryのアプリサイトを法務ページの公開先とする
+
+- Date: 2026-08-31
+- Status: 確定
+- Supersedes: None。D-014の申請原稿集約を補足し、D-024の外部操作権限とD-025の検証方針は維持する。
+- Context: ユーザーは、開発中のAppLibraryの一覧から各アプリWebサイトへ案内し、そのサイト内へ利用規約・プライバシーポリシーを設ける方針を指定した。Cloudflareはドメイン・DNS管理、Web公開はVercelへ統一し、app.yutodev.comの移行は別途進行中である。
+- Decision: 申請準備で法務ページが必要になったら、[プロダクト方針 §6.1](product.md#61-applibraryでの法務ページ公開方針)に従い、各アプリのApp Store原稿を基にAppLibraryから案内されるアプリサイトへ公開する。Cloudflare Pagesは使わない。具体的な配置・パス・公開URL・Vercel projectはユーザーの後日指定事項として残し、今回確定しない。
+- Consequence: 方針の文書化と独立したアプリ開発・原稿準備は進められる。公開先が必要な作業だけを確認待ちにし、ユーザー指定後に配置を確定する。法務本文の実態照合・初回承認・公開到達性の確認を維持し、サイト移行・デプロイ・DNS変更・App Store提出はこの決定だけでは実行しない。
+- Related Issue: #27
