@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo 'usage: sync-github-labels.sh --repo OWNER/REPOSITORY --executor codex' >&2
+  echo 'usage: sync-github-labels.sh --repo OWNER/REPOSITORY --executor codex|claude' >&2
   exit 2
 }
 
@@ -16,7 +16,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo 'invalid repository' >&2; exit 2; }
-[[ "$executor" == codex ]] || { echo 'sync-github-labels.sh is Codex-only; pass --executor codex' >&2; exit 2; }
+[[ "$executor" == codex || "$executor" == claude ]] || { echo 'sync-github-labels.sh requires --executor codex or --executor claude' >&2; exit 2; }
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd -P)
 manifest="$repo_root/.github/labels.yml"

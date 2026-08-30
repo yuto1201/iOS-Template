@@ -77,7 +77,7 @@ shipping_skills=(
   plan-issue-batch
   ship-issue
   ship-issue-batch
-  codex-external-ops
+  external-ops
 )
 
 integration_skills=(
@@ -112,6 +112,23 @@ for file in "${required_files[@]}"; do
     exit 1
   fi
 done
+
+for removed in \
+  .claude/hooks/guard-external-ops.sh \
+  .agents/skills/codex-external-ops/SKILL.md \
+  .claude/skills/codex-external-ops \
+  tools/request-codex-op.sh \
+  tools/validate-codex-op-request.sh \
+  tools/lib/codex-external-op-instruction.md \
+  tools/tests/test-claude-guard.sh \
+  tools/tests/test-codex-op-transport.sh; do
+  [[ ! -e "$removed" && ! -L "$removed" ]] || { echo "obsolete model-specific authority path remains: $removed" >&2; exit 1; }
+done
+
+ruby -rjson -e '
+  settings=JSON.parse(File.binread(".claude/settings.json"))
+  abort "Claude settings must retain only the shared SessionStart instruction loader" unless settings.keys == ["hooks"] && settings.dig("hooks")&.keys == ["SessionStart"]
+'
 
 if [[ -e CLAUDE.md ]] || git ls-files --error-unmatch CLAUDE.md >/dev/null 2>&1; then
   echo "CLAUDE.md must not exist or be tracked" >&2
@@ -257,7 +274,7 @@ for path in files:
         violations.append(f"private-key header in {name}")
     if password_assignment.search(data) and name != "tools/tests/test-visual-review-packet.sh":
         violations.append(f"password assignment in {name}")
-    if dedicated_filename.search(data) and name != "tools/tests/test-claude-guard.sh":
+    if dedicated_filename.search(data):
         violations.append(f"dedicated secret filename in {name}")
 if service_role_paths != service_role_allowed:
     violations.append(f"service_role policy occurrence set changed: {sorted(service_role_paths)!r}")
@@ -284,12 +301,17 @@ PYTHON
 
 ruby -ryaml -rjson -e '
   data = YAML.safe_load(File.read("Config/ownership.yml"), permitted_classes: [], aliases: false)
-  abort "unexpected schema version" unless data["schemaVersion"] == 1
-  abort "ownership top-level schema differs" unless data.keys.sort == %w[appStore cloudflare elevenlabs github schemaVersion supabase].sort
+  abort "unexpected schema version" unless data["schemaVersion"] == 2
+  abort "ownership top-level schema differs" unless data.keys.sort == %w[appStore cloudflare elevenlabs github linear schemaVersion supabase vercel].sort
   abort "unexpected GitHub login" unless data.dig("github", "login") == "yuto1201"
-  abort "unexpected Supabase organization" unless data.dig("supabase", "organization") == "YUTO1201"
+  abort "unexpected Supabase organization ID" unless data.dig("supabase", "organizationId") == "kmjpkzaqlewqnypyqwkg"
+  abort "unexpected Supabase organization name" unless data.dig("supabase", "organizationName") == "yuto1201#{39.chr}s Org"
   %w[projectRef].each { |key| abort "#{key} must be null" unless data.dig("supabase", key).nil? }
-  %w[accountId target].each { |key| abort "Cloudflare #{key} must be null" unless data.dig("cloudflare", key).nil? }
+  abort "unexpected Cloudflare account" unless data.dig("cloudflare", "accountId") == "7ea8e713d76506f9e303f58624829aa5" && data.dig("cloudflare", "accountName") == "Yuto Dev" && data.dig("cloudflare", "plan") == "free"
+  abort "Cloudflare target must be null" unless data.dig("cloudflare", "target").nil?
+  abort "unexpected Linear identity" unless data["linear"] == {"workspaceSlug"=>"yuto33004", "workspaceUrl"=>"https://linear.app/yuto33004", "teamKey"=>"YUT"}
+  abort "unexpected Vercel team" unless data.dig("vercel", "teamId") == "team_ANEUn6gVL8dccPaY08wkvxFt" && data.dig("vercel", "teamSlug") == "yuto16" && data.dig("vercel", "plan") == "hobby"
+  abort "Vercel projectId must be null" unless data.dig("vercel", "projectId").nil?
   %w[accountId workspaceId].each { |key| abort "ElevenLabs #{key} must be null" unless data.dig("elevenlabs", key).nil? }
   abort "App Store teamId must be null" unless data.dig("appStore", "teamId").nil?
   if File.exist?("Config/app-identity.json")

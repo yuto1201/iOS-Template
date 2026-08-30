@@ -65,6 +65,8 @@ OPERATIONS = {
   'supabase.apply_migrations' => ['supabase-project', %w[migrations]],
   'cloudflare.inspect_account' => ['cloudflare-account', []],
   'cloudflare.deploy' => ['cloudflare-project', %w[source]],
+  'linear.inspect_workspace' => ['linear-workspace', []],
+  'vercel.inspect_team' => ['vercel-team', []],
   'elevenlabs.generate_audio' => ['elevenlabs-project', %w[outputPath text voice]],
   'elevenlabs.process_media' => ['elevenlabs-project', %w[mode outputPath request]],
   'appstore.inspect_app' => ['appstore-app', []],
@@ -123,7 +125,7 @@ def latest_owned_state_marker(document, current, owner)
     begin
       marker = JSON.parse(matches.fetch(0).fetch(0))
       next unless marker.is_a?(Hash) && marker.keys.sort == %w[executor from resumeState timestamp to]
-      next unless marker['executor'] == 'codex'
+      next unless %w[codex claude].include?(marker['executor'])
       next unless marker['from'].is_a?(String) && marker['to'].is_a?(String)
       next unless marker['resumeState'].nil? || marker['resumeState'].is_a?(String)
       marker_time = Time.iso8601(marker['timestamp'])
@@ -175,7 +177,7 @@ def full_state_record(value, issue, repository)
   workflow_state(value['state'], 'state record state')
   workflow_state(value['previousState'], 'state record previousState', nullable: true)
   workflow_state(value['resumeState'], 'state record resumeState', nullable: true)
-  fail_closed('state record executor is invalid') unless value['executor'] == 'codex'
+  fail_closed('state record executor is invalid') unless %w[codex claude].include?(value['executor']) && value['executor'] == value['primaryImplementer']
   sha(value['headSha'], 'state record headSha') if value.key?('headSha')
   fail_closed('state record pull request identity is invalid') if value.key?('pullRequest') && !(value['pullRequest'].is_a?(Integer) && value['pullRequest'].positive?)
   workflow_state(value['from'], 'state record from', nullable: true) if value.key?('from')
@@ -197,7 +199,7 @@ def minimal_state_record(value, expected_state: nil)
   workflow_state(value['from'], 'minimal state record from', nullable: true)
   workflow_state(value['to'], 'minimal state record to')
   workflow_state(value['resumeState'], 'minimal state record resumeState', nullable: true)
-  fail_closed('minimal state record executor is invalid') unless value['executor'] == 'codex'
+  fail_closed('minimal state record executor is invalid') unless %w[codex claude].include?(value['executor'])
   begin
     Time.iso8601(value['timestamp'])
   rescue ArgumentError, TypeError
@@ -824,16 +826,16 @@ when 'validate-claim-state'
   fail_closed('Claim state is not recoverable') unless %w[approved claimed].include?(value['state'])
   puts canonical_json(value)
 when 'state-marker'
-  from, to, resume_state, timestamp = ARGV
-  fail_closed('state-marker arguments are invalid') unless ARGV.length == 4
+  from, to, resume_state, timestamp, executor = ARGV
+  fail_closed('state-marker arguments are invalid') unless ARGV.length == 5 && %w[codex claude].include?(executor)
   marker = {
     'from' => from, 'to' => to, 'resumeState' => (resume_state == 'null' ? nil : resume_state),
-    'executor' => 'codex', 'timestamp' => timestamp
+    'executor' => executor, 'timestamp' => timestamp
   }
   puts "<!-- ios-template-state #{canonical_json(marker)} -->"
 when 'state-transition-pending'
-  issue, repository, from, to, resume_state, timestamp, head_sha = ARGV
-  fail_closed('state-transition-pending arguments are invalid') unless ARGV.length == 7 && issue.match?(/\A[1-9][0-9]*\z/)
+  issue, repository, from, to, resume_state, timestamp, head_sha, executor = ARGV
+  fail_closed('state-transition-pending arguments are invalid') unless ARGV.length == 8 && issue.match?(/\A[1-9][0-9]*\z/) && %w[codex claude].include?(executor)
   workflow_state(from, 'pending from')
   workflow_state(to, 'pending to')
   workflow_state(resume_state, 'pending resumeState', nullable: true) unless resume_state == 'null'
@@ -846,16 +848,16 @@ when 'state-transition-pending'
   puts canonical_json(
     'schemaVersion' => 1, 'issue' => Integer(issue), 'repository' => repository,
     'from' => from, 'to' => to, 'resumeState' => (resume_state == 'null' ? nil : resume_state),
-    'executor' => 'codex', 'timestamp' => timestamp, 'headSha' => (head_sha == 'null' ? nil : head_sha)
+    'executor' => executor, 'timestamp' => timestamp, 'headSha' => (head_sha == 'null' ? nil : head_sha)
   )
 when 'validate-state-transition-pending'
-  path, issue, repository, from, to, head_sha = ARGV
-  fail_closed('validate-state-transition-pending arguments are invalid') unless ARGV.length == 6 && issue.match?(/\A[1-9][0-9]*\z/)
+  path, issue, repository, from, to, head_sha, executor = ARGV
+  fail_closed('validate-state-transition-pending arguments are invalid') unless ARGV.length == 7 && issue.match?(/\A[1-9][0-9]*\z/) && %w[codex claude].include?(executor)
   fail_closed('pending transition path is a symlink') if File.symlink?(path)
   bytes = File.binread(path)
   value = JSON.parse(bytes)
   exact_keys(value, %w[executor from headSha issue repository resumeState schemaVersion timestamp to], 'pending transition')
-  fail_closed('pending transition identity differs') unless value['schemaVersion'] == 1 && value['issue'] == Integer(issue) && value['repository'] == repository && value['from'] == from && value['to'] == to && value['executor'] == 'codex'
+  fail_closed('pending transition identity differs') unless value['schemaVersion'] == 1 && value['issue'] == Integer(issue) && value['repository'] == repository && value['from'] == from && value['to'] == to && value['executor'] == executor
   expected_head = head_sha == 'null' ? nil : head_sha
   fail_closed('pending transition Head differs') unless value['headSha'] == expected_head
   workflow_state(value['resumeState'], 'pending resumeState', nullable: true)

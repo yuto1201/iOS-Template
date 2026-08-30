@@ -89,7 +89,7 @@ write_claim_state() {
       "primaryImplementer" => agent,
       "issueContract" => {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => digest},
       "state" => state, "previousState" => (state == "claimed" ? "approved" : nil), "resumeState" => nil,
-      "executor" => "codex"
+      "executor" => agent
     }
     puts JSON.generate(canonical(value))
   ' "$issue" "$repo" "$branch" "$worktree" "$base_sha" "$agent" "$contract_digest" "$state" > "${state_file}.tmp"
@@ -221,4 +221,4 @@ if [[ "$current_state" == claimed && ! -e "$(dirname "$state_file")/state-transi
 fi
 
 cleanup_claim_temps
-jq -cn --arg repository "$repo" --argjson issue "$issue" --arg branch "$branch" --arg worktree "$worktree_relative" --arg baseSha "$base_sha" --arg agent "$agent" --arg digest "$contract_digest" '{repository:$repository,issue:$issue,branch:$branch,worktree:$worktree,baseSha:$baseSha,primaryImplementer:$agent,issueContract:{path:(".artifacts/issues/" + ($issue|tostring) + "/issue-contract.json"),digest:$digest},state:"claimed",previousState:"approved",resumeState:null,executor:"codex"}'
+jq -cn --arg repository "$repo" --argjson issue "$issue" --arg branch "$branch" --arg worktree "$worktree_relative" --arg baseSha "$base_sha" --arg agent "$agent" --arg digest "$contract_digest" '{repository:$repository,issue:$issue,branch:$branch,worktree:$worktree,baseSha:$baseSha,primaryImplementer:$agent,issueContract:{path:(".artifacts/issues/" + ($issue|tostring) + "/issue-contract.json"),digest:$digest},state:"claimed",previousState:"approved",resumeState:null,executor:$agent}'

@@ -9,8 +9,8 @@ Resume from durable GitHub/state artifacts; never infer completion from local fi
 
 ## Authority routing
 
-- Codex is the external controller. It runs Claim/state/merge/cleanup tools and all authenticated provider operations after personal-account preflight.
-- A Claude primary performs local implementation and local verification only. Every authenticated operation goes through `codex-external-ops`; Claude never runs `gh`, remote Git, a provider CLI/MCP, or Codex CLI. The enclosing runtime must supply a Codex controller to execute the Codex-only stages below. `request-codex-op.sh` is an atomic-operation transport, not a way to request a multi-operation shipping script. If no Codex controller is available, use `blocked:ops` rather than inventing a bridge.
+- Codex and Claude have equal authority. The selected Issue executor runs Claim/state/merge/cleanup tools and authenticated provider operations after the same configured-account preflight.
+- Every authenticated operation uses `external-ops`; the live Issue operation block must name the executing model and match `Config/ownership.yml`.
 - Opposite review always uses `cross-model-review`; never invoke a reviewer CLI directly or self-approve.
 
 ## State-driven workflow
@@ -23,7 +23,7 @@ review-requested -> approved-for-merge -> merged -> done
 review-requested -> changes-requested -> in-progress
 ```
 
-1. Have the Codex controller read the durable GitHub state first:
+1. Have the selected executor read the durable GitHub state first:
 
 ```sh
 tools/issue-state.sh get --repo "$REPO" --issue "$ISSUE"
@@ -73,7 +73,7 @@ tools/cross-model-review.sh \
 
 The tool moves an approved result to `approved-for-merge` and a rejected result to `changes-requested`. Fix only in scope; a new Head repeats verification and review.
 
-5. At `approved-for-merge`, let the Codex controller run the sole publication orchestrator:
+5. At `approved-for-merge`, let the selected executor run the sole publication orchestrator:
 
 ```sh
 tools/merge-issue.sh --repo "$REPO" --issue "$ISSUE"

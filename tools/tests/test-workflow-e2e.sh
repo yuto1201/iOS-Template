@@ -338,14 +338,6 @@ rmdir "$issue_worktree/docs/nested"
 (cd "$primary" && tools/claim-issue.sh --repo "$repository" --issue "$issue" --agent codex) >"$workspace/resume.json"
 cmp -s "$claim_result" "$workspace/resume.json" || fail 'same-agent Resume changed the durable claim identity'
 
-# Claude may perform local Git work, but direct GitHub access is denied and
-# delegated to Codex by the repository guard.
-guard="$issue_worktree/.claude/hooks/guard-external-ops.sh"
-"$guard" <"$issue_worktree/tools/tests/fixtures/claude-hook/allow-git-status.json" >"$workspace/guard-allow.json"
-[[ ! -s "$workspace/guard-allow.json" ]] || fail 'Claude guard rejected local Git status'
-"$guard" <"$issue_worktree/tools/tests/fixtures/claude-hook/deny-gh.json" >"$workspace/guard-deny.json"
-[[ "$(/usr/bin/plutil -extract hookSpecificOutput.permissionDecision raw -o - "$workspace/guard-deny.json")" == deny ]] || fail 'Claude guard allowed direct GitHub access'
-
 (cd "$issue_worktree" && tools/issue-state.sh transition --repo "$repository" --issue "$issue" --from claimed --to in-progress) >/dev/null
 cat >"$issue_worktree/docs/workflow-e2e-fixture.md" <<'DOC'
 # Workflow E2E fixture

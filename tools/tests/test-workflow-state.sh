@@ -116,6 +116,9 @@ assert_json() {
   ruby -rjson -e "$code" "$path"
 }
 
+ruby "$repo_root/tools/lib/workflow-json.rb" state-marker approved claimed null 2026-08-24T00:00:00Z claude > "$workspace/claude-marker.txt"
+rg -Fq '"executor":"claude"' "$workspace/claude-marker.txt" || { echo 'Claude state executor was not preserved' >&2; exit 1; }
+
 cd "$repo_root"
 mkdir -p "$artifact_issue"
 

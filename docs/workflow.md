@@ -9,7 +9,7 @@
 - Base Branch: `main`
 - Merge method: Squash
 
-Primary implementerはCodexまたはClaudeです。Issue状態、GitHub remote、認証済み外部操作、マージを実行するExternal orchestratorは常にCodexです。Claude実装時は `docs/AUTHORITY.md` の固定transportでCodexへ委託します。
+Primary implementerとExternal orchestratorはCodexまたはClaudeです。各認証済み外部操作はIssue contractの`Executor`へ実行モデルを明示し、`docs/AUTHORITY.md`の共通account／target preflightを通します。
 
 BranchはIssue作成後に作ります。Issue番号を推測して先にBranchを作りません。
 
@@ -53,7 +53,7 @@ CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/iss
 
 `externalOperations` は順序付きの操作ID配列です。`externalOperationDetailsDigest` はIssue本文の各五field blockを `operation`、`service`、`environment`、`executor`、`approvalRequired`、正規化したnullまたはstringの`approvalReference`へ変換し、同じ順序のcanonical JSONへ計算したSHA-256です。したがってIDが同じでもservice、environment、executor、承認条件または承認参照が変わればsnapshot bytesとdigestが変わります。
 
-検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。ClaudeはGitHubから取得せず、このCodex生成snapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用でき、Issue本文が変わった場合はCodexが再取得してdigestを更新します。
+検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。実行モデルがGitHubから取得して生成したsnapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用でき、Issue本文が変わった場合は実行モデルが再取得してdigestを更新します。
 
 application検証を実行するIssue contractだけ、上の必須fieldに加えて次のexact `verification` objectを持てます。許可するkeyは `bundleIdentifier`、`unitTestIdentifier`、固定順4件の `cases`、受け入れ条件と同じ順の `acceptanceMappings` だけです。`unitTestIdentifier` とcaseの `testIdentifier` はどちらも `Target/Class/testMethod` です。各caseは `id` に加え、`testIdentifier` または `assertion` のちょうど一方を持ちます。Task 4で許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}` です。application実行時にこのobjectがない、不完全、順序違い、両actionを持つ場合は、Build前に失敗します。
 
@@ -129,20 +129,20 @@ Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approve
 - `paused`: ユーザーが明示的に停止
 - `superseded`: 別Issueまたは決定に置き換えられた
 
-状態はGitHub Issueのlabelとcommentを正本とします。ローカルの状態ファイルは再開を補助しますが、GitHubと矛盾する場合はCodexがGitHubを再確認します。
+状態はGitHub Issueのlabelとcommentを正本とします。ローカルの状態ファイルは再開を補助しますが、GitHubと矛盾する場合は実行モデルがGitHubを再確認します。
 
 ## 5. Issue実行フロー
 
 ### 5.1 Claim
 
-1. CodexがIssue読取の直前にアクティブな個人GitHubアカウントとRepositoryを確認し、live Issue contractの`github.read_issue`宣言を検証する。
+1. 実行モデルがIssue読取の直前に設定済みGitHubアカウントとRepositoryを確認し、live Issue contractの`github.read_issue`宣言を検証する。
 2. IssueのGoal、Scope、Acceptance criteria、Dependenciesを読む。
 3. Definition of Readyを満たさなければ作業を開始しない。
 4. 通常のshippingに必要な`github.read_issue`、`github.update_issue`、`github.push_branch`、`github.create_pr`、`github.merge_pr`、`github.delete_branch`がすべてlive Issue contractへ宣言されていることを確認し、`issue-contract.json` を作成してdigestを記録する。
 5. Primary agentをIssueへ記録する。
 6. Branch、worktree、共有artifact link、sealed contract、durable stateを順に作成してからremoteの`claimed` labelと所有者markerを公開する。各境界はjournalで再開可能にし、同じagentとexact contractだけが続行できる。
 
-ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変更はCodexへ委託します。
+CodexとClaudeは同じ手順で1、4、5、6とGitHub上の状態変更を実行します。
 
 ### 5.2 Implement
 
@@ -178,7 +178,7 @@ ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変
 
 ### 5.5 PR and merge
 
-1. Codexが個人GitHubアカウントを再確認する。
+1. Issueで指定された実行モデルが設定済みGitHubアカウントを再確認する。
 2. durable stateのrepository、Issue、Branch、worktree、Base、Head、contract digestと、callerの `--repo`、現在のGit branch/ref/Head/Base/clean状態を一致させる。
 3. `tools/premerge-gate.sh --repo ${OWNER_REPO} --issue ${ISSUE_NUMBER} --head-sha ${HEAD_SHA}` を初回実行する。
 4. approvedな固定snapshotからPR本文をrenderする。`changes-requested` は本文を生成せず拒否する。
@@ -191,9 +191,9 @@ ClaudeがPrimary implementerの場合も、1、4、5、6とGitHub上の状態変
 
 `gh pr merge --delete-branch` に後片付け全体を任せません。各対象を明示して、別worktreeやユーザーBranchを削除しないようにします。
 
-認証済みmutationはIssue contractに同じoperation IDが宣言されている場合だけ実行します。Gateとmergeには`github.merge_pr`、Push直前には`github.push_branch`、新しいPRを作る経路だけ`github.create_pr`、remote Branch削除直前には`github.delete_branch`が必要です。新規PR経路では`github.create_pr`の欠落をPushより前にも検査し、必要宣言が一つでも欠ける場合は外部mutationをゼロのまま拒否します。既存の正確なPRを再利用する経路は`github.create_pr`を要求しません。
+認証済みmutationはIssue contractに同じoperation IDと実行モデルの`Executor`が宣言されている場合だけ実行します。Gateとmergeには`github.merge_pr`、Push直前には`github.push_branch`、新しいPRを作る経路だけ`github.create_pr`、remote Branch削除直前には`github.delete_branch`が必要です。新規PR経路では`github.create_pr`の欠落をPushより前にも検査し、必要宣言が一つでも欠ける場合は外部mutationをゼロのまま拒否します。既存の正確なPRを再利用する経路は`github.create_pr`を要求しません。
 
-Squash Merge後は元Branch tipが`main`の祖先にならないため、`git branch --merged` を完了判定に使いません。Codexは対象PRの`state == MERGED`、`headRefOid`が記録済みHead SHAと一致すること、`mergeCommit`が存在することをGitHubから確認します。必要に応じてpatch-idでSquash commitとの差分同等性も確認します。
+Squash Merge後は元Branch tipが`main`の祖先にならないため、`git branch --merged` を完了判定に使いません。実行モデルは対象PRの`state == MERGED`、`headRefOid`が記録済みHead SHAと一致すること、`mergeCommit`が存在することをGitHubから確認します。必要に応じてpatch-idでSquash commitとの差分同等性も確認します。
 
 ## 6. PR本文の必須項目
 
@@ -245,6 +245,6 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 
 ## 9. Bootstrap
 
-Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むためCodexが同じ手順を手動実行します。手動であってもIssue、Branch、PR、4条件Simulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。
+Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むため選択された実行モデルが同じ手順を手動実行します。手動であってもIssue、Branch、PR、4条件Simulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。
 
 Bootstrap IssueのPRには、各受け入れ条件IDと証拠、GitHub account preflightのsanitized要約、Verify対象SHA、Review対象SHAを記載します。Simulator verificationが入った後は`verify.json`を使用し、Security and workflowが入った後は全Issueを自動状態機械へ移行します。

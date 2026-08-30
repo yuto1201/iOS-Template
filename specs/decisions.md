@@ -167,3 +167,12 @@
 - Context: ElevenLabsで効果音とBGMだけでなく、テキスト読み上げ、Voice Changer、文字起こし、音声分離、画像、動画も扱い、CodexとClaudeの不足するメディア制作能力を補う必要がある。
 - Decision: 承認済みIssueが必要とする場合だけ、`ios-media-assets`が8つの明示的なモードへ振り分ける。認証済み処理はCodexだけが個人アカウントで実行し、Claudeはローカル準備・検証・統合に限定する。
 - Consequence: 重複する`ios-audio-assets`は廃止する。各モードは権利・同意・プライバシー・契約・課金境界を事前確認し、受理した出力とsanitized manifestだけをアプリへ統合する。
+
+## D-024: 外部操作権限をモデルではなく設定済みアカウントへ結び付ける
+
+- Date: 2026-08-30
+- Status: 確定
+- Supersedes: D-001のモデル間の主従、D-002、D-019、D-014とD-023のCodex専用外部操作部分
+- Context: このMacではClaudeとCodexの外部サービス接続をすべて個人用アカウントへ統一でき、会社用接続との分離はクラウド同期ではなく端末単位で管理できる。モデル名による拒否は個人アカウント混同を防ぐための代理制約であり、現在の運用には不要になった。
+- Decision: ClaudeとCodexはローカル作業、認証済み外部操作、秘密取得、Issue状態操作、PR作成、Squash Mergeについて同じ権限を持つ。権限はモデル名ではなく、`Config/ownership.yml`の安定識別子、Issue contractのoperation／Executor、対象、環境、Head SHA、ユーザー承認によって決める。Claude固有の外部操作拒否hookとCodex委託専用transportは廃止する。
+- Consequence: どちらのモデルも指定外アカウント、未設定target、曖昧な認証sessionではfail closedになる。評価エージェントのread-only制限、秘密非露出、課金・破壊・法的操作のユーザー承認は維持する。

@@ -22,14 +22,14 @@
 - Issue の受け入れ条件外へ機能を広げない。
 - 実行していない Build、Test、Simulator 操作を成功として報告しない。
 - 反対モデルの承認と、現在の Head SHA に一致する検証証拠がなければマージしない。
-- マージは Codex が `--squash` と Head SHA 照合を使って実行する。
+- マージはIssueで指定されたCodexまたはClaudeが `--squash` と Head SHA 照合を使って実行する。
 - ユーザーの既存変更、認証情報、生成物を上書きまたは削除しない。
 
 ## 外部操作の権限
 
-Claude はローカルの実装、修正、ローカル Git、Xcode、Simulator、公開資料の調査だけを行えます。GitHub、Supabase、Cloudflare、ElevenLabs、App Store Connect、その他の認証済み外部操作は、必ず Codex へ委託します。
+ClaudeとCodexは同じ権限を持ち、どちらもローカル作業と認証済み外部操作を実行できます。権限はモデル名ではなく、`Config/ownership.yml`の許可済みアカウント／target、Issue contractのoperation／Executor、環境、Head SHA、ユーザー承認で決まります。
 
-Codex は外部操作の直前に、アクティブな個人アカウントと対象リソースを確認します。詳細と例外のない境界は `docs/AUTHORITY.md` を参照してください。
+外部操作の直前に実行モデルがアクティブなアカウントと対象リソースを完全一致で確認します。指定外アカウント、未設定target、曖昧な認証sessionでは操作しません。詳細は `docs/AUTHORITY.md` を参照してください。
 
 ## 標準検証
 

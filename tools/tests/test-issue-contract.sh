@@ -116,6 +116,15 @@ assert_fails 'an approval reference mismatching all no operations is rejected' "
 write_feature_issue "$workspace/normal-repo-operation.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/normal-repo-operation.md"
 
+write_feature_issue "$workspace/claude-repo-operation.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Claude\n- Approval required: no' 'No additional approval.'
+"$repo_root/tools/validate-issue-body.sh" "$workspace/claude-repo-operation.md"
+
+write_feature_issue "$workspace/model-neutral-providers.md" $'- Operation: linear.inspect_workspace\n- Service: Linear\n- Environment: production\n- Executor: Claude\n- Approval required: no\n\n- Operation: vercel.inspect_team\n- Service: Vercel\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
+"$repo_root/tools/validate-issue-body.sh" "$workspace/model-neutral-providers.md"
+
+write_feature_issue "$workspace/unknown-executor.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Cursor\n- Approval required: no' 'No additional approval.'
+assert_fails 'an external operation executor outside Codex and Claude is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-executor.md"
+
 write_feature_issue "$workspace/approved-external-operation.md" $'- Operation: appstore.submit_review\n- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/approved-external-operation.md"
 
@@ -286,9 +295,10 @@ chmod +x "$fake_bin/gh"
 export PATH="$fake_bin:$PATH"
 export FAKE_GH_LOG="$workspace/gh.log"
 "$repo_root/tools/sync-github-labels.sh" --repo yuto1201/iOS-Template --executor codex
+"$repo_root/tools/sync-github-labels.sh" --repo yuto1201/iOS-Template --executor claude
 rg -q '^label edit state:proposed ' "$FAKE_GH_LOG"
 rg -q '^label create agent:codex ' "$FAKE_GH_LOG"
-[[ "$(rg -c '^label list ' "$FAKE_GH_LOG")" == 1 ]] || { echo 'label sync did not use one repository snapshot' >&2; exit 1; }
+[[ "$(rg -c '^label list ' "$FAKE_GH_LOG")" == 2 ]] || { echo 'each model-neutral label sync did not use one repository snapshot' >&2; exit 1; }
 rg -q '^label list --repo yuto1201/iOS-Template --limit 1000 --json name,color,description$' "$FAKE_GH_LOG"
 
-echo 'PASS: Issue forms, Definition of Ready validator, PR template, labels, and Codex label sync'
+echo 'PASS: Issue forms, Definition of Ready validator, PR template, labels, and model-neutral label sync'

@@ -24,12 +24,12 @@ The current state machine permits `blocked:repeated-failure` only from `in-progr
 - At `in-progress`, the third identical failure transitions directly to `blocked:repeated-failure` through `tools/issue-state.sh transition`.
 - At `changes-requested`, `verify-passed`, or `approved-for-merge`, first use their explicit allowed transition to `in-progress`, then transition to `blocked:repeated-failure`. This abandons the stale later-stage readiness; resumption must repeat the affected verification/review.
 - At `review-requested`, do not invent an `in-progress` or repeated-failure transition. Reviewer unavailability uses the allowed `blocked:review` path; a real changes-requested result follows `changes-requested -> in-progress`.
-- At `claimed`, `merged`, or `done`, do not manufacture a repeated-failure state. Preserve the current state and surface the unsupported recovery to the Codex controller.
+- At `claimed`, `merged`, or `done`, do not manufacture a repeated-failure state. Preserve the current state and surface the unsupported recovery to the selected executor.
 
 `tools/issue-state.sh` owns `resumeState`; never pass or hand-edit it. Do not relabel a failure flaky or bypass verification/review.
 
 ## Batch-wide stops
 
-Stop all remaining lanes only for a shared acceptance-affecting unresolved decision, unverifiable personal GitHub identity, broken Base Branch, missing Xcode/runtime needed by every remaining Issue, or an explicit user stop. Account/provider mutations remain Codex-only; Claude-primary lanes follow `codex-external-ops` and may continue local work while an independent operation is blocked.
+Stop all remaining lanes only for a shared acceptance-affecting unresolved decision, unverifiable configured GitHub identity, broken Base Branch, missing Xcode/runtime needed by every remaining Issue, or an explicit user stop. Account/provider mutations may be executed by Codex or Claude through the same `external-ops` preflight.
 
 Report per Issue: durable state, dependency/block reason, current Head when claimed, last completed stage, retry tuple/count, and next eligible action. `done` means merge confirmation, exact cleanup, and the final state transition all succeeded.

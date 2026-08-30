@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 --repo DIR --package-root DIR --package-manifest FILE --preflight FILE --audit FILE --result FILE --team-id ID --bundle-id ID --version VERSION --build-id ID --source-sha SHA --build-digest DIGEST --primary-model codex --section ID --remote-reference REF --readback-digest DIGEST --resume-readback yes|no --now ISO8601 [--submit-for-review yes|no]" >&2
+  echo "usage: $0 --repo DIR --package-root DIR --package-manifest FILE --preflight FILE --audit FILE --result FILE --team-id ID --bundle-id ID --version VERSION --build-id ID --source-sha SHA --build-digest DIGEST --primary-model codex|claude --section ID --remote-reference REF --readback-digest DIGEST --resume-readback yes|no --now ISO8601 [--submit-for-review yes|no]" >&2
   exit 64
 }
 
@@ -33,7 +33,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$repo" && -n "$package_root" && -n "$package_manifest" && -n "$preflight" && -n "$audit" && -n "$result" && -n "$team_id" && -n "$bundle_id" && -n "$version" && -n "$build_id" && -n "$source_sha" && -n "$build_digest" && -n "$primary_model" && -n "$section" && -n "$remote_reference" && -n "$readback_digest" && -n "$resume_readback" && -n "$now" ]] || usage
-[[ "$primary_model" == codex ]] || { echo 'primary model must be Codex for App Store operations' >&2; exit 1; }
+[[ "$primary_model" == codex || "$primary_model" == claude ]] || { echo 'primary model must be codex or claude' >&2; exit 1; }
 [[ "$resume_readback" == yes || "$resume_readback" == no ]] || usage
 [[ "$submit_for_review" == yes || "$submit_for_review" == no ]] || usage
 [[ "$source_sha" =~ ^[0-9a-f]{40}$ && "$build_digest" =~ ^sha256:[0-9a-f]{64}$ && "$readback_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || usage
@@ -104,11 +104,12 @@ abort "release audit is not approved for the package" unless audit.is_a?(Hash) &
   audit["sourceSha"]==source_sha && audit["buildDigest"]==build_digest && audit["packageDigest"]==manifest["packageDigest"] && audit["findings"]==[]
 
 preflight=JSON.parse(File.binread(preflight_path))
-preflight_keys=%w[schemaVersion issue provider account target environment operation health checkedAt digest]
-abort "App Store preflight schema is invalid" unless preflight.is_a?(Hash) && preflight.keys.sort==preflight_keys.sort && preflight["schemaVersion"]==1
+preflight_keys=%w[schemaVersion issue executor provider account target environment operation health checkedAt digest]
+abort "App Store preflight schema is invalid" unless preflight.is_a?(Hash) && preflight.keys.sort==preflight_keys.sort && preflight["schemaVersion"]==2
 unsigned=preflight.reject{|key,_| key=="digest"}
 expected_digest="sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical.call(unsigned)))}"
 abort "App Store preflight digest is invalid" unless preflight["digest"]==expected_digest
+abort "App Store preflight executor mismatch" unless preflight["executor"]==ENV.fetch("PRIMARY_MODEL")
 abort "App Store personal team mismatch" unless preflight["provider"]=="app-store" && preflight["account"]==team
 abort "App Store bundle target mismatch" unless preflight["target"]==bundle
 abort "App Store preflight is not healthy production evidence" unless preflight["environment"]=="production" && preflight["operation"]=="appstore.inspect_app" && preflight["health"]=="healthy"
@@ -132,11 +133,11 @@ if existing
   value=JSON.parse(File.binread(result_path))
   abort "submission result schema is invalid" unless value.is_a?(Hash) && value.keys.sort==result_keys.sort && value["schemaVersion"]==1
   abort "submission result identity changed" unless value.values_at("primaryModel","teamId","bundleId","version","buildId","sourceSha","buildDigest","packageDigest")==
-    ["codex",team,bundle,version,build_id,source_sha,build_digest,manifest["packageDigest"]]
+    [ENV.fetch("PRIMARY_MODEL"),team,bundle,version,build_id,source_sha,build_digest,manifest["packageDigest"]]
   completed=value["sections"]
   abort "submission result sections are invalid" unless completed.is_a?(Array) && completed.each_with_index.all?{|entry,index| entry.is_a?(Hash) && entry.keys.sort==section_keys.sort && entry["id"]==sections[index] && entry["status"]=="verified" && entry["readBackSource"]=="app-store-connect"}
 else
-  value={"schemaVersion"=>1,"status"=>"in-progress","primaryModel"=>"codex","teamId"=>team,"bundleId"=>bundle,
+  value={"schemaVersion"=>1,"status"=>"in-progress","primaryModel"=>ENV.fetch("PRIMARY_MODEL"),"teamId"=>team,"bundleId"=>bundle,
     "version"=>version,"buildId"=>build_id,"sourceSha"=>source_sha,"buildDigest"=>build_digest,"packageDigest"=>manifest["packageDigest"],
     "sections"=>[],"lastCompletedSection"=>nil,"updatedAt"=>now}
   completed=value["sections"]

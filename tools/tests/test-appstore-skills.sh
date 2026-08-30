@@ -25,7 +25,7 @@ version=1.0
   echo 'submission skill symlink is invalid' >&2; exit 1
 }
 ! rg -q 'TODO|\[TODO' "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md"
-rg -q 'Codex' "$submit_skill/SKILL.md" && rg -q 'Claude.*delegate|Claude.*委託' "$submit_skill/SKILL.md"
+rg -q 'Codex and Claude may perform' "$submit_skill/SKILL.md" && ! rg -q 'Claude.*delegate|Claude.*委託' "$submit_skill/SKILL.md"
 rg -q 'first.publication|first publication|初回公開' "$prepare_skill/SKILL.md"
 
 project="$workspace/project"; package="$project/App Store"
@@ -158,9 +158,9 @@ write_valid_fixture; digest=$(package_digest); write_attestations "$digest"; rm 
 assert_seal_failure 'missing first publication approval' 'approval'
 
 write_preflight() {
-  local account=$1
-  ACCOUNT="$account" TARGET="$bundle_id" FILE="$preflight" ruby -rjson -rdigest -e '
-    value={"schemaVersion"=>1,"issue"=>8,"provider"=>"app-store","account"=>ENV.fetch("ACCOUNT"),"target"=>ENV.fetch("TARGET"),
+  local account=$1 executor=${2:-codex}
+  ACCOUNT="$account" EXECUTOR="$executor" TARGET="$bundle_id" FILE="$preflight" ruby -rjson -rdigest -e '
+    value={"schemaVersion"=>2,"issue"=>8,"executor"=>ENV.fetch("EXECUTOR"),"provider"=>"app-store","account"=>ENV.fetch("ACCOUNT"),"target"=>ENV.fetch("TARGET"),
       "environment"=>"production","operation"=>"appstore.inspect_app","health"=>"healthy","checkedAt"=>"2026-08-26T02:05:00Z"}
     canonical=lambda{|item| item.is_a?(Hash) ? item.keys.sort.to_h{|key| [key,canonical.call(item.fetch(key))]} : item}
     value["digest"]="sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical.call(value)))}"
@@ -169,11 +169,11 @@ write_preflight() {
 }
 
 record_section() {
-  local section=$1 expected_build=${2:-$build_digest} resume=${3:-no}
+  local section=$1 expected_build=${2:-$build_digest} resume=${3:-no} primary_model=${4:-codex}
   "$record" --repo "$project" --package-root "$package" --package-manifest "$package/submission/$version-package.json" \
     --preflight "$preflight" --audit "$audit" --result "$package/submission/$version-result.json" \
     --team-id "$team_id" --bundle-id "$bundle_id" --version "$version" --build-id 42 --source-sha "$source_sha" \
-    --build-digest "$expected_build" --primary-model codex --section "$section" \
+    --build-digest "$expected_build" --primary-model "$primary_model" --section "$section" \
     --remote-reference "asc://apps/$bundle_id/versions/$version/$section" \
     --readback-digest sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
     --resume-readback "$resume" --now 2026-08-26T02:10:00Z
@@ -201,4 +201,9 @@ set +e; output=$(record_section localization "$build_digest" no 2>&1); command_s
 second=$(record_section localization "$build_digest" yes)
 [[ "$second" == *'"lastCompletedSection":"localization"'* ]] || { echo "resume with readback failed: $second" >&2; exit 1; }
 
-echo 'PASS: App Store skills seal an audited package and enforce Codex personal-account, legal, digest, build, and resume gates'
+rm -f -- "$package/submission/$version-result.json"
+write_preflight "$team_id" claude
+claude_result=$(record_section app-information "$build_digest" no claude)
+[[ "$claude_result" == *'"primaryModel":"claude"'* ]] || { echo "Claude submission executor was not preserved: $claude_result" >&2; exit 1; }
+
+echo 'PASS: App Store skills apply the same configured-account, legal, digest, build, and resume gates to Codex and Claude'

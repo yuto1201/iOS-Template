@@ -35,8 +35,8 @@ If consent, ownership, privacy treatment, or an acceptance-affecting choice is u
 
 ## Shared workflow
 
-1. Claude or Codex may prepare sanitized prompts, local source media, manifests, and app integration. Authenticated ElevenLabs inspection, upload, generation, transformation, transcription, polling, and download are Codex-only.
-2. Codex checks the selected route from the Issue worktree. Claude delegates this named check rather than invoking a path blocked by its external-operation guard:
+1. Claude or Codex may prepare sanitized prompts, local source media, manifests, app integration, and authenticated ElevenLabs work after the same account-bound preflight.
+2. The selected executor checks the route from the Issue worktree:
 
 ```sh
 .agents/skills/ios-media-assets/scripts/check-elevenlabs-capability.sh \
@@ -44,10 +44,10 @@ If consent, ownership, privacy treatment, or an acceptance-affecting choice is u
   --provider-status available
 ```
 
-3. Codex verifies the configured personal account, workspace, and exact entitlement before submitting anything:
+3. The selected executor verifies the configured account, workspace, and exact entitlement before submitting anything:
 
 ```sh
-tools/provider-preflight.sh --issue ISSUE elevenlabs --operation MODE
+tools/provider-preflight.sh --executor EXECUTOR --issue ISSUE elevenlabs --operation MODE
 ```
 
 4. Retrieve the API key only for the child process through the repository secret tooling. Never put it in Git, a prompt, argv, logs, Issue/PR text, manifests, or a persistent environment variable. The installed `elevenlabs` CLI manages authentication and agents; media operations may require the official API or SDK because the CLI does not expose every mode.

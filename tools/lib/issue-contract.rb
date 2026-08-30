@@ -32,6 +32,8 @@ module IOSTemplate
       "github" => "GitHub",
       "supabase" => "Supabase",
       "cloudflare" => "Cloudflare",
+      "linear" => "Linear",
+      "vercel" => "Vercel",
       "elevenlabs" => "ElevenLabs",
       "appstore" => "App Store Connect"
     }.freeze
@@ -49,6 +51,8 @@ module IOSTemplate
       supabase.apply_migrations
       cloudflare.inspect_account
       cloudflare.deploy
+      linear.inspect_workspace
+      vercel.inspect_team
       elevenlabs.generate_audio
       elevenlabs.process_media
       appstore.inspect_app
@@ -268,7 +272,7 @@ module IOSTemplate
           failures << "External operations Service #{service} does not match #{operation}; expected #{expected_service}"
         end
         failures << "External operations Environment must be local, preview, staging, or production" unless ENVIRONMENTS.include?(environment)
-        failures << "External operations Executor must be Codex" unless executor == "Codex"
+        failures << "External operations Executor must be Codex or Claude" unless %w[Codex Claude].include?(executor)
         failures << "External operations Approval required must be yes or no" unless %w[yes no].include?(approval_value)
 
         details << {

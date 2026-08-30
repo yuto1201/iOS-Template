@@ -1,8 +1,8 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.0  
-Date: 2026-08-21
+Version: 1.1
+Date: 2026-08-30
 
 ## 1. 設計原則
 
@@ -108,7 +108,7 @@ View から Supabase SDK、SwiftData の複雑な問い合わせ、外部生成A
 | `ship-issue-batch` | 独立Issueを安全に並行化し、依存Issueを順に進める |
 | `ios-verify` | Build、Test、4条件のSimulator検証、証拠生成を行う |
 | `cross-model-review` | 反対モデルへレビューを依頼し、Head SHA付き結果を保存する |
-| `codex-external-ops` | ClaudeからCodexへ外部操作を委託し、アカウント確認結果を受け取る |
+| `external-ops` | CodexとClaudeに共通のアカウント／target照合後、認証済み外部操作を実行する |
 | `app-bootstrap` | 新規リポジトリのXcode・Swift・設定Identityを機能開発前に安全に初期化する |
 
 ### 条件付き
@@ -140,10 +140,12 @@ Codex は `.codex/agents/*.toml`、Claude は `.claude/agents/*.md` を使いま
 - GitHub: Issue、PR、レビュー記録、Squash Merge
 - Supabase: 認証・DB・Storageが必要な場合だけ
 - Cloudflare: ドメイン、公開サイト、Workerが必要な場合だけ
+- Linear: Issue／Project連携が必要な場合だけ
+- Vercel: Web配信または補助サービスのdeployが必要な場合だけ
 - ElevenLabs: 承認済みの音声・画像・動画処理が必要な場合だけ
 - App Store Connect: TestFlight、提出、審査対応
 
-認証済み操作はCodexだけが実行します。Claudeはローカルコードとマイグレーションファイルを作成できますが、リモートへ適用しません。
+認証済み操作はCodexとClaudeのどちらも実行できます。実行モデルに関係なく、Issue contractで指定されたoperation／Executorと`Config/ownership.yml`のアカウント／targetを完全一致で検証し、未設定または不一致なら操作しません。
 
 ## 8. Supabase構成
 

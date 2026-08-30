@@ -4,9 +4,9 @@ This contract separates release readiness from authenticated App Store Connect m
 
 ## Authority and entry conditions
 
-- Codex is the only execution principal for App Store Connect, authenticated browser, upload, signing-account, and provider operations. Claude delegates these operations to Codex and may only edit or review local materials.
+- Codex and Claude may execute App Store Connect, authenticated browser, upload, signing-account, and provider operations when named as the Issue executor.
 - The release Issue must declare each intended production operation, including inspection, section updates, screenshot upload, build selection, and submission for review. No skill invocation broadens Issue authority.
-- Immediately before each mutation batch, Codex verifies the active personal Team, App, Bundle ID, version, and build against `Config/ownership.yml` and the sealed package. A company identity or ambiguous target is a hard stop.
+- Immediately before each mutation batch, the selected executor verifies the active configured Team, App, Bundle ID, version, and build against `Config/ownership.yml` and the sealed package. Another identity or ambiguous target is a hard stop.
 - `prepare-appstore-assets` must have produced `${VERSION}-package.json` for the exact source SHA and build digest, with current Apple requirements and an approved release-auditor result.
 - A first public release additionally requires the user's package-bound confirmation of the privacy policy and terms. AI review cannot grant legal approval.
 
@@ -32,6 +32,6 @@ Do not continue when App Store Connect presents an unexpected agreement, price, 
 
 `App Store/submission/${VERSION}-result.json` is an ordered, sanitized journal. Each entry contains the section ID, `verified` status, an `asc://` remote reference, SHA-256 readback digest, `app-store-connect` source, and verification time. It contains no field values or credentials.
 
-On resume, Codex must authenticate again, rerun preflight, recompute all immutable inputs, and read back every recorded remote section. `scripts/record-section.sh --resume-readback yes` is valid only after that comparison. Local status alone is not evidence of remote completion.
+On resume, the selected executor must authenticate again, rerun preflight, recompute all immutable inputs, and read back every recorded remote section. `scripts/record-section.sh --resume-readback yes` is valid only after that comparison. Local status alone is not evidence of remote completion.
 
 The final journal status `submitted` means only that the exact candidate was submitted for review and read back. It does not mean Apple approved or released the app. App Review and release status are later observations and must be reported separately.

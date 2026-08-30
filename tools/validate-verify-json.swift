@@ -528,9 +528,10 @@ func validateSharedArtifactState(
     guard stateWorktree == ".worktrees/\(slug)" else {
         throw ValidationFailure("shared artifact state worktree and Branch disagree")
     }
+    let primaryImplementer = try requireString(state["primaryImplementer"]!, at: "shared artifact state.primaryImplementer")
     guard matches(try requireString(state["baseSha"]!, at: "shared artifact state.baseSha"), regex: shaPattern),
-          try requireString(state["primaryImplementer"]!, at: "shared artifact state.primaryImplementer") == String(branch.split(separator: "/", maxSplits: 1)[0]),
-          try requireString(state["executor"]!, at: "shared artifact state.executor") == "codex" else {
+          primaryImplementer == String(branch.split(separator: "/", maxSplits: 1)[0]),
+          try requireString(state["executor"]!, at: "shared artifact state.executor") == primaryImplementer else {
         throw ValidationFailure("shared artifact state does not match schema v1")
     }
     let workflowStates: Set<String> = [
