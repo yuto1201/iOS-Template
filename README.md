@@ -1,6 +1,6 @@
 # iOS-Template
 
-Codex を中心に、Claude を実装担当または反対モデルの評価者として併用する個人向け iOS 開発テンプレートです。仕様、Issue、ブランチ、検証、反対モデルレビュー、PR、Squash Merge までを一貫したワークフローとして扱います。
+CodexとClaudeを同等の実装・外部操作担当として使い、反対側のモデルを評価者にする個人向けiOS開発テンプレートです。仕様、Issue、ブランチ、検証、反対モデルレビュー、PR、Squash Mergeまでを一貫したワークフローとして扱います。
 
 Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、英語・日本語、iPhone・iPad、共有仕様スキル、Codex/Claude 共通責務の read-only 評価エージェントを含みます。運用自動化は [実装計画索引](./docs/superpowers/plans/README.md) に従って段階的に追加します。
 
@@ -152,11 +152,11 @@ swift tools/validate-verify-json.swift \
 
 ### GitHub workflow initialization
 
-テンプレートから個人用リポジトリを作成した直後、最初のIssueを起票する前にCodexが個人GitHubアカウントと対象リポジトリを確認し、workflow labelsを一度同期します。この操作は冪等で、既存の正しいlabelは変更しません。Claudeからは実行せずCodexへ委託します。
+テンプレートから個人用リポジトリを作成した直後、最初のIssueを起票する前にCodexまたはClaudeが`Config/ownership.yml`のGitHubアカウントと対象リポジトリを確認し、workflow labelsを一度同期します。この操作は冪等で、既存の正しいlabelは変更しません。
 
 ```sh
 REPO='OWNER/REPO'
-tools/sync-github-labels.sh --repo "$REPO" --executor codex
+tools/sync-github-labels.sh --repo "$REPO" --executor codex # または claude
 ```
 
 その後、アプリ固有の最小仕様を`specs/`で確定し、Foundation、Identity bootstrap、Simulator verificationの3つのBootstrap Issueを依存順に起票します。Issue作成後にだけ各Branch/worktreeを作り、Identity bootstrapが完了するまでFeature実装を開始しません。
@@ -190,28 +190,28 @@ done < <(git ls-files --others --exclude-standard -z)
 
 すべての差分と結果recordを確認してからFoundation、Xcode、4条件Simulator、反対モデルレビューを実行してください。共通の手順は[App Bootstrap skill](./.agents/skills/app-bootstrap/SKILL.md)を正とします。
 
-同じ4入力で再実行すると`already-complete`を返して何も変更しません。1値でも異なる再実行は、既存結果と競合するため変更前に失敗します。GitHub上のリポジトリ名変更とApple側のBundle ID登録はこのコマンドに含まれず、それぞれCodexが個人アカウントを確認して別操作として行います。
+同じ4入力で再実行すると`already-complete`を返して何も変更しません。1値でも異なる再実行は、既存結果と競合するため変更前に失敗します。GitHub上のリポジトリ名変更とApple側のBundle ID登録はこのコマンドに含まれず、Issueで指定された実行モデルが設定済みアカウントを確認して別操作として行います。
 
 ### Feature開発開始ゲート
 
-Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに`Status: 確定`で、そのIssueの受け入れ条件と一致していることを確認します。未作成、確定前、または不一致なら、CodexがIssueを`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しません。
+Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに`Status: 確定`で、そのIssueの受け入れ条件と一致していることを確認します。未作成、確定前、または不一致なら、実行モデルがIssueを`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しません。
 
 ## 条件付き統合と秘密管理
 
 Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundation のアプリ本体へ組み込まれていません。必要性を確定仕様と Issue の受け入れ条件に明記した場合だけ、別 Issue で有効化します。テンプレートの状態では root `supabase/`、外部 SDK、認証済み接続を持たず、不要なサービスの保守や権限を発生させません。
 
-- データベース、認証、同期、Storage が必要なアプリでは [Supabase operations skill](./.agents/skills/supabase-ops/SKILL.md)を使用します。`Status: 確定`かつ`Supabase: required`の仕様だけが有効化でき、`supabase/migrations/`を唯一のスキーマ履歴としてRLSとPolicyを同時に追加します。Claudeはローカルのmigration編集・検証・`supabase db reset --local`まで、個人の`YUTO1201` Organization/Projectへのlink・pull・push・SQL適用はCodexだけが行います。
-- 読み上げ、Voice Changer、文字起こし、効果音、音声分離、音楽、画像、動画が必要な場合は [iOS media assets skill](./.agents/skills/ios-media-assets/SKILL.md)を使用します。Codexが個人ElevenLabsアカウント、Workspace、モード別entitlementを先に確認し、受理した音声・transcript・PNG・MP4とsanitized manifestだけを統合します。`paid_plan_required`、権限・moderation・著作権拒否、課金成否が曖昧な試行は自動retryしません。Claudeはpromptやmanifestの準備、ローカル検証、アプリ統合だけを行います。
-- GitHub、Supabase、Cloudflare、ElevenLabs、App Store Connectを含む認証済み外部操作は、実行直前に`tools/provider-preflight.sh`で個人アカウントと対象を照合し、Codexだけが実行します。Claudeは`codex-external-ops`へ委託します。
+- データベース、認証、同期、Storageが必要なアプリでは [Supabase operations skill](./.agents/skills/supabase-ops/SKILL.md)を使用します。`Status: 確定`かつ`Supabase: required`の仕様だけが有効化でき、`supabase/migrations/`を唯一のスキーマ履歴としてRLSとPolicyを同時に追加します。CodexとClaudeのどちらもlocal／remote作業を実行できますが、remoteではOrganization IDとProject Refを照合します。
+- 読み上げ、Voice Changer、文字起こし、効果音、音声分離、音楽、画像、動画が必要な場合は [iOS media assets skill](./.agents/skills/ios-media-assets/SKILL.md)を使用します。実行モデルが設定済みElevenLabs Account／Workspaceとmode別entitlementを先に確認し、受理した出力とsanitized manifestだけを統合します。
+- GitHub、Supabase、Cloudflare、Linear、Vercel、ElevenLabs、App Store Connectを含む認証済み外部操作は、CodexとClaudeが同じ [external operations skill](./.agents/skills/external-ops/SKILL.md)を使い、実行直前に設定済みアカウントと対象を照合します。
 - 一行の秘密値はmacOS Keychainへ保存し、`tools/run-with-secret.sh`が子プロセスの環境だけへ渡します。App Store Connectの`.p8`は`~/Library/Application Support/iOS-Template/secrets/${appSlug}/`の`0700`ディレクトリ／`0600`ファイルだけを`tools/run-with-private-key.sh`で使用します。取得値を表示するコマンドはなく、`.secrets/`と`secret-staging/`もGit管理外です。
 
 ## App Store リリース素材
 
-`App Store/`は、英語・日本語metadata、privacy宣言、privacy policyとtermsの原稿、review notes、release notes、最終screenshots、提出チェックリストを一括管理する非秘密の正本です。テンプレートのURLと法務文書は未確定、画像は未生成なので、そのまま提出可能という意味ではありません。現在の公開要件は`App Store/submission/requirements.json`へ取得日時・参照元とともに固定し、準備時に期限切れならCodexがApple公式資料から更新します。
+`App Store/`は、英語・日本語metadata、privacy宣言、privacy policyとtermsの原稿、review notes、release notes、最終screenshots、提出チェックリストを一括管理する非秘密の正本です。テンプレートのURLと法務文書は未確定、画像は未生成なので、そのまま提出可能という意味ではありません。現在の公開要件は`App Store/submission/requirements.json`へ取得日時・参照元とともに固定し、準備時に期限切れなら実行モデルがApple公式資料から更新します。
 
 リリース候補がBuild/Test済みになったら [prepare-appstore-assets skill](./.agents/skills/prepare-appstore-assets/SKILL.md)で、実際の仕様から文面を生成し、App Store専用Simulator matrixで英日・iPhone/iPad画像を撮影します。このmatrixは通常検証とは別で、表示ファミリー要件に応じてPro Maxを使用できます。全画像とprivacy/legal/metadataを`release-auditor`が同一SHA・同一build digestで承認し、初回公開時はユーザーがprivacy policyとtermsを確認した後だけ、変更検知可能なpackage manifestを作ります。
 
-提出は [submit-appstore-release skill](./.agents/skills/submit-appstore-release/SKILL.md)をCodexで実行します。Codexが個人Team、App、Bundle ID、version、buildを確認し、App Store Connectへセクション単位で入力・保存・再読込します。中断時は`App Store/submission/${VERSION}-result.json`のsanitizedな参照とdigestから再開しますが、remoteを再読込するまでは完了扱いにしません。packageまたはbuildが変わった場合は提出せず、準備と監査からやり直します。
+提出は [submit-appstore-release skill](./.agents/skills/submit-appstore-release/SKILL.md)をIssueで指定されたCodexまたはClaudeが実行します。実行モデルが設定済みTeam、App、Bundle ID、version、buildを確認し、App Store Connectへセクション単位で入力・保存・再読込します。
 
 ## 最初に読む文書
 
@@ -231,7 +231,7 @@ Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundat
 - `Flower`: Issue 単位の証拠管理、視覚評価、作業完了ゲート
 - `Elsefolk`: 仕様の確定・提案・未決の分離、決定ログ、実測を伴う完了報告
 - `CafLog`: 日本語・英語対応、iPhone・iPad、App Store 用素材の管理
-- 今回の確定方針: Codex の個人アカウントだけが認証済み外部操作を担当し、Claude はローカルの実装・修正・検証に限定する
+- 現行の確定方針: CodexとClaudeは同じ外部操作権限を持ち、`Config/ownership.yml`の設定済みアカウントだけを使用する
 
 参照プロジェクト固有の画面、データモデル、アーキテクチャ、`CLAUDE.md` は継承しません。
 
@@ -241,7 +241,7 @@ Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundat
 - 1 Issue = 1 Branch = 1 PR とする。
 - AI が Simulator 検証、反対モデルレビュー、修正、PR、Squash Merge まで進める。
 - ユーザーによる実機確認は、AI の Definition of Done の後に行う最終確認とする。
-- 外部アカウント操作は常に Codex が行う。
+- 外部アカウント操作はIssueで指定されたCodexまたはClaudeが、設定済みidentityのpreflight後に行う。
 - 秘密値は Git、Issue、PR、ログ、スクリーンショット、AI プロンプトに残さない。
 
 ## Issue 自動運用とリカバリー
@@ -274,7 +274,7 @@ tools/cross-model-review.sh --primary codex \
   --output ".artifacts/issues/$ISSUE/$HEAD_SHA/review.json"
 ```
 
-マージ診断はmutationを行わないGateを先に実行します。承認済みreviewと最新のaccount preflightが同じHeadへ揃った後、CodexがPR作成、Squash Merge、正確なBranch/worktree cleanup、`done` 遷移まで行います。
+マージ診断はmutationを行わないGateを先に実行します。承認済みreviewと最新のaccount preflightが同じHeadへ揃った後、Issueで指定された実行モデルがPR作成、Squash Merge、正確なBranch/worktree cleanup、`done`遷移まで行います。
 
 ```sh
 tools/github-account-preflight.sh --repo "$REPO" --issue "$ISSUE" \

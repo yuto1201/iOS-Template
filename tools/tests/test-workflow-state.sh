@@ -5,33 +5,19 @@ repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-workflow-state.XXXXXX")
 test_issue=424249
 artifact_issue="$repo_root/.artifacts/issues/$test_issue"
-request_dir="$repo_root/.artifacts/ops-requests"
-result_dir="$repo_root/.artifacts/ops-results"
 [[ ! -e "$artifact_issue" ]] || { echo "refusing to overwrite existing $artifact_issue" >&2; exit 1; }
 state_worktree=''
 cleanup() {
   if [[ -n "$state_worktree" && -e "$state_worktree" ]]; then git -C "$repo_root" worktree remove --force "$state_worktree" >/dev/null 2>&1 || true; fi
   git -C "$repo_root" branch -D "codex/$test_issue-workflow-state" >/dev/null 2>&1 || true
-  rm -rf "$workspace" "$artifact_issue" "$request_dir/issue-424249-create-pr-1.json" "$request_dir/create-issue.json" "$request_dir/bad.json" "$request_dir/cloudflare-deploy.json" "$request_dir/elevenlabs-audio.json" "$request_dir/appstore-build.json" "$request_dir/supabase-migrations.json" "$request_dir/path-link" "$result_dir/issue-424249-create-pr-1.json"
+  rm -rf "$workspace" "$artifact_issue"
 }
 trap cleanup EXIT
 
 fake_bin="$workspace/bin"
-mkdir -p "$fake_bin" "$request_dir" "$result_dir"
+mkdir -p "$fake_bin"
 cp "$repo_root/tools/tests/fixtures/gh" "$fake_bin/gh"
 chmod +x "$fake_bin/gh"
-cat > "$fake_bin/codex" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ -n "${FAKE_CODEX_REQUIRE_CLOSED_STDIN:-}" ]]; then
-  ruby -e 'exit(STDIN.stat.rdev == File.stat("/dev/null").rdev ? 0 : 1)' || exit 97
-fi
-if [[ -n "${FAKE_CODEX_MUTATE_REQUEST:-}" ]]; then
-  cp "${FAKE_CODEX_MUTATION_FILE:?FAKE_CODEX_MUTATION_FILE is required}" "$FAKE_CODEX_MUTATE_REQUEST"
-fi
-printf '%s\n' '{"status":"succeeded","executor":"codex","verifiedAccount":"yuto1201","target":"yuto1201/iOS-Template","operation":"github.create_pr","resultReference":"https://github.com/yuto1201/iOS-Template/pull/424249","executedAt":"2026-08-24T00:00:00Z","token":"must-not-survive"}'
-EOF
-chmod +x "$fake_bin/codex"
 real_git=$(command -v git)
 cat > "$fake_bin/git" <<'EOF'
 #!/usr/bin/env bash
@@ -115,6 +101,9 @@ assert_json() {
   local path=$1 code=$2
   ruby -rjson -e "$code" "$path"
 }
+
+ruby "$repo_root/tools/lib/workflow-json.rb" state-marker approved claimed null 2026-08-24T00:00:00Z claude > "$workspace/claude-marker.txt"
+rg -Fq '"executor":"claude"' "$workspace/claude-marker.txt" || { echo 'Claude state executor was not preserved' >&2; exit 1; }
 
 cd "$repo_root"
 mkdir -p "$artifact_issue"
@@ -392,49 +381,4 @@ printf '{"state":"claimed","unexpected":"must-fail-closed"}' > ".artifacts/issue
 assert_fails 'malformed durable identity stops before GitHub mutation' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from claimed --to in-progress
 ! rg -q '^issue edit ' "$FAKE_GH_LOG"
 
-request=.artifacts/ops-requests/issue-424249-create-pr-1.json
-cat > "$request" <<'EOF'
-{"requestVersion":1,"requestId":"issue-424249-create-pr-1","issue":424249,"operation":"github.create_pr","target":{"kind":"repository","identifier":"yuto1201/iOS-Template"},"environment":"production","expectedAccount":"yuto1201","inputs":{"base":"main","head":"codex/424249-workflow"},"reason":"ready"}
-EOF
-"$repo_root/tools/validate-codex-op-request.sh" --request "$request"
-
-cat > "$request_dir/create-issue.json" <<'EOF'
-{"requestVersion":1,"requestId":"create-issue","issue":424249,"operation":"github.create_issue","target":{"kind":"repository","identifier":"yuto1201/iOS-Template"},"environment":"production","expectedAccount":"yuto1201","inputs":{"title":"Release notes","body":"First paragraph.\n\n- A Markdown item\n- Another item"},"reason":"document release"}
-EOF
-"$repo_root/tools/validate-codex-op-request.sh" --request "$request_dir/create-issue.json" > "$workspace/create-issue.json"
-assert_json "$workspace/create-issue.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value.dig("inputs", "body") == "First paragraph.\n\n- A Markdown item\n- Another item"'
-
-cat > "$request_dir/cloudflare-deploy.json" <<'EOF'
-{"requestVersion":1,"requestId":"cloudflare-deploy","issue":424249,"operation":"cloudflare.deploy","target":{"kind":"cloudflare-project","identifier":"example"},"environment":"production","expectedAccount":"yuto1201","inputs":{"source":"/tmp/escape"},"reason":"deploy"}
-EOF
-assert_fails 'Cloudflare source path must be contained in the repository' "$repo_root/tools/validate-codex-op-request.sh" --request "$request_dir/cloudflare-deploy.json"
-ln -s /tmp "$request_dir/path-link"
-ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["inputs"]["source"] = ".artifacts/ops-requests/path-link"; File.write(ARGV[0], JSON.generate(value))' "$request_dir/cloudflare-deploy.json"
-assert_fails 'Cloudflare source symlink escape is rejected' "$repo_root/tools/validate-codex-op-request.sh" --request "$request_dir/cloudflare-deploy.json"
-cat > "$request_dir/elevenlabs-audio.json" <<'EOF'
-{"requestVersion":1,"requestId":"elevenlabs-audio","issue":424249,"operation":"elevenlabs.process_media","target":{"kind":"elevenlabs-project","identifier":"example"},"environment":"production","expectedAccount":"yuto1201","inputs":{"mode":"text-to-speech","outputPath":"/tmp/audio.mp3","request":"approved speech request"},"reason":"generate"}
-EOF
-assert_fails 'ElevenLabs output path must use an allowed Resource directory' "$repo_root/tools/validate-codex-op-request.sh" --request "$request_dir/elevenlabs-audio.json"
-cat > "$request_dir/appstore-build.json" <<'EOF'
-{"requestVersion":1,"requestId":"appstore-build","issue":424249,"operation":"appstore.upload_build","target":{"kind":"appstore-app","identifier":"example"},"environment":"production","expectedAccount":"yuto1201","inputs":{"buildPath":"../escape.ipa"},"reason":"upload"}
-EOF
-assert_fails 'App Store build path must use its artifact root' "$repo_root/tools/validate-codex-op-request.sh" --request "$request_dir/appstore-build.json"
-cat > "$request_dir/supabase-migrations.json" <<'EOF'
-{"requestVersion":1,"requestId":"supabase-migrations","issue":424249,"operation":"supabase.apply_migrations","target":{"kind":"supabase-project","identifier":"example"},"environment":"production","expectedAccount":"yuto1201","inputs":{"migrations":["../escape.sql"]},"reason":"migrate"}
-EOF
-assert_fails 'migration input must not contain a path escape' "$repo_root/tools/validate-codex-op-request.sh" --request "$request_dir/supabase-migrations.json"
-
-printf '{"requestVersion":1}' > .artifacts/ops-requests/bad.json
-assert_fails 'malformed operation request is rejected' "$repo_root/tools/validate-codex-op-request.sh" --request .artifacts/ops-requests/bad.json
-assert_fails 'request path escape is rejected' "$repo_root/tools/validate-codex-op-request.sh" --request ../outside.json
-ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["approval"] = "approved"; File.write(ARGV[0], JSON.generate(value))' "$request"
-assert_fails 'request-selected approval is rejected' "$repo_root/tools/validate-codex-op-request.sh" --request "$request"
-sed -i '' 's/,"approval":"approved"//' "$request"
-
-# The end-to-end transport contract has its own isolated fixture because it now
-# binds to an exact sealed Issue contract, a fresh live Issue reconstruction,
-# and a durable replay receipt. Keep the state tests independent of those
-# transport artifacts while still making this aggregate suite exercise them.
-"$repo_root/tools/tests/test-codex-op-transport.sh"
-
-echo 'PASS: GitHub preflight, durable state transitions, and fixed Codex operation transport'
+echo 'PASS: GitHub preflight and model-neutral durable state transitions'

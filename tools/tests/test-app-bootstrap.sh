@@ -887,18 +887,32 @@ import sys
 with open(sys.argv[1]) as source:
     actual = source.read()
 
-expected = """schemaVersion: 1
+expected = """schemaVersion: 2
 
 github:
   login: yuto1201
 
 supabase:
-  organization: YUTO1201
+  organizationId: kmjpkzaqlewqnypyqwkg
+  organizationName: "yuto1201's Org"
   projectRef: null
 
 cloudflare:
-  accountId: null
+  accountId: 7ea8e713d76506f9e303f58624829aa5
+  accountName: Yuto Dev
+  plan: free
   target: null
+
+linear:
+  workspaceSlug: yuto33004
+  workspaceUrl: https://linear.app/yuto33004
+  teamKey: YUT
+
+vercel:
+  teamId: team_ANEUn6gVL8dccPaY08wkvxFt
+  teamSlug: yuto16
+  plan: hobby
+  projectId: null
 
 elevenlabs:
   accountId: null

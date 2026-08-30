@@ -510,12 +510,12 @@ enable_supabase_preflight() {
 }
 
 write_supabase_preflight() {
-  local account=${1:-YUTO1201} target=${2:-personal-project} environment=${3:-production}
+  local account=${1:-kmjpkzaqlewqnypyqwkg} target=${2:-personal-project} environment=${3:-production}
   mkdir -p "$repo/.artifacts/issues/42/provider-preflights"
   ACCOUNT="$account" TARGET="$target" ENVIRONMENT="$environment" CHECKED_AT="$preflight_at" ruby -rjson -rdigest -e '
     def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value; end
     path = ARGV.fetch(0)
-    value = {"schemaVersion" => 1, "issue" => 42, "provider" => "supabase", "account" => ENV.fetch("ACCOUNT"), "target" => ENV.fetch("TARGET"), "environment" => ENV.fetch("ENVIRONMENT"), "operation" => "supabase.inspect_project", "health" => "healthy", "checkedAt" => ENV.fetch("CHECKED_AT")}
+    value = {"schemaVersion" => 2, "issue" => 42, "executor" => "codex", "provider" => "supabase", "account" => ENV.fetch("ACCOUNT"), "target" => ENV.fetch("TARGET"), "environment" => ENV.fetch("ENVIRONMENT"), "operation" => "supabase.inspect_project", "health" => "healthy", "checkedAt" => ENV.fetch("CHECKED_AT")}
     value["digest"] = "sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(value)))}"
     File.binwrite(path, JSON.generate(canonical(value)))
   ' "$repo/.artifacts/issues/42/provider-preflights/supabase.json"
@@ -529,22 +529,22 @@ write_supabase_preflight 'Company'
 assert_fails 'company provider account is rejected' run_gate
 write_supabase_preflight 'yuto1201'
 assert_fails 'case-mismatched provider account is rejected' run_gate
-write_supabase_preflight YUTO1201 'other-project'
+write_supabase_preflight kmjpkzaqlewqnypyqwkg 'other-project'
 assert_fails 'wrong provider target is rejected' run_gate
-write_supabase_preflight YUTO1201 'Personal-project'
+write_supabase_preflight kmjpkzaqlewqnypyqwkg 'Personal-project'
 assert_fails 'case-mismatched provider target is rejected' run_gate
 write_supabase_preflight '   '
 assert_fails 'blank provider account is rejected' run_gate
-write_supabase_preflight YUTO1201 ' personal-project '
+write_supabase_preflight kmjpkzaqlewqnypyqwkg ' personal-project '
 assert_fails 'untrimmed provider target is rejected' run_gate
-write_supabase_preflight YUTO1201 personal-project ' production '
+write_supabase_preflight kmjpkzaqlewqnypyqwkg personal-project ' production '
 assert_fails 'untrimmed provider environment is rejected' run_gate
 long_account=$(printf 'a%.0s' {1..257})
 write_supabase_preflight "$long_account"
 assert_fails 'overlong provider account is rejected' run_gate
-write_supabase_preflight YUTO1201 '<project-ref>'
+write_supabase_preflight kmjpkzaqlewqnypyqwkg '<project-ref>'
 assert_fails 'unsafe provider target characters are rejected' run_gate
-write_supabase_preflight YUTO1201 personal-project qa
+write_supabase_preflight kmjpkzaqlewqnypyqwkg personal-project qa
 assert_fails 'unknown provider environment is rejected' run_gate
 write_supabase_preflight
 

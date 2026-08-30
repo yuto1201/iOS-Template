@@ -92,7 +92,7 @@ def validate_state(root, repository, issue, mode)
   refuse("state Branch and worktree slugs differ") unless branch_match[2] == worktree_match[1]
   expected_model = branch.start_with?("codex/") ? "codex" : "claude"
   refuse("state primary implementer differs from Branch ownership") unless state["primaryImplementer"] == expected_model
-  refuse("state executor must be Codex") unless state["executor"] == "codex"
+  refuse("state executor must match the primary implementer") unless state["executor"] == expected_model
   base = sha!(state["baseSha"], "state.baseSha")
   head = sha!(state["headSha"], "state.headSha")
   contract_ref = state["issueContract"]

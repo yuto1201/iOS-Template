@@ -106,7 +106,7 @@ For either path, set the canonical evidence path before preparing the review han
 EVIDENCE=".artifacts/issues/${ISSUE}/${HEAD_SHA}/verify.json"
 ```
 
-External account/provider preflights are separate Codex-only merge-time artifacts. This skill does not authorize GitHub, provider, signing-account, App Store Connect, or other authenticated operations.
+External account/provider preflights are separate merge-time artifacts that Codex or Claude may produce under the same configured-account policy. This skill alone does not authorize GitHub, provider, signing-account, App Store Connect, or other authenticated operations.
 
 Independently validate the exact canonical evidence and derive its digest only after validation exits zero. If the Issue changes repository delivery tools, guards, workflow state, or evidence producers, also run every tracked `tools/tests/test-*.sh` through `tools/run-repository-tests.sh` in its clean detached worktree and supply one exact `--map AC-N=...` for every acceptance criterion. The command publishes only current-Head, sanitized, no-replace `repository-tests.json`; any failed test or incomplete mapping blocks review. Then use the single deterministic producer to seal the actual Base-to-Head diff, canonical verify bytes, ordered visual evidence, and any canonical repository test evidence into the schema-v2 review packet. Never run the producer before verification succeeds, hand-author either review artifact, or substitute another packet schema.
 

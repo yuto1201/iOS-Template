@@ -11,22 +11,28 @@ fail() {
 usage() {
   cat >&2 <<'USAGE'
 usage:
-  provider-preflight.sh --issue NUMBER github --target OWNER/REPO
-  provider-preflight.sh --issue NUMBER supabase --environment local|preview|staging|production
-  provider-preflight.sh --issue NUMBER cloudflare --target IDENTIFIER
-  provider-preflight.sh --issue NUMBER elevenlabs --operation text-to-speech|speech-to-speech|speech-to-text|sound-effect|audio-isolation|music|image|video
-  provider-preflight.sh --issue NUMBER app-store --version VERSION
+  provider-preflight.sh --executor codex|claude --issue NUMBER github --target OWNER/REPO
+  provider-preflight.sh --executor codex|claude --issue NUMBER supabase --environment local|preview|staging|production
+  provider-preflight.sh --executor codex|claude --issue NUMBER cloudflare --target IDENTIFIER
+  provider-preflight.sh --executor codex|claude --issue NUMBER linear --target TEAM_KEY
+  provider-preflight.sh --executor codex|claude --issue NUMBER vercel --target TEAM_SLUG
+  provider-preflight.sh --executor codex|claude --issue NUMBER elevenlabs --operation text-to-speech|speech-to-speech|speech-to-text|sound-effect|audio-isolation|music|image|video
+  provider-preflight.sh --executor codex|claude --issue NUMBER app-store --version VERSION
 USAGE
   exit 2
 }
 
-[[ $# -ge 3 && $1 == --issue ]] || usage
+[[ $# -ge 5 && $1 == --executor ]] || usage
+executor=${2:-}
+shift 2
+[[ "$executor" == codex || "$executor" == claude ]] || fail 'Executor must be codex or claude'
+[[ $1 == --issue ]] || usage
 issue_number=${2:-}
 provider=${3:-}
 shift 3
 [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || fail 'Issue number is invalid'
 case "$provider" in
-  github|supabase|cloudflare|elevenlabs|app-store) ;;
+  github|supabase|cloudflare|linear|vercel|elevenlabs|app-store) ;;
   *) usage ;;
 esac
 
@@ -62,6 +68,18 @@ case "$provider" in
     [[ "$requested_target" =~ ^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$ ]] || fail 'Cloudflare target is invalid'
     evidence_environment=production
     evidence_operation=cloudflare.inspect_account
+    ;;
+  linear)
+    [[ -n "$requested_target" && -z "$requested_environment$requested_media_operation$requested_version" ]] || usage
+    [[ "$requested_target" =~ ^[A-Za-z][A-Za-z0-9_-]{1,31}$ ]] || fail 'Linear team key is invalid'
+    evidence_environment=production
+    evidence_operation=linear.inspect_workspace
+    ;;
+  vercel)
+    [[ -n "$requested_target" && -z "$requested_environment$requested_media_operation$requested_version" ]] || usage
+    [[ "$requested_target" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$ ]] || fail 'Vercel team slug is invalid'
+    evidence_environment=production
+    evidence_operation=vercel.inspect_team
     ;;
   elevenlabs)
     [[ -n "$requested_media_operation" && -z "$requested_target$requested_environment$requested_version" ]] || usage
@@ -125,13 +143,19 @@ else
       ' "$temporary_directory/provider-native.json" "$(ruby "$repo_root/tools/lib/ownership.rb" --file "$ownership_file" --provider supabase | jq -er .target)" > "$raw_response" 2>/dev/null || fail 'Supabase response could not prove the configured project'
       ;;
     cloudflare)
-      fail 'Cloudflare target inspection requires a Codex provider adapter that is not configured'
+      fail 'Cloudflare target inspection requires an authenticated provider adapter that is not configured'
+      ;;
+    linear)
+      fail 'Linear workspace inspection requires an authenticated provider adapter that is not configured'
+      ;;
+    vercel)
+      fail 'Vercel team inspection requires an authenticated provider adapter that is not configured'
       ;;
     elevenlabs)
-      fail 'ElevenLabs entitlement inspection requires the Codex media capability'
+      fail 'ElevenLabs entitlement inspection requires an authenticated media capability'
       ;;
     app-store)
-      fail 'App Store identity inspection requires the authenticated Codex App Store workflow'
+      fail 'App Store identity inspection requires an authenticated App Store workflow'
       ;;
   esac
 fi
@@ -139,12 +163,14 @@ chmod 600 "$raw_response"
 
 expected_identity=$(PROVIDER="$provider" OWNERSHIP="$ownership_file" REPO_TARGET="$requested_target" ruby -rjson -ryaml -e '
   value=YAML.safe_load(File.binread(ENV.fetch("OWNERSHIP")), permitted_classes: [], aliases: false)
-  abort unless value.is_a?(Hash) && value["schemaVersion"] == 1
+  abort unless value.is_a?(Hash) && value["schemaVersion"] == 2
   provider=ENV.fetch("PROVIDER")
   pair=case provider
        when "github" then [value.dig("github","login"), ENV.fetch("REPO_TARGET")]
-       when "supabase" then [value.dig("supabase","organization"), value.dig("supabase","projectRef")]
+       when "supabase" then [value.dig("supabase","organizationId"), value.dig("supabase","projectRef")]
        when "cloudflare" then [value.dig("cloudflare","accountId"), value.dig("cloudflare","target")]
+       when "linear" then [value.dig("linear","workspaceSlug"), value.dig("linear","teamKey")]
+       when "vercel" then [value.dig("vercel","teamId"), value.dig("vercel","teamSlug")]
        when "elevenlabs" then [value.dig("elevenlabs","accountId"), value.dig("elevenlabs","workspaceId")]
        when "app-store" then [value.dig("appStore","teamId"), value.dig("appStore","bundleId")]
        else abort
@@ -157,9 +183,11 @@ expected_account=$(jq -er '.account | strings' <<< "$expected_identity")
 expected_target=$(jq -er '.target | strings' <<< "$expected_identity")
 if [[ "$provider" == github && "$requested_target" != "$expected_target" ]]; then fail 'GitHub target differs from the requested repository'; fi
 if [[ "$provider" == cloudflare && "$requested_target" != "$expected_target" ]]; then fail 'Cloudflare target differs from configured ownership'; fi
+if [[ "$provider" == linear && "$requested_target" != "$expected_target" ]]; then fail 'Linear target differs from configured ownership'; fi
+if [[ "$provider" == vercel && "$requested_target" != "$expected_target" ]]; then fail 'Vercel target differs from configured ownership'; fi
 
 candidate="$temporary_directory/candidate.json"
-PROVIDER="$provider" ISSUE="$issue_number" ACCOUNT="$expected_account" TARGET="$expected_target" \
+PROVIDER="$provider" EXECUTOR="$executor" ISSUE="$issue_number" ACCOUNT="$expected_account" TARGET="$expected_target" \
   ENVIRONMENT="$evidence_environment" OPERATION="$evidence_operation" MEDIA_OPERATION="$requested_media_operation" \
   VERSION="$requested_version" CHECKED_AT="$checked_at" ruby -rjson -rdigest -rtime -e '
     def canonical(value)
@@ -192,7 +220,7 @@ PROVIDER="$provider" ISSUE="$issue_number" ACCOUNT="$expected_account" TARGET="$
       end
       Time.iso8601(ENV.fetch("CHECKED_AT"))
       value={
-        "schemaVersion"=>1,"issue"=>Integer(ENV.fetch("ISSUE")),"provider"=>provider,
+        "schemaVersion"=>2,"issue"=>Integer(ENV.fetch("ISSUE")),"executor"=>ENV.fetch("EXECUTOR"),"provider"=>provider,
         "account"=>ENV.fetch("ACCOUNT"),"target"=>ENV.fetch("TARGET"),
         "environment"=>ENV.fetch("ENVIRONMENT"),"operation"=>ENV.fetch("OPERATION"),
         "health"=>"healthy","checkedAt"=>ENV.fetch("CHECKED_AT")

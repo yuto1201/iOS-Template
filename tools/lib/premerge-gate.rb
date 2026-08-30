@@ -205,7 +205,7 @@ begin
   non_github_operations = operation_details.keys.reject { |operation| operation.start_with?("github.") }
   unless non_github_operations.empty?
     provider_root = artifact_snapshots.directory(issue_directory, "provider-preflights", "provider-preflights")
-    provider_by_prefix = {"supabase" => "supabase", "cloudflare" => "cloudflare", "elevenlabs" => "elevenlabs", "appstore" => "app-store"}
+    provider_by_prefix = {"supabase" => "supabase", "cloudflare" => "cloudflare", "linear" => "linear", "vercel" => "vercel", "elevenlabs" => "elevenlabs", "appstore" => "app-store"}
     non_github_operations.each do |operation|
       prefix = operation.split(".", 2).first
       provider = provider_by_prefix.fetch(prefix) { refuse("unsupported provider operation: #{operation}") }
@@ -237,11 +237,12 @@ begin
 
   provider_files.each do |provider, held|
     value = parse_object(held.bytes, "#{provider} provider preflight")
-    exact_keys!(value, %w[schemaVersion issue provider account target environment operation health checkedAt digest], "#{provider} provider preflight")
+    exact_keys!(value, %w[schemaVersion issue executor provider account target environment operation health checkedAt digest], "#{provider} provider preflight")
     operation = value["operation"]
     detail = operation_details[operation]
     refuse("#{provider} provider operation does not match the Issue contract") unless detail && operation.split(".", 2).first == (provider == "app-store" ? "appstore" : provider)
-    refuse("#{provider} provider identity is invalid") unless value["schemaVersion"] == 1 && value["issue"] == issue && value["provider"] == provider && value["health"] == "healthy"
+    refuse("#{provider} provider identity is invalid") unless value["schemaVersion"] == 2 && value["issue"] == issue && value["provider"] == provider && value["health"] == "healthy"
+    refuse("#{provider} provider executor differs from the Issue contract") unless value["executor"] == detail.fetch("executor").downcase
     safe_identifier!(value["account"], "#{provider} provider account")
     safe_identifier!(value["target"], "#{provider} provider target")
     expected_provider_identity = IOSTemplate::Ownership.provider_identity!(ownership, provider)
@@ -285,7 +286,7 @@ begin
   completed_at = iso8601!(verify.fetch("completedAt"), "verify.completedAt")
 
   expected_account = IOSTemplate::Ownership.github_login!(ownership)
-  refuse("configured GitHub account is not the approved personal account") unless expected_account == "yuto1201"
+  refuse("configured GitHub account differs from this repository owner") unless expected_account == repository.split("/", 2).first
   preflight = parse_object(preflight_file.bytes, "github-preflight.json")
   exact_keys!(preflight, %w[account repository defaultBranch url intendedOperation issue headSha checkedAt digest], "github-preflight.json")
   refuse("GitHub preflight identity differs from the merge request") unless

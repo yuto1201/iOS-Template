@@ -65,7 +65,7 @@ body:
     id: external-operations
     attributes:
       label: External operations
-      description: "Write `None`, or one or more exact five-field blocks in this order. Operation must be an exact ID from `docs/AUTHORITY.md`; repeat the block for each operation."
+      description: "Write `None`, or one or more exact five-field blocks in this order. Operation must be an exact ID from `docs/AUTHORITY.md`; Executor must be Codex or Claude; repeat the block for each operation."
       placeholder: |
         - Operation: github.read_issue
         - Service: GitHub

@@ -71,8 +71,8 @@ Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evi
 tools/run-repository-tests.sh \
   --issue "${ISSUE}" \
   --expected-base "${BASE_SHA}" \
-  --map AC-1=tools/tests/test-claude-guard.sh \
-  --map AC-2=tools/tests/test-workflow-state.sh
+  --map AC-1=tools/tests/test-provider-ownership.sh \
+  --map AC-2=tools/tests/test-provider-preflight.sh
 ```
 
 `prepare-review-packet.sh` はこのcanonical evidenceが存在する場合だけ検証してpacket内の `repositoryTests` へ封印します。したがってreviewerとpre-merge gateは、iOS smoke testとは別に、現在Headで実際に通過したRepository test suiteと各ACの対応を評価できます。
@@ -375,9 +375,9 @@ gateはprimary checkoutのartifactをpathごとに読み直しません。Issue 
 - `gh issue view` のfixed fields `number,url,body,labels` がcaller Issueと一致し、`type:feature` または `type:regression` がちょうど一つ存在
 - live Issue本文をshared Issue parserで再構成したcanonical contract bytesが `issue-contract.json` と完全一致
 - Provider外部操作はproviderごとに一つ以下で、exact operationとenvironmentがIssueの五field operation blockに一致し、account/target、health、timestamp、digestが安全
-- Providerのaccount/targetは`Config/ownership.yml`のexact case-sensitive値と一致する。Supabaseは`organization`/`projectRef`、Cloudflareは`accountId`/`target`、ElevenLabsは`accountId`/`workspaceId`、App Store Connectは`teamId`/`bundleId`へ対応し、nullまたは未設定ならfail closed
+- Providerのexecutor/account/targetはIssue contractと`Config/ownership.yml`のexact case-sensitive値に一致する。Supabaseは`organizationId`/`projectRef`、Cloudflareは`accountId`/`target`、Linearは`workspaceSlug`/`teamKey`、Vercelは`teamId`/`teamSlug`、ElevenLabsは`accountId`/`workspaceId`、App Store Connectは`teamId`/`bundleId`へ対応し、必要なtargetがnullまたは未設定ならfail closed
 - Issue contractが`github.merge_pr`を宣言し、live Issueから再構成した構造化operation details digestもcanonical snapshotと一致
-- `github-preflight.json` のaccountが `Config/ownership.yml` の `yuto1201` と一致し、repository、`main`、URL、`github.merge_pr`、Issue、Head、digestが完全一致
+- `github-preflight.json`のaccountが`Config/ownership.yml`のloginと一致し、repository owner、`main`、URL、`github.merge_pr`、Issue、Head、digestが完全一致
 - GitHub preflightがverify完了、review完了、`approved-for-merge` transitionのすべてより新しく、許容未来時刻を超えない
 
 一つでも不一致ならマージしません。

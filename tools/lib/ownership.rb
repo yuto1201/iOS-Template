@@ -9,17 +9,21 @@ module IOSTemplate
   module Ownership
     class ValidationError < StandardError; end
 
-    TOP_LEVEL_KEYS = %w[schemaVersion github supabase cloudflare elevenlabs appStore].freeze
+    TOP_LEVEL_KEYS = %w[schemaVersion github supabase cloudflare linear vercel elevenlabs appStore].freeze
     PROVIDER_FIELDS = {
-      "supabase" => ["supabase", "organization", "projectRef"],
+      "supabase" => ["supabase", "organizationId", "projectRef"],
       "cloudflare" => ["cloudflare", "accountId", "target"],
+      "linear" => ["linear", "workspaceSlug", "teamKey"],
+      "vercel" => ["vercel", "teamId", "teamSlug"],
       "elevenlabs" => ["elevenlabs", "accountId", "workspaceId"],
       "app-store" => ["appStore", "teamId", "bundleId"]
     }.freeze
     SECTION_KEYS = {
       "github" => %w[login],
-      "supabase" => %w[organization projectRef],
-      "cloudflare" => %w[accountId target],
+      "supabase" => %w[organizationId organizationName projectRef],
+      "cloudflare" => %w[accountId accountName plan target],
+      "linear" => %w[workspaceSlug workspaceUrl teamKey],
+      "vercel" => %w[teamId teamSlug plan projectId],
       "elevenlabs" => %w[accountId workspaceId],
       "appStore" => %w[teamId bundleId]
     }.freeze
@@ -29,7 +33,7 @@ module IOSTemplate
     def parse(bytes)
       value = YAML.safe_load(bytes, permitted_classes: [], permitted_symbols: [], aliases: false)
       exact_keys!(value, TOP_LEVEL_KEYS, "ownership")
-      refuse("ownership.schemaVersion must be 1") unless value["schemaVersion"] == 1
+      refuse("ownership.schemaVersion must be 2") unless value["schemaVersion"] == 2
       SECTION_KEYS.each do |section, keys|
         exact_keys!(value[section], keys, "ownership.#{section}")
         value.fetch(section).each do |field, entry|
@@ -61,7 +65,7 @@ module IOSTemplate
 
     def validate_identifier!(value, at)
       refuse("#{at} is not configured") unless value.is_a?(String)
-      refuse("#{at} is invalid") unless value.bytesize.between?(1, 256) && value == value.strip && value.match?(/\A[A-Za-z0-9][A-Za-z0-9 ._:@\/-]*\z/)
+      refuse("#{at} is invalid") unless value.bytesize.between?(1, 256) && value == value.strip && value.match?(/\A[\p{L}\p{N}][\p{L}\p{N} ._:@\/'-]*\z/u)
       value
     end
 
@@ -74,7 +78,7 @@ end
 if $PROGRAM_NAME == __FILE__
   options = {}
   parser = OptionParser.new do |cli|
-    cli.banner = "usage: ownership.rb --file PATH --provider supabase|cloudflare|elevenlabs|app-store"
+    cli.banner = "usage: ownership.rb --file PATH --provider supabase|cloudflare|linear|vercel|elevenlabs|app-store"
     cli.on("--file PATH") { |value| options["file"] = value }
     cli.on("--provider PROVIDER") { |value| options["provider"] = value }
   end

@@ -5,7 +5,6 @@ require 'json'
 require 'digest'
 require 'time'
 require 'open3'
-require 'tempfile'
 require 'uri'
 require_relative 'descriptor-files'
 require_relative 'issue-contract'
@@ -65,6 +64,8 @@ OPERATIONS = {
   'supabase.apply_migrations' => ['supabase-project', %w[migrations]],
   'cloudflare.inspect_account' => ['cloudflare-account', []],
   'cloudflare.deploy' => ['cloudflare-project', %w[source]],
+  'linear.inspect_workspace' => ['linear-workspace', []],
+  'vercel.inspect_team' => ['vercel-team', []],
   'elevenlabs.generate_audio' => ['elevenlabs-project', %w[outputPath text voice]],
   'elevenlabs.process_media' => ['elevenlabs-project', %w[mode outputPath request]],
   'appstore.inspect_app' => ['appstore-app', []],
@@ -123,7 +124,7 @@ def latest_owned_state_marker(document, current, owner)
     begin
       marker = JSON.parse(matches.fetch(0).fetch(0))
       next unless marker.is_a?(Hash) && marker.keys.sort == %w[executor from resumeState timestamp to]
-      next unless marker['executor'] == 'codex'
+      next unless %w[codex claude].include?(marker['executor'])
       next unless marker['from'].is_a?(String) && marker['to'].is_a?(String)
       next unless marker['resumeState'].nil? || marker['resumeState'].is_a?(String)
       marker_time = Time.iso8601(marker['timestamp'])
@@ -175,7 +176,7 @@ def full_state_record(value, issue, repository)
   workflow_state(value['state'], 'state record state')
   workflow_state(value['previousState'], 'state record previousState', nullable: true)
   workflow_state(value['resumeState'], 'state record resumeState', nullable: true)
-  fail_closed('state record executor is invalid') unless value['executor'] == 'codex'
+  fail_closed('state record executor is invalid') unless %w[codex claude].include?(value['executor']) && value['executor'] == value['primaryImplementer']
   sha(value['headSha'], 'state record headSha') if value.key?('headSha')
   fail_closed('state record pull request identity is invalid') if value.key?('pullRequest') && !(value['pullRequest'].is_a?(Integer) && value['pullRequest'].positive?)
   workflow_state(value['from'], 'state record from', nullable: true) if value.key?('from')
@@ -197,7 +198,7 @@ def minimal_state_record(value, expected_state: nil)
   workflow_state(value['from'], 'minimal state record from', nullable: true)
   workflow_state(value['to'], 'minimal state record to')
   workflow_state(value['resumeState'], 'minimal state record resumeState', nullable: true)
-  fail_closed('minimal state record executor is invalid') unless value['executor'] == 'codex'
+  fail_closed('minimal state record executor is invalid') unless %w[codex claude].include?(value['executor'])
   begin
     Time.iso8601(value['timestamp'])
   rescue ArgumentError, TypeError
@@ -385,13 +386,13 @@ ensure
 end
 
 def strict_result(result, request)
-  exact_keys(result, %w[executedAt executor operation resultReference status target verifiedAccount], 'Codex result')
-  fail_closed('Codex result executor is invalid') unless result['executor'] == 'codex'
-  fail_closed('Codex result does not match request') unless
+  exact_keys(result, %w[executedAt executor operation resultReference status target verifiedAccount], 'external operation result')
+  fail_closed('external operation result executor is invalid') unless %w[codex claude].include?(result['executor'])
+  fail_closed('external operation result does not match request') unless
     result['operation'] == request['operation'] &&
     result['target'] == request.dig('target', 'identifier') &&
     result['verifiedAccount'] == request['expectedAccount']
-  fail_closed('Codex result status is invalid') unless %w[succeeded failed blocked:ops].include?(result['status'])
+  fail_closed('external operation result status is invalid') unless %w[succeeded failed blocked:ops].include?(result['status'])
   %w[executedAt executor operation status target verifiedAccount].each do |key|
     nonempty_string(result[key], "result.#{key}")
     fail_closed("result.#{key} contains unsafe characters") if result[key].match?(/[\x00-\x1f\x7f]/)
@@ -424,12 +425,11 @@ rescue URI::InvalidURIError
   fail_closed('result.resultReference is invalid')
 end
 
-class CodexOperationTransport
+class ExternalOperationTransport
   def initialize(request_path:, result_path:)
     @request_path = request_path
     @result_path = result_path
     @repo_root = File.realpath(File.join(__dir__, '..', '..'))
-    @instruction_path = File.join(@repo_root, 'tools', 'lib', 'codex-external-op-instruction.md')
     @artifact_snapshots = nil
     @source_snapshots = nil
   end
@@ -464,7 +464,7 @@ class CodexOperationTransport
     )
     receipt_leaf = @artifact_snapshots.publish_exclusive(@receipts, "#{@request_id}.json", in_flight, at: 'operation receipt')
 
-    sanitized = invoke_codex(authorization, idempotency_key)
+    sanitized = invoke_executor(authorization, idempotency_key)
     @artifact_snapshots.verify!
     @source_snapshots.verify!
     verify_lock_identity
@@ -644,8 +644,8 @@ class CodexOperationTransport
     operation_detail = parsed.external_operation_details.find { |detail| detail.fetch('operation') == @request.fetch('operation') }
     fail_closed('operation is not declared by the sealed current Issue') unless operation_detail
     fail_closed('request environment differs from the Issue contract') unless operation_detail.fetch('environment') == @request.fetch('environment')
-    fail_closed('Issue contract executor is not Codex') unless operation_detail.fetch('executor') == 'Codex'
-    fail_closed('operation requires a separately verified Codex approval receipt') if operation_detail.fetch('approvalRequired')
+    fail_closed('Issue contract executor is invalid') unless %w[Codex Claude].include?(operation_detail.fetch('executor'))
+    fail_closed('operation requires a separately verified approval receipt') if operation_detail.fetch('approvalRequired')
     expected = expected_request_identity(@ownership, @request.fetch('operation'), repository)
     fail_closed('request account or target differs from Config ownership') unless
       @request.fetch('expectedAccount') == expected.fetch('account') &&
@@ -662,41 +662,8 @@ class CodexOperationTransport
     JSON.parse(contract.bytes).fetch('repository')
   end
 
-  def invoke_codex(authorization, idempotency_key)
-    instruction = File.binread(@instruction_path)
-    Tempfile.create(['ios-template-codex-request-', '.json']) do |snapshot|
-      snapshot.binmode
-      snapshot.write(@request_bytes)
-      snapshot.flush
-      snapshot.fsync
-      snapshot.chmod(0o400)
-      prompt = [
-        instruction.rstrip,
-        "Validated request snapshot: #{snapshot.path}",
-        "Request digest: #{@request_digest}",
-        "Issue contract digest: #{authorization.fetch('contractDigest')}",
-        "Provider idempotency key: #{idempotency_key}"
-      ].join("\n")
-      Tempfile.create('ios-template-codex-stdout-') do |stdout|
-        Tempfile.create('ios-template-codex-stderr-') do |stderr|
-          [stdout, stderr].each { |file| file.chmod(0o600) }
-          pid = Process.spawn(
-            'codex', 'exec', '--sandbox', 'workspace-write', '--', prompt,
-            in: File::NULL, out: stdout, err: stderr, chdir: @repo_root
-          )
-          _, status = Process.wait2(pid)
-          fail_closed('fixed Codex child did not complete successfully; replay is blocked') unless status.success?
-          stdout.rewind
-          bytes = stdout.read
-          stat = stdout.stat
-          fail_closed('Codex stdout provenance changed') unless stat.file? && stat.nlink == 1 && (stat.mode & 0o777) == 0o600 && stat.size == bytes.bytesize
-          result = JSON.parse(bytes)
-          strict_result(result, @request)
-        end
-      end
-    end
-  rescue JSON::ParserError
-    fail_closed('Codex stdout did not contain one sanitized JSON result')
+  def invoke_executor(_authorization, _idempotency_key)
+    fail_closed('embedded external-operation transport was retired; use the selected executor with the shared external-ops workflow')
   end
 
   def verify_published_result(result_leaf, expected_bytes)
@@ -734,12 +701,6 @@ when 'verify-request-snapshot'
   request = validate_request(JSON.parse(bytes), ownership, File.realpath(repo_root))
   fail_closed('request snapshot is not canonical') unless bytes == canonical_json(request)
   puts canonical_json(request)
-when 'run-codex-transport'
-  request_path, result_path = ARGV
-  fail_closed('run-codex-transport arguments are invalid') unless ARGV.length == 2
-  puts CodexOperationTransport.new(
-    request_path: request_path, result_path: result_path
-  ).run
 when 'merge-freshness'
   verify_path, review_path, checked_at = ARGV
   fail_closed('merge-freshness arguments are invalid') unless ARGV.length == 3
@@ -781,12 +742,12 @@ when 'latest-state-marker'
   fail_closed('latest-state-marker arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)
   puts canonical_json(latest_owned_state_marker(JSON.parse(STDIN.read), current, owner))
 when 'state-record'
-  state, from, to, resume_state, timestamp = ARGV
-  fail_closed('state-record arguments are invalid') unless ARGV.length == 5
+  state, from, to, resume_state, timestamp, executor = ARGV
+  fail_closed('state-record arguments are invalid') unless ARGV.length == 6 && %w[codex claude].include?(executor)
   record = {
     'state' => state, 'from' => (from == 'null' ? nil : from), 'to' => to,
     'resumeState' => (resume_state == 'null' ? nil : resume_state),
-    'executor' => 'codex', 'timestamp' => timestamp
+    'executor' => executor, 'timestamp' => timestamp
   }
   puts canonical_json(record)
 when 'validate-preclaim-state'
@@ -824,16 +785,16 @@ when 'validate-claim-state'
   fail_closed('Claim state is not recoverable') unless %w[approved claimed].include?(value['state'])
   puts canonical_json(value)
 when 'state-marker'
-  from, to, resume_state, timestamp = ARGV
-  fail_closed('state-marker arguments are invalid') unless ARGV.length == 4
+  from, to, resume_state, timestamp, executor = ARGV
+  fail_closed('state-marker arguments are invalid') unless ARGV.length == 5 && %w[codex claude].include?(executor)
   marker = {
     'from' => from, 'to' => to, 'resumeState' => (resume_state == 'null' ? nil : resume_state),
-    'executor' => 'codex', 'timestamp' => timestamp
+    'executor' => executor, 'timestamp' => timestamp
   }
   puts "<!-- ios-template-state #{canonical_json(marker)} -->"
 when 'state-transition-pending'
-  issue, repository, from, to, resume_state, timestamp, head_sha = ARGV
-  fail_closed('state-transition-pending arguments are invalid') unless ARGV.length == 7 && issue.match?(/\A[1-9][0-9]*\z/)
+  issue, repository, from, to, resume_state, timestamp, head_sha, executor = ARGV
+  fail_closed('state-transition-pending arguments are invalid') unless ARGV.length == 8 && issue.match?(/\A[1-9][0-9]*\z/) && %w[codex claude].include?(executor)
   workflow_state(from, 'pending from')
   workflow_state(to, 'pending to')
   workflow_state(resume_state, 'pending resumeState', nullable: true) unless resume_state == 'null'
@@ -846,16 +807,16 @@ when 'state-transition-pending'
   puts canonical_json(
     'schemaVersion' => 1, 'issue' => Integer(issue), 'repository' => repository,
     'from' => from, 'to' => to, 'resumeState' => (resume_state == 'null' ? nil : resume_state),
-    'executor' => 'codex', 'timestamp' => timestamp, 'headSha' => (head_sha == 'null' ? nil : head_sha)
+    'executor' => executor, 'timestamp' => timestamp, 'headSha' => (head_sha == 'null' ? nil : head_sha)
   )
 when 'validate-state-transition-pending'
-  path, issue, repository, from, to, head_sha = ARGV
-  fail_closed('validate-state-transition-pending arguments are invalid') unless ARGV.length == 6 && issue.match?(/\A[1-9][0-9]*\z/)
+  path, issue, repository, from, to, head_sha, executor = ARGV
+  fail_closed('validate-state-transition-pending arguments are invalid') unless ARGV.length == 7 && issue.match?(/\A[1-9][0-9]*\z/) && %w[codex claude].include?(executor)
   fail_closed('pending transition path is a symlink') if File.symlink?(path)
   bytes = File.binread(path)
   value = JSON.parse(bytes)
   exact_keys(value, %w[executor from headSha issue repository resumeState schemaVersion timestamp to], 'pending transition')
-  fail_closed('pending transition identity differs') unless value['schemaVersion'] == 1 && value['issue'] == Integer(issue) && value['repository'] == repository && value['from'] == from && value['to'] == to && value['executor'] == 'codex'
+  fail_closed('pending transition identity differs') unless value['schemaVersion'] == 1 && value['issue'] == Integer(issue) && value['repository'] == repository && value['from'] == from && value['to'] == to && value['executor'] == executor
   expected_head = head_sha == 'null' ? nil : head_sha
   fail_closed('pending transition Head differs') unless value['headSha'] == expected_head
   workflow_state(value['resumeState'], 'pending resumeState', nullable: true)

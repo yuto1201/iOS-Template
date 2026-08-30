@@ -152,7 +152,8 @@ fi
 workflow_transition_allowed "$from" "$to" || { echo "invalid transition: $from -> $to" >&2; exit 1; }
 # Validate the durable record before any GitHub mutation. This preserves Task 4
 # identity records and makes malformed or escaping state fail closed.
-prepare_state "$current" null "$current" null >/dev/null
+current_record=$(prepare_state "$current" null "$current" null)
+state_executor=$(jq -er '.executor | select(. == "codex" or . == "claude")' <<< "$current_record") || { echo 'durable state executor is invalid' >&2; exit 1; }
 require_transition_head
 resume_state=null
 if workflow_is_blocked "$from" || [[ "$from" == paused ]]; then
@@ -163,7 +164,7 @@ if workflow_is_blocked "$from" || [[ "$from" == paused ]]; then
     from_document=$(require_current_state "$from")
     mutate_labels "$from_document" "state:$from" "state:$conflict"
     conflict_document=$(require_current_state "$conflict")
-    marker=$(ruby "$json_tool" state-marker "$from" "$conflict" null "$timestamp")
+    marker=$(ruby "$json_tool" state-marker "$from" "$conflict" null "$timestamp" "$state_executor")
     post_marker "$conflict_document" "$marker"
     write_state "$conflict_record" >/dev/null
     echo 'blocked resume history is missing or ambiguous; moved to blocked:conflict' >&2
@@ -174,7 +175,7 @@ if workflow_is_blocked "$to" || [[ "$to" == paused ]]; then resume_state=$from; 
 
 pending_path="$(dirname "$state_file")/state-transition.pending.json"
 load_pending() {
-  ruby "$json_tool" validate-state-transition-pending "$pending_path" "$issue" "$repo" "$from" "$to" "${head_sha:-null}"
+  ruby "$json_tool" validate-state-transition-pending "$pending_path" "$issue" "$repo" "$from" "$to" "${head_sha:-null}" "$state_executor"
 }
 write_pending() {
   local document=$1 temporary
@@ -200,7 +201,7 @@ else
   preauthorized_from_document=$(require_current_state "$from")
   require_issue_operation "$preauthorized_from_document" github.update_issue || { echo 'Issue contract does not authorize Issue state mutation' >&2; exit 1; }
   workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || { echo 'GitHub account preflight failed before Issue mutation' >&2; exit 1; }
-  pending=$(ruby "$json_tool" state-transition-pending "$issue" "$repo" "$from" "$to" "$resume_state" "$timestamp" "${head_sha:-null}")
+  pending=$(ruby "$json_tool" state-transition-pending "$issue" "$repo" "$from" "$to" "$resume_state" "$timestamp" "${head_sha:-null}" "$state_executor")
   write_pending "$pending"
 fi
 
@@ -211,11 +212,11 @@ if [[ "$current" == "$to" ]]; then
   if [[ -n "$existing_marker" ]]; then
     PENDING="$pending" ruby -rjson -e '
       pending=JSON.parse(ENV.fetch("PENDING")); marker=JSON.parse(STDIN.read)
-      expected={"executor"=>"codex","from"=>pending.fetch("from"),"to"=>pending.fetch("to"),"resumeState"=>pending.fetch("resumeState"),"timestamp"=>pending.fetch("timestamp")}
+      expected={"executor"=>pending.fetch("executor"),"from"=>pending.fetch("from"),"to"=>pending.fetch("to"),"resumeState"=>pending.fetch("resumeState"),"timestamp"=>pending.fetch("timestamp")}
       abort "existing owned marker differs from pending transition" unless marker==expected
     ' <<< "$existing_marker" || exit 1
   else
-    marker=$(ruby "$json_tool" state-marker "$from" "$to" "$resume_state" "$timestamp")
+    marker=$(ruby "$json_tool" state-marker "$from" "$to" "$resume_state" "$timestamp" "$state_executor")
     post_marker "$issue_json" "$marker"
     [[ "${IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT:-0}" != 1 ]] || { echo 'injected failure after state comment' >&2; exit 97; }
   fi
@@ -238,7 +239,7 @@ fi
 require_transition_head
 to_document=$(require_current_state "$to")
 require_transition_head
-marker=$(ruby "$json_tool" state-marker "$from" "$to" "$resume_state" "$timestamp")
+marker=$(ruby "$json_tool" state-marker "$from" "$to" "$resume_state" "$timestamp" "$state_executor")
 post_marker "$to_document" "$marker"
 [[ "${IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT:-0}" != 1 ]] || { echo 'injected failure after state comment' >&2; exit 97; }
 require_transition_head

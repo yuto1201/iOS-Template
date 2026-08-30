@@ -1,6 +1,6 @@
 ---
 name: release-auditor
-description: Use this agent when a TestFlight, App Store, or repository release operation is being prepared. Typical triggers include checking signing identity, privacy and legal materials, store metadata, and Codex-only external-operation boundaries. See "When to invoke" in the agent body.
+description: Use this agent when a TestFlight, App Store, or repository release operation is being prepared. Typical triggers include checking signing identity, privacy and legal materials, store metadata, and configured-account external-operation boundaries. See "When to invoke" in the agent body.
 model: inherit
 color: red
 tools: ["Read", "Glob", "Grep"]
@@ -14,4 +14,4 @@ Read and follow `docs/agent-contracts/release-auditor.md`, then inspect only the
 
 - **TestFlight readiness.** Check exact commit/build identity, signing ownership, tests, and release channel consistency.
 - **App Store materials.** Check privacy, legal, metadata, localization, and screenshot completeness before submission.
-- **Authority boundary.** Detect company-account identifiers or external steps not explicitly assigned to Codex.
+- **Authority boundary.** Detect unconfigured account identifiers or external steps not explicitly assigned to the Issue's selected executor.

@@ -5,19 +5,19 @@ description: Execute and resume an authenticated App Store Connect submission fr
 
 # Submit App Store Release
 
-Only Codex may perform this authenticated external workflow. Claude may implement local changes or evaluate evidence, but must delegate every App Store Connect, browser, upload, signing-account, or provider action to Codex.
+Codex and Claude may perform this authenticated external workflow. The Issue must name the selected executor, which uses the same configured Team/App preflight and secret-handling rules.
 
 ## Entry gates
 
 1. Read the release Issue operation declarations, `docs/AUTHORITY.md`, `docs/agent-contracts/appstore-submission.md`, and `${VERSION}-package.json`.
-2. Require the Issue to authorize the exact App Store operation. Verify the active authenticated session belongs to the configured personal Team and the remote App, Bundle ID, version, and build are exact. Never use a company Team visible in Claude's environment.
-3. Run `tools/provider-preflight.sh --issue "$ISSUE" app-store --version "$VERSION"` through the authenticated Codex App Store adapter. Require healthy production evidence whose account and target equal `Config/ownership.yml`.
+2. Require the Issue to authorize the exact App Store operation and executor. Verify the active authenticated session belongs to the configured Team and the remote App, Bundle ID, version, and build are exact. Never use another visible Team.
+3. Run `tools/provider-preflight.sh --executor "$EXECUTOR" --issue "$ISSUE" app-store --version "$VERSION"` through the authenticated App Store adapter. Require healthy production evidence whose account and target equal `Config/ownership.yml`.
 4. Recompute the package, build, release-audit, screenshot-manifest, and prepared-manifest digests. Refuse any mismatch. A first-publication package must contain the user legal-approval digest.
 5. Resolve review contact credentials only at child-process scope from Keychain. Never place a secret value in the browser transcript, command arguments, result JSON, Issue, PR, screenshot, or AI prompt.
 
 ## Section workflow
 
-Use the Codex-controlled authenticated browser and process these sections in order:
+Use the selected executor's authenticated browser and process these sections in order:
 
 1. app information
 2. English and Japanese localization
@@ -33,7 +33,7 @@ For every section, enter only values from the sealed package, save them, then re
 
 The only resume source is `App Store/submission/${VERSION}-result.json`. When it exists:
 
-1. Reopen App Store Connect in the personal Codex session.
+1. Reopen App Store Connect in the selected executor's configured session.
 2. Re-run personal Team/App/Bundle/version/build preflight.
 3. Read back all previously recorded sections from the remote service; do not trust local completion flags alone.
 4. Pass `--resume-readback yes` only after that comparison succeeds, then record the next section.

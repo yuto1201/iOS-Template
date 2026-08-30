@@ -1,8 +1,8 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 1.0  
-Date: 2026-08-21
+Version: 1.1
+Date: 2026-08-30
 
 ## 1. テンプレート完成条件
 
@@ -12,8 +12,8 @@ Date: 2026-08-21
 - [ ] 日本語と英語を切り替えて主要画面を検証できる。
 - [ ] `.agents/skills/` のCoreスキルをCodexとClaudeの双方から利用できる。
 - [ ] `.codex/agents/` と `.claude/agents/` に同等責務の評価エージェントがある。
-- [ ] Claudeの認証済み外部操作がPreToolUseフックで拒否される。
-- [ ] Codexの外部操作前チェックが個人アカウントと対象リソースを表示する。
+- [ ] CodexとClaudeが同じ外部操作権限を持ち、モデル固有の拒否経路が存在しない。
+- [ ] 外部操作前チェックが実行モデル、設定済みアカウント、対象リソースを照合する。
 - [ ] IssueからSquash Merge・Branch削除までのドライランテストが通る。
 - [ ] 最新iPhone Proと最新iPad Airを日英で解決し、バッチ内で固定できる。
 - [ ] Head SHAが異なる古い検証・レビューではpre-merge gateが失敗する。
@@ -33,7 +33,7 @@ Date: 2026-08-21
 - 各受け入れ条件に `AC-1` から始まる安定したIDがある。
 - 依存IssueとBlockerが記載されている。
 - UI変更の場合、対象画面・状態・日英の期待が記載されている。
-- 外部サービスを使う場合、サービス、環境、Codex実行が指定されている。
+- 外部サービスを使う場合、サービス、環境、CodexまたはClaudeの実行者が指定されている。
 - 法的、課金、本番破壊操作を伴う場合、必要なユーザー承認が記載されている。
 - Feature Issueでは、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**しており、Issueの受け入れ条件と矛盾しない。満たさない場合は`blocked:user`とし、Branch/worktree作成や実装を開始しない。
 
@@ -49,7 +49,7 @@ Date: 2026-08-21
 6. 反対モデルがレビューし、未解決の重大指摘がない。
 7. レビュー対象のHead SHAが現在のHead SHAと一致する。
 8. PR本文にIssue、仕様、検証、レビューの要約がある。
-9. CodexがSquash Mergeした。
+9. Issueで指定された実行モデルがSquash Mergeした。
 10. リモートBranch、ローカルBranch、worktreeを安全に後片付けした。
 11. GitHub Issueが完了状態になっている。
 
@@ -74,7 +74,7 @@ Date: 2026-08-21
 - Dynamic Type、VoiceOverラベル、タップ領域、色コントラストを変更範囲に応じて確認する。
 - iPadで単にiPhone画面を拡大せず、レイアウト破綻がないことを確認する。
 - 秘密、個人情報、会社アカウント識別子を証拠へ含めない。
-- 外部操作の成功はCodexが実応答から確認し、推測で記録しない。
+- 外部操作の成功は実行モデルが実応答から確認し、推測で記録しない。
 
 ## 6. 失敗と再試行
 
@@ -89,9 +89,9 @@ Pre-mergeの失敗は同じIssueで修正します。マージ後に判明した
 
 ## 7. Bootstrap Issue
 
-自動化ツール自身を作る最初の3件だけは、まだ存在しないツールを完了条件にできません。Foundation Issue、Identity bootstrap Issue、Simulator verification IssueをBootstrap Issueとし、Codexが次を手動で実行します。
+自動化ツール自身を作る最初の3件だけは、まだ存在しないツールを完了条件にできません。Foundation Issue、Identity bootstrap Issue、Simulator verification IssueをBootstrap Issueとし、Issueで選択された実行モデル（CodexまたはClaude）が次を手動で実行します。
 
-- 個人GitHubアカウント確認、Issue、Branch、Push、PR、Squash Merge、後片付け
+- 設定済みGitHubアカウント確認、Issue、Branch、Push、PR、Squash Merge、後片付け
 - Head SHAを明記したBuild・Test・4条件Simulator結果のPR記録
 - 反対モデルのread-onlyレビューと、対象Head SHAのPR記録
 - `--match-head-commit` によるSquash Merge

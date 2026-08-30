@@ -11,7 +11,7 @@ Build the package from the confirmed product specification and exact release can
 
 1. Read the release Issue, confirmed `specs/` documents, `App Store/README.md`, `docs/AUTHORITY.md`, and `docs/agent-contracts/release-auditor.md`.
 2. Require a full source Head SHA, the SHA-256 digest of the tested release build, Bundle ID, marketing version, and whether this is the first public release.
-3. Use Codex to refresh `App Store/submission/requirements.json` from official Apple documentation when its `retrievedAt` exceeds `maxAgeDays`. Store only public limits and source URLs. Claude must delegate this network operation to Codex.
+3. Use the selected Codex or Claude executor to refresh `App Store/submission/requirements.json` from official Apple documentation when its `retrievedAt` exceeds `maxAgeDays`. Store only public limits and source URLs.
 4. Refuse to continue if the build, package, requirements, or specification is changing.
 
 ## Prepare the source package

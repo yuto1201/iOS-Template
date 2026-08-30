@@ -111,7 +111,7 @@ else
       end
     end
     issue, repo, branch, worktree, base, agent, digest, state, previous, resume, timestamp = ARGV
-    value = {"schemaVersion" => 1, "issue" => Integer(issue), "repository" => repo, "branch" => branch, "worktree" => worktree, "baseSha" => base, "primaryImplementer" => agent, "issueContract" => {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => digest}, "state" => state, "previousState" => previous, "resumeState" => (resume == "null" ? nil : resume), "executor" => "codex", "from" => previous, "to" => state, "transitionedAt" => timestamp}
+    value = {"schemaVersion" => 1, "issue" => Integer(issue), "repository" => repo, "branch" => branch, "worktree" => worktree, "baseSha" => base, "primaryImplementer" => agent, "issueContract" => {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => digest}, "state" => state, "previousState" => previous, "resumeState" => (resume == "null" ? nil : resume), "executor" => agent, "from" => previous, "to" => state, "transitionedAt" => timestamp}
     puts JSON.generate(canonical(value))
   ' "$issue" "$repo" "$branch" "$worktree_relative" "$base_sha" "$agent" "$contract_digest" "$state" "$previous_state" "$state_resume" "$timestamp")
 fi
@@ -119,4 +119,4 @@ temporary=$(mktemp "${state_file}.tmp.XXXXXX")
 printf '%s\n' "$record" > "$temporary"
 chmod 600 "$temporary"
 mv -f "$temporary" "$state_file"
-jq -cn --arg repository "$repo" --argjson issue "$issue" --arg branch "$branch" --arg worktree "$worktree_relative" --arg baseSha "$base_sha" --arg agent "$agent" --arg digest "$contract_digest" --arg state "$state" --arg previousState "$previous_state" --argjson resumeState "$resume_state_json" '{repository:$repository,issue:$issue,branch:$branch,worktree:$worktree,baseSha:$baseSha,primaryImplementer:$agent,issueContract:{path:(".artifacts/issues/" + ($issue|tostring) + "/issue-contract.json"),digest:$digest},state:$state,previousState:$previousState,resumeState:$resumeState,executor:"codex"}'
+jq -cn --arg repository "$repo" --argjson issue "$issue" --arg branch "$branch" --arg worktree "$worktree_relative" --arg baseSha "$base_sha" --arg agent "$agent" --arg digest "$contract_digest" --arg state "$state" --arg previousState "$previous_state" --argjson resumeState "$resume_state_json" '{repository:$repository,issue:$issue,branch:$branch,worktree:$worktree,baseSha:$baseSha,primaryImplementer:$agent,issueContract:{path:(".artifacts/issues/" + ($issue|tostring) + "/issue-contract.json"),digest:$digest},state:$state,previousState:$previousState,resumeState:$resumeState,executor:$agent}'
