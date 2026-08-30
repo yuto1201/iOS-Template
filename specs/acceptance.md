@@ -1,7 +1,7 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 1.1
+Version: 1.2
 Date: 2026-08-30
 
 ## 1. テンプレート完成条件
@@ -33,6 +33,7 @@ Date: 2026-08-30
 - 各受け入れ条件に `AC-1` から始まる安定したIDがある。
 - 依存IssueとBlockerが記載されている。
 - UI変更の場合、対象画面・状態・日英の期待が記載されている。
+- Delivery profileが`fast`、`standard`、`strict`のいずれかで、選定理由が記載されている。profile未導入の既存Issueは`strict`として扱う。
 - 外部サービスを使う場合、サービス、環境、CodexまたはClaudeの実行者が指定されている。
 - 法的、課金、本番破壊操作を伴う場合、必要なユーザー承認が記載されている。
 - Feature Issueでは、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**しており、Issueの受け入れ条件と矛盾しない。満たさない場合は`blocked:user`とし、Branch/worktree作成や実装を開始しない。
@@ -42,18 +43,30 @@ Date: 2026-08-30
 次をすべて満たしたIssueだけを完了とします。
 
 1. 受け入れ条件を満たす実装がある。
-2. 対象BuildとTestが実行済みで成功している。
-3. UIに関係する変更は標準Simulatorマトリクスで確認済み。
-4. AIがスクリーンショットと操作結果を評価済み。
+2. profileが要求するBuildとTestが実行済みで成功している。
+3. `standard`／`strict`のUI変更は、安定した最終候補Headを標準Simulatorマトリクスで確認済み。
+4. `standard`／`strict`のUI変更は、AIがスクリーンショットと操作結果を評価済み。
 5. 検証証拠のCommit SHAが現在のHead SHAと一致する。
-6. 反対モデルがレビューし、未解決の重大指摘がない。
-7. レビュー対象のHead SHAが現在のHead SHAと一致する。
+6. `standard`／`strict`は反対モデルがレビューし、未解決の重大指摘がない。`fast`はblocking reviewを要求しない。
+7. reviewを要求するprofileでは、レビュー対象のHead SHAが現在のHead SHAと一致する。
 8. PR本文にIssue、仕様、検証、レビューの要約がある。
 9. Issueで指定された実行モデルがSquash Mergeした。
 10. リモートBranch、ローカルBranch、worktreeを安全に後片付けした。
 11. GitHub Issueが完了状態になっている。
 
 ユーザーの実機確認は、このDefinition of Doneの後に行います。実機で問題が見つかった場合は、新しいRegression Issueとして扱います。
+
+## 3.1 Delivery profile
+
+| Profile | 使用条件 | 完了ゲート |
+| --- | --- | --- |
+| `fast` | 非UI、ローカル、低リスク。ドメインロジック、局所的なデータ変換、文書、通常の保守 | 現在HeadのBuild、対象Unit Test、変更対象がworkflow toolならrepository test。4条件Simulator、画像評価、blocking reviewは不要 |
+| `standard` | 通常の画面、操作、localization、accessibility変更 | 開発中は対象Test。安定した最終候補Headで4条件Simulator、画像評価、反対モデルレビューを1回実行 |
+| `strict` | 認証・認可、秘密、DB schema／migration、本番データ、破壊的操作、課金・plan、privacy・法務、App Store／TestFlight、署名、delivery gate自体 | 現行の完全検証、反対モデルレビュー、必要なaccount／target preflightとユーザー承認 |
+
+`fast`はUI verificationが`Not applicable`の場合だけ選択できます。承認が必要な操作またはstrict対象operationを含むIssueへ`fast`／`standard`を指定した場合は実装開始前に拒否し、focused evidence発行時にもUI source、security／service import、migration、ownership、release、delivery gateの変更を検出して拒否します。GitHubのIssue、Branch、PR、Squash Mergeはprofileに関係なくaccount preflightとexact Head照合を維持します。
+
+profile未導入の既存Issueは安全な移行のため`strict`です。
 
 ## 4. 標準Simulatorマトリクス
 
@@ -65,6 +78,8 @@ Date: 2026-08-30
 | iPad | 同上 | `ja_JP` | `ja` |
 
 「最新」はIssueバッチ開始時にインストール済みXcodeから解決し、バッチ中は固定します。条件に合うデバイスがなければ `blocked:environment` とし、黙って別モデルへ変更しません。
+
+このmatrixは`standard`／`strict`の最終候補Headだけに使用します。`fast`では解決、起動、Screenshot取得を行いません。
 
 ## 5. 品質ゲート
 
@@ -86,6 +101,8 @@ Date: 2026-08-30
 - 依存Issue未完了は `blocked:dependency`。
 
 Pre-mergeの失敗は同じIssueで修正します。マージ後に判明した不具合だけ、新しいRegression Issueを作ります。
+
+完全な4条件検証が失敗した後は、同じ原因を再現する対象Testまたは局所確認が成功するまで完全検証を再実行しません。実装中の各commitでcanonical Simulator証拠を作らず、最終候補Headが安定してから一度だけ作ることを標準とします。
 
 ## 7. Bootstrap Issue
 

@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-主開発モデルとは異なるモデルが、現在のHead SHAに対して受け入れ条件、実装、検証証拠をread-onlyで評価します。自己承認と、古い差分に対する承認を防ぎます。
+`standard`／`strict` Issueでは、主開発モデルとは異なるモデルが現在のHead SHAに対して受け入れ条件、実装、検証証拠をread-onlyで評価します。自己承認と、古い差分に対する承認を防ぎます。explicit `fast`はblocking reviewを要求せず、review packetを作成しません。profile未導入の既存Issueは`strict`です。
 
 ## 2. Review packet
 

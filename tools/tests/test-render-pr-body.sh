@@ -16,6 +16,7 @@ cp "$source_root/tools/validate-verify-json.swift" "$primary/tools/"
 cp "$source_root/tools/lib/descriptor-files.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-contract.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-sealing.rb" "$primary/tools/lib/"
+cp "$source_root/tools/lib/delivery-profile.rb" "$primary/tools/lib/"
 printf '%s\n' '{}' >"$primary/TemplateApp.xcodeproj/project.pbxproj"
 printf '%s\n' '# Initial' >"$primary/docs/initial.md"
 git -C "$primary" init -q
@@ -313,5 +314,13 @@ v=JSON.parse(File.read(ENV.fetch("VERIFY")));r=JSON.parse(File.read(ENV.fetch("R
 seal_review
 documentation_body=$(run_renderer)
 grep -Fq 'Verify status: `not-applicable`' <<<"$documentation_body" || { echo 'documentation-only PR body was rejected' >&2; exit 1; }
+
+# Explicit fast renders current-Head evidence without opening or requiring any
+# opposite-model artifact.
+CONTRACT="$contract" VERIFY="$verify" STATE="$issue_dir/state.json" ruby -rjson -rdigest -e '
+contract_path=ENV.fetch("CONTRACT"); contract=JSON.parse(File.binread(contract_path)); contract.delete("verification"); contract["deliveryProfile"]={"name"=>"fast","reason"=>"Non-UI low-risk renderer fixture."}; File.binwrite(contract_path,JSON.generate(contract)); digest="sha256:#{Digest::SHA256.file(contract_path).hexdigest}"; verify_path=ENV.fetch("VERIFY"); verify=JSON.parse(File.binread(verify_path)); verify.fetch("issueContract")["digest"]=digest; File.binwrite(verify_path,JSON.pretty_generate(verify)+"\n"); state_path=ENV.fetch("STATE"); state=JSON.parse(File.binread(state_path)); state.fetch("issueContract")["digest"]=digest; File.binwrite(state_path,JSON.generate(state))'
+rm -f "$review" "$review_packet" "$review_diff" "$head_dir/review-receipt.json"
+fast_body=$(run_renderer)
+grep -Fq 'Not required for explicit `fast` delivery profile.' <<<"$fast_body" || { echo 'fast PR body did not record the review waiver' >&2; exit 1; }
 
 echo 'PASS: PR body readiness is bound to canonical current visual evidence and documentation-only validation remains available'

@@ -97,7 +97,7 @@ def transition_allowed?(from, to)
     approved:claimed approved:blocked:dependency approved:paused approved:superseded
     claimed:in-progress claimed:blocked:conflict claimed:paused
     in-progress:verify-passed in-progress:paused
-    verify-passed:review-requested verify-passed:in-progress verify-passed:blocked:review
+    verify-passed:review-requested verify-passed:approved-for-merge verify-passed:in-progress verify-passed:blocked:review
     review-requested:changes-requested review-requested:approved-for-merge review-requested:blocked:review
     changes-requested:in-progress changes-requested:blocked:user changes-requested:paused
     approved-for-merge:merged approved-for-merge:in-progress approved-for-merge:blocked:conflict approved-for-merge:blocked:ops
@@ -639,6 +639,7 @@ class ExternalOperationTransport
     )
     reconstructed = parsed.contract
     reconstructed['verification'] = contract['verification'] if contract.key?('verification')
+    reconstructed['deliveryProfile'] = contract['deliveryProfile'] if contract.key?('deliveryProfile')
     fail_closed('live Issue reconstruction differs from sealed contract bytes') unless
       canonical_json(reconstructed) == contract_leaf.bytes
     operation_detail = parsed.external_operation_details.find { |detail| detail.fetch('operation') == @request.fetch('operation') }
@@ -702,18 +703,29 @@ when 'verify-request-snapshot'
   fail_closed('request snapshot is not canonical') unless bytes == canonical_json(request)
   puts canonical_json(request)
 when 'merge-freshness'
-  verify_path, review_path, checked_at = ARGV
-  fail_closed('merge-freshness arguments are invalid') unless ARGV.length == 3
+  contract_path, verify_path, review_path, checked_at, issue_text, repository = ARGV
+  fail_closed('merge-freshness arguments are invalid') unless ARGV.length == 6 && issue_text.match?(/\A[1-9][0-9]*\z/)
+  contract = read_json(contract_path)
+  IOSTemplate::IssueContract.validate_snapshot!(contract, issue: Integer(issue_text), repository: repository)
   verify = read_json(verify_path)
-  review = read_json(review_path)
   begin
     completed_at = Time.iso8601(verify.fetch('completedAt'))
-    reviewed_at = Time.iso8601(review.fetch('reviewedAt'))
     checked = Time.iso8601(checked_at)
   rescue KeyError, ArgumentError
     fail_closed('merge evidence timestamps are missing or invalid')
   end
-  fail_closed('merge preflight is not fresher than canonical evidence') unless checked > completed_at && checked > reviewed_at
+  fail_closed('merge preflight is not fresher than canonical evidence') unless checked > completed_at
+  if IOSTemplate::DeliveryProfile.review_required?(contract)
+    review = read_json(review_path)
+    begin
+      reviewed_at = Time.iso8601(review.fetch('reviewedAt'))
+    rescue KeyError, ArgumentError
+      fail_closed('merge evidence timestamps are missing or invalid')
+    end
+    fail_closed('merge preflight is not fresher than canonical evidence') unless checked > reviewed_at
+  else
+    fail_closed('fast merge freshness must not receive review evidence') unless review_path == '-'
+  end
 when 'preflight'
   account, repository, default_branch, url, intended_operation, issue, head_sha, checked_at = ARGV
   fail_closed('preflight arguments are invalid') unless ARGV.length == 8

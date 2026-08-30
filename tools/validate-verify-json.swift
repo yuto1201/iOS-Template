@@ -705,6 +705,7 @@ struct IssueContract {
     let acceptanceCriteria: [AcceptanceCriterion]
     let fetchedAt: Date
     let verification: VerificationInfo?
+    let deliveryProfile: String
 
     var acceptanceIDs: [String] { acceptanceCriteria.map(\.id) }
 }
@@ -837,7 +838,7 @@ func validateIssueContract(
         "schemaVersion", "issue", "repository", "goal", "specAnchors", "acceptanceCriteria",
         "dependencies", "externalOperations", "externalOperationDetailsDigest", "fetchedAt"
     ]
-    let allowedContractKeys = requiredContractKeys.union(["verification"])
+    let allowedContractKeys = requiredContractKeys.union(["verification", "deliveryProfile"])
     let actualContractKeys = Set(contract.keys)
     let missingContractKeys = requiredContractKeys.subtracting(actualContractKeys).sorted()
     let unknownContractKeys = actualContractKeys.subtracting(allowedContractKeys).sorted()
@@ -913,10 +914,27 @@ func validateIssueContract(
     } else {
         normalizedVerification = nil
     }
+    let deliveryProfile: String
+    if let rawProfile = contract["deliveryProfile"] {
+        let profile = try requireObject(rawProfile, at: "issueContract.deliveryProfile")
+        try requireExactKeys(profile, ["name", "reason"], at: "issueContract.deliveryProfile")
+        let name = try requireString(profile["name"]!, at: "issueContract.deliveryProfile.name")
+        guard ["fast", "standard", "strict"].contains(name) else {
+            throw ValidationFailure("issueContract.deliveryProfile.name is invalid")
+        }
+        _ = try requireString(profile["reason"]!, at: "issueContract.deliveryProfile.reason")
+        deliveryProfile = name
+    } else {
+        deliveryProfile = "strict"
+    }
+    if deliveryProfile == "fast", normalizedVerification != nil {
+        throw ValidationFailure("fast issueContract cannot require UI verification")
+    }
     return IssueContract(
         acceptanceCriteria: criteria,
         fetchedAt: fetchedAt,
-        verification: normalizedVerification
+        verification: normalizedVerification,
+        deliveryProfile: deliveryProfile
     )
 }
 
@@ -1340,6 +1358,72 @@ func validateDocumentationDiff(expectedBase: String, expectedHead: String) throw
     }
 }
 
+func validateFastDiff(expectedBase: String, expectedHead: String) throws {
+    let result = try runGitProcess(["diff", "--name-only", "-z", "--no-renames", expectedBase, expectedHead, "--"])
+    guard result.status == 0 else {
+        throw ValidationFailure("unable to inspect fast delivery range")
+    }
+    var fields = result.stdout.split(separator: 0, omittingEmptySubsequences: false)
+    guard fields.last?.isEmpty == true else {
+        throw ValidationFailure("fast delivery diff was not NUL terminated")
+    }
+    fields.removeLast()
+    guard !fields.isEmpty else {
+        throw ValidationFailure("fast delivery range contains no changes")
+    }
+
+    let exactStrictPaths: Set<String> = [
+        "AGENTS.md", "Config/ownership.yml", "docs/AUTHORITY.md", "docs/security.md",
+        "docs/workflow.md", "docs/verification.md", "specs/acceptance.md",
+        "specs/architecture.md", "specs/decisions.md", "tools/issue-state.sh",
+        "tools/claim-issue.sh", "tools/resume-issue.sh", "tools/premerge-gate.sh",
+        "tools/merge-issue.sh", "tools/cleanup-issue.sh", "tools/github-account-preflight.sh",
+        "tools/provider-preflight.sh", "tools/validate-verify-json.swift", "tools/verify-fast-issue.sh"
+    ]
+    let strictPrefixes = [
+        "App Store/", "supabase/migrations/", ".github/workflows/",
+        "docs/agent-contracts/", ".agents/skills/external-ops/",
+        ".agents/skills/ship-issue/", ".agents/skills/cross-model-review/",
+        ".agents/skills/ios-verify/", ".agents/skills/prepare-appstore-assets/",
+        ".agents/skills/submit-appstore-release/"
+    ]
+    let uiFragments = ["UITests/", ".xcassets/", ".strings", ".xcstrings", ".storyboard", ".xib"]
+    let strictImports = [
+        "import AuthenticationServices", "import LocalAuthentication", "import Security",
+        "import StoreKit", "import CloudKit", "import Supabase"
+    ]
+
+    for rawField in fields {
+        guard let path = String(data: Data(rawField), encoding: .utf8) else {
+            throw ValidationFailure("fast delivery diff contains a non-UTF-8 path")
+        }
+        _ = try relativeComponents(path, at: "fast delivery path")
+        if exactStrictPaths.contains(path) || strictPrefixes.contains(where: { path.hasPrefix($0) }) ||
+            path.hasSuffix(".entitlements") || path.hasSuffix(".xcprivacy") || path.hasSuffix("project.pbxproj") {
+            throw ValidationFailure("fast delivery profile cannot cover high-risk path: \(path)")
+        }
+        if uiFragments.contains(where: { path.contains($0) }) {
+            throw ValidationFailure("fast delivery profile cannot cover UI path: \(path)")
+        }
+        guard path.hasSuffix(".swift") else { continue }
+        var source: String?
+        for revision in [expectedHead, expectedBase] {
+            let blob = try runGitProcess(["show", "\(revision):\(path)"])
+            if blob.status == 0, let text = String(data: blob.stdout, encoding: .utf8) {
+                source = text
+                break
+            }
+        }
+        guard let source else { continue }
+        if source.contains("import SwiftUI") || source.contains("import UIKit") {
+            throw ValidationFailure("fast delivery profile cannot cover UI source: \(path)")
+        }
+        if strictImports.contains(where: { source.contains($0) }) {
+            throw ValidationFailure("fast delivery profile cannot cover security or service source: \(path)")
+        }
+    }
+}
+
 struct Options {
     let file: String
     let candidateFile: String?
@@ -1352,6 +1436,13 @@ struct Options {
 }
 
 struct DocumentationPublishOptions {
+    let issue: Int
+    let expectedBase: String
+    let expectedHead: String
+    let inputPath: String
+}
+
+struct FocusedPublishOptions {
     let issue: Int
     let expectedBase: String
     let expectedHead: String
@@ -4161,6 +4252,146 @@ func parseDocumentationPublishOptions(_ arguments: [String]) throws -> Documenta
     )
 }
 
+func parseFocusedPublishOptions(_ arguments: [String]) throws -> FocusedPublishOptions {
+    var values: [String: String] = [:]
+    var index = 0
+    let allowed = Set(["--issue", "--expected-base", "--expected-head", "--input"])
+    while index < arguments.count {
+        let key = arguments[index]
+        guard allowed.contains(key), values[key] == nil, index + 1 < arguments.count else {
+            throw ValidationFailure("invalid focused publication arguments")
+        }
+        values[key] = arguments[index + 1]
+        index += 2
+    }
+    guard let issueText = values["--issue"], let issue = Int(issueText), issue > 0,
+          let expectedBase = values["--expected-base"], matches(expectedBase, regex: shaPattern),
+          let expectedHead = values["--expected-head"], matches(expectedHead, regex: shaPattern),
+          let inputPath = values["--input"], values.count == allowed.count else {
+        throw ValidationFailure("invalid focused publication arguments")
+    }
+    let expectedInput = ".artifacts/issues/\(issue)/focused-evidence-input.json"
+    guard inputPath == expectedInput else {
+        throw ValidationFailure("focused evidence input must use the canonical path: \(expectedInput)")
+    }
+    return FocusedPublishOptions(
+        issue: issue, expectedBase: expectedBase, expectedHead: expectedHead, inputPath: inputPath
+    )
+}
+
+func publishFocusedEvidence(_ options: FocusedPublishOptions) throws -> String {
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead, expectedIssue: options.issue
+    )
+    defer { closeTrustedRepository(repository) }
+    let entries = try headTreeEntries(head: options.expectedHead)
+    try validateWorkingTree(entries: entries, repository: repository)
+
+    let inputData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: try relativeComponents(options.inputPath, at: "focused evidence input"),
+        at: "focused evidence input"
+    )
+    let input = try readJSONObject(data: inputData, at: "focused evidence input")
+    try requireExactKeys(
+        input, ["schemaVersion", "reason", "xcode", "scheme", "tests"], at: "focused evidence input"
+    )
+    guard try requireInteger(input["schemaVersion"]!, at: "focused evidence input.schemaVersion") == 1 else {
+        throw ValidationFailure("focused evidence input.schemaVersion must be 1")
+    }
+    let reason = try requireString(input["reason"]!, at: "focused evidence input.reason")
+    let xcode = try validateXcodeIdentity(input["xcode"]!, at: "focused evidence input.xcode")
+    let scheme = try requireString(input["scheme"]!, at: "focused evidence input.scheme")
+    let tests = try requireObject(input["tests"]!, at: "focused evidence input.tests")
+    try requireExactKeys(tests, ["passed", "failed", "skipped"], at: "focused evidence input.tests")
+    let passed = try requireInteger(tests["passed"]!, at: "focused evidence input.tests.passed", minimum: 1)
+    let failed = try requireInteger(tests["failed"]!, at: "focused evidence input.tests.failed", minimum: 0)
+    let skipped = try requireInteger(tests["skipped"]!, at: "focused evidence input.tests.skipped", minimum: 0)
+    guard failed == 0, skipped == 0 else {
+        throw ValidationFailure("focused evidence requires zero failed and skipped tests")
+    }
+
+    let contractPath = ".artifacts/issues/\(options.issue)/issue-contract.json"
+    let contractData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: [".artifacts", "issues", String(options.issue), "issue-contract.json"],
+        at: "issueContract.path"
+    )
+    let contractReference: [String: Any] = [
+        "path": contractPath, "digest": "sha256:\(sha256(data: contractData))"
+    ]
+    let contract = try validateIssueContract(
+        reference: contractReference, issue: options.issue, repository: repository
+    )
+    guard contract.deliveryProfile == "fast" else {
+        throw ValidationFailure("focused evidence requires explicit fast delivery profile")
+    }
+    try validateFastDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+
+    let acceptance: [[String: Any]] = contract.acceptanceIDs.map { id in
+        ["id": id, "status": "passed", "evidence": ["stage:build", "stage:unit-tests"]]
+    }
+    let completedAt = max(Date(), contract.fetchedAt)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let document: [String: Any] = [
+        "schemaVersion": 1,
+        "status": "passed",
+        "changeClassification": "focused-code",
+        "reason": reason,
+        "issue": options.issue,
+        "baseSha": options.expectedBase,
+        "headSha": options.expectedHead,
+        "issueContract": contractReference,
+        "matrixFile": NSNull(),
+        "matrixDigest": NSNull(),
+        "executionRoute": "xcodebuild-focused",
+        "xcode": ["path": xcode.path, "version": xcode.version, "build": xcode.build],
+        "build": [
+            "status": "passed", "scheme": scheme, "warningsAdded": 0,
+            "project": NSNull(), "sourceTree": NSNull()
+        ],
+        "tests": ["status": "passed", "passed": passed, "failed": failed, "skipped": skipped],
+        "cases": [],
+        "visualEvaluation": ["status": "not-applicable", "findings": []],
+        "acceptanceEvidence": acceptance,
+        "completedAt": formatter.string(from: completedAt)
+    ]
+    let data = try JSONSerialization.data(
+        withJSONObject: document, options: [.prettyPrinted, .sortedKeys]
+    ) + Data("\n".utf8)
+    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
+    let evidenceDirectory = try ensureCanonicalEvidenceDirectory(
+        repository: repository, issue: options.issue, head: options.expectedHead
+    )
+    defer { close(evidenceDirectory) }
+    try removeInterruptedPublicationCandidates(directory: evidenceDirectory, prefixes: [".verify-candidate-"])
+    let candidateName = ".verify-candidate-\(UUID().uuidString.lowercased())"
+    try writeExclusiveFile(
+        directoryFileDescriptor: evidenceDirectory, name: candidateName, data: data, permissions: S_IRUSR
+    )
+    let candidateFD = openat(evidenceDirectory, candidateName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard candidateFD >= 0 else { throw ValidationFailure("verify.json candidate could not be retained") }
+    defer {
+        heldValidatedCandidateFileDescriptor = nil
+        close(candidateFD)
+        _ = unlinkat(evidenceDirectory, candidateName, 0)
+    }
+    heldValidatedCandidateFileDescriptor = candidateFD
+    let relativePath = (evidenceComponents + ["verify.json"]).joined(separator: "/")
+    try validate(options: Options(
+        file: repository.rootPath + "/" + relativePath,
+        candidateFile: repository.rootPath + "/" + (evidenceComponents + [candidateName]).joined(separator: "/"),
+        expectedFileDigest: nil,
+        expectedIssue: options.issue,
+        expectedBase: options.expectedBase,
+        expectedHead: options.expectedHead,
+        initialVisualResultData: nil,
+        initialVisualResultDigest: nil
+    ))
+    return relativePath
+}
+
 func publishDocumentationEvidence(_ options: DocumentationPublishOptions) throws -> String {
     let repository = try validateTrustedRepository(
         expectedBase: options.expectedBase, expectedHead: options.expectedHead, expectedIssue: options.issue
@@ -4213,6 +4444,9 @@ func publishDocumentationEvidence(_ options: DocumentationPublishOptions) throws
     try validateDocumentationDiff(
         expectedBase: options.expectedBase, expectedHead: options.expectedHead
     )
+    if contract.deliveryProfile == "fast" {
+        try validateFastDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+    }
 
     let completedAt = max(Date(), contract.fetchedAt)
     let formatter = ISO8601DateFormatter()
@@ -4584,6 +4818,59 @@ func validate(options: Options) throws {
             try validateApplicationVisual(root["visualEvaluation"]!, packet: currentPacket)
         }
 
+    case "focused-code":
+        guard contract.deliveryProfile == "fast" else {
+            throw ValidationFailure("focused-code verification requires explicit fast delivery profile")
+        }
+        try validateFastDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+        guard try requireString(root["status"]!, at: "status") == "passed" else {
+            throw ValidationFailure("focused-code status must be passed")
+        }
+        _ = try requireString(root["reason"]!, at: "reason")
+        try requireNull(root["matrixFile"]!, at: "matrixFile")
+        try requireNull(root["matrixDigest"]!, at: "matrixDigest")
+        guard try requireString(root["executionRoute"]!, at: "executionRoute") == "xcodebuild-focused" else {
+            throw ValidationFailure("focused-code executionRoute must be xcodebuild-focused")
+        }
+        _ = try validateXcodeIdentity(root["xcode"]!, at: "xcode")
+        let build = try requireObject(root["build"]!, at: "build")
+        try requireExactKeys(build, ["status", "scheme", "warningsAdded", "project", "sourceTree"], at: "build")
+        guard try requireString(build["status"]!, at: "build.status") == "passed" else {
+            throw ValidationFailure("focused-code build.status must be passed")
+        }
+        _ = try requireString(build["scheme"]!, at: "build.scheme")
+        guard try requireInteger(build["warningsAdded"]!, at: "build.warningsAdded", minimum: 0) == 0 else {
+            throw ValidationFailure("focused-code build.warningsAdded must be zero")
+        }
+        try requireNull(build["project"]!, at: "build.project")
+        try requireNull(build["sourceTree"]!, at: "build.sourceTree")
+        try validateTests(root["tests"]!, documentationOnly: false)
+        guard try requireArray(root["cases"]!, at: "cases").isEmpty else {
+            throw ValidationFailure("focused-code cases must be empty")
+        }
+        try validateVisual(root["visualEvaluation"]!, documentationOnly: true)
+        let focusedMappings = contract.acceptanceIDs.map { _ in ["stage:build", "stage:unit-tests"] }
+        try validateAcceptanceEvidence(
+            root["acceptanceEvidence"]!, contractIDs: contract.acceptanceIDs,
+            documentationOnly: false, expectedMappings: focusedMappings
+        )
+        let entries = try headTreeEntries(head: headSha)
+        try validateWorkingTree(entries: entries, repository: repository)
+        candidatePublicationCheck = {
+            let currentHead = try runGitString(
+                ["rev-parse", "HEAD"], failure: "unable to recheck current Git HEAD"
+            )
+            guard currentHead == options.expectedHead else {
+                throw ValidationFailure("Git Head changed before focused evidence publication")
+            }
+            _ = try validateIssueContract(
+                reference: contractReference, issue: issue, repository: repository
+            )
+            let currentEntries = try headTreeEntries(head: headSha)
+            try validateWorkingTree(entries: currentEntries, repository: repository)
+            try validateFastDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+        }
+
     case "documentation-only":
         guard try requireString(root["status"]!, at: "status") == "not-applicable" else {
             throw ValidationFailure("documentation-only status must be not-applicable")
@@ -4608,6 +4895,9 @@ func validate(options: Options) throws {
             expectedBase: options.expectedBase,
             expectedHead: options.expectedHead
         )
+        if contract.deliveryProfile == "fast" {
+            try validateFastDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+        }
         candidatePublicationCheck = {
             let currentHead = try runGitString(
                 ["rev-parse", "HEAD"], failure: "unable to recheck current Git HEAD"
@@ -4622,6 +4912,9 @@ func validate(options: Options) throws {
                 expectedBase: options.expectedBase,
                 expectedHead: options.expectedHead
             )
+            if contract.deliveryProfile == "fast" {
+                try validateFastDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+            }
         }
 
     default:
@@ -4645,6 +4938,10 @@ do {
     if arguments.first == "--publish-documentation" {
         print(try publishDocumentationEvidence(
             parseDocumentationPublishOptions(Array(arguments.dropFirst()))
+        ))
+    } else if arguments.first == "--publish-focused" {
+        print(try publishFocusedEvidence(
+            parseFocusedPublishOptions(Array(arguments.dropFirst()))
         ))
     } else if arguments.first == "--visual-packet" {
         print(try createVisualReviewPacket(parseVisualPacketOptions(Array(arguments.dropFirst()))))

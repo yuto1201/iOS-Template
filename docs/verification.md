@@ -4,6 +4,8 @@
 
 AIが「コード上は正しそう」ではなく、Build、Test、操作、見た目を実測したうえでIssueを完了できるようにします。物理端末の最終判断はユーザーが後から行います。
 
+検証コストはIssueのdelivery profileへ比例させます。低リスク非UI変更の`fast`ではBuildと対象Unit Testを実測しますが、Simulator matrix、Screenshot、視覚評価は要求しません。通常UIの`standard`と高リスクの`strict`だけが完全な4条件経路を使用します。profile未導入の既存Issueは`strict`です。
+
 ## 2. 環境の解決
 
 `tools/resolve-simulator-matrix.sh` はIssueバッチ開始時に一度だけ実行します。
@@ -47,6 +49,24 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 ## 4. 実行段階
 
+### Fast route: focused Build and Test
+
+`fast`は安定した現在Headで次を実行します。
+
+```bash
+tools/verify-fast-issue.sh \
+  --issue "$ISSUE" \
+  --expected-base "$BASE_SHA" \
+  --project ExampleApp.xcodeproj \
+  --scheme ExampleApp \
+  --test-identifier ExampleAppTests/DomainAcceptanceTests/allAcceptanceCriteria \
+  --destination-udid "$IPHONE_UDID"
+```
+
+この経路はBuildを1回、指定Unit Testを1回実行し、警告・失敗・Skipがないことを確認して`focused-code`のcanonical `verify.json`を発行します。4条件matrixの解決、アプリ操作、Screenshot、視覚評価は行いません。Issue contractがexplicit `fast`でない場合、またはBase..HeadにUI source、security／service import、migration、ownership、release、delivery gateなどの高リスクpathが含まれる場合は拒否します。
+
+文書だけの変更は、従来どおりXcode自体を起動しないdocumentation-only経路を使用できます。
+
 ### Stage A: 静的確認
 
 - 変更ファイルとIssue Scopeの対応
@@ -77,7 +97,7 @@ tools/run-repository-tests.sh \
 
 `prepare-review-packet.sh` はこのcanonical evidenceが存在する場合だけ検証してpacket内の `repositoryTests` へ封印します。したがってreviewerとpre-merge gateは、iOS smoke testとは別に、現在Headで実際に通過したRepository test suiteと各ACの対応を評価できます。
 
-### Stage C: UI and acceptance matrix
+### Stage C: UI and acceptance matrix (`standard` / `strict`)
 
 4条件それぞれで次を行います。
 
@@ -88,9 +108,9 @@ tools/run-repository-tests.sh \
 5. 主要状態のスクリーンショットを保存する。
 6. crash、freeze、layout overflow、欠けた翻訳を確認する。
 
-UI変更でないIssueでも、起動や依存関係へ影響する場合は4条件のsmoke testを行います。純粋な文書変更はSimulator検証を `not-applicable` とし、その理由を記録できます。
+`standard`／`strict`で起動や依存関係へ影響する場合は4条件のsmoke testを行います。`fast`と純粋な文書変更はSimulator検証を`not-applicable`とします。
 
-### Stage D: AI visual evaluation
+### Stage D: AI visual evaluation (`standard` / `strict`)
 
 AIはスクリーンショットごとに次を評価します。
 
@@ -102,7 +122,7 @@ AIはスクリーンショットごとに次を評価します。
 - Sheet、alert、keyboard、orientationなど対象状態
 - 参照デザインがある場合の差異
 
-主開発モデルが一次評価し、反対モデルレビューへ画像を含めます。見た目の好みだけで仕様を増やしません。
+`standard`／`strict`では主開発モデルが一次評価し、反対モデルレビューへ画像を含めます。見た目の好みだけで仕様を増やしません。
 
 ### Stage D.1: 二段階の証拠公開
 

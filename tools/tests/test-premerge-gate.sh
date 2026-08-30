@@ -650,4 +650,17 @@ FAKE_SKIP_SWIFT=1 FINAL_GATE_SWAP_TARGET="$final_image" assert_fails 'packet-bou
 grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo 'final image lease fixture did not reach PR refresh' >&2; exit 1; }
 [[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'final lease merged after packet-bound image changed' >&2; exit 1; }
 
+# Explicit fast accepts the same current-Head and account gates without any
+# opposite-model artifact. Rebuild the exact live contract so stale strict
+# review files cannot accidentally authorize this route.
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); marker="## External operations\n"; replacement="## Delivery profile\n\n- Profile: fast\n- Reason: Non-UI low-risk documentation fixture.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
+canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
+contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+HEAD="$head_sha" BASE="$base_sha" DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'puts JSON.generate({"schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template", "branch" => "codex/42-gate-evidence", "worktree" => ".worktrees/42-gate-evidence", "baseSha" => ENV.fetch("BASE"), "primaryImplementer" => "codex", "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "state" => "approved-for-merge", "previousState" => "verify-passed", "resumeState" => nil, "executor" => "codex", "headSha" => ENV.fetch("HEAD"), "pullRequest" => 57, "from" => "verify-passed", "to" => "approved-for-merge", "transitionedAt" => ENV.fetch("TRANSITIONED_AT")})' > "$repo/.artifacts/issues/42/state.json"
+write_verify
+write_preflight
+write_supabase_preflight
+rm -f "$repo/.artifacts/issues/42/$head_sha/review-packet.json" "$repo/.artifacts/issues/42/$head_sha/review.diff" "$repo/.artifacts/issues/42/$head_sha/review.json" "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
+run_gate >/dev/null
+
 echo 'PASS: gate binds caller identity, live Issue, descriptor snapshots, review, provider, and GitHub preflight evidence'

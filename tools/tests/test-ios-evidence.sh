@@ -108,6 +108,11 @@ prepare_fixture() {
       printf '%s\n' '# Head' >"$fixture_root/$change_path"
       git -C "$fixture_root" add -- "$change_path"
       ;;
+    swiftui)
+      mkdir -p "$fixture_root/$(dirname "$change_path")"
+      printf '%s\n' 'import SwiftUI' 'struct ChangedView: View { var body: some View { Text("Changed") } }' >"$fixture_root/$change_path"
+      git -C "$fixture_root" add -- "$change_path"
+      ;;
     chmod)
       chmod +x "$fixture_root/docs/mode.md"
       git -C "$fixture_root" add -- docs/mode.md
@@ -747,6 +752,66 @@ prepare_fixture linked-documentation passed.json normal docs/linked.md
 make_documentation_only
 linked_worktree="$(install_linked_worktree)"
 run_linked_validator "$linked_worktree"
+
+prepare_fixture linked-focused passed.json normal Sources/Logic.swift
+mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" 'document.delete("verification"); document["deliveryProfile"]={"name"=>"fast","reason"=>"Low-risk non-UI logic covered by focused tests."}'
+rm "$evidence_file"
+focused_input="$fixture_root/.artifacts/issues/42/focused-evidence-input.json"
+ruby -rjson - "$focused_input" <<'RUBY'
+value = {
+  "schemaVersion" => 1,
+  "reason" => "Focused Build and selected Unit Test passed.",
+  "xcode" => {"path" => "/Applications/Xcode.app/Contents/Developer", "version" => "26.5", "build" => "17F42"},
+  "scheme" => "TemplateApp",
+  "tests" => {"passed" => 1, "failed" => 0, "skipped" => 0}
+}
+File.write(ARGV.fetch(0), JSON.pretty_generate(value) + "\n")
+RUBY
+linked_worktree="$(install_linked_worktree)"
+(
+  cd "$linked_worktree"
+  "$validator" --publish-focused --issue 42 --expected-base "$base_sha" --expected-head "$head_sha" \
+    --input .artifacts/issues/42/focused-evidence-input.json >/dev/null
+)
+run_linked_validator "$linked_worktree"
+ruby -rjson -e 'value=JSON.parse(File.read(ARGV.fetch(0))); abort unless value["changeClassification"]=="focused-code" && value["executionRoute"]=="xcodebuild-focused" && value["cases"]==[] && value.dig("visualEvaluation","status")=="not-applicable"' "$evidence_file"
+
+prepare_fixture linked-focused-legacy passed.json normal Sources/Legacy.swift
+rm "$evidence_file"
+focused_input="$fixture_root/.artifacts/issues/42/focused-evidence-input.json"
+ruby -rjson - "$focused_input" <<'RUBY'
+value = {"schemaVersion"=>1,"reason"=>"Focused check","xcode"=>{"path"=>"/Applications/Xcode.app/Contents/Developer","version"=>"26.5","build"=>"17F42"},"scheme"=>"TemplateApp","tests"=>{"passed"=>1,"failed"=>0,"skipped"=>0}}
+File.write(ARGV.fetch(0), JSON.generate(value))
+RUBY
+linked_worktree="$(install_linked_worktree)"
+if (
+  cd "$linked_worktree"
+  "$validator" --publish-focused --issue 42 --expected-base "$base_sha" --expected-head "$head_sha" \
+    --input .artifacts/issues/42/focused-evidence-input.json
+) >"$scratch/focused-legacy.stdout" 2>"$scratch/focused-legacy.stderr"; then
+  echo 'focused publisher accepted a legacy strict contract' >&2
+  exit 1
+fi
+grep -Fq 'focused evidence requires explicit fast delivery profile' "$scratch/focused-legacy.stderr"
+
+prepare_fixture linked-focused-ui passed.json swiftui TemplateApp/ChangedView.swift
+mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" 'document.delete("verification"); document["deliveryProfile"]={"name"=>"fast","reason"=>"Incorrectly classified UI change."}'
+rm "$evidence_file"
+focused_input="$fixture_root/.artifacts/issues/42/focused-evidence-input.json"
+ruby -rjson - "$focused_input" <<'RUBY'
+value = {"schemaVersion"=>1,"reason"=>"Focused check","xcode"=>{"path"=>"/Applications/Xcode.app/Contents/Developer","version"=>"26.5","build"=>"17F42"},"scheme"=>"TemplateApp","tests"=>{"passed"=>1,"failed"=>0,"skipped"=>0}}
+File.write(ARGV.fetch(0), JSON.generate(value))
+RUBY
+linked_worktree="$(install_linked_worktree)"
+if (
+  cd "$linked_worktree"
+  "$validator" --publish-focused --issue 42 --expected-base "$base_sha" --expected-head "$head_sha" \
+    --input .artifacts/issues/42/focused-evidence-input.json
+) >"$scratch/focused-ui.stdout" 2>"$scratch/focused-ui.stderr"; then
+  echo 'focused publisher accepted a SwiftUI change' >&2
+  exit 1
+fi
+grep -Fq 'fast delivery profile cannot cover UI source: TemplateApp/ChangedView.swift' "$scratch/focused-ui.stderr"
 
 prepare_fixture linked-code-as-documentation passed.json normal scripts/linked.sh
 make_documentation_only

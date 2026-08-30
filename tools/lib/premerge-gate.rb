@@ -7,6 +7,7 @@ require "open3"
 require "time"
 require_relative "descriptor-files"
 require_relative "issue-contract"
+require_relative "delivery-profile"
 require_relative "ownership"
 require_relative "review-contract"
 require_relative "review-receipt"
@@ -157,25 +158,31 @@ begin
   state_file = artifact_snapshots.leaf(issue_directory, "state.json", "state.json")
   contract_file = artifact_snapshots.leaf(issue_directory, "issue-contract.json", "issue-contract.json")
   verify_file = artifact_snapshots.leaf(head_directory, "verify.json", "verify.json")
-  packet_file = artifact_snapshots.leaf(head_directory, "review-packet.json", "review-packet.json")
-  review_file = artifact_snapshots.leaf(head_directory, "review.json", "review.json")
-  receipt_file = artifact_snapshots.leaf(head_directory, "review-receipt.json", "review-receipt.json")
+  contract = parse_object(contract_file.bytes, "issue-contract.json")
+  review_required = IOSTemplate::DeliveryProfile.review_required?(contract)
+  packet_file = review_required ? artifact_snapshots.leaf(head_directory, "review-packet.json", "review-packet.json") : nil
+  review_file = review_required ? artifact_snapshots.leaf(head_directory, "review.json", "review.json") : nil
+  receipt_file = review_required ? artifact_snapshots.leaf(head_directory, "review-receipt.json", "review-receipt.json") : nil
   preflight_file = artifact_snapshots.leaf(issue_directory, "github-preflight.json", "github-preflight.json")
   config = source_snapshots.directory(source_snapshots.root, "Config", "Config")
   ownership_file = source_snapshots.leaf(config, "ownership.yml", "Config/ownership.yml")
   ownership = IOSTemplate::Ownership.parse(ownership_file.bytes)
 
-  review_references = IOSTemplate::ReviewContract.strict_references!(
-    packet_bytes: packet_file.bytes, issue: issue, head_sha: head_sha
-  )
-  evidence_prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
-  diff_relative = review_references.fetch("diff").fetch("path").delete_prefix(evidence_prefix)
-  diff_file = artifact_snapshots.relative_leaf(head_directory, diff_relative, "review.diff")
-  image_files = review_references.fetch("imageFiles").to_h do |reference|
-    path = reference.fetch("path")
-    relative = path.delete_prefix(evidence_prefix)
-    held = artifact_snapshots.relative_leaf(head_directory, relative, "review image #{path}")
-    [path, held]
+  diff_file = nil
+  image_files = {}
+  if review_required
+    review_references = IOSTemplate::ReviewContract.strict_references!(
+      packet_bytes: packet_file.bytes, issue: issue, head_sha: head_sha
+    )
+    evidence_prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
+    diff_relative = review_references.fetch("diff").fetch("path").delete_prefix(evidence_prefix)
+    diff_file = artifact_snapshots.relative_leaf(head_directory, diff_relative, "review.diff")
+    image_files = review_references.fetch("imageFiles").to_h do |reference|
+      path = reference.fetch("path")
+      relative = path.delete_prefix(evidence_prefix)
+      held = artifact_snapshots.relative_leaf(head_directory, relative, "review image #{path}")
+      [path, held]
+    end
   end
 
   state = parse_object(state_file.bytes, "state.json")
@@ -195,7 +202,6 @@ begin
     state["baseSha"] == identity["baseSha"] && state["headSha"] == head_sha &&
     state.dig("issueContract", "digest") == identity["contractDigest"]
   transitioned_at = iso8601!(state["transitionedAt"], "state.transitionedAt")
-  contract = parse_object(contract_file.bytes, "issue-contract.json")
   contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_file.bytes)}"
   refuse("contract bytes differ from validated identity") unless contract_digest == identity["contractDigest"]
 
@@ -230,6 +236,7 @@ begin
   )
   reconstructed_contract = parsed_contract.contract
   reconstructed_contract["verification"] = contract["verification"] if contract.key?("verification")
+  reconstructed_contract["deliveryProfile"] = contract["deliveryProfile"] if contract.key?("deliveryProfile")
   reconstructed_bytes = JSON.generate(canonical(reconstructed_contract))
   refuse("live Issue contract bytes differ from the canonical snapshot") unless reconstructed_bytes.b == contract_file.bytes.b
   parsed_contract.external_operation_details.each { |detail| operation_details[detail.fetch("operation")] = detail }
@@ -268,22 +275,25 @@ begin
   )
   refuse("verify.json does not satisfy the canonical verification contract: #{validator_output.strip}") unless validator_status.success?
 
-  review_values = IOSTemplate::ReviewContract.validate!(
-    packet_bytes: packet_file.bytes, result_bytes: review_file.bytes,
-    verify_bytes: verify_file.bytes, contract_bytes: contract_file.bytes,
-    primary: state.fetch("primaryImplementer"), issue: issue, base_sha: base_sha, head_sha: head_sha,
-    require_temporal_order: true, strict: true,
-    diff_bytes: diff_file.bytes,
-    image_bytes: image_files.transform_values(&:bytes),
-    actual_diff_bytes: actual_diff_bytes
-  )
-  refuse("opposite-model review is not approved") unless review_values.fetch("result").fetch("verdict") == "approved"
-  IOSTemplate::ReviewReceipt.validate!(
-    receipt_bytes: receipt_file.bytes, packet_bytes: packet_file.bytes, review_bytes: review_file.bytes,
-    repo: root, primary: state.fetch("primaryImplementer"), issue: issue, head_sha: head_sha
-  )
-  reviewed_at = iso8601!(review_values.fetch("result").fetch("reviewedAt"), "review.reviewedAt")
   completed_at = iso8601!(verify.fetch("completedAt"), "verify.completedAt")
+  reviewed_at = completed_at
+  if review_required
+    review_values = IOSTemplate::ReviewContract.validate!(
+      packet_bytes: packet_file.bytes, result_bytes: review_file.bytes,
+      verify_bytes: verify_file.bytes, contract_bytes: contract_file.bytes,
+      primary: state.fetch("primaryImplementer"), issue: issue, base_sha: base_sha, head_sha: head_sha,
+      require_temporal_order: true, strict: true,
+      diff_bytes: diff_file.bytes,
+      image_bytes: image_files.transform_values(&:bytes),
+      actual_diff_bytes: actual_diff_bytes
+    )
+    refuse("opposite-model review is not approved") unless review_values.fetch("result").fetch("verdict") == "approved"
+    IOSTemplate::ReviewReceipt.validate!(
+      receipt_bytes: receipt_file.bytes, packet_bytes: packet_file.bytes, review_bytes: review_file.bytes,
+      repo: root, primary: state.fetch("primaryImplementer"), issue: issue, head_sha: head_sha
+    )
+    reviewed_at = iso8601!(review_values.fetch("result").fetch("reviewedAt"), "review.reviewedAt")
+  end
 
   expected_account = IOSTemplate::Ownership.github_login!(ownership)
   refuse("configured GitHub account differs from this repository owner") unless expected_account == repository.split("/", 2).first

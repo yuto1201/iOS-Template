@@ -5,7 +5,7 @@ description: Use when verifying an iOS Issue for completion, producing current-H
 
 # iOS Verification
 
-Orchestrate the repository's deterministic tools; do not reproduce or weaken their validation logic. A successful run binds the Issue contract, frozen Simulator matrix, visual approval, final evidence, review packet, and current Git Head to one SHA.
+Orchestrate the repository's deterministic tools; do not reproduce or weaken their validation logic. A successful run binds the Issue contract, delivery profile, required evidence, and current Git Head to one SHA. Only `standard` and `strict` bind the frozen Simulator matrix and visual approval.
 
 ## Required inputs
 
@@ -16,6 +16,14 @@ Require `.artifacts/issues/${ISSUE}/issue-contract.json`, then resolve `HEAD_SHA
 Classify the trusted Base-to-Head range before touching Simulator state. Only `README.md`, `AGENTS.md`, and Markdown under `docs/` or `specs/`, with no rename, gitlink, symlink, or mode/type change, may use the documentation-only path. Let the final validator make the authoritative classification.
 
 ## Select the execution route
+
+Read `deliveryProfile.name` from the canonical Issue contract. Missing means legacy `strict`.
+
+- `fast`: require UI verification to be not applicable and run `tools/verify-fast-issue.sh` with the selected Unit Test and one available iPhone Simulator UDID. Do not resolve the four-case matrix, capture images, create a visual packet, or request blocking opposite-model review.
+- `standard` / `strict`: use the application verification route below only after targeted checks and a diff/AC self-audit are green.
+- documentation-only: use the existing documentation publisher regardless of profile.
+
+Never start full Simulator verification for an intermediate commit. After a full run fails, first make the directly affected targeted check pass before retrying the full route.
 
 When XcodeBuildMCP is callable, you may inspect its session defaults to identify future compatibility work. No canonical XcodeBuildMCP evidence producer exists in this repository, so inspection never selects it as an execution route. Always use `tools/verify-ios-issue.sh`, the tested `xcodebuild-simctl` producer, until a canonical MCP producer and integration coverage are added. Do not bypass it with manual `xcodebuild`, `simctl`, screenshots, or JSON. Tool unavailability is never test success.
 
@@ -129,4 +137,4 @@ printf '%s %s\n' "$EVIDENCE" "$DIGEST"
 printf '%s\n' "$REVIEW_PACKET"
 ```
 
-Pass that exact `REVIEW_PACKET` path to the next `cross-model-review` invocation. The canonical review tools own schema-v2 and `reviewPacketDigest` validation; do not recompute, translate, or edit their output. A changed Head restarts verification and review; an unavailable opposite model is `blocked:review`, never self-approval.
+For `standard`/`strict`, pass that exact `REVIEW_PACKET` path to the next `cross-model-review` invocation. The canonical review tools own schema-v2 and `reviewPacketDigest` validation; do not recompute, translate, or edit their output. A changed Head restarts profile-required verification and, when applicable, review. An unavailable required opposite model is `blocked:review`, never self-approval. Explicit `fast` stops after canonical focused evidence and does not prepare a review packet.

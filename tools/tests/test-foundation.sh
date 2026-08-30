@@ -26,6 +26,8 @@ required_files=(
   tools/tests/test-app-bootstrap.sh
   tools/check-markdown-links.swift
   tools/publish-documentation-verify.sh
+  tools/verify-fast-issue.sh
+  tools/lib/delivery-profile.rb
   tools/run-repository-tests.sh
   tools/lib/run-repository-tests.rb
   tools/tests/test-repository-test-evidence.sh

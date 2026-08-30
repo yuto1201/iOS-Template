@@ -53,6 +53,14 @@ CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/iss
 
 `externalOperations` は順序付きの操作ID配列です。`externalOperationDetailsDigest` はIssue本文の各五field blockを `operation`、`service`、`environment`、`executor`、`approvalRequired`、正規化したnullまたはstringの`approvalReference`へ変換し、同じ順序のcanonical JSONへ計算したSHA-256です。したがってIDが同じでもservice、environment、executor、承認条件または承認参照が変わればsnapshot bytesとdigestが変わります。
 
+新規Issueは`Delivery profile`節へ`Profile`と`Reason`を記載し、snapshotへ次を追加します。
+
+```json
+{"deliveryProfile":{"name":"fast","reason":"Local non-UI logic covered by targeted tests."}}
+```
+
+`name`は`fast`、`standard`、`strict`だけを許可します。profile未導入の既存snapshotは`strict`です。`fast`はUI verificationが`Not applicable`で、追加承認やstrict対象operationがない場合だけ有効です。Supabase migration、Cloudflare deploy、メディア生成、App Store upload／metadata／submissionなどを低いprofileへ指定するとClaim前に拒否します。
+
 検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。実行モデルがGitHubから取得して生成したsnapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用でき、Issue本文が変わった場合は実行モデルが再取得してdigestを更新します。
 
 application検証を実行するIssue contractだけ、上の必須fieldに加えて次のexact `verification` objectを持てます。許可するkeyは `bundleIdentifier`、`unitTestIdentifier`、固定順4件の `cases`、受け入れ条件と同じ順の `acceptanceMappings` だけです。`unitTestIdentifier` とcaseの `testIdentifier` はどちらも `Target/Class/testMethod` です。各caseは `id` に加え、`testIdentifier` または `assertion` のちょうど一方を持ちます。Task 4で許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}` です。application実行時にこのobjectがない、不完全、順序違い、両actionを持つ場合は、Build前に失敗します。
@@ -88,6 +96,7 @@ proposed
   -> claimed
   -> in-progress
   -> verify-passed
+  -> approved-for-merge              # fast only
   -> review-requested
   -> changes-requested -> in-progress
   -> approved-for-merge
@@ -104,6 +113,7 @@ proposed
 | `claimed` | `in-progress`, `blocked:conflict`, `paused` |
 | `in-progress` | `verify-passed`, 任意の`blocked:*`, `paused` |
 | `verify-passed` | `review-requested`, `in-progress`, `blocked:review` |
+| `verify-passed` | `approved-for-merge`（explicit `fast`のみ） |
 | `review-requested` | `changes-requested`, `approved-for-merge`, `blocked:review` |
 | `changes-requested` | `in-progress`, `blocked:user`, `paused` |
 | `approved-for-merge` | `merged`, `in-progress`, `blocked:conflict`, `blocked:ops` |
@@ -153,24 +163,25 @@ CodexとClaudeは同じ手順で1、4、5、6とGitHub上の状態変更を実�
 5. 小さな意味単位でcommitする。
 6. Scope外の必要作業を発見したら、勝手に含めず追跡Issue候補へ記録する。
 
+開発中はcanonicalな4条件証拠を作りません。対象Unit/UI Test、Build、lint、repository testなど、失敗原因へ直接対応する安価な確認を反復します。`standard`／`strict`の完全検証は、diffと受け入れ条件を自己監査し、既知の対象Testがすべて成功した最終候補Headで開始します。
+
 ### 5.3 Verify
 
-1. `ios-verify` がバッチ固定済みSimulatorマトリクスを読む。
-2. Buildと対象Testを実行する。
-3. IssueがRepository toolやworkflowを変更する場合、`run-repository-tests.sh` でtracked `tools/tests/test-*.sh` 全件をclean detached worktree上で実行し、同じHeadとAC対応を封印する。
-4. iPhone ProとiPad Airを日英で操作する。
-5. スクリーンショットと機械判定を保存する。
-6. AIが見た目と受け入れ条件を評価する。
-7. `verify.json` にHead SHAを記録する。
-8. `prepare-review-packet.sh` が存在するrepository test evidenceもpacket内へ含めたことを確認する。
-9. 同じHeadを明示して`in-progress -> verify-passed`へ遷移し、durable stateへ固定する。
+1. `fast`は`verify-fast-issue.sh`で一つのSimulator上のBuildと指定Unit Testだけを実行する。matrix、Screenshot、視覚評価は作らない。
+2. `standard`／`strict`は`ios-verify`がバッチ固定済みSimulatorマトリクスを読み、Build、対象Test、4条件操作、Screenshot、視覚評価を実行する。
+3. IssueがRepository toolやworkflowを変更する場合、profileに関係なく`run-repository-tests.sh`でtracked `tools/tests/test-*.sh`全件をclean detached worktree上で実行し、同じHeadとAC対応を封印する。
+4. `verify.json` にprofile、実行route、Head SHAを対応させる。
+5. 同じHeadを明示して`in-progress -> verify-passed`へ遷移し、durable stateへ固定する。
+
+完全検証が失敗した場合、原因へ直接対応する対象Testが成功するまで4条件検証を再実行しません。別Headのcanonical evidenceを作り続けることを進捗として扱いません。
 
 ### 5.4 Opposite-model review
 
+- `fast`: blocking reviewを行わず、`verify-passed -> approved-for-merge`へ直接進む
 - Codex実装: Claudeへread-onlyレビューを依頼
 - Claude実装: Codexへread-onlyレビューを依頼
 
-レビュー対象はIssue、仕様、Base SHA、Head SHA、Verify SHA、diff、テスト結果、UI画像です。レビュー結果が `changes-requested` なら同じIssueで修正し、検証とレビューをやり直します。
+`standard`／`strict`のレビュー対象はIssue、仕様、Base SHA、Head SHA、Verify SHA、diff、テスト結果、UI画像です。レビュー結果が `changes-requested` なら同じIssueで修正し、原因へ対応する対象確認を先に成功させてから最終検証とレビューをやり直します。
 
 レビューのタイムアウトは10分です。利用不能時は `blocked:review` とし、独立Issueを進めます。自己承認はしません。
 

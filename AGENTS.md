@@ -21,7 +21,7 @@
 - `main` へ直接コミットまたは直接 Push しない。
 - Issue の受け入れ条件外へ機能を広げない。
 - 実行していない Build、Test、Simulator 操作を成功として報告しない。
-- 反対モデルの承認と、現在の Head SHA に一致する検証証拠がなければマージしない。
+- `standard`／`strict`は反対モデルの承認を必須とし、`fast`は現在HeadのBuild・対象Test証拠だけでマージできる。
 - マージはIssueで指定されたCodexまたはClaudeが `--squash` と Head SHA 照合を使って実行する。
 - ユーザーの既存変更、認証情報、生成物を上書きまたは削除しない。
 
@@ -33,7 +33,13 @@ ClaudeとCodexは同じ権限を持ち、どちらもローカル作業と認証
 
 ## 標準検証
 
-Issue バッチ開始時に最新の利用可能な iOS Runtime を解決し、そのバッチ内で固定します。
+Issueに`fast`、`standard`、`strict`のdelivery profileと理由を明示します。未指定の既存Issueは`strict`です。
+
+- `fast`: 非UI・低リスク。Buildと対象Testだけを実行し、4条件Simulator、画像評価、blockingな反対モデルレビューは行わない。
+- `standard`: 通常のUI変更。開発中は対象Testを優先し、安定した最終候補Headでだけ次の4条件と反対モデルレビューを行う。
+- `strict`: 認証・認可、秘密、migration、本番データ、課金、法務、リリース、workflow gate変更。現行の完全ゲートを維持する。
+
+`standard`／`strict`はIssue バッチ開始時に最新の利用可能な iOS Runtime を解決し、そのバッチ内で固定します。
 
 - 最新 iPhone Pro（Pro Max を除く）、英語
 - 最新 iPhone Pro（Pro Max を除く）、日本語

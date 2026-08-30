@@ -1,6 +1,6 @@
 # iOS-Template
 
-CodexとClaudeを同等の実装・外部操作担当として使い、反対側のモデルを評価者にする個人向けiOS開発テンプレートです。仕様、Issue、ブランチ、検証、反対モデルレビュー、PR、Squash Mergeまでを一貫したワークフローとして扱います。
+CodexとClaudeを同等の実装・外部操作担当として使う個人向けiOS開発テンプレートです。仕様、Issue、ブランチ、リスクに応じた検証・レビュー、PR、Squash Mergeまでを一貫したワークフローとして扱います。
 
 Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、英語・日本語、iPhone・iPad、共有仕様スキル、Codex/Claude 共通責務の read-only 評価エージェントを含みます。運用自動化は [実装計画索引](./docs/superpowers/plans/README.md) に従って段階的に追加します。
 
@@ -12,7 +12,9 @@ Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、
 tools/tests/test-foundation.sh
 ```
 
-Build と Test は、インストール済み Xcode から [標準 Simulator マトリクス](./docs/verification.md#3-固定されるmatrix)を解決し、Issue バッチ内で固定して実行します。次は Foundation 検証で使うコマンド形です。`TEMPLATE_IPHONE_UDID` と `TEMPLATE_IPAD_UDID` には、同じ最新 iOS Runtime の iPhone Pro（Pro Max を除く）と13-inch iPad Airを指定します。
+Issueには`fast`、`standard`、`strict`のdelivery profileと理由を指定します。非UI・低リスクの`fast`は現在HeadのBuild・対象Test・必要なrepository testだけ、通常UIの`standard`は安定した最終候補Headで完全検証、高リスクの`strict`は完全検証と反対モデルレビューに加えて対象別preflightを要求します。profile未導入の既存Issueは`strict`です。
+
+Foundationやdelivery gate自体は`strict`です。Build と Test は、インストール済み Xcode から [標準 Simulator マトリクス](./docs/verification.md#3-固定されるmatrix)を解決し、Issue バッチ内で固定して実行します。次は Foundation 検証で使うコマンド形です。`TEMPLATE_IPHONE_UDID` と `TEMPLATE_IPAD_UDID` には、同じ最新 iOS Runtime の iPhone Pro（Pro Max を除く）と13-inch iPad Airを指定します。
 
 ```sh
 TEMPLATE_IPHONE_UDID="<resolved-iPhone-Pro-UDID>"
@@ -239,7 +241,7 @@ Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundat
 
 - 仕様が未決のまま実装を開始しない。
 - 1 Issue = 1 Branch = 1 PR とする。
-- AI が Simulator 検証、反対モデルレビュー、修正、PR、Squash Merge まで進める。
+- AI がdelivery profileに必要な検証・レビュー、修正、PR、Squash Mergeまで進める。
 - ユーザーによる実機確認は、AI の Definition of Done の後に行う最終確認とする。
 - 外部アカウント操作はIssueで指定されたCodexまたはClaudeが、設定済みidentityのpreflight後に行う。
 - 秘密値は Git、Issue、PR、ログ、スクリーンショット、AI プロンプトに残さない。
@@ -257,7 +259,7 @@ tools/claim-issue.sh --repo "$REPO" --issue "$ISSUE" --agent codex
 tools/resume-issue.sh --repo "$REPO" --issue "$ISSUE"
 ```
 
-Issue worktreeで検証を終えたら、現在のcommitを直接解決し、その同じSHAへVerify、review packet、反対モデルreviewを順に結び付けます。ドキュメントだけの変更は `publish-documentation-verify.sh`、アプリ変更は [iOS verification](./docs/verification.md) のSimulator matrixを使用します。ドキュメント経路はSimulator成功を意味しません。
+Issue worktreeで対象確認を終え、差分が安定してから現在のcommitを直接解決し、その同じSHAへcanonical Verifyを結び付けます。`fast`は`verify-fast-issue.sh`でBuildと対象Unit Testを実測し、`verify-passed`から直接`approved-for-merge`へ進みます。`standard`／`strict`だけが完全Simulator matrix、review packet、反対モデルreviewを使用します。ドキュメントだけの変更は`publish-documentation-verify.sh`を使い、Simulator成功を意味しません。
 
 ```sh
 HEAD_SHA="$(git rev-parse HEAD)"
@@ -265,6 +267,12 @@ BASE_SHA="$(jq -r '.baseSha' ".artifacts/issues/$ISSUE/state.json")"
 
 tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
   --from in-progress --to verify-passed --head-sha "$HEAD_SHA"
+
+# explicit fast
+tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
+  --from verify-passed --to approved-for-merge
+
+# standard / strict
 tools/prepare-review-packet.sh --primary codex --issue "$ISSUE" \
   --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
 tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
@@ -274,7 +282,7 @@ tools/cross-model-review.sh --primary codex \
   --output ".artifacts/issues/$ISSUE/$HEAD_SHA/review.json"
 ```
 
-マージ診断はmutationを行わないGateを先に実行します。承認済みreviewと最新のaccount preflightが同じHeadへ揃った後、Issueで指定された実行モデルがPR作成、Squash Merge、正確なBranch/worktree cleanup、`done`遷移まで行います。
+マージ診断はmutationを行わないGateを先に実行します。`standard`／`strict`では承認済みreview、全profileでは現在HeadのVerifyと最新のaccount preflightが揃った後、Issueで指定された実行モデルがPR作成、Squash Merge、正確なBranch/worktree cleanup、`done`遷移まで行います。
 
 ```sh
 tools/github-account-preflight.sh --repo "$REPO" --issue "$ISSUE" \

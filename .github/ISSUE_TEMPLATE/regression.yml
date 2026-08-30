@@ -62,6 +62,16 @@ body:
     validations:
       required: true
   - type: textarea
+    id: delivery-profile
+    attributes:
+      label: Delivery profile
+      description: "Choose fast for low-risk non-UI work, standard for ordinary UI work, or strict for security, data migration, production, billing, legal, or release work. Existing Issues without this block remain strict."
+      placeholder: |
+        - Profile: standard
+        - Reason: User-visible regression requiring final UI verification.
+    validations:
+      required: true
+  - type: textarea
     id: external-operations
     attributes:
       label: External operations
