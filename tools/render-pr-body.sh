@@ -13,7 +13,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$issue" =~ ^[1-9][0-9]*$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || usage
 
-ruby -rjson -rdigest -rtime -ropen3 -I"$repo_root/tools/lib" -rdescriptor-files -rreview-contract -rreview-sealing - "$repo_root" "$issue" "$head_sha" <<'RUBY'
+ruby -rjson -rdigest -rtime -ropen3 -I"$repo_root/tools/lib" -rdescriptor-files -rreview-contract -rreview-sealing -rdelivery-profile - "$repo_root" "$issue" "$head_sha" <<'RUBY'
 repo, issue_text, head = ARGV
 issue = Integer(issue_text)
 
@@ -128,18 +128,19 @@ head_root = File.join(issue_root, head)
 snapshots = HeldEvidence.new(primary)
 contract_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, "issue-contract.json"], "Issue contract")
 verify_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, head, "verify.json"], "verify.json")
-review_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, head, "review.json"], "review.json")
-review_packet_leaf = snapshots.leaf([".artifacts", "issues", issue.to_s, head, "review-packet.json"], "review-packet.json")
 contract_bytes = contract_leaf.bytes
 verify_bytes = verify_leaf.bytes
 contract = parse_leaf(contract_leaf, "Issue contract")
 verify = parse_leaf(verify_leaf, "verify.json")
-review = parse_leaf(review_leaf, "review.json")
-review_packet = parse_leaf(review_packet_leaf, "review-packet.json")
+review_required = IOSTemplate::DeliveryProfile.review_required?(contract)
+review_leaf = review_required ? snapshots.leaf([".artifacts", "issues", issue.to_s, head, "review.json"], "review.json") : nil
+review_packet_leaf = review_required ? snapshots.leaf([".artifacts", "issues", issue.to_s, head, "review-packet.json"], "review-packet.json") : nil
+review = review_required ? parse_leaf(review_leaf, "review.json") : nil
+review_packet = review_required ? parse_leaf(review_packet_leaf, "review-packet.json") : nil
 contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
 verify_digest = "sha256:#{Digest::SHA256.hexdigest(verify_bytes)}"
 contract_required = %w[schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies externalOperations externalOperationDetailsDigest fetchedAt]
-reject("Issue contract schema is incomplete") unless contract.is_a?(Hash) && (contract.keys - contract_required - ["verification"]).empty? && contract_required.all? { |key| contract.key?(key) }
+reject("Issue contract schema is incomplete") unless contract.is_a?(Hash) && (contract.keys - contract_required - ["verification", "deliveryProfile"]).empty? && contract_required.all? { |key| contract.key?(key) }
 exact_keys!(verify, %w[schemaVersion status changeClassification reason issue baseSha headSha issueContract matrixFile matrixDigest executionRoute xcode build tests cases visualEvaluation acceptanceEvidence completedAt], "verify.json")
 reject("contract identity mismatch") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue
 reject("contract repository is invalid") unless contract["repository"].is_a?(String) && contract["repository"].match?(%r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z})
@@ -162,6 +163,7 @@ end
 # The shared review contract owns every packet/result/verify/diff/image
 # relationship. The renderer only holds the referenced bytes and supplies the
 # independently generated Git diff to that pure validator.
+if review_required
 begin
   review_references = IOSTemplate::ReviewContract.strict_references!(
     packet_bytes: review_packet_leaf.bytes, issue: issue, head_sha: head
@@ -195,6 +197,7 @@ rescue IOSTemplate::ReviewContract::ValidationError => error
   reject("strict review closure is invalid: #{error.message}")
 end
 reject("review verdict is not approved") unless review["verdict"] == "approved"
+end
 build = verify["build"]
 tests = verify["tests"]
 cases = verify["cases"]
@@ -204,6 +207,13 @@ if verify["changeClassification"] == "documentation-only"
   exact_keys!(tests, %w[status passed failed skipped], "documentation tests")
   exact_keys!(verify["visualEvaluation"], %w[status findings], "documentation visual evaluation")
   reject("documentation verification readiness differs") unless verify["status"] == "not-applicable" && verify["reason"].is_a?(String) && !verify["reason"].empty? && verify["executionRoute"] == "none" && verify["xcode"].nil? && build == {"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil} && tests == {"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil} && cases == [] && verify["matrixFile"].nil? && verify["matrixDigest"].nil? && verify["visualEvaluation"] == {"status"=>"not-applicable","findings"=>[]}
+elsif verify["changeClassification"] == "focused-code"
+  exact_keys!(build, %w[status scheme warningsAdded project sourceTree], "focused build")
+  exact_keys!(tests, %w[status passed failed skipped], "focused tests")
+  exact_keys!(verify["xcode"], %w[path version build], "focused xcode")
+  exact_keys!(verify["visualEvaluation"], %w[status findings], "focused visual evaluation")
+  reject("focused verification requires fast profile") unless IOSTemplate::DeliveryProfile.effective_name(contract) == "fast"
+  reject("focused verification readiness differs") unless verify["status"] == "passed" && verify["reason"].is_a?(String) && !verify["reason"].empty? && verify["executionRoute"] == "xcodebuild-focused" && verify["xcode"].values.all? { |entry| entry.is_a?(String) && !entry.empty? } && build["status"] == "passed" && build["scheme"].is_a?(String) && !build["scheme"].empty? && build["warningsAdded"] == 0 && build["project"].nil? && build["sourceTree"].nil? && tests["status"] == "passed" && tests["passed"].is_a?(Integer) && tests["passed"].positive? && tests["failed"] == 0 && tests["skipped"] == 0 && cases == [] && verify["matrixFile"].nil? && verify["matrixDigest"].nil? && verify["visualEvaluation"] == {"status"=>"not-applicable","findings"=>[]}
 else
   exact_keys!(build, %w[status scheme warningsAdded project sourceTree], "application build")
   exact_keys!(tests, %w[status passed failed skipped], "application tests")
@@ -251,7 +261,7 @@ else
   validate_canonical_verify!(repo, issue, head, verify["baseSha"], verify_digest)
 end
 
-if verify["changeClassification"] == "documentation-only"
+if %w[documentation-only focused-code].include?(verify["changeClassification"])
   validate_canonical_verify!(repo, issue, head, verify["baseSha"], verify_digest)
 end
 
@@ -300,12 +310,16 @@ end
 puts
 puts "## Opposite-model review"
 puts
-puts "- Reviewer: `#{reviewer}`"
-puts "- Reviewer model: `#{reviewer}`"
-puts "- Reviewed Head SHA: `#{review["headSha"]}`"
-puts "- Verified SHA: `#{review["verifySha"]}`"
-puts "- Verdict: `#{review["verdict"]}`"
-puts "- Blocking findings: `0`"
+if review_required
+  puts "- Reviewer: `#{reviewer}`"
+  puts "- Reviewer model: `#{reviewer}`"
+  puts "- Reviewed Head SHA: `#{review["headSha"]}`"
+  puts "- Verified SHA: `#{review["verifySha"]}`"
+  puts "- Verdict: `#{review["verdict"]}`"
+  puts "- Blocking findings: `0`"
+else
+  puts "- Not required for explicit `fast` delivery profile."
+end
 puts
 puts "## Remaining work"
 puts

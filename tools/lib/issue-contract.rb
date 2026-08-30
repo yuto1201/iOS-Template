@@ -5,6 +5,7 @@ require "json"
 require "optparse"
 require "time"
 require "digest"
+require_relative "delivery-profile"
 
 module IOSTemplate
   module IssueContract
@@ -66,7 +67,7 @@ module IOSTemplate
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
     ].freeze
-    SNAPSHOT_OPTIONAL_KEYS = %w[verification].freeze
+    SNAPSHOT_OPTIONAL_KEYS = %w[verification deliveryProfile].freeze
 
     Result = Struct.new(:contract, :external_operation_details, keyword_init: true)
 
@@ -162,6 +163,20 @@ module IOSTemplate
         failures
       )
 
+      delivery_profile = parse_delivery_profile(lines, headings, failures)
+      if delivery_profile
+        name = delivery_profile.fetch("name")
+        if name == "fast" && !ui_verification.match?(/\A\s*(?:[-*]\s*)?Not applicable\.?\s*\z/i)
+          failures << "fast delivery profile requires UI verification to be Not applicable"
+        end
+        if name != "strict" && external_details.any? { |detail| DeliveryProfile.strict_operation?(detail.fetch("operation")) }
+          failures << "high-risk external operations require strict delivery profile"
+        end
+        if name == "fast" && external_details.any? { |detail| detail.fetch("approvalRequired") }
+          failures << "approval-required operations cannot use fast delivery profile"
+        end
+      end
+
       snapshot_requested = !issue.nil? || !repository.nil? || !fetched_at.nil?
       contract = nil
       if snapshot_requested
@@ -214,11 +229,37 @@ module IOSTemplate
           "externalOperationDetailsDigest" => "sha256:#{Digest::SHA256.hexdigest(canonical_json(external_details))}",
           "fetchedAt" => fetched_at
         }
+        contract["deliveryProfile"] = delivery_profile if delivery_profile
       end
 
       raise ValidationError, failures unless failures.empty?
 
       Result.new(contract: contract, external_operation_details: external_details)
+    end
+
+    def parse_delivery_profile(lines, headings, failures)
+      matches = headings.select { |heading, _| heading == "Delivery profile" }
+      return nil if matches.empty?
+      if matches.length > 1
+        failures << "duplicate optional heading: Delivery profile"
+        return nil
+      end
+      heading_index = matches.first[1]
+      next_heading = headings.find { |_, line_index| line_index > heading_index }
+      section = lines[(heading_index + 1)...(next_heading ? next_heading[1] : lines.length)].join
+      parsed = section.each_line.reject { |line| line.strip.empty? }.map do |line|
+        match = line.match(/\A\s*[-*]\s*(Profile|Reason):\s*(\S.*?)\s*\z/)
+        match&.captures
+      end
+      unless parsed.length == 2 && parsed.none?(&:nil?) && parsed.map(&:first) == ["Profile", "Reason"]
+        failures << "Delivery profile must contain Profile and Reason in order"
+        return nil
+      end
+      name = parsed[0][1].downcase
+      reason = parsed[1][1].strip
+      failures << "Delivery profile must be fast, standard, or strict" unless DeliveryProfile::NAMES.include?(name)
+      return nil unless DeliveryProfile::NAMES.include?(name)
+      {"name" => name, "reason" => reason}
     end
 
     def parse_external_operations(external_section, approvals_section, failures)
@@ -320,6 +361,17 @@ module IOSTemplate
       failures << "Issue contract dependencies are invalid" unless dependencies.is_a?(Array) && dependencies.all? { |entry| entry.is_a?(Integer) && entry.positive? } && dependencies.uniq == dependencies
       operations = value["externalOperations"]
       failures << "Issue contract external operations are invalid" unless operations.is_a?(Array) && operations.all? { |entry| entry.is_a?(String) && ALLOWED_OPERATIONS.include?(entry) } && operations.uniq == operations
+      begin
+        profile = DeliveryProfile.effective_name(value)
+        if profile == "fast" && value.key?("verification")
+          failures << "Issue contract fast delivery profile cannot require UI verification"
+        end
+        if profile != "strict" && operations.is_a?(Array) && operations.any? { |operation| DeliveryProfile.strict_operation?(operation) }
+          failures << "Issue contract high-risk external operations require strict delivery profile"
+        end
+      rescue ArgumentError => error
+        failures << error.message
+      end
       failures << "Issue contract operation-details digest is invalid" unless value["externalOperationDetailsDigest"].is_a?(String) && value["externalOperationDetailsDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
       begin
         Time.iso8601(value["fetchedAt"].to_s)

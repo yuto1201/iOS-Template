@@ -6,6 +6,7 @@ require "json"
 require "time"
 require_relative "descriptor-files"
 require_relative "issue-contract"
+require_relative "delivery-profile"
 
 def refuse(message)
   warn "merge identity refused: #{message}"
@@ -110,7 +111,8 @@ def validate_state(root, repository, issue, mode)
   state_name = state["state"]
   case state_name
   when "approved-for-merge"
-    refuse("approved state history is invalid") unless state["previousState"] == "review-requested" && state["resumeState"].nil? && state["from"] == "review-requested" && state["to"] == "approved-for-merge"
+    expected_previous = IOSTemplate::DeliveryProfile.review_required?(contract) ? "review-requested" : "verify-passed"
+    refuse("approved state history is invalid") unless state["previousState"] == expected_previous && state["resumeState"].nil? && state["from"] == expected_previous && state["to"] == "approved-for-merge"
   when "merged"
     refuse("merged state history is invalid") unless state["previousState"] == "approved-for-merge" && state["resumeState"].nil? && state["from"] == "approved-for-merge" && state["to"] == "merged"
     positive_integer!(state["pullRequest"], "merged state pullRequest")

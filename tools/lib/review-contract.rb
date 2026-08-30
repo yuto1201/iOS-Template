@@ -29,7 +29,7 @@ module IOSTemplate
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
     ].freeze
-    CONTRACT_OPTIONAL_KEYS = %w[verification].freeze
+    CONTRACT_OPTIONAL_KEYS = %w[verification deliveryProfile].freeze
     LEGACY_CONTRACT_KEYS = (CONTRACT_KEYS - %w[externalOperationDetailsDigest]).freeze
     REFERENCE_KEYS = %w[path digest].freeze
     DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
@@ -230,10 +230,11 @@ module IOSTemplate
     def validate_contract_keys!(contract, allow_legacy: false)
       required_sets = [CONTRACT_KEYS]
       required_sets << LEGACY_CONTRACT_KEYS if allow_legacy
-      allowed_sets = required_sets.flat_map do |required|
-        [required.sort, (required + CONTRACT_OPTIONAL_KEYS).sort]
+      valid = contract.is_a?(Hash) && required_sets.any? do |required|
+        required.all? { |key| contract.key?(key) } &&
+          (contract.keys - required - CONTRACT_OPTIONAL_KEYS).empty?
       end
-      reject("issue contract: unexpected or missing keys") unless contract.is_a?(Hash) && allowed_sets.include?(contract.keys.sort)
+      reject("issue contract: unexpected or missing keys") unless valid
       contract
     end
 

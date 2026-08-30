@@ -11,7 +11,7 @@ Resume from durable GitHub/state artifacts; never infer completion from local fi
 
 - Codex and Claude have equal authority. The selected Issue executor runs Claim/state/merge/cleanup tools and authenticated provider operations after the same configured-account preflight.
 - Every authenticated operation uses `external-ops`; the live Issue operation block must name the executing model and match `Config/ownership.yml`.
-- Opposite review always uses `cross-model-review`; never invoke a reviewer CLI directly or self-approve.
+- When `standard` or `strict` requires opposite review, always use `cross-model-review`; never invoke a reviewer CLI directly or self-approve. Explicit `fast` omits the blocking review stage.
 
 ## State-driven workflow
 
@@ -21,6 +21,7 @@ Use the exact order:
 approved -> claimed -> in-progress -> verify-passed -> review-requested
 review-requested -> approved-for-merge -> merged -> done
 review-requested -> changes-requested -> in-progress
+verify-passed -> approved-for-merge -> merged -> done  # explicit fast only
 ```
 
 1. Have the selected executor read the durable GitHub state first:
@@ -52,8 +53,8 @@ Dispatch again from `RESUME_STATE`; do not imply that Resume performed the trans
 Transition only through `tools/issue-state.sh`; do not hand-edit labels, markers, or state JSON.
 Every allowed recovery into `in-progress` clears the old durable Head binding. Treat that state as unverified: re-resolve the current Issue worktree Head and repeat verification before creating a new binding; never reuse an earlier Head or its evidence.
 
-2. Only in `in-progress`, implement the Issue contract. Apply TDD and commit locally. A changed Head invalidates prior verification/review.
-3. Use `ios-verify`. Transition to `verify-passed` only after canonical `verify.json` validates for current Head; documentation-only work uses that skill's `tools/publish-documentation-verify.sh` path, not a skipped check. From the canonical Issue worktree, bind the exact current Head accepted by the state tool:
+2. Only in `in-progress`, implement the Issue contract. Apply TDD and commit locally. During implementation run targeted checks only; do not create canonical four-case evidence for each intermediate commit. A changed Head invalidates prior canonical verification/review.
+3. Use `ios-verify`. `fast` uses focused Build and selected Unit Test; `standard`/`strict` use the full Simulator route only after the candidate Head is stable. Transition to `verify-passed` only after canonical `verify.json` validates for current Head; documentation-only work uses that skill's `tools/publish-documentation-verify.sh` path, not a skipped check. From the canonical Issue worktree, bind the exact current Head accepted by the state tool:
 
 ```sh
 ISSUE_WORKTREE="$(git rev-parse --show-toplevel)"
@@ -62,7 +63,7 @@ cd "$ISSUE_WORKTREE"
 tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" --from in-progress --to verify-passed --head-sha "$HEAD_SHA"
 ```
 
-4. Transition to `review-requested`, then run the exact opposite-model handoff:
+4. For explicit `fast`, transition directly from `verify-passed` to `approved-for-merge`; the state tool rejects this shortcut for `standard`, `strict`, and legacy Issues. For `standard`/`strict`, transition to `review-requested`, then run the exact opposite-model handoff:
 
 ```sh
 tools/cross-model-review.sh \

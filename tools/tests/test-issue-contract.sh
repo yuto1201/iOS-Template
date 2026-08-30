@@ -23,6 +23,7 @@ write_feature_issue() {
   local path=$1
   local external_operations=${2:-- None.}
   local user_approvals=${3:-None.}
+  local delivery_profile=${4:-}
   cat > "$path" <<EOF
 ## Goal
 
@@ -52,6 +53,8 @@ Make the workflow contract testable.
 ## UI verification
 
 - Not applicable.
+
+$delivery_profile
 
 ## External operations
 
@@ -118,6 +121,28 @@ write_feature_issue "$workspace/normal-repo-operation.md" $'- Operation: github.
 
 write_feature_issue "$workspace/claude-repo-operation.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Claude\n- Approval required: no' 'No additional approval.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/claude-repo-operation.md"
+
+write_feature_issue "$workspace/fast-profile.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.' $'## Delivery profile\n\n- Profile: fast\n- Reason: Local non-UI logic covered by targeted tests.'
+"$repo_root/tools/validate-issue-body.sh" "$workspace/fast-profile.md"
+ruby "$repo_root/tools/lib/issue-contract.rb" --body "$workspace/fast-profile.md" --type feature --format contract --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z > "$workspace/fast-profile.json"
+assert_json "$workspace/fast-profile.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["deliveryProfile"]=={"name"=>"fast","reason"=>"Local non-UI logic covered by targeted tests."}'
+assert_fails 'fast snapshot rejects a forged UI verification object' ruby -I"$repo_root/tools/lib" -rjson -rissue-contract -e '
+value=JSON.parse(File.binread(ARGV.fetch(0))); value["verification"]={}; IOSTemplate::IssueContract.validate_snapshot!(value,issue:42,repository:"yuto1201/iOS-Template")' "$workspace/fast-profile.json"
+
+sed 's/Profile: fast/Profile: turbo/' "$workspace/fast-profile.md" > "$workspace/unknown-profile.md"
+assert_fails 'an unknown delivery profile is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-profile.md"
+
+sed 's/- Not applicable\./- Target screens\/states: Settings loaded.\n- English expectations: Settings is complete.\n- Japanese expectations: 設定が完全に表示される。/' "$workspace/fast-profile.md" > "$workspace/fast-ui.md"
+assert_fails 'fast profile rejects UI verification' "$repo_root/tools/validate-issue-body.sh" "$workspace/fast-ui.md"
+
+write_feature_issue "$workspace/fast-migration.md" $'- Operation: supabase.apply_migrations\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.' $'## Delivery profile\n\n- Profile: fast\n- Reason: Incorrectly classified migration.'
+assert_fails 'fast profile rejects high-risk provider mutation' "$repo_root/tools/validate-issue-body.sh" "$workspace/fast-migration.md"
+
+write_feature_issue "$workspace/standard-deploy.md" $'- Operation: cloudflare.deploy\n- Service: Cloudflare\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.' $'## Delivery profile\n\n- Profile: standard\n- Reason: Incorrectly classified production deploy.'
+assert_fails 'standard profile rejects high-risk provider mutation' "$repo_root/tools/validate-issue-body.sh" "$workspace/standard-deploy.md"
+
+write_feature_issue "$workspace/strict-release.md" $'- Operation: appstore.submit_review\n- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: strict\n- Reason: App Store submission is a release boundary.'
+"$repo_root/tools/validate-issue-body.sh" "$workspace/strict-release.md"
 
 write_feature_issue "$workspace/model-neutral-providers.md" $'- Operation: linear.inspect_workspace\n- Service: Linear\n- Environment: production\n- Executor: Claude\n- Approval required: no\n\n- Operation: vercel.inspect_team\n- Service: Vercel\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/model-neutral-providers.md"
@@ -253,7 +278,7 @@ for required in \
   [[ -f "$repo_root/$required" ]] || { echo "missing required workflow file: $required" >&2; exit 1; }
 done
 
-for heading in Goal 'In scope' 'Out of scope' 'Acceptance criteria' 'Spec anchors' Dependencies 'UI verification' 'External operations' 'User approvals'; do
+for heading in Goal 'In scope' 'Out of scope' 'Acceptance criteria' 'Spec anchors' Dependencies 'UI verification' 'Delivery profile' 'External operations' 'User approvals'; do
   rg -Fq "label: $heading" "$repo_root/.github/ISSUE_TEMPLATE/feature.yml" || { echo "feature form lacks $heading" >&2; exit 1; }
 done
 for operation in github.read_issue github.update_issue github.push_branch github.create_pr github.merge_pr github.delete_branch; do
