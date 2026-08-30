@@ -89,7 +89,7 @@ Pre-mergeの失敗は同じIssueで修正します。マージ後に判明した
 
 ## 7. Bootstrap Issue
 
-自動化ツール自身を作る最初の3件だけは、まだ存在しないツールを完了条件にできません。Foundation Issue、Identity bootstrap Issue、Simulator verification IssueをBootstrap Issueとし、Codexが次を手動で実行します。
+自動化ツール自身を作る最初の3件だけは、まだ存在しないツールを完了条件にできません。Foundation Issue、Identity bootstrap Issue、Simulator verification IssueをBootstrap Issueとし、Issueで選択された実行モデル（CodexまたはClaude）が次を手動で実行します。
 
 - 設定済みGitHubアカウント確認、Issue、Branch、Push、PR、Squash Merge、後片付け
 - Head SHAを明記したBuild・Test・4条件Simulator結果のPR記録

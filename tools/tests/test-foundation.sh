@@ -131,12 +131,20 @@ ruby -rjson -e '
 '
 
 model_neutral_authority_files=(
+  README.md
+  AGENTS.md
   .agents/skills/app-bootstrap/SKILL.md
   .agents/skills/plan-issue-batch/SKILL.md
   .agents/skills/ios-verify/SKILL.md
   .claude/agents/release-auditor.md
+  specs/README.md
+  specs/architecture.md
+  specs/acceptance.md
+  docs/AUTHORITY.md
+  docs/security.md
+  docs/workflow.md
 )
-if rg -n -i 'codex-only|codex only|delegate(d)? to codex|delegated to codex|codexへ委託|codex専用|never run .*from claude|do not create .*from a claude' "${model_neutral_authority_files[@]}"; then
+if rg -n -i 'codex-only|codex only|delegate(d)? to codex|delegated to codex|codexへ委託|codex専用|Codexが次を手動で実行|never run .*from claude|do not create .*from a claude' "${model_neutral_authority_files[@]}"; then
   echo 'active instructions must not retain model-specific external authority restrictions' >&2
   exit 1
 fi
