@@ -10,6 +10,12 @@ This contract separates release readiness from authenticated App Store Connect m
 - `prepare-appstore-assets` must have produced `${VERSION}-package.json` for the exact source SHA and build digest, with current Apple requirements and an approved release-auditor result.
 - A first public release additionally requires the user's package-bound confirmation of the privacy policy and terms. AI review cannot grant legal approval.
 
+## Legal-page publication destination
+
+During submission preparation, follow [the AppLibrary publication policy](../../specs/product.md#61-applibraryでの法務ページ公開方針): the `app.yutodev.com` app catalog links to each app's website, where its privacy policy and terms belong. Vercel manages Web publication; Cloudflare manages the domain and DNS, not Pages hosting. Keep the app's `App Store/` sources as the authority for the published text.
+
+AppLibrary's layout and Vercel migration are still being developed separately. The user will specify the actual placement and public URLs later; never derive them from the catalog domain or assume migration is complete. Independent app development and legal drafts can continue. If publication or submission needs an unresolved destination, mark that Issue `blocked:user` and request it. Before submission, confirm the designated pages are publicly reachable without login and match the approved text, privacy declarations, in-app links, and submission metadata. This policy is neither legal-text approval nor authority to edit/deploy AppLibrary, change DNS, or submit the app.
+
 ## Immutable inputs
 
 The prepared manifest binds the Bundle ID, version, source SHA, build digest, package tree digest, requirement cache, screenshot manifest, release audit, and first-publication approval. Recompute them at workflow start and resume. Any mismatch invalidates all unperformed sections; never repair a mismatch by editing the manifest or remote values.
