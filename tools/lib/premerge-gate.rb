@@ -235,10 +235,13 @@ begin
   # Reconstruct `verification` from the live Issue body so a post-Claim change to the
   # Verification mapping cannot be masked by the sealed value. The repository-level half
   # of the object comes from the Base commit blob, matching what Claim sealed.
+  # capture3 keeps stderr out of the blob. Git can emit warnings on a successful read,
+  # and capture2e would splice them into the bytes the contract is reconstructed from.
   base_verification = begin
-    Open3.capture2e(
+    stdout, _stderr, status = Open3.capture3(
       "git", "-C", root, "cat-file", "blob", "#{identity.fetch('baseSha')}:Config/verification.json"
-    ).then { |output, status| status.success? ? output : nil }
+    )
+    status.success? ? stdout : nil
   end
   # A sealed contract that carries `verification` can only be reproduced from the Base
   # blob. Refuse rather than silently reading whatever the working tree holds now.
