@@ -229,7 +229,7 @@ if [[ "$mode" == build-for-testing ]]; then
   [[ ! -e "$source_root/Sources/Ignored.swift" ]] || { echo 'ignored source entered raw-Head snapshot' >&2; exit 1; }
   mutate_path="$(state mutate_worktree_path)"
   [[ "$(state mutate_worktree)" != 1 || -z "$mutate_path" ]] || printf '%s\n' MUTATED-WORKTREE >"$mutate_path"
-  [[ "$parallel" == NO && "$destination_count" == 1 && "$destination" == *id=00000000-0000-0000-0000-000000000001 ]] || { echo 'build destination or parallel setting is invalid' >&2; exit 1; }
+  [[ "$parallel" == NO && "$destination_count" == 1 && "$destination" == *id="$(state first_udid)" ]] || { echo 'build destination or parallel setting is invalid' >&2; exit 1; }
   app="$derived/Build/Products/Debug-iphonesimulator/TemplateApp.app"
   mkdir -p "$app" "$result"
   plist='<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.TemplateApp</string><key>CFBundleExecutable</key><string>TemplateApp</string></dict></plist>'
@@ -284,10 +284,10 @@ source_root="${project%/TemplateApp.xcodeproj}"
 [[ "$(/bin/pwd -P)" == "$(builtin cd "$source_root" && /bin/pwd -P)" ]] || { echo 'test cwd escaped the private raw-Head source snapshot' >&2; exit 1; }
   if [[ "$identifier" == TemplateAppTests/UnitSmokeTests/testUnit\(\) ]]; then
   [[ "$(state test_mode)" != command-fail ]] || { echo 'configured unit test command failure' >&2; exit 1; }
-  [[ "$destination" == *id=00000000-0000-0000-0000-000000000001 ]] || { echo 'wrong unit destination' >&2; exit 1; }
+  [[ "$destination" == *id="$(state first_udid)" ]] || { echo 'wrong unit destination' >&2; exit 1; }
   [[ -z "$language$region" && "$result" == */Tests.xcresult ]] || { echo 'unit stage included UI locale or wrong result' >&2; exit 1; }
   mkdir -p "$result"
-  printf '%s\n' Booted >"$state_dir/device-state-00000000-0000-0000-0000-000000000001"
+  printf '%s\n' Booted >"$state_dir/device-state-$(state first_udid)"
   if [[ "$(state config_mode)" == mutate ]]; then
     workspace="$(dirname "$result")"
     config="$workspace/config.json"
@@ -413,7 +413,7 @@ if [[ "${1-}" == xcresulttool ]]; then
   fi
   [[ "${2-}" == get && "${3-}" == test-results ]] || { echo 'unexpected xcresulttool query' >&2; exit 1; }
   if [[ "$result_path" == */Tests.xcresult ]]; then
-    passed=1 failed=0 skipped=0 total=1 udid=00000000-0000-0000-0000-000000000001
+    passed=1 failed=0 skipped=0 total=1 udid="$(state first_udid)"
     selected_target=TemplateAppTests selected_class=UnitSmokeTests selected_method=testUnit selected_url_method='testUnit()'
     case "$(state test_mode)" in
       failed) passed=0; failed=1 ;;
@@ -655,8 +655,8 @@ done
 repo="" base_sha="" head_sha="" contract="" matrix="" draft="" visual="" final=""
 
 write_contract() {
-  /usr/bin/ruby -I"$source_repo/tools/lib" -rissue-contract -rjson -rtime - "$1" "${2:-valid}" <<'RUBY'
-path, mode = ARGV
+  /usr/bin/ruby -I"$source_repo/tools/lib" -rissue-contract -rjson -rtime - "$1" "${2:-valid}" "${3:-full}" <<'RUBY'
+path, mode, scope = ARGV
 cases = [
   {"id" => "iphone-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
   {"id" => "iphone-ja", "assertion" => {"kind" => "launch-succeeded"}},
@@ -672,6 +672,10 @@ mappings = [
 ]
 mappings.pop if mode == "missing-mapping"
 mappings[1]["checks"] << "case:unknown" if mode == "unknown-mapping"
+if scope == "iphone-ja"
+  cases.select! { |entry| entry["id"] == "iphone-ja" }
+  mappings.each { |entry| entry["checks"].select! { |check| check.start_with?("stage:") || check.end_with?(":iphone-ja") } }
+end
 document = {
   "schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template",
   "goal" => "Run reproducible iOS verification",
@@ -717,6 +721,7 @@ if mode == "valid"
     ## Verification
     #{JSON.generate(document.fetch("verification"))}
   BODY
+  body += "\n## Verification scope\n- Scope: iphone-ja\n- Stage: feature\n- Reason: Japanese iPhone feature fixture; finishing deferred.\n" if scope == "iphone-ja"
   produced = IOSTemplate::IssueContract.parse(body, issue: 42, repository: "yuto1201/iOS-Template", fetched_at: document.fetch("fetchedAt")).contract
   File.write(path, IOSTemplate::IssueContract.canonical_json(produced))
 else
@@ -726,8 +731,8 @@ RUBY
 }
 
 write_matrix() {
-  /usr/bin/ruby -rjson -rtime - "$1" "$fake_developer" <<'RUBY'
-path, developer = ARGV
+  /usr/bin/ruby -rjson -rtime - "$1" "$fake_developer" "${2:-full}" <<'RUBY'
+path, developer, scope = ARGV
 rows = [
   ["iphone-en", "iPhone", "en_US", "en", "00000000-0000-0000-0000-000000000001"],
   ["iphone-ja", "iPhone", "ja_JP", "ja", "00000000-0000-0000-0000-000000000002"],
@@ -743,12 +748,16 @@ document = {
     {"id" => id, "family" => family, "deviceType" => {"identifier" => type[0], "name" => type[1]}, "locale" => locale, "language" => language, "udid" => udid}
   end
 }
+if scope == "iphone-ja"
+  document["scope"] = scope
+  document["cases"].select! { |entry| entry["id"] == "iphone-ja" }
+end
 File.write(path, JSON.pretty_generate(document) + "\n")
 RUBY
 }
 
 prepare_repo() {
-  local label="$1" contract_mode="${2:-valid}" head_directory="${3:-present}"
+  local label="$1" contract_mode="${2:-valid}" head_directory="${3:-present}" scope="${4:-full}"
   repo="$scratch/$label/repository"
   mkdir -p "$repo/TemplateApp.xcodeproj" "$repo/docs" "$repo/Sources" "$repo/Config"
   repo="$(cd "$repo" && pwd -P)"
@@ -774,8 +783,13 @@ prepare_repo() {
   final="$repo/.artifacts/issues/42/$head_sha/verify.json"
   mkdir -p "$(dirname "$contract")" "$(dirname "$matrix")"
   [[ "$head_directory" != present ]] || mkdir -p "$(dirname "$draft")"
-  write_contract "$contract" "$contract_mode"
-  write_matrix "$matrix"
+  write_contract "$contract" "$contract_mode" "$scope"
+  write_matrix "$matrix" "$scope"
+  if [[ "$scope" == iphone-ja ]]; then
+    set_state first_udid 00000000-0000-0000-0000-000000000002
+  else
+    set_state first_udid 00000000-0000-0000-0000-000000000001
+  fi
   : >"$fake_log"
   : >"$poison_log"
   /bin/rm -f "$poison_sentinel"
@@ -977,6 +991,36 @@ if [[ ! -e "$runner" ]]; then
   echo "iOS runner RED tests are ready"
   exit 1
 fi
+
+[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+prepare_repo scoped-valid valid present iphone-ja
+run_execute
+write_visual approved
+run_finalize
+(cd "$repo" && "$validator_binary" --file "$final" --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha")
+/usr/bin/ruby -rjson - "$final" "$fake_log" <<'RUBY'
+final = JSON.parse(File.read(ARGV.fetch(0)))
+abort "final must have only Japanese iPhone" unless final["cases"].map { |entry| entry["id"] } == ["iphone-ja"]
+abort "visual must have only Japanese iPhone" unless final["visualEvaluation"]["cases"].map { |entry| entry["id"] } == ["iphone-ja"]
+commands = File.readlines(ARGV.fetch(1)).map { |line| line.chomp.split("\t") }
+screenshots = commands.select { |fields| fields[2..3] == ["simctl", "io"] }
+abort "must capture exactly one screenshot" unless screenshots.length == 1 && screenshots.first[4].end_with?("000002")
+mutations = commands.select { |fields| fields[2] == "simctl" && !%w[list].include?(fields[3]) }
+abort "touched an English or iPad Simulator" unless mutations.all? { |fields| fields[4] == "00000000-0000-0000-0000-000000000002" }
+puts "scoped runner: 1 case, 1 screenshot, 1 visual case; no English/iPad Simulator operations"
+RUBY
+prepare_repo scoped-mismatch valid present iphone-ja
+write_matrix "$matrix" full
+expect_execute_failure scoped-mismatch "verification contract is absent or incomplete"
+! rg -q 'build-for-testing|simctl' "$fake_log"
+prepare_repo scoped-foundation valid present iphone-ja
+printf '%s\n' REQUIRED-FULL >"$repo/Config/Feature.xcconfig"
+git -C "$repo" add Config/Feature.xcconfig
+git -C "$repo" commit -q -m foundation
+refresh_head_paths
+expect_execute_failure scoped-foundation "full verification is required"
+! rg -q 'build-for-testing|simctl' "$fake_log"
+if [[ "${1-}" == scoped ]]; then echo "scoped runner tests passed"; exit 0; fi
 
 startup_stdout="$scratch/startup.stdout"
 startup_stderr="$scratch/startup.stderr"

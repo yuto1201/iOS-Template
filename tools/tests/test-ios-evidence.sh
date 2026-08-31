@@ -74,8 +74,9 @@ prepare_fixture() {
   local template="${2:-passed.json}"
   local change_kind="${3:-normal}"
   local change_path="${4:-docs/change.md}"
+  local scope="${5:-full}"
 
-  fixture_root="$scratch/$label/repository"
+  fixture_root="${6:-$scratch/$label/repository}"
   mkdir -p "$fixture_root"
   fixture_root="$(cd "$fixture_root" && pwd -P)"
   git -C "$fixture_root" init -q
@@ -141,7 +142,23 @@ prepare_fixture() {
   mkdir -p "$evidence_dir" "$matrix_dir"
   cp "$fixtures/issue-contract.json" "$issue_dir/issue-contract.json"
   cp "$matrix_fixture" "$matrix_dir/simulator-matrix.json"
-  cp -R "$fixtures/screenshots/." "$evidence_dir/"
+  local case_ids=(iphone-en iphone-ja ipad-en ipad-ja)
+  if [[ "$scope" == "iphone-ja" ]]; then
+    case_ids=(iphone-ja)
+    ruby -rjson - "$issue_dir/issue-contract.json" "$matrix_dir/simulator-matrix.json" <<'RUBY'
+contract_path, matrix_path = ARGV
+contract = JSON.parse(File.read(contract_path))
+contract["verificationScope"] = {"name"=>"iphone-ja", "stage"=>"feature", "reason"=>"Japanese iPhone feature fixture; finishing deferred."}
+contract["verification"]["cases"].select! { |entry| entry["id"] == "iphone-ja" }
+contract["verification"]["acceptanceMappings"].each { |entry| entry["checks"].select! { |check| check.start_with?("stage:") || check.end_with?(":iphone-ja") } }
+matrix = JSON.parse(File.read(matrix_path))
+matrix["scope"] = "iphone-ja"
+matrix["cases"].select! { |entry| entry["id"] == "iphone-ja" }
+File.write(contract_path, JSON.generate(contract))
+File.write(matrix_path, JSON.generate(matrix))
+RUBY
+  fi
+  for id in "${case_ids[@]}"; do cp -R "$fixtures/screenshots/$id" "$evidence_dir/"; done
 
   local contract_digest matrix_digest source_tree_digest
   contract_digest="$(shasum -a 256 "$issue_dir/issue-contract.json" | awk '{print $1}')"
@@ -180,6 +197,15 @@ text = File.read(source)
 }.each { |key, value| text = text.gsub(key, value) }
 File.write(destination, text)
 RUBY
+  if [[ "$scope" == "iphone-ja" ]]; then
+    ruby -rjson - "$evidence_file" <<'RUBY'
+path = ARGV.fetch(0)
+value = JSON.parse(File.read(path))
+value["cases"].select! { |entry| entry["id"] == "iphone-ja" }
+value["acceptanceEvidence"].each { |entry| entry["evidence"].select! { |check| check.start_with?("stage:") || check.end_with?(":iphone-ja") } }
+File.write(path, JSON.generate(value))
+RUBY
+  fi
 
   # Application evidence uses the same two-phase draft/packet chain as the runner.
   if [[ "$template" != "stale-sha.json" && "$change_kind" == "normal" ]]; then
@@ -189,7 +215,7 @@ RUBY
     workspace="/tmp/ios-template-verify/$(basename "$canonical_root")-$root_digest/issue-42/$head_sha/Attempts/attempt-aaaaaaaa"
     draft_file="$evidence_dir/verify-draft.json"
     packet_file="$evidence_dir/visual-packet.json"
-    for id in iphone-en iphone-ja ipad-en ipad-ja; do
+    for id in "${case_ids[@]}"; do
       cp "$png_fixture" "$evidence_dir/$id/screenshot.png"
       /usr/bin/ruby -rzlib - "$png_fixture" "$evidence_dir/$id/settings.png" "$id" <<'RUBY'
 source, destination, label = ARGV
@@ -212,7 +238,8 @@ RUBY
       ruby -rjson -rdigest <<'RUBY'
 repository = ENV.fetch("REPOSITORY")
 final = JSON.parse(File.read(ENV.fetch("EVIDENCE")))
-ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
+actions = JSON.parse(File.read(File.join(repository, ".artifacts/issues/42/issue-contract.json"))).fetch("verification").fetch("cases")
+ids = actions.map { |entry| entry.fetch("id") }
 draft = {
   "schemaVersion" => 1, "status" => "awaiting-visual-review", "issue" => 42,
   "baseSha" => final.fetch("baseSha"), "headSha" => final.fetch("headSha"),
@@ -224,7 +251,7 @@ draft = {
     {
       "id" => id, "status" => "passed", "screenshot" => "#{id}/screenshot.png",
       "screenshotDigest" => "sha256:#{Digest::SHA256.file(image).hexdigest}",
-      "mechanicalCheck" => index.even? ? "test:TemplateAppUITests/SmokeTests/testLaunch" : "assertion:launch-succeeded"
+      "mechanicalCheck" => actions[index].key?("testIdentifier") ? "test:#{actions[index].fetch('testIdentifier')}" : "assertion:launch-succeeded"
     }
   end,
   "acceptanceEvidence" => final.fetch("acceptanceEvidence").map { |entry| {"id" => entry.fetch("id"), "evidence" => entry.fetch("evidence").reject { |check| check.start_with?("visual:") }} },
@@ -337,6 +364,32 @@ make_documentation_only() {
     ]
   '
 }
+
+# Reuse the real canonical fixture for release tests without copying/moving sealed roots.
+if [[ "${1-}" == "--export-fixture" ]]; then
+  [[ $# == 3 && ( "$3" == "full" || "$3" == "iphone-ja" ) && -d "$2" && ! -L "$2" ]] || exit 64
+  [[ -z "$(find "$2" -mindepth 1 -maxdepth 1 -print -quit)" ]] || exit 64
+  prepare_fixture exported passed.json normal docs/change.md "$3" "$2"
+  run_validator
+  ruby -rjson -e 'puts JSON.generate(root:ARGV[0],base:ARGV[1],head:ARGV[2],issue:42)' "$fixture_root" "$base_sha" "$head_sha"
+  exit 0
+fi
+[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+prepare_fixture scoped-passed passed.json normal docs/change.md iphone-ja
+run_validator
+mutate_json "$evidence_file" 'document["cases"] = []'
+expect_failure scoped-missing-case "cases must contain exactly the frozen matrix rows"
+prepare_fixture scoped-docs passed.json normal docs/change.md iphone-ja
+make_documentation_only
+expect_failure scoped-docs "iphone-ja requires application-code verification"
+prepare_fixture scoped-wrong-matrix passed.json normal docs/change.md iphone-ja
+mutate_json "$fixture_root/.artifacts/batches/evidence-fixture/simulator-matrix.json" 'document.delete("scope")'
+refresh_matrix_digest
+expect_failure scoped-wrong-matrix "matrixFile.cases must contain exactly four rows"
+if [[ "${1-}" == scoped ]]; then
+  echo "scoped evidence tests passed"
+  exit 0
+fi
 
 prepare_fixture valid-passed
 run_validator

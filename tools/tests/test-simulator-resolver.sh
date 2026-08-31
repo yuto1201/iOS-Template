@@ -18,6 +18,7 @@ run_resolver() {
     --devices "$3" \
     --batch-id settings-2026-08-21 \
     --resolved-at 2026-08-21T12:00:00+09:00 \
+    "${@:4}" \
     >"$output" 2>"$errors"
 }
 
@@ -133,6 +134,17 @@ document["devicetypes"].reject! { |entry| entry["name"].start_with?("iPad Air") 
 File.write(destination, JSON.generate(document))
 RUBY
 expect_failure "no matching iPad Air Device Type" "$fixtures/runtimes.json" "$no_air" "$fixtures/devices.json"
+
+# Partial coverage must not even resolve an iPad, and is never an arbitrary subset.
+run_resolver "$fixtures/runtimes.json" "$no_air" "$fixtures/devices.json" --scope iphone-ja
+ruby -rjson - "$output" <<'RUBY'
+matrix = JSON.parse(File.read(ARGV.fetch(0)))
+abort "partial scope missing" unless matrix["scope"] == "iphone-ja"
+abort "partial resolver did not select exactly Japanese iPhone" unless matrix["cases"].map { |c| [c["id"], c["language"], c["locale"]] } == [["iphone-ja", "ja", "ja_JP"]]
+abort "partial resolver used an older runtime" unless matrix.dig("runtime", "version") == "10.3"
+RUBY
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope other
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope iphone-ja --scope full
 
 malformed_versions=(
   '10..3'

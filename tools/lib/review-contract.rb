@@ -4,6 +4,7 @@ require "digest"
 require "json"
 require "open3"
 require "time"
+require_relative "verification-scope"
 
 module IOSTemplate
   module ReviewContract
@@ -29,7 +30,7 @@ module IOSTemplate
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
     ].freeze
-    CONTRACT_OPTIONAL_KEYS = %w[verification deliveryProfile].freeze
+    CONTRACT_OPTIONAL_KEYS = %w[verification deliveryProfile verificationScope].freeze
     LEGACY_CONTRACT_KEYS = (CONTRACT_KEYS - %w[externalOperationDetailsDigest]).freeze
     REFERENCE_KEYS = %w[path digest].freeze
     DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
@@ -62,6 +63,7 @@ module IOSTemplate
       completed_at = validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, require_temporal_order)
 
       if schema == 2
+        validate_evidence_scope!(contract, verify)
         validate_strict_closure!(
           packet: packet, packet_bytes: packet_bytes, verify: verify, verify_bytes: verify_bytes,
           issue: issue, head_sha: head_sha, diff_bytes: diff_bytes, image_bytes: image_bytes,
@@ -236,6 +238,27 @@ module IOSTemplate
       end
       reject("issue contract: unexpected or missing keys") unless valid
       contract
+    end
+
+    def validate_evidence_scope!(contract, verify)
+      name = VerificationScope.validate_contract!(contract)
+      application = verify["changeClassification"] == "application-code"
+      reject("explicit Verification scope requires application-code verification") if contract.key?("verificationScope") && !application
+      application ||= verify["changeClassification"].nil? && verify.dig("visualEvaluation", "status") == "passed"
+      return unless application
+
+      expected = VerificationScope.case_ids(name)
+      configured = contract.dig("verification", "cases")
+      if configured
+        reject("contract verification cases differ from scope") unless configured.is_a?(Array) &&
+          configured.all? { |entry| entry.is_a?(Hash) } && configured.map { |entry| entry["id"] } == expected
+      end
+      [verify["cases"], verify.dig("visualEvaluation", "cases")].each do |cases|
+        reject("verification or visual cases differ from sealed scope") unless cases.is_a?(Array) &&
+          cases.all? { |entry| entry.is_a?(Hash) } && cases.map { |entry| entry["id"] } == expected
+      end
+    rescue ArgumentError, TypeError => error
+      reject(error.message)
     end
 
     def validate_scope!(packet, contract)

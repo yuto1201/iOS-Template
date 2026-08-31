@@ -8,13 +8,15 @@ scratch="$(mktemp -d -t simulator-lifecycle.XXXXXX)"
 mkdir -p "$scratch/tmp"
 batch_id="lifecycle-$RANDOM-$RANDOM"
 partial_batch="partial-$RANDOM-$RANDOM"
+scoped_batch="ja-$RANDOM-$RANDOM"
 matrix=".artifacts/batches/$batch_id/simulator-matrix.json"
 partial_matrix=".artifacts/batches/$partial_batch/simulator-matrix.json"
+scoped_matrix=".artifacts/batches/$scoped_batch/simulator-matrix.json"
 [[ ! -e "$matrix" && ! -L "$matrix" && ! -e "$partial_matrix" && ! -L "$partial_matrix" ]] || {
   echo "test batch artifact unexpectedly already exists" >&2
   exit 1
 }
-trap 'rm -rf "$scratch" "$(dirname "$matrix")" "$(dirname "$partial_matrix")"' EXIT
+trap 'rm -rf "$scratch" "$(dirname "$matrix")" "$(dirname "$partial_matrix")" "$(dirname "$scoped_matrix")"' EXIT
 
 fake_bin="$scratch/bin"
 io_helper="$scratch/simulator-matrix-io"
@@ -133,6 +135,10 @@ matrix = {
     {"id" => id, "family" => family, "deviceType" => {"identifier" => identifier, "name" => name}, "locale" => locale, "language" => language}
   end
 }
+if arguments.include?("--scope") && arguments[arguments.index("--scope") + 1] == "iphone-ja"
+  matrix["scope"] = "iphone-ja"
+  matrix["cases"].select! { |entry| entry["id"] == "iphone-ja" }
+end
 case ENV["FAKE_RESOLVER_MODE"]
 when "wrong-batch"
   matrix["batchId"] = "otherwise-valid-wrong-batch"
@@ -442,4 +448,28 @@ if find .artifacts/batches -type f -name '.*' -print -quit | rg -q .; then
 fi
 [[ ! -e "$malicious_log" ]] || { echo "legacy executable/data override was invoked" >&2; exit 1; }
 
+run bash tools/resolve-simulator-matrix.sh --batch-id "$scoped_batch" --output "$scoped_matrix" --scope iphone-ja
+ruby -rjson - "$scoped_matrix" "$log" "$scoped_batch" <<'RUBY'
+path, log, batch = ARGV
+matrix = JSON.parse(File.read(path))
+abort "one-case matrix missing scope" unless matrix["scope"] == "iphone-ja"
+abort "one-case matrix contains other devices" unless matrix["cases"].map { |entry| entry["id"] } == ["iphone-ja"]
+created = File.readlines(log).select { |line| line.start_with?("simctl\tcreate\tiOS-Template-#{batch}-") }
+abort "must create exactly one Japanese iPhone" unless created.length == 1 && created.first.include?("-iphone-ja\t")
+RUBY
+cp "$log" "$scratch/before-scope-mismatch.log"
+cp "$scoped_matrix" "$scratch/frozen-ja.json"
+if run bash tools/resolve-simulator-matrix.sh --batch-id "$scoped_batch" --output "$scoped_matrix"; then
+  echo "resolver reused iphone-ja as full" >&2; exit 1
+fi
+cmp "$log" "$scratch/before-scope-mismatch.log"
+cmp "$scoped_matrix" "$scratch/frozen-ja.json"
+run bash tools/resolve-simulator-matrix.sh --batch-id "$scoped_batch" --output "$scoped_matrix" --scope iphone-ja
+run bash tools/destroy-simulator-matrix.sh --matrix "$scoped_matrix"
+ruby -rjson - "$scratch/frozen-ja.json" "$log" <<'RUBY'
+matrix = JSON.parse(File.read(ARGV.fetch(0)))
+udid = matrix.fetch("cases").first.fetch("udid")
+deletes = File.readlines(ARGV.fetch(1)).count { |line| line.chomp == "simctl\tdelete\t#{udid}" }
+abort "scoped cleanup must delete exactly its owned Simulator" unless deletes == 1
+RUBY
 echo "all simulator lifecycle tests passed"

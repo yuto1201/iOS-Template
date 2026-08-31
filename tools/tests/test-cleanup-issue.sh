@@ -25,7 +25,7 @@ make_case() {
   mkdir -p "$CASE_PRIMARY/.worktrees"; git -C "$CASE_PRIMARY" worktree add -b "$branch" "$CASE_WORKTREE" main >/dev/null
   mkdir -p "$CASE_PRIMARY/tools/lib" "$CASE_WORKTREE/tools" "$CASE_PRIMARY/.artifacts/issues/$issue"
   cp "$source_root/tools/cleanup-issue.sh" "$CASE_PRIMARY/tools/"
-  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/delivery-profile.rb" "$CASE_PRIMARY/tools/lib/"
+  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/delivery-profile.rb" "$source_root/tools/lib/verification-scope.rb" "$CASE_PRIMARY/tools/lib/"
   cat >"$CASE_PRIMARY/tools/github-account-preflight.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail

@@ -17,7 +17,7 @@ The iOS reviewer evaluates Swift, SwiftUI, Xcode configuration, tests, accessibi
 5. Check device behavior required by the Issue. Compare iPhone Pro and iPad Air and both languages for adaptation/release work; do not add deferred iPad polish as a feature AC.
 6. Flag unsupported success claims, new warnings, skipped tests, or generated-file hazards.
 
-Follow the [staged-development policy](../../specs/development-stages.md). Existing English/iPad behavior and localization/layout foundations must not be broken or removed. Deferral is not proof of support. Until Issue #32 implements scoped evidence, retain the current four-case packet requirements and inspect every required image; do not accept a hand-trimmed packet.
+Follow the [staged-development policy](../../specs/development-stages.md). Review exactly the sealed scope: explicit iphone-ja has one Japanese iPhone case; legacy/full has four. Preserve localization/layout groundwork and existing English/iPad behavior. Do not demand deferred translation/iPad polish on every feature, accept hand-trimmed evidence, or infer release readiness. Adaptation/release and foundation changes require full.
 
 ## Finding schema
 

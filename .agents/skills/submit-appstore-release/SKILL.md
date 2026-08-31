@@ -9,6 +9,14 @@ Codex and Claude may perform this authenticated external workflow. The Issue mus
 
 ## Entry gates
 
+Require completed English/iPad adaptation and a schema-2 manifest bound to passed full application verification at the exact candidate Head and Bundle ID. Old manifests must be resealed. Before any authenticated write, and again on resume, check that proof:
+
+```sh
+ruby tools/lib/release-verification.rb "$PWD" "$PACKAGE_MANIFEST" "$HEAD_SHA" "$BUNDLE_ID"
+```
+
+This read-only check does not authorize submission or replace account, legal, build, package or independent screenshot requirements. record-section.sh rechecks the same proof before publishing each result.
+
 1. Read the release Issue operation declarations, `docs/AUTHORITY.md`, `docs/agent-contracts/appstore-submission.md`, and `${VERSION}-package.json`.
 2. Require the Issue to authorize the exact App Store operation and executor. Verify the active authenticated session belongs to the configured Team and the remote App, Bundle ID, version, and build are exact. Never use another visible Team.
 3. Run `tools/provider-preflight.sh --executor "$EXECUTOR" --issue "$ISSUE" app-store --version "$VERSION"` through the authenticated App Store adapter. Require healthy production evidence whose account and target equal `Config/ownership.yml`.

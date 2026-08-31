@@ -6,6 +6,7 @@ require "optparse"
 require "time"
 require "digest"
 require_relative "delivery-profile"
+require_relative "verification-scope"
 
 module IOSTemplate
   module IssueContract
@@ -67,7 +68,7 @@ module IOSTemplate
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
     ].freeze
-    SNAPSHOT_OPTIONAL_KEYS = %w[verification deliveryProfile].freeze
+    SNAPSHOT_OPTIONAL_KEYS = %w[verification deliveryProfile verificationScope].freeze
     VERIFICATION_CASE_IDS = %w[iphone-en iphone-ja ipad-en ipad-ja].freeze
     VERIFICATION_CHECKS = (
       %w[stage:build stage:unit-tests] +
@@ -180,8 +181,20 @@ module IOSTemplate
         failures
       )
 
-      verification = parse_verification(lines, headings, acceptance_items.map { |item| item.fetch("id") }, failures)
+      verification_scope = parse_verification_scope(lines, headings, failures)
+      case_ids = VerificationScope.case_ids(verification_scope ? verification_scope.fetch("name") : "full")
+      verification = parse_verification(lines, headings, acceptance_items.map { |item| item.fetch("id") }, failures, case_ids)
       delivery_profile = parse_delivery_profile(lines, headings, failures)
+      scope_context = {"externalOperations" => external_details.map { |detail| detail.fetch("operation") }}
+      scope_context["verificationScope"] = verification_scope if verification_scope
+      scope_context["verification"] = verification if verification
+      scope_context["deliveryProfile"] = delivery_profile if delivery_profile
+      begin
+        scope_name = VerificationScope.validate_contract!(scope_context)
+        failures << "release Issues require full Verification scope" if issue_type == "release" && scope_name != "full"
+      rescue ArgumentError => error
+        failures << error.message
+      end
       if delivery_profile
         name = delivery_profile.fetch("name")
         if name == "fast" && verification
@@ -252,6 +265,7 @@ module IOSTemplate
         }
         contract["deliveryProfile"] = delivery_profile if delivery_profile
         contract["verification"] = verification if verification
+        contract["verificationScope"] = verification_scope if verification_scope
       end
 
       raise ValidationError, failures unless failures.empty?
@@ -259,7 +273,31 @@ module IOSTemplate
       Result.new(contract: contract, external_operation_details: external_details)
     end
 
-    def parse_verification(lines, headings, acceptance_ids, failures)
+    def parse_verification_scope(lines, headings, failures)
+      matches = headings.select { |heading, _| heading == "Verification scope" }
+      return nil if matches.empty?
+      if matches.length != 1
+        failures << "duplicate optional heading: Verification scope"
+        return nil
+      end
+      start = matches.first[1]
+      following = headings.find { |_, index| index > start }
+      section = lines[(start + 1)...(following ? following[1] : lines.length)].join.strip
+      return nil if ["_No response_", "Not applicable"].include?(section)
+      fields = section.lines.reject { |line| line.strip.empty? }.map do |line|
+        line.match(/\A\s*[-*]\s*(Scope|Stage|Reason):\s*(\S.*?)\s*\z/)&.captures
+      end
+      unless fields.length == 3 && fields.none?(&:nil?) && fields.map(&:first) == %w[Scope Stage Reason]
+        failures << "Verification scope must contain Scope, Stage, and Reason in order"
+        return nil
+      end
+      VerificationScope.validate!({"name" => fields[0][1], "stage" => fields[1][1], "reason" => fields[2][1]})
+    rescue ArgumentError => error
+      failures << error.message
+      nil
+    end
+
+    def parse_verification(lines, headings, acceptance_ids, failures, case_ids = VERIFICATION_CASE_IDS)
       matches = headings.select { |heading, _| heading == "Verification" }
       return nil if matches.empty?
       if matches.length != 1
@@ -274,14 +312,15 @@ module IOSTemplate
       fence = section.match(/\A```json[ \t]*\r?\n(.*)\r?\n```[ \t]*\z/m)
       json = fence ? fence[1] : section
       value = JSON.parse(json, object_class: UniqueVerificationKeys)
-      validate_verification(value, acceptance_ids, failures)
+      validate_verification(value, acceptance_ids, failures, case_ids)
       value
     rescue JSON::ParserError
       failures << "Verification must contain one unambiguous JSON object, optionally fenced as json"
       nil
     end
 
-    def validate_verification(value, acceptance_ids, failures)
+    def validate_verification(value, acceptance_ids, failures, case_ids = VERIFICATION_CASE_IDS)
+      allowed_checks = %w[stage:build stage:unit-tests] + case_ids.map { |id| "case:#{id}" } + case_ids.map { |id| "visual:#{id}" }
       unless value.is_a?(Hash) && value.keys.sort == %w[acceptanceMappings bundleIdentifier cases unitTestIdentifier]
         failures << "Verification must contain exactly bundleIdentifier, unitTestIdentifier, cases, and acceptanceMappings"
         return
@@ -293,11 +332,11 @@ module IOSTemplate
         failures << "Verification unitTestIdentifier must be Target/Class/testMethod with optional trailing ()"
       end
       cases = value["cases"]
-      if cases.is_a?(Array) && cases.length == VERIFICATION_CASE_IDS.length
+      if cases.is_a?(Array) && cases.length == case_ids.length
         cases.each_with_index do |entry, index|
-          unless entry.is_a?(Hash) && entry["id"] == VERIFICATION_CASE_IDS[index] &&
+          unless entry.is_a?(Hash) && entry["id"] == case_ids[index] &&
                  [%w[id testIdentifier], %w[assertion id]].include?(entry.keys.sort)
-            failures << "Verification cases must have four ordered IDs and exactly one testIdentifier or assertion"
+            failures << "Verification cases must have exact scoped ordered IDs and exactly one testIdentifier or assertion"
             next
           end
           if entry.key?("testIdentifier")
@@ -309,7 +348,7 @@ module IOSTemplate
           end
         end
       else
-        failures << "Verification cases must contain the exact four ordered case IDs"
+        failures << "Verification cases must contain the exact #{case_ids.length == 4 ? 'four' : 'one'} ordered case IDs"
       end
 
       mappings = value["acceptanceMappings"]
@@ -325,8 +364,8 @@ module IOSTemplate
         end
         checks = mapping["checks"]
         unless checks.is_a?(Array) && !checks.empty? && checks.uniq == checks &&
-               checks.all? { |check| VERIFICATION_CHECKS.include?(check) } &&
-               checks == VERIFICATION_CHECKS.select { |check| checks.include?(check) } &&
+               checks.all? { |check| allowed_checks.include?(check) } &&
+               checks == allowed_checks.select { |check| checks.include?(check) } &&
                checks.any? { |check| check.start_with?("stage:", "case:") }
           failures << "Verification checks must be nonempty, unique, in canonical order, and include an execution check"
         end
@@ -453,8 +492,14 @@ module IOSTemplate
         entry.is_a?(Hash) && entry.keys.sort == %w[id text] && entry["id"] == "AC-#{index + 1}" && entry["text"].is_a?(String) && !entry["text"].strip.empty?
       end
       failures << "Issue contract acceptance criteria are invalid" unless valid_criteria
+      scope_name = "full"
+      begin
+        scope_name = VerificationScope.validate_contract!(value)
+      rescue ArgumentError => error
+        failures << error.message
+      end
       if value.key?("verification")
-        validate_verification(value["verification"], valid_criteria ? criteria.map { |entry| entry.fetch("id") } : [], failures)
+        validate_verification(value["verification"], valid_criteria ? criteria.map { |entry| entry.fetch("id") } : [], failures, VerificationScope.case_ids(scope_name))
       end
       dependencies = value["dependencies"]
       failures << "Issue contract dependencies are invalid" unless dependencies.is_a?(Array) && dependencies.all? { |entry| entry.is_a?(Integer) && entry.positive? } && dependencies.uniq == dependencies

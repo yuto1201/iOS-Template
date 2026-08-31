@@ -48,7 +48,7 @@ Date: 2026-08-31
 4. Build、Test、標準Simulatorマトリクス、反対モデルレビュー、Squash Mergeを完了する。
 5. 変換済みIdentityを基準にFeature Issueを開始する。
 
-アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、CodexはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
+アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、選択された実行モデルはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
 
 テンプレートリポジトリ自身には将来の実アプリ名を固定しません。GitHub上のリポジトリ名はテンプレートからリポジトリを作成するときに決め、bootstrapツールは認証済みリモート名変更を行いません。
 
@@ -56,7 +56,7 @@ Date: 2026-08-31
 
 Identity/bootstrap完了後の通常機能開発は、日本語iPhoneの体験と対象Testを優先する。機能と画面遷移が安定した段階で英訳・iPad最適化をまとめて行い、リリース前に日本語・英語 × iPhone・iPadを確認する。最初から文字列管理、可変レイアウト、accessibility、データ・権限・課金の安全な土台を維持し、最終的な対応範囲は減らさない。
 
-段階別の完了条件、仕上げIssueへの集約、危険度と検証範囲の分離は[段階的開発仕様](development-stages.md)を正とする。1条件でのcanonical検証は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)の実装待ちであり、現在の4条件固定ツールを省略してよいという意味ではない。
+段階別の完了条件、仕上げIssueへの集約、危険度と検証範囲の分離は[段階的開発仕様](development-stages.md)を正とする。通常機能は明示した`iphone-ja`のcanonical検証で完了できる。範囲未指定の既存Issue、仕上げ・リリース、Foundation・Identity/bootstrapは`full`を維持する。
 
 ## 4. データ方針
 

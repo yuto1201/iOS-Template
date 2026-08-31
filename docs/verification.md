@@ -8,11 +8,11 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 ### 1.1 承認済み方針と現行実装の境界
 
-目標の検証範囲は通常機能の`iphone-ja`（1条件）と仕上げ・リリースの`full`（4条件）です。delivery profileは危険度を決める別軸であり、日本語iPhoneのUIを`fast`へ変更して確認を省略しません。安全性・対象Test・反対モデルレビュー・Head照合は維持します。
+検証範囲は通常機能の`iphone-ja`（1条件）と仕上げ・リリースの`full`（4条件）です。delivery profileは危険度を決める別軸であり、日本語iPhoneのUIを`fast`へ変更して確認を省略しません。安全性・対象Test・反対モデルレビュー・Head照合は維持します。
 
-**以下のコマンドとschemaは現行4条件経路の説明です。** 1条件経路は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)で、#19の検証設定生成と#29のlive Issue再照合に続いて実装します。現時点では`standard`／`strict`のcanonical完了に4条件を要求し、非対応のCLI引数や手書きの部分matrixは使いません。共有スキルと実行toolの更新も#32の範囲です。
+以下のschema例は`full`です。`iphone-ja`ではcontractの`verificationScope`とmatrixの`scope: iphone-ja`を結び、case集合を`iphone-ja`の1件に限定します。Build・対象Testは各1回、UI操作・画像評価は要求された1件／4件。省略されたscopeは従来どおり`full`です。
 
-移行中でも機能実装・局所確認は日本語iPhoneへ集中し、英訳・iPad最適化を仕上げへ延期できます。現行4条件のTest・画像確認は実行した事実として記録し、翻訳や端末対応が完成したという主張と分離します。宣言済みの延期を新しい機能ACへ戻さず、未実行や失敗を成功へ変換することもしません。
+英訳・iPad最適化の延期先をIssueに記載し、日本語iPhoneの確認と英語・iPadの対応完了を区別します。未実行は`deferred / unverified`であり成功ではありません。Foundation・Identity/bootstrap、gate・project設定変更、仕上げ・リリースは`full`を維持します。
 
 ## 2. 環境の解決
 
@@ -22,8 +22,8 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 2. Xcode versionとbuildを記録する。
 3. 利用可能かつ最新のiOS Runtimeを選ぶ。
 4. Runtime内の利用可能なDevice TypeからiPhone Proを選ぶ。`Pro Max` は除外する。
-5. 同じRuntimeから最新世代のiPad Airを選ぶ。同世代に11-inchと13-inchがあれば13-inchを選ぶ。
-6. 英語と日本語を組み合わせ、4行のmatrixを作る。
+5. `full`の場合だけ、同じRuntime向けの最新世代iPad Airを選ぶ。同世代に11-inchと13-inchがあれば13-inchを選ぶ。`iphone-ja`ではiPadを解決・作成しない。
+6. `full`は英語・日本語の4行、`iphone-ja`は日本語iPhoneの1行を作る。
 7. `.artifacts/batches/${batchId}/simulator-matrix.json` へ保存する。
 
 名前に合う端末が見つからない場合、別端末へ自動フォールバックしません。`blocked:environment` として、利用可能な候補一覧を報告します。
@@ -107,7 +107,7 @@ tools/run-repository-tests.sh \
 
 ### Stage C: UI and acceptance matrix (`standard` / `strict`)
 
-4条件それぞれで次を行います。
+contractで指定されたexact 1条件／4条件それぞれで次を行います。
 
 1. Simulatorを対象RuntimeとDevice Typeで準備する。
 2. LocaleとLanguageを明示してアプリを起動する。
@@ -116,7 +116,7 @@ tools/run-repository-tests.sh \
 5. 主要状態のスクリーンショットを保存する。
 6. crash、freeze、操作不能を確認し、Issueで要求された端末・言語のlayout overflowと翻訳不足を確認する。仕上げへ延期した完成度は未完了として区別する。
 
-`standard`／`strict`で起動や依存関係へ影響する場合は4条件のsmoke testを行います。`fast`と純粋な文書変更はSimulator検証を`not-applicable`とします。
+`standard`／`strict`で起動や依存関係へ影響する場合は宣言範囲のsmoke testを行います。Foundation・project設定変更は`full`です。`fast`と純粋な文書変更はSimulator検証を`not-applicable`としますが、明示scopeのapplication contractを文書経路で完了させません。
 
 ### Stage D: AI visual evaluation (`standard` / `strict`)
 
@@ -136,7 +136,7 @@ AIはスクリーンショットごとに次を評価します。
 
 ### Stage D.1: 二段階の証拠公開
 
-application検証は、実行と視覚承認を分けます。最初のcommandは現在のGit Head、信頼済みBase、canonical Issue contract、完全な固定matrixをXcode commandより先に検証します。Buildを1回、unit testを1回だけ実行し、その後4caseを直列実行します。
+application検証は実行と視覚承認を分けます。最初に現在Head、信頼済みBase、canonical Issue contract、scopeが一致する固定matrixを検証し、Foundation・リリース関連の実差分では`full`を要求します。Buildと指定Unit Testを各1回実行し、その後contractの1case／4caseを直列実行します。
 historical evidence表記の`tests:TemplateAppTests/NotificationSettingsTests`はbootstrapのlive identity anchorとしてだけ保持します。Task 4 contractの`acceptanceMappings.checks`ではこの表記を許可せず、`stage:unit-tests`と実行済みcase referenceを使います。
 
 ```bash
@@ -157,13 +157,13 @@ production entrypointはprivileged modeのabsolute `/bin/bash -p` で起動し�
 
 Build productはlocked attempt内のDerivedData `Build/Products` 配下にあるregular app directoryだけを候補にし、Bundle IDとBundle executableを検証します。runnerはbundle tree全体をdescriptor-boundに再帰走査し、symlink、special file、別uid、複数hardlinkを拒否してprivate `StagedApp`へcopy、seal、fsyncします。tree digestはrecord type、path、content length/contentをlength-prefixして構造とbytesを一意に固定します。各install直前にstaged tree、Bundle ID、executableを再読してdigest一致を要求するため、Build productやstaged pathの置換をinstallへ持ち込めません。
 
-sealed configはbatch ID、Runtime identifier/version、4caseのexact UDID、Device Type identifier/name、および`iOS-Template-${batchId}-${caseId}`形式の専用device名を固定します。runnerは最初のXcode Build前にfresh `simctl list devices --json`で4件すべてのUDID/name/Runtime/Device Type/availabilityとglobal name uniquenessを一括検証し、不一致・欠落・重複が1件でもあればshutdown/eraseを一件も行いません。検証済みの4台だけを起動時にshutdown-if-Bootedしてeraseし、unit test後にも最初のUI caseをclean stateへ戻します。各shutdown/eraseの直前とerase直後にもfresh full-set identityを再検証します。ここでの`erase`は固定UDIDを保った専用Simulator内部データのresource reclamationであり、deviceの`delete`/再createとは別です。runnerはUDIDをdelete/createせず、別deviceへ代替しません。batchの4台をdeleteするのはcanonical evidenceとopposite-model reviewが同じHeadで完了した後だけです。
+sealed configはbatch ID、Runtime identifier/version、要求scopeの1case／4caseのexact UDID、Device Type identifier/name、および`iOS-Template-${batchId}-${caseId}`形式の専用device名を固定します。runnerは最初のXcode Build前にfresh `simctl list devices --json`で要求された全caseのUDID/name/Runtime/Device Type/availabilityとglobal name uniquenessを一括検証し、不一致・欠落・重複が1件でもあればshutdown/eraseを一件も行いません。検証済みの専用deviceだけを起動時にshutdown-if-Bootedしてeraseし、unit test後にも最初のUI caseをclean stateへ戻します。各shutdown/eraseの直前とerase直後にもfresh full-set identityを再検証します。ここでの`erase`は固定UDIDを保った専用Simulator内部データのresource reclamationであり、deviceの`delete`/再createとは別です。runnerはUDIDをdelete/createせず、別deviceへ代替しません。batchの専用deviceをdeleteするのはcanonical evidenceとopposite-model reviewが同じHeadで完了した後だけです。
 
 各case直前にlive Git Head、tracked Head inventory/bytes/flags、sealed config、canonical contract/matrix、source/project digestを再検証します。その後matrixのexact UDIDをbootし、bootstatus、staged appのinstall、Bundle IDからinstalled app containerを取得、既存processのterminate、exact language/localeでlaunch、bounded process-liveness probe、contractの機械check、もう一度のbounded liveness probe、Screenshotの順に直列実行します。`testIdentifier` はunique case xcresultを使うexact `-only-testing` です。UI testがappを再launchできるため、完了後はvalidated executableをSimulator内のbounded `pgrep`とnon-truncated `ps -ww -o comm=`で一意に再取得し、そのexecutable pathがBundle IDから取得したapp container内のexact executableであることを照合してcurrent PIDをprobeします。すべてのSimulator process queryはhost側でも5秒に制限し、timeout時は専用process groupへTERM、1秒のgrace、KILL、bounded disappearance確認の順で子孫を残しません。`launch-succeeded` はlaunchが返したPIDのlivenessまでを確認する狭いsmoke checkであり、UI内容の保証ではありません。
 
-case成功は、exact UI結果、locale relaunch、process identity/liveness、decodable PNGを確認し、PNG bytesとSHA-256 receiptをhost attemptへfsyncした後に、入力を再検証し、対象Bundle IDだけをterminate、専用deviceをshutdown/erase、identityとShutdown stateを再確認して初めて確定します。通常failure/TERMはboot/install前から記録したactive caseだけをbest-effortで同じ手順により回収し、SIGKILLで残った状態は次回runner開始時の4台一括回収で処理します。shutdown/erase/postcheckの失敗はsanitized failure recordを残し、draftを公開しません。canonical evidenceの正本はhost側の4 PNGとdigest-bound artifactであり、全4caseを毎回最初から実行して一括公開します。partial resumeや別attemptとのmergeは行いません。
+case成功は、exact UI結果、locale relaunch、process identity/liveness、decodable PNGを確認し、PNG bytesとSHA-256 receiptをhost attemptへfsyncした後に、入力を再検証し、対象Bundle IDだけをterminate、専用deviceをshutdown/erase、identityとShutdown stateを再確認して初めて確定します。通常failure/TERMはboot/install前から記録したactive caseだけをbest-effortで同じ手順により回収し、SIGKILLで残った状態は次回runner開始時のscope内device一括回収で処理します。shutdown/erase/postcheckの失敗はsanitized failure recordを残し、draftを公開しません。canonical evidenceの正本はhost側の1枚／4枚のPNGとdigest-bound artifactであり、要求scopeの全caseを毎回最初から実行して一括公開します。partial resumeや別attemptとのmergeは行いません。
 
-実行成功時はfinal結果ではなく、4枚のdecodable PNGとcanonical `.artifacts/issues/42/${headSha}/verify-draft.json` を一つのpublication transactionとして`renameatx_np(RENAME_EXCL)`でno-replace publishし、fileとdirectoryをfsyncします。全4caseとinput再検証が完了するまではcanonical Screenshotもdraftも公開しません。publication前にsealed `.verify-publication-journal.json` をdurable publishし、draft完成後にだけ削除・fsyncします。SIGKILL等で途中終了した場合、次のrunnerがIssue/Head lock取得後にjournalのexact digestを検証します。partial Screenshot transactionはrollbackして同じHeadを再試行し、4枚とdraftがすべてexact digestで揃うcomplete transactionは既存draftを成功として返し、Build/Testを再実行しません。通常のdraft衝突も同じ範囲だけをrollbackします。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceはcontractのmappingからvisual参照だけを除いたexactな実行済みstage/case参照です。sealed config digest、canonical contract/matrix/source/project、Git Headとtracked Head inventory/bytes/flagsはcaseごと、およびpublication直前にdescriptor-boundで再検証します。
+実行成功時はfinal結果ではなく、要求scopeの1枚／4枚のdecodable PNGとcanonical `.artifacts/issues/42/${headSha}/verify-draft.json` を一つのpublication transactionとして`renameatx_np(RENAME_EXCL)`でno-replace publishし、fileとdirectoryをfsyncします。要求scopeの全caseとinput再検証が完了するまではcanonical Screenshotもdraftも公開しません。publication前にsealed `.verify-publication-journal.json` をdurable publishし、draft完成後にだけ削除・fsyncします。SIGKILL等で途中終了した場合、次のrunnerがIssue/Head lock取得後にjournalのexact digestを検証します。partial Screenshot transactionはrollbackして同じHeadを再試行し、要求された全画像とdraftがすべてexact digestで揃うcomplete transactionは既存draftを成功として返し、Build/Testを再実行しません。通常のdraft衝突も同じ範囲だけをrollbackします。次がschema version 1のexact internal schemaです。Objectは例にないkeyを持てず、`cases` と `acceptanceEvidence` はcontractの順序を保ちます。`mechanicalCheck` は実行した `test:${testIdentifier}` または `assertion:launch-succeeded`、acceptance evidenceはcontractのmappingからvisual参照だけを除いたexactな実行済みstage/case参照です。sealed config digest、canonical contract/matrix/source/project、Git Headとtracked Head inventory/bytes/flagsはcaseごと、およびpublication直前にdescriptor-boundで再検証します。
 
 ```json
 {
@@ -198,7 +198,7 @@ case成功は、exact UI結果、locale relaunch、process identity/liveness、d
 }
 ```
 
-Task 5のAI評価はcanonical `.artifacts/issues/42/${headSha}/visual-result.json` を次のexact schemaで書きます。`draft` と `visualPacket` は同じIssue/Headのcanonical pathとexact bytesを固定します。4件すべての `images` はpacketのprimary/additional imageを同じ順序、state、path、digestで列挙し、承認時はtop-level、各case、各imageの `findings` が空です。
+Task 5のAI評価はcanonical `.artifacts/issues/42/${headSha}/visual-result.json` を次のexact schemaで書きます。`draft` と `visualPacket` は同じIssue/Headのcanonical pathとexact bytesを固定します。要求scopeの全caseの `images` はpacketのprimary/additional imageを同じ順序、state、path、digestで列挙し、承認時はtop-level、各case、各imageの `findings` が空です。
 
 ```json
 {
@@ -306,7 +306,7 @@ Issue/current Head identityを確立した後のrange、tracked Head不一致、
 
 `schemaVersion: 1` のapplication変更で必須となるfieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、Issue contract path/digest、matrix path/digest、execution route、Xcode、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。GitHubとproviderのpreflightは外部操作直前の証拠なのでverify.jsonへ含めず、pre-merge gateが別artifactとして検査します。
 
-application変更が参照するmatrixは、batch lifecycleが完成させたexact schemaのファイルです。top-levelは `schemaVersion`、`batchId`、`resolvedAt`、`xcode`、`runtime`、`cases` だけを持ち、4つのcaseは固定順で、それぞれ `id`、`family`、`deviceType`、`locale`、`language`、`udid` だけを持ちます。Evidenceの4つのcase IDと順序はこのmatrixへ一致させ、各Screenshot pathはcase IDから始まる一意な相対pathにします。
+application変更のmatrixはbatch lifecycleが完成させたexact schemaです。top-levelは`schemaVersion`、`batchId`、`resolvedAt`、`xcode`、`runtime`、`cases`と任意の`scope`だけを持ちます。省略は`full`、`scope: iphone-ja`は1件で、nullや未知値は拒否します。caseは`id`、`family`、`deviceType`、`locale`、`language`、`udid`だけを持ち、contract・Evidenceとexact順序で一致させます。
 
 検証時はGit top-levelから、Issueの信頼済みBase/HeadをJSONとは別の引数で渡します。
 

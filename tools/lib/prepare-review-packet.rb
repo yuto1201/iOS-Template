@@ -136,6 +136,7 @@ module IOSTemplate
 
     def validate_inputs!(contract, verify, issue, base_sha, head_sha, contract_digest)
       ReviewContract.validate_contract_keys!(contract)
+      ReviewContract.validate_evidence_scope!(contract, verify)
       reject("issue contract identity differs from caller") unless contract["schemaVersion"] == 1 && contract["issue"] == issue
       ReviewContract.digest!(contract["externalOperationDetailsDigest"], "issue contract.externalOperationDetailsDigest")
       reject("verify identity differs from caller") unless verify["schemaVersion"] == 1 && verify["issue"] == issue && verify["baseSha"] == base_sha && verify["headSha"] == head_sha

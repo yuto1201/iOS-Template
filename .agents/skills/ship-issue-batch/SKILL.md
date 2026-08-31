@@ -5,6 +5,8 @@ description: Use when multiple ready iOS Issues should progress autonomously whi
 
 # Ship Issue Batch
 
+Group Simulator batches by sealed scope with distinct batch IDs. Explicit iphone-ja features use one case; legacy/full, adaptation/release and foundation changes use four. Never shrink claimed scope or silently fall back. Keep one shared English/iPad finishing Issue per app as a release dependency.
+
 Schedule the graph produced by `plan-issue-batch`; use `ship-issue` for each node. A fast lane never weakens an individual Issue gate.
 
 ## Scheduler invariants

@@ -221,6 +221,7 @@ if ! snapshot_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift
   diagnostic="$snapshot_receipt"
   case "$diagnostic" in
     *"lock"*) fail "verification lock is already held" ;;
+    *"full verification is required"*) fail "full verification is required for this change" ;;
     *"verification"*) fail "verification contract is absent or incomplete" ;;
     *"tracked"*|*"source bytes"*|*"source mode"*) fail "working tree must be clean" ;;
     *"project"*) fail "project path or contents are invalid" ;;
@@ -238,6 +239,12 @@ config_check() {
   run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-config \
     --config "$config" --digest "$config_digest" --check >/dev/null
 }
+verification_scope="$(config_value verificationScope)"
+case "$verification_scope" in
+  iphone-ja) case_ids=(iphone-ja); case_indexes=(0) ;;
+  full) case_ids=(iphone-en iphone-ja ipad-en ipad-ja); case_indexes=(0 1 2 3) ;;
+  *) fail "verification scope is invalid" ;;
+esac
 active_case_id=""
 active_probe_pid=""
 runner_succeeded=0
@@ -352,13 +359,11 @@ capture_simulator_identities() {
 }
 
 case_udid() {
-  case "$1" in
-    iphone-en) config_value cases.0.udid ;;
-    iphone-ja) config_value cases.1.udid ;;
-    ipad-en) config_value cases.2.udid ;;
-    ipad-ja) config_value cases.3.udid ;;
-    *) return 1 ;;
-  esac
+  local index
+  for index in "${case_indexes[@]}"; do
+    if [[ "${case_ids[$index]}" == "$1" ]]; then config_value "cases.$index.udid"; return; fi
+  done
+  return 1
 }
 
 reclaim_owned_simulator() {
@@ -436,7 +441,7 @@ fi
 
 stage="simulator-ownership"
 capture_simulator_identities "startup-full-set" || fail "dedicated Simulator ownership validation failed"
-for owned_case_id in iphone-en iphone-ja ipad-en ipad-ja; do
+for owned_case_id in "${case_ids[@]}"; do
   reclaim_owned_simulator "$owned_case_id" "startup-$owned_case_id" \
     || fail "dedicated Simulator startup reclamation failed"
 done
@@ -495,7 +500,7 @@ json_tool test-tree "$unit_tree" "$unit_test_identifier" "$first_udid" 2>"$run_s
 
 stage="post-unit-simulator-reclamation"
 verify_live_inputs
-reclaim_owned_simulator "iphone-en" "post-unit-iphone-en" \
+reclaim_owned_simulator "${case_ids[0]}" "post-unit-${case_ids[0]}" \
   || fail "unit-test Simulator resource reclamation failed"
 
 bundle_identifier="$(config_value bundleIdentifier)"
@@ -507,7 +512,7 @@ fi
 IFS=$'\t' read -r app_path app_digest app_executable <<<"$app_receipt"
 [[ -n "$app_path" && "$app_digest" =~ ^sha256:[0-9a-f]{64}$ && "$app_executable" =~ ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$ ]] || fail "built application staging receipt is invalid"
 
-for index in 0 1 2 3; do
+for index in "${case_indexes[@]}"; do
   stage="case-input-$index"
   verify_live_inputs
   case_id="$(config_value cases.$index.id)"

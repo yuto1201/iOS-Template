@@ -10,7 +10,7 @@ Build the package from the confirmed product specification and exact release can
 ## Preconditions
 
 1. Read the release Issue, confirmed `specs/` documents, `App Store/README.md`, `docs/AUTHORITY.md`, and `docs/agent-contracts/release-auditor.md`.
-2. Require a full source Head SHA, the SHA-256 digest of the tested release build, Bundle ID, marketing version, and whether this is the first public release.
+2. Require exact source Head, trusted verification Base and Issue, canonical passed full application verify.json for that Head and Bundle ID, the separate distribution-build digest, version, and first-publication status. English/iPad adaptation must be complete. Japanese iPhone-only evidence never satisfies release readiness.
 3. Use the selected Codex or Claude executor to refresh `App Store/submission/requirements.json` from official Apple documentation when its `retrievedAt` exceeds `maxAgeDays`. Store only public limits and source URLs.
 4. Refuse to continue if the build, package, requirements, or specification is changing.
 
@@ -33,9 +33,10 @@ Run the skill script only after the audit and, when applicable, user legal appro
   --requirements "$PWD/App Store/submission/requirements.json" \
   --bundle-id "$BUNDLE_ID" --version "$VERSION" \
   --source-sha "$HEAD_SHA" --build-digest "$BUILD_DIGEST" \
+  --verification-issue "$VERIFICATION_ISSUE" --verification-base "$VERIFICATION_BASE" \
   --audit "$RELEASE_AUDIT" --first-publication "$FIRST_PUBLICATION" \
   --legal-approval "$LEGAL_APPROVAL_OR_NONE" \
   --output "$PWD/App Store/submission/$VERSION-package.json" --now "$UTC_NOW"
 ```
 
-The output is the immutable handoff to `submit-appstore-release`. Any source, build, metadata, legal, privacy, screenshot, requirements, or audit change requires a new preparation and review. Do not store credentials, personal content, Apple session data, or secret values in the package or approval evidence.
+The schema-2 output binds the full verification reference/digest and is the immutable handoff to `submit-appstore-release`. Any source, build, metadata, legal, privacy, screenshot, requirements, or audit change requires a new preparation and review. Do not store credentials, personal content, Apple session data, or secret values in the package or approval evidence.

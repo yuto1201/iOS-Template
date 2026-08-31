@@ -31,9 +31,21 @@ Issue数を増やすこと自体を目的にしません。セットアップと
 
 ## 3. Issue contract snapshot
 
-以下は現行の4条件固定schemaです。通常機能の`iphone-ja`と仕上げ・リリースの`full`をsealed contractで区別する経路は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)で、[検証設定生成 #19](https://github.com/yuto1201/iOS-Template/issues/19)・[live再照合 #29](https://github.com/yuto1201/iOS-Template/issues/29)の修正後に実装します。対応前に新fieldやcase省略を手作業でsnapshotへ入れません。
+通常UIのIssue本文には次を記載します。Reasonは変更に応じて具体化し、Out of scopeまたはEnglish expectationsに実在する共通の英語・iPad仕上げIssueをリンクします。
 
-CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/issue-contract.json` へ次のsanitized snapshotを保存します。Bootstrap IssueではCodexが同じ形式を手動生成します。
+```markdown
+## Verification scope
+
+- Scope: iphone-ja
+- Stage: feature
+- Reason: 日本語iPhoneで主要フローを確認し、英語・iPadの仕上げは共通Issueへ集約する。
+```
+
+対応するVerification JSONのcasesはiphone-jaだけとし、ACごとのchecksもそのscopeのstage・case・visualに限定します。fullは従来の4件順序です。Scope・Stage・Reasonの順序、非空理由、未知値・重複節・nullの拒否を共通producerで検証し、仕上げ・リリースはfull、release stageはstrict、App Store操作もfullを要求します。明示scopeをdocumentation-onlyまたはfast経路で完了させません。
+
+以下の例は後方互換の`full` contractです。通常機能では任意節`Verification scope`を共通producerが読み、`verificationScope`へ封印します。旧snapshotにfieldを補完せず、省略は`full`。新規通常UIは`standard` + `iphone-ja / feature`、仕上げは`full / adaptation`、リリースは`strict` + `full / release`です。理由・scope・stageのClaim後変更もlive再照合で拒否します。
+
+選択された実行モデルはClaim時にGitHub Issueを読み、共通producerで`.artifacts/issues/${issueNumber}/issue-contract.json`へ次のsanitized snapshotを保存します。Bootstrapも同じproducerを使い、canonical contractを手書きで生成・縮小しません。
 
 `type:feature`、`type:docs`、`type:release`は同じ基本contract schemaを使い、`type:regression`だけ`Original PR`と`Reproduction steps`を追加必須にします。4種類のうちexact 1 labelが必要で、複数または未知のtypeはClaimとGateで拒否します。
 
@@ -69,7 +81,7 @@ CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/iss
 
 application検証を実行するIssueは任意の`Verification`節へ、次の例のように完全なJSON objectを記載します。生のJSONまたは単一の`json` code fenceを使い、外側の`verification` wrapperは書きません。`tools/validate-issue-body.sh`とClaimが同じ`tools/lib/issue-contract.rb`で入力を検証し、canonical snapshotの`verification`へ格納します。Feature／Regression formにも入力欄があります。Configや環境変数から暗黙の既定値を補わず、このIssue本文だけを入力の正本とします。
 
-許可するkeyは`bundleIdentifier`、`unitTestIdentifier`、固定順4件の`cases`、受け入れ条件と同じ順の`acceptanceMappings`だけです。`unitTestIdentifier`とcaseの`testIdentifier`はどちらも`Target/Class/testMethod`（末尾の`()`は任意）です。各caseは`id`に加え、`testIdentifier`または`assertion`のちょうど一方を持ちます。許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}`です。未知・欠落・重複key、case／AC／checkの不正順序、両actionはClaim前に拒否します。
+許可するkeyは`bundleIdentifier`、`unitTestIdentifier`、scopeで定まる固定順1件／4件の`cases`、受け入れ条件と同じ順の`acceptanceMappings`だけです。`unitTestIdentifier`とcaseの`testIdentifier`はどちらも`Target/Class/testMethod`（末尾の`()`は任意）です。各caseは`id`に加え、`testIdentifier`または`assertion`のちょうど一方を持ちます。許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}`です。未知・欠落・重複key、case／AC／checkの不正順序、両actionはClaim前に拒否します。
 
 documentation-only Issueでは節を省略するか、`Not applicable`／GitHub空欄の`_No response_`にします。この場合、従来のsnapshot bytesに`verification`を追加しません。空のJSON、空節、部分設定を「省略」には読み替えません。`fast`へapplication Verificationを指定することも拒否します。application実行時のobject不在は、引き続きBuild前に失敗します。
 
@@ -180,12 +192,12 @@ CodexとClaudeは同じ手順で1、4、5、6とGitHub上の状態変更を実�
 ### 5.3 Verify
 
 1. `fast`は`verify-fast-issue.sh`で一つのSimulator上のBuildと指定Unit Testだけを実行する。matrix、Screenshot、視覚評価は作らない。
-2. `standard`／`strict`は`ios-verify`がバッチ固定済みSimulatorマトリクスを読み、Build、対象Test、操作、Screenshot、視覚評価を実行する。#32の対応前は現行4条件、対応後はIssueで宣言されたiphone-jaまたはfullのexact集合を確認する。
+2. `standard`／`strict`は`ios-verify`が範囲別にバッチ固定済みSimulatorマトリクスを読み、Build、対象Test、操作、Screenshot、視覚評価を実行する。Issueで宣言した`iphone-ja`のexact 1件または`full`のexact 4件を確認する。
 3. IssueがRepository toolやworkflowを変更する場合、profileに関係なく`run-repository-tests.sh`でtracked `tools/tests/test-*.sh`全件をclean detached worktree上で実行し、同じHeadとAC対応を封印する。
 4. `verify.json` にprofile、実行route、Head SHAを対応させる。
 5. 同じHeadを明示して`in-progress -> verify-passed`へ遷移し、durable stateへ固定する。
 
-完全検証が失敗した場合、原因へ直接対応する対象Testが成功するまで4条件検証を再実行しません。別Headのcanonical evidenceを作り続けることを進捗として扱いません。
+canonical検証が失敗した場合、原因へ直接対応する対象Testが成功するまで要求scopeの検証を再実行しません。別Headのcanonical evidenceを作り続けることを進捗として扱いません。
 
 ### 5.4 Opposite-model review
 
@@ -246,7 +258,7 @@ Closes #42
 
 PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼りません。
 
-上の例はfull検証です。機能Issueでは今回確認した範囲と「英語・iPad仕上げIssueへ延期／未検証」を区別します。`None for this Issue`をアプリ全体の完成と解釈しません。現行rendererの出力や証拠を手で1条件へ書き換えず、範囲別表示の実装は#32で行います。
+上の例はfull検証です。`iphone-ja`のrendererは日本語iPhoneだけを確認済みとし、英語・iPadを`deferred / unverified`として表示します。`None for this Issue`をアプリ全体の完成と解釈しません。出力や証拠を手で縮小せず、共通producerを使用します。
 
 ## 7. 再試行とRegression
 

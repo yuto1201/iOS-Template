@@ -5,6 +5,8 @@ description: Use when an iOS-Template Issue has canonical current-Head verificat
 
 # Cross-model review
 
+Review exact sealed scope: explicit iphone-ja means one Japanese iPhone case, absent/full means four. Deferred English/iPad polish belongs to the linked finishing Issue, not new feature ACs or release readiness. Adaptation/release and foundation changes require full. Safety, account and current-Head approval gates remain unchanged.
+
 This skill orchestrates the fixed local tools for `standard` and `strict` Issues. Explicit `fast` Issues do not call this blocking review skill. It never substitutes the primary model as reviewer, edits review artifacts on behalf of a reviewer, or grants external-operation authority.
 
 1. Read `docs/agent-contracts/review-packet.md`, `docs/verification.md`, and the Issue contract. Start at the Git top-level with the approved `ISSUE`, trusted `BASE_SHA`, verified current `HEAD_SHA`, and `PRIMARY_MODEL`. Do not dispatch review until `ios-verify` has produced complete canonical evidence for that exact Head.

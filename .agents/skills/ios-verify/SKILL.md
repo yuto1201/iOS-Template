@@ -19,11 +19,13 @@ Classify the trusted Base-to-Head range before touching Simulator state. Only `R
 
 Read `deliveryProfile.name` from the canonical Issue contract. Missing means legacy `strict`.
 
+Read verificationScope independently. Explicit iphone-ja / feature selects one Japanese iPhone case; absent/full selects four. Normal new UI uses standard + iphone-ja. Adaptation/release, foundation/identity/project configuration and gate changes require full. Keep critical auth/data/billing tests regardless of UI scope. Never reseal a claimed contract or require deferred English/iPad polish on every feature.
+
 - `fast`: require UI verification to be not applicable and run `tools/verify-fast-issue.sh` with the selected Unit Test and one available iPhone Simulator UDID. Do not resolve the four-case matrix, capture images, create a visual packet, or request blocking opposite-model review.
 - `standard` / `strict`: use the application verification route below only after targeted checks and a diff/AC self-audit are green.
-- documentation-only: use the existing documentation publisher regardless of profile.
+- documentation-only: use the existing documentation publisher when the contract has no explicit application scope.
 
-Never start full Simulator verification for an intermediate commit. After a full run fails, first make the directly affected targeted check pass before retrying the full route.
+Never start canonical Simulator verification for an intermediate commit. After a run fails, first make the directly affected targeted check pass before retrying the selected scope.
 
 When XcodeBuildMCP is callable, you may inspect its session defaults to identify future compatibility work. No canonical XcodeBuildMCP evidence producer exists in this repository, so inspection never selects it as an execution route. Always use `tools/verify-ios-issue.sh`, the tested `xcodebuild-simctl` producer, until a canonical MCP producer and integration coverage are added. Do not bypass it with manual `xcodebuild`, `simctl`, screenshots, or JSON. Tool unavailability is never test success.
 
@@ -34,6 +36,7 @@ Acquire the single repository-wide Simulator verification lock immediately befor
 Resolve a missing matrix once, or revalidate an existing one in place, inside the same locked command that runs verification:
 
 ```sh
+SCOPE="$(ruby -Itools/lib -rjson -rverification-scope -e 'puts IOSTemplate::VerificationScope.validate_contract!(JSON.parse(File.binread(ARGV.fetch(0))))' ".artifacts/issues/${ISSUE}/issue-contract.json")"
 tools/with-ios-simulator-lock.sh --timeout 0 -- /bin/bash -c '
   set -euo pipefail
   ISSUE="$1"
@@ -41,8 +44,17 @@ tools/with-ios-simulator-lock.sh --timeout 0 -- /bin/bash -c '
   BATCH_ID="$3"
   PROJECT="$4"
   SCHEME="$5"
+  SCOPE="$6"
   MATRIX=".artifacts/batches/${BATCH_ID}/simulator-matrix.json"
-  tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX"
+  PRIMARY_ROOT="$(ruby tools/lib/review-artifacts.rb "$PWD" | jq -er .primaryRoot)"
+  (
+    cd "$PRIMARY_ROOT"
+    if [[ "$SCOPE" == full ]]; then
+      tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX"
+    else
+      tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" --scope "$SCOPE"
+    fi
+  )
   tools/verify-ios-issue.sh \
     --issue "$ISSUE" \
     --expected-base "$BASE_SHA" \
@@ -50,12 +62,14 @@ tools/with-ios-simulator-lock.sh --timeout 0 -- /bin/bash -c '
     --matrix "$MATRIX" \
     --project "$PROJECT" \
     --scheme "$SCHEME"
-' ios-verify "$ISSUE" "$BASE_SHA" "$BATCH_ID" "$PROJECT" "$SCHEME"
+' ios-verify "$ISSUE" "$BASE_SHA" "$BATCH_ID" "$PROJECT" "$SCHEME" "$SCOPE"
 ```
 
-The lifecycle command must preserve an existing complete matrix byte-for-byte. It must select the latest installed available iOS Runtime, iPhone Pro excluding Pro Max, and the latest iPad Air, with exact ordered rows `iphone-en` (`en_US`/`en`), `iphone-ja` (`ja_JP`/`ja`), `ipad-en` (`en_US`/`en`), and `ipad-ja` (`ja_JP`/`ja`). Never repair a partial frozen matrix or fall back to another device family. Treat missing dedicated devices or changed frozen bytes as `blocked:environment`.
+Use a separate BATCH_ID per scope. The physical-primary lifecycle call is the existing linked-artifact workaround (Issue #20), not its fix. The primary must have the scoped resolver for iphone-ja; do not substitute full or replace the artifact link. Verification stays in the Issue worktree under the same lock.
 
-Trust only the returned canonical `.artifacts/issues/${ISSUE}/${HEAD_SHA}/verify-draft.json`. The runner owns exact matrix hashing, Xcode identity, execution route, sealed Head inputs, one Build, one unit test, four serial locale cases, isolated `/tmp` DerivedData, screenshots, and failure evidence.
+The lifecycle command preserves frozen bytes and rejects scope changes before Simulator mutation. For iphone-ja it resolves only Japanese iPhone, even without an iPad. The following four-case selection applies only to full. It must select the latest installed available iOS Runtime, iPhone Pro excluding Pro Max, and the latest iPad Air, with exact ordered rows `iphone-en` (`en_US`/`en`), `iphone-ja` (`ja_JP`/`ja`), `ipad-en` (`en_US`/`en`), and `ipad-ja` (`ja_JP`/`ja`). Never repair a partial frozen matrix or fall back to another device family. Treat missing dedicated devices or changed frozen bytes as `blocked:environment`.
+
+Trust only the returned canonical `.artifacts/issues/${ISSUE}/${HEAD_SHA}/verify-draft.json`. The runner owns exact matrix hashing, Xcode identity, execution route, sealed Head inputs, one Build, one selected Unit Test, one or four serial locale cases, isolated `/tmp` DerivedData, screenshots, and failure evidence.
 
 Create the visual packet from that draft:
 
@@ -67,7 +81,7 @@ tools/visual-review-packet.sh \
   --output ".artifacts/issues/${ISSUE}/${HEAD_SHA}/visual-packet.json"
 ```
 
-Evaluate every packet image using `docs/agent-contracts/visual-reviewer.md`. Write the exact canonical `visual-result.json`. If any finding exists, use `changes-requested` and stop; do not finalize failed visual evaluation.
+Evaluate every packet image using `docs/agent-contracts/visual-reviewer.md`. Omitted English/iPad coverage is deferred/unverified, linked to the shared finishing Issue. Write the exact canonical `visual-result.json`. If any finding exists, use `changes-requested` and stop; do not finalize failed visual evaluation.
 
 For an all-approved result, finalize through the runner so it revalidates Head, matrix, packet, result, and every image byte:
 

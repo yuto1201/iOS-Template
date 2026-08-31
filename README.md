@@ -4,7 +4,7 @@ CodexとClaudeを同等の実装・外部操作担当として使う個人向け
 
 Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、英語・日本語、iPhone・iPad、共有仕様スキル、Codex/Claude 共通責務の read-only 評価エージェントを含みます。運用自動化は [実装計画索引](./docs/superpowers/plans/README.md) に従って段階的に追加します。
 
-開発順序は**日本語iPhoneで機能を固める → 英語・iPadを仕上げる → リリース前に4条件確認**です。[段階的開発仕様](./specs/development-stages.md)に、初期から残す土台と延期できる作業を定めています。1条件でのcanonical検証は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)の実装待ちで、現行ツールは4条件固定です。文書の方針変更だけで、実行経路や既存アプリまで移行済みとは扱いません。
+開発順序は**日本語iPhoneで機能を固める → 英語・iPadを仕上げる → リリース前に4条件確認**です。[段階的開発仕様](./specs/development-stages.md)に従い、新規の通常UI Issueは`standard` + `iphone-ja`、仕上げ・リリースは`full`で検証します。文字列管理・可変レイアウトの土台は初期から維持します。既存Issueや既存アプリは自動移行しません。
 
 ## Foundation の検証
 
@@ -14,7 +14,7 @@ Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、
 tools/tests/test-foundation.sh
 ```
 
-Issueには`fast`、`standard`、`strict`のdelivery profileと理由を指定します。非UI・低リスクの`fast`は現在HeadのBuild・対象Test・必要なrepository testだけ、通常UIの`standard`は安定した最終候補Headで要求範囲を検証します。`standard`／`strict`の反対モデルレビュー、高リスクの対象別Test・preflight・必要な承認を維持します。profile未指定は`strict`、検証範囲未指定は`full`です。以下は現行4条件経路の手順です。
+Issueには`fast`、`standard`、`strict`のdelivery profileと理由を指定します。非UI・低リスクの`fast`は現在HeadのBuild・対象Test・必要なrepository testだけ、通常UIの`standard`は安定した最終候補Headで要求範囲を検証します。`standard`／`strict`の反対モデルレビュー、高リスクの対象別Test・preflight・必要な承認を維持します。profile未指定は`strict`、検証範囲未指定は`full`です。以下は`full`検証の手順例です。
 
 Foundationやdelivery gate自体は`strict`です。Build と Test は、インストール済み Xcode から [標準 Simulator マトリクス](./docs/verification.md#3-固定されるmatrix)を解決し、Issue バッチ内で固定して実行します。次は Foundation 検証で使うコマンド形です。`TEMPLATE_IPHONE_UDID` と `TEMPLATE_IPAD_UDID` には、同じ最新 iOS Runtime の iPhone Pro（Pro Max を除く）と13-inch iPad Airを指定します。
 

@@ -701,11 +701,58 @@ func validateXcodeIdentity(_ value: Any, at path: String) throws -> XcodeIdentit
     )
 }
 
+enum VerificationScope: String {
+    case iphoneJapanese = "iphone-ja"
+    case full
+
+    var caseIDs: [String] {
+        self == .iphoneJapanese ? ["iphone-ja"] : ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
+    }
+
+    static func name(_ raw: Any?, at path: String) throws -> VerificationScope {
+        guard let raw else { return .full }
+        let name = try requireString(raw, at: path)
+        guard let scope = VerificationScope(rawValue: name) else {
+            throw ValidationFailure("\(path) must be iphone-ja or full")
+        }
+        return scope
+    }
+}
+
+func contractVerificationScope(_ contract: JSONObject) throws -> VerificationScope {
+    guard let raw = contract["verificationScope"] else { return .full }
+    let value = try requireObject(raw, at: "issueContract.verificationScope")
+    try requireExactKeys(value, ["name", "stage", "reason"], at: "issueContract.verificationScope")
+    let scope = try VerificationScope.name(value["name"], at: "issueContract.verificationScope.name")
+    let stage = try requireString(value["stage"]!, at: "issueContract.verificationScope.stage")
+    _ = try requireString(value["reason"]!, at: "issueContract.verificationScope.reason")
+    guard ["feature", "adaptation", "release"].contains(stage) else {
+        throw ValidationFailure("issueContract.verificationScope.stage is invalid")
+    }
+    guard stage == "feature" || scope == .full else {
+        throw ValidationFailure("adaptation and release require full Verification scope")
+    }
+    let profile = (contract["deliveryProfile"] as? JSONObject)?["name"] as? String ?? "strict"
+    guard contract["verification"] != nil, profile != "fast" else {
+        throw ValidationFailure("Verification scope requires application Verification, not fast")
+    }
+    guard stage != "release" || profile == "strict" else {
+        throw ValidationFailure("release requires strict delivery profile")
+    }
+    let operations = try requireStringArray(contract["externalOperations"]!, at: "issueContract.externalOperations")
+    guard scope == .full || !operations.contains(where: { $0.hasPrefix("appstore.") }) else {
+        throw ValidationFailure("App Store operations require full Verification scope")
+    }
+    return scope
+}
+
 struct IssueContract {
     let acceptanceCriteria: [AcceptanceCriterion]
     let fetchedAt: Date
     let verification: VerificationInfo?
     let deliveryProfile: String
+    let verificationScope: VerificationScope
+    let verificationStage: String?
 
     var acceptanceIDs: [String] { acceptanceCriteria.map(\.id) }
 }
@@ -728,7 +775,7 @@ struct VerificationInfo {
     let acceptanceMappings: [[String]]
 }
 
-func validateOptionalVerification(_ value: Any, acceptanceIDs: [String]) throws -> VerificationInfo {
+func validateOptionalVerification(_ value: Any, acceptanceIDs: [String], scope: VerificationScope) throws -> VerificationInfo {
     let verification = try requireObject(value, at: "issueContract.verification")
     try requireExactKeys(
         verification, ["bundleIdentifier", "unitTestIdentifier", "cases", "acceptanceMappings"], at: "issueContract.verification"
@@ -745,10 +792,10 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String]) throws 
     guard matches(unitTestIdentifier, regex: testIdentifierPattern) else {
         throw ValidationFailure("issueContract.verification.unitTestIdentifier must be Target/Class/testMethod with optional trailing ()")
     }
-    let expectedIDs = ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
+    let expectedIDs = scope.caseIDs
     let cases = try requireArray(verification["cases"]!, at: "issueContract.verification.cases")
     guard cases.count == expectedIDs.count else {
-        throw ValidationFailure("issueContract.verification.cases must contain the exact four ordered case IDs")
+        throw ValidationFailure("issueContract.verification.cases must contain the exact \(scope == .full ? "four" : "one") ordered case IDs")
     }
     let normalizedCases = try cases.enumerated().map { index, rawCase -> VerificationCaseInfo in
         let path = "issueContract.verification.cases[\(index)]"
@@ -760,7 +807,7 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String]) throws 
             throw ValidationFailure("\(path) must contain exactly one of testIdentifier or assertion")
         }
         guard try requireString(entry["id"]!, at: "\(path).id") == expectedIDs[index] else {
-            throw ValidationFailure("issueContract.verification.cases must contain the exact four ordered case IDs")
+            throw ValidationFailure("issueContract.verification.cases must contain the exact \(scope == .full ? "four" : "one") ordered case IDs")
         }
         if keys == testKeys {
             let identifier = try requireString(entry["testIdentifier"]!, at: "\(path).testIdentifier")
@@ -777,11 +824,8 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String]) throws 
             return VerificationCaseInfo(id: expectedIDs[index], action: "assertion", value: "launch-succeeded")
         }
     }
-    let allowedChecks = [
-        "stage:build", "stage:unit-tests",
-        "case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja",
-        "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"
-    ]
+    let allowedChecks = ["stage:build", "stage:unit-tests"] +
+        expectedIDs.map { "case:\($0)" } + expectedIDs.map { "visual:\($0)" }
     let allowedOrder = Dictionary(uniqueKeysWithValues: allowedChecks.enumerated().map { ($1, $0) })
     let mappings = try requireArray(
         verification["acceptanceMappings"]!, at: "issueContract.verification.acceptanceMappings"
@@ -838,7 +882,7 @@ func validateIssueContract(
         "schemaVersion", "issue", "repository", "goal", "specAnchors", "acceptanceCriteria",
         "dependencies", "externalOperations", "externalOperationDetailsDigest", "fetchedAt"
     ]
-    let allowedContractKeys = requiredContractKeys.union(["verification", "deliveryProfile"])
+    let allowedContractKeys = requiredContractKeys.union(["verification", "deliveryProfile", "verificationScope"])
     let actualContractKeys = Set(contract.keys)
     let missingContractKeys = requiredContractKeys.subtracting(actualContractKeys).sorted()
     let unknownContractKeys = actualContractKeys.subtracting(allowedContractKeys).sorted()
@@ -908,9 +952,10 @@ func validateIssueContract(
     guard Set(ids).count == ids.count else {
         throw ValidationFailure("issueContract acceptance IDs must be unique")
     }
+    let verificationScope = try contractVerificationScope(contract)
     let normalizedVerification: VerificationInfo?
     if let rawVerification = contract["verification"] {
-        normalizedVerification = try validateOptionalVerification(rawVerification, acceptanceIDs: ids)
+        normalizedVerification = try validateOptionalVerification(rawVerification, acceptanceIDs: ids, scope: verificationScope)
     } else {
         normalizedVerification = nil
     }
@@ -934,7 +979,9 @@ func validateIssueContract(
         acceptanceCriteria: criteria,
         fetchedAt: fetchedAt,
         verification: normalizedVerification,
-        deliveryProfile: deliveryProfile
+        deliveryProfile: deliveryProfile,
+        verificationScope: verificationScope,
+        verificationStage: (contract["verificationScope"] as? JSONObject)?["stage"] as? String
     )
 }
 
@@ -948,6 +995,7 @@ struct MatrixInfo {
     let xcode: XcodeIdentity
     let runtime: RuntimeIdentity
     let cases: [MatrixCaseInfo]
+    let scope: VerificationScope
 
     var caseIDs: [String] { cases.map(\.id) }
 }
@@ -980,9 +1028,10 @@ func validateMatrix(
     }
     let batchID = pathComponents[2]
     let matrix = try readJSONObject(data: data, at: "matrixFile")
+    let scope = try VerificationScope.name(matrix["scope"], at: "matrixFile.scope")
     try requireExactKeys(
         matrix,
-        ["schemaVersion", "batchId", "resolvedAt", "xcode", "runtime", "cases"],
+        Set(["schemaVersion", "batchId", "resolvedAt", "xcode", "runtime", "cases"]).union(matrix["scope"] == nil ? [] : ["scope"]),
         at: "matrixFile"
     )
     guard try requireInteger(matrix["schemaVersion"]!, at: "matrixFile.schemaVersion") == 1 else {
@@ -1003,15 +1052,16 @@ func validateMatrix(
         version: try requireString(runtime["version"]!, at: "matrixFile.runtime.version")
     )
 
-    let expected: [(String, String, String, String)] = [
+    let fullRows: [(String, String, String, String)] = [
         ("iphone-en", "iPhone", "en_US", "en"),
         ("iphone-ja", "iPhone", "ja_JP", "ja"),
         ("ipad-en", "iPad", "en_US", "en"),
         ("ipad-ja", "iPad", "ja_JP", "ja")
     ]
+    let expected = fullRows.filter { scope.caseIDs.contains($0.0) }
     let cases = try requireArray(matrix["cases"]!, at: "matrixFile.cases")
     guard cases.count == expected.count else {
-        throw ValidationFailure("matrixFile.cases must contain exactly four rows")
+        throw ValidationFailure("matrixFile.cases must contain exactly \(scope == .full ? "four" : "one") rows")
     }
     var familyTypes: [String: DeviceTypeIdentity] = [:]
     var udids = Set<String>()
@@ -1053,7 +1103,43 @@ func validateMatrix(
             locale: locale, language: language, udid: udid
         ))
     }
-    return MatrixInfo(resolvedAt: resolvedAt, xcode: xcode, runtime: runtimeIdentity, cases: normalizedCases)
+    return MatrixInfo(resolvedAt: resolvedAt, xcode: xcode, runtime: runtimeIdentity, cases: normalizedCases, scope: scope)
+}
+
+func validateScopeMatch(contract: IssueContract, matrix: MatrixInfo) throws {
+    guard contract.verificationScope == matrix.scope,
+          contract.verificationScope.caseIDs == matrix.caseIDs else {
+        throw ValidationFailure("verification scope and cases do not match matrix")
+    }
+    if let verification = contract.verification, verification.cases.map(\.id) != matrix.caseIDs {
+        throw ValidationFailure("verification scope and cases do not match matrix")
+    }
+}
+
+func validateScopeDiff(_ scope: VerificationScope, expectedBase: String, expectedHead: String) throws {
+    guard scope == .iphoneJapanese else { return }
+    let result = try runGitProcess(["diff", "--name-only", "-z", "--no-renames", expectedBase, expectedHead, "--"])
+    guard result.status == 0, result.stdout.last == 0 else {
+        throw ValidationFailure("unable to inspect scoped verification range")
+    }
+    let exact: Set<String> = [
+        "AGENTS.md", "CLAUDE.md", "Config/ownership.yml", "Config/template-identity.json",
+        "docs/AUTHORITY.md", "docs/security.md", "docs/workflow.md", "docs/verification.md",
+        "specs/development-stages.md"
+    ]
+    let prefixes = ["tools/", ".agents/", ".codex/", ".claude/", ".github/", "App Store/", "docs/agent-contracts/"]
+    for raw in result.stdout.split(separator: 0) {
+        guard let path = String(data: Data(raw), encoding: .utf8) else {
+            throw ValidationFailure("scoped diff contains a non-UTF-8 path")
+        }
+        _ = try relativeComponents(path, at: "scoped diff path")
+        if exact.contains(path) || prefixes.contains(where: { path.hasPrefix($0) }) ||
+            path.contains(".xcodeproj/") || path.contains(".xcworkspace/") ||
+            path.hasSuffix(".xcconfig") || path.hasSuffix(".entitlements") || path.hasSuffix(".xcprivacy") ||
+            path == "Info.plist" || path.hasSuffix("/Info.plist") {
+            throw ValidationFailure("full verification is required for foundation or release path: \(path)")
+        }
+    }
 }
 
 func validateAcceptanceEvidence(
@@ -1838,9 +1924,8 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
         at: "matrix"
     )
     let matrix = try validateMatrix(data: matrixData, recordedPath: options.matrix)
-    guard verification.cases.map(\.id) == matrix.caseIDs else {
-        throw ValidationFailure("verification cases do not match matrix cases")
-    }
+    try validateScopeMatch(contract: contract, matrix: matrix)
+    try validateScopeDiff(contract.verificationScope, expectedBase: options.expectedBase, expectedHead: options.expectedHead)
     let sourceIdentity = try sourceTreeIdentity(
         entries: entries, head: options.expectedHead, projectPath: options.project
     )
@@ -1875,6 +1960,7 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
         "workspaceRoot": workspaceRoot,
         "contractPath": options.issueContract,
         "contractDigest": contractDigest,
+        "verificationScope": contract.verificationScope.rawValue,
         "batchId": batchID,
         "matrixPath": options.matrix,
         "matrixDigest": "sha256:\(sha256(data: matrixData))",
@@ -1950,7 +2036,7 @@ func verifyRunnerInputs(
     guard "sha256:\(sha256(data: contractData))" == contractDigest else {
         throw ValidationFailure("contract changed during verification")
     }
-    _ = try validateIssueContract(
+    let contract = try validateIssueContract(
         reference: ["path": options.issueContract, "digest": contractDigest],
         issue: options.issue,
         repository: repository
@@ -1964,7 +2050,9 @@ func verifyRunnerInputs(
     guard "sha256:\(sha256(data: matrixData))" == matrixDigest else {
         throw ValidationFailure("matrix changed during verification")
     }
-    _ = try validateMatrix(data: matrixData, recordedPath: options.matrix)
+    let matrix = try validateMatrix(data: matrixData, recordedPath: options.matrix)
+    try validateScopeMatch(contract: contract, matrix: matrix)
+    try validateScopeDiff(contract.verificationScope, expectedBase: options.expectedBase, expectedHead: options.expectedHead)
     let sourceIdentity = try sourceTreeIdentity(
         entries: entries, head: options.expectedHead, projectPath: options.project
     )
@@ -2326,7 +2414,15 @@ func readSealedRunnerConfig(configPath: String, expectedDigest: String) throws -
           (configInfo.st_mode & 0o777) == S_IRUSR else {
         throw ValidationFailure("runner config is not sealed")
     }
-    return try readJSONObject(data: configData, at: "runner config")
+    let config = try readJSONObject(data: configData, at: "runner config")
+    let expectedIDs = try VerificationScope.name(config["verificationScope"], at: "runner config scope").caseIDs
+    let rawCases = try requireArray(config["cases"] ?? NSNull(), at: "runner config cases")
+    let ids = try rawCases.map { raw -> String in
+        let entry = try requireObject(raw, at: "runner config case")
+        return try requireString(entry["id"] ?? NSNull(), at: "runner config case id")
+    }
+    guard ids == expectedIDs else { throw ValidationFailure("runner config cases do not match scope") }
+    return config
 }
 
 func runnerConfigValue(configPath: String, expectedDigest: String, keyPath: String) throws -> String {
@@ -2416,7 +2512,7 @@ func validateRunnerSimulators(
     let runtimeIdentifier = try requireString(runtime["identifier"]!, at: "runner config runtime.identifier")
     _ = try requireString(runtime["version"]!, at: "runner config runtime.version")
     let configuredCases = try requireArray(config["cases"]!, at: "runner config cases")
-    let expectedIDs = ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
+    let expectedIDs = try VerificationScope.name(config["verificationScope"], at: "runner config scope").caseIDs
     guard configuredCases.count == expectedIDs.count else {
         throw ValidationFailure("runner config Simulator ownership set is incomplete")
     }
@@ -3070,7 +3166,8 @@ func recoverRunnerPublication(
         throw ValidationFailure("publication journal draftDigest is invalid")
     }
     let cases = try requireArray(journal["cases"]!, at: "publication journal cases")
-    guard configuredCases.count == 4, cases.count == configuredCases.count else {
+    guard configuredCases.count == (try VerificationScope.name(config["verificationScope"], at: "runner config scope")).caseIDs.count,
+          cases.count == configuredCases.count else {
         throw ValidationFailure("publication journal cases mismatch")
     }
     var expectedCases: [(id: String, digest: String)] = []
@@ -3212,7 +3309,9 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
         throw ValidationFailure("runner draft workspace paths are invalid")
     }
     let configuredCases = try requireArray(config["cases"]!, at: "runner config cases")
-    guard configuredCases.count == 4 else { throw ValidationFailure("runner config cases are invalid") }
+    guard configuredCases.count == (try VerificationScope.name(config["verificationScope"], at: "runner config scope")).caseIDs.count else {
+        throw ValidationFailure("runner config cases are invalid")
+    }
     var draftCases: [[String: Any]] = []
     var screenshotData: [Data] = []
     for value in configuredCases {
@@ -3457,6 +3556,8 @@ func validateCanonicalRunnerDraft(
     )
     try validateDigest(draft["matrixDigest"]!, data: matrixData, at: "draft matrixDigest")
     let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
+    try validateScopeMatch(contract: contract, matrix: matrix)
+    try validateScopeDiff(contract.verificationScope, expectedBase: expectedBase, expectedHead: expectedHead)
     guard try requireString(draft["executionRoute"]!, at: "draft executionRoute") == "xcodebuild-simctl",
           try validateXcodeIdentity(draft["xcode"]!, at: "draft xcode") == matrix.xcode else {
         throw ValidationFailure("draft execution identity is invalid")
@@ -3467,8 +3568,8 @@ func validateCanonicalRunnerDraft(
     try validateTests(draft["tests"]!, documentationOnly: false)
 
     let draftCases = try requireArray(draft["cases"]!, at: "draft cases")
-    guard draftCases.count == 4, draftCases.count == matrix.cases.count else {
-        throw ValidationFailure("draft must contain exact four cases")
+    guard draftCases.count == matrix.cases.count else {
+        throw ValidationFailure(matrix.scope == .full ? "draft must contain exact four cases" : "draft must contain exact one case")
     }
     var screenshotData: [Data] = []
     for (index, value) in draftCases.enumerated() {
@@ -3581,7 +3682,9 @@ func validateCanonicalVisualResult(
         throw ValidationFailure("visual packet digest mismatch")
     }
     let visualCases = try requireArray(visual["cases"]!, at: "visual cases")
-    guard visualCases.count == 4 else { throw ValidationFailure("visual result must contain exact four cases") }
+    guard visualCases.count == draft.matrix.cases.count else {
+        throw ValidationFailure(draft.matrix.scope == .full ? "visual result must contain exact four cases" : "visual result must contain exact one case")
+    }
     for (index, value) in visualCases.enumerated() {
         let entry = try requireObject(value, at: "visual case")
         try requireExactKeys(entry, ["id", "status", "images", "findings"], at: "visual case")
@@ -4003,7 +4106,7 @@ func createVisualReviewPacketCanonical(
     let matrix = validatedDraft.matrix
     let draftCases = validatedDraft.cases
     guard draftCases.count == matrix.cases.count else {
-        throw ValidationFailure("draft must contain the exact four matrix cases")
+        throw ValidationFailure("draft must contain the exact scoped matrix cases")
     }
     var receipts: [VisualPacketReceipt] = [
         VisualPacketReceipt(components: draftComponents, digest: sha256(data: draftData), label: "draft"),
@@ -4674,6 +4777,13 @@ func validate(options: Options) throws {
     }
 
     let classification = try requireString(root["changeClassification"]!, at: "changeClassification")
+    if contract.verificationScope == .iphoneJapanese && classification != "application-code" {
+        throw ValidationFailure("iphone-ja requires application-code verification")
+    }
+    if contract.verificationStage != nil && classification != "application-code" {
+        throw ValidationFailure("explicit Verification scope requires application-code verification")
+    }
+    try validateScopeDiff(contract.verificationScope, expectedBase: options.expectedBase, expectedHead: options.expectedHead)
     var candidatePublicationCheck: (() throws -> Void)?
     switch classification {
     case "application-code":
@@ -4698,6 +4808,7 @@ func validate(options: Options) throws {
         )
         try validateDigest(root["matrixDigest"]!, data: matrixData, at: "matrixDigest")
         let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
+        try validateScopeMatch(contract: contract, matrix: matrix)
 
         let route = try requireString(root["executionRoute"]!, at: "executionRoute")
         guard ["xcodebuild-simctl", "xcodebuild-mcp"].contains(route) else {
