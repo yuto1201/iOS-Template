@@ -1383,6 +1383,7 @@ func validateFastDiff(expectedBase: String, expectedHead: String) throws {
         "tools/verify-ios-issue.sh"
     ]
     let strictPrefixes = [
+        "tools/lib/",
         "App Store/", "supabase/migrations/", ".github/workflows/",
         "docs/agent-contracts/", ".agents/skills/external-ops/",
         ".agents/skills/ship-issue/", ".agents/skills/cross-model-review/",

@@ -270,4 +270,62 @@ if contract_for "$fast_body" >/dev/null 2>&1; then
   exit 1
 fi
 
+# The producer and tools/validate-verify-json.swift implement the same schema twice.
+# Feed a producer-generated contract through the Swift validator's real path so a future
+# drift in either regex, key set, or ordering rule fails here instead of before Build.
+swift_repo="$workspace/swift-repo"
+/usr/bin/git init -q "$swift_repo"
+/usr/bin/git -C "$swift_repo" config user.name Fixture
+/usr/bin/git -C "$swift_repo" config user.email fixture@example.invalid
+/bin/mkdir -p "$swift_repo/docs"
+printf 'base\n' > "$swift_repo/docs/base.md"
+printf '.artifacts\n' > "$swift_repo/.gitignore"
+/usr/bin/git -C "$swift_repo" add -- docs/base.md .gitignore
+/usr/bin/git -C "$swift_repo" commit -q -m base
+swift_base="$(/usr/bin/git -C "$swift_repo" rev-parse HEAD)"
+printf 'head\n' > "$swift_repo/docs/head.md"
+/usr/bin/git -C "$swift_repo" add -- docs/head.md
+/usr/bin/git -C "$swift_repo" commit -q -m head
+swift_head="$(/usr/bin/git -C "$swift_repo" rev-parse HEAD)"
+
+swift_issue_root="$swift_repo/.artifacts/issues/42"
+/bin/mkdir -p "$swift_issue_root"
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --verification-config "$configuration" \
+  --body "$body" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-01-01T00:00:00Z \
+  > "$swift_issue_root/issue-contract.json"
+
+cat > "$swift_issue_root/documentation-evidence-input.json" <<'JSON'
+{
+  "schemaVersion": 1,
+  "reason": "Only allowlisted Markdown documentation changed",
+  "acceptanceEvidence": [
+    {"id": "AC-1", "evidence": ["documents:docs/head.md"]},
+    {"id": "AC-2", "evidence": ["links:docs/head.md"]}
+  ]
+}
+JSON
+
+# The Swift validator parses issueContract.verification through validateOptionalVerification.
+# Publication succeeding proves the producer output satisfies the Swift schema.
+( cd "$swift_repo" && /usr/bin/swift "$repo_root/tools/validate-verify-json.swift" --publish-documentation \
+    --issue 42 --expected-base "$swift_base" --expected-head "$swift_head" \
+    --input ".artifacts/issues/42/documentation-evidence-input.json" ) >/dev/null
+
+# A contract whose verification violates the Swift schema must be rejected there too.
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  document = JSON.parse(File.read(path))
+  document.fetch("verification")["bundleIdentifier"] = "App"
+  File.write(path, JSON.generate(document))
+' "$swift_issue_root/issue-contract.json"
+/bin/rm -rf "$swift_repo/.artifacts/issues/42/$swift_head"
+if ( cd "$swift_repo" && /usr/bin/swift "$repo_root/tools/validate-verify-json.swift" --publish-documentation \
+       --issue 42 --expected-base "$swift_base" --expected-head "$swift_head" \
+       --input ".artifacts/issues/42/documentation-evidence-input.json" ) >/dev/null 2>&1; then
+  echo "expected rejection: Swift validator accepted an invalid bundleIdentifier" >&2
+  exit 1
+fi
+
 echo "issue contract verification tests passed"

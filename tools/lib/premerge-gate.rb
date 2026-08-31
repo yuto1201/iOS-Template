@@ -4,6 +4,7 @@
 require "digest"
 require "json"
 require "tempfile"
+require "tmpdir"
 require "open3"
 require "time"
 require_relative "descriptor-files"
@@ -239,6 +240,10 @@ begin
       "git", "-C", root, "cat-file", "blob", "#{identity.fetch('baseSha')}:Config/verification.json"
     ).then { |output, status| status.success? ? output : nil }
   end
+  # A sealed contract that carries `verification` can only be reproduced from the Base
+  # blob. Refuse rather than silently reading whatever the working tree holds now.
+  refuse("Base Config/verification.json is unavailable for contract reconstruction") if
+    base_verification.nil? && contract.key?("verification")
   base_verification_file = nil
   if base_verification
     base_verification_file = Tempfile.new("ios-template-premerge-verification")
@@ -248,6 +253,11 @@ begin
     IOSTemplate::IssueContract.verification_configuration_override = base_verification_file.path
     IOSTemplate::IssueContract.verification_configuration_digest =
       "sha256:#{Digest::SHA256.hexdigest(base_verification)}"
+  else
+    # No Base configuration: pass an explicit absent path so reconstruction can never
+    # fall back to the checked-out file.
+    IOSTemplate::IssueContract.verification_configuration_override =
+      File.join(Dir.tmpdir, "ios-template-absent-verification-#{Process.pid}.json")
   end
   parsed_contract = begin
     IOSTemplate::IssueContract.parse(
