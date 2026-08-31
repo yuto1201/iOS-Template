@@ -1,6 +1,6 @@
 # 日本語iPhone優先の段階的開発
 
-Status: 確定  
+Status: 確定
 Version: 1.0
 Date: 2026-08-31
 
