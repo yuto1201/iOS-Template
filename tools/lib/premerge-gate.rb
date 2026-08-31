@@ -235,8 +235,6 @@ begin
     repository: repository, fetched_at: contract["fetchedAt"]
   )
   reconstructed_contract = parsed_contract.contract
-  reconstructed_contract["verification"] = contract["verification"] if contract.key?("verification")
-  reconstructed_contract["deliveryProfile"] = contract["deliveryProfile"] if contract.key?("deliveryProfile")
   reconstructed_bytes = JSON.generate(canonical(reconstructed_contract))
   refuse("live Issue contract bytes differ from the canonical snapshot") unless reconstructed_bytes.b == contract_file.bytes.b
   parsed_contract.external_operation_details.each { |detail| operation_details[detail.fetch("operation")] = detail }

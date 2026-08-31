@@ -612,10 +612,10 @@ class ExternalOperationTransport
     fail_closed('Issue artifact directory is locked by a writer') unless issue_dir.io.flock(File::LOCK_SH | File::LOCK_NB)
     contract_leaf = @artifact_snapshots.leaf(issue_dir, 'issue-contract.json', at: 'Issue contract')
     state_leaf = @artifact_snapshots.leaf(issue_dir, 'state.json', at: 'Issue state')
-    contract = JSON.parse(contract_leaf.bytes)
+    contract = JSON.parse(contract_leaf.bytes.dup)
     IOSTemplate::IssueContract.validate_snapshot!(contract, issue: issue_number, repository: repository)
     contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_leaf.bytes)}"
-    state = full_state_record(JSON.parse(state_leaf.bytes), issue_number, repository)
+    state = full_state_record(JSON.parse(state_leaf.bytes.dup), issue_number, repository)
     fail_closed('Issue state does not bind the exact contract bytes') unless
       state.dig('issueContract', 'path') == ".artifacts/issues/#{issue_number}/issue-contract.json" &&
       state.dig('issueContract', 'digest') == contract_digest
@@ -638,10 +638,8 @@ class ExternalOperationTransport
       issue: issue_number, repository: repository, fetched_at: contract.fetch('fetchedAt')
     )
     reconstructed = parsed.contract
-    reconstructed['verification'] = contract['verification'] if contract.key?('verification')
-    reconstructed['deliveryProfile'] = contract['deliveryProfile'] if contract.key?('deliveryProfile')
     fail_closed('live Issue reconstruction differs from sealed contract bytes') unless
-      canonical_json(reconstructed) == contract_leaf.bytes
+      canonical_json(reconstructed).b == contract_leaf.bytes.b
     operation_detail = parsed.external_operation_details.find { |detail| detail.fetch('operation') == @request.fetch('operation') }
     fail_closed('operation is not declared by the sealed current Issue') unless operation_detail
     fail_closed('request environment differs from the Issue contract') unless operation_detail.fetch('environment') == @request.fetch('environment')
@@ -660,7 +658,7 @@ class ExternalOperationTransport
     issues = @artifact_snapshots.directory(@artifact_snapshots.root, 'issues', at: '.artifacts/issues identity')
     issue_dir = @artifact_snapshots.directory(issues, @request.fetch('issue').to_s, at: 'Issue artifact identity')
     contract = @artifact_snapshots.leaf(issue_dir, 'issue-contract.json', at: 'Issue contract identity')
-    JSON.parse(contract.bytes).fetch('repository')
+    JSON.parse(contract.bytes.dup).fetch('repository')
   end
 
   def invoke_executor(_authorization, _idempotency_key)
