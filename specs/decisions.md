@@ -195,3 +195,13 @@
 - Decision: 申請準備で法務ページが必要になったら、[プロダクト方針 §6.1](product.md#61-applibraryでの法務ページ公開方針)に従い、各アプリのApp Store原稿を基にAppLibraryから案内されるアプリサイトへ公開する。Cloudflare Pagesは使わない。具体的な配置・パス・公開URL・Vercel projectはユーザーの後日指定事項として残し、今回確定しない。
 - Consequence: 方針の文書化と独立したアプリ開発・原稿準備は進められる。公開先が必要な作業だけを確認待ちにし、ユーザー指定後に配置を確定する。法務本文の実態照合・初回承認・公開到達性の確認を維持し、サイト移行・デプロイ・DNS変更・App Store提出はこの決定だけでは実行しない。
 - Related Issue: #27
+
+## D-027: 日本語iPhoneで機能を固めてから英語とiPadを仕上げる
+
+- Date: 2026-08-31
+- Status: 確定
+- Supersedes: D-009とD-025の通常UI Issueにおける4条件一律適用。D-025の危険度分類とレビュー、安全・account・Head照合の境界は維持する。
+- Context: 実際にテンプレートで開発すると、日本語・英語、iPhone・iPadを毎機能で同時に完成させる作業が反復し、主要機能の進行を遅らせた。ユーザーは日本語iPhoneを先に作り、英語・iPadを最後に仕上げる方針を承認した。
+- Decision: [段階的開発仕様](development-stages.md)に従い、通常機能開発は日本語iPhone、主要機能と画面遷移が安定したら英語・iPad仕上げ、リリース候補は4条件で確認する。delivery profileと検証範囲を分離し、localization・可変レイアウト・accessibilityの土台とデータ・権限・課金の正しさは初期から維持する。
+- Consequence: 翻訳・iPad最適化を仕上げIssueへ集約し、リリースIssueの依存にする。既存snapshotを縮小せず、未検証の言語・端末を成功扱いしない。実行ツールは現在4条件固定なので、#19・#29の既存修正に続く#32で1条件経路を実装するまで現行canonicalゲートを維持する。方針記載だけでツール対応済みとは報告しない。
+- Related Issue: #31、#32

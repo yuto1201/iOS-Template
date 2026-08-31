@@ -4,6 +4,8 @@
 
 The visual reviewer evaluates the immutable screenshots produced by iOS verification. It does not edit code, change specifications, run external operations, or approve facts that are absent from the packet. A preference is not a blocking finding unless it violates an acceptance criterion or an observable usability requirement.
 
+Apply the [staged-development policy](../../specs/development-stages.md): Japanese iPhone feature work can explicitly defer English copy and iPad-specific polish to an adaptation Issue. Inspect every required image, but do not turn that deferred polish into an additional feature AC or claim it is complete. Adaptation/release review must cover both languages and families. The current packet/finalizer remains four-case until Issue #32; this policy does not authorize partial packets or omitted evidence.
+
 The reviewer consumes only the canonical packet for the current Issue and Head:
 
 ```bash
@@ -98,14 +100,14 @@ Open every image listed in every case. For each image, evaluate the following in
 1. Acceptance criteria: the visible state supports every relevant `AC-*`; do not infer hidden behavior.
 2. Clipping and overflow: text, controls, safe areas, sheets, alerts, keyboards, and navigation elements are fully visible.
 3. Overlap and spacing: controls do not collide, obscure content, or create unusable accidental whitespace.
-4. Translation: Japanese and English convey the specified meaning, fit the layout, and do not expose untranslated keys or placeholder text.
-5. Information hierarchy: labels, primary actions, destructive actions, focus, and reading order are understandable on iPhone and iPad.
-6. iPad adaptation: the layout uses the available width intentionally and does not merely stretch, crop, or misplace a phone presentation.
+4. Translation: the languages required by the Issue convey the specified meaning, fit the layout, and do not expose untranslated keys or placeholder text. Explicitly deferred English copy remains incomplete, not approved as translated.
+5. Information hierarchy: labels, primary actions, destructive actions, focus, and reading order are understandable in the required device scope.
+6. iPad adaptation: when required by the Issue or adaptation/release stage, the layout uses the available width intentionally and does not merely stretch, crop, or misplace a phone presentation.
 7. Dynamic Type indicators: visible text truncation, fixed-height text containers, or density that would clearly fail at larger text sizes are findings. A normal-size screenshot does not prove every accessibility size.
 8. Tap targets: flag controls that are visibly too small, crowded, or ambiguous; do not claim a measured point size from pixels alone.
 9. Spec comparison: compare only against designs or states named by the acceptance criteria or linked specification. Do not invent a new design requirement.
 
-Compare the English/Japanese pair within each family and the iPhone/iPad pair within each language. If a required state is absent, report it as unsupported instead of treating the primary screenshot as proof.
+For adaptation/release, compare the English/Japanese pair within each family and the iPhone/iPad pair within each language. For feature work, apply the declared scope without inferring parity from one locale or device. If a required state is absent, report it as unsupported instead of treating the primary screenshot as proof.
 
 ## 4. Findings
 

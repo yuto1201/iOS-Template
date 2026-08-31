@@ -1,7 +1,7 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 1.3
+Version: 1.4
 Date: 2026-08-31
 
 ## 1. 目的
@@ -33,6 +33,7 @@ Date: 2026-08-31
 - UI Test: XCUITest
 - 対応端末: iPhone と iPad
 - 対応言語: 日本語と英語
+- 開発順序: 日本語iPhoneで主要機能を固め、英語・iPadの仕上げ後にリリース候補を4条件で確認する
 - Xcode、Swift、iOS Deployment Target: アプリ開始時に最新の安定版と要件を確認して仕様に固定
 
 テンプレート自体は特定の将来の Xcode や iOS バージョンを永続的に固定しません。バージョンはアプリごとの決定ログへ記録します。
@@ -50,6 +51,12 @@ Date: 2026-08-31
 アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、CodexはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
 
 テンプレートリポジトリ自身には将来の実アプリ名を固定しません。GitHub上のリポジトリ名はテンプレートからリポジトリを作成するときに決め、bootstrapツールは認証済みリモート名変更を行いません。
+
+### 3.2 日本語iPhone優先の機能開発
+
+Identity/bootstrap完了後の通常機能開発は、日本語iPhoneの体験と対象Testを優先する。機能と画面遷移が安定した段階で英訳・iPad最適化をまとめて行い、リリース前に日本語・英語 × iPhone・iPadを確認する。最初から文字列管理、可変レイアウト、accessibility、データ・権限・課金の安全な土台を維持し、最終的な対応範囲は減らさない。
+
+段階別の完了条件、仕上げIssueへの集約、危険度と検証範囲の分離は[段階的開発仕様](development-stages.md)を正とする。1条件でのcanonical検証は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)の実装待ちであり、現在の4条件固定ツールを省略してよいという意味ではない。
 
 ## 4. データ方針
 

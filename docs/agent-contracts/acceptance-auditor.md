@@ -17,6 +17,8 @@ The acceptance auditor applies the canonical [opposite-model review packet](./re
 5. Check for scope expansion and unsupported Build, Test, account, or external-operation claims.
 6. Emit one `acceptanceAssessment` entry for every `AC-*` before deciding the verdict.
 
+Use the [staged-development policy](../../specs/development-stages.md) to distinguish feature completion from release readiness. Explicitly deferred English/iPad polish is tracked in the adaptation Issue, not silently added to a Japanese iPhone feature's ACs. It is also not evidence of English/iPad support. Release readiness still requires the adaptation work and all four cases at the candidate Head. Until Issue #32 implements scoped evidence, do not waive the current four-case packet requirements.
+
 ## Finding schema
 
 Use the JSON result and finding schemas in `docs/agent-contracts/review-packet.md`. Every acceptance item must be `supported` or `unsupported` and cite exact evidence paths.

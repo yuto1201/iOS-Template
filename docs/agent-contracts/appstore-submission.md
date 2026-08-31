@@ -9,6 +9,7 @@ This contract separates release readiness from authenticated App Store Connect m
 - Immediately before each mutation batch, the selected executor verifies the active configured Team, App, Bundle ID, version, and build against `Config/ownership.yml` and the sealed package. Another identity or ambiguous target is a hard stop.
 - `prepare-appstore-assets` must have produced `${VERSION}-package.json` for the exact source SHA and build digest, with current Apple requirements and an approved release-auditor result.
 - A first public release additionally requires the user's package-bound confirmation of the privacy policy and terms. AI review cannot grant legal approval.
+- Under the [staged-development policy](../../specs/development-stages.md), the English/iPad adaptation Issue must be complete and the release candidate Head must have full Japanese/English × iPhone/iPad verification. Japanese iPhone feature evidence alone does not establish release readiness. Keep the independent App Store screenshot requirements and privacy/legal checks.
 
 ## Legal-page publication destination
 

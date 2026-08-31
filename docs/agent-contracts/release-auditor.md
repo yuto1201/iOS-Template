@@ -17,6 +17,8 @@ The release auditor determines whether a candidate may proceed to TestFlight, Ap
 5. Confirm every authenticated step is assigned to Codex and destructive/legal/paid actions carry required approval.
 6. Separate readiness from execution; report what may proceed without performing it.
 
+The [staged-development policy](../../specs/development-stages.md) permits Japanese iPhone-first feature work, not a reduced release gate. Require completed English/iPad adaptation and full Japanese/English × iPhone/iPad evidence for the candidate Head, plus the separate release screenshot requirements. A feature Issue's approval or partial-language evidence does not establish release readiness.
+
 ## Finding schema
 
 Return each finding as `severity`, `category`, `file`, `line`, `title`, `evidence`, and `requiredChange`. Categories include `release`, `signing`, `privacy`, `legal`, `metadata`, `security`, and `authority`.

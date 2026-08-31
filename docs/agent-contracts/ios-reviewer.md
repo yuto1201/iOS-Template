@@ -13,9 +13,11 @@ The iOS reviewer evaluates Swift, SwiftUI, Xcode configuration, tests, accessibi
 1. Trace every changed behavior through state, error, concurrency, persistence, and lifecycle paths.
 2. Check Swift and SwiftUI correctness, API availability, ownership, and actor isolation.
 3. Check that unit and UI tests can fail for the important regressions they claim to cover.
-4. Check English and Japanese strings, accessibility semantics, Dynamic Type risks, and tap targets within scope.
-5. Compare iPhone Pro and iPad Air evidence for clipping, unsafe layout, or phone-only assumptions.
+4. Check localized string management, accessibility semantics, Dynamic Type risks, and tap targets within scope. Japanese iPhone feature work may explicitly defer new English copy to the adaptation Issue.
+5. Check device behavior required by the Issue. Compare iPhone Pro and iPad Air and both languages for adaptation/release work; do not add deferred iPad polish as a feature AC.
 6. Flag unsupported success claims, new warnings, skipped tests, or generated-file hazards.
+
+Follow the [staged-development policy](../../specs/development-stages.md). Existing English/iPad behavior and localization/layout foundations must not be broken or removed. Deferral is not proof of support. Until Issue #32 implements scoped evidence, retain the current four-case packet requirements and inspect every required image; do not accept a hand-trimmed packet.
 
 ## Finding schema
 

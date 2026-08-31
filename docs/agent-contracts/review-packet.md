@@ -75,12 +75,14 @@
 1. 各受け入れ条件に実装と証拠があるか。
 2. 仕様外の振る舞いを追加・変更していないか。
 3. correctness、state、concurrency、persistence、securityの問題がないか。
-4. iPhone、iPad、日本語、英語で明らかなUI問題がないか。
+4. Issueの開発段階と宣言された範囲でUIに問題がないか。仕上げ・リリースではiPhone、iPad、日本語、英語の全範囲を確認する。
 5. Testが重要な失敗経路を検出できるか。
 6. Verify結果に未検証の事実主張がないか。
 7. 現在のHead SHAを承認してよいか。
 
 スタイル上の好みだけをBlocking findingにしません。
+
+[段階的開発仕様](../../specs/development-stages.md)に従い、通常機能では明示的に延期した英訳・iPad最適化を追加ACとして要求しません。今回の確認範囲と仕上げIssueに残る範囲を区別し、未検証を成功と解釈しないでください。現在のpacket・validatorは4条件固定のため、1条件経路のIssue #32が完了するまではschemaを省略・縮小せず、現行の必須証拠をすべて確認します。
 
 ## 4. Result schema
 
