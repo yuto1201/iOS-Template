@@ -36,10 +36,14 @@ ClaudeとCodexは同じ権限を持ち、どちらもローカル作業と認証
 Issueに`fast`、`standard`、`strict`のdelivery profileと理由を明示します。未指定の既存Issueは`strict`です。
 
 - `fast`: 非UI・低リスク。Buildと対象Testだけを実行し、4条件Simulator、画像評価、blockingな反対モデルレビューは行わない。
-- `standard`: 通常のUI変更。開発中は対象Testを優先し、安定した最終候補Headでだけ次の4条件と反対モデルレビューを行う。
-- `strict`: 認証・認可、秘密、migration、本番データ、課金、法務、リリース、workflow gate変更。現行の完全ゲートを維持する。
+- `standard`: 通常のUI変更。機能開発は日本語iPhoneと対象Testを優先し、安定した最終候補Headで要求範囲のSimulator・画像評価と反対モデルレビューを行う。
+- `strict`: 認証・認可、秘密、migration、本番データ、課金、法務、リリース、workflow gate変更。対象別Test・安全確認・必要な承認を維持する。
 
-`standard`／`strict`はIssue バッチ開始時に最新の利用可能な iOS Runtime を解決し、そのバッチ内で固定します。
+[段階的開発仕様](specs/development-stages.md)に従い、通常機能は日本語iPhone、主要機能が安定したら英語・iPadを仕上げ、リリース前に4条件を確認します。文字列管理・可変レイアウトの土台は初期から保ち、翻訳・iPad最適化の延期先をIssueへ記載します。危険度と検証範囲を混同せず、UIを`fast`へ偽装しません。
+
+**移行中:** 1条件でのcanonical完了経路は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)の実装待ちです。それまでは`standard`／`strict`の現行4条件ゲートを維持します。未指定の既存Issueも4条件です。未確認の英語・iPadを成功扱いしません。
+
+現行の4条件および仕上げ・リリースの`full`は、バッチ開始時に最新の利用可能なiOS Runtimeを解決し、そのバッチ内で固定します。
 
 - 最新 iPhone Pro（Pro Max を除く）、英語
 - 最新 iPhone Pro（Pro Max を除く）、日本語

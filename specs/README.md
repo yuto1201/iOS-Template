@@ -9,6 +9,7 @@
 | [product.md](./product.md) | テンプレートの目的、標準技術、対象・対象外 |
 | [architecture.md](./architecture.md) | リポジトリ構造、責務、条件付きモジュール |
 | [acceptance.md](./acceptance.md) | テンプレートとIssueの完了条件 |
+| [development-stages.md](./development-stages.md) | 日本語iPhone優先の開発順序、仕上げ、検証範囲と移行境界 |
 | [decisions.md](./decisions.md) | 確定した判断と変更理由 |
 
 ## 判断の状態

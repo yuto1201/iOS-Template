@@ -27,7 +27,11 @@ BranchはIssue作成後に作ります。Issue番号を推測して先にBranch�
 
 Issue数を増やすこと自体を目的にしません。セットアップとその成果物が独立して価値を持たない場合、同じIssueへ含めます。
 
+[段階的開発仕様](../specs/development-stages.md)に従い、通常の機能Issueは日本語iPhoneを主対象に計画し、英訳・iPad最適化をまとめる仕上げIssueをリリースIssueの依存にします。変更の危険度と端末・言語の検証範囲は別に記載します。既存の英語・iPad ACを自動的に削除せず、延期対象とその回収先を明示します。
+
 ## 3. Issue contract snapshot
+
+以下は現行の4条件固定schemaです。通常機能の`iphone-ja`と仕上げ・リリースの`full`をsealed contractで区別する経路は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)で、[検証設定生成 #19](https://github.com/yuto1201/iOS-Template/issues/19)・[live再照合 #29](https://github.com/yuto1201/iOS-Template/issues/29)の修正後に実装します。対応前に新fieldやcase省略を手作業でsnapshotへ入れません。
 
 CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/issue-contract.json` へ次のsanitized snapshotを保存します。Bootstrap IssueではCodexが同じ形式を手動生成します。
 
@@ -163,12 +167,12 @@ CodexとClaudeは同じ手順で1、4、5、6とGitHub上の状態変更を実�
 5. 小さな意味単位でcommitする。
 6. Scope外の必要作業を発見したら、勝手に含めず追跡Issue候補へ記録する。
 
-開発中はcanonicalな4条件証拠を作りません。対象Unit/UI Test、Build、lint、repository testなど、失敗原因へ直接対応する安価な確認を反復します。`standard`／`strict`の完全検証は、diffと受け入れ条件を自己監査し、既知の対象Testがすべて成功した最終候補Headで開始します。
+開発中は日本語iPhoneと対象Unit/UI Test、Build、lint、repository testなど、失敗原因へ直接対応する安価な確認を反復します。文字列・レイアウトの土台を保ち、英訳・iPad最適化は仕上げへ集約します。canonical証拠は中間commitごとに作らず、diffとACを自己監査し、既知の対象Testが成功した最終候補Headで作成します。変更が英語・iPad固有の問題や共通基盤へ直接及ぶ場合は、そのIssueでfullを要求します。
 
 ### 5.3 Verify
 
 1. `fast`は`verify-fast-issue.sh`で一つのSimulator上のBuildと指定Unit Testだけを実行する。matrix、Screenshot、視覚評価は作らない。
-2. `standard`／`strict`は`ios-verify`がバッチ固定済みSimulatorマトリクスを読み、Build、対象Test、4条件操作、Screenshot、視覚評価を実行する。
+2. `standard`／`strict`は`ios-verify`がバッチ固定済みSimulatorマトリクスを読み、Build、対象Test、操作、Screenshot、視覚評価を実行する。#32の対応前は現行4条件、対応後はIssueで宣言されたiphone-jaまたはfullのexact集合を確認する。
 3. IssueがRepository toolやworkflowを変更する場合、profileに関係なく`run-repository-tests.sh`でtracked `tools/tests/test-*.sh`全件をclean detached worktree上で実行し、同じHeadとAC対応を封印する。
 4. `verify.json` にprofile、実行route、Head SHAを対応させる。
 5. 同じHeadを明示して`in-progress -> verify-passed`へ遷移し、durable stateへ固定する。
@@ -233,6 +237,8 @@ Closes #42
 ```
 
 PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼りません。
+
+上の例はfull検証です。機能Issueでは今回確認した範囲と「英語・iPad仕上げIssueへ延期／未検証」を区別します。`None for this Issue`をアプリ全体の完成と解釈しません。現行rendererの出力や証拠を手で1条件へ書き換えず、範囲別表示の実装は#32で行います。
 
 ## 7. 再試行とRegression
 

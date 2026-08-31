@@ -4,7 +4,15 @@
 
 AIが「コード上は正しそう」ではなく、Build、Test、操作、見た目を実測したうえでIssueを完了できるようにします。物理端末の最終判断はユーザーが後から行います。
 
-検証コストはIssueのdelivery profileへ比例させます。低リスク非UI変更の`fast`ではBuildと対象Unit Testを実測しますが、Simulator matrix、Screenshot、視覚評価は要求しません。通常UIの`standard`と高リスクの`strict`だけが完全な4条件経路を使用します。profile未導入の既存Issueは`strict`です。
+検証コストはIssueの危険度と開発段階に合わせます。低リスク非UI変更の`fast`ではBuildと対象Unit Testを実測しますが、Simulator matrix、Screenshot、視覚評価は要求しません。profile未導入の既存Issueは`strict`です。日本語iPhoneで機能を固め、英語・iPadを仕上げてからリリースする[段階的開発仕様](../specs/development-stages.md)を採用します。
+
+### 1.1 承認済み方針と現行実装の境界
+
+目標の検証範囲は通常機能の`iphone-ja`（1条件）と仕上げ・リリースの`full`（4条件）です。delivery profileは危険度を決める別軸であり、日本語iPhoneのUIを`fast`へ変更して確認を省略しません。安全性・対象Test・反対モデルレビュー・Head照合は維持します。
+
+**以下のコマンドとschemaは現行4条件経路の説明です。** 1条件経路は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)で、#19の検証設定生成と#29のlive Issue再照合に続いて実装します。現時点では`standard`／`strict`のcanonical完了に4条件を要求し、非対応のCLI引数や手書きの部分matrixは使いません。共有スキルと実行toolの更新も#32の範囲です。
+
+移行中でも機能実装・局所確認は日本語iPhoneへ集中し、英訳・iPad最適化を仕上げへ延期できます。現行4条件のTest・画像確認は実行した事実として記録し、翻訳や端末対応が完成したという主張と分離します。宣言済みの延期を新しい機能ACへ戻さず、未実行や失敗を成功へ変換することもしません。
 
 ## 2. 環境の解決
 
@@ -71,7 +79,7 @@ tools/verify-fast-issue.sh \
 
 - 変更ファイルとIssue Scopeの対応
 - 追跡対象への秘密混入スキャン
-- 日本語・英語の文字列不足
+- 日本語の文字列、localization可能な管理、既存翻訳の破壊がないこと。新規英訳の完成確認は仕上げ範囲で行い、延期箇所は記録する
 - Compile-time warningの差分
 
 ### Stage B: Build and unit tests
@@ -106,7 +114,7 @@ tools/run-repository-tests.sh \
 3. Issueの受け入れ操作を実行する。
 4. 期待するUI要素と状態を機械判定する。
 5. 主要状態のスクリーンショットを保存する。
-6. crash、freeze、layout overflow、欠けた翻訳を確認する。
+6. crash、freeze、操作不能を確認し、Issueで要求された端末・言語のlayout overflowと翻訳不足を確認する。仕上げへ延期した完成度は未完了として区別する。
 
 `standard`／`strict`で起動や依存関係へ影響する場合は4条件のsmoke testを行います。`fast`と純粋な文書変更はSimulator検証を`not-applicable`とします。
 
@@ -123,6 +131,8 @@ AIはスクリーンショットごとに次を評価します。
 - 参照デザインがある場合の差異
 
 `standard`／`strict`では主開発モデルが一次評価し、反対モデルレビューへ画像を含めます。見た目の好みだけで仕様を増やしません。
+
+すべての必須画像は確認しますが、評価する完成度はIssueのACと開発段階に合わせます。通常機能で延期を明示した英訳・iPad最適化を、画像があるという理由だけで完成必須にしません。仕上げ・リリースでは日英・端末間の完成度を確認し、延期を残したままfull対応済みとは判定しません。
 
 ### Stage D.1: 二段階の証拠公開
 
