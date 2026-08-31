@@ -145,10 +145,11 @@ base_verification=$(mktemp "${TMPDIR:-/tmp}/ios-template-verification-config.XXX
 trap 'rm -f "$body" "$contract_candidate" "$base_verification"' EXIT
 base_verification_digest=''
 if git -C "$repo_root" cat-file -e "$base_sha:Config/verification.json" 2>/dev/null; then
+  # Derive the digest from the immutable Git object, never by reading the temporary file
+  # back. Git objects are content addressed, so both reads return the same bytes and the
+  # digest cannot be influenced by anything that swaps the temporary path.
+  base_verification_digest="sha256:$(git -C "$repo_root" cat-file blob "$base_sha:Config/verification.json" | ruby -rdigest -e 'print Digest::SHA256.hexdigest(STDIN.binread)')"
   git -C "$repo_root" cat-file blob "$base_sha:Config/verification.json" > "$base_verification"
-  # The producer re-opens this path, so bind the exact Base bytes by digest. A swap
-  # between writing and reading is rejected instead of silently sealed.
-  base_verification_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$base_verification")"
 else
   rm -f "$base_verification"
   base_verification=/nonexistent/Config/verification.json

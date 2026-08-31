@@ -3,6 +3,7 @@
 
 require "digest"
 require "json"
+require "tempfile"
 require "open3"
 require "time"
 require_relative "descriptor-files"
@@ -230,12 +231,36 @@ begin
   type_labels = labels.map { |label| label["name"] }.select { |name| %w[type:feature type:regression type:docs type:release].include?(name) }
   refuse("live Issue must have exactly one supported type label") unless type_labels.length == 1
   issue_type = type_labels.first.delete_prefix("type:")
-  parsed_contract = IOSTemplate::IssueContract.parse(
-    live_issue["body"], issue_type: issue_type, issue: issue,
-    repository: repository, fetched_at: contract["fetchedAt"]
-  )
+  # Reconstruct `verification` from the live Issue body so a post-Claim change to the
+  # Verification mapping cannot be masked by the sealed value. The repository-level half
+  # of the object comes from the Base commit blob, matching what Claim sealed.
+  base_verification = begin
+    Open3.capture2e(
+      "git", "-C", root, "cat-file", "blob", "#{identity.fetch('baseSha')}:Config/verification.json"
+    ).then { |output, status| status.success? ? output : nil }
+  end
+  base_verification_file = nil
+  if base_verification
+    base_verification_file = Tempfile.new("ios-template-premerge-verification")
+    base_verification_file.binmode
+    base_verification_file.write(base_verification)
+    base_verification_file.flush
+    IOSTemplate::IssueContract.verification_configuration_override = base_verification_file.path
+    IOSTemplate::IssueContract.verification_configuration_digest =
+      "sha256:#{Digest::SHA256.hexdigest(base_verification)}"
+  end
+  parsed_contract = begin
+    IOSTemplate::IssueContract.parse(
+      live_issue["body"], issue_type: issue_type, issue: issue,
+      repository: repository, fetched_at: contract["fetchedAt"]
+    )
+  ensure
+    IOSTemplate::IssueContract.verification_configuration_override = nil
+    IOSTemplate::IssueContract.verification_configuration_digest = nil
+    base_verification_file&.close!
+  end
   reconstructed_contract = parsed_contract.contract
-  reconstructed_contract["verification"] = contract["verification"] if contract.key?("verification")
+  # deliveryProfile keeps its historical behaviour; see Issue #29.
   reconstructed_contract["deliveryProfile"] = contract["deliveryProfile"] if contract.key?("deliveryProfile")
   reconstructed_bytes = JSON.generate(canonical(reconstructed_contract))
   refuse("live Issue contract bytes differ from the canonical snapshot") unless reconstructed_bytes.b == contract_file.bytes.b

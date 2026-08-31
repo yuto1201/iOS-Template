@@ -21,6 +21,21 @@ cp -R "$repo_root/.agents" "$repo/"
 cp -R "$repo_root/specs" "$repo/"
 cp "$repo_root/Config/ownership.yml" "$repo/Config/"
 ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
+# premerge-gate reconstructs `verification` from the live Issue body plus this Base blob,
+# so the fixture Base must carry the repository half of the contract.
+cat > "$repo/Config/verification.json" <<'JSON'
+{
+  "schemaVersion": 1,
+  "bundleIdentifier": "com.example.TemplateApp",
+  "unitTestIdentifier": "TemplateAppTests/UnitSmokeTests/testUnit",
+  "cases": [
+    {"id": "iphone-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+    {"id": "iphone-ja", "assertion": {"kind": "launch-succeeded"}},
+    {"id": "ipad-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+    {"id": "ipad-ja", "assertion": {"kind": "launch-succeeded"}}
+  ]
+}
+JSON
 printf '.artifacts\n' > "$repo/.gitignore"
 printf 'fixture\n' > "$repo/README.md"
 git -C "$repo" add .gitignore README.md Config tools .agents specs
@@ -70,6 +85,11 @@ cat > "$issue_body" <<'EOF'
 ## UI verification
 
 - Not applicable.
+
+## Verification mapping
+
+- AC-1: stage:build, stage:unit-tests
+- AC-2: case:iphone-en, case:iphone-ja, case:ipad-en, case:ipad-ja, visual:iphone-en, visual:iphone-ja, visual:ipad-en, visual:ipad-ja
 
 ## External operations
 
@@ -448,6 +468,11 @@ assert_fails 'changes-requested review is rejected' run_gate
 assert_fails 'changes-requested review is refused by renderer' \
   "$issue_worktree/tools/render-pr-body.sh" --issue 42 --head-sha "$head_sha"
 write_review
+cp "$issue_body" "$scratch/issue-body.mapping-original"
+ruby -e 'path = ARGV.fetch(0); text = File.read(path); text.sub!("- AC-1: stage:build, stage:unit-tests\n", "- AC-1: stage:build\n") or abort "verification mapping fixture line missing"; File.write(path, text)' "$issue_body"
+assert_fails 'live Verification mapping edit is rejected' run_gate
+cp "$scratch/issue-body.mapping-original" "$issue_body"
+
 cp "$issue_body" "$scratch/issue-body.original"
 ruby -e 'path = ARGV.fetch(0); text = File.read(path); text.sub!("- AC-2: Every acceptance criterion has one evidence mapping.\n", "- AC-2: Every acceptance criterion has one evidence mapping.\n- AC-3: A live Issue edit invalidates the snapshot.\n"); File.write(path, text)' "$issue_body"
 assert_fails 'live Issue contract staleness is rejected' run_gate
@@ -653,7 +678,8 @@ grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo 'fin
 # Explicit fast accepts the same current-Head and account gates without any
 # opposite-model artifact. Rebuild the exact live contract so stale strict
 # review files cannot accidentally authorize this route.
-ruby -e 'path=ARGV.fetch(0); text=File.binread(path); marker="## External operations\n"; replacement="## Delivery profile\n\n- Profile: fast\n- Reason: Non-UI low-risk documentation fixture.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
+# A fast Issue never runs application verification, so it must not declare a mapping.
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!(/## Verification mapping\n\n(?:- .*\n)+\n/, "") or abort "verification mapping fixture section missing"; marker="## External operations\n"; replacement="## Delivery profile\n\n- Profile: fast\n- Reason: Non-UI low-risk documentation fixture.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 HEAD="$head_sha" BASE="$base_sha" DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'puts JSON.generate({"schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template", "branch" => "codex/42-gate-evidence", "worktree" => ".worktrees/42-gate-evidence", "baseSha" => ENV.fetch("BASE"), "primaryImplementer" => "codex", "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "state" => "approved-for-merge", "previousState" => "verify-passed", "resumeState" => nil, "executor" => "codex", "headSha" => ENV.fetch("HEAD"), "pullRequest" => 57, "from" => "verify-passed", "to" => "approved-for-merge", "transitionedAt" => ENV.fetch("TRANSITIONED_AT")})' > "$repo/.artifacts/issues/42/state.json"
