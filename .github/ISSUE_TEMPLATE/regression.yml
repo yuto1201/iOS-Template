@@ -72,6 +72,28 @@ body:
     validations:
       required: true
   - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: "For application verification, provide this complete JSON object with real app/test identifiers and explicit checks for every AC in order. Omit for documentation-only or fast Issues. The placeholder is an example, not proof of your ACs. See docs/workflow.md."
+      placeholder: |
+        {
+          "bundleIdentifier": "com.example.ExampleApp",
+          "unitTestIdentifier": "ExampleAppTests/ExampleAppTests/testSave",
+          "cases": [
+            {"id": "iphone-en", "testIdentifier": "ExampleAppUITests/SmokeTests/testLaunch"},
+            {"id": "iphone-ja", "testIdentifier": "ExampleAppUITests/SmokeTests/testLaunch"},
+            {"id": "ipad-en", "assertion": {"kind": "launch-succeeded"}},
+            {"id": "ipad-ja", "assertion": {"kind": "launch-succeeded"}}
+          ],
+          "acceptanceMappings": [
+            {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},
+            {"id": "AC-2", "checks": ["case:iphone-ja", "visual:iphone-ja"]}
+          ]
+        }
+    validations:
+      required: false
+  - type: textarea
     id: external-operations
     attributes:
       label: External operations

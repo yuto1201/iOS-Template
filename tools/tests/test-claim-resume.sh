@@ -126,6 +126,25 @@ Make the Settings screen deterministic.
 
 - Not applicable.
 
+## Verification
+
+```json
+{
+  "bundleIdentifier": "com.example.TemplateApp",
+  "unitTestIdentifier": "TemplateAppTests/UnitSmokeTests/testUnit",
+  "cases": [
+    {"id": "iphone-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+    {"id": "iphone-ja", "assertion": {"kind": "launch-succeeded"}},
+    {"id": "ipad-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+    {"id": "ipad-ja", "assertion": {"kind": "launch-succeeded"}}
+  ],
+  "acceptanceMappings": [
+    {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},
+    {"id": "AC-2", "checks": ["case:iphone-ja", "visual:iphone-ja"]}
+  ]
+}
+```
+
 ## External operations
 
 - Operation: github.read_issue
@@ -242,6 +261,12 @@ assert_json "$clone/.artifacts/issues/42/issue-contract.json" '
   abort unless value["acceptanceCriteria"].map { |entry| entry["id"] } == ["AC-1", "AC-2"]
   abort unless value["dependencies"] == [5]
   abort unless value["externalOperations"] == ["github.read_issue", "github.update_issue", "github.push_branch", "github.create_pr", "github.merge_pr", "github.delete_branch", "supabase.inspect_project"]
+  abort unless value.dig("verification", "bundleIdentifier") == "com.example.TemplateApp"
+  abort unless value.dig("verification", "cases").map { |entry| entry["id"] } == %w[iphone-en iphone-ja ipad-en ipad-ja]
+  abort unless value.dig("verification", "acceptanceMappings") == [
+    {"id"=>"AC-1", "checks"=>["stage:build", "stage:unit-tests"]},
+    {"id"=>"AC-2", "checks"=>["case:iphone-ja", "visual:iphone-ja"]}
+  ]
 '
 ruby -rjson -rdigest -e '
   def canonical(value)
@@ -289,6 +314,14 @@ edits_before=$(rg -c '^issue edit ' "$gh_log" || true)
 (cd "$clone" && "$claim" --repo yuto1201/iOS-Template --issue 42 --agent codex) > "$workspace/repeated-claim.json"
 cmp -s "$claim_result" "$workspace/repeated-claim.json"
 [[ "$edits_before" == "$(rg -c '^issue edit ' "$gh_log" || true)" ]] || { echo 'repeated claim mutated Issue state' >&2; exit 1; }
+
+cp "$issue_body_file" "$workspace/issue-body-before-mapping-change.md"
+cp "$clone/.artifacts/issues/42/issue-contract.json" "$workspace/contract-before-mapping-change.json"
+sed -i '' 's/"case:iphone-ja", "visual:iphone-ja"/"case:ipad-ja", "visual:ipad-ja"/' "$issue_body_file"
+assert_fails 'repeated Claim rejects changed verification mapping without replacing the sealed contract' bash -c "cd '$clone' && '$claim' --repo yuto1201/iOS-Template --issue 42 --agent codex"
+cmp -s "$workspace/contract-before-mapping-change.json" "$clone/.artifacts/issues/42/issue-contract.json"
+[[ "$edits_before" == "$(rg -c '^issue edit ' "$gh_log" || true)" ]]
+cp "$workspace/issue-body-before-mapping-change.md" "$issue_body_file"
 
 assert_fails 'a different primary implementer cannot claim the same Issue' bash -c "cd '$clone' && '$claim' --repo yuto1201/iOS-Template --issue 42 --agent claude"
 [[ "$before_status" == "$(git -C "$clone" status --porcelain)" ]] || { echo 'conflicting claim changed dirty main checkout' >&2; exit 1; }
