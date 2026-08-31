@@ -968,6 +968,22 @@ if "$control_runner" >"$startup_stdout" 2>"$startup_stderr"; then
 fi
 grep -Fq 'unsafe runner invocation path' "$startup_stderr" || { echo "control-character startup was not rejected" >&2; exit 1; }
 
+# The guard must not depend on the locale's collation order. tools/lib/xcode.sh forces
+# en_US.UTF-8 for scrubbed execution, so a range-based test would pass here while the
+# real execution path stayed unguarded.
+for guard_locale in C en_US.UTF-8 ja_JP.UTF-8; do
+  if LC_ALL="$guard_locale" LANG="$guard_locale" "$control_runner" >"$startup_stdout" 2>"$startup_stderr"; then
+    echo "control-character startup unexpectedly succeeded under $guard_locale" >&2; exit 1
+  fi
+  grep -Fq 'unsafe runner invocation path' "$startup_stderr" || {
+    echo "control-character startup was not rejected under $guard_locale" >&2; exit 1
+  }
+done
+if LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 "$runner" >"$startup_stdout" 2>"$startup_stderr"; then
+  echo "argument-less startup unexpectedly succeeded" >&2; exit 1
+fi
+grep -Fq 'usage:' "$startup_stderr" || { echo "a clean path must still reach the runner" >&2; exit 1; }
+
 swift_driver_probe="$scratch/swift-driver-probe.swift"
 printf '%s\n' 'print("swift-driver-ok")' >"$swift_driver_probe"
 if ! swift_driver_output="$(
