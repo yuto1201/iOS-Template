@@ -147,6 +147,12 @@ fake_bin="$scratch/bin"
 mkdir "$fake_bin"
 real_swift=$(command -v swift)
 real_ruby=$(command -v ruby)
+# Compile the exact validator once for this fixture. Every invocation still
+# validates fresh evidence; a changed source falls back to the real interpreter.
+cached_validator_source="$scratch/validate-verify-json.swift"
+cached_validator="$scratch/validate-verify-json"
+cp "$repo_root/tools/validate-verify-json.swift" "$cached_validator_source"
+/usr/bin/swiftc "$cached_validator_source" -o "$cached_validator"
 cat > "$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -194,6 +200,10 @@ fi
 if [[ "${FAKE_SKIP_SWIFT:-0}" == 1 ]]; then
   exit 0
 fi
+if [[ -f "${1-}" ]] && /usr/bin/cmp -s "$1" "${GATE_TEST_VALIDATOR_SOURCE:?}"; then
+  shift
+  exec "${GATE_TEST_VALIDATOR_BINARY:?}" "$@"
+fi
 exec "${REAL_SWIFT:?}" "$@"
 EOF
 cat > "$fake_bin/ruby" <<'EOF'
@@ -224,6 +234,7 @@ exec "${REAL_RUBY:?}" "$@"
 EOF
 chmod +x "$fake_bin/gh" "$fake_bin/swift" "$fake_bin/ruby"
 export PATH="$fake_bin:$PATH" REAL_SWIFT="$real_swift" REAL_RUBY="$real_ruby" FAKE_GH_LOG="$scratch/gh.log" FAKE_ISSUE_BODY="$issue_body" FAKE_MERGE_MUTATIONS="$scratch/merge-mutations.log" FAKE_HEAD="$head_sha"
+export GATE_TEST_VALIDATOR_SOURCE="$cached_validator_source" GATE_TEST_VALIDATOR_BINARY="$cached_validator"
 
 issue_worktree="$repo/.worktrees/42-gate-evidence"
 mkdir -p "$repo/.worktrees"
@@ -303,21 +314,60 @@ RECEIPT="$repo/.artifacts/issues/42/$head_sha/review-receipt.json" ruby -rjson -
 assert_fails 'forged review receipt is rejected' run_gate
 write_receipt
 
-# Application contracts add one canonical verification object to the exact
-# live-Issue snapshot. The strict Gate must preserve that optional object while
-# still rejecting every other extra top-level field.
-CONTRACT="$repo/.artifacts/issues/42/issue-contract.json" ruby -rjson -e '
-  def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value.is_a?(Array) ? value.map { |entry| canonical(entry) } : value; end
-  path=ENV.fetch("CONTRACT"); value=JSON.parse(File.binread(path))
-  value["verification"]={"bundleIdentifier"=>"com.example.TemplateApp","unitTestIdentifier"=>"TemplateAppTests/UnitSmokeTests/testUnit","cases"=>[{"id"=>"iphone-en","testIdentifier"=>"TemplateAppUITests/SmokeTests/testLaunch"},{"id"=>"iphone-ja","assertion"=>{"kind"=>"launch-succeeded"}},{"id"=>"ipad-en","testIdentifier"=>"TemplateAppUITests/SmokeTests/testLaunch"},{"id"=>"ipad-ja","assertion"=>{"kind"=>"launch-succeeded"}}],"acceptanceMappings"=>[{"id"=>"AC-1","checks"=>["stage:build","stage:unit-tests"]},{"id"=>"AC-2","checks"=>["case:iphone-en","case:iphone-ja","case:ipad-en","case:ipad-ja","visual:iphone-en","visual:iphone-ja","visual:ipad-en","visual:ipad-ja"]}]}
-  File.binwrite(path,JSON.generate(canonical(value)))
-'
+# The real producer seals both optional fields from the live Issue, not from
+# independently injected snapshot values. Overwriting reconstructed fields with
+# sealed values would let the live-only mutations below reach the merge call.
+cp "$issue_body" "$scratch/issue.legacy.md"
+ruby -rjson - "$issue_body" <<'RUBY'
+path=ARGV.fetch(0)
+verification={"bundleIdentifier"=>"com.example.TemplateApp","unitTestIdentifier"=>"TemplateAppTests/UnitSmokeTests/testUnit","cases"=>[{"id"=>"iphone-en","testIdentifier"=>"TemplateAppUITests/SmokeTests/testLaunch"},{"id"=>"iphone-ja","assertion"=>{"kind"=>"launch-succeeded"}},{"id"=>"ipad-en","testIdentifier"=>"TemplateAppUITests/SmokeTests/testLaunch"},{"id"=>"ipad-ja","assertion"=>{"kind"=>"launch-succeeded"}}],"acceptanceMappings"=>[{"id"=>"AC-1","checks"=>["stage:build","stage:unit-tests"]},{"id"=>"AC-2","checks"=>["case:iphone-en","case:iphone-ja","case:ipad-en","case:ipad-ja","visual:iphone-en","visual:iphone-ja","visual:ipad-en","visual:ipad-ja"]}]}
+text=File.read(path)
+text += "\n## Delivery profile\n\n- Profile: strict\n- Reason: Preserve the exact reviewed verification contract.\n"
+text += "\n## Verification\n\n#{JSON.generate(verification)}\n"
+File.write(path,text)
+RUBY
+cp "$issue_body" "$scratch/issue.application.md"
+canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 DIGEST="$contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
 write_verify
 write_review_packet
 write_review
 write_preflight
+run_gate >/dev/null
+cp "$repo/.artifacts/issues/42/issue-contract.json" "$scratch/contract.application.json"
+
+for mutation in verification-mapping delivery-profile delivery-reason verification-removed delivery-removed; do
+  cp "$scratch/issue.application.md" "$issue_body"
+  ruby -rjson - "$issue_body" "$mutation" <<'RUBY'
+path, mutation=ARGV
+text=File.read(path)
+case mutation
+when "verification-mapping"
+  text.sub!(/(\n## Verification\n\s*)(\{.*\})(\s*)\z/m) do
+    prefix, json, suffix=$1, $2, $3
+    value=JSON.parse(json)
+    value.fetch("acceptanceMappings").fetch(0)["checks"]=["stage:build"]
+    prefix+JSON.generate(value)+suffix
+  end or abort "Verification fixture not found"
+when "delivery-profile"
+  text.sub!("- Profile: strict", "- Profile: standard") or abort
+when "delivery-reason"
+  text.sub!("Preserve the exact reviewed verification contract.", "A different review scope justification.") or abort
+when "verification-removed"
+  text.sub!(/\n## Verification\n.*\z/m, "") or abort
+when "delivery-removed"
+  text.sub!(/\n## Delivery profile\n.*?(?=\n## Verification\n)/m, "") or abort
+end
+File.write(path,text)
+RUBY
+  : > "$FAKE_MERGE_MUTATIONS"
+  assert_fails_with "live $mutation is rejected before merge" \
+    'live Issue contract bytes differ from the canonical snapshot' run_gate_merge
+  [[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo "live $mutation reached merge" >&2; exit 1; }
+  cmp -s "$scratch/contract.application.json" "$repo/.artifacts/issues/42/issue-contract.json" || { echo 'Gate rewrote the sealed contract' >&2; exit 1; }
+done
+cp "$scratch/issue.application.md" "$issue_body"
 run_gate >/dev/null
 
 CONTRACT="$repo/.artifacts/issues/42/issue-contract.json" STATE="$repo/.artifacts/issues/42/state.json" VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" PACKET="$repo/.artifacts/issues/42/$head_sha/review-packet.json" REVIEW="$repo/.artifacts/issues/42/$head_sha/review.json" ruby -rjson -rdigest -e '
@@ -329,6 +379,7 @@ CONTRACT="$repo/.artifacts/issues/42/issue-contract.json" STATE="$repo/.artifact
 '
 assert_fails_with 'unknown application contract field is rejected by strict Gate' 'Issue contract has unknown fields: unexpected' run_gate
 
+cp "$scratch/issue.legacy.md" "$issue_body"
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 DIGEST="$contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
@@ -336,6 +387,26 @@ write_verify
 write_review_packet
 write_review
 write_preflight
+
+# Adding previously absent optional input is also a contract change. Neither
+# addition may be silently ignored, and a legacy snapshot must remain untouched.
+cp "$repo/.artifacts/issues/42/issue-contract.json" "$scratch/contract.legacy.json"
+for section in Verification 'Delivery profile'; do
+  cp "$scratch/issue.legacy.md" "$issue_body"
+  ruby - "$issue_body" "$scratch/issue.application.md" "$section" <<'RUBY'
+path, application, heading=ARGV
+text=File.read(application)
+section=text[/\n## #{Regexp.escape(heading)}\n.*?(?=\n## |\z)/m] or abort "optional fixture not found"
+File.write(path,File.read(path)+section)
+RUBY
+  : > "$FAKE_MERGE_MUTATIONS"
+  assert_fails_with "live added $section is rejected before merge" \
+    'live Issue contract bytes differ from the canonical snapshot' run_gate_merge
+  [[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo "added $section reached merge" >&2; exit 1; }
+  cmp -s "$scratch/contract.legacy.json" "$repo/.artifacts/issues/42/issue-contract.json" || { echo 'Gate rewrote the legacy contract' >&2; exit 1; }
+done
+cp "$scratch/issue.legacy.md" "$issue_body"
+run_gate >/dev/null
 
 : > "$FAKE_GH_LOG"
 cp "$repo/.artifacts/issues/42/issue-contract.json" "$scratch/contract.with-merge"
