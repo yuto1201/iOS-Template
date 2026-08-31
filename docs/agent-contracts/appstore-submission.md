@@ -19,6 +19,8 @@ AppLibrary's layout and Vercel migration are still being developed separately. T
 
 ## Immutable inputs
 
+Schema-2 preparation also binds the canonical full application verification Issue, trusted Base, path and digest. Require the same current Head and Bundle ID, completed English/iPad adaptation, and all four cases. Before external writes and on resume, run `ruby tools/lib/release-verification.rb "$PWD" "$PACKAGE_MANIFEST" "$HEAD_SHA" "$BUNDLE_ID"`; it is read-only and does not grant authority. Old manifests without this proof require resealing. The section recorder rejects stale, partial or changed proof independently.
+
 The prepared manifest binds the Bundle ID, version, source SHA, build digest, package tree digest, requirement cache, screenshot manifest, release audit, and first-publication approval. Recompute them at workflow start and resume. Any mismatch invalidates all unperformed sections; never repair a mismatch by editing the manifest or remote values.
 
 Secrets and App Store session data are not immutable package inputs. Resolve a required review credential from Keychain only into a child process or the exact authenticated form field. Never put secret values in tracked files, browser transcripts, screenshots, logs, evidence, Issue/PR text, or AI prompts.

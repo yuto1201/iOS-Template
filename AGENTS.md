@@ -41,9 +41,9 @@ Issueに`fast`、`standard`、`strict`のdelivery profileと理由を明示し�
 
 [段階的開発仕様](specs/development-stages.md)に従い、通常機能は日本語iPhone、主要機能が安定したら英語・iPadを仕上げ、リリース前に4条件を確認します。文字列管理・可変レイアウトの土台は初期から保ち、翻訳・iPad最適化の延期先をIssueへ記載します。危険度と検証範囲を混同せず、UIを`fast`へ偽装しません。
 
-**移行中:** 1条件でのcanonical完了経路は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)の実装待ちです。それまでは`standard`／`strict`の現行4条件ゲートを維持します。未指定の既存Issueも4条件です。未確認の英語・iPadを成功扱いしません。
+通常UI Issueは`Verification scope`に`Scope: iphone-ja`・`Stage: feature`・理由を明示し、1条件のcanonical経路を使用します。仕上げは`full / adaptation`、リリースは`full / release`。未指定の既存Issueは4条件のままで、Claim済みcontractを自動縮小しません。未確認の英語・iPadは延期・未検証として報告します。
 
-現行の4条件および仕上げ・リリースの`full`は、バッチ開始時に最新の利用可能なiOS Runtimeを解決し、そのバッチ内で固定します。
+仕上げ・リリースと全体整合確認の`full`は、バッチ開始時に最新の利用可能なiOS Runtimeを解決し、そのバッチ内で固定します。`iphone-ja`も同じRuntime選択規則で日本語iPhoneの1条件を固定します。
 
 - 最新 iPhone Pro（Pro Max を除く）、英語
 - 最新 iPhone Pro（Pro Max を除く）、日本語

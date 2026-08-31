@@ -7,6 +7,7 @@ usage() {
 }
 
 repo= package_root= package_manifest= preflight= audit= result= team_id= bundle_id= version= build_id= source_sha= build_digest=
+tool_root=$(cd "$(dirname "$0")/../../../.." && /bin/pwd -P)
 primary_model= section= remote_reference= readback_digest= resume_readback= now= submit_for_review=no
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -57,7 +58,8 @@ result_parent=$(cd "$(dirname "$result")" && /bin/pwd -P); result="$result_paren
 PACKAGE_ROOT="$package_root" PACKAGE_MANIFEST="$package_manifest" PREFLIGHT="$preflight" AUDIT="$audit" RESULT="$result" \
 TEAM_ID="$team_id" BUNDLE_ID="$bundle_id" VERSION="$version" BUILD_ID="$build_id" SOURCE_SHA="$source_sha" \
 BUILD_DIGEST="$build_digest" PRIMARY_MODEL="$primary_model" SECTION="$section" REMOTE_REFERENCE="$remote_reference" \
-READBACK_DIGEST="$readback_digest" RESUME_READBACK="$resume_readback" NOW="$now" SUBMIT_FOR_REVIEW="$submit_for_review" ruby <<'RUBY'
+READBACK_DIGEST="$readback_digest" RESUME_READBACK="$resume_readback" NOW="$now" SUBMIT_FOR_REVIEW="$submit_for_review" \
+VERIFICATION_REPO="$repo" ruby -r"$tool_root/tools/lib/release-verification" <<'RUBY'
 require "json"
 require "digest"
 require "time"
@@ -91,8 +93,8 @@ tree_digest=lambda do
 end
 
 manifest=JSON.parse(File.binread(manifest_path))
-manifest_keys=%w[schemaVersion status bundleId version sourceSha buildDigest requirementsDigest screenshotManifestDigest packageDigest auditDigest firstPublication legalApprovalDigest preparedAt]
-abort "prepared package manifest schema is invalid" unless manifest.is_a?(Hash) && manifest.keys.sort==manifest_keys.sort && manifest["schemaVersion"]==1 && manifest["status"]=="prepared"
+manifest_keys=%w[schemaVersion status bundleId version sourceSha buildDigest requirementsDigest screenshotManifestDigest packageDigest auditDigest firstPublication legalApprovalDigest preparedAt verification]
+abort "prepared package manifest schema is invalid; full verification must be resealed" unless manifest.is_a?(Hash) && manifest.keys.sort==manifest_keys.sort && manifest["schemaVersion"]==2 && manifest["status"]=="prepared"
 abort "prepared package bundle or version mismatch" unless manifest["bundleId"]==bundle && manifest["version"]==version
 abort "prepared package build mismatch" unless manifest["sourceSha"]==source_sha && manifest["buildDigest"]==build_digest
 abort "prepared package digest is stale" unless manifest["packageDigest"]==tree_digest.call
@@ -148,8 +150,16 @@ entry={"id"=>requested,"status"=>"verified","remoteReference"=>ENV.fetch("REMOTE
 completed << entry
 value["lastCompletedSection"]=requested; value["updatedAt"]=now
 value["status"]=(requested=="submission" ? "submitted" : "in-progress")
-temporary="#{result_path}.tmp.#{$$}"
-File.open(temporary,File::WRONLY|File::CREAT|File::EXCL,0600){|file| file.write(JSON.generate(value)+"\n"); file.flush; file.fsync}
-File.rename(temporary,result_path); File.chmod(0644,result_path)
-puts JSON.generate(value)
+verification=manifest.fetch("verification")
+abort "prepared verification reference is invalid" unless verification.is_a?(Hash) && verification.keys.sort==%w[baseSha digest issue path]
+publisher=lambda do |document|
+  temporary="#{result_path}.tmp.#{$$}"
+  File.open(temporary,File::WRONLY|File::CREAT|File::EXCL,0600){|file| file.write(JSON.generate(document)+"\n"); file.flush; file.fsync}
+  File.rename(temporary,result_path); File.chmod(0644,result_path)
+  puts JSON.generate(document)
+end
+IOSTemplate::ReleaseVerification.with_full_proof(
+  repo: ENV.fetch("VERIFICATION_REPO"), issue: verification["issue"], base: verification["baseSha"],
+  head: source_sha, bundle: bundle, expected_reference: verification, publish: publisher
+) { value }
 RUBY

@@ -37,6 +37,10 @@ artifact_head="$artifact_issue/$head_sha"
 mkdir -p "$artifact_head/iphone-en"
 printf 'sealed-image-A\n' > "$artifact_head/iphone-en/screenshot.png"
 image_digest=$(digest "$artifact_head/iphone-en/screenshot.png")
+for id in iphone-ja ipad-en ipad-ja; do
+  mkdir -p "$artifact_head/$id"
+  cp "$artifact_head/iphone-en/screenshot.png" "$artifact_head/$id/screenshot.png"
+done
 cat > "$artifact_issue/issue-contract.json" <<JSON
 {"schemaVersion":1,"issue":$issue,"repository":"yuto1201/iOS-Template","goal":"Seal exact review evidence","specAnchors":["specs/acceptance.md#品質ゲート"],"acceptanceCriteria":[{"id":"AC-1","text":"Review binds exact evidence"}],"dependencies":[],"externalOperations":[],"externalOperationDetailsDigest":"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","fetchedAt":"2026-08-24T00:00:00Z"}
 JSON
@@ -61,6 +65,16 @@ write_verify() {
   cat > "$artifact_head/verify.json" <<JSON
 {"schemaVersion":1,"status":"passed","issue":$issue,"baseSha":"$base_sha","headSha":"$head_sha","issueContract":{"path":".artifacts/issues/$issue/issue-contract.json","digest":"$contract_digest"},"visualEvaluation":{"status":"passed","cases":[{"id":"iphone-en","images":[{"state":"primary","path":"iphone-en/screenshot.png","digest":"$image_digest","status":"passed","findings":[]}]}],"findings":[]},"acceptanceEvidence":[{"id":"AC-1","status":"passed","evidence":["visual:iphone-en"]}],"completedAt":"2026-08-24T00:01:00Z","testMarker":"$marker"}
 JSON
+  ruby -rjson - "$artifact_head/verify.json" <<'RUBY'
+path = ARGV.fetch(0)
+value = JSON.parse(File.binread(path))
+ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
+image = value.fetch("visualEvaluation").fetch("cases").first.fetch("images").first
+value["changeClassification"] = "application-code"
+value["cases"] = ids.map { |id| {"id"=>id, "status"=>"passed"} }
+value["visualEvaluation"]["cases"] = ids.map { |id| {"id"=>id, "images"=>[image.merge("path"=>"#{id}/screenshot.png")]} }
+File.binwrite(path, JSON.generate(value))
+RUBY
 }
 write_verify A
 

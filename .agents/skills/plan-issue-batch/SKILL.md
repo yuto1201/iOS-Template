@@ -16,6 +16,8 @@ Produce a reviewable Issue graph before Claim. Keep setup with its first useful 
    - `standard`: ordinary user-visible UI, localization, or accessibility work.
    - `strict`: auth/authorization, secrets, schema/migration, production/destructive data, billing/plan, privacy/legal, App Store/TestFlight/signing, or delivery-gate changes.
    - An existing Issue without an explicit profile remains `strict`; never downgrade it by inference.
+   - Independently declare Verification scope with Scope, Stage, Reason in order. Normal UI uses standard + iphone-ja / feature; adaptation uses full / adaptation; release uses strict + full / release. Foundation, identity, project configuration, gate and cross-device changes use full. Absent scope remains legacy full.
+   - Plan one shared English/iPad finishing Issue per app, link deferred feature work, and make release depend on it. Preserve String Catalog keys, flexible layout and critical auth/data/billing tests. Do not invent Issue numbers or require finished English/iPad UI per feature.
 4. Run `tools/validate-issue-body.sh --type "$TYPE"` on each proposed body. An Issue is Definition of Ready only when that validator passes and every acceptance-affecting decision is confirmed.
 5. Draw directed edges `prerequisite -> dependent`. Reject cycles. A dependency is an ordering constraint, not a reason to combine otherwise independent outcomes.
 6. Add serialization edges when expected write-sets overlap. Treat Xcode project/configuration edits as conflicts even when paths are generated indirectly.

@@ -17,7 +17,7 @@ The acceptance auditor applies the canonical [opposite-model review packet](./re
 5. Check for scope expansion and unsupported Build, Test, account, or external-operation claims.
 6. Emit one `acceptanceAssessment` entry for every `AC-*` before deciding the verdict.
 
-Use the [staged-development policy](../../specs/development-stages.md) to distinguish feature completion from release readiness. Explicitly deferred English/iPad polish is tracked in the adaptation Issue, not silently added to a Japanese iPhone feature's ACs. It is also not evidence of English/iPad support. Release readiness still requires the adaptation work and all four cases at the candidate Head. Until Issue #32 implements scoped evidence, do not waive the current four-case packet requirements.
+Use the [staged-development policy](../../specs/development-stages.md) to distinguish feature completion from release readiness. Review the sealed scope: explicit iphone-ja means one Japanese iPhone case; absent/full means all four. Deferred English/iPad polish belongs in one linked adaptation Issue, not additional feature ACs or proof of support. Adaptation/release require full coverage at the candidate Head.
 
 ## Finding schema
 

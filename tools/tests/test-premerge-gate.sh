@@ -337,7 +337,7 @@ write_preflight
 run_gate >/dev/null
 cp "$repo/.artifacts/issues/42/issue-contract.json" "$scratch/contract.application.json"
 
-for mutation in verification-mapping delivery-profile delivery-reason verification-removed delivery-removed; do
+for mutation in verification-mapping delivery-profile delivery-reason verification-removed delivery-removed scope-added; do
   cp "$scratch/issue.application.md" "$issue_body"
   ruby -rjson - "$issue_body" "$mutation" <<'RUBY'
 path, mutation=ARGV
@@ -358,6 +358,8 @@ when "verification-removed"
   text.sub!(/\n## Verification\n.*\z/m, "") or abort
 when "delivery-removed"
   text.sub!(/\n## Delivery profile\n.*?(?=\n## Verification\n)/m, "") or abort
+when "scope-added"
+  text += "\n## Verification scope\n- Scope: full\n- Stage: feature\n- Reason: Added after Claim.\n"
 end
 File.write(path,text)
 RUBY
@@ -369,6 +371,48 @@ RUBY
 done
 cp "$scratch/issue.application.md" "$issue_body"
 run_gate >/dev/null
+
+# Isolate live scope tampering at the pre-verification boundary. Deliberately
+# retain the previous proof: no valid scope mutation may reach proof/review or merge.
+cp "$repo/.artifacts/issues/42/state.json" "$scratch/state.before-scope.json"
+ruby - "$issue_body" <<'RUBY'
+path = ARGV.fetch(0)
+File.write(path, File.read(path) + "\n## Verification scope\n- Scope: full\n- Stage: feature\n- Reason: Full foundation coverage.\n")
+RUBY
+canonical_contract >"$repo/.artifacts/issues/42/issue-contract.json"
+cp "$issue_body" "$scratch/issue.scope.md"
+cp "$repo/.artifacts/issues/42/issue-contract.json" "$scratch/contract.scope.json"
+scope_digest="sha256:$(shasum -a 256 "$scratch/contract.scope.json" | awk '{print $1}')"
+DIGEST="$scope_digest" ruby -rjson -e 'path=ARGV[0]; value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+for mutation in reason stage removed narrowed; do
+  cp "$scratch/issue.scope.md" "$issue_body"
+  ruby -rjson - "$issue_body" "$mutation" <<'RUBY'
+path, mode = ARGV
+text = File.read(path)
+case mode
+when "reason" then text.sub!("Full foundation coverage.", "Changed after Claim.")
+when "stage" then text.sub!("- Stage: feature", "- Stage: adaptation")
+when "removed" then text.sub!(/\n## Verification scope\n.*\z/m, "")
+when "narrowed"
+  text.sub!("- Scope: full", "- Scope: iphone-ja")
+  text.sub!(/(\n## Verification\n\s*)(\{.*?\})(\s*\n## Verification scope)/m) do
+    prefix, json, suffix = $1, $2, $3
+    value = JSON.parse(json)
+    value["cases"].select! { |entry| entry["id"] == "iphone-ja" }
+    value["acceptanceMappings"].each { |entry| entry["checks"].select! { |check| check.start_with?("stage:") || check.end_with?(":iphone-ja") } }
+    prefix + JSON.generate(value) + suffix
+  end or abort "missing Verification"
+end
+File.write(path, text)
+RUBY
+  : >"$FAKE_MERGE_MUTATIONS"
+  assert_fails_with "live scope $mutation is rejected" 'live Issue contract bytes differ from the canonical snapshot' run_gate_merge
+  [[ ! -s "$FAKE_MERGE_MUTATIONS" ]]
+  cmp "$scratch/contract.scope.json" "$repo/.artifacts/issues/42/issue-contract.json"
+done
+cp "$scratch/state.before-scope.json" "$repo/.artifacts/issues/42/state.json"
+cp "$scratch/contract.application.json" "$repo/.artifacts/issues/42/issue-contract.json"
+cp "$scratch/issue.application.md" "$issue_body"
 
 CONTRACT="$repo/.artifacts/issues/42/issue-contract.json" STATE="$repo/.artifacts/issues/42/state.json" VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" PACKET="$repo/.artifacts/issues/42/$head_sha/review-packet.json" REVIEW="$repo/.artifacts/issues/42/$head_sha/review.json" ruby -rjson -rdigest -e '
   contract=JSON.parse(File.binread(ENV.fetch("CONTRACT"))); contract["unexpected"]=true; File.binwrite(ENV.fetch("CONTRACT"),JSON.generate(contract)); contract_digest="sha256:#{Digest::SHA256.file(ENV.fetch("CONTRACT")).hexdigest}"

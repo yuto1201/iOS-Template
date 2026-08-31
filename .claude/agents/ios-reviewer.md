@@ -14,4 +14,4 @@ Read and follow `docs/agent-contracts/ios-reviewer.md`, then inspect only the pa
 
 - **Swift review.** Evaluate correctness, actor isolation, state, persistence, and lifecycle behavior after implementation.
 - **Test review.** Check whether unit and UI tests detect the important regressions they claim to cover.
-- **UI matrix review.** Inspect English/Japanese and iPhone/iPad evidence for accessibility or layout defects.
+- **UI matrix review.** Inspect the sealed scope for accessibility/layout defects: one Japanese iPhone case for explicit iphone-ja, four for legacy/full. Require full for adaptation/release; do not add deferred English/iPad polish as feature ACs.

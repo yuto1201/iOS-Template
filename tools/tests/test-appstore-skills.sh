@@ -9,10 +9,9 @@ submit_skill="$repo_root/.agents/skills/submit-appstore-release"
 seal="$prepare_skill/scripts/seal-package.sh"
 record="$submit_skill/scripts/record-section.sh"
 requirements_source="$repo_root/tools/tests/fixtures/appstore/requirements.json"
-source_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 build_digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 team_id=YUTO-PERSONAL-TEAM
-bundle_id=com.yuto.TemplateApp
+bundle_id=com.example.TemplateApp
 version=1.0
 
 [[ -f "$prepare_skill/SKILL.md" && -x "$seal" && -f "$submit_skill/SKILL.md" && -x "$record" ]] || {
@@ -30,6 +29,10 @@ rg -q 'first.publication|first publication|初回公開' "$prepare_skill/SKILL.m
 
 project="$workspace/project"; package="$project/App Store"
 audit="$workspace/release-audit.json"; approval="$workspace/legal-approval.json"; preflight="$workspace/app-store-preflight.json"
+mkdir -p "$project"
+proof=$("$repo_root/tools/tests/test-ios-evidence.sh" --export-fixture "$project" full | tail -n 1)
+source_sha=$(ruby -rjson -e 'puts JSON.parse(ARGV[0]).fetch("head")' "$proof")
+verification_base=$(ruby -rjson -e 'puts JSON.parse(ARGV[0]).fetch("base")' "$proof")
 
 package_digest() {
   PACKAGE="$package" ruby -rdigest -e '
@@ -45,7 +48,7 @@ package_digest() {
 }
 
 write_valid_fixture() {
-  rm -rf -- "$project"; mkdir -p "$project/tools" "$package/metadata/localizations" "$package/privacy" "$package/legal" "$package/review" \
+  rm -rf -- "$package"; mkdir -p "$project/tools" "$package/metadata/localizations" "$package/privacy" "$package/legal" "$package/review" \
     "$package/release-notes" "$package/submission" "$package/screenshots/en-US/iphone-6.9" "$package/screenshots/en-US/ipad-13" \
     "$package/screenshots/ja/iphone-6.9" "$package/screenshots/ja/ipad-13"
   /bin/cp "$repo_root/tools/validate-appstore-package.sh" "$project/tools/validate-appstore-package.sh"
@@ -136,6 +139,7 @@ write_attestations() {
 seal_package() {
   "$seal" --repo "$project" --package-root "$package" --requirements "$package/submission/requirements.json" \
     --bundle-id "$bundle_id" --version "$version" --source-sha "$source_sha" --build-digest "$build_digest" \
+    --verification-issue 42 --verification-base "$verification_base" \
     --audit "$audit" --first-publication yes --legal-approval "$approval" \
     --output "$package/submission/$version-package.json" --now 2026-08-26T02:00:00Z
 }
@@ -149,6 +153,23 @@ assert_seal_failure() {
 write_valid_fixture; digest=$(package_digest); write_attestations "$digest"
 prepared=$(seal_package)
 [[ "$prepared" == *'"status":"prepared"'* && -f "$package/submission/$version-package.json" ]] || { echo "complete preparation failed: $prepared" >&2; exit 1; }
+ruby "$repo_root/tools/lib/release-verification.rb" "$project" "$package/submission/$version-package.json" "$source_sha" "$bundle_id" >/dev/null
+ruby -r"$repo_root/tools/lib/release-verification" - "$project" "$verification_base" "$source_sha" "$bundle_id" <<'RUBY'
+repo, base, head, bundle = ARGV
+[
+  {head: "f" * 40, bundle: bundle},
+  {head: head, bundle: "com.example.OtherApp"}
+].each do |identity|
+  published = false
+  begin
+    IOSTemplate::ReleaseVerification.with_full_proof(repo: repo, issue: 42, base: base, head: identity[:head],
+      bundle: identity[:bundle], publish: ->(_) { published = true }) { {} }
+    abort "invalid release proof was accepted"
+  rescue IOSTemplate::ReleaseVerification::InvalidProof
+    abort "invalid proof published output" if published
+  end
+end
+RUBY
 
 write_valid_fixture; /usr/bin/sed -i '' 's/Status: Confirmed/Status: Draft/' "$package/legal/privacy-policy.md"
 digest=$(package_digest); write_attestations "$digest"
@@ -205,5 +226,17 @@ rm -f -- "$package/submission/$version-result.json"
 write_preflight "$team_id" claude
 claude_result=$(record_section app-information "$build_digest" no claude)
 [[ "$claude_result" == *'"primaryModel":"claude"'* ]] || { echo "Claude submission executor was not preserved: $claude_result" >&2; exit 1; }
+
+printf '\n' >>"$project/.artifacts/issues/42/$source_sha/verify.json"
+set +e; output=$(record_section localization "$build_digest" yes claude 2>&1); command_status=$?; set -e
+[[ "$command_status" -ne 0 && "$output" == *'verification'* ]] || { echo "changed verification proof was not blocked: $output" >&2; exit 1; }
+
+project="$workspace/partial"; package="$project/App Store"
+mkdir -p "$project"
+proof=$("$repo_root/tools/tests/test-ios-evidence.sh" --export-fixture "$project" iphone-ja | tail -n 1)
+source_sha=$(ruby -rjson -e 'puts JSON.parse(ARGV[0]).fetch("head")' "$proof")
+verification_base=$(ruby -rjson -e 'puts JSON.parse(ARGV[0]).fetch("base")' "$proof")
+write_valid_fixture; digest=$(package_digest); write_attestations "$digest"
+assert_seal_failure 'one-case proof cannot release' 'full'
 
 echo 'PASS: App Store skills apply the same configured-account, legal, digest, build, and resume gates to Codex and Claude'

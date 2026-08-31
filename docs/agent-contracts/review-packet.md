@@ -82,7 +82,7 @@
 
 スタイル上の好みだけをBlocking findingにしません。
 
-[段階的開発仕様](../../specs/development-stages.md)に従い、通常機能では明示的に延期した英訳・iPad最適化を追加ACとして要求しません。今回の確認範囲と仕上げIssueに残る範囲を区別し、未検証を成功と解釈しないでください。現在のpacket・validatorは4条件固定のため、1条件経路のIssue #32が完了するまではschemaを省略・縮小せず、現行の必須証拠をすべて確認します。
+[段階的開発仕様](../../specs/development-stages.md)に従い、明示`iphone-ja`の通常機能は1条件、未指定／`full`は4条件の証拠を確認します。延期した英訳・iPad最適化を追加ACとして要求せず、未検証を成功と解釈しません。仕上げ・リリース・全体整合は`full`。packetはsealed contractへdigestで束縛され、手作業のcase省略や別scope流用は拒否します。
 
 ## 4. Result schema
 

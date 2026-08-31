@@ -45,7 +45,7 @@ Date: 2026-08-31
 
 1. 受け入れ条件を満たす実装がある。
 2. profileが要求するBuildとTestが実行済みで成功している。
-3. `standard`／`strict`のUI変更は、安定した最終候補HeadをIssueの検証範囲に対応するSimulatorマトリクスで確認済み。1条件経路の実装までは§4の現行4条件を維持する。
+3. `standard`／`strict`のUI変更は、安定した最終候補HeadをIssueの検証範囲に対応するSimulatorマトリクスで確認済み。`iphone-ja`は日本語iPhoneの1条件、`full`と範囲未指定は§4の4条件を要求する。
 4. `standard`／`strict`のUI変更は、AIが要求された全スクリーンショットと操作結果を評価済み。延期した英語・iPadを成功と推測していない。
 5. 検証証拠のCommit SHAが現在のHead SHAと一致する。
 6. `standard`／`strict`は反対モデルがレビューし、未解決の重大指摘がない。`fast`はblocking reviewを要求しない。
@@ -71,11 +71,11 @@ Date: 2026-08-31
 
 profile未導入の既存Issueは安全な移行のため`strict`です。
 
-profileを下げることで日本語iPhone開発を実現しない。危険度の判定は維持し、端末・言語の範囲だけを[開発段階](development-stages.md#3-危険度と検証範囲は別に決める)に合わせる。現在のapplication検証は4条件固定であり、次節の移行境界を守る。
+profileを下げることで日本語iPhone開発を実現しない。危険度の判定は維持し、端末・言語の範囲だけを[開発段階](development-stages.md#3-危険度と検証範囲は別に決める)に合わせる。Claim時の明示範囲をcontract、matrix、実行、画像評価、review、PR、pre-mergeで一致させる。
 
 ## 4. 標準Simulatorマトリクス
 
-確定した目標は、通常機能開発の`iphone-ja`（下表の日本語iPhoneだけ）と、仕上げ・リリースの`full`（下表の4条件）の分離である。`iphone-ja`でのcanonical完了経路は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)で実装する。対応前のツール・既存snapshotには下表の4条件を適用し、1条件を無理に通さない。
+通常機能開発の`iphone-ja`は下表の日本語iPhoneだけ、仕上げ・リリースの`full`は下表の4条件を要求する。未指定の既存Issue・snapshotは`full`で、Claim済みの範囲を暗黙に縮小しない。任意の部分集合や別scopeの凍結matrix再利用は禁止する。
 
 | Family | Device | Locale | Language |
 | --- | --- | --- | --- |

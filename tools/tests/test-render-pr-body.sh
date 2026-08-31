@@ -2,6 +2,10 @@
 set -euo pipefail
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
+[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+scope="${1:-full}"
+case_ids=(iphone-en iphone-ja ipad-en ipad-ja)
+[[ "$scope" != scoped ]] || case_ids=(iphone-ja)
 fixtures="$source_root/tools/tests/fixtures/verify"
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-render.XXXXXX")
 scratch=$(cd "$scratch" && pwd -P)
@@ -17,6 +21,8 @@ cp "$source_root/tools/lib/descriptor-files.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-contract.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-sealing.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/delivery-profile.rb" "$primary/tools/lib/"
+cp "$source_root/tools/lib/verification-scope.rb" "$primary/tools/lib/"
+cp "$source_root/tools/lib/prepare-review-packet.rb" "$source_root/tools/lib/review-artifacts.rb" "$primary/tools/lib/"
 printf '%s\n' '{}' >"$primary/TemplateApp.xcodeproj/project.pbxproj"
 printf '%s\n' '# Initial' >"$primary/docs/initial.md"
 git -C "$primary" init -q
@@ -48,7 +54,7 @@ packet="$head_dir/visual-packet.json"
 matrix="$matrix_dir/simulator-matrix.json"
 mkdir -p "$head_dir" "$matrix_dir"
 cp "$fixtures/issue-contract.json" "$contract"
-cp -R "$fixtures/screenshots/." "$head_dir/"
+for id in "${case_ids[@]}"; do cp -R "$fixtures/screenshots/$id" "$head_dir/"; done
 
 ruby -rjson - "$matrix" <<'RUBY'
 path = ARGV.fetch(0)
@@ -69,9 +75,21 @@ matrix = {
 File.write(path, JSON.pretty_generate(matrix) + "\n")
 RUBY
 
+if [[ "$scope" == scoped ]]; then
+  ruby -rjson - "$contract" "$matrix" <<'RUBY'
+contract_path, matrix_path = ARGV
+contract = JSON.parse(File.read(contract_path))
+contract["verificationScope"] = {"name"=>"iphone-ja", "stage"=>"feature", "reason"=>"Japanese iPhone first; finishing deferred."}
+contract["verification"]["cases"].select! { |entry| entry["id"] == "iphone-ja" }
+contract["verification"]["acceptanceMappings"].each { |entry| entry["checks"].select! { |check| check.start_with?("stage:") || check.end_with?(":iphone-ja") } }
+matrix = JSON.parse(File.read(matrix_path))
+matrix["scope"] = "iphone-ja"; matrix["cases"].select! { |entry| entry["id"] == "iphone-ja" }
+File.write(contract_path, JSON.generate(contract)); File.write(matrix_path, JSON.generate(matrix))
+RUBY
+fi
 png_fixture="$scratch/one-pixel.png"
 printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' | /usr/bin/base64 -D >"$png_fixture"
-for id in iphone-en iphone-ja ipad-en ipad-ja; do
+for id in "${case_ids[@]}"; do
   cp "$png_fixture" "$head_dir/$id/screenshot.png"
   /usr/bin/ruby -rzlib - "$png_fixture" "$head_dir/$id/settings.png" "$id" <<'RUBY'
 source, destination, label = ARGV
@@ -111,15 +129,18 @@ root_digest=$(printf '%s' "$canonical_root" | shasum -a 256 | awk '{print $1}')
 workspace="/tmp/ios-template-verify/$(basename "$canonical_root")-$root_digest/issue-42/$head/Attempts/attempt-aaaaaaaa"
 REPOSITORY="$worktree" EVIDENCE="$verify" DRAFT="$draft" WORKSPACE="$workspace" ruby -rjson -rdigest <<'RUBY'
 final = JSON.parse(File.read(ENV.fetch("EVIDENCE")))
+actions = JSON.parse(File.read(File.join(ENV.fetch("REPOSITORY"), ".artifacts/issues/42/issue-contract.json"))).fetch("verification").fetch("cases")
+ids = actions.map { |entry| entry.fetch("id") }
+final["cases"].select! { |entry| ids.include?(entry["id"]) }
+final["acceptanceEvidence"].each { |entry| entry["evidence"].select! { |check| check.start_with?("stage:") || ids.any? { |id| check.end_with?(":#{id}") } } }
 root = File.dirname(ENV.fetch("EVIDENCE"))
 final.fetch("cases").each { |entry| entry["screenshotDigest"] = "sha256:#{Digest::SHA256.file(File.join(root, entry.fetch("screenshot"))).hexdigest}" }
 File.write(ENV.fetch("EVIDENCE"), JSON.pretty_generate(final) + "\n")
-ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
 draft = {
   "schemaVersion"=>1,"status"=>"awaiting-visual-review","issue"=>42,"baseSha"=>final.fetch("baseSha"),"headSha"=>final.fetch("headSha"),
   "issueContract"=>final.fetch("issueContract"),"matrixFile"=>final.fetch("matrixFile"),"matrixDigest"=>final.fetch("matrixDigest"),
   "executionRoute"=>"xcodebuild-simctl","xcode"=>final.fetch("xcode"),"build"=>final.fetch("build"),"tests"=>final.fetch("tests"),
-  "cases"=>ids.map.with_index { |id,index| image=File.join(root,id,"screenshot.png"); {"id"=>id,"status"=>"passed","screenshot"=>"#{id}/screenshot.png","screenshotDigest"=>"sha256:#{Digest::SHA256.file(image).hexdigest}","mechanicalCheck"=>index.even? ? "test:TemplateAppUITests/SmokeTests/testLaunch" : "assertion:launch-succeeded"} },
+  "cases"=>ids.map.with_index { |id,index| image=File.join(root,id,"screenshot.png"); {"id"=>id,"status"=>"passed","screenshot"=>"#{id}/screenshot.png","screenshotDigest"=>"sha256:#{Digest::SHA256.file(image).hexdigest}","mechanicalCheck"=>actions[index].key?("testIdentifier") ? "test:#{actions[index].fetch('testIdentifier')}" : "assertion:launch-succeeded"} },
   "acceptanceEvidence"=>final.fetch("acceptanceEvidence").map { |entry| {"id"=>entry.fetch("id"),"evidence"=>entry.fetch("evidence").reject { |check| check.start_with?("visual:") }} },
   "workspaceArtifacts"=>{"derivedDataPath"=>"#{ENV.fetch("WORKSPACE")}/DerivedData","buildResultBundlePath"=>"#{ENV.fetch("WORKSPACE")}/Build.xcresult","testResultBundlePath"=>"#{ENV.fetch("WORKSPACE")}/Tests.xcresult"},
   "executionCompletedAt"=>"2026-08-21T12:30:00+09:00"
@@ -139,7 +160,7 @@ value["visualEvaluation"]={"status"=>"passed","packet"=>{"path"=>".artifacts/iss
 
 seal_review() {
   REPOSITORY="$worktree" CONTRACT="$contract" VERIFY="$verify" REVIEW_PACKET="$review_packet" REVIEW_DIFF="$review_diff" REVIEW="$review" HEAD="$head" BASE="$base" \
-    ruby -I "$primary/tools/lib" -rjson -rdigest -rreview-contract <<'RUBY'
+    ruby -I "$primary/tools/lib" -rjson -rdigest -rreview-contract -rprepare-review-packet <<'RUBY'
 repo = File.realpath(ENV.fetch("REPOSITORY"))
 contract_path = ENV.fetch("CONTRACT")
 verify_path = ENV.fetch("VERIFY")
@@ -150,21 +171,11 @@ base = ENV.fetch("BASE")
 head = ENV.fetch("HEAD")
 contract_bytes = File.binread(contract_path)
 verify_bytes = File.binread(verify_path)
-contract = JSON.parse(contract_bytes)
 verify = JSON.parse(verify_bytes)
-diff = IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: base, head_sha: head)
-images = IOSTemplate::ReviewContract.verified_image_references!(verify, issue: 42, head_sha: head)
-prefix = ".artifacts/issues/42/#{head}/"
-packet = {
-  "schemaVersion" => 2, "issue" => 42, "primaryModel" => "codex", "reviewerModel" => "claude",
-  "baseSha" => base, "headSha" => head, "verifySha" => head,
-  "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => IOSTemplate::ReviewContract.digest(contract_bytes)},
-  "specAnchors" => contract.fetch("specAnchors"), "acceptanceCriteria" => contract.fetch("acceptanceCriteria"),
-  "diff" => {"path" => "#{prefix}review.diff", "digest" => IOSTemplate::ReviewContract.digest(diff)},
-  "verify" => {"path" => "#{prefix}verify.json", "digest" => IOSTemplate::ReviewContract.digest(verify_bytes)},
-  "imageFiles" => images
-}
-packet_bytes = JSON.generate(packet)
+File.unlink(packet_path) if File.exist?(packet_path)
+File.unlink(diff_path) if File.exist?(diff_path)
+IOSTemplate::PrepareReviewPacket.prepare(repo: repo, primary: "codex", issue: 42, base_sha: base, head_sha: head)
+packet_bytes = File.binread(packet_path)
 result = {
   "schemaVersion" => 2, "issue" => 42, "reviewerModel" => "claude", "baseSha" => base,
   "headSha" => head, "verifySha" => head, "issueContractDigest" => IOSTemplate::ReviewContract.digest(contract_bytes),
@@ -172,20 +183,18 @@ result = {
   "acceptanceAssessment" => verify.fetch("acceptanceEvidence").map { |item| {"id" => item.fetch("id"), "status" => "supported", "evidence" => ["verify.json#acceptanceEvidence"]} },
   "reviewedAt" => "2026-08-21T13:01:00+09:00", "reviewPacketDigest" => IOSTemplate::ReviewContract.digest(packet_bytes)
 }
-File.binwrite(diff_path, diff)
-File.binwrite(packet_path, packet_bytes)
 File.binwrite(result_path, JSON.generate(result))
 RUBY
 }
 seal_review
 
 cp "$contract" "$scratch/contract.good"; cp "$verify" "$scratch/verify.good"; cp "$review" "$scratch/review.good"; cp "$review_packet" "$scratch/review-packet.good"; cp "$review_diff" "$scratch/review-diff.good"; cp "$matrix" "$scratch/matrix.good"; cp "$packet" "$scratch/packet.good"
-for id in iphone-en iphone-ja ipad-en ipad-ja; do cp "$head_dir/$id/screenshot.png" "$scratch/$id-screenshot.good"; cp "$head_dir/$id/settings.png" "$scratch/$id-settings.good"; done
+for id in "${case_ids[@]}"; do cp "$head_dir/$id/screenshot.png" "$scratch/$id-screenshot.good"; cp "$head_dir/$id/settings.png" "$scratch/$id-settings.good"; done
 
 run_renderer() { "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head"; }
 restore_application() {
   cp "$scratch/contract.good" "$contract"; cp "$scratch/verify.good" "$verify"; cp "$scratch/review.good" "$review"; cp "$scratch/review-packet.good" "$review_packet"; cp "$scratch/review-diff.good" "$review_diff"; cp "$scratch/matrix.good" "$matrix"; rm -f "$packet"; cp "$scratch/packet.good" "$packet"
-  for id in iphone-en iphone-ja ipad-en ipad-ja; do cp "$scratch/$id-screenshot.good" "$head_dir/$id/screenshot.png"; cp "$scratch/$id-settings.good" "$head_dir/$id/settings.png"; done
+  for id in "${case_ids[@]}"; do cp "$scratch/$id-screenshot.good" "$head_dir/$id/screenshot.png"; cp "$scratch/$id-settings.good" "$head_dir/$id/settings.png"; done
 }
 expect_refusal() {
   local label=$1
@@ -194,6 +203,18 @@ expect_refusal() {
 }
 
 body=$(run_renderer)
+if [[ "$scope" == scoped ]]; then
+  grep -Fq 'iPhone Pro / Japanese (`iphone-ja`): `passed`' <<<"$body"
+  [[ "$(grep -c 'deferred / unverified' <<<"$body")" == 3 ]]
+  ! grep -Eq '(English|iPad).*`passed`' <<<"$body"
+  ruby -rjson - "$review_packet" <<'RUBY'
+value = JSON.parse(File.read(ARGV[0]))
+abort "packet contains unverified languages/devices" unless value["imageFiles"].all? { |entry| entry["path"].include?("/iphone-ja/") }
+RUBY
+  printf '\n' >>"$matrix"; expect_refusal scoped-stale-matrix
+  echo 'PASS: one-case canonical review packet and PR keep English/iPad deferred/unverified'
+  exit 0
+fi
 for expected in \
   'Closes #42' \
   '`docs/verification.md#stage-e-evidence`' \
@@ -324,3 +345,4 @@ fast_body=$(run_renderer)
 grep -Fq 'Not required for explicit `fast` delivery profile.' <<<"$fast_body" || { echo 'fast PR body did not record the review waiver' >&2; exit 1; }
 
 echo 'PASS: PR body readiness is bound to canonical current visual evidence and documentation-only validation remains available'
+bash "$source_root/tools/tests/test-render-pr-body.sh" scoped

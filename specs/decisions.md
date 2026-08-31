@@ -205,3 +205,13 @@
 - Decision: [段階的開発仕様](development-stages.md)に従い、通常機能開発は日本語iPhone、主要機能と画面遷移が安定したら英語・iPad仕上げ、リリース候補は4条件で確認する。delivery profileと検証範囲を分離し、localization・可変レイアウト・accessibilityの土台とデータ・権限・課金の正しさは初期から維持する。
 - Consequence: 翻訳・iPad最適化を仕上げIssueへ集約し、リリースIssueの依存にする。既存snapshotを縮小せず、未検証の言語・端末を成功扱いしない。実行ツールは現在4条件固定なので、#19・#29の既存修正に続く#32で1条件経路を実装するまで現行canonicalゲートを維持する。方針記載だけでツール対応済みとは報告しない。
 - Related Issue: #31、#32
+
+## D-028: 検証範囲をIssue契約と実行・リリース証拠へ接続する
+
+- Date: 2026-09-01
+- Status: 確定
+- Supersedes: D-027の移行中という実装境界。危険度・安全・account・Head・反対モデル承認は変更しない。
+- Context: 日本語iPhone優先の承認済み方針を、固定4条件の実行経路でも実現する必要がある。
+- Decision: 任意のVerification scope節を共通producerがname・stage・reasonとして封印する。通常UIはstandard + iphone-ja / feature、仕上げはfull / adaptation、リリースはstrict + full / release。未指定の既存contractはbyte互換のfull。case集合はexact 1件／4件のみで、scope改変・別範囲のmatrixや証拠流用を拒否する。
+- Consequence: 日本語iPhoneの機能Issueで英訳・iPad最適化を毎回完成させない。共通の仕上げIssueをリリース依存にし、申請準備・提出再開では同じ候補HeadとBundle IDのfull証拠を再検証する。提出画像の専用matrix、法務承認、指定アカウントの確認は維持する。既存アプリには自動適用しない。
+- Related Issue: #32

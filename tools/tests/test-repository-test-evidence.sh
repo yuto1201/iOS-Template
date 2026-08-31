@@ -14,6 +14,7 @@ cp "$source_repo/tools/run-repository-tests.sh" "$repo/tools/"
 cp "$source_repo/tools/lib/run-repository-tests.rb" \
   "$source_repo/tools/lib/review-artifacts.rb" \
   "$source_repo/tools/lib/review-contract.rb" \
+  "$source_repo/tools/lib/verification-scope.rb" \
   "$source_repo/tools/lib/review-sealing.rb" \
   "$source_repo/tools/lib/prepare-review-packet.rb" \
   "$repo/tools/lib/"

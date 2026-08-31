@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
-ruby -I"$repo_root/tools/lib" -rissue-contract -rminitest/autorun -rjson -ropen3 -rtmpdir -ryaml - "$repo_root" <<'RUBY'
+ruby -I"$repo_root/tools/lib" -rissue-contract -rreview-contract -rminitest/autorun -rjson -ropen3 -rtmpdir -ryaml - "$repo_root" <<'RUBY'
 REPO_ROOT = ARGV.shift
 
 class VerificationContractTest < Minitest::Test
@@ -120,6 +120,54 @@ class VerificationContractTest < Minitest::Test
     assert_raises(IOSTemplate::IssueContract::ValidationError) { parse(text) }
   end
 
+  def scoped_body(name = "iphone-ja", stage = "feature", profile = "standard")
+    value = verification
+    value["cases"].select! { |entry| entry["id"] == "iphone-ja" } if name == "iphone-ja"
+    body(JSON.generate(value)) + "\n## Verification scope\n- Scope: #{name}\n- Stage: #{stage}\n- Reason: Japanese iPhone first; finishing is deferred.\n" +
+      "\n## Delivery profile\n- Profile: #{profile}\n- Reason: Targeted feature verification.\n"
+  end
+
+  def test_scope_is_sealed_independently_of_risk_and_legacy_bytes_are_unchanged
+    %w[standard strict].each do |profile|
+      contract = parse(scoped_body("iphone-ja", "feature", profile))
+      assert_equal({"name"=>"iphone-ja", "stage"=>"feature", "reason"=>"Japanese iPhone first; finishing is deferred."}, contract["verificationScope"])
+      assert_equal ["iphone-ja"], contract.dig("verification", "cases").map { |entry| entry["id"] }
+      IOSTemplate::IssueContract.validate_snapshot!(contract, issue: 42, repository: "yuto1201/iOS-Template")
+    end
+    %w[feature adaptation release].each do |stage|
+      contract = parse(scoped_body("full", stage, "strict"))
+      assert_equal "full", contract.dig("verificationScope", "name")
+    end
+    [nil, "_No response_", "Not applicable"].each do |section|
+      text = body + (section ? "\n## Verification scope\n#{section}\n" : "")
+      assert_equal IOSTemplate::IssueContract.canonical_json(parse(body)), IOSTemplate::IssueContract.canonical_json(parse(text))
+    end
+  end
+
+  def test_scope_rejects_invalid_schema_expansion_and_release_shrinking
+    invalid = [
+      scoped_body("other"), scoped_body("iphone-ja", "other"), scoped_body("iphone-ja", "adaptation"),
+      scoped_body("iphone-ja", "release", "strict"), scoped_body("full", "release", "standard"),
+      scoped_body("iphone-ja", "feature", "fast"),
+      scoped_body.sub("- Reason: Japanese iPhone first; finishing is deferred.", "- Reason: "),
+      scoped_body + "\n## Verification scope\nNot applicable\n",
+      scoped_body.sub("- Stage: feature", "- Scope: full"),
+      scoped_body.sub("## Verification\n", "## Ignored\n"),
+      scoped_body.sub('"case:iphone-ja"', '"case:ipad-ja"')
+    ]
+    invalid.each { |text| assert_raises(IOSTemplate::IssueContract::ValidationError) { parse(text) } }
+    assert_raises(IOSTemplate::IssueContract::ValidationError) { IOSTemplate::IssueContract.parse(scoped_body, issue_type: "release") }
+    [nil, {}, {"name"=>"full"}, {"name"=>"iphone-ja","stage"=>"adaptation","reason"=>"no"},
+     {"name"=>"full","stage"=>"feature","reason"=>"ok","extra"=>true}].each do |scope|
+      snapshot = parse(body(JSON.generate(verification)))
+      snapshot["verificationScope"] = scope
+      assert_raises(IOSTemplate::IssueContract::ValidationError) { IOSTemplate::IssueContract.validate_snapshot!(snapshot, issue: 42, repository: "yuto1201/iOS-Template") }
+    end
+    snapshot = parse(scoped_body("iphone-ja", "feature", "strict"))
+    snapshot["externalOperations"] = ["appstore.inspect_app"]
+    assert_raises(IOSTemplate::IssueContract::ValidationError) { IOSTemplate::IssueContract.validate_snapshot!(snapshot, issue: 42, repository: "yuto1201/iOS-Template") }
+  end
+
   def test_real_cli_validates_and_generates_the_same_verification
     Dir.mktmpdir("verification-contract-") do |directory|
       path = File.join(directory, "issue.md")
@@ -135,13 +183,33 @@ class VerificationContractTest < Minitest::Test
     end
   end
 
+  def test_review_cannot_expand_or_shrink_the_sealed_scope
+    contract = parse(scoped_body)
+    proof = {"changeClassification"=>"application-code", "cases"=>[{"id"=>"iphone-ja"}],
+             "visualEvaluation"=>{"cases"=>[{"id"=>"iphone-ja"}]}}
+    IOSTemplate::ReviewContract.validate_evidence_scope!(contract, proof)
+    ["cases", "visual"].each do |key|
+      bad = Marshal.load(Marshal.dump(proof))
+      (key == "cases" ? bad["cases"] : bad["visualEvaluation"]["cases"]) << {"id"=>"ipad-ja"}
+      assert_raises(IOSTemplate::ReviewContract::ValidationError) { IOSTemplate::ReviewContract.validate_evidence_scope!(contract, bad) }
+    end
+    assert_raises(IOSTemplate::ReviewContract::ValidationError) { IOSTemplate::ReviewContract.validate_evidence_scope!(contract, {"changeClassification"=>"documentation-only"}) }
+    contract = parse(scoped_body("full", "adaptation", "strict"))
+    assert_raises(IOSTemplate::ReviewContract::ValidationError) { IOSTemplate::ReviewContract.validate_evidence_scope!(contract, proof) }
+  end
+
   def test_issue_form_examples_are_consumable_without_rewriting_the_schema
     %w[feature regression].each do |type|
       form = YAML.load_file(File.join(REPO_ROOT, ".github/ISSUE_TEMPLATE/#{type}.yml"))
       field = form.fetch("body").find { |entry| entry["id"] == "verification" }
       refute_nil field, "#{type} form has no Verification input"
       example = field.fetch("attributes").fetch("placeholder")
-      assert_equal JSON.parse(example), parse(body(example)).fetch("verification")
+      scope = form.fetch("body").find { |entry| entry["id"] == "verification-scope" }.fetch("attributes").fetch("value")
+      profile = form.fetch("body").find { |entry| entry["id"] == "delivery-profile" }.fetch("attributes").fetch("value")
+      contract = parse(body(example) + "\n## Verification scope\n#{scope}\n## Delivery profile\n#{profile}")
+      assert_equal JSON.parse(example), contract.fetch("verification")
+      assert_equal "iphone-ja", contract.dig("verificationScope", "name")
+      assert_equal "standard", contract.dig("deliveryProfile", "name")
     end
   end
 end

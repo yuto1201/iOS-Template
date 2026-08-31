@@ -55,10 +55,10 @@ body:
     id: ui-verification
     attributes:
       label: UI verification
-      description: "Write `Not applicable`, or list target screens/states plus exact English and Japanese expectations."
+      description: "For UI work, describe the selected scope. Japanese iPhone features may defer English/iPad polish to one linked finishing Issue. Non-UI work may say Not applicable."
       placeholder: |
         - Target screens/states: Settings screen, loaded state
-        - English expectations: Title and controls are complete in English.
+        - English expectations: Deferred/unverified; link the shared English/iPad finishing Issue here.
         - Japanese expectations: Title and controls are complete in Japanese.
     validations:
       required: true
@@ -67,11 +67,22 @@ body:
     attributes:
       label: Delivery profile
       description: "Choose fast for low-risk non-UI work, standard for ordinary UI work, or strict for security, data migration, production, billing, legal, or release work. Existing Issues without this block remain strict."
-      placeholder: |
-        - Profile: fast
-        - Reason: Local non-UI logic with targeted Build and Unit Test coverage.
+      value: |
+        - Profile: standard
+        - Reason: Ordinary UI feature verified at a stable candidate Head.
     validations:
       required: true
+  - type: textarea
+    id: verification-scope
+    attributes:
+      label: Verification scope
+      description: "Normal UI work uses iphone-ja / feature. Choose full for adaptation, release, foundation or cross-device changes. Remove this section for documentation-only or fast work. Link deferred work in Out of scope."
+      value: |
+        - Scope: iphone-ja
+        - Stage: feature
+        - Reason: Japanese iPhone first; English/iPad finishing is tracked in the shared finishing Issue.
+    validations:
+      required: false
   - type: textarea
     id: verification
     attributes:
@@ -82,10 +93,7 @@ body:
           "bundleIdentifier": "com.example.ExampleApp",
           "unitTestIdentifier": "ExampleAppTests/ExampleAppTests/testSave",
           "cases": [
-            {"id": "iphone-en", "testIdentifier": "ExampleAppUITests/SmokeTests/testLaunch"},
-            {"id": "iphone-ja", "testIdentifier": "ExampleAppUITests/SmokeTests/testLaunch"},
-            {"id": "ipad-en", "assertion": {"kind": "launch-succeeded"}},
-            {"id": "ipad-ja", "assertion": {"kind": "launch-succeeded"}}
+            {"id": "iphone-ja", "testIdentifier": "ExampleAppUITests/SmokeTests/testLaunch"}
           ],
           "acceptanceMappings": [
             {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},

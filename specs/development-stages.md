@@ -1,20 +1,20 @@
 # 日本語iPhone優先の段階的開発
 
 Status: 確定
-Version: 1.0
-Date: 2026-08-31
+Version: 1.1
+Date: 2026-09-01
 
 ## 1. 方針
 
 通常の機能開発は日本語iPhoneを主対象とし、主要機能・画面遷移が安定してから英語・iPadを仕上げる。最終的な対応範囲は日本語・英語、iPhone・iPadのまま変更しない。これは開発順序と検証範囲の変更であり、安全性やリリース品質を下げる決定ではない。
 
-この方針は確定済みだが、1条件でcanonical検証を完了する実行経路は[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)で実装する。**現在のツールは4条件固定**である。実装前に1件の証拠を4件として扱ったり、検証を省略してマージしたりしない。移行中の扱いは§6を正とする。
+[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)の実行経路により、新規の通常機能Issueは明示した`iphone-ja`の1条件でcanonical検証・反対モデルレビュー・マージを完了できる。未指定の既存Issueは`full`のままとし、未検証の言語・端末を成功扱いしない。
 
 ## 2. 開発の順序
 
 | 段階 | 主な作業 | 検証範囲と終了条件 |
 | --- | --- | --- |
-| 機能開発 | 日本語iPhoneの主要機能、画面遷移、保存・復元、エラー表示を固める | 実行経路の対応後は `iphone-ja`。IssueのACと対象Testを満たす。英訳・iPad最適化の完成は求めない |
+| 機能開発 | 日本語iPhoneの主要機能、画面遷移、保存・復元、エラー表示を固める | `iphone-ja`。IssueのACと対象Testを満たす。英訳・iPad最適化の完成は求めない |
 | 仕上げ | 英訳、文字量差、iPadレイアウト、回転・サイズ変更などをまとめて調整する | `full`。主要機能とナビゲーションが安定した時点で開始し、対応範囲の不足を解消する |
 | リリース確認 | 同じ候補Headの回帰確認、提出情報・法務・スクリーンショットを整合させる | `full`。iPhone/iPad × 日本語/英語を確認する。App Store用画像の専用matrixは別途維持する |
 
@@ -25,7 +25,7 @@ Date: 2026-08-31
 ## 3. 危険度と検証範囲は別に決める
 
 - Delivery profile (`fast` / `standard` / `strict`) は変更の危険度と必要な安全確認・レビューを決める。
-- 検証範囲 (`iphone-ja` / `full`) は確認する端末・言語を決める。実行経路の対応後、通常の新規UI Issueは `standard` + `iphone-ja` を標準とする。
+- 検証範囲 (`iphone-ja` / `full`) は確認する端末・言語を決める。通常の新規UI Issueは `standard` + `iphone-ja` を標準とする。
 - `iphone-ja` は最新利用可能iOS上のiPhone Pro（Pro Maxを除く）、`ja_JP` / `ja` の1条件。
 - `full` は既存順の `iphone-en`、`iphone-ja`、`ipad-en`、`ipad-ja` の4条件。Runtime・deviceのバッチ内固定を維持する。
 - 日本語iPhoneだけで作るUIも `fast` にはしない。`fast` の非UI・低リスク条件を変えない。
@@ -64,11 +64,11 @@ Date: 2026-08-31
 
 ## 6. 現行ツールからの移行
 
-[Issue #31](https://github.com/yuto1201/iOS-Template/issues/31)はこの方針の文書化だけを行う。実行ツール、Issue form、共有スキル、エージェント設定、Xcode projectは変更しない。`iphone-ja` の新しいCLI引数やsnapshot fieldが既に使えるとは扱わない。
+[Issue #31](https://github.com/yuto1201/iOS-Template/issues/31)で確定した方針を#32で実行経路へ接続する。Issue本文の任意節`Verification scope`は`Scope`（`iphone-ja` / `full`）、`Stage`（`feature` / `adaptation` / `release`）、空でない`Reason`をこの順に記載する。省略、`_No response_`、`Not applicable`は旧形式の`full`で、既存canonical bytesへfieldを追加しない。
 
-移行中も機能実装と対象Testは日本語iPhoneを中心に進めてよい。既存Issue formが要求するEnglish expectationsには、翻訳完成を仕上げへ延期することと、現行の4条件smokeで実際に確認する動作を記載する。後送りを成功と記載せず、4件の画像はすべて確認する。現行のcanonical完了ゲートは省略しない。
+新規の通常UI Issueは`standard` + `iphone-ja / feature`を標準とする。English expectationsには仕上げへの延期と共通仕上げIssueへのリンクを記載でき、毎機能の英訳完成・iPad画像は要求しない。英語・iPad固有や横断変更は`full`。`adaptation` / `release`は`full`、`release`は`strict`、App Store operationも`full`を必須にする。
 
-1条件でのIssue完了は、#32がcontract生成からmatrix、runner、visual、review、PR、pre-mergeまで一貫して対応した後に開始する。既存の固定4件schemaを手作業で書き換えたり、不足したcaseの証拠を生成したりしない。同一batch内でscopeを変えず、別scope・別Headの証拠を流用しない。
+`verificationScope`はClaim時とlive再構成で一致させる。実行・画像評価・review・PRはcontractのexact 1件／4件に従う。resolverは`--scope iphone-ja`を受け付け、未指定は`full`。batch IDを範囲ごとに分け、同一batchの範囲変更・別scopeや別Headの証拠流用は拒否する。snapshotや証拠を手書きで縮小しない。
 
 この変更を既にテンプレートから作成済みのアプリへ自動適用したとは報告しない。各アプリの現行仕様・ツールとの差分を確認し、別Issueで移行する。
 

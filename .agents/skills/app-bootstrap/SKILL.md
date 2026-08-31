@@ -5,11 +5,13 @@ description: Use when converting a repository created from iOS-Template to one a
 
 # App Bootstrap
 
+Identity/bootstrap uses strict + full coverage, not the normal feature form default. After bootstrap, ordinary new UI uses standard + iphone-ja with one shared English/iPad finishing Issue. Do not remove existing English resources or iPad targets.
+
 Complete the identity conversion before Feature development. Treat `Config/template-identity.json` as the source contract and `Config/app-identity.json` as the non-secret result record.
 
 ## Feature gate
 
-Before any Feature Issue starts, confirm that the app-specific `specs/product.md` and `specs/acceptance.md` are both `Status: 確定` and consistent with the Issue acceptance criteria. If either document is missing, not 確定, or inconsistent, have Codex transition the Issue to `blocked:user`. Do not create its Branch/worktree and do not implement it.
+Before any Feature Issue starts, confirm that the app-specific `specs/product.md` and `specs/acceptance.md` are both `Status: 確定` and consistent with the Issue acceptance criteria. If either document is missing, not 確定, or inconsistent, have the Issue-selected Codex or Claude executor transition the Issue to `blocked:user`. Do not create its Branch/worktree and do not implement it.
 
 ## Identity bootstrap order
 

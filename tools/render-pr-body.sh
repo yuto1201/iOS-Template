@@ -140,7 +140,7 @@ review_packet = review_required ? parse_leaf(review_packet_leaf, "review-packet.
 contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
 verify_digest = "sha256:#{Digest::SHA256.hexdigest(verify_bytes)}"
 contract_required = %w[schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies externalOperations externalOperationDetailsDigest fetchedAt]
-reject("Issue contract schema is incomplete") unless contract.is_a?(Hash) && (contract.keys - contract_required - ["verification", "deliveryProfile"]).empty? && contract_required.all? { |key| contract.key?(key) }
+reject("Issue contract schema is incomplete") unless contract.is_a?(Hash) && (contract.keys - contract_required - ["verification", "deliveryProfile", "verificationScope"]).empty? && contract_required.all? { |key| contract.key?(key) }
 exact_keys!(verify, %w[schemaVersion status changeClassification reason issue baseSha headSha issueContract matrixFile matrixDigest executionRoute xcode build tests cases visualEvaluation acceptanceEvidence completedAt], "verify.json")
 reject("contract identity mismatch") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue
 reject("contract repository is invalid") unless contract["repository"].is_a?(String) && contract["repository"].match?(%r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z})
@@ -201,7 +201,9 @@ end
 build = verify["build"]
 tests = verify["tests"]
 cases = verify["cases"]
-case_ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
+IOSTemplate::ReviewContract.validate_evidence_scope!(contract, verify)
+verification_scope = IOSTemplate::VerificationScope.effective_name(contract)
+case_ids = IOSTemplate::VerificationScope.case_ids(verification_scope)
 if verify["changeClassification"] == "documentation-only"
   exact_keys!(build, %w[status scheme warningsAdded project sourceTree], "documentation build")
   exact_keys!(tests, %w[status passed failed skipped], "documentation tests")
@@ -292,6 +294,10 @@ puts "- Matrix digest: `#{verify["matrixDigest"] || "not-applicable"}`"
 case_labels = {"iphone-en" => "iPhone Pro / English", "iphone-ja" => "iPhone Pro / Japanese", "ipad-en" => "iPad Air / English", "ipad-ja" => "iPad Air / Japanese"}
 if cases.is_a?(Array) && !cases.empty?
   case_labels.each do |id, label|
+    unless case_ids.include?(id)
+      puts "  - #{label} (#{id}): deferred / unverified — shared English/iPad finishing Issue"
+      next
+    end
     item = cases.find { |entry| entry.is_a?(Hash) && entry["id"] == id }
     reject("matrix result is missing #{id}") unless item
     puts "  - #{label} (`#{id}`): `#{item["status"]}`"

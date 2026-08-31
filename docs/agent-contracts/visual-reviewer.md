@@ -4,7 +4,7 @@
 
 The visual reviewer evaluates the immutable screenshots produced by iOS verification. It does not edit code, change specifications, run external operations, or approve facts that are absent from the packet. A preference is not a blocking finding unless it violates an acceptance criterion or an observable usability requirement.
 
-Apply the [staged-development policy](../../specs/development-stages.md): Japanese iPhone feature work can explicitly defer English copy and iPad-specific polish to an adaptation Issue. Inspect every required image, but do not turn that deferred polish into an additional feature AC or claim it is complete. Adaptation/release review must cover both languages and families. The current packet/finalizer remains four-case until Issue #32; this policy does not authorize partial packets or omitted evidence.
+Apply the [staged-development policy](../../specs/development-stages.md): an explicit iphone-ja feature packet has one Japanese iPhone case; absent/full has four. Inspect every required image. English/iPad polish may be deferred to a linked adaptation Issue, not added as feature ACs or claimed as completed. Adaptation/release packets require full.
 
 The reviewer consumes only the canonical packet for the current Issue and Head:
 
@@ -91,7 +91,7 @@ The packet builder must succeed immediately before evaluation. A packet copied f
 }
 ```
 
-The real packet always contains exactly `iphone-en`, `iphone-ja`, `ipad-en`, and `ipad-ja` in that order. Every case has one primary image. Additional direct-child PNGs are ordered by filename and represent named UI states. Each image is a descriptor-bound regular file whose SHA-256 and decoded dimensions were checked at the packet publication boundary.
+A real packet contains exactly the contract's case sequence: iphone-ja alone, or iphone-en, iphone-ja, ipad-en, ipad-ja in that order. Every required case has one primary image. Additional direct-child PNGs represent named states and remain ordered by filename. Images retain descriptor-bound SHA-256 and decoded-dimension checks.
 
 ## 3. Review procedure
 
@@ -187,4 +187,4 @@ The evaluator writes `.artifacts/issues/${issue}/${headSha}/visual-result.json`.
 }
 ```
 
-The example is an exact representation: the first case demonstrates an additional state while the other packet cases contain only their primary state. A real result must reproduce every packet image in exact order and may never omit an entry. For approval, top-level `status` and all case statuses are `approved`, all finding arrays are empty, the four cases retain canonical order, and `reviewedAt` is a complete ISO 8601 timestamp no earlier than draft completion. If any finding exists, use `changes-requested` for the top-level status and the affected case status, place each finding in its affected case and once in the top-level array, and do not run finalization. The current finalizer accepts only the all-approved form and revalidates the draft, contract, matrix, current Head, packet bytes, and every reviewed image before producing `verify.json`.
+The example is an exact representation: the first case demonstrates an additional state while the other packet cases contain only their primary state. A real result must reproduce every packet image in exact order and may never omit an entry. For approval, top-level `status` and all case statuses are `approved`, all finding arrays are empty, the scope-selected cases retain canonical order, and `reviewedAt` is a complete ISO 8601 timestamp no earlier than draft completion. If any finding exists, use `changes-requested` for the top-level status and the affected case status, place each finding in its affected case and once in the top-level array, and do not run finalization. The current finalizer accepts only the all-approved form and revalidates the draft, contract, matrix, current Head, packet bytes, and every reviewed image before producing `verify.json`.
