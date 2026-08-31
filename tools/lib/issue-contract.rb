@@ -68,6 +68,23 @@ module IOSTemplate
       externalOperations externalOperationDetailsDigest fetchedAt
     ].freeze
     SNAPSHOT_OPTIONAL_KEYS = %w[verification deliveryProfile].freeze
+    VERIFICATION_CASE_IDS = %w[iphone-en iphone-ja ipad-en ipad-ja].freeze
+    VERIFICATION_CHECKS = (
+      %w[stage:build stage:unit-tests] +
+      VERIFICATION_CASE_IDS.map { |id| "case:#{id}" } +
+      VERIFICATION_CASE_IDS.map { |id| "visual:#{id}" }
+    ).freeze
+    BUNDLE_IDENTIFIER = /\A[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9][A-Za-z0-9-]*)+\z/
+    TEST_IDENTIFIER = %r{\A[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*(\(\))?\z}
+
+    # JSON's default last-key-wins behavior would hide ambiguous operator input.
+    class UniqueVerificationKeys < Hash
+      def []=(key, value)
+        raise JSON::ParserError, "duplicate Verification key" if key?(key)
+
+        super
+      end
+    end
 
     Result = Struct.new(:contract, :external_operation_details, keyword_init: true)
 
@@ -163,9 +180,13 @@ module IOSTemplate
         failures
       )
 
+      verification = parse_verification(lines, headings, acceptance_items.map { |item| item.fetch("id") }, failures)
       delivery_profile = parse_delivery_profile(lines, headings, failures)
       if delivery_profile
         name = delivery_profile.fetch("name")
+        if name == "fast" && verification
+          failures << "fast delivery profile cannot contain application Verification"
+        end
         if name == "fast" && !ui_verification.match?(/\A\s*(?:[-*]\s*)?Not applicable\.?\s*\z/i)
           failures << "fast delivery profile requires UI verification to be Not applicable"
         end
@@ -230,11 +251,86 @@ module IOSTemplate
           "fetchedAt" => fetched_at
         }
         contract["deliveryProfile"] = delivery_profile if delivery_profile
+        contract["verification"] = verification if verification
       end
 
       raise ValidationError, failures unless failures.empty?
 
       Result.new(contract: contract, external_operation_details: external_details)
+    end
+
+    def parse_verification(lines, headings, acceptance_ids, failures)
+      matches = headings.select { |heading, _| heading == "Verification" }
+      return nil if matches.empty?
+      if matches.length != 1
+        failures << "duplicate optional heading: Verification"
+        return nil
+      end
+      start = matches.first[1]
+      following = headings.find { |_, index| index > start }
+      section = lines[(start + 1)...(following ? following[1] : lines.length)].join.strip
+      return nil if ["_No response_", "Not applicable"].include?(section)
+
+      fence = section.match(/\A```json[ \t]*\r?\n(.*)\r?\n```[ \t]*\z/m)
+      json = fence ? fence[1] : section
+      value = JSON.parse(json, object_class: UniqueVerificationKeys)
+      validate_verification(value, acceptance_ids, failures)
+      value
+    rescue JSON::ParserError
+      failures << "Verification must contain one unambiguous JSON object, optionally fenced as json"
+      nil
+    end
+
+    def validate_verification(value, acceptance_ids, failures)
+      unless value.is_a?(Hash) && value.keys.sort == %w[acceptanceMappings bundleIdentifier cases unitTestIdentifier]
+        failures << "Verification must contain exactly bundleIdentifier, unitTestIdentifier, cases, and acceptanceMappings"
+        return
+      end
+      unless value["bundleIdentifier"].is_a?(String) && value["bundleIdentifier"].match?(BUNDLE_IDENTIFIER)
+        failures << "Verification bundleIdentifier is invalid"
+      end
+      unless value["unitTestIdentifier"].is_a?(String) && value["unitTestIdentifier"].match?(TEST_IDENTIFIER)
+        failures << "Verification unitTestIdentifier must be Target/Class/testMethod with optional trailing ()"
+      end
+      cases = value["cases"]
+      if cases.is_a?(Array) && cases.length == VERIFICATION_CASE_IDS.length
+        cases.each_with_index do |entry, index|
+          unless entry.is_a?(Hash) && entry["id"] == VERIFICATION_CASE_IDS[index] &&
+                 [%w[id testIdentifier], %w[assertion id]].include?(entry.keys.sort)
+            failures << "Verification cases must have four ordered IDs and exactly one testIdentifier or assertion"
+            next
+          end
+          if entry.key?("testIdentifier")
+            unless entry["testIdentifier"].is_a?(String) && entry["testIdentifier"].match?(TEST_IDENTIFIER)
+              failures << "Verification case testIdentifier is invalid"
+            end
+          elsif entry["assertion"] != {"kind" => "launch-succeeded"}
+            failures << "Verification assertion must be exactly launch-succeeded"
+          end
+        end
+      else
+        failures << "Verification cases must contain the exact four ordered case IDs"
+      end
+
+      mappings = value["acceptanceMappings"]
+      unless acceptance_ids == acceptance_ids.each_index.map { |index| "AC-#{index + 1}" } &&
+             mappings.is_a?(Array) && mappings.length == acceptance_ids.length
+        failures << "Verification acceptanceMappings must map every numeric AC exactly once in order"
+        return
+      end
+      mappings.each_with_index do |mapping, index|
+        unless mapping.is_a?(Hash) && mapping.keys.sort == %w[checks id] && mapping["id"] == acceptance_ids[index]
+          failures << "Verification acceptanceMappings must follow the exact AC order"
+          next
+        end
+        checks = mapping["checks"]
+        unless checks.is_a?(Array) && !checks.empty? && checks.uniq == checks &&
+               checks.all? { |check| VERIFICATION_CHECKS.include?(check) } &&
+               checks == VERIFICATION_CHECKS.select { |check| checks.include?(check) } &&
+               checks.any? { |check| check.start_with?("stage:", "case:") }
+          failures << "Verification checks must be nonempty, unique, in canonical order, and include an execution check"
+        end
+      end
     end
 
     def parse_delivery_profile(lines, headings, failures)
@@ -357,6 +453,9 @@ module IOSTemplate
         entry.is_a?(Hash) && entry.keys.sort == %w[id text] && entry["id"] == "AC-#{index + 1}" && entry["text"].is_a?(String) && !entry["text"].strip.empty?
       end
       failures << "Issue contract acceptance criteria are invalid" unless valid_criteria
+      if value.key?("verification")
+        validate_verification(value["verification"], valid_criteria ? criteria.map { |entry| entry.fetch("id") } : [], failures)
+      end
       dependencies = value["dependencies"]
       failures << "Issue contract dependencies are invalid" unless dependencies.is_a?(Array) && dependencies.all? { |entry| entry.is_a?(Integer) && entry.positive? } && dependencies.uniq == dependencies
       operations = value["externalOperations"]

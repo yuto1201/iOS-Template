@@ -655,7 +655,7 @@ done
 repo="" base_sha="" head_sha="" contract="" matrix="" draft="" visual="" final=""
 
 write_contract() {
-  /usr/bin/ruby -rjson -rtime - "$1" "${2:-valid}" <<'RUBY'
+  /usr/bin/ruby -I"$source_repo/tools/lib" -rissue-contract -rjson -rtime - "$1" "${2:-valid}" <<'RUBY'
 path, mode = ARGV
 cases = [
   {"id" => "iphone-en", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"},
@@ -692,7 +692,36 @@ document = {
 }
 document.delete("verification") if mode == "absent"
 document.fetch("verification").delete("unitTestIdentifier") if mode == "missing-unit-test" && document["verification"]
-File.write(path, JSON.pretty_generate(document) + "\n")
+if mode == "valid"
+  # Exercise the real producer-to-runner boundary. Malformed modes below remain
+  # deliberate synthetic fixtures for the independent Swift validator.
+  body = <<~BODY
+    ## Goal
+    #{document.fetch("goal")}
+    ## In scope
+    - Exercise application verification.
+    ## Out of scope
+    - External operations.
+    ## Acceptance criteria
+    #{document.fetch("acceptanceCriteria").map { |ac| "- #{ac.fetch('id')}: #{ac.fetch('text')}" }.join("\n")}
+    ## Spec anchors
+    - [Done](specs/acceptance.md#3-issue-definition-of-done)
+    ## Dependencies
+    None
+    ## UI verification
+    Not applicable
+    ## External operations
+    None
+    ## User approvals
+    None
+    ## Verification
+    #{JSON.generate(document.fetch("verification"))}
+  BODY
+  produced = IOSTemplate::IssueContract.parse(body, issue: 42, repository: "yuto1201/iOS-Template", fetched_at: document.fetch("fetchedAt")).contract
+  File.write(path, IOSTemplate::IssueContract.canonical_json(produced))
+else
+  File.write(path, JSON.pretty_generate(document) + "\n")
+end
 RUBY
 }
 

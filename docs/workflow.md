@@ -65,15 +65,21 @@ CodexはClaim時にGitHub Issueを読み、`.artifacts/issues/${issueNumber}/iss
 
 `name`は`fast`、`standard`、`strict`だけを許可します。profile未導入の既存snapshotは`strict`です。`fast`はUI verificationが`Not applicable`で、追加承認やstrict対象operationがない場合だけ有効です。Supabase migration、Cloudflare deploy、メディア生成、App Store upload／metadata／submissionなどを低いprofileへ指定するとClaim前に拒否します。
 
-検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。実行モデルがGitHubから取得して生成したsnapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用でき、Issue本文が変わった場合は実行モデルが再取得してdigestを更新します。
+検証、視覚評価、反対モデルレビュー、pre-merge gateは同じsnapshot pathとdigestを使用します。実行モデルがGitHubから取得して生成したsnapshotをローカル入力として読みます。Head SHAが変わってもIssue本文が変わらない限りsnapshotは再利用できます。Claimの再実行ではlive本文からの再生成bytesが既存契約と一致しなければ拒否し、古い契約・証拠を自動上書きしません。
 
-application検証を実行するIssue contractだけ、上の必須fieldに加えて次のexact `verification` objectを持てます。許可するkeyは `bundleIdentifier`、`unitTestIdentifier`、固定順4件の `cases`、受け入れ条件と同じ順の `acceptanceMappings` だけです。`unitTestIdentifier` とcaseの `testIdentifier` はどちらも `Target/Class/testMethod` です。各caseは `id` に加え、`testIdentifier` または `assertion` のちょうど一方を持ちます。Task 4で許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}` です。application実行時にこのobjectがない、不完全、順序違い、両actionを持つ場合は、Build前に失敗します。
+application検証を実行するIssueは任意の`Verification`節へ、次の例のように完全なJSON objectを記載します。生のJSONまたは単一の`json` code fenceを使い、外側の`verification` wrapperは書きません。`tools/validate-issue-body.sh`とClaimが同じ`tools/lib/issue-contract.rb`で入力を検証し、canonical snapshotの`verification`へ格納します。Feature／Regression formにも入力欄があります。Configや環境変数から暗黙の既定値を補わず、このIssue本文だけを入力の正本とします。
+
+許可するkeyは`bundleIdentifier`、`unitTestIdentifier`、固定順4件の`cases`、受け入れ条件と同じ順の`acceptanceMappings`だけです。`unitTestIdentifier`とcaseの`testIdentifier`はどちらも`Target/Class/testMethod`（末尾の`()`は任意）です。各caseは`id`に加え、`testIdentifier`または`assertion`のちょうど一方を持ちます。許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}`です。未知・欠落・重複key、case／AC／checkの不正順序、両actionはClaim前に拒否します。
+
+documentation-only Issueでは節を省略するか、`Not applicable`／GitHub空欄の`_No response_`にします。この場合、従来のsnapshot bytesに`verification`を追加しません。空のJSON、空節、部分設定を「省略」には読み替えません。`fast`へapplication Verificationを指定することも拒否します。application実行時のobject不在は、引き続きBuild前に失敗します。
 
 `acceptanceMappings` は全 `AC-*` をexactに一度ずつ含め、各 `checks` は空でなく重複せず、次のcanonical順を守ります: `stage:build`、`stage:unit-tests`、4つの `case:<case-id>`、4つの `visual:<case-id>`。少なくとも1つのstageまたはcase checkが必要です。runnerは実行したstage/caseだけをdraftへ記録し、finalizeはAIが承認したvisual checkを加えたexact mappingをfinal evidenceへ記録します。未知または未実行の参照は許可しません。
 
+````markdown
+## Verification
+
 ```json
 {
-  "verification": {
     "bundleIdentifier": "com.example.ExampleApp",
     "unitTestIdentifier": "ExampleAppTests/UnitSmokeTests/testUnit",
     "cases": [
@@ -86,9 +92,11 @@ application検証を実行するIssue contractだけ、上の必須fieldに加�
       {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests", "case:iphone-en", "case:iphone-ja"]},
       {"id": "AC-2", "checks": ["case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
     ]
-  }
 }
 ```
+````
+
+各ACのchecksは実際にそのACを確認するものだけを明示し、未指定のACへ全checkを自動割当しません。例のidentifierやmappingをそのまま根拠として使わず、実在TestとACへ置き換えます。Repository toolのACはapplication smokeだけでは証明できないため、§5.3のcanonical repository testとAC別mappingも必須です。live IssueのVerification／deliveryProfile改変検出は既存[Issue #29](https://github.com/yuto1201/iOS-Template/issues/29)で修正します。
 
 このobjectはIssue contractのdigestへ含まれます。runnerは開始時にbytesをdescriptor-boundなsealed snapshotへ固定し、各caseとScreenshot/draftのno-replace publication境界でGit Head、tracked Head inventory/bytes/flags、canonical contract/matrixのexact bytes/digestを再照合します。trusted Git `ls-tree`/`cat-file blob`からcontained relative symlinkを含むprivate raw-Head source snapshotを構築してXcodeへ渡し、project pathをlength-prefixしたfull source digestを`build.sourceTree`、project subtree digestを`build.project`としてdraft/finalへ固定し、両者のproject path exact一致を要求します。Build productはprivate attemptへ再帰copyしてlength-prefixしたtree digestを固定し、各install直前に再検証します。Task 5はcanonical draftからdescriptor-bound `visual-packet.json`をno-replace生成し、primaryと追加stateを含む全PNGを順序、path、SHA-256、dimensionへ固定します。`visual-result.json`とfinal `visualEvaluation`はpacket exact bytesと全reviewed imageをattestし、finalizeとstandalone validatorはcurrent bytesまで再照合します。Screenshot/draft publicationはIssue/Head lock下のdurable journalからSIGKILL後のpartial transactionをrollbackし、complete transactionをidempotent successとして回収します。finalもexact既存bytesだけをidempotent successとします。CLI引数や環境変数でBundle ID、test identifier、assertionを差し替えません。
 
