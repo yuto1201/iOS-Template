@@ -143,15 +143,21 @@ git -C "$repo_root" fetch origin main >/dev/null
 base_sha=$(git -C "$repo_root" rev-parse --verify 'origin/main^{commit}') || { echo 'origin/main is not a verified commit' >&2; exit 1; }
 base_verification=$(mktemp "${TMPDIR:-/tmp}/ios-template-verification-config.XXXXXX")
 trap 'rm -f "$body" "$contract_candidate" "$base_verification"' EXIT
+base_verification_digest=''
 if git -C "$repo_root" cat-file -e "$base_sha:Config/verification.json" 2>/dev/null; then
   git -C "$repo_root" cat-file blob "$base_sha:Config/verification.json" > "$base_verification"
+  # The producer re-opens this path, so bind the exact Base bytes by digest. A swap
+  # between writing and reading is rejected instead of silently sealed.
+  base_verification_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$base_verification")"
 else
   rm -f "$base_verification"
   base_verification=/nonexistent/Config/verification.json
+  base_verification_digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
 fi
 
 ruby "$repo_root/tools/lib/issue-contract.rb" \
   --verification-config "$base_verification" \
+  --verification-config-digest "$base_verification_digest" \
   --body "$body" --type "$issue_type" --format contract \
   --issue "$issue" --repo "$repo" --fetched-at "$fetched_at" \
   > "$contract_candidate"

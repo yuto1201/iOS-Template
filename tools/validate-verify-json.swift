@@ -1378,7 +1378,9 @@ func validateFastDiff(expectedBase: String, expectedHead: String) throws {
         "specs/architecture.md", "specs/decisions.md", "tools/issue-state.sh",
         "tools/claim-issue.sh", "tools/resume-issue.sh", "tools/premerge-gate.sh",
         "tools/merge-issue.sh", "tools/cleanup-issue.sh", "tools/github-account-preflight.sh",
-        "tools/provider-preflight.sh", "tools/validate-verify-json.swift", "tools/verify-fast-issue.sh"
+        "tools/provider-preflight.sh", "tools/validate-verify-json.swift", "tools/verify-fast-issue.sh",
+        "Config/verification.json", "tools/lib/issue-contract.rb", "tools/validate-issue-body.sh",
+        "tools/verify-ios-issue.sh"
     ]
     let strictPrefixes = [
         "App Store/", "supabase/migrations/", ".github/workflows/",

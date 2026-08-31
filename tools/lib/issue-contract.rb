@@ -167,7 +167,7 @@ module IOSTemplate
         lines, headings, acceptance_items.map { |item| item.fetch("id") }, failures
       )
       verification_configuration = load_verification_configuration(
-        failures, required: !verification_mappings.nil?
+        failures, required: !verification_mappings.nil?, digest: verification_configuration_digest
       )
 
       delivery_profile = parse_delivery_profile(lines, headings, failures)
@@ -175,6 +175,9 @@ module IOSTemplate
         name = delivery_profile.fetch("name")
         if name == "fast" && !ui_verification.match?(/\A\s*(?:[-*]\s*)?Not applicable\.?\s*\z/i)
           failures << "fast delivery profile requires UI verification to be Not applicable"
+        end
+        if name == "fast" && !verification_mappings.nil?
+          failures << "fast delivery profile cannot declare a Verification mapping"
         end
         if name != "strict" && external_details.any? { |detail| DeliveryProfile.strict_operation?(detail.fetch("operation")) }
           failures << "high-risk external operations require strict delivery profile"
@@ -283,8 +286,11 @@ module IOSTemplate
 
     EXECUTION_CHECK_PREFIXES = %w[stage: case:].freeze
 
-    TEST_IDENTIFIER_PATTERN = %r{\A[A-Za-z0-9_]+/[A-Za-z0-9_]+/[A-Za-z0-9_]+(?:\(\))?\z}
-    BUNDLE_IDENTIFIER_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9.-]*\z/
+    # Keep these identical to bundleIdentifierPattern and testIdentifierPattern in
+    # tools/validate-verify-json.swift. A looser Ruby rule would let Claim seal a
+    # contract that the Swift validator rejects before Build.
+    TEST_IDENTIFIER_PATTERN = %r{\A[A-Za-z_][A-Za-z0-9_.\-]*/[A-Za-z_][A-Za-z0-9_.\-]*/[A-Za-z_][A-Za-z0-9_.\-]*(?:\(\))?\z}
+    BUNDLE_IDENTIFIER_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9-]*(?:\.[A-Za-z0-9][A-Za-z0-9-]*)+\z/
 
     # Claim passes the Base-commit blob so the sealed contract can never embed
     # uncommitted or concurrently swapped working-tree bytes. Other callers fall back to
@@ -297,24 +303,43 @@ module IOSTemplate
       @verification_configuration_override = path
     end
 
+    def verification_configuration_digest
+      @verification_configuration_digest
+    end
+
+    def verification_configuration_digest=(value)
+      @verification_configuration_digest = value
+    end
+
     def verification_configuration_path
       verification_configuration_override || File.expand_path("../../Config/verification.json", __dir__)
     end
 
     # Repository-level facts that never vary per Issue. Per-Issue evidence attribution
     # comes from the Issue body instead, so this file cannot widen what an Issue claims.
-    def load_verification_configuration(failures, required:)
+    def load_verification_configuration(failures, required:, digest: nil)
+      # An Issue that declares no mapping runs no application verification, so it must
+      # not be blocked by an unrelated or broken configuration file.
+      return nil unless required
       path = verification_configuration_path
       unless File.exist?(path) || File.symlink?(path)
-        failures << "Config/verification.json is missing" if required
+        failures << "Config/verification.json is missing"
         return nil
       end
       unless File.file?(path) && !File.symlink?(path)
         failures << "Config/verification.json must be a regular file"
         return nil
       end
+      bytes = File.binread(path)
+      if digest
+        actual = "sha256:#{Digest::SHA256.hexdigest(bytes)}"
+        unless actual == digest
+          failures << "Config/verification.json does not match the sealed Base blob digest"
+          return nil
+        end
+      end
       begin
-        value = JSON.parse(File.read(path))
+        value = JSON.parse(bytes)
       rescue JSON::ParserError
         failures << "Config/verification.json is not valid JSON"
         return nil
@@ -593,6 +618,7 @@ if $PROGRAM_NAME == __FILE__
     cli.on("--repo OWNER/REPO") { |value| options["repo"] = value }
     cli.on("--fetched-at TIMESTAMP") { |value| options["fetched_at"] = value }
     cli.on("--verification-config PATH") { |value| options["verification_config"] = value }
+    cli.on("--verification-config-digest DIGEST") { |value| options["verification_config_digest"] = value }
   end
 
   begin
@@ -606,6 +632,7 @@ if $PROGRAM_NAME == __FILE__
     end
 
     IOSTemplate::IssueContract.verification_configuration_override = options["verification_config"]
+    IOSTemplate::IssueContract.verification_configuration_digest = options["verification_config_digest"]
 
     result = IOSTemplate::IssueContract.parse_file(
       options.fetch("body"),

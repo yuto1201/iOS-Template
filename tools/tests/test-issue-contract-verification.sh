@@ -232,4 +232,42 @@ assert_rejected_configuration "invalid unit test identifier" '{"schemaVersion":1
 assert_rejected_configuration "unknown key" '{"schemaVersion":1,"bundleIdentifier":"com.example.App","unitTestIdentifier":"A/B/c","cases":[{"id":"iphone-en","testIdentifier":"A/B/c"},{"id":"iphone-ja","testIdentifier":"A/B/c"},{"id":"ipad-en","testIdentifier":"A/B/c"},{"id":"ipad-ja","testIdentifier":"A/B/c"}],"extra":true}'
 assert_rejected_configuration "malformed JSON" 'not json'
 
+# The Ruby identifier rules must match tools/validate-verify-json.swift exactly, or Claim
+# seals a contract the Swift validator rejects before Build.
+assert_rejected_configuration "single-component bundle identifier" '{"schemaVersion":1,"bundleIdentifier":"App","unitTestIdentifier":"A/B/c","cases":[{"id":"iphone-en","testIdentifier":"A/B/c"},{"id":"iphone-ja","testIdentifier":"A/B/c"},{"id":"ipad-en","testIdentifier":"A/B/c"},{"id":"ipad-ja","testIdentifier":"A/B/c"}]}'
+assert_rejected_configuration "digit-leading test identifier component" '{"schemaVersion":1,"bundleIdentifier":"com.example.App","unitTestIdentifier":"1A/B/c","cases":[{"id":"iphone-en","testIdentifier":"A/B/c"},{"id":"iphone-ja","testIdentifier":"A/B/c"},{"id":"ipad-en","testIdentifier":"A/B/c"},{"id":"ipad-ja","testIdentifier":"A/B/c"}]}'
+
+# A configuration swapped between Claim sealing the digest and the producer reading the
+# file must be rejected rather than sealed.
+sealed_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$configuration")"
+printf '%s' '{"schemaVersion":1,"bundleIdentifier":"com.attacker.App","unitTestIdentifier":"A/B/c","cases":[{"id":"iphone-en","testIdentifier":"A/B/c"},{"id":"iphone-ja","testIdentifier":"A/B/c"},{"id":"ipad-en","testIdentifier":"A/B/c"},{"id":"ipad-ja","testIdentifier":"A/B/c"}]}' > "$configuration"
+if ruby "$repo_root/tools/lib/issue-contract.rb" \
+     --verification-config "$configuration" --verification-config-digest "$sealed_digest" \
+     --body "$body" --type feature --format contract \
+     --issue 1 --repo owner/repo --fetched-at 2026-01-01T00:00:00Z >/dev/null 2>&1; then
+  echo "expected rejection: configuration swapped after the digest was sealed" >&2
+  exit 1
+fi
+cp "$repo_root/Config/verification.json" "$configuration"
+
+# An Issue without a mapping must not be blocked by an unrelated broken configuration.
+printf '%s' 'not json' > "$configuration"
+contract_for "$absent" >/dev/null
+cp "$repo_root/Config/verification.json" "$configuration"
+
+# fast delivery profile and a declared mapping are mutually exclusive.
+fast_body="$workspace/issue-fast.md"
+write_issue "$fast_body" "$valid_mapping"
+ruby -e '
+  path = ARGV.fetch(0)
+  text = File.read(path)
+  text.sub!(/## UI verification\n\n(?:- .*\n)+/, "## UI verification\n\nNot applicable\n") or abort "UI block not found"
+  text.sub!("## Verification mapping", "## Delivery profile\n\n- Profile: fast\n- Reason: Local non-UI logic.\n\n## Verification mapping") or abort "mapping heading not found"
+  File.write(path, text)
+' "$fast_body"
+if contract_for "$fast_body" >/dev/null 2>&1; then
+  echo "expected rejection: fast profile with a Verification mapping" >&2
+  exit 1
+fi
+
 echo "issue contract verification tests passed"
