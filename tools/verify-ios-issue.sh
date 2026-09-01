@@ -418,8 +418,25 @@ run_snapshot_xcodebuild() {
 }
 contract_digest="$(config_value contractDigest)"
 matrix_digest="$(config_value matrixDigest)"
+verification_timeout_seconds="${IOS_TEMPLATE_VERIFICATION_TIMEOUT_SECONDS:-7200}"
+positive_timeout "$verification_timeout_seconds" || fail "verification timeout must be a positive integer"
+assert_verification_lock_alive() {
+  local lock_status=0
+  [[ -n "$lock_holder_pid" ]] || fail "verification lock is not held"
+  if /bin/kill -0 "$lock_holder_pid" >/dev/null 2>&1; then
+    return 0
+  fi
+  wait "$lock_holder_pid" >/dev/null 2>&1 || lock_status="$?"
+  lock_holder_pid=""
+  if [[ "$lock_status" -eq 124 ]]; then
+    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at verification-lock; elapsedSeconds=$verification_timeout_seconds; timeoutSeconds=$verification_timeout_seconds"
+    fail "verification lock expired during verification"
+  fi
+  fail "verification lock ended during verification"
+}
 verify_live_inputs() {
   local input_diagnostic
+  assert_verification_lock_alive
   config_check || fail "verification config changed during verification"
   if ! input_diagnostic="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-inputs \
     --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
@@ -434,6 +451,8 @@ verify_live_inputs() {
     esac
   fi
 }
+IOS_TEMPLATE_COMMAND_STAGE=verification-lock \
+IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS="$verification_timeout_seconds" \
 run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-lock-holder \
   --config "$config" --digest "$config_digest" <"$lock_control_fifo" >"$lock_ready_fifo" &
 lock_holder_pid="$!"

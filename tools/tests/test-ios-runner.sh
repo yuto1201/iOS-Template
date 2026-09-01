@@ -1090,6 +1090,36 @@ RUBY
 /bin/kill "$unrelated_timeout_pid"
 wait "$unrelated_timeout_pid" 2>/dev/null || true
 unrelated_timeout_pid=''
+
+prepare_repo shape-lock-timeout valid present shape
+lock_timeout_hold="$scratch/shape-lock-timeout-hold"
+(
+  for _ in $(/usr/bin/jot 2000); do
+    [[ ! -e "$lock_timeout_hold.started" ]] || break
+    /bin/sleep 0.01
+  done
+  [[ -e "$lock_timeout_hold.started" ]] || exit 1
+  /bin/sleep 2
+  : >"$lock_timeout_hold.release"
+) &
+lock_timeout_release_pid=$!
+if IOS_TEMPLATE_VERIFICATION_TIMEOUT_SECONDS=1 FAKE_HOLD_BUILD_FILE="$lock_timeout_hold" \
+    run_execute >"$scratch/shape-lock-timeout.stdout" 2>"$scratch/shape-lock-timeout.stderr"; then
+  wait "$lock_timeout_release_pid" || true
+  echo "expired verification lock unexpectedly allowed success" >&2
+  exit 1
+fi
+wait "$lock_timeout_release_pid"
+grep -Fq 'timed out at verification-lock' "$scratch/shape-lock-timeout.stderr" || {
+  echo "verification lock timeout did not report its bounded stage" >&2
+  exit 1
+}
+[[ ! -e "$final" && ! -e "$draft" ]] || {
+  echo "verification lock timeout published successful evidence" >&2
+  exit 1
+}
+assert_no_failed_attempts
+
 if [[ "${1-}" == scoped ]]; then echo "scoped runner tests passed"; exit 0; fi
 
 startup_stdout="$scratch/startup.stdout"
