@@ -1,0 +1,162 @@
+name: Release
+description: Verify an explicit release candidate without lowering the release gate.
+title: "[Release]: "
+labels:
+  - type:release
+  - state:proposed
+body:
+  - type: markdown
+    attributes:
+      value: "Use only after shape and required harden Issues are complete. Every release check is bound to one candidate Head."
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: Identify the release candidate and intended release outcome.
+    validations:
+      required: true
+  - type: textarea
+    id: in-scope
+    attributes:
+      label: In scope
+      description: List complete release verification and submission-readiness work.
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: List product changes that require separate shape or harden Issues.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Use ordered AC-1 through AC-n identifiers for every release gate.
+    validations:
+      required: true
+  - type: textarea
+    id: spec-anchors
+    attributes:
+      label: Spec anchors
+      description: Add local Markdown links with exact section anchors.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: List the completed shape/harden/finishing Issues on which this candidate depends.
+    validations:
+      required: true
+  - type: textarea
+    id: ui-verification
+    attributes:
+      label: UI verification
+      value: |
+        - Target screens/states: Every release-critical flow and required state.
+        - English expectations: Complete on iPhone and iPad, including layout and untranslated-text inspection.
+        - Japanese expectations: Complete on iPhone and iPad, including layout and untranslated-text inspection.
+    validations:
+      required: true
+  - type: textarea
+    id: delivery-stage
+    attributes:
+      label: Delivery stage
+      value: |
+        - Stage: release
+        - Time budget: 480 minutes
+        - Reason: Produce complete same-Head release-candidate evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: delivery-profile
+    attributes:
+      label: Delivery profile
+      value: |
+        - Profile: strict
+        - Reason: Release, legal, signing, and submission boundaries remain strict.
+    validations:
+      required: true
+  - type: textarea
+    id: verification-scope
+    attributes:
+      label: Verification scope
+      value: |
+        - Scope: full
+        - Reason: Release requires iPhone/iPad in Japanese/English on one candidate Head.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: Replace every identifier and AC mapping with the candidate's complete four-case integration and visual checks.
+      placeholder: |
+        {
+          "bundleIdentifier": "com.example.ExampleApp",
+          "unitTestIdentifier": "ExampleAppTests/ReleaseTests/testCriticalLogic",
+          "cases": [
+            {"id": "iphone-en", "testIdentifier": "ExampleAppUITests/ReleaseTests/testCriticalFlow"},
+            {"id": "iphone-ja", "testIdentifier": "ExampleAppUITests/ReleaseTests/testCriticalFlow"},
+            {"id": "ipad-en", "testIdentifier": "ExampleAppUITests/ReleaseTests/testCriticalFlow"},
+            {"id": "ipad-ja", "testIdentifier": "ExampleAppUITests/ReleaseTests/testCriticalFlow"}
+          ],
+          "acceptanceMappings": [
+            {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},
+            {"id": "AC-2", "checks": ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
+          ]
+        }
+    validations:
+      required: true
+  - type: textarea
+    id: external-operations
+    attributes:
+      label: External operations
+      description: "Write None, or exact authorized five-field operation blocks. App Store mutations require the configured personal target and any required user approval."
+      placeholder: |
+        - Operation: github.read_issue
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.update_issue
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.push_branch
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.create_pr
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.merge_pr
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+
+        - Operation: github.delete_branch
+        - Service: GitHub
+        - Environment: production
+        - Executor: Codex
+        - Approval required: no
+    validations:
+      required: true
+  - type: textarea
+    id: user-approvals
+    attributes:
+      label: User approvals
+      description: Cite every approval required by a declared release operation; otherwise write None.
+    validations:
+      required: true

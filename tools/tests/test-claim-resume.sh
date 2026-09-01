@@ -124,7 +124,25 @@ Make the Settings screen deterministic.
 
 ## UI verification
 
-- Not applicable.
+- Target screens/states: Every release-fixture launch state.
+- English expectations: Complete on iPhone and iPad.
+- Japanese expectations: Complete on iPhone and iPad.
+
+## Delivery stage
+
+- Stage: release
+- Time budget: 480 minutes
+- Reason: Preserve a complete full-matrix contract fixture.
+
+## Delivery profile
+
+- Profile: strict
+- Reason: Exercise the release-level Claim boundary.
+
+## Verification scope
+
+- Scope: full
+- Reason: Exercise all four canonical release cases.
 
 ## Verification
 
@@ -140,7 +158,7 @@ Make the Settings screen deterministic.
   ],
   "acceptanceMappings": [
     {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},
-    {"id": "AC-2", "checks": ["case:iphone-ja", "visual:iphone-ja"]}
+    {"id": "AC-2", "checks": ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
   ]
 }
 ```
@@ -261,11 +279,14 @@ assert_json "$clone/.artifacts/issues/42/issue-contract.json" '
   abort unless value["acceptanceCriteria"].map { |entry| entry["id"] } == ["AC-1", "AC-2"]
   abort unless value["dependencies"] == [5]
   abort unless value["externalOperations"] == ["github.read_issue", "github.update_issue", "github.push_branch", "github.create_pr", "github.merge_pr", "github.delete_branch", "supabase.inspect_project"]
+  abort unless value["deliveryStage"] == {"name"=>"release", "timeBudgetMinutes"=>480, "reason"=>"Preserve a complete full-matrix contract fixture."}
+  abort unless value["deliveryProfile"] == {"name"=>"strict", "reason"=>"Exercise the release-level Claim boundary."}
+  abort unless value["verificationScope"] == {"name"=>"full", "reason"=>"Exercise all four canonical release cases."}
   abort unless value.dig("verification", "bundleIdentifier") == "com.example.TemplateApp"
   abort unless value.dig("verification", "cases").map { |entry| entry["id"] } == %w[iphone-en iphone-ja ipad-en ipad-ja]
   abort unless value.dig("verification", "acceptanceMappings") == [
     {"id"=>"AC-1", "checks"=>["stage:build", "stage:unit-tests"]},
-    {"id"=>"AC-2", "checks"=>["case:iphone-ja", "visual:iphone-ja"]}
+    {"id"=>"AC-2", "checks"=>["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
   ]
 '
 ruby -rjson -rdigest -e '
@@ -317,7 +338,7 @@ cmp -s "$claim_result" "$workspace/repeated-claim.json"
 
 cp "$issue_body_file" "$workspace/issue-body-before-mapping-change.md"
 cp "$clone/.artifacts/issues/42/issue-contract.json" "$workspace/contract-before-mapping-change.json"
-sed -i '' 's/"case:iphone-ja", "visual:iphone-ja"/"case:ipad-ja", "visual:ipad-ja"/' "$issue_body_file"
+sed -i '' 's/"case:iphone-en", "case:iphone-ja"/"case:iphone-ja", "case:iphone-en"/' "$issue_body_file"
 assert_fails 'repeated Claim rejects changed verification mapping without replacing the sealed contract' bash -c "cd '$clone' && '$claim' --repo yuto1201/iOS-Template --issue 42 --agent codex"
 cmp -s "$workspace/contract-before-mapping-change.json" "$clone/.artifacts/issues/42/issue-contract.json"
 [[ "$edits_before" == "$(rg -c '^issue edit ' "$gh_log" || true)" ]]

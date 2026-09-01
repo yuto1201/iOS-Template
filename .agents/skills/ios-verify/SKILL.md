@@ -5,7 +5,7 @@ description: Use when verifying an iOS Issue for completion, producing current-H
 
 # iOS Verification
 
-Orchestrate the repository's deterministic tools; do not reproduce or weaken their validation logic. A successful run binds the Issue contract, delivery profile, required evidence, and current Git Head to one SHA. Only `standard` and `strict` bind the frozen Simulator matrix and visual approval.
+Orchestrate the repository's deterministic tools; do not reproduce or weaken their validation logic. A successful run binds the Issue contract, Delivery stage, delivery profile, required evidence, and current Git Head to one SHA. Delivery stage controls verification breadth; delivery profile controls risk. Only a visual-required contract creates screenshots and a visual packet.
 
 ## Required inputs
 
@@ -17,15 +17,15 @@ Classify the trusted Base-to-Head range before touching Simulator state. Only `R
 
 ## Select the execution route
 
-Read `deliveryProfile.name` from the canonical Issue contract. Missing means legacy `strict`.
+Read `deliveryStage.name`, `deliveryProfile.name`, and Verification scope from the canonical Issue contract. A missing Delivery stage or profile is a sealed legacy contract and remains release-level/strict. Never reseal a claimed contract or infer a narrower scope.
 
-Read verificationScope independently. Explicit iphone-ja / feature selects one Japanese iPhone case; absent/full selects four. Normal new UI uses standard + iphone-ja. Adaptation/release, foundation/identity/project configuration and gate changes require full. Keep critical auth/data/billing tests regardless of UI scope. Never reseal a claimed contract or require deferred English/iPad polish on every feature.
+- `shape`: use `iphone-ja`; require Build, critical Unit Test, and one primary-flow smoke test. Do not capture screenshots or claim release readiness.
+- `harden`: use the exact `targeted` canonical subset declared by the contract. Verify only the affected behavior and related regressions. A harden contract requests visual evidence only when an AC explicitly contains a `visual:` check.
+- `release` or legacy: use `full`; require all four cases, visual/accessibility/integration evidence, same-Head review preparation, and the release gate.
+- explicit `fast`: require UI verification to be not applicable and run `tools/verify-fast-issue.sh` with the selected Unit Test and one available iPhone Simulator UDID.
+- documentation-only: use the documentation publisher when the contract has no application scope.
 
-- `fast`: require UI verification to be not applicable and run `tools/verify-fast-issue.sh` with the selected Unit Test and one available iPhone Simulator UDID. Do not resolve the four-case matrix, capture images, create a visual packet, or request blocking opposite-model review.
-- `standard` / `strict`: use the application verification route below only after targeted checks and a diff/AC self-audit are green.
-- documentation-only: use the existing documentation publisher when the contract has no explicit application scope.
-
-Never start canonical Simulator verification for an intermediate commit. After a run fails, first make the directly affected targeted check pass before retrying the selected scope.
+Never start canonical Simulator verification for an intermediate commit. After a failure, run in this order: affected test, related regression tests, stage-standard verification, then full verification only for release. Stop after two identical failures. Every Xcode, Unit/UI Test, and Simulator command must go through the repository's finite-timeout wrappers; a timeout is failure and must not publish successful evidence.
 
 When XcodeBuildMCP is callable, you may inspect its session defaults to identify future compatibility work. No canonical XcodeBuildMCP evidence producer exists in this repository, so inspection never selects it as an execution route. Always use `tools/verify-ios-issue.sh`, the tested `xcodebuild-simctl` producer, until a canonical MCP producer and integration coverage are added. Do not bypass it with manual `xcodebuild`, `simctl`, screenshots, or JSON. Tool unavailability is never test success.
 
@@ -36,7 +36,9 @@ Acquire the single repository-wide Simulator verification lock immediately befor
 Resolve a missing matrix once, or revalidate an existing one in place, inside the same locked command that runs verification:
 
 ```sh
-SCOPE="$(ruby -Itools/lib -rjson -rverification-scope -e 'puts IOSTemplate::VerificationScope.validate_contract!(JSON.parse(File.binread(ARGV.fetch(0))))' ".artifacts/issues/${ISSUE}/issue-contract.json")"
+CONTRACT=".artifacts/issues/${ISSUE}/issue-contract.json"
+SCOPE="$(ruby -Itools/lib -rjson -rverification-scope -e 'puts IOSTemplate::VerificationScope.validate_contract!(JSON.parse(File.binread(ARGV.fetch(0))))' "$CONTRACT")"
+CASE_IDS="$(ruby -Itools/lib -rjson -rverification-scope -e 'puts IOSTemplate::VerificationScope.case_ids_for_contract(JSON.parse(File.binread(ARGV.fetch(0)))).join(",")' "$CONTRACT")"
 tools/with-ios-simulator-lock.sh --timeout 0 -- /bin/bash -c '
   set -euo pipefail
   ISSUE="$1"
@@ -45,15 +47,17 @@ tools/with-ios-simulator-lock.sh --timeout 0 -- /bin/bash -c '
   PROJECT="$4"
   SCHEME="$5"
   SCOPE="$6"
+  CASE_IDS="$7"
   MATRIX=".artifacts/batches/${BATCH_ID}/simulator-matrix.json"
   PRIMARY_ROOT="$(ruby tools/lib/review-artifacts.rb "$PWD" | jq -er .primaryRoot)"
   (
     cd "$PRIMARY_ROOT"
-    if [[ "$SCOPE" == full ]]; then
-      tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX"
-    else
-      tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" --scope "$SCOPE"
-    fi
+    case "$SCOPE" in
+      full) tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" ;;
+      iphone-ja) tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" --scope iphone-ja ;;
+      targeted) tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" --scope targeted --case-ids "$CASE_IDS" ;;
+      *) printf "Unsupported scope: %s\n" "$SCOPE" >&2; exit 2 ;;
+    esac
   )
   tools/verify-ios-issue.sh \
     --issue "$ISSUE" \
@@ -62,14 +66,16 @@ tools/with-ios-simulator-lock.sh --timeout 0 -- /bin/bash -c '
     --matrix "$MATRIX" \
     --project "$PROJECT" \
     --scheme "$SCHEME"
-' ios-verify "$ISSUE" "$BASE_SHA" "$BATCH_ID" "$PROJECT" "$SCHEME" "$SCOPE"
+' ios-verify "$ISSUE" "$BASE_SHA" "$BATCH_ID" "$PROJECT" "$SCHEME" "$SCOPE" "$CASE_IDS"
 ```
 
-Use a separate BATCH_ID per scope. The physical-primary lifecycle call is the existing linked-artifact workaround (Issue #20), not its fix. The primary must have the scoped resolver for iphone-ja; do not substitute full or replace the artifact link. Verification stays in the Issue worktree under the same lock.
+Use a separate BATCH_ID per stage and scope. The physical-primary lifecycle call is the existing linked-artifact workaround (Issue #20), not its fix. The primary must have the scoped resolver; do not substitute full or replace the artifact link. Verification stays in the Issue worktree under the same lock.
 
-The lifecycle command preserves frozen bytes and rejects scope changes before Simulator mutation. For iphone-ja it resolves only Japanese iPhone, even without an iPad. The following four-case selection applies only to full. It must select the latest installed available iOS Runtime, iPhone Pro excluding Pro Max, and the latest iPad Air, with exact ordered rows `iphone-en` (`en_US`/`en`), `iphone-ja` (`ja_JP`/`ja`), `ipad-en` (`en_US`/`en`), and `ipad-ja` (`ja_JP`/`ja`). Never repair a partial frozen matrix or fall back to another device family. Treat missing dedicated devices or changed frozen bytes as `blocked:environment`.
+The lifecycle command preserves frozen bytes and rejects scope changes before Simulator mutation. `iphone-ja` resolves only the Japanese iPhone; `targeted` resolves only its ordered contract cases. `full` selects the latest installed available iOS Runtime, iPhone Pro excluding Pro Max, and latest iPad Air, with exact ordered rows `iphone-en`, `iphone-ja`, `ipad-en`, and `ipad-ja`. Never repair a partial frozen matrix or fall back to another device family. Treat missing dedicated devices or changed frozen bytes as `blocked:environment`.
 
-Trust only the returned canonical `.artifacts/issues/${ISSUE}/${HEAD_SHA}/verify-draft.json`. The runner owns exact matrix hashing, Xcode identity, execution route, sealed Head inputs, one Build, one selected Unit Test, one or four serial locale cases, isolated `/tmp` DerivedData, screenshots, and failure evidence.
+The runner owns exact matrix hashing, Xcode identity, sealed Head inputs, one Build, one selected Unit Test, the scoped serial smoke/UI cases, isolated `/tmp` DerivedData, bounded child processes, owned-Simulator cleanup, and failure evidence. For a nonvisual shape/harden contract, trust only the directly published `.artifacts/issues/${ISSUE}/${HEAD_SHA}/verify.json`; it must state that the stage passed and is not release-ready. It must not contain screenshots or a visual packet.
+
+Only when the contract is visual-required, trust the returned `.artifacts/issues/${ISSUE}/${HEAD_SHA}/verify-draft.json` and continue with visual review:
 
 Create the visual packet from that draft:
 
@@ -81,7 +87,7 @@ tools/visual-review-packet.sh \
   --output ".artifacts/issues/${ISSUE}/${HEAD_SHA}/visual-packet.json"
 ```
 
-Evaluate every packet image using `docs/agent-contracts/visual-reviewer.md`. Omitted English/iPad coverage is deferred/unverified, linked to the shared finishing Issue. Write the exact canonical `visual-result.json`. If any finding exists, use `changes-requested` and stop; do not finalize failed visual evaluation.
+Evaluate every packet image using `docs/agent-contracts/visual-reviewer.md`. For targeted harden work, every omitted case remains explicitly out of this Issue's evidence; for release, omission is invalid. Write the exact canonical `visual-result.json`. If any finding exists, use `changes-requested` and stop; do not finalize failed visual evaluation.
 
 For an all-approved result, finalize through the runner so it revalidates Head, matrix, packet, result, and every image byte:
 
@@ -130,7 +136,7 @@ EVIDENCE=".artifacts/issues/${ISSUE}/${HEAD_SHA}/verify.json"
 
 External account/provider preflights are separate merge-time artifacts that Codex or Claude may produce under the same configured-account policy. This skill alone does not authorize GitHub, provider, signing-account, App Store Connect, or other authenticated operations.
 
-Independently validate the exact canonical evidence and derive its digest only after validation exits zero. If the Issue changes repository delivery tools, guards, workflow state, or evidence producers, also run every tracked `tools/tests/test-*.sh` through `tools/run-repository-tests.sh` in its clean detached worktree and supply one exact `--map AC-N=...` for every acceptance criterion. The command publishes only current-Head, sanitized, no-replace `repository-tests.json`; any failed test or incomplete mapping blocks review. Then use the single deterministic producer to seal the actual Base-to-Head diff, canonical verify bytes, ordered visual evidence, and any canonical repository test evidence into the schema-v2 review packet. Never run the producer before verification succeeds, hand-author either review artifact, or substitute another packet schema.
+Independently validate the exact canonical evidence and derive its digest only after validation exits zero. If the Issue changes repository delivery tools, guards, workflow state, or evidence producers, also run every tracked `tools/tests/test-*.sh` through `tools/run-repository-tests.sh` in its clean detached worktree and supply one exact `--map AC-N=...` for every acceptance criterion. The command publishes only current-Head, sanitized, no-replace `repository-tests.json`; any failed test or incomplete mapping blocks completion. Prepare a schema-v2 review packet only when the canonical `DeliveryProfile.review_required?` helper returns true. Never hand-author review artifacts or substitute another packet schema.
 
 ```sh
 swift tools/validate-verify-json.swift \
@@ -140,15 +146,18 @@ swift tools/validate-verify-json.swift \
   --expected-head "$HEAD_SHA"
 DIGEST="sha256:$(shasum -a 256 "$EVIDENCE" | awk '{print $1}')"
 
-REVIEW_PREPARATION="$(tools/prepare-review-packet.sh --primary "$PRIMARY_MODEL" --issue "$ISSUE" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA")"
-REVIEW_PACKET="$(jq -er '.path' <<<"$REVIEW_PREPARATION")"
+REVIEW_REQUIRED="$(ruby -Itools/lib -rjson -rdelivery-profile -e 'puts IOSTemplate::DeliveryProfile.review_required?(JSON.parse(File.binread(ARGV.fetch(0))))' ".artifacts/issues/${ISSUE}/issue-contract.json")"
+if [[ "$REVIEW_REQUIRED" == true ]]; then
+  REVIEW_PREPARATION="$(tools/prepare-review-packet.sh --primary "$PRIMARY_MODEL" --issue "$ISSUE" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA")"
+  REVIEW_PACKET="$(jq -er '.path' <<<"$REVIEW_PREPARATION")"
+fi
 
 FINAL_HEAD="$(git rev-parse HEAD)"
 [[ "$FINAL_HEAD" == "$HEAD_SHA" ]] || { echo "Head changed after verification" >&2; exit 1; }
 FINAL_DIGEST="sha256:$(shasum -a 256 "$EVIDENCE" | awk '{print $1}')"
 [[ "$FINAL_DIGEST" == "$DIGEST" ]] || { echo "verify.json changed after validation" >&2; exit 1; }
 printf '%s %s\n' "$EVIDENCE" "$DIGEST"
-printf '%s\n' "$REVIEW_PACKET"
+[[ "$REVIEW_REQUIRED" == false ]] || printf '%s\n' "$REVIEW_PACKET"
 ```
 
-For `standard`/`strict`, pass that exact `REVIEW_PACKET` path to the next `cross-model-review` invocation. The canonical review tools own schema-v2 and `reviewPacketDigest` validation; do not recompute, translate, or edit their output. A changed Head restarts profile-required verification and, when applicable, review. An unavailable required opposite model is `blocked:review`, never self-approval. Explicit `fast` stops after canonical focused evidence and does not prepare a review packet.
+When review is required, pass that exact `REVIEW_PACKET` path to the next `cross-model-review` invocation. The canonical review tools own schema-v2 and `reviewPacketDigest` validation; do not recompute, translate, or edit their output. A changed Head restarts stage-required verification and, when applicable, review. An unavailable required opposite model is `blocked:review`, never self-approval. A non-release standard shape/harden Issue stops after canonical evidence and does not prepare a review packet.

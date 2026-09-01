@@ -19,6 +19,7 @@ module IOSTemplate
     SHA = /\A[0-9a-f]{40}\z/
     TEST_PATH = %r{\Atools/tests/test-[a-z0-9-]+\.sh\z}
     RUNNER_PATHS = %w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb].freeze
+    DEFAULT_CHILD_TIMEOUT_SECONDS = 900
 
     def run(repo:, issue:, expected_base:, mappings:)
       reject("repository root must be a physical absolute directory") unless repo.start_with?("/") && File.realpath(repo) == repo
@@ -121,22 +122,24 @@ module IOSTemplate
           tests.each do |path|
             arguments = test_arguments(path)
             started = Time.now.utc
-            stdout, stderr, status = Open3.capture3(
+            timeout_seconds = repository_test_timeout_seconds
+            stdout, stderr, status, timed_out, elapsed = capture3_bounded(
               {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil},
               "/bin/bash", "-p", path, *arguments,
-              chdir: worktree
+              chdir: worktree, timeout_seconds: timeout_seconds
             )
             completed = Time.now.utc
-            exit_status = status.exitstatus || 128 + status.termsig.to_i
+            exit_status = timed_out ? 124 : status.exitstatus || 128 + status.termsig.to_i
             results << {
               "path" => path,
               "arguments" => arguments,
-              "status" => status.success? ? "passed" : "failed",
+              "status" => timed_out ? "timed-out" : status.success? ? "passed" : "failed",
               "exitStatus" => exit_status,
               "outputDigest" => ReviewContract.digest(stdout.b + "\0".b + stderr.b),
               "startedAt" => started.iso8601(6),
               "completedAt" => completed.iso8601(6)
             }
+            reject("repository test timed out: #{path}; elapsedSeconds=#{format('%.3f', elapsed)}") if timed_out
             break unless status.success?
           end
         ensure
@@ -148,6 +151,52 @@ module IOSTemplate
         end
       end
       results
+    end
+
+    def repository_test_timeout_seconds
+      raw = ENV.fetch("IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS", DEFAULT_CHILD_TIMEOUT_SECONDS.to_s)
+      value = Integer(raw, 10)
+      reject("repository test timeout must be a positive integer") unless value.positive?
+      value
+    rescue ArgumentError
+      reject("repository test timeout must be a positive integer")
+    end
+
+    def capture3_bounded(environment, *command, chdir:, timeout_seconds:)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      input = output = error = wait_thread = nil
+      input, output, error, wait_thread = Open3.popen3(environment, *command, chdir: chdir, pgroup: true)
+      input.close
+      stdout_reader = Thread.new { output.read }
+      stderr_reader = Thread.new { error.read }
+      timed_out = wait_thread.join(timeout_seconds).nil?
+      if timed_out
+        terminate_process_group(wait_thread.pid)
+        wait_thread.join(5)
+        if wait_thread.alive?
+          begin
+            Process.kill("KILL", -wait_thread.pid)
+          rescue Errno::ESRCH
+            nil
+          end
+          wait_thread.join
+        end
+      end
+      status = wait_thread.value
+      stdout = stdout_reader.value
+      stderr = stderr_reader.value
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+      [stdout, stderr, status, timed_out, elapsed]
+    ensure
+      input&.close unless input&.closed?
+      output&.close unless output&.closed?
+      error&.close unless error&.closed?
+    end
+
+    def terminate_process_group(pid)
+      Process.kill("TERM", -pid)
+    rescue Errno::ESRCH
+      nil
     end
 
     def test_arguments(path)

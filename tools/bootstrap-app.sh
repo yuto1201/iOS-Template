@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+bootstrap_script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+source "$bootstrap_script_dir/lib/bounded-command.sh"
+
 die() {
   echo "bootstrap-app: $*" >&2
   exit 1
@@ -148,7 +151,8 @@ swift "$stage_worktree/tools/bootstrap-app.swift" apply \
   --app-slug "$app_slug" \
   --bundle-id "$bundle_id" >/dev/null
 
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+bounded_run bootstrap-xcode-list "${IOS_TEMPLATE_BOOTSTRAP_XCODE_TIMEOUT_SECONDS:-300}" \
+  /usr/bin/env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild -list -json -project "$stage_worktree/$module_name.xcodeproj" >/dev/null
 
 changed_paths=()

@@ -1,8 +1,8 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 1.4
-Date: 2026-08-31
+Version: 1.5
+Date: 2026-09-02
 
 ## 1. 目的
 
@@ -12,7 +12,7 @@ Date: 2026-08-31
 
 - 未決事項を抱えたまま実装しない。
 - Issue の塊を指定すれば、AI が独立性と依存関係を判断して止まらず進める。
-- 各Issueはリスクに応じた検証を完了し、`standard`／`strict`では反対モデルレビューも完了してからマージする。
+- 各IssueはDelivery stageに応じた検証を完了し、`strict`または`release`では反対モデルレビューも完了してからマージする。
 - 設定済みの個人用外部アカウント以外を使用しない。
 - App Store 申請に必要な情報を後から探し直さない。
 
@@ -54,9 +54,9 @@ Date: 2026-08-31
 
 ### 3.2 日本語iPhone優先の機能開発
 
-Identity/bootstrap完了後の通常機能開発は、日本語iPhoneの体験と対象Testを優先する。機能と画面遷移が安定した段階で英訳・iPad最適化をまとめて行い、リリース前に日本語・英語 × iPhone・iPadを確認する。最初から文字列管理、可変レイアウト、accessibility、データ・権限・課金の安全な土台を維持し、最終的な対応範囲は減らさない。
+Identity/bootstrap完了後の通常機能開発は、まず`shape`で日本語iPhoneの主要導線と重要ロジックを操作可能にする。承認された形に必要な英訳、iPad最適化、Dark Mode、Dynamic Type、VoiceOver、44pt、復旧、性能などは、問題ごとの狭い`harden` Issueで進める。`release`で日本語・英語 × iPhone・iPadと提出前品質を完全確認する。最初から文字列管理、可変レイアウト、データ・権限・課金の安全な土台を維持し、最終的な対応範囲は減らさない。
 
-段階別の完了条件、仕上げIssueへの集約、危険度と検証範囲の分離は[段階的開発仕様](development-stages.md)を正とする。通常機能は明示した`iphone-ja`のcanonical検証で完了できる。範囲未指定の既存Issue、仕上げ・リリース、Foundation・Identity/bootstrapは`full`を維持する。
+段階別の完了条件、harden Issueへの分離、危険度と検証範囲の分離は[段階的開発仕様](development-stages.md)を正とする。shapeは明示した`iphone-ja`のcanonical検証で完了できるが、release-readyとは扱わない。hardenは`targeted`、release、stage未指定の既存Issue、Foundation・Identity/bootstrapは`full`を維持する。
 
 ## 4. データ方針
 
@@ -113,8 +113,8 @@ AI は、承認済み仕様を前提として次を止まらず進めます。
 2. GitHub Issue 起票
 3. Branch と worktree 作成
 4. 実装とテスト
-5. Delivery profileに応じた検証と視覚評価
-6. `standard`／`strict`の反対モデルレビュー
+5. Delivery stageとprofileに応じた有界検証と、必要な場合だけの視覚評価
+6. `strict`または`release`の反対モデルレビュー
 7. 指摘修正と再検証
 8. PR 作成
 9. Squash Merge

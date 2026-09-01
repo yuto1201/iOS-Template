@@ -1,84 +1,91 @@
-# 日本語iPhone優先の段階的開発
+# 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 1.1
-Date: 2026-09-01
+Version: 2.0
+Date: 2026-09-02
 
-## 1. 方針
+## 1. 原則
 
-通常の機能開発は日本語iPhoneを主対象とし、主要機能・画面遷移が安定してから英語・iPadを仕上げる。最終的な対応範囲は日本語・英語、iPhone・iPadのまま変更しない。これは開発順序と検証範囲の変更であり、安全性やリリース品質を下げる決定ではない。
+開発順序は、操作可能な形を作る、実画面で方向性を承認する、問題別に品質を固める、リリース候補を完全検証する、の順とする。最終品質は下げず、高コストな横断検証を変更が収束した後へ移す。
 
-[Issue #32](https://github.com/yuto1201/iOS-Template/issues/32)の実行経路により、新規の通常機能Issueは明示した`iphone-ja`の1条件でcanonical検証・反対モデルレビュー・マージを完了できる。未指定の既存Issueは`full`のままとし、未検証の言語・端末を成功扱いしない。
+Delivery stageはIssue type、workflow state、危険度を表すDelivery profileとは別の一項目である。新規Issueは`shape`、`harden`、`release`のいずれか、正のTime budget、理由を持つ。
 
-## 2. 開発の順序
+## 2. Delivery stage
 
-| 段階 | 主な作業 | 検証範囲と終了条件 |
-| --- | --- | --- |
-| 機能開発 | 日本語iPhoneの主要機能、画面遷移、保存・復元、エラー表示を固める | `iphone-ja`。IssueのACと対象Testを満たす。英訳・iPad最適化の完成は求めない |
-| 仕上げ | 英訳、文字量差、iPadレイアウト、回転・サイズ変更などをまとめて調整する | `full`。主要機能とナビゲーションが安定した時点で開始し、対応範囲の不足を解消する |
-| リリース確認 | 同じ候補Headの回帰確認、提出情報・法務・スクリーンショットを整合させる | `full`。iPhone/iPad × 日本語/英語を確認する。App Store用画像の専用matrixは別途維持する |
+| Stage | 目的 | 標準検証 | 完了時の表現 |
+| --- | --- | --- | --- |
+| `shape` | 主要導線を短時間で操作可能にし、実画面で仕様とUI方向を確認する | Build、重要Unit Test、代表的な日本語iPhone 1条件のSmoke Test。コンパイル、起動、保存不能、クラッシュを確認 | 「shape完了。release-readyではない」 |
+| `harden` | 承認済みの形に対し、一つの品質問題を狭く改善する | 対象Test、関連回帰、明示した`targeted` Simulator case。変更に必要な品質確認だけ | 「対象をharden済み。release-readyではない」 |
+| `release` | リリース候補Headの全体品質と提出準備を確定する | §5の完全検証 | 完全検証が成功した場合だけrelease-ready |
 
-「最後」は申請直前の残り時間で処理するという意味ではない。主要なユーザーフローが日本語iPhoneで通り、画面構成の大きな変更が収束した時点で仕上げへ移る。新機能を際限なく追加して仕上げを先送りしない。
+`shape`のTime budget既定値は120分とし、Issueで変更できる。超過しそうならScopeを狭める、`harden` Issueへ分ける、環境障害で停止する、または受け入れ条件を変える判断だけを`blocked:user`にする。追加の品質項目を同じIssueへ積み増して延長しない。
 
-機能開発中も、変更が英語・iPad固有の不具合、共通レイアウト、複数端末の状態管理などに直接及ぶ場合は、そのIssueを `full` とする。既に動いている英語・iPadの機能を削除・破壊して日本語iPhoneを早く完成させることはしない。
+`harden`では、保存失敗復旧、特定画面のDynamic Type、特定導線のVoiceOver、localization、Dark Mode、accessibility、performance、回帰不具合などを別々に扱う。無関係な品質項目を一つのIssueへ束ねない。
 
-## 3. 危険度と検証範囲は別に決める
+## 3. Delivery profileとVerification scope
 
-- Delivery profile (`fast` / `standard` / `strict`) は変更の危険度と必要な安全確認・レビューを決める。
-- 検証範囲 (`iphone-ja` / `full`) は確認する端末・言語を決める。通常の新規UI Issueは `standard` + `iphone-ja` を標準とする。
-- `iphone-ja` は最新利用可能iOS上のiPhone Pro（Pro Maxを除く）、`ja_JP` / `ja` の1条件。
-- `full` は既存順の `iphone-en`、`iphone-ja`、`ipad-en`、`ipad-ja` の4条件。Runtime・deviceのバッチ内固定を維持する。
-- 日本語iPhoneだけで作るUIも `fast` にはしない。`fast` の非UI・低リスク条件を変えない。
-- 認証・認可、秘密、永続化・migration、破壊的操作、課金、個人情報の確認は開発初期から行う。`strict` でも通常機能のUI範囲を限定できるが、重要な失敗経路のTestや追加承認を省略しない。日時・通貨・複数形などロケールで変わるドメインロジックのTestはUI範囲とは別に必要な条件を確認する。
-- 仕上げ、Foundation・Identity/bootstrapの全体整合、検証gate自体、App Store/TestFlight向けリリース作業は `full`。提出権限、署名、法務・privacy承認、設定済みアカウントの照合は引き続き `strict` の境界に従う。
-- `standard` / `strict` の反対モデルレビュー、現在Headと証拠の一致、1 Issue = 1 Branch = 1 PR、Squash Mergeは維持する。
-- scope未指定の既存Issue・snapshotは `full`、profile未指定は `strict`。Claim済みの範囲を暗黙に縮小しない。
+Delivery profileは変更の危険度を表す。
 
-## 4. 最初から残す土台と後送りする作業
+- `fast`: 非UI・ローカル・低リスク。
+- `standard`: 通常の画面・操作・品質改善。
+- `strict`: 認証・認可、秘密、migration、本番データ、破壊的操作、課金、privacy・法務、App Store/TestFlight、署名、workflow gate。
 
-最初から行うこと:
+Verification scopeは端末・言語の範囲を表す。
 
-- ユーザー向け文字列を既存のString Catalog等で管理し、安定したキーと文脈を保つ。表示文言を識別子や永続化値として使わず、文字列の継ぎ足しで翻訳困難な文を組み立てない。
-- 固定画面サイズに依存しないレイアウト、Dynamic Type、VoiceOverの意味づけ、基本的なタップ領域を日本語iPhoneの変更範囲で確認する。
-- 日時・数値・通貨の適切なフォーマット、保存形式と表示の分離、データ・状態管理とViewの責務分離を保つ。
-- iPad targetや既存の英語リソースを削除しない。テンプレートの開発言語設定を、作業言語が日本語という理由だけで変更しない。
-- 重要な共通画面では既存Previewや短い確認で大画面・長い文言の破綻を早く見つけてもよい。ただし毎Issueの全端末・全言語検証を別名で復活させない。
+- `shape`は`iphone-ja`。最新利用可能iOSのiPhone Pro（Pro Maxを除く）、`ja_JP` / `ja`の1条件。
+- applicationを検証する`harden`は`targeted`。`iphone-en`、`iphone-ja`、`ipad-en`、`ipad-ja`のうち、Issueの変更対象に必要な非空のcanonical部分集合。
+- `release`は`full`。上記4条件を固定順ですべて実行する。
 
-仕上げでまとめて行うこと:
+`shape`はUIを含むため`fast`へ偽装しない。逆に`strict`なshape/hardenでも、危険な対象の安全確認は維持しつつ、無関係なリリース全体検証は後段へ移せる。
 
-- 新規文言の英訳、用語統一、英語の自然さと文字量差の調整。
-- iPad向けの列構成、余白、ナビゲーション、sheet/popover、回転・サイズ変更、キーボード表示の最適化。
-- 日英・iPhone/iPadの横断UI確認、提出用メタデータ・スクリーンショットの最終整合。
+## 4. 常に守る安全基準
 
-未翻訳箇所を仮の英訳で完成扱いにしない。翻訳しやすい土台を保つために、将来不要かもしれない抽象化や独自localization基盤を先回りして作ることも不要。
+Delivery stageにかかわらず、次を省略しない。
 
-## 5. Issue・レビュー・リリースの扱い
+- コンパイル可能であること。
+- ユーザーデータを破壊せず、保存形式の互換性を守ること。
+- 金額、日付、保存など重要ロジックを対象Unit Testで確認すること。
+- 認証情報や個人情報を保存・出力しないこと。
+- ユーザー所有ファイルを削除・上書きしないこと。
+- Issue Scope外へ実装を広げないこと。
+- 実行していないBuild、Test、Simulator操作を成功と報告しないこと。
 
-新しいアプリの計画時に「英語・iPad仕上げ」Issueを用意する。画面ごとに細かい延期Issueを大量作成せず、仕上げIssueに未翻訳箇所・対象画面・注意点をまとめる。リリースIssueはその完了に依存させる。配置・仕様が未確定なら、実装を先に始めず必要な判断だけを確認する。
+String Catalog等の安定したキー、可変レイアウト、意味のあるaccessibility情報、iPad target、既存英語リソースは初期から壊さない。ただし全翻訳、全画面のDynamic Type／VoiceOver／44pt／Light-Dark監査をshapeの完了条件にはしない。
 
-各機能Issueでは、Goal / In scope / Out of scope / UI verificationに段階、今回の対象範囲、後送り先を記載する。英語・iPadを後送りしたこと自体を今回のAC不足にせず、対象範囲の実装と証拠で判定する。既存ACが英語・iPadを明示要求するIssueは、自動的に対象外へ書き換えない。
+## 5. Release完全検証
 
-レビューとPRでは「今回確認済み」と「仕上げへ延期・未検証」を区別する。日本語iPhoneの成功から英語やiPadの成功を推測せず、`not-applicable` を全対応済みという意味で使わない。`Remaining work: None for this Issue` はアプリ全体の完成を意味しない。
+`release` Issueまたは明示的なリリース候補だけが、次を必須とする。
 
-リリース候補では仕上げIssueの完了だけでなく、候補Headそのものの4条件検証を要求する。古いHeadの画像・成功結果や日本語iPhoneだけの成功では、日英・iPhone/iPad対応済みと判定しない。App Store用の表示ファミリー・画像要件、metadata、privacy/legalは別途確認する。
+- iPhone／iPad × 日本語／英語の4条件。
+- Light／Dark Mode。
+- Dynamic Type。
+- VoiceOver。
+- 44pt以上の操作領域。
+- 未翻訳、切れ、重なりの目視確認。
+- 完全な統合UI Test。
+- 同一Head SHAに束縛された証拠。
+- 反対モデルレビュー。
+- premerge gate。
+- App Store提出前検証。
 
-## 6. 現行ツールからの移行
+Runtime、Device Type、case集合はバッチ内で固定する。古いHead、別scope、部分attemptの結果を正式証拠へ混ぜない。
 
-[Issue #31](https://github.com/yuto1201/iOS-Template/issues/31)で確定した方針を#32で実行経路へ接続する。Issue本文の任意節`Verification scope`は`Scope`（`iphone-ja` / `full`）、`Stage`（`feature` / `adaptation` / `release`）、空でない`Reason`をこの順に記載する。省略、`_No response_`、`Not applicable`は旧形式の`full`で、既存canonical bytesへfieldを追加しない。
+## 6. 有界実行と再実行
 
-新規の通常UI Issueは`standard` + `iphone-ja / feature`を標準とする。English expectationsには仕上げへの延期と共通仕上げIssueへのリンクを記載でき、毎機能の英訳完成・iPad画像は要求しない。英語・iPad固有や横断変更は`full`。`adaptation` / `release`は`full`、`release`は`strict`、App Store operationも`full`を必須にする。
+`xcodebuild`、Unit Test、UI Test、`simctl`、Swift検証は有限timeoutで起動する。timeout時は当該呼び出しのprocess groupだけへTERM、grace、必要時KILLを行い、現在attemptが所有するSimulatorとlockだけを回収する。別Issue、別repository、ユーザーが起動したXcodeやSimulatorへglobal shutdown／killを行わない。
 
-`verificationScope`はClaim時とlive再構成で一致させる。実行・画像評価・review・PRはcontractのexact 1件／4件に従う。resolverは`--scope iphone-ja`を受け付け、未指定は`full`。batch IDを範囲ごとに分け、同一batchの範囲変更・別scopeや別Headの証拠流用は拒否する。snapshotや証拠を手書きで縮小しない。
+失敗記録には停止stage、経過時間、timeoutを含める。timeoutや失敗時に成功形式の`verify.json`を生成しない。同じ原因の実行は最大2回で止める。
 
-この変更を既にテンプレートから作成済みのアプリへ自動適用したとは報告しない。各アプリの現行仕様・ツールとの差分を確認し、別Issueで移行する。
+再実行の順序は、対象Test、関連回帰Test、Delivery stage標準検証、`release`完全検証とする。正式な一括証拠へ異なるattemptの部分結果を混ぜないが、診断済みの対象Test結果は修正判断に利用する。
 
-## 7. 実装の依存関係
+## 7. Issue・レビュー・移行
 
-| Issue | 成果 / AC | Spec anchors | 主な変更先 | 依存 | 実装開始条件 |
-| --- | --- | --- | --- | --- | --- |
-| [#31](https://github.com/yuto1201/iOS-Template/issues/31) | 方針・移行境界 / AC-1〜5 | 本文§1〜6、acceptance.md §3〜5 | AGENTS・README・specs・docsのMarkdown | なし | ユーザー承認済み |
-| [#19](https://github.com/yuto1201/iOS-Template/issues/19) | 検証設定のIssue contract生成 / 既存AC | acceptance.md §3・5 | contract・Issue form・tests・docs | 既存Issueに従う | 既存担当の進行を維持 |
-| [#29](https://github.com/yuto1201/iOS-Template/issues/29) | live Issue改変検出 / 既存AC | acceptance.md §3・5 | pre-merge・tests | #19との入力経路を整合 | 既存Issueに従う |
-| [#32](https://github.com/yuto1201/iOS-Template/issues/32) | 1条件／4条件の実行・証拠・review / AC-1〜7 | 本文§2〜6、acceptance.md §3〜5 | tools・tests・Issue form・共有スキル・reviewer・関連文書 | #31・#19・#29 | 依存の完了後 |
+新規Issueの`Delivery stage`節は`Stage`、`Time budget`、`Reason`をこの順で持つ。`Verification scope`節は`Scope`と`Reason`を持ち、stageを重複記載しない。Feature formは`shape / 120 minutes / standard / iphone-ja`、Regression formは`harden / targeted`、Release formは`release / strict / full`を既定とする。
 
-依存辺は `#31 -> #32`、`#19 -> #32`、`#29 -> #32`。contract・Issue form・workflow文書・gateを触る作業は直列化し、#19や#29を重複実装しない。#32ではlegacy fullと新しい1条件経路、不正scope・改変・リリース縮小の拒否を検証し、移行注記と共有スキルを同時に更新する。
+`shape`と`harden`の`standard`はblockingな反対モデルレビューを要求しない。`strict`または`release`は現在Headの正式な反対モデルレビューを必須とする。shape/hardenのPRと完了報告は必ずnot release-readyを明記する。
+
+Claim済みで`deliveryStage`を持たない既存contractはcanonical bytesを変更せず、従来のprofile／scope gateを維持する。すなわちlegacy standard／strictはfullと正式review、legacy explicit fastは従来どおりfocused evidenceを使う。新しいIssue validatorはstage未指定を拒否する。既存Issueを縮小したい場合は、暗黙変換せずユーザー承認の上で新しいIssueへ分離する。
+
+## 8. 依存関係
+
+Issue #44がこの仕様、Issue forms、skills、validator、runner、repository tests、bootstrap後repositoryを同じ契約へ揃える。以後のアプリではshapeの実画面承認後に必要なharden Issueを作り、それらを依存にしたrelease Issueで完全検証する。

@@ -54,11 +54,22 @@ body:
     id: ui-verification
     attributes:
       label: UI verification
-      description: "For UI work, describe the selected scope. Japanese iPhone features may defer English/iPad polish to one linked finishing Issue. Non-UI work may say Not applicable."
+      description: "Describe only this regression's affected target and cases. Unrelated quality work belongs to separate harden Issues. Non-UI work may say Not applicable."
       placeholder: |
         - Target screens/states: Settings screen, reproduced and corrected states
-        - English expectations: Deferred/unverified; link the shared English/iPad finishing Issue here.
+        - English expectations: Include only when affected; otherwise explicitly out of scope.
         - Japanese expectations: The corrected state is complete in Japanese.
+    validations:
+      required: true
+  - type: textarea
+    id: delivery-stage
+    attributes:
+      label: Delivery stage
+      description: "A post-merge regression normally hardens one approved behavior. Keep the problem and verification target narrow."
+      value: |
+        - Stage: harden
+        - Time budget: 180 minutes
+        - Reason: Correct one approved behavior and verify only the affected target.
     validations:
       required: true
   - type: textarea
@@ -75,11 +86,10 @@ body:
     id: verification-scope
     attributes:
       label: Verification scope
-      description: "Use iphone-ja / feature for a Japanese iPhone regression. Use full for English/iPad, adaptation, release, foundation or cross-device changes. Remove for documentation-only or fast work."
+      description: "Use targeted and list the exact ordered affected Simulator cases in Verification. Do not repeat Delivery stage here. Remove for documentation-only or fast work."
       value: |
-        - Scope: iphone-ja
-        - Stage: feature
-        - Reason: Japanese iPhone first; English/iPad finishing is tracked in the shared finishing Issue.
+        - Scope: targeted
+        - Reason: Verify only the device/language cases affected by this regression.
     validations:
       required: false
   - type: textarea
@@ -96,7 +106,7 @@ body:
           ],
           "acceptanceMappings": [
             {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},
-            {"id": "AC-2", "checks": ["case:iphone-ja", "visual:iphone-ja"]}
+            {"id": "AC-2", "checks": ["case:iphone-ja"]}
           ]
         }
     validations:

@@ -122,7 +122,17 @@ cleanup_claim_temps() {
 }
 printf '%s' "$issue_json" | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("body")' > "$body"
 issue_type=$(printf '%s' "$issue_json" | issue_type_from_json)
-"$repo_root/tools/validate-issue-body.sh" --type "$issue_type" "$body" >/dev/null
+existing_contract_path="$repo_root/.artifacts/issues/$issue/issue-contract.json"
+allow_legacy_stage=0
+if [[ -f "$existing_contract_path" && ! -L "$existing_contract_path" ]] &&
+   ruby -rjson -e 'exit(JSON.parse(File.binread(ARGV.fetch(0))).key?("deliveryStage") ? 1 : 0)' "$existing_contract_path"; then
+  allow_legacy_stage=1
+fi
+if [[ "$allow_legacy_stage" -eq 1 ]]; then
+  "$repo_root/tools/validate-issue-body.sh" --type "$issue_type" --allow-legacy-delivery-stage "$body" >/dev/null
+else
+  "$repo_root/tools/validate-issue-body.sh" --type "$issue_type" "$body" >/dev/null
+fi
 
 slug=$(canonical_title_slug "$title")
 branch="$agent/$issue-$slug"
@@ -131,16 +141,22 @@ worktree_path="$repo_root/$worktree_relative"
 branches=$(candidate_branches | sort -u || true)
 worktrees=$(worktree_candidates || true)
 
-existing_contract_path="$repo_root/.artifacts/issues/$issue/issue-contract.json"
 if [[ -f "$existing_contract_path" && ! -L "$existing_contract_path" ]]; then
   fetched_at=$(jq -er '.fetchedAt | strings' "$existing_contract_path") || conflict 'sealed Issue contract has no fetchedAt'
 else
   fetched_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 fi
-ruby "$repo_root/tools/lib/issue-contract.rb" \
-  --body "$body" --type "$issue_type" --format contract \
-  --issue "$issue" --repo "$repo" --fetched-at "$fetched_at" \
-  > "$contract_candidate"
+if [[ "$allow_legacy_stage" -eq 1 ]]; then
+  ruby "$repo_root/tools/lib/issue-contract.rb" \
+    --body "$body" --type "$issue_type" --format contract \
+    --issue "$issue" --repo "$repo" --fetched-at "$fetched_at" \
+    --allow-legacy-delivery-stage > "$contract_candidate"
+else
+  ruby "$repo_root/tools/lib/issue-contract.rb" \
+    --body "$body" --type "$issue_type" --format contract \
+    --issue "$issue" --repo "$repo" --fetched-at "$fetched_at" \
+    > "$contract_candidate"
+fi
 contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$contract_candidate")"
 
 for required_operation in github.read_issue github.update_issue github.push_branch github.create_pr github.merge_pr github.delete_branch; do

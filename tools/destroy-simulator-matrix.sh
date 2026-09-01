@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
+source "$repo_root/tools/lib/bounded-command.sh"
 
 cleanup_paths=()
 cleanup() {
@@ -22,7 +23,8 @@ make_temp() {
 trap cleanup EXIT
 
 matrix_io() {
-  swift tools/simulator-matrix-io.swift "$@"
+  bounded_run simulator-matrix-io "${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}" \
+    swift tools/simulator-matrix-io.swift "$@"
 }
 
 [[ $# -eq 2 && $1 == "--matrix" ]] || {
@@ -47,7 +49,7 @@ make_temp matrix_copy destroy-matrix
 make_temp devices_copy destroy-devices
 make_temp udids destroy-udids
 matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$matrix_copy"
-xcrun simctl list devices -j >"$devices_copy"
+bounded_run simulator-list-before-destroy "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" xcrun simctl list devices -j >"$devices_copy"
 matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$devices_copy" --name devices.json
 ruby tools/validate-simulator-matrix.rb complete "$matrix_copy" "$batch_id" "$devices_copy"
 ruby -rjson - "$matrix_copy" >"$udids" <<'RUBY'
@@ -56,5 +58,5 @@ puts matrix.fetch("cases").map { |entry| entry.fetch("udid") }
 RUBY
 
 while IFS= read -r udid; do
-  xcrun simctl delete "$udid"
+  bounded_run simulator-delete "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" xcrun simctl delete "$udid"
 done <"$udids"

@@ -106,8 +106,8 @@ View から Supabase SDK、SwiftData の複雑な問い合わせ、外部生成A
 | `plan-issue-batch` | 指定された機能を依存関係付きIssue群へ分解する |
 | `ship-issue` | 1 Issue を実装からSquash Mergeまで進める |
 | `ship-issue-batch` | 独立Issueを安全に並行化し、依存Issueを順に進める |
-| `ios-verify` | delivery profileに応じてfocused Build／Testまたは4条件Simulator検証を選び、現在Headの証拠を生成する |
-| `cross-model-review` | `standard`／`strict`で反対モデルへレビューを依頼し、Head SHA付き結果を保存する。`fast`ではblocking gateにしない |
+| `ios-verify` | Delivery stageに応じてshape 1条件、harden targeted、release 4条件の有界検証を選び、現在Headの証拠を生成する |
+| `cross-model-review` | `strict`または`release`で反対モデルへレビューを依頼し、Head SHA付き結果を保存する。非releaseのstandard shape/hardenと`fast`ではblocking gateにしない |
 | `external-ops` | CodexとClaudeに共通のアカウント／target照合後、認証済み外部操作を実行する |
 | `app-bootstrap` | 新規リポジトリのXcode・Swift・設定Identityを機能開発前に安全に初期化する |
 

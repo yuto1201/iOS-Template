@@ -102,6 +102,17 @@ Exercise the complete documentation-only Issue shipping workflow.
 
 - Not applicable.
 
+## Delivery stage
+
+- Stage: harden
+- Time budget: 120 minutes
+- Reason: Exercise one documentation workflow without claiming release readiness.
+
+## Delivery profile
+
+- Profile: strict
+- Reason: The fixture intentionally exercises the formal review and premerge path.
+
 ## External operations
 
 - Operation: github.read_issue

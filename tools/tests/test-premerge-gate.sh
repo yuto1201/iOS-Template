@@ -85,7 +85,7 @@ cat > "$issue_body" <<'EOF'
 EOF
 
 canonical_contract() {
-  ruby "$repo/tools/lib/issue-contract.rb" --body "$issue_body" --type feature --format contract \
+  ruby "$repo/tools/lib/issue-contract.rb" --allow-legacy-delivery-stage --body "$issue_body" --type feature --format contract \
     --issue 42 --repo yuto1201/iOS-Template --fetched-at "$contract_at"
 }
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"

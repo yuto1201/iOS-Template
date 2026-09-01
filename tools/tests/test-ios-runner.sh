@@ -4,7 +4,15 @@ set -euo pipefail
 source_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 scratch="$(mktemp -d "$HOME/Library/Caches/ios-runner.XXXXXX")"
 scratch="$(cd "$scratch" && pwd -P)"
-trap '[[ "${KEEP_IOS_RUNNER_SCRATCH-}" == 1 ]] || rm -rf "$scratch"' EXIT
+unrelated_timeout_pid=''
+cleanup_test() {
+  if [[ -n "$unrelated_timeout_pid" ]]; then
+    /bin/kill "$unrelated_timeout_pid" >/dev/null 2>&1 || true
+    wait "$unrelated_timeout_pid" 2>/dev/null || true
+  fi
+  [[ "${KEEP_IOS_RUNNER_SCRATCH-}" == 1 ]] || rm -rf "$scratch"
+}
+trap cleanup_test EXIT
 
 adapter_bin="$scratch/adapter-bin"
 poison_bin="$scratch/poison-bin"
@@ -20,6 +28,8 @@ mkdir -p "$adapter_bin" "$poison_bin" "$adapter_state" "$fake_developer/usr/bin"
   "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin" "$test_source/tools/lib"
 /bin/cp "$source_repo/tools/verify-ios-issue.sh" "$runner"
 /bin/cp "$source_repo/tools/lib/xcode.sh" "$test_source/tools/lib/xcode.sh"
+/bin/cp "$source_repo/tools/lib/bounded-command.sh" "$test_source/tools/lib/bounded-command.sh"
+/bin/cp "$source_repo/tools/lib/bounded-command.rb" "$test_source/tools/lib/bounded-command.rb"
 /bin/cp "$source_repo/tools/validate-verify-json.swift" "$test_source/tools/validate-verify-json.swift"
 /usr/bin/ruby - "$test_source/tools/validate-verify-json.swift" "$adapter_state" <<'RUBY'
 path, state_dir = ARGV
@@ -301,6 +311,7 @@ fi
 [[ "$(state ui_mode)" != fail ]] || { echo 'configured UI test failure' >&2; exit 1; }
 case "$destination" in
   *id=00000000-0000-0000-0000-000000000001) expected_case=iphone-en; expected_language=en; expected_region=US ;;
+  *id=00000000-0000-0000-0000-000000000002) expected_case=iphone-ja; expected_language=ja; expected_region=JP ;;
   *id=00000000-0000-0000-0000-000000000003) expected_case=ipad-en; expected_language=en; expected_region=US ;;
   *) echo 'wrong UI destination' >&2; exit 1 ;;
 esac
@@ -427,6 +438,7 @@ if [[ "${1-}" == xcresulttool ]]; then
     selected_target=TemplateAppUITests selected_class=SmokeTests selected_method=testLaunch selected_url_method=testLaunch
     case "$result_path" in
       */Cases/iphone-en.xcresult) udid=00000000-0000-0000-0000-000000000001 ;;
+      */Cases/iphone-ja.xcresult) udid=00000000-0000-0000-0000-000000000002 ;;
       */Cases/ipad-en.xcresult) udid=00000000-0000-0000-0000-000000000003 ;;
       *) echo 'unexpected UI summary result path' >&2; exit 1 ;;
     esac
@@ -672,9 +684,13 @@ mappings = [
 ]
 mappings.pop if mode == "missing-mapping"
 mappings[1]["checks"] << "case:unknown" if mode == "unknown-mapping"
-if scope == "iphone-ja"
+if %w[iphone-ja shape].include?(scope)
   cases.select! { |entry| entry["id"] == "iphone-ja" }
   mappings.each { |entry| entry["checks"].select! { |check| check.start_with?("stage:") || check.end_with?(":iphone-ja") } }
+end
+if scope == "shape"
+  cases[0] = {"id" => "iphone-ja", "testIdentifier" => "TemplateAppUITests/SmokeTests/testLaunch"}
+  mappings.each { |entry| entry["checks"].reject! { |check| check.start_with?("visual:") } }
 end
 document = {
   "schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template",
@@ -713,7 +729,7 @@ if mode == "valid"
     ## Dependencies
     None
     ## UI verification
-    Not applicable
+    #{scope == "shape" ? "- Target screens/states: Main launch path.\n- English expectations: Deferred to release.\n- Japanese expectations: Main path is operable." : "Not applicable"}
     ## External operations
     None
     ## User approvals
@@ -721,8 +737,27 @@ if mode == "valid"
     ## Verification
     #{JSON.generate(document.fetch("verification"))}
   BODY
-  body += "\n## Verification scope\n- Scope: iphone-ja\n- Stage: feature\n- Reason: Japanese iPhone feature fixture; finishing deferred.\n" if scope == "iphone-ja"
-  produced = IOSTemplate::IssueContract.parse(body, issue: 42, repository: "yuto1201/iOS-Template", fetched_at: document.fetch("fetchedAt")).contract
+  if scope == "iphone-ja"
+    body += "\n## Verification scope\n- Scope: iphone-ja\n- Stage: feature\n- Reason: Japanese iPhone feature fixture; finishing deferred.\n"
+  elsif scope == "shape"
+    body += <<~BODY
+
+      ## Delivery profile
+      - Profile: standard
+      - Reason: Operable UI shape with bounded smoke verification.
+      ## Delivery stage
+      - Stage: shape
+      - Time budget: 120 minutes
+      - Reason: Confirm the primary flow before hardening.
+      ## Verification scope
+      - Scope: iphone-ja
+      - Reason: One representative Japanese iPhone smoke path.
+    BODY
+  end
+  produced = IOSTemplate::IssueContract.parse(
+    body, issue: 42, repository: "yuto1201/iOS-Template", fetched_at: document.fetch("fetchedAt"),
+    allow_legacy_delivery_stage: scope != "shape"
+  ).contract
   File.write(path, IOSTemplate::IssueContract.canonical_json(produced))
 else
   File.write(path, JSON.pretty_generate(document) + "\n")
@@ -748,8 +783,8 @@ document = {
     {"id" => id, "family" => family, "deviceType" => {"identifier" => type[0], "name" => type[1]}, "locale" => locale, "language" => language, "udid" => udid}
   end
 }
-if scope == "iphone-ja"
-  document["scope"] = scope
+if %w[iphone-ja shape].include?(scope)
+  document["scope"] = "iphone-ja"
   document["cases"].select! { |entry| entry["id"] == "iphone-ja" }
 end
 File.write(path, JSON.pretty_generate(document) + "\n")
@@ -785,7 +820,7 @@ prepare_repo() {
   [[ "$head_directory" != present ]] || mkdir -p "$(dirname "$draft")"
   write_contract "$contract" "$contract_mode" "$scope"
   write_matrix "$matrix" "$scope"
-  if [[ "$scope" == iphone-ja ]]; then
+  if [[ "$scope" == iphone-ja || "$scope" == shape ]]; then
     set_state first_udid 00000000-0000-0000-0000-000000000002
   else
     set_state first_udid 00000000-0000-0000-0000-000000000001
@@ -993,6 +1028,19 @@ if [[ ! -e "$runner" ]]; then
 fi
 
 [[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+prepare_repo shape-valid valid present shape
+run_execute
+[[ -e "$final" ]] || { echo "shape runner did not publish verify.json" >&2; exit 1; }
+[[ ! -e "$draft" ]] || { echo "shape runner incorrectly created visual-review draft" >&2; exit 1; }
+/usr/bin/ruby -rjson - "$final" "$fake_log" <<'RUBY'
+final = JSON.parse(File.read(ARGV.fetch(0)))
+abort "shape route is wrong" unless final.fetch("executionRoute") == "xcodebuild-stage"
+abort "shape claimed release readiness" unless final.fetch("reason") == "Delivery stage shape passed; not release-ready."
+abort "shape cases are wrong" unless final.fetch("cases") == [{"id" => "iphone-ja", "mechanicalCheck" => "test:TemplateAppUITests/SmokeTests/testLaunch", "status" => "passed"}]
+abort "shape visual result is wrong" unless final.fetch("visualEvaluation") == {"findings" => [], "status" => "not-applicable"}
+commands = File.readlines(ARGV.fetch(1)).map { |line| line.chomp.split("\t") }
+abort "shape captured a screenshot" if commands.any? { |fields| fields[2..3] == ["simctl", "io"] }
+RUBY
 prepare_repo scoped-valid valid present iphone-ja
 run_execute
 write_visual approved
@@ -1020,6 +1068,28 @@ git -C "$repo" commit -q -m foundation
 refresh_head_paths
 expect_execute_failure scoped-foundation "full verification is required"
 ! rg -q 'build-for-testing|simctl' "$fake_log"
+
+prepare_repo shape-timeout valid present shape
+timeout_hold="$scratch/shape-timeout-hold"
+/bin/sleep 60 &
+unrelated_timeout_pid=$!
+if IOS_TEMPLATE_XCODEBUILD_TIMEOUT_SECONDS=1 FAKE_HOLD_BUILD_FILE="$timeout_hold" run_execute >"$scratch/shape-timeout.stdout" 2>"$scratch/shape-timeout.stderr"; then
+  echo "shape timeout unexpectedly returned success" >&2; exit 1
+fi
+grep -Fq 'timed out at build' "$scratch/shape-timeout.stderr"
+grep -Fq 'elapsedSeconds=' "$scratch/shape-timeout.stderr"
+/bin/kill -0 "$unrelated_timeout_pid" || { echo "timeout terminated an unrelated project process" >&2; exit 1; }
+[[ ! -e "$final" && ! -e "$draft" ]] || { echo "timeout published successful evidence" >&2; exit 1; }
+/usr/bin/ruby - "$fake_log" <<'RUBY'
+lines = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
+mutations = lines.select { |fields| fields[0] == "xcrun" && fields[2] == "simctl" && %w[terminate shutdown erase delete].include?(fields[3]) }
+owned = "00000000-0000-0000-0000-000000000002"
+abort "timeout cleanup touched a Simulator outside the invocation-owned shape case" unless mutations.all? { |fields| fields[4] == owned }
+abort "timeout cleanup did not reclaim the invocation-owned Simulator" unless mutations.any? { |fields| fields[3] == "shutdown" } && mutations.any? { |fields| fields[3] == "erase" }
+RUBY
+/bin/kill "$unrelated_timeout_pid"
+wait "$unrelated_timeout_pid" 2>/dev/null || true
+unrelated_timeout_pid=''
 if [[ "${1-}" == scoped ]]; then echo "scoped runner tests passed"; exit 0; fi
 
 startup_stdout="$scratch/startup.stdout"

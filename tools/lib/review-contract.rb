@@ -30,7 +30,7 @@ module IOSTemplate
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
     ].freeze
-    CONTRACT_OPTIONAL_KEYS = %w[verification deliveryProfile verificationScope].freeze
+    CONTRACT_OPTIONAL_KEYS = %w[verification deliveryProfile verificationScope deliveryStage].freeze
     LEGACY_CONTRACT_KEYS = (CONTRACT_KEYS - %w[externalOperationDetailsDigest]).freeze
     REFERENCE_KEYS = %w[path digest].freeze
     DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
@@ -247,7 +247,7 @@ module IOSTemplate
       application ||= verify["changeClassification"].nil? && verify.dig("visualEvaluation", "status") == "passed"
       return unless application
 
-      expected = VerificationScope.case_ids(name)
+      expected = VerificationScope.case_ids_for_contract(contract)
       configured = contract.dig("verification", "cases")
       if configured
         reject("contract verification cases differ from scope") unless configured.is_a?(Array) &&

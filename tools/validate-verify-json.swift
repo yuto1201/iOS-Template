@@ -703,40 +703,92 @@ func validateXcodeIdentity(_ value: Any, at path: String) throws -> XcodeIdentit
 
 enum VerificationScope: String {
     case iphoneJapanese = "iphone-ja"
+    case targeted
     case full
 
-    var caseIDs: [String] {
-        self == .iphoneJapanese ? ["iphone-ja"] : ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
+    var fixedCaseIDs: [String]? {
+        switch self {
+        case .iphoneJapanese: return ["iphone-ja"]
+        case .targeted: return nil
+        case .full: return ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
+        }
     }
 
     static func name(_ raw: Any?, at path: String) throws -> VerificationScope {
         guard let raw else { return .full }
         let name = try requireString(raw, at: path)
         guard let scope = VerificationScope(rawValue: name) else {
-            throw ValidationFailure("\(path) must be iphone-ja or full")
+            throw ValidationFailure("\(path) must be iphone-ja, targeted, or full")
         }
         return scope
     }
 }
 
-func contractVerificationScope(_ contract: JSONObject) throws -> VerificationScope {
-    guard let raw = contract["verificationScope"] else { return .full }
-    let value = try requireObject(raw, at: "issueContract.verificationScope")
-    try requireExactKeys(value, ["name", "stage", "reason"], at: "issueContract.verificationScope")
-    let scope = try VerificationScope.name(value["name"], at: "issueContract.verificationScope.name")
-    let stage = try requireString(value["stage"]!, at: "issueContract.verificationScope.stage")
-    _ = try requireString(value["reason"]!, at: "issueContract.verificationScope.reason")
-    guard ["feature", "adaptation", "release"].contains(stage) else {
-        throw ValidationFailure("issueContract.verificationScope.stage is invalid")
+let fullVerificationCaseIDs = ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
+
+func validateTargetedCaseIDs(_ ids: [String], at path: String) throws -> [String] {
+    guard !ids.isEmpty, Set(ids).count == ids.count,
+          ids.allSatisfy(fullVerificationCaseIDs.contains),
+          ids == fullVerificationCaseIDs.filter(ids.contains) else {
+        throw ValidationFailure("\(path) must be a nonempty canonical Simulator-case subset")
     }
-    guard stage == "feature" || scope == .full else {
-        throw ValidationFailure("adaptation and release require full Verification scope")
+    return ids
+}
+
+struct DeliveryStageInfo {
+    let name: String
+    let timeBudgetMinutes: Int?
+    let explicit: Bool
+}
+
+func contractDeliveryStage(_ contract: JSONObject) throws -> DeliveryStageInfo {
+    guard let raw = contract["deliveryStage"] else {
+        return DeliveryStageInfo(name: "release", timeBudgetMinutes: nil, explicit: false)
+    }
+    let value = try requireObject(raw, at: "issueContract.deliveryStage")
+    try requireExactKeys(value, ["name", "reason", "timeBudgetMinutes"], at: "issueContract.deliveryStage")
+    let name = try requireString(value["name"]!, at: "issueContract.deliveryStage.name")
+    guard ["shape", "harden", "release"].contains(name) else {
+        throw ValidationFailure("issueContract.deliveryStage.name is invalid")
+    }
+    _ = try requireString(value["reason"]!, at: "issueContract.deliveryStage.reason")
+    let budget = try requireInteger(value["timeBudgetMinutes"]!, at: "issueContract.deliveryStage.timeBudgetMinutes", minimum: 1)
+    return DeliveryStageInfo(name: name, timeBudgetMinutes: budget, explicit: true)
+}
+
+func contractVerificationScope(_ contract: JSONObject, deliveryStage: DeliveryStageInfo) throws -> VerificationScope {
+    guard let raw = contract["verificationScope"] else {
+        if deliveryStage.explicit && ["shape", "release"].contains(deliveryStage.name) {
+            throw ValidationFailure("\(deliveryStage.name) requires explicit Verification scope")
+        }
+        return .full
+    }
+    let value = try requireObject(raw, at: "issueContract.verificationScope")
+    let expectedKeys = deliveryStage.explicit ? ["name", "reason"] : ["name", "stage", "reason"]
+    try requireExactKeys(value, Set(expectedKeys), at: "issueContract.verificationScope")
+    let scope = try VerificationScope.name(value["name"], at: "issueContract.verificationScope.name")
+    _ = try requireString(value["reason"]!, at: "issueContract.verificationScope.reason")
+    if deliveryStage.explicit {
+        let required: VerificationScope = deliveryStage.name == "shape" ? .iphoneJapanese : deliveryStage.name == "harden" ? .targeted : .full
+        guard scope == required else {
+            throw ValidationFailure("Delivery stage and Verification scope are contradictory")
+        }
+    } else {
+        guard scope != .targeted else { throw ValidationFailure("legacy Verification scope cannot be targeted") }
+        let stage = try requireString(value["stage"]!, at: "issueContract.verificationScope.stage")
+        guard ["feature", "adaptation", "release"].contains(stage) else {
+            throw ValidationFailure("issueContract.verificationScope.stage is invalid")
+        }
+        guard stage == "feature" || scope == .full else {
+            throw ValidationFailure("adaptation and release require full Verification scope")
+        }
     }
     let profile = (contract["deliveryProfile"] as? JSONObject)?["name"] as? String ?? "strict"
     guard contract["verification"] != nil, profile != "fast" else {
         throw ValidationFailure("Verification scope requires application Verification, not fast")
     }
-    guard stage != "release" || profile == "strict" else {
+    let legacyRelease = !deliveryStage.explicit && (value["stage"] as? String) == "release"
+    guard !(legacyRelease || deliveryStage.name == "release") || profile == "strict" else {
         throw ValidationFailure("release requires strict delivery profile")
     }
     let operations = try requireStringArray(contract["externalOperations"]!, at: "issueContract.externalOperations")
@@ -753,8 +805,11 @@ struct IssueContract {
     let deliveryProfile: String
     let verificationScope: VerificationScope
     let verificationStage: String?
+    let deliveryStage: DeliveryStageInfo
+    let visualRequired: Bool
 
     var acceptanceIDs: [String] { acceptanceCriteria.map(\.id) }
+    var caseIDs: [String] { verification?.cases.map(\.id) ?? verificationScope.fixedCaseIDs ?? [] }
 }
 
 struct AcceptanceCriterion {
@@ -775,7 +830,7 @@ struct VerificationInfo {
     let acceptanceMappings: [[String]]
 }
 
-func validateOptionalVerification(_ value: Any, acceptanceIDs: [String], scope: VerificationScope) throws -> VerificationInfo {
+func validateOptionalVerification(_ value: Any, acceptanceIDs: [String], expectedIDs: [String], deliveryStage: DeliveryStageInfo) throws -> VerificationInfo {
     let verification = try requireObject(value, at: "issueContract.verification")
     try requireExactKeys(
         verification, ["bundleIdentifier", "unitTestIdentifier", "cases", "acceptanceMappings"], at: "issueContract.verification"
@@ -792,10 +847,9 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String], scope: 
     guard matches(unitTestIdentifier, regex: testIdentifierPattern) else {
         throw ValidationFailure("issueContract.verification.unitTestIdentifier must be Target/Class/testMethod with optional trailing ()")
     }
-    let expectedIDs = scope.caseIDs
     let cases = try requireArray(verification["cases"]!, at: "issueContract.verification.cases")
     guard cases.count == expectedIDs.count else {
-        throw ValidationFailure("issueContract.verification.cases must contain the exact \(scope == .full ? "four" : "one") ordered case IDs")
+        throw ValidationFailure("issueContract.verification.cases must contain the exact staged ordered case IDs")
     }
     let normalizedCases = try cases.enumerated().map { index, rawCase -> VerificationCaseInfo in
         let path = "issueContract.verification.cases[\(index)]"
@@ -807,7 +861,7 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String], scope: 
             throw ValidationFailure("\(path) must contain exactly one of testIdentifier or assertion")
         }
         guard try requireString(entry["id"]!, at: "\(path).id") == expectedIDs[index] else {
-            throw ValidationFailure("issueContract.verification.cases must contain the exact \(scope == .full ? "four" : "one") ordered case IDs")
+            throw ValidationFailure("issueContract.verification.cases must contain the exact staged ordered case IDs")
         }
         if keys == testKeys {
             let identifier = try requireString(entry["testIdentifier"]!, at: "\(path).testIdentifier")
@@ -852,6 +906,20 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String], scope: 
         }
         return checks
     }
+    let allChecks = normalizedMappings.flatMap { $0 }
+    if deliveryStage.explicit && deliveryStage.name == "shape" {
+        guard expectedIDs == ["iphone-ja"], normalizedCases.allSatisfy({ $0.action == "testIdentifier" }),
+              !allChecks.contains(where: { $0.hasPrefix("visual:") }) else {
+            throw ValidationFailure("shape requires one Japanese-iPhone Smoke Test without visual evidence")
+        }
+    }
+    if deliveryStage.explicit && deliveryStage.name == "release" {
+        let requiredVisuals = fullVerificationCaseIDs.map { "visual:\($0)" }
+        guard expectedIDs == fullVerificationCaseIDs,
+              requiredVisuals.allSatisfy(allChecks.contains) else {
+            throw ValidationFailure("release requires the full matrix and visual evidence")
+        }
+    }
     return VerificationInfo(
         bundleIdentifier: bundleIdentifier,
         unitTestIdentifier: unitTestIdentifier,
@@ -882,7 +950,7 @@ func validateIssueContract(
         "schemaVersion", "issue", "repository", "goal", "specAnchors", "acceptanceCriteria",
         "dependencies", "externalOperations", "externalOperationDetailsDigest", "fetchedAt"
     ]
-    let allowedContractKeys = requiredContractKeys.union(["verification", "deliveryProfile", "verificationScope"])
+    let allowedContractKeys = requiredContractKeys.union(["verification", "deliveryProfile", "verificationScope", "deliveryStage"])
     let actualContractKeys = Set(contract.keys)
     let missingContractKeys = requiredContractKeys.subtracting(actualContractKeys).sorted()
     let unknownContractKeys = actualContractKeys.subtracting(allowedContractKeys).sorted()
@@ -952,10 +1020,30 @@ func validateIssueContract(
     guard Set(ids).count == ids.count else {
         throw ValidationFailure("issueContract acceptance IDs must be unique")
     }
-    let verificationScope = try contractVerificationScope(contract)
+    let deliveryStage = try contractDeliveryStage(contract)
+    let verificationScope = try contractVerificationScope(contract, deliveryStage: deliveryStage)
+    let expectedCaseIDs: [String]
+    if let fixedCaseIDs = verificationScope.fixedCaseIDs {
+        expectedCaseIDs = fixedCaseIDs
+    } else {
+        let rawVerification = try requireObject(
+            contract["verification"] ?? NSNull(), at: "issueContract.verification"
+        )
+        let rawCases = try requireArray(
+            rawVerification["cases"] ?? NSNull(), at: "issueContract.verification.cases"
+        )
+        let rawCaseIDs = try rawCases.enumerated().map { index, rawCase in
+            let entry = try requireObject(rawCase, at: "issueContract.verification.cases[\(index)]")
+            return try requireString(entry["id"] ?? NSNull(), at: "issueContract.verification.cases[\(index)].id")
+        }
+        expectedCaseIDs = try validateTargetedCaseIDs(rawCaseIDs, at: "issueContract.verification.cases")
+    }
     let normalizedVerification: VerificationInfo?
     if let rawVerification = contract["verification"] {
-        normalizedVerification = try validateOptionalVerification(rawVerification, acceptanceIDs: ids, scope: verificationScope)
+        normalizedVerification = try validateOptionalVerification(
+            rawVerification, acceptanceIDs: ids, expectedIDs: expectedCaseIDs,
+            deliveryStage: deliveryStage
+        )
     } else {
         normalizedVerification = nil
     }
@@ -975,13 +1063,37 @@ func validateIssueContract(
     if deliveryProfile == "fast", normalizedVerification != nil {
         throw ValidationFailure("fast issueContract cannot require UI verification")
     }
+    if deliveryStage.explicit && deliveryStage.name == "shape" && deliveryProfile == "fast" {
+        throw ValidationFailure("shape requires standard or strict delivery profile")
+    }
+    if deliveryStage.explicit && ["shape", "release"].contains(deliveryStage.name), normalizedVerification == nil {
+        throw ValidationFailure("\(deliveryStage.name) requires application Verification")
+    }
+    let operations = try requireStringArray(contract["externalOperations"]!, at: "issueContract.externalOperations")
+    if deliveryStage.explicit,
+       operations.contains(where: { $0.hasPrefix("appstore.") }),
+       deliveryStage.name != "release" {
+        throw ValidationFailure("App Store operations require release Delivery stage")
+    }
+    let visualRequired: Bool
+    if !deliveryStage.explicit || deliveryStage.name == "release" {
+        visualRequired = true
+    } else if deliveryStage.name == "shape" {
+        visualRequired = false
+    } else {
+        visualRequired = normalizedVerification?.acceptanceMappings
+            .flatMap { $0 }
+            .contains(where: { $0.hasPrefix("visual:") }) ?? false
+    }
     return IssueContract(
         acceptanceCriteria: criteria,
         fetchedAt: fetchedAt,
         verification: normalizedVerification,
         deliveryProfile: deliveryProfile,
         verificationScope: verificationScope,
-        verificationStage: (contract["verificationScope"] as? JSONObject)?["stage"] as? String
+        verificationStage: (contract["verificationScope"] as? JSONObject)?["stage"] as? String,
+        deliveryStage: deliveryStage,
+        visualRequired: visualRequired
     )
 }
 
@@ -1058,10 +1170,20 @@ func validateMatrix(
         ("ipad-en", "iPad", "en_US", "en"),
         ("ipad-ja", "iPad", "ja_JP", "ja")
     ]
-    let expected = fullRows.filter { scope.caseIDs.contains($0.0) }
     let cases = try requireArray(matrix["cases"]!, at: "matrixFile.cases")
+    let matrixCaseIDs = try cases.enumerated().map { index, rawCase in
+        let entry = try requireObject(rawCase, at: "matrixFile.cases[\(index)]")
+        return try requireString(entry["id"] ?? NSNull(), at: "matrixFile.cases[\(index)].id")
+    }
+    let expectedIDs: [String]
+    if let fixedCaseIDs = scope.fixedCaseIDs {
+        expectedIDs = fixedCaseIDs
+    } else {
+        expectedIDs = try validateTargetedCaseIDs(matrixCaseIDs, at: "matrixFile.cases")
+    }
+    let expected = fullRows.filter { expectedIDs.contains($0.0) }
     guard cases.count == expected.count else {
-        throw ValidationFailure("matrixFile.cases must contain exactly \(scope == .full ? "four" : "one") rows")
+        throw ValidationFailure("matrixFile.cases must contain the exact scoped rows")
     }
     var familyTypes: [String: DeviceTypeIdentity] = [:]
     var udids = Set<String>()
@@ -1108,7 +1230,7 @@ func validateMatrix(
 
 func validateScopeMatch(contract: IssueContract, matrix: MatrixInfo) throws {
     guard contract.verificationScope == matrix.scope,
-          contract.verificationScope.caseIDs == matrix.caseIDs else {
+          contract.caseIDs == matrix.caseIDs else {
         throw ValidationFailure("verification scope and cases do not match matrix")
     }
     if let verification = contract.verification, verification.cases.map(\.id) != matrix.caseIDs {
@@ -1117,7 +1239,7 @@ func validateScopeMatch(contract: IssueContract, matrix: MatrixInfo) throws {
 }
 
 func validateScopeDiff(_ scope: VerificationScope, expectedBase: String, expectedHead: String) throws {
-    guard scope == .iphoneJapanese else { return }
+    guard scope != .full else { return }
     let result = try runGitProcess(["diff", "--name-only", "-z", "--no-renames", expectedBase, expectedHead, "--"])
     guard result.status == 0, result.stdout.last == 0 else {
         throw ValidationFailure("unable to inspect scoped verification range")
@@ -1371,6 +1493,30 @@ func validateApplicationCases(
         )
         guard evidenceCase.screenshotDigest == "sha256:\(sha256(data: screenshotData))" else {
             throw ValidationFailure("cases[\(index)].screenshotDigest does not match exact screenshot bytes")
+        }
+    }
+}
+
+func validateMechanicalApplicationCases(
+    _ value: Any,
+    matrixCaseIDs: [String],
+    verificationCases: [VerificationCaseInfo]
+) throws {
+    let cases = try requireArray(value, at: "cases")
+    guard cases.count == matrixCaseIDs.count, verificationCases.count == matrixCaseIDs.count else {
+        throw ValidationFailure("cases must contain exactly the frozen matrix rows")
+    }
+    for (index, rawCase) in cases.enumerated() {
+        let path = "cases[\(index)]"
+        let entry = try requireObject(rawCase, at: path)
+        try requireExactKeys(entry, ["id", "status", "mechanicalCheck"], at: path)
+        let action = verificationCases[index]
+        let expectedCheck = action.action == "testIdentifier"
+            ? "test:\(action.value)" : "assertion:launch-succeeded"
+        guard try requireString(entry["id"]!, at: "\(path).id") == matrixCaseIDs[index],
+              try requireString(entry["status"]!, at: "\(path).status") == "passed",
+              try requireString(entry["mechanicalCheck"]!, at: "\(path).mechanicalCheck") == expectedCheck else {
+            throw ValidationFailure("\(path) does not match its staged mechanical verification")
         }
     }
 }
@@ -1960,6 +2106,8 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
         "workspaceRoot": workspaceRoot,
         "contractPath": options.issueContract,
         "contractDigest": contractDigest,
+        "deliveryStage": contract.deliveryStage.name,
+        "visualRequired": contract.visualRequired ? "true" : "false",
         "verificationScope": contract.verificationScope.rawValue,
         "batchId": batchID,
         "matrixPath": options.matrix,
@@ -1972,6 +2120,7 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
         "acceptanceMappings": mappings,
         "xcode": ["path": matrix.xcode.path, "version": matrix.xcode.version, "build": matrix.xcode.build],
         "runtime": ["identifier": matrix.runtime.identifier, "version": matrix.runtime.version],
+        "caseCount": String(cases.count),
         "cases": cases
     ]
     let prepared = try prepareRunnerWorkspace(
@@ -2372,6 +2521,23 @@ func discardPreparedRunnerWorkspace(_ prepared: PreparedRunnerWorkspace) throws 
     }
 }
 
+func runnerConfigCaseIDs(_ config: JSONObject) throws -> [String] {
+    let scope = try VerificationScope.name(config["verificationScope"], at: "runner config scope")
+    let rawCases = try requireArray(config["cases"] ?? NSNull(), at: "runner config cases")
+    let ids = try rawCases.map { raw -> String in
+        let entry = try requireObject(raw, at: "runner config case")
+        return try requireString(entry["id"] ?? NSNull(), at: "runner config case id")
+    }
+    let expectedIDs: [String]
+    if let fixedCaseIDs = scope.fixedCaseIDs {
+        expectedIDs = fixedCaseIDs
+    } else {
+        expectedIDs = try validateTargetedCaseIDs(ids, at: "runner config cases")
+    }
+    guard ids == expectedIDs else { throw ValidationFailure("runner config cases do not match scope") }
+    return ids
+}
+
 func readSealedRunnerConfig(configPath: String, expectedDigest: String) throws -> JSONObject {
     guard matches(expectedDigest, regex: digestPattern), configPath.hasPrefix("/tmp/") else {
         throw ValidationFailure("runner config identity is invalid")
@@ -2415,13 +2581,7 @@ func readSealedRunnerConfig(configPath: String, expectedDigest: String) throws -
         throw ValidationFailure("runner config is not sealed")
     }
     let config = try readJSONObject(data: configData, at: "runner config")
-    let expectedIDs = try VerificationScope.name(config["verificationScope"], at: "runner config scope").caseIDs
-    let rawCases = try requireArray(config["cases"] ?? NSNull(), at: "runner config cases")
-    let ids = try rawCases.map { raw -> String in
-        let entry = try requireObject(raw, at: "runner config case")
-        return try requireString(entry["id"] ?? NSNull(), at: "runner config case id")
-    }
-    guard ids == expectedIDs else { throw ValidationFailure("runner config cases do not match scope") }
+    _ = try runnerConfigCaseIDs(config)
     return config
 }
 
@@ -2512,7 +2672,7 @@ func validateRunnerSimulators(
     let runtimeIdentifier = try requireString(runtime["identifier"]!, at: "runner config runtime.identifier")
     _ = try requireString(runtime["version"]!, at: "runner config runtime.version")
     let configuredCases = try requireArray(config["cases"]!, at: "runner config cases")
-    let expectedIDs = try VerificationScope.name(config["verificationScope"], at: "runner config scope").caseIDs
+    let expectedIDs = try runnerConfigCaseIDs(config)
     guard configuredCases.count == expectedIDs.count else {
         throw ValidationFailure("runner config Simulator ownership set is incomplete")
     }
@@ -3166,7 +3326,7 @@ func recoverRunnerPublication(
         throw ValidationFailure("publication journal draftDigest is invalid")
     }
     let cases = try requireArray(journal["cases"]!, at: "publication journal cases")
-    guard configuredCases.count == (try VerificationScope.name(config["verificationScope"], at: "runner config scope")).caseIDs.count,
+    guard configuredCases.count == (try runnerConfigCaseIDs(config)).count,
           cases.count == configuredCases.count else {
         throw ValidationFailure("publication journal cases mismatch")
     }
@@ -3280,7 +3440,8 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
         expectedBase: options.expectedBase, expectedHead: options.expectedHead, expectedIssue: options.issue
     )
     defer { closeTrustedRepository(repository) }
-    guard try requireString(config["repositoryRoot"]!, at: "runner config repositoryRoot") == repository.rootPath else {
+    guard try requireString(config["repositoryRoot"]!, at: "runner config repositoryRoot") == repository.rootPath,
+          try requireString(config["visualRequired"]!, at: "runner config visualRequired") == "true" else {
         throw ValidationFailure("runner config repository identity mismatch")
     }
     let contractPath = try requireString(config["contractPath"]!, at: "runner config contractPath")
@@ -3309,7 +3470,7 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
         throw ValidationFailure("runner draft workspace paths are invalid")
     }
     let configuredCases = try requireArray(config["cases"]!, at: "runner config cases")
-    guard configuredCases.count == (try VerificationScope.name(config["verificationScope"], at: "runner config scope")).caseIDs.count else {
+    guard configuredCases.count == (try runnerConfigCaseIDs(config)).count else {
         throw ValidationFailure("runner config cases are invalid")
     }
     var draftCases: [[String: Any]] = []
@@ -3499,6 +3660,145 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
     return repository.rootPath + "/" + (evidenceComponents + ["verify-draft.json"]).joined(separator: "/")
 }
 
+func publishRunnerStageEvidence(_ options: RunnerDraftOptions) throws -> String {
+    guard options.issue > 0, matches(options.expectedBase, regex: shaPattern),
+          matches(options.expectedHead, regex: shaPattern), options.expectedBase != options.expectedHead,
+          options.scheme.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil,
+          options.passed > 0, options.failed == 0, options.skipped == 0 else {
+        throw ValidationFailure("runner stage evidence inputs are invalid")
+    }
+    let config = try readSealedRunnerConfig(configPath: options.configPath, expectedDigest: options.configDigest)
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead, expectedIssue: options.issue
+    )
+    defer { closeTrustedRepository(repository) }
+    guard try requireString(config["repositoryRoot"]!, at: "runner config repositoryRoot") == repository.rootPath,
+          try requireString(config["visualRequired"]!, at: "runner config visualRequired") == "false" else {
+        throw ValidationFailure("runner config does not permit nonvisual stage evidence")
+    }
+    let stageName = try requireString(config["deliveryStage"]!, at: "runner config deliveryStage")
+    guard ["shape", "harden"].contains(stageName) else {
+        throw ValidationFailure("nonvisual stage evidence requires shape or harden")
+    }
+    let contractPath = try requireString(config["contractPath"]!, at: "runner config contractPath")
+    let matrixPath = try requireString(config["matrixPath"]!, at: "runner config matrixPath")
+    let contractDigest = try requireString(config["contractDigest"]!, at: "runner config contractDigest")
+    let matrixDigest = try requireString(config["matrixDigest"]!, at: "runner config matrixDigest")
+    let projectReference = try requireObject(config["project"]!, at: "runner config project")
+    let projectPath = try requireString(projectReference["path"]!, at: "runner config project.path")
+    let projectDigest = try requireString(projectReference["digest"]!, at: "runner config project.digest")
+    let sourceReference = try requireObject(config["sourceTree"]!, at: "runner config sourceTree")
+    let sourceDigest = try requireString(sourceReference["digest"]!, at: "runner config sourceTree.digest")
+    try verifyRunnerInputs(
+        options: RunnerSnapshotOptions(
+            issue: options.issue, expectedBase: options.expectedBase, expectedHead: options.expectedHead,
+            issueContract: contractPath, matrix: matrixPath, project: projectPath
+        ),
+        contractDigest: contractDigest, matrixDigest: matrixDigest,
+        projectDigest: projectDigest, sourceDigest: sourceDigest
+    )
+    let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
+    guard options.configPath == attemptRoot + "/config.json",
+          options.derivedData == attemptRoot + "/DerivedData",
+          options.buildResult == attemptRoot + "/Build.xcresult",
+          options.testResult == attemptRoot + "/Tests.xcresult" else {
+        throw ValidationFailure("runner stage workspace paths are invalid")
+    }
+    let contractData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: try relativeComponents(contractPath, at: "issue contract"),
+        at: "issue contract"
+    )
+    guard contractDigest == "sha256:\(sha256(data: contractData))" else {
+        throw ValidationFailure("runner issue contract digest changed")
+    }
+    let contractReference: [String: Any] = ["path": contractPath, "digest": contractDigest]
+    let contract = try validateIssueContract(
+        reference: contractReference, issue: options.issue, repository: repository
+    )
+    guard !contract.visualRequired, contract.deliveryStage.name == stageName,
+          let verification = contract.verification else {
+        throw ValidationFailure("runner issue contract does not permit nonvisual stage evidence")
+    }
+    let configuredCases = try requireArray(config["cases"]!, at: "runner config cases")
+    let configuredIDs = try runnerConfigCaseIDs(config)
+    guard configuredCases.count == verification.cases.count,
+          configuredIDs == verification.cases.map(\.id) else {
+        throw ValidationFailure("runner config cases do not match staged verification")
+    }
+    let stageCases: [[String: Any]] = try configuredCases.enumerated().map { index, value in
+        let entry = try requireObject(value, at: "runner config case")
+        let id = try requireString(entry["id"]!, at: "runner config case id")
+        let action = try requireString(entry["action"]!, at: "runner config case action")
+        let actionValue = try requireString(entry["value"]!, at: "runner config case value")
+        let expected = verification.cases[index]
+        guard id == expected.id, action == expected.action, actionValue == expected.value else {
+            throw ValidationFailure("runner config mechanical case changed")
+        }
+        return [
+            "id": id,
+            "status": "passed",
+            "mechanicalCheck": action == "testIdentifier" ? "test:\(actionValue)" : "assertion:launch-succeeded"
+        ]
+    }
+    let configuredMappings = try requireArray(config["acceptanceMappings"]!, at: "runner config acceptanceMappings")
+    let acceptance: [[String: Any]] = try configuredMappings.map { value in
+        let mapping = try requireObject(value, at: "runner config acceptance mapping")
+        let id = try requireString(mapping["id"]!, at: "runner config acceptance ID")
+        let checks = try requireStringArray(mapping["checks"]!, at: "runner config acceptance checks")
+        guard !checks.contains(where: { $0.hasPrefix("visual:") }) else {
+            throw ValidationFailure("nonvisual stage evidence cannot include visual checks")
+        }
+        return ["id": id, "status": "passed", "evidence": checks]
+    }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let document: [String: Any] = [
+        "schemaVersion": 1, "status": "passed", "changeClassification": "application-code",
+        "reason": "Delivery stage \(stageName) passed; not release-ready.",
+        "issue": options.issue, "baseSha": options.expectedBase, "headSha": options.expectedHead,
+        "issueContract": contractReference, "matrixFile": matrixPath, "matrixDigest": matrixDigest,
+        "executionRoute": "xcodebuild-stage", "xcode": config["xcode"]!,
+        "build": [
+            "status": "passed", "scheme": options.scheme, "warningsAdded": 0,
+            "project": projectReference, "sourceTree": sourceReference
+        ],
+        "tests": ["status": "passed", "passed": options.passed, "failed": 0, "skipped": 0],
+        "cases": stageCases,
+        "visualEvaluation": ["status": "not-applicable", "findings": []],
+        "acceptanceEvidence": acceptance,
+        "completedAt": formatter.string(from: max(Date(), contract.fetchedAt))
+    ]
+    let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
+    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
+    let evidenceDirectory = try ensureCanonicalEvidenceDirectory(
+        repository: repository, issue: options.issue, head: options.expectedHead
+    )
+    defer { close(evidenceDirectory) }
+    try removeInterruptedPublicationCandidates(directory: evidenceDirectory, prefixes: [".verify-candidate-"])
+    let candidateName = ".verify-candidate-\(UUID().uuidString.lowercased())"
+    try writeExclusiveFile(
+        directoryFileDescriptor: evidenceDirectory, name: candidateName, data: data, permissions: S_IRUSR
+    )
+    let candidateFD = openat(evidenceDirectory, candidateName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard candidateFD >= 0 else { throw ValidationFailure("verify.json candidate could not be retained") }
+    defer {
+        heldValidatedCandidateFileDescriptor = nil
+        close(candidateFD)
+        _ = unlinkat(evidenceDirectory, candidateName, 0)
+    }
+    heldValidatedCandidateFileDescriptor = candidateFD
+    let relativePath = (evidenceComponents + ["verify.json"]).joined(separator: "/")
+    try validate(options: Options(
+        file: repository.rootPath + "/" + relativePath,
+        candidateFile: repository.rootPath + "/" + (evidenceComponents + [candidateName]).joined(separator: "/"),
+        expectedFileDigest: nil, expectedIssue: options.issue,
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead,
+        initialVisualResultData: nil, initialVisualResultDigest: nil
+    ))
+    return relativePath
+}
+
 struct CanonicalDraftValidation {
     let data: Data
     let object: JSONObject
@@ -3546,7 +3846,7 @@ func validateCanonicalRunnerDraft(
     }
     let contractReference = try requireObject(draft["issueContract"]!, at: "draft issueContract")
     let contract = try validateIssueContract(reference: contractReference, issue: issue, repository: repository)
-    guard let verification = contract.verification else {
+    guard contract.visualRequired, let verification = contract.verification else {
         throw ValidationFailure("canonical contract has no verification contract")
     }
     let matrixPath = try requireString(draft["matrixFile"]!, at: "draft matrixFile")
@@ -3763,8 +4063,10 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     let finalAcceptance: [[String: Any]] = contract.acceptanceIDs.enumerated().map { index, id in
         ["id": id, "status": "passed", "evidence": verification.acceptanceMappings[index]]
     }
+    let finalReason: Any = contract.deliveryStage.explicit && contract.deliveryStage.name != "release"
+        ? "Delivery stage \(contract.deliveryStage.name) passed; not release-ready." : NSNull()
     let final: [String: Any] = [
-        "schemaVersion": 1, "status": "passed", "changeClassification": "application-code", "reason": NSNull(),
+        "schemaVersion": 1, "status": "passed", "changeClassification": "application-code", "reason": finalReason,
         "issue": options.issue, "baseSha": options.expectedBase, "headSha": options.expectedHead,
         "issueContract": contractReference, "matrixFile": matrixPath, "matrixDigest": draft["matrixDigest"]!,
         "executionRoute": "xcodebuild-simctl", "xcode": draft["xcode"]!, "build": draft["build"]!,
@@ -4790,7 +5092,24 @@ func validate(options: Options) throws {
         guard try requireString(root["status"]!, at: "status") == "passed" else {
             throw ValidationFailure("application status must be passed")
         }
-        try requireNull(root["reason"]!, at: "reason")
+        if contract.visualRequired {
+            if contract.deliveryStage.explicit && contract.deliveryStage.name != "release" {
+                let expectedReason = "Delivery stage \(contract.deliveryStage.name) passed; not release-ready."
+                guard try requireString(root["reason"]!, at: "reason") == expectedReason else {
+                    throw ValidationFailure("non-release Delivery stage must be reported as not release-ready")
+                }
+            } else {
+                try requireNull(root["reason"]!, at: "reason")
+            }
+        } else {
+            guard contract.deliveryStage.explicit, contract.deliveryStage.name != "release" else {
+                throw ValidationFailure("nonvisual application evidence requires shape or harden Delivery stage")
+            }
+            let expectedReason = "Delivery stage \(contract.deliveryStage.name) passed; not release-ready."
+            guard try requireString(root["reason"]!, at: "reason") == expectedReason else {
+                throw ValidationFailure("non-release Delivery stage must be reported as not release-ready")
+            }
+        }
 
         let matrixPath = try requireString(root["matrixFile"]!, at: "matrixFile")
         let matrixComponents = try relativeComponents(matrixPath, at: "matrixFile")
@@ -4809,9 +5128,14 @@ func validate(options: Options) throws {
         try validateDigest(root["matrixDigest"]!, data: matrixData, at: "matrixDigest")
         let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
         try validateScopeMatch(contract: contract, matrix: matrix)
+        guard completedAt >= matrix.resolvedAt else {
+            throw ValidationFailure("completedAt must not precede the frozen Simulator matrix")
+        }
 
         let route = try requireString(root["executionRoute"]!, at: "executionRoute")
-        guard ["xcodebuild-simctl", "xcodebuild-mcp"].contains(route) else {
+        let allowedRoutes = contract.visualRequired
+            ? ["xcodebuild-simctl", "xcodebuild-mcp"] : ["xcodebuild-stage"]
+        guard allowedRoutes.contains(route) else {
             throw ValidationFailure("executionRoute is not supported")
         }
         let xcode = try validateXcodeIdentity(root["xcode"]!, at: "xcode")
@@ -4823,25 +5147,35 @@ func validate(options: Options) throws {
             repository: repository, expectedHead: headSha
         )
         try validateTests(root["tests"]!, documentationOnly: false)
-        try validateApplicationCases(
-            root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
-            head: headSha, repository: repository
-        )
-        let canonicalDraft = try validateCanonicalRunnerDraft(
-            repository: repository, issue: issue, expectedBase: options.expectedBase,
-            expectedHead: options.expectedHead,
-            draftComponents: [".artifacts", "issues", String(issue), headSha, "verify-draft.json"]
-        )
-        let visualPacket = try validateCanonicalVisualPacket(
-            repository: repository, issue: issue, expectedHead: headSha,
-            draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json", draft: canonicalDraft
-        )
+        guard let verification = contract.verification else {
+            throw ValidationFailure("application verification contract is absent")
+        }
+        if contract.visualRequired {
+            try validateApplicationCases(
+                root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
+                head: headSha, repository: repository
+            )
+        } else {
+            try validateMechanicalApplicationCases(
+                root["cases"]!, matrixCaseIDs: matrix.caseIDs,
+                verificationCases: verification.cases
+            )
+        }
         let visualResultComponents = [
             ".artifacts", "issues", String(issue), headSha, "visual-result.json"
         ]
         let initialVisualResultData: Data?
         let initialVisualResultDigest: String?
-        if candidateName != nil {
+        if contract.visualRequired, candidateName != nil {
+            let canonicalDraft = try validateCanonicalRunnerDraft(
+                repository: repository, issue: issue, expectedBase: options.expectedBase,
+                expectedHead: options.expectedHead,
+                draftComponents: [".artifacts", "issues", String(issue), headSha, "verify-draft.json"]
+            )
+            let visualPacket = try validateCanonicalVisualPacket(
+                repository: repository, issue: issue, expectedHead: headSha,
+                draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json", draft: canonicalDraft
+            )
             guard let expectedVisualData = options.initialVisualResultData,
                   let expectedVisualDigest = options.initialVisualResultDigest,
                   sha256(data: expectedVisualData) == expectedVisualDigest else {
@@ -4867,7 +5201,20 @@ func validate(options: Options) throws {
             initialVisualResultData = nil
             initialVisualResultDigest = nil
         }
-        try validateApplicationVisual(root["visualEvaluation"]!, packet: visualPacket)
+        if contract.visualRequired {
+            let canonicalDraft = try validateCanonicalRunnerDraft(
+                repository: repository, issue: issue, expectedBase: options.expectedBase,
+                expectedHead: options.expectedHead,
+                draftComponents: [".artifacts", "issues", String(issue), headSha, "verify-draft.json"]
+            )
+            let visualPacket = try validateCanonicalVisualPacket(
+                repository: repository, issue: issue, expectedHead: headSha,
+                draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json", draft: canonicalDraft
+            )
+            try validateApplicationVisual(root["visualEvaluation"]!, packet: visualPacket)
+        } else {
+            try validateVisual(root["visualEvaluation"]!, documentationOnly: true)
+        }
         try validateAcceptanceEvidence(
             root["acceptanceEvidence"]!, contractIDs: contract.acceptanceIDs, documentationOnly: false,
             expectedMappings: contract.verification?.acceptanceMappings
@@ -4895,38 +5242,45 @@ func validate(options: Options) throws {
                 matrixDigest: matrixDigest,
                 projectDigest: projectDigest, sourceDigest: sourceDigest
             )
-            try validateApplicationCases(
-                root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
-                head: headSha, repository: repository
-            )
-            let currentDraft = try validateCanonicalRunnerDraft(
-                repository: repository, issue: issue, expectedBase: options.expectedBase,
-                expectedHead: options.expectedHead,
-                draftComponents: [".artifacts", "issues", String(issue), headSha, "verify-draft.json"]
-            )
-            let currentPacket = try validateCanonicalVisualPacket(
-                repository: repository, issue: issue, expectedHead: headSha,
-                draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json", draft: currentDraft
-            )
-            guard let expectedVisualData = initialVisualResultData,
-                  let expectedVisualDigest = initialVisualResultDigest else {
-                throw ValidationFailure("initial visual result validation state is unavailable")
+            if contract.visualRequired {
+                try validateApplicationCases(
+                    root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
+                    head: headSha, repository: repository
+                )
+                let currentDraft = try validateCanonicalRunnerDraft(
+                    repository: repository, issue: issue, expectedBase: options.expectedBase,
+                    expectedHead: options.expectedHead,
+                    draftComponents: [".artifacts", "issues", String(issue), headSha, "verify-draft.json"]
+                )
+                let currentPacket = try validateCanonicalVisualPacket(
+                    repository: repository, issue: issue, expectedHead: headSha,
+                    draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json", draft: currentDraft
+                )
+                guard let expectedVisualData = initialVisualResultData,
+                      let expectedVisualDigest = initialVisualResultDigest else {
+                    throw ValidationFailure("initial visual result validation state is unavailable")
+                }
+                let currentVisualData = try readBoundRegularFile(
+                    rootFileDescriptor: repository.rootFileDescriptor,
+                    components: visualResultComponents,
+                    at: "visual result"
+                )
+                guard currentVisualData == expectedVisualData,
+                      sha256(data: currentVisualData) == expectedVisualDigest else {
+                    throw ValidationFailure("visual result changed before publication")
+                }
+                _ = try validateCanonicalVisualResult(
+                    data: currentVisualData, issue: issue, expectedHead: headSha,
+                    draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json",
+                    draft: currentDraft, packet: currentPacket
+                )
+                try validateApplicationVisual(root["visualEvaluation"]!, packet: currentPacket)
+            } else {
+                try validateMechanicalApplicationCases(
+                    root["cases"]!, matrixCaseIDs: matrix.caseIDs,
+                    verificationCases: verification.cases
+                )
             }
-            let currentVisualData = try readBoundRegularFile(
-                rootFileDescriptor: repository.rootFileDescriptor,
-                components: visualResultComponents,
-                at: "visual result"
-            )
-            guard currentVisualData == expectedVisualData,
-                  sha256(data: currentVisualData) == expectedVisualDigest else {
-                throw ValidationFailure("visual result changed before publication")
-            }
-            _ = try validateCanonicalVisualResult(
-                data: currentVisualData, issue: issue, expectedHead: headSha,
-                draftPath: ".artifacts/issues/\(issue)/\(headSha)/verify-draft.json",
-                draft: currentDraft, packet: currentPacket
-            )
-            try validateApplicationVisual(root["visualEvaluation"]!, packet: currentPacket)
         }
 
     case "focused-code":
@@ -5214,8 +5568,11 @@ do {
             issue: issue, expectedBase: expectedBase, expectedHead: expectedHead,
             stage: stage, message: message
         )))
-    } else if arguments.first == "--runner-publish-draft" {
-        guard arguments.count == 25 else { throw ValidationFailure("invalid runner draft arguments") }
+    } else if arguments.first == "--runner-publish-draft" || arguments.first == "--runner-publish-stage" {
+        let stagePublication = arguments.first == "--runner-publish-stage"
+        guard arguments.count == 25 else {
+            throw ValidationFailure(stagePublication ? "invalid runner stage evidence arguments" : "invalid runner draft arguments")
+        }
         var values: [String: String] = [:]
         var index = 1
         while index < arguments.count {
@@ -5233,12 +5590,13 @@ do {
               let skippedText = values["--skipped"], let skipped = Int(skippedText), values.count == 12 else {
             throw ValidationFailure("invalid runner draft arguments")
         }
-        print(try publishRunnerDraft(RunnerDraftOptions(
+        let options = RunnerDraftOptions(
             configPath: config, configDigest: digest, issue: issue,
             expectedBase: expectedBase, expectedHead: expectedHead, scheme: scheme,
             derivedData: derivedData, buildResult: buildResult, testResult: testResult,
             passed: passed, failed: failed, skipped: skipped
-        )))
+        )
+        print(try stagePublication ? publishRunnerStageEvidence(options) : publishRunnerDraft(options))
     } else if arguments.first == "--runner-find-app" {
         guard arguments.count == 9, arguments[1] == "--config", arguments[3] == "--digest",
               arguments[5] == "--derived-data", arguments[7] == "--bundle-identifier" else {

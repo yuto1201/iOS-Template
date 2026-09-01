@@ -4,7 +4,7 @@ CodexとClaudeを同等の実装・外部操作担当として使う個人向け
 
 Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、英語・日本語、iPhone・iPad、共有仕様スキル、Codex/Claude 共通責務の read-only 評価エージェントを含みます。運用自動化は [実装計画索引](./docs/superpowers/plans/README.md) に従って段階的に追加します。
 
-開発順序は**日本語iPhoneで機能を固める → 英語・iPadを仕上げる → リリース前に4条件確認**です。[段階的開発仕様](./specs/development-stages.md)に従い、新規の通常UI Issueは`standard` + `iphone-ja`、仕上げ・リリースは`full`で検証します。文字列管理・可変レイアウトの土台は初期から維持します。既存Issueや既存アプリは自動移行しません。
+開発順序は**shapeで日本語iPhoneの主要導線を動かす → hardenで必要な品質を対象別に固める → releaseで完全検証する**です。[段階的開発仕様](./specs/development-stages.md)に従い、通常UIのshapeは既定120分・`standard` + `iphone-ja`、hardenは`targeted`、releaseは`strict` + `full`で検証します。文字列管理・可変レイアウトと安全の土台は初期から維持します。既存のClaim済みIssueは自動で縮小せず、旧release-level契約を維持します。
 
 ## Foundation の検証
 
@@ -14,7 +14,7 @@ Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、
 tools/tests/test-foundation.sh
 ```
 
-Issueには`fast`、`standard`、`strict`のdelivery profileと理由を指定します。非UI・低リスクの`fast`は現在HeadのBuild・対象Test・必要なrepository testだけ、通常UIの`standard`は安定した最終候補Headで要求範囲を検証します。`standard`／`strict`の反対モデルレビュー、高リスクの対象別Test・preflight・必要な承認を維持します。profile未指定は`strict`、検証範囲未指定は`full`です。以下は`full`検証の手順例です。
+Issueには、成熟度を表す`shape`／`harden`／`release`のDelivery stageとTime budget、危険度を表す`fast`／`standard`／`strict`のdelivery profileを別々に指定します。shapeはBuild・重要Unit Test・日本語iPhone 1条件のSmoke、hardenは対象Testと指定caseだけ、releaseは従来の完全検証です。`strict`または`release`だけがblockingな反対モデルレビューを要求します。stage未指定の既存contractは従来のprofile／scope gateを維持し、profile未指定はstrict、検証範囲未指定はfullとして扱います。以下はrelease/full検証の手順例です。
 
 Foundationやdelivery gate自体は`strict`です。Build と Test は、インストール済み Xcode から [標準 Simulator マトリクス](./docs/verification.md#3-固定されるmatrix)を解決し、Issue バッチ内で固定して実行します。次は Foundation 検証で使うコマンド形です。`TEMPLATE_IPHONE_UDID` と `TEMPLATE_IPAD_UDID` には、同じ最新 iOS Runtime の iPhone Pro（Pro Max を除く）と13-inch iPad Airを指定します。
 
@@ -24,8 +24,10 @@ TEMPLATE_IPAD_UDID="<resolved-iPad-Air-13-inch-UDID>"
 TEMPLATE_DERIVED_DATA=$(mktemp -d /tmp/ios-template-derived-data.XXXXXX)
 TEMPLATE_RESULT_BUNDLES=$(mktemp -d /tmp/ios-template-result-bundles.XXXXXX)
 trap 'rm -rf "$TEMPLATE_DERIVED_DATA" "$TEMPLATE_RESULT_BUNDLES"' EXIT
+source tools/lib/xcode.sh
+resolve_xcode_environment
 
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+run_xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPHONE_UDID}" \
@@ -34,7 +36,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   test -only-testing:TemplateAppTests
 
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+run_xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPHONE_UDID}" \
@@ -44,7 +46,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   test-without-building \
   -only-testing:TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle
 
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+run_xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPHONE_UDID}" \
@@ -54,7 +56,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   test-without-building \
   -only-testing:TemplateAppUITests/TemplateAppUITests/testJapaneseWelcomeTitle
 
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+run_xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPAD_UDID}" \
@@ -64,7 +66,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
   test-without-building \
   -only-testing:TemplateAppUITests/TemplateAppUITests/testEnglishWelcomeTitle
 
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+run_xcodebuild \
   -project TemplateApp.xcodeproj \
   -scheme TemplateApp \
   -destination "platform=iOS Simulator,id=${TEMPLATE_IPAD_UDID}" \
@@ -192,7 +194,7 @@ while IFS= read -r -d '' path; do
 done < <(git ls-files --others --exclude-standard -z)
 ```
 
-すべての差分と結果recordを確認してからFoundation、Xcode、4条件Simulator、反対モデルレビューを実行してください。共通の手順は[App Bootstrap skill](./.agents/skills/app-bootstrap/SKILL.md)を正とします。
+Identity Bootstrapはdelivery gateを変えるrelease/strict Issueなので、すべての差分と結果recordを確認してからFoundation、bounded Xcode検証、4条件Simulator、反対モデルレビューを実行してください。共通の手順は[App Bootstrap skill](./.agents/skills/app-bootstrap/SKILL.md)を正とします。
 
 同じ4入力で再実行すると`already-complete`を返して何も変更しません。1値でも異なる再実行は、既存結果と競合するため変更前に失敗します。GitHub上のリポジトリ名変更とApple側のBundle ID登録はこのコマンドに含まれず、Issueで指定された実行モデルが設定済みアカウントを確認して別操作として行います。
 
@@ -243,7 +245,7 @@ Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundat
 
 - 仕様が未決のまま実装を開始しない。
 - 1 Issue = 1 Branch = 1 PR とする。
-- AI がdelivery profileに必要な検証・レビュー、修正、PR、Squash Mergeまで進める。
+- AI がDelivery stageとdelivery profileに必要な検証・レビュー、修正、PR、Squash Mergeまで進める。
 - ユーザーによる実機確認は、AI の Definition of Done の後に行う最終確認とする。
 - 外部アカウント操作はIssueで指定されたCodexまたはClaudeが、設定済みidentityのpreflight後に行う。
 - 秘密値は Git、Issue、PR、ログ、スクリーンショット、AI プロンプトに残さない。
@@ -261,7 +263,7 @@ tools/claim-issue.sh --repo "$REPO" --issue "$ISSUE" --agent codex
 tools/resume-issue.sh --repo "$REPO" --issue "$ISSUE"
 ```
 
-Issue worktreeで対象確認を終え、差分が安定してから現在のcommitを直接解決し、その同じSHAへcanonical Verifyを結び付けます。`fast`は`verify-fast-issue.sh`でBuildと対象Unit Testを実測し、`verify-passed`から直接`approved-for-merge`へ進みます。`standard`／`strict`だけが完全Simulator matrix、review packet、反対モデルreviewを使用します。ドキュメントだけの変更は`publish-documentation-verify.sh`を使い、Simulator成功を意味しません。
+Issue worktreeで対象確認を終え、差分が安定してから現在のcommitを直接解決し、その同じSHAへcanonical Verifyを結び付けます。shapeは日本語iPhone 1条件、hardenはtargeted部分集合、releaseは完全Simulator matrixを使用します。非releaseのstandard shape/hardenとexplicit fastは`verify-passed`から直接`approved-for-merge`へ進み、strictまたはreleaseだけがreview packetと反対モデルreviewを使用します。ドキュメントだけの変更は`publish-documentation-verify.sh`を使い、Simulator成功を意味しません。
 
 ```sh
 HEAD_SHA="$(git rev-parse HEAD)"
@@ -270,11 +272,11 @@ BASE_SHA="$(jq -r '.baseSha' ".artifacts/issues/$ISSUE/state.json")"
 tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
   --from in-progress --to verify-passed --head-sha "$HEAD_SHA"
 
-# explicit fast
+# review不要: explicit fast、または非releaseのstandard shape/harden
 tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
   --from verify-passed --to approved-for-merge
 
-# standard / strict
+# review必須: strict、release、またはstage未導入のlegacy contract
 tools/prepare-review-packet.sh --primary codex --issue "$ISSUE" \
   --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
 tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
@@ -284,7 +286,7 @@ tools/cross-model-review.sh --primary codex \
   --output ".artifacts/issues/$ISSUE/$HEAD_SHA/review.json"
 ```
 
-マージ診断はmutationを行わないGateを先に実行します。`standard`／`strict`では承認済みreview、全profileでは現在HeadのVerifyと最新のaccount preflightが揃った後、Issueで指定された実行モデルがPR作成、Squash Merge、正確なBranch/worktree cleanup、`done`遷移まで行います。
+マージ診断はmutationを行わないGateを先に実行します。strict／releaseでは承認済みreview、すべてのcontractでは現在Headのstage別Verifyと最新のaccount preflightが揃った後、Issueで指定された実行モデルがPR作成、Squash Merge、正確なBranch/worktree cleanup、`done`遷移まで行います。shape/hardenのPRは必ずnot release-readyと明記します。
 
 ```sh
 tools/github-account-preflight.sh --repo "$REPO" --issue "$ISSUE" \

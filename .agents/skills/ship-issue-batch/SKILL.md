@@ -5,7 +5,7 @@ description: Use when multiple ready iOS Issues should progress autonomously whi
 
 # Ship Issue Batch
 
-Group Simulator batches by sealed scope with distinct batch IDs. Explicit iphone-ja features use one case; legacy/full, adaptation/release and foundation changes use four. Never shrink claimed scope or silently fall back. Keep one shared English/iPad finishing Issue per app as a release dependency.
+Group Simulator batches by sealed Delivery stage and scope with distinct batch IDs. `shape` uses one `iphone-ja` case, `harden` uses its exact `targeted` subset, and `release` or a sealed legacy contract uses `full`. Never shrink a claimed scope or silently fall back. Required focused harden Issues must be dependencies of the release candidate.
 
 Schedule the graph produced by `plan-issue-batch`; use `ship-issue` for each node. A fast lane never weakens an individual Issue gate.
 
@@ -19,11 +19,11 @@ Schedule the graph produced by `plan-issue-batch`; use `ship-issue` for each nod
 
 ## Retry boundary
 
-Count a failure as identical only when `(Issue, stage, exact tool argv, exit status, SHA-256 of exact captured stderr bytes)` is byte-for-byte unchanged. Do not normalize timestamps or messages to manufacture equality. A success or a different tuple starts a new count. Never run a fourth identical attempt.
+Count a failure as identical only when `(Issue, stage, exact tool argv, exit status, SHA-256 of exact captured stderr bytes)` is byte-for-byte unchanged. Do not normalize timestamps or messages to manufacture equality. A success or a different tuple starts a new count. Stop after the second identical failure; never start a third attempt automatically.
 
 The current state machine permits `blocked:repeated-failure` only from `in-progress`:
 
-- At `in-progress`, the third identical failure transitions directly to `blocked:repeated-failure` through `tools/issue-state.sh transition`.
+- At `in-progress`, the second identical failure transitions directly to `blocked:repeated-failure` through `tools/issue-state.sh transition`.
 - At `changes-requested`, `verify-passed`, or `approved-for-merge`, first use their explicit allowed transition to `in-progress`, then transition to `blocked:repeated-failure`. This abandons the stale later-stage readiness; resumption must repeat the affected verification/review.
 - At `review-requested`, do not invent an `in-progress` or repeated-failure transition. Reviewer unavailability uses the allowed `blocked:review` path; a real changes-requested result follows `changes-requested -> in-progress`.
 - At `claimed`, `merged`, or `done`, do not manufacture a repeated-failure state. Preserve the current state and surface the unsupported recovery to the selected executor.

@@ -140,7 +140,8 @@ review_packet = review_required ? parse_leaf(review_packet_leaf, "review-packet.
 contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
 verify_digest = "sha256:#{Digest::SHA256.hexdigest(verify_bytes)}"
 contract_required = %w[schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies externalOperations externalOperationDetailsDigest fetchedAt]
-reject("Issue contract schema is incomplete") unless contract.is_a?(Hash) && (contract.keys - contract_required - ["verification", "deliveryProfile", "verificationScope"]).empty? && contract_required.all? { |key| contract.key?(key) }
+reject("Issue contract schema is incomplete") unless contract.is_a?(Hash) && (contract.keys - contract_required - ["verification", "deliveryStage", "deliveryProfile", "verificationScope"]).empty? && contract_required.all? { |key| contract.key?(key) }
+delivery_stage = IOSTemplate::DeliveryStage.explicit?(contract) ? IOSTemplate::DeliveryStage.effective_name(contract) : "legacy"
 exact_keys!(verify, %w[schemaVersion status changeClassification reason issue baseSha headSha issueContract matrixFile matrixDigest executionRoute xcode build tests cases visualEvaluation acceptanceEvidence completedAt], "verify.json")
 reject("contract identity mismatch") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue
 reject("contract repository is invalid") unless contract["repository"].is_a?(String) && contract["repository"].match?(%r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z})
@@ -203,7 +204,8 @@ tests = verify["tests"]
 cases = verify["cases"]
 IOSTemplate::ReviewContract.validate_evidence_scope!(contract, verify)
 verification_scope = IOSTemplate::VerificationScope.effective_name(contract)
-case_ids = IOSTemplate::VerificationScope.case_ids(verification_scope)
+case_ids = IOSTemplate::VerificationScope.case_ids_for_contract(contract)
+visual_required = IOSTemplate::DeliveryStage.visual_required?(contract)
 if verify["changeClassification"] == "documentation-only"
   exact_keys!(build, %w[status scheme warningsAdded project sourceTree], "documentation build")
   exact_keys!(tests, %w[status passed failed skipped], "documentation tests")
@@ -220,7 +222,13 @@ else
   exact_keys!(build, %w[status scheme warningsAdded project sourceTree], "application build")
   exact_keys!(tests, %w[status passed failed skipped], "application tests")
   reject("application Verify status is not passed") unless verify["status"] == "passed"
-  reject("application classification is invalid") unless verify["changeClassification"] == "application-code" && verify["reason"].nil? && %w[xcodebuild-mcp xcodebuild-simctl].include?(verify["executionRoute"]) && verify["xcode"].is_a?(Hash)
+  reject("application classification is invalid") unless verify["changeClassification"] == "application-code" && verify["xcode"].is_a?(Hash)
+  if visual_required
+    reject("visual application route is invalid") unless verify["reason"].nil? && %w[xcodebuild-mcp xcodebuild-simctl].include?(verify["executionRoute"])
+  else
+    expected_reason = "Delivery stage #{delivery_stage} passed; not release-ready."
+    reject("nonvisual application route is invalid") unless verify["reason"] == expected_reason && verify["executionRoute"] == "xcodebuild-stage"
+  end
   exact_keys!(verify["xcode"], %w[path version build], "application xcode")
   reject("application Xcode identity is incomplete") unless verify["xcode"].values.all? { |entry| entry.is_a?(String) && !entry.empty? }
   exact_keys!(build["project"], %w[path digest], "application build project") if build["project"].is_a?(Hash)
@@ -228,38 +236,41 @@ else
   reject("application Build is not passed") unless build["status"] == "passed" && build["scheme"].is_a?(String) && !build["scheme"].empty? && build["warningsAdded"] == 0 && build["project"].is_a?(Hash) && build["sourceTree"].is_a?(Hash)
   reject("application Build identity is incomplete") unless build["project"]["path"].is_a?(String) && !build["project"]["path"].empty? && build["project"]["digest"].is_a?(String) && build["project"]["digest"].match?(/\Asha256:[0-9a-f]{64}\z/) && build["sourceTree"]["headSha"] == head && build["sourceTree"]["digest"].is_a?(String) && build["sourceTree"]["digest"].match?(/\Asha256:[0-9a-f]{64}\z/) && build["sourceTree"]["projectPath"] == build["project"]["path"]
   reject("application Tests are not passed") unless tests["status"] == "passed" && tests["passed"].is_a?(Integer) && tests["passed"].positive? && tests["failed"] == 0 && tests["skipped"] == 0
-  reject("application matrix is not exactly four passed cases") unless cases.is_a?(Array) && cases.map { |item| item["id"] } == case_ids && cases.all? { |item| item.is_a?(Hash) && item.keys.sort == %w[id status screenshot screenshotDigest].sort && item["status"] == "passed" && item["screenshot"].is_a?(String) && item["screenshot"].start_with?("#{item["id"]}/") && item["screenshotDigest"].is_a?(String) && item["screenshotDigest"].match?(/\Asha256:[0-9a-f]{64}\z/) } && verify["matrixFile"].is_a?(String) && !verify["matrixFile"].empty? && verify["matrixDigest"].is_a?(String) && verify["matrixDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
+  reject("application matrix identity is incomplete") unless verify["matrixFile"].is_a?(String) && !verify["matrixFile"].empty? && verify["matrixDigest"].is_a?(String) && verify["matrixDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
   visual = verify["visualEvaluation"]
-  reject("application visual evaluation is not passed") unless visual.is_a?(Hash) && visual.keys.sort == %w[status packet cases findings].sort && visual["status"] == "passed" && visual["findings"] == [] && visual["packet"].is_a?(Hash) && visual["packet"].keys.sort == %w[path digest].sort && visual["packet"]["path"].is_a?(String) && visual["packet"]["digest"].is_a?(String) && visual["packet"]["digest"].match?(/\Asha256:[0-9a-f]{64}\z/) && visual["cases"].is_a?(Array) && visual["cases"].map { |item| item["id"] } == case_ids && visual["cases"].all? { |item| item.is_a?(Hash) && item.keys.sort == %w[id images].sort && item["images"].is_a?(Array) && !item["images"].empty? && item["images"].all? { |image| image.is_a?(Hash) && image.keys.sort == %w[state path digest status findings].sort && image["state"].is_a?(String) && !image["state"].empty? && image["status"] == "passed" && image["findings"] == [] && image["path"].is_a?(String) && image["digest"].is_a?(String) && image["digest"].match?(/\Asha256:[0-9a-f]{64}\z/) } }
-
-  # Retain the complete visual input set while the canonical Swift validator
-  # proves all schema, relationship, and digest rules. Ruby only discovers and
-  # binds safe paths here; it deliberately does not duplicate those rules.
   matrix_components = relative_components(verify["matrixFile"], "matrixFile")
   reject("matrixFile is outside the canonical artifact store") unless matrix_components.first == ".artifacts"
   snapshots.leaf(matrix_components, "matrixFile")
   evidence_prefix = [".artifacts", "issues", issue.to_s, head]
-  cases.each do |item|
-    screenshot = relative_components(item["screenshot"], "case screenshot")
-    snapshots.leaf(evidence_prefix + screenshot, "case screenshot #{item["id"]}")
-  end
-  snapshots.leaf(evidence_prefix + ["verify-draft.json"], "verify-draft.json")
-  packet_components = relative_components(visual.dig("packet", "path"), "visual packet")
-  reject("visual packet is outside this Issue and Head") unless packet_components[0, 4] == evidence_prefix
-  packet_leaf = snapshots.leaf(packet_components, "visual packet")
-  packet = parse_leaf(packet_leaf, "visual packet")
-  packet_cases = packet["cases"]
-  reject("visual packet image references are incomplete") unless packet_cases.is_a?(Array)
-  packet_cases.each do |packet_case|
-    images = packet_case.is_a?(Hash) ? packet_case["images"] : nil
-    reject("visual packet image references are incomplete") unless images.is_a?(Array) && !images.empty?
-    images.each do |image|
-      path = image.is_a?(Hash) ? image["path"] : nil
-      components = relative_components(path, "visual packet image")
-      snapshots.leaf(evidence_prefix + components, "visual packet image #{path}")
+  if visual_required
+    reject("application visual cases are incomplete") unless cases.is_a?(Array) && cases.map { |item| item["id"] } == case_ids && cases.all? { |item| item.is_a?(Hash) && item.keys.sort == %w[id status screenshot screenshotDigest].sort && item["status"] == "passed" && item["screenshot"].is_a?(String) && item["screenshot"].start_with?("#{item["id"]}/") && item["screenshotDigest"].is_a?(String) && item["screenshotDigest"].match?(/\Asha256:[0-9a-f]{64}\z/) }
+    reject("application visual evaluation is not passed") unless visual.is_a?(Hash) && visual.keys.sort == %w[status packet cases findings].sort && visual["status"] == "passed" && visual["findings"] == [] && visual["packet"].is_a?(Hash) && visual["packet"].keys.sort == %w[path digest].sort && visual["packet"]["path"].is_a?(String) && visual["packet"]["digest"].is_a?(String) && visual["packet"]["digest"].match?(/\Asha256:[0-9a-f]{64}\z/) && visual["cases"].is_a?(Array) && visual["cases"].map { |item| item["id"] } == case_ids && visual["cases"].all? { |item| item.is_a?(Hash) && item.keys.sort == %w[id images].sort && item["images"].is_a?(Array) && !item["images"].empty? && item["images"].all? { |image| image.is_a?(Hash) && image.keys.sort == %w[state path digest status findings].sort && image["state"].is_a?(String) && !image["state"].empty? && image["status"] == "passed" && image["findings"] == [] && image["path"].is_a?(String) && image["digest"].is_a?(String) && image["digest"].match?(/\Asha256:[0-9a-f]{64}\z/) } }
+    cases.each do |item|
+      screenshot = relative_components(item["screenshot"], "case screenshot")
+      snapshots.leaf(evidence_prefix + screenshot, "case screenshot #{item["id"]}")
     end
+    snapshots.leaf(evidence_prefix + ["verify-draft.json"], "verify-draft.json")
+    packet_components = relative_components(visual.dig("packet", "path"), "visual packet")
+    reject("visual packet is outside this Issue and Head") unless packet_components[0, 4] == evidence_prefix
+    packet_leaf = snapshots.leaf(packet_components, "visual packet")
+    packet = parse_leaf(packet_leaf, "visual packet")
+    packet_cases = packet["cases"]
+    reject("visual packet image references are incomplete") unless packet_cases.is_a?(Array)
+    packet_cases.each do |packet_case|
+      images = packet_case.is_a?(Hash) ? packet_case["images"] : nil
+      reject("visual packet image references are incomplete") unless images.is_a?(Array) && !images.empty?
+      images.each do |image|
+        path = image.is_a?(Hash) ? image["path"] : nil
+        components = relative_components(path, "visual packet image")
+        snapshots.leaf(evidence_prefix + components, "visual packet image #{path}")
+      end
+    end
+    case_ids.each { |id| snapshots.watch_directory(evidence_prefix + [id], "visual packet case directory") }
+  else
+    expected_mechanical_checks = Array(contract.dig("verification", "cases")).to_h { |item| [item["id"], "test:#{item["testIdentifier"]}"] }
+    reject("nonvisual application cases are incomplete") unless cases.is_a?(Array) && cases.map { |item| item["id"] } == case_ids && cases.all? { |item| item.is_a?(Hash) && item.keys.sort == %w[id mechanicalCheck status].sort && item["status"] == "passed" && item["mechanicalCheck"] == expected_mechanical_checks[item["id"]] }
+    reject("nonvisual application visual evidence must be not-applicable") unless visual == {"status"=>"not-applicable", "findings"=>[]}
   end
-  case_ids.each { |id| snapshots.watch_directory(evidence_prefix + [id], "visual packet case directory") }
   validate_canonical_verify!(repo, issue, head, verify["baseSha"], verify_digest)
 end
 
@@ -282,6 +293,8 @@ puts "- Issue contract digest: `#{contract_digest}`"
 puts
 puts "## Verification"
 puts
+puts "- Delivery stage: `#{delivery_stage}`"
+puts "- Release readiness: `#{delivery_stage == "release" ? "release candidate verified" : "not release-ready"}`"
 puts "- Head SHA: `#{head}`"
 puts "- Verify status: `#{verify["status"]}`"
 puts "- Verify digest: `#{verify_digest}`"
@@ -295,7 +308,7 @@ case_labels = {"iphone-en" => "iPhone Pro / English", "iphone-ja" => "iPhone Pro
 if cases.is_a?(Array) && !cases.empty?
   case_labels.each do |id, label|
     unless case_ids.include?(id)
-      puts "  - #{label} (#{id}): deferred / unverified — shared English/iPad finishing Issue"
+      puts "  - #{label} (#{id}): outside this `#{delivery_stage}` Issue / unverified"
       next
     end
     item = cases.find { |entry| entry.is_a?(Hash) && entry["id"] == id }
@@ -324,7 +337,7 @@ if review_required
   puts "- Verdict: `#{review["verdict"]}`"
   puts "- Blocking findings: `0`"
 else
-  puts "- Not required for explicit `fast` delivery profile."
+  puts "- Not required by this non-release, non-strict contract."
 end
 puts
 puts "## Remaining work"

@@ -143,6 +143,15 @@ abort "partial scope missing" unless matrix["scope"] == "iphone-ja"
 abort "partial resolver did not select exactly Japanese iPhone" unless matrix["cases"].map { |c| [c["id"], c["language"], c["locale"]] } == [["iphone-ja", "ja", "ja_JP"]]
 abort "partial resolver used an older runtime" unless matrix.dig("runtime", "version") == "10.3"
 RUBY
+run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope targeted --case-ids iphone-en,ipad-ja
+ruby -rjson - "$output" <<'RUBY'
+matrix = JSON.parse(File.read(ARGV.fetch(0)))
+abort "targeted scope missing" unless matrix["scope"] == "targeted"
+abort "targeted resolver changed the ordered subset" unless matrix.fetch("cases").map { |entry| entry.fetch("id") } == ["iphone-en", "ipad-ja"]
+RUBY
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope targeted
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope targeted --case-ids ipad-ja,iphone-en
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope full --case-ids iphone-ja
 expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope other
 expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope iphone-ja --scope full
 

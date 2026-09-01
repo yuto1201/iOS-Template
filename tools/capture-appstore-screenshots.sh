@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+capture_script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+source "$capture_script_dir/lib/bounded-command.sh"
+
 usage() {
   echo "usage: $0 --requirements FILE --states FILE --app-path APP --bundle-id ID --source-sha SHA --build-digest sha256:HEX --runtime ID --output-root DIR" >&2
   exit 64
@@ -43,15 +46,15 @@ created_devices=()
 cleanup() {
   local udid
   for udid in "${created_devices[@]}"; do
-    "$xcrun_bin" simctl shutdown "$udid" >/dev/null 2>&1 || true
-    "$xcrun_bin" simctl delete "$udid" >/dev/null 2>&1 || true
+    bounded_run appstore-simulator-cleanup "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl shutdown "$udid" >/dev/null 2>&1 || true
+    bounded_run appstore-simulator-delete "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl delete "$udid" >/dev/null 2>&1 || true
   done
   [[ -n "${staging:-}" && -d "$staging" ]] && rm -rf -- "$staging"
   return 0
 }
 trap cleanup EXIT INT TERM
 
-"$xcrun_bin" simctl list -j devicetypes > "$staging/inventory.json"
+bounded_run appstore-simulator-inventory "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl list -j devicetypes > "$staging/inventory.json"
 REQUIREMENTS="$requirements" STATES="$states" INVENTORY="$staging/inventory.json" PLAN="$staging/plan.json" ruby <<'RUBY'
 require "json"
 
@@ -102,7 +105,7 @@ device_map="$staging/devices.tsv"
 while IFS=$'\t' read -r family device_type device_identifier; do
   [[ -n "$family" && -n "$device_type" && -n "$device_identifier" ]] || { echo 'release device plan is incomplete' >&2; exit 1; }
   name="iOS-Template-AppStore-${family}-$$"
-  udid=$("$xcrun_bin" simctl create "$name" "$device_identifier" "$runtime")
+  udid=$(bounded_run appstore-simulator-create "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl create "$name" "$device_identifier" "$runtime")
   [[ "$udid" =~ ^[0-9A-Fa-f-]{36}$ ]] || { echo "simctl returned an invalid UDID for $family" >&2; exit 1; }
   created_devices+=("$udid")
   printf '%s\t%s\t%s\n' "$family" "$udid" "$device_type" >> "$device_map"
@@ -123,18 +126,18 @@ while [[ "$index" -lt "$case_count" ]]; do
   destination_directory="$staging/$locale/$family"
   mkdir -p "$destination_directory"
   destination="$destination_directory/$(printf '%02d' "$order")-$state.png"
-  "$xcrun_bin" simctl boot "$udid"
-  "$xcrun_bin" simctl bootstatus "$udid" -b
-  "$xcrun_bin" simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiBars 3 --cellularBars 4 --batteryState charged --batteryLevel 100
-  "$xcrun_bin" simctl install "$udid" "$app_path"
-  "$xcrun_bin" simctl launch --terminate-running-process "$udid" "$bundle_id" \
+  bounded_run appstore-simulator-boot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl boot "$udid"
+  bounded_run appstore-simulator-bootstatus "${IOS_TEMPLATE_SIMULATOR_BOOT_TIMEOUT_SECONDS:-300}" "$xcrun_bin" simctl bootstatus "$udid" -b
+  bounded_run appstore-status-bar "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiBars 3 --cellularBars 4 --batteryState charged --batteryLevel 100
+  bounded_run appstore-simulator-install "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl install "$udid" "$app_path"
+  bounded_run appstore-simulator-launch "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl launch --terminate-running-process "$udid" "$bundle_id" \
     -AppleLanguages "($language)" -AppleLocale "$apple_locale" -AppleInterfaceStyle Light \
     --disable-animations --fixed-date 2026-01-01T09:41:00Z "${launch_arguments[@]}"
-  "$xcrun_bin" simctl io "$udid" screenshot --type=png "$destination"
-  "$xcrun_bin" simctl terminate "$udid" "$bundle_id"
-  "$xcrun_bin" simctl status_bar "$udid" clear
-  "$xcrun_bin" simctl shutdown "$udid"
-  "$xcrun_bin" simctl erase "$udid"
+  bounded_run appstore-screenshot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl io "$udid" screenshot --type=png "$destination"
+  bounded_run appstore-simulator-terminate "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl terminate "$udid" "$bundle_id"
+  bounded_run appstore-status-bar-clear "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl status_bar "$udid" clear
+  bounded_run appstore-simulator-shutdown "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl shutdown "$udid"
+  bounded_run appstore-simulator-erase "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl erase "$udid"
   index=$((index+1))
 done
 
