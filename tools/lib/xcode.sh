@@ -3,8 +3,16 @@
 TRUSTED_XCODE_SELECT="/usr/bin/xcode-select"
 TRUSTED_XCRUN="/usr/bin/xcrun"
 PREFERRED_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
-XCODE_LIB_DIR="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ -n "${BASH_VERSION-}" ]]; then
+  XCODE_SOURCE_PATH="${BASH_SOURCE[0]}"
+elif [[ -n "${ZSH_VERSION-}" ]]; then
+  XCODE_SOURCE_PATH="${(%):-%N}"
+else
+  return 1 2>/dev/null || exit 1
+fi
+XCODE_LIB_DIR="$(cd "$(/usr/bin/dirname "$XCODE_SOURCE_PATH")" && pwd -P)"
 BOUNDED_COMMAND_PATH="$XCODE_LIB_DIR/bounded-command.rb"
+unset XCODE_SOURCE_PATH
 
 positive_timeout() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]

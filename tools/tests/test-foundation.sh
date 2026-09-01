@@ -125,6 +125,13 @@ for file in "${required_files[@]}"; do
   fi
 done
 
+xcode_library="$repo_root/tools/lib/xcode.sh"
+zsh_bounded_command=$(/bin/zsh -c 'source "$1"; print -r -- "$BOUNDED_COMMAND_PATH"' xcode-library "$xcode_library")
+[[ "$zsh_bounded_command" == "$repo_root/tools/lib/bounded-command.rb" ]] || {
+  echo "Xcode timeout wrapper did not resolve its own directory when sourced from zsh" >&2
+  exit 1
+}
+
 for removed in \
   .claude/hooks/guard-external-ops.sh \
   .agents/skills/codex-external-ops/SKILL.md \
