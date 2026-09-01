@@ -284,7 +284,7 @@ state_worktree="$primary_root/.worktrees/$test_issue-workflow-state"
 git -C "$primary_root" worktree add -b "codex/$test_issue-workflow-state" "$state_worktree" "$head_sha" >/dev/null
 ln -s ../../.artifacts "$state_worktree/.artifacts"
 cp "$repo_root/tools/issue-state.sh" "$state_worktree/tools/issue-state.sh"
-cp "$repo_root/tools/lib/workflow-json.rb" "$repo_root/tools/lib/workflow.sh" "$repo_root/tools/lib/issue-contract.rb" "$repo_root/tools/lib/delivery-profile.rb" "$repo_root/tools/lib/verification-scope.rb" "$state_worktree/tools/lib/"
+cp "$repo_root/tools/lib/workflow-json.rb" "$repo_root/tools/lib/workflow.sh" "$repo_root/tools/lib/issue-contract.rb" "$repo_root/tools/lib/delivery-stage.rb" "$repo_root/tools/lib/delivery-profile.rb" "$repo_root/tools/lib/verification-scope.rb" "$state_worktree/tools/lib/"
 export FAKE_GIT_HEAD_WORKTREE="$state_worktree" FAKE_GIT_HEAD_COUNT_FILE="$workspace/head-count"
 contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' ".artifacts/issues/$test_issue/issue-contract.json")"
 cat > ".artifacts/issues/$test_issue/state.json" <<EOF

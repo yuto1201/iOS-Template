@@ -36,7 +36,7 @@ make_case() {
   mkdir -p "$CASE_WORKTREE/tools/lib" "$CASE_WORKTREE/Config" "$CASE_PRIMARY/.artifacts/issues/$issue"
   cp "$source_root/Config/ownership.yml" "$CASE_WORKTREE/Config/ownership.yml"
   cp "$source_root/tools/merge-issue.sh" "$source_root/tools/render-pr-body.sh" "$source_root/tools/issue-state.sh" "$source_root/tools/validate-verify-json.swift" "$source_root/tools/prepare-review-packet.sh" "$CASE_WORKTREE/tools/"
-  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/delivery-profile.rb" "$source_root/tools/lib/verification-scope.rb" "$source_root/tools/lib/ownership.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$source_root/tools/lib/review-artifacts.rb" "$source_root/tools/lib/review-contract.rb" "$source_root/tools/lib/review-sealing.rb" "$source_root/tools/lib/prepare-review-packet.rb" "$CASE_WORKTREE/tools/lib/"
+  cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/delivery-stage.rb" "$source_root/tools/lib/delivery-profile.rb" "$source_root/tools/lib/verification-scope.rb" "$source_root/tools/lib/ownership.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$source_root/tools/lib/review-artifacts.rb" "$source_root/tools/lib/review-contract.rb" "$source_root/tools/lib/review-sealing.rb" "$source_root/tools/lib/prepare-review-packet.rb" "$CASE_WORKTREE/tools/lib/"
   ln -s ../../.artifacts "$CASE_WORKTREE/.artifacts"
   printf '.artifacts\n' >>"$(git -C "$CASE_WORKTREE" rev-parse --git-path info/exclude)"
 
