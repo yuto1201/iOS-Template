@@ -237,6 +237,7 @@ if [[ "$mode" == build-for-testing ]]; then
   [[ "$(/bin/cat "$source_root/Sources/App.swift")" == HEAD-SOURCE ]] || { echo 'raw-Head source snapshot is incomplete' >&2; exit 1; }
   [[ "$(/bin/cat "$source_root/Config/App.xcconfig")" == HEAD-CONFIG ]] || { echo 'raw-Head config snapshot is incomplete' >&2; exit 1; }
   [[ ! -e "$source_root/Sources/Ignored.swift" ]] || { echo 'ignored source entered raw-Head snapshot' >&2; exit 1; }
+  printf '%s\n' Booted >"$state_dir/device-state-$(state first_udid)"
   mutate_path="$(state mutate_worktree_path)"
   [[ "$(state mutate_worktree)" != 1 || -z "$mutate_path" ]] || printf '%s\n' MUTATED-WORKTREE >"$mutate_path"
   [[ "$parallel" == NO && "$destination_count" == 1 && "$destination" == *id="$(state first_udid)" ]] || { echo 'build destination or parallel setting is invalid' >&2; exit 1; }
@@ -606,6 +607,7 @@ RUBY
       while true; do /bin/sleep 0.05; done
     fi
     if [[ "$(state case_mode)" == stubborn-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && "${4-}" == /bin/kill ]]; then
+      /bin/ps -o pgid= -p "$$" | /usr/bin/tr -d ' ' >"$state_dir/stubborn-probe-pgid"
       printf '%s\n' "$$" >"$state_dir/stubborn-probe-pid"
       trap '' TERM
       while true; do /bin/sleep 0.05; done
@@ -840,7 +842,7 @@ prepare_repo() {
   /bin/rm -f "$adapter_state/publication-kill-fired" "$adapter_state/mutate-after-case-fired" "$adapter_state"/ui-ran-*
   /bin/rm -f "$adapter_state"/publication-kill-*
   /bin/rm -f "$adapter_state"/publication-kill-after-*
-  /bin/rm -f "$adapter_state/stubborn-probe-pid"
+  /bin/rm -f "$adapter_state"/stubborn-probe-*
   /bin/rm -f "$adapter_state"/term-blocked-probe-* "$adapter_state/term-blocked-runner-pid" "$adapter_state/term-cleanup-before-probe-stop"
   /bin/rm -f "$adapter_state"/device-state-* "$adapter_state"/erase-count-*
   for udid in \
@@ -1019,6 +1021,55 @@ File.write(visual_path, JSON.pretty_generate(document) + "\n")
 RUBY
 }
 
+test_stubborn_probe() {
+  prepare_repo stubborn-probe-timeout
+  FAKE_CASE_MODE=stubborn-probe run_execute >"$scratch/stubborn-probe.stdout" 2>"$scratch/stubborn-probe.stderr" &
+  stubborn_runner_pid=$!
+  stubborn_child_pid=""
+  for _ in $(/usr/bin/jot 800); do
+    stubborn_child_pid="$(/bin/cat "$adapter_state/stubborn-probe-pid" 2>/dev/null || true)"
+    [[ "$stubborn_child_pid" =~ ^[1-9][0-9]*$ ]] && break
+    /bin/kill -0 "$stubborn_runner_pid" >/dev/null 2>&1 || break
+    /bin/sleep 0.05
+  done
+  if [[ ! "$stubborn_child_pid" =~ ^[1-9][0-9]*$ ]]; then
+    /bin/kill -KILL "$stubborn_runner_pid" >/dev/null 2>&1 || true
+    wait "$stubborn_runner_pid" 2>/dev/null || true
+    echo "bounded Simulator probe fixture did not reach its TERM-ignoring child" >&2
+    exit 1
+  fi
+  stubborn_probe_pgid="$(/bin/cat "$adapter_state/stubborn-probe-pgid" 2>/dev/null || true)"
+  if [[ ! "$stubborn_probe_pgid" =~ ^[1-9][0-9]*$ || "$stubborn_probe_pgid" != "$stubborn_child_pid" ]]; then
+    /bin/kill -KILL "$stubborn_child_pid" >/dev/null 2>&1 || true
+    /bin/kill -KILL "$stubborn_runner_pid" >/dev/null 2>&1 || true
+    wait "$stubborn_runner_pid" 2>/dev/null || true
+    echo "bounded Simulator probe fixture did not establish an isolated process group" >&2
+    exit 1
+  fi
+  stubborn_finished=0
+  for _ in $(/usr/bin/jot 400); do
+    if ! /bin/kill -0 "$stubborn_runner_pid" >/dev/null 2>&1; then stubborn_finished=1; break; fi
+    /bin/sleep 0.05
+  done
+  if [[ "$stubborn_finished" != 1 ]]; then
+    /bin/kill -KILL -- "-$stubborn_probe_pgid" >/dev/null 2>&1 || true
+    /bin/kill -KILL "$stubborn_runner_pid" >/dev/null 2>&1 || true
+    wait "$stubborn_runner_pid" 2>/dev/null || true
+    echo "bounded Simulator probe cleanup did not finish after KILL" >&2
+    exit 1
+  fi
+  if wait "$stubborn_runner_pid"; then
+    echo "stubborn Simulator probe unexpectedly succeeded" >&2; exit 1
+  fi
+  grep -Fq 'process liveness' "$scratch/stubborn-probe.stderr" || { echo "stubborn probe reported the wrong failure" >&2; exit 1; }
+  if /bin/kill -0 -- "-$stubborn_probe_pgid" >/dev/null 2>&1; then
+    /bin/kill -KILL -- "-$stubborn_probe_pgid" >/dev/null 2>&1 || true
+    echo "bounded Simulator probe left its TERM-ignoring process group alive" >&2
+    exit 1
+  fi
+  assert_no_failed_attempts
+}
+
 # Initial RED: the complete behavioral suite is enabled after this missing-runner assertion passes.
 if [[ ! -e "$runner" ]]; then
   prepare_repo red-runner
@@ -1027,7 +1078,12 @@ if [[ ! -e "$runner" ]]; then
   exit 1
 fi
 
-[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == stubborn ) ) ]] || exit 64
+if [[ "${1-}" == stubborn ]]; then
+  test_stubborn_probe
+  echo "stubborn probe runner test passed"
+  exit 0
+fi
 prepare_repo shape-valid valid present shape
 run_execute
 [[ -e "$final" ]] || { echo "shape runner did not publish verify.json" >&2; exit 1; }
@@ -1481,33 +1537,7 @@ if /usr/bin/find "$(dirname "$draft")/failures" -type f ! -name 'failure-*.json'
   exit 1
 fi
 
-prepare_repo stubborn-probe-timeout
-FAKE_CASE_MODE=stubborn-probe run_execute >"$scratch/stubborn-probe.stdout" 2>"$scratch/stubborn-probe.stderr" &
-stubborn_runner_pid=$!
-stubborn_finished=0
-for _ in $(/usr/bin/jot 400); do
-  if ! /bin/kill -0 "$stubborn_runner_pid" >/dev/null 2>&1; then stubborn_finished=1; break; fi
-  /bin/sleep 0.05
-done
-if [[ "$stubborn_finished" != 1 ]]; then
-  stubborn_child_pid="$(/bin/cat "$adapter_state/stubborn-probe-pid" 2>/dev/null || true)"
-  [[ ! "$stubborn_child_pid" =~ ^[1-9][0-9]*$ ]] || /bin/kill -KILL "$stubborn_child_pid" >/dev/null 2>&1 || true
-  /bin/kill -KILL "$stubborn_runner_pid" >/dev/null 2>&1 || true
-  wait "$stubborn_runner_pid" 2>/dev/null || true
-  echo "bounded Simulator probe hung after TERM" >&2
-  exit 1
-fi
-if wait "$stubborn_runner_pid"; then
-  echo "stubborn Simulator probe unexpectedly succeeded" >&2; exit 1
-fi
-grep -Fq 'process liveness' "$scratch/stubborn-probe.stderr" || { echo "stubborn probe reported the wrong failure" >&2; exit 1; }
-stubborn_child_pid="$(/bin/cat "$adapter_state/stubborn-probe-pid" 2>/dev/null || true)"
-if [[ "$stubborn_child_pid" =~ ^[1-9][0-9]*$ ]] && /bin/kill -0 "$stubborn_child_pid" >/dev/null 2>&1; then
-  /bin/kill -KILL "$stubborn_child_pid" >/dev/null 2>&1 || true
-  echo "bounded Simulator probe left a TERM-ignoring descendant" >&2
-  exit 1
-fi
-assert_no_failed_attempts
+test_stubborn_probe
 
 prepare_repo malicious-git-policy
 malicious_hooks="$scratch/malicious-hooks"
@@ -1576,9 +1606,31 @@ FAKE_BUILD_MODE= expect_execute_failure missing-project-member "build command fa
 
 prepare_repo mutate-worktree-during-build
 FAKE_MUTATE_WORKTREE=1 expect_execute_failure mutate-worktree-during-build "verification inputs changed"
-if /usr/bin/awk -F '\t' '$1 == "xcodebuild" && $0 ~ /build-for-testing$/ {built=1; next} built && $1 == "xcrun" && $3 == "simctl" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
-  echo "worktree mutation reached post-Build Simulator commands" >&2; exit 1
-fi
+/usr/bin/ruby - "$fake_log" <<'RUBY'
+lines = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
+build = lines.index { |fields| fields[0] == "xcodebuild" && fields.last == "build-for-testing" }
+abort "worktree mutation fixture did not reach Build" unless build
+after_build = lines.drop(build + 1)
+abort "worktree mutation reached post-Build tests" if after_build.any? { |fields| fields[0] == "xcodebuild" }
+owned = "00000000-0000-0000-0000-000000000001"
+simctl = after_build.select { |fields| fields[0] == "xcrun" && fields[2] == "simctl" }
+allowed_cleanup = simctl.all? do |fields|
+  case fields[3]
+  when "list"
+    fields[4..] == ["devices", "--json"]
+  when "terminate"
+    fields[4] == owned && fields[5] == "com.example.TemplateApp"
+  when "shutdown", "erase"
+    fields[4] == owned
+  else
+    false
+  end
+end
+abort "worktree mutation reached non-cleanup Simulator commands" unless allowed_cleanup
+abort "worktree mutation did not reclaim the Build destination" unless
+  simctl.any? { |fields| fields[3] == "shutdown" && fields[4] == owned } &&
+  simctl.any? { |fields| fields[3] == "erase" && fields[4] == owned }
+RUBY
 
 prepare_repo intermediate-project-symlink
 mkdir -p "$repo/RealProjects/TemplateApp.xcodeproj"
@@ -1715,7 +1767,7 @@ done
 
 for source in contract matrix; do
   prepare_repo "publication-race-$source"
-  FAKE_PUBLICATION_RACE="$source" expect_execute_failure "publication-race-$source" "atomic draft publication failed"
+  FAKE_PUBLICATION_RACE="$source" expect_execute_failure "publication-race-$source" "atomic staged evidence publication failed"
   [[ ! -e "$draft" ]] || { echo "publication race emitted a stale draft" >&2; exit 1; }
   for case_id in iphone-en iphone-ja ipad-en ipad-ja; do
     [[ ! -e "$(dirname "$draft")/$case_id/screenshot.png" ]] || { echo "publication race left a screenshot" >&2; exit 1; }
@@ -1780,7 +1832,7 @@ run_execute
 [[ -f "$draft" ]] || { echo "same-Head retry did not publish draft" >&2; exit 1; }
 
 prepare_repo draft-collision
-FAKE_COLLIDE_DRAFT=1 expect_execute_failure draft-collision "atomic draft publication failed"
+FAKE_COLLIDE_DRAFT=1 expect_execute_failure draft-collision "atomic staged evidence publication failed"
 grep -Fq sentinel-draft "$draft" || { echo "draft collision replaced the winner" >&2; exit 1; }
 for case_id in iphone-en iphone-ja ipad-en ipad-ja; do
   [[ ! -e "$(dirname "$draft")/$case_id/screenshot.png" ]] || { echo "draft collision left a partial screenshot bundle" >&2; exit 1; }
@@ -1788,7 +1840,7 @@ done
 
 
 prepare_repo killed-draft-publication
-FAKE_PUBLICATION_KILL=1 expect_execute_failure killed-draft-publication "atomic draft publication failed"
+FAKE_PUBLICATION_KILL=1 expect_execute_failure killed-draft-publication "atomic staged evidence publication failed"
 run_execute
 [[ -f "$draft" ]] || { echo "same-Head retry did not recover killed draft publication" >&2; exit 1; }
 [[ ! -e "$(dirname "$draft")/.verify-publication-journal.json" ]] || { echo "successful retry left publication journal" >&2; exit 1; }
@@ -1796,7 +1848,7 @@ run_execute
 for canonical_name in .verify-publication-journal.json screenshot.png verify-draft.json; do
   label="kill-before-${canonical_name//[^A-Za-z0-9]/-}"
   prepare_repo "$label"
-  FAKE_PUBLICATION_KILL_TARGET="$canonical_name" expect_execute_failure "$label" "atomic draft publication failed"
+  FAKE_PUBLICATION_KILL_TARGET="$canonical_name" expect_execute_failure "$label" "atomic staged evidence publication failed"
   run_execute
   [[ -f "$draft" ]] || { echo "same-Head retry failed after kill before $canonical_name" >&2; exit 1; }
 done
@@ -1804,7 +1856,7 @@ done
 for canonical_name in .verify-publication-journal.json screenshot.png verify-draft.json; do
   label="kill-after-${canonical_name//[^A-Za-z0-9]/-}"
   prepare_repo "$label"
-  FAKE_PUBLICATION_KILL_AFTER_TARGET="$canonical_name" expect_execute_failure "$label" "atomic draft publication failed"
+  FAKE_PUBLICATION_KILL_AFTER_TARGET="$canonical_name" expect_execute_failure "$label" "atomic staged evidence publication failed"
   : >"$fake_log"
   run_execute
   [[ -f "$draft" ]] || { echo "same-Head retry failed after kill after $canonical_name" >&2; exit 1; }

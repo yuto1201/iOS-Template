@@ -511,6 +511,7 @@ if ! run_snapshot_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesi
   -resultBundlePath "$build_result" -parallel-testing-enabled NO build-for-testing >"$build_log" 2>&1; then
   fail "build command failed"
 fi
+verify_live_inputs
 build_diagnostics="$run_state/build-diagnostics.json"
 run_xcrun xcresulttool get build-results --schema-version 0.1.0 --path "$build_result" --compact >"$build_diagnostics" 2>"$run_state/build-diagnostics-error" || fail "build diagnostics failed"
 json_tool diagnostics "$build_diagnostics" succeeded 2>"$run_state/build-diagnostics-parse-error" || fail "build warnings are not allowed"
