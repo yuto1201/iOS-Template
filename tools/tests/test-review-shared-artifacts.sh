@@ -6,6 +6,7 @@ workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-review-shared.XXXXXX")
 workspace=$(cd "$workspace" && pwd -P)
 primary="$workspace/primary"
 linked="$primary/.worktrees/reviewer"
+tracked_archive="$workspace/tracked-files.tar"
 issue=424244
 trap 'rm -rf "$workspace"' EXIT
 
@@ -19,7 +20,9 @@ assert_fails() {
 }
 
 mkdir -p "$primary"
-(cd "$source_repo" && tar -cf - --exclude=.git --exclude=.artifacts --exclude=.worktrees --exclude=.superpowers .) | (cd "$primary" && tar -xf -)
+(cd "$source_repo" && git ls-files -z | tar --null -T - -cf "$tracked_archive")
+(cd "$primary" && tar -xf "$tracked_archive")
+rm -f "$tracked_archive"
 git -C "$primary" init -q
 git -C "$primary" config user.name 'Review Fixture'
 git -C "$primary" config user.email 'review-fixture@example.invalid'
