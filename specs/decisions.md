@@ -215,3 +215,13 @@
 - Decision: 任意のVerification scope節を共通producerがname・stage・reasonとして封印する。通常UIはstandard + iphone-ja / feature、仕上げはfull / adaptation、リリースはstrict + full / release。未指定の既存contractはbyte互換のfull。case集合はexact 1件／4件のみで、scope改変・別範囲のmatrixや証拠流用を拒否する。
 - Consequence: 日本語iPhoneの機能Issueで英訳・iPad最適化を毎回完成させない。共通の仕上げIssueをリリース依存にし、申請準備・提出再開では同じ候補HeadとBundle IDのfull証拠を再検証する。提出画像の専用matrix、法務承認、指定アカウントの確認は維持する。既存アプリには自動適用しない。
 - Related Issue: #32
+
+## D-029: 動く形から品質を固めるDelivery stageを導入する
+
+- Date: 2026-09-02
+- Status: 確定
+- Supersedes: D-017の3回上限、D-025のstandard一律review、D-027／D-028のfeature／adaptation stage。危険度profile、全stageの安全境界、release品質、account／Head照合は維持する。
+- Context: PayCycle Issue #11ではアプリ追加約1,152行に対してTest追加約1,714行となり、操作可能なMVP後の4条件、visual、accessibility、統合UI、同一Head証拠、正式reviewを一つのIssueへ集中させた結果、単純な成果物に数十時間を要した。
+- Decision: 新規Issueへ`shape`、`harden`、`release`のDelivery stageとTime budgetを導入する。shapeは既定120分でBuild、重要Unit Test、日本語iPhone Smokeだけ、hardenは一つの品質問題とtargeted caseだけ、releaseは従来の4条件、Light/Dark、Dynamic Type、VoiceOver、44pt、visual、統合UI、同一Head証拠、反対モデルreview、premerge、提出前確認を必須にする。shape／hardenはrelease-readyと報告しない。同じ原因は最大2回で停止する。
+- Consequence: 実装中は対象Test、関連回帰、stage標準、release完全検証の順に広げる。全Xcode／Simulator操作はfinite timeoutとinvocation-owned process group、owned Simulator cleanupを使い、他Issueやユーザーprocessを終了しない。stage未指定のClaim済みcontractはbyte互換の従来profile／scope gateを維持する。
+- Related Issue: #44

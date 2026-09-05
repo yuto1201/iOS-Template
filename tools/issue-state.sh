@@ -153,7 +153,7 @@ workflow_transition_allowed "$from" "$to" || { echo "invalid transition: $from -
 if [[ "$from" == verify-passed && "$to" == approved-for-merge ]]; then
   ruby -I"$repo_root/tools/lib" -rjson -rdelivery-profile -e '
     contract=JSON.parse(File.binread(ARGV.fetch(0)))
-    abort "direct approval requires explicit fast delivery profile" unless IOSTemplate::DeliveryProfile.effective_name(contract)=="fast"
+    abort "direct approval requires a review-not-required delivery contract" if IOSTemplate::DeliveryProfile.review_required?(contract)
   ' "$repo_root/.artifacts/issues/$issue/issue-contract.json" || exit 1
 fi
 # Validate the durable record before any GitHub mutation. This preserves Task 4

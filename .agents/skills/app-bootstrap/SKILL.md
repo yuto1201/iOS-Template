@@ -5,7 +5,7 @@ description: Use when converting a repository created from iOS-Template to one a
 
 # App Bootstrap
 
-Identity/bootstrap uses strict + full coverage, not the normal feature form default. After bootstrap, ordinary new UI uses standard + iphone-ja with one shared English/iPad finishing Issue. Do not remove existing English resources or iPad targets.
+Identity/bootstrap is a `release` stage with `strict` + `full` coverage because it changes the generated repository's identity and delivery gates. After bootstrap, ordinary new UI starts as `shape` + `standard` + `iphone-ja`; focused quality work uses `harden` + `targeted`. Do not remove existing English resources or iPad targets.
 
 Complete the identity conversion before Feature development. Treat `Config/template-identity.json` as the source contract and `Config/app-identity.json` as the non-secret result record.
 
@@ -43,7 +43,7 @@ done < <(git ls-files --others --exclude-standard -z)
 ```
 
 Also inspect `Config/app-identity.json` and confirm the Head SHA is unchanged. Reject unrelated edits or any Identity mismatch. Do not stage any bootstrap output during this inspection.
-5. Run `bash tools/tests/test-foundation.sh` and `bash tools/tests/test-app-bootstrap.sh all`. Run Xcode project listing, build, Unit Test, and UI Test with DerivedData and result bundles under `/tmp`, outside File Provider-managed repository paths. Verify that all targets and configurations retain the separately specified Deployment Target.
+5. Run `bash tools/tests/test-foundation.sh` and `bash tools/tests/test-app-bootstrap.sh all`. Confirm the generated repository retains the shape, harden, and release Issue contracts, validators, bounded verification tools, and repository tests. Exercise both a valid shape contract and a valid release contract in the generated sample. Run Xcode project listing, build, Unit Test, and UI Test through the repository's bounded wrappers with DerivedData and result bundles under `/tmp`, outside File Provider-managed repository paths. Verify that all targets and configurations retain the separately specified Deployment Target.
 6. Resolve the latest installed iOS Runtime as described in [`docs/verification.md`](../../../docs/verification.md). Run and visually evaluate the four fixed Simulator cases: latest iPhone Pro in English and Japanese, and latest iPad Air in English and Japanese. Preserve Head-SHA-bound evidence.
 7. Request the required opposite-model read-only review for the same Head SHA. Address blocking findings and repeat every affected verification before proceeding.
 8. Let the Issue's selected executor verify the configured personal GitHub account, push only the Issue Branch, create the PR, compare the reviewed/verified Head SHA, Squash Merge, confirm Issue closure, delete the merged remote Branch, and clean up the local Branch/worktree.

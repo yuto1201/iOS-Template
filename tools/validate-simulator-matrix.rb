@@ -6,7 +6,7 @@ requested_scope = nil
 if ARGV.length >= 2 && ARGV[-2] == "--scope"
   requested_scope = ARGV.pop
   ARGV.pop
-  IOSTemplate::VerificationScope.case_ids(requested_scope)
+  IOSTemplate::VerificationScope.case_ids(requested_scope) unless requested_scope == "targeted"
 end
 
 phase, matrix_path, batch_id, devices_path = ARGV
@@ -16,7 +16,8 @@ matrix = JSON.parse(File.read(matrix_path))
 abort "blocked:environment: invalid matrix object" unless matrix.is_a?(Hash)
 scope = IOSTemplate::VerificationScope.matrix_name(matrix)
 abort "blocked:environment: frozen matrix scope differs from requested scope" if requested_scope && requested_scope != scope
-expected = IOSTemplate::VerificationScope.rows(scope)
+targeted_ids = scope == "targeted" ? IOSTemplate::VerificationScope.case_ids_for_matrix(matrix) : nil
+expected = IOSTemplate::VerificationScope.rows(scope, targeted_ids: targeted_ids)
 error = "blocked:environment: invalid #{phase} matrix"
 expected_keys = phase == "planned" ? %w[batchId cases resolvedAt runtime schemaVersion] : %w[batchId cases resolvedAt runtime schemaVersion xcode]
 expected_keys = (expected_keys + ["scope"]).sort if matrix.key?("scope")

@@ -3,6 +3,28 @@
 TRUSTED_XCODE_SELECT="/usr/bin/xcode-select"
 TRUSTED_XCRUN="/usr/bin/xcrun"
 PREFERRED_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+if [[ -n "${BASH_VERSION-}" ]]; then
+  XCODE_SOURCE_PATH="${BASH_SOURCE[0]}"
+elif [[ -n "${ZSH_VERSION-}" ]]; then
+  XCODE_SOURCE_PATH="${(%):-%N}"
+else
+  return 1 2>/dev/null || exit 1
+fi
+XCODE_LIB_DIR="$(cd "$(/usr/bin/dirname "$XCODE_SOURCE_PATH")" && pwd -P)"
+BOUNDED_COMMAND_PATH="$XCODE_LIB_DIR/bounded-command.rb"
+unset XCODE_SOURCE_PATH
+
+positive_timeout() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+run_scrubbed_bounded() {
+  local command_stage=$1 timeout_seconds=$2
+  shift 2
+  positive_timeout "$timeout_seconds" || return 2
+  run_scrubbed /usr/bin/ruby --disable-gems "$BOUNDED_COMMAND_PATH" \
+    --stage "$command_stage" --timeout-seconds "$timeout_seconds" --grace-seconds 5 -- "$@"
+}
 
 initialize_trusted_environment() {
   [[ -z "${TRUSTED_ENVIRONMENT_READY-}" ]] || return 0
@@ -85,13 +107,43 @@ resolve_xcode_environment() {
 }
 
 run_xcodebuild() {
-  run_scrubbed DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" "$XCODEBUILD_PATH" "$@"
+  local command_stage="${IOS_TEMPLATE_COMMAND_STAGE:-${stage:-xcodebuild}}"
+  local timeout_seconds="${IOS_TEMPLATE_XCODEBUILD_TIMEOUT_SECONDS:-1200}"
+  positive_timeout "$timeout_seconds" || return 2
+  local command_status=0
+  IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE=""
+  run_scrubbed DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" /usr/bin/ruby --disable-gems "$BOUNDED_COMMAND_PATH" \
+    --stage "$command_stage" --timeout-seconds "$timeout_seconds" --grace-seconds 5 -- "$XCODEBUILD_PATH" "$@" || command_status=$?
+  if [[ "$command_status" -eq 124 ]]; then
+    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $command_stage; elapsedSeconds=$timeout_seconds; timeoutSeconds=$timeout_seconds"
+  fi
+  return "$command_status"
 }
 
 run_xcrun() {
-  run_scrubbed DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" "$TRUSTED_XCRUN" "$@"
+  local command_stage="${IOS_TEMPLATE_COMMAND_STAGE:-${stage:-xcrun}}"
+  local timeout_seconds="${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}"
+  positive_timeout "$timeout_seconds" || return 2
+  local command_status=0
+  IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE=""
+  run_scrubbed DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" /usr/bin/ruby --disable-gems "$BOUNDED_COMMAND_PATH" \
+    --stage "$command_stage" --timeout-seconds "$timeout_seconds" --grace-seconds 5 -- "$TRUSTED_XCRUN" "$@" || command_status=$?
+  if [[ "$command_status" -eq 124 ]]; then
+    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $command_stage; elapsedSeconds=$timeout_seconds; timeoutSeconds=$timeout_seconds"
+  fi
+  return "$command_status"
 }
 
 run_xcode_swift() {
-  run_scrubbed DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" "$XCODE_SWIFT_PATH" "$@"
+  local command_stage="${IOS_TEMPLATE_COMMAND_STAGE:-${stage:-swift-validation}}"
+  local timeout_seconds="${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}"
+  positive_timeout "$timeout_seconds" || return 2
+  local command_status=0
+  IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE=""
+  run_scrubbed DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" /usr/bin/ruby --disable-gems "$BOUNDED_COMMAND_PATH" \
+    --stage "$command_stage" --timeout-seconds "$timeout_seconds" --grace-seconds 5 -- "$XCODE_SWIFT_PATH" "$@" || command_status=$?
+  if [[ "$command_status" -eq 124 ]]; then
+    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $command_stage; elapsedSeconds=$timeout_seconds; timeoutSeconds=$timeout_seconds"
+  fi
+  return "$command_status"
 }

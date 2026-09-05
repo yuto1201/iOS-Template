@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
+source "$repo_root/tools/lib/bounded-command.sh"
 
 cleanup_paths=()
 cleanup() {
@@ -22,21 +23,34 @@ make_temp() {
 trap cleanup EXIT
 
 matrix_io() {
-  swift tools/simulator-matrix-io.swift "$@"
+  bounded_run simulator-matrix-io "${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}" \
+    swift tools/simulator-matrix-io.swift "$@"
 }
 
 usage() {
-  echo "usage: resolve-simulator-matrix.sh --batch-id <id> --output <path> [--scope iphone-ja|full]" >&2
+  echo "usage: resolve-simulator-matrix.sh --batch-id <id> --output <path> [--scope iphone-ja|targeted|full] [--case-ids id,id]" >&2
   exit 2
 }
 
-[[ ( $# -eq 4 || $# -eq 6 ) && $1 == "--batch-id" && $3 == "--output" ]] || usage
-batch_id="$2"
-output="$4"
+[[ $# -ge 4 && $1 == "--batch-id" && $3 == "--output" ]] || usage
+batch_id="$2" output="$4"
+shift 4
 scope=full
-if [[ $# -eq 6 ]]; then
-  [[ "$5" == "--scope" && ( "$6" == "iphone-ja" || "$6" == "full" ) ]] || usage
-  scope="$6"
+scope_seen=0
+requested_case_ids=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --scope) [[ $# -ge 2 && "$scope_seen" -eq 0 ]] || usage; scope="$2"; scope_seen=1; shift 2 ;;
+    --case-ids) [[ $# -ge 2 && -z "$requested_case_ids" ]] || usage; requested_case_ids="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+[[ "$scope" == iphone-ja || "$scope" == targeted || "$scope" == full ]] || usage
+if [[ "$scope" == targeted ]]; then
+  [[ -n "$requested_case_ids" ]] || usage
+  ruby -Itools/lib -rverification-scope -e 'IOSTemplate::VerificationScope.validate_targeted_case_ids!(ARGV.fetch(0).split(",", -1))' "$requested_case_ids" || usage
+else
+  [[ -z "$requested_case_ids" ]] || usage
 fi
 [[ "$batch_id" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,63}$ ]] || {
   echo "blocked:environment: invalid batch ID" >&2
@@ -54,9 +68,16 @@ if [[ "$matrix_state" == "present" ]]; then
   make_temp reuse_devices reuse-devices
   matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$reuse_matrix"
   ruby tools/validate-simulator-matrix.rb complete "$reuse_matrix" "$batch_id" --scope "$scope"
-  xcrun simctl list devices -j >"$reuse_devices"
+  bounded_run simulator-list "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" xcrun simctl list devices -j >"$reuse_devices"
   matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$reuse_devices" --name devices.json
   ruby tools/validate-simulator-matrix.rb complete "$reuse_matrix" "$batch_id" "$reuse_devices" --scope "$scope"
+  if [[ "$scope" == targeted ]]; then
+    ruby -rjson - "$reuse_matrix" "$requested_case_ids" <<'RUBY'
+matrix, requested = ARGV
+actual = JSON.parse(File.read(matrix)).fetch("cases").map { |entry| entry.fetch("id") }.join(",")
+abort "blocked:environment: frozen matrix cases differ from requested target" unless actual == requested
+RUBY
+  fi
   echo "$expected_output"
   exit 0
 fi
@@ -65,7 +86,7 @@ capture_list() {
   local subject="$1"
   local temporary
   make_temp temporary "$subject"
-  xcrun simctl list "$subject" -j >"$temporary"
+  bounded_run "simulator-list-$subject" "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" xcrun simctl list "$subject" -j >"$temporary"
   matrix_io \
     --operation replace --repo "$repo_root" --batch "$batch_id" \
     --source "$temporary" --name "$subject.json"
@@ -85,11 +106,22 @@ matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name runtim
 matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name devicetypes.json >"$types_input"
 matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name devices.json >"$devices_input"
 
-swift tools/resolve-simulator-matrix.swift \
-  --runtimes "$runtimes_input" \
-  --device-types "$types_input" \
-  --devices "$devices_input" \
-  --batch-id "$batch_id" --scope "$scope" >"$working_matrix"
+if [[ "$scope" == targeted ]]; then
+  bounded_run simulator-matrix-resolver "${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}" \
+    swift tools/resolve-simulator-matrix.swift \
+    --runtimes "$runtimes_input" --device-types "$types_input" --devices "$devices_input" \
+    --batch-id "$batch_id" --scope targeted --case-ids "$requested_case_ids" >"$working_matrix"
+elif [[ "$scope" == iphone-ja ]]; then
+  bounded_run simulator-matrix-resolver "${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}" \
+    swift tools/resolve-simulator-matrix.swift \
+    --runtimes "$runtimes_input" --device-types "$types_input" --devices "$devices_input" \
+    --batch-id "$batch_id" --scope iphone-ja >"$working_matrix"
+else
+  bounded_run simulator-matrix-resolver "${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}" \
+    swift tools/resolve-simulator-matrix.swift \
+    --runtimes "$runtimes_input" --device-types "$types_input" --devices "$devices_input" \
+    --batch-id "$batch_id" >"$working_matrix"
+fi
 
 ruby tools/validate-simulator-matrix.rb planned "$working_matrix" "$batch_id" --scope "$scope"
 
@@ -98,7 +130,7 @@ if [[ -n "${DEVELOPER_DIR:-}" ]]; then
 else
   developer_path="$(xcode-select -p)"
 fi
-xcode_version="$(xcodebuild -version)"
+xcode_version="$(bounded_run xcode-version "${IOS_TEMPLATE_XCODEBUILD_PROBE_TIMEOUT_SECONDS:-60}" xcodebuild -version)"
 xcode_json="$(ruby -rjson - "$developer_path" "$xcode_version" <<'RUBY'
 path, output = ARGV
 version = output[/Xcode\s+([^\n]+)/, 1]
@@ -120,16 +152,17 @@ ruby tools/validate-simulator-matrix.rb planned-with-xcode "$working_matrix" "$b
 ruby -rjson -Itools/lib -rverification-scope - "$working_matrix" "$batch_id" >"$plan_file" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
 batch_id = ARGV.fetch(1)
-expected = IOSTemplate::VerificationScope.case_ids(IOSTemplate::VerificationScope.matrix_name(matrix))
+expected = IOSTemplate::VerificationScope.case_ids_for_matrix(matrix)
 abort "blocked:environment: resolver did not return exact scoped cases" unless matrix.fetch("cases").map { |entry| entry["id"] } == expected
 matrix.fetch("cases").each do |entry|
   type = entry.fetch("deviceType")
   puts [entry.fetch("id"), "iOS-Template-#{batch_id}-#{entry.fetch("id")}", type.fetch("identifier"), matrix.fetch("runtime").fetch("identifier")].join("\t")
 end
 RUBY
-ruby -Itools/lib -rverification-scope - "$plan_file" "$scope" <<'RUBY'
+ruby -Itools/lib -rverification-scope - "$plan_file" "$scope" "$requested_case_ids" <<'RUBY'
 rows = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t", 4) }
-expected = IOSTemplate::VerificationScope.case_ids(ARGV.fetch(1))
+scope, requested = ARGV.fetch(1), ARGV.fetch(2)
+expected = scope == "targeted" ? IOSTemplate::VerificationScope.validate_targeted_case_ids!(requested.split(",", -1)) : IOSTemplate::VerificationScope.case_ids(scope)
 abort "blocked:environment: invalid Simulator creation plan" unless rows.length == expected.length && rows.map(&:first) == expected && rows.all? { |row| row.length == 4 && row.all? { |value| !value.empty? } }
 abort "blocked:environment: duplicate Simulator creation plan row" unless rows.map { |row| row[1] }.uniq.length == expected.length
 RUBY
@@ -151,7 +184,7 @@ RUBY
 }
 
 while IFS=$'\t' read -r case_id simulator_name device_type runtime; do
-  if ! udid="$(xcrun simctl create "$simulator_name" "$device_type" "$runtime")"; then
+  if ! udid="$(bounded_run simulator-create "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" xcrun simctl create "$simulator_name" "$device_type" "$runtime")"; then
     record_failure "$case_id" "$simulator_name"
     echo "blocked:environment: Simulator creation failed; preserved possible dedicated Simulators in an exclusive batch failure report" >&2
     exit 1
@@ -166,11 +199,11 @@ done <"$plan_file"
 
 make_temp post_devices post-devices
 make_temp complete_matrix complete-matrix
-xcrun simctl list devices -j >"$post_devices"
+bounded_run simulator-list-post-create "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" xcrun simctl list devices -j >"$post_devices"
 ruby -rjson -Itools/lib -rverification-scope - "$working_matrix" "$plan_file" "$created_file" "$post_devices" "$batch_id" >"$complete_matrix" <<'RUBY'
 matrix_path, plan_path, created_path, devices_path, batch_id = ARGV
 matrix = JSON.parse(File.read(matrix_path))
-expected_ids = IOSTemplate::VerificationScope.case_ids(IOSTemplate::VerificationScope.matrix_name(matrix))
+expected_ids = IOSTemplate::VerificationScope.case_ids_for_matrix(matrix)
 cases = matrix.fetch("cases")
 abort "blocked:environment: resolver did not return exact scoped cases" unless cases.map { |entry| entry["id"] } == expected_ids
 plan = File.readlines(plan_path, chomp: true).map { |line| line.split("\t", 4) }

@@ -54,6 +54,12 @@ Make the workflow contract testable.
 
 - Not applicable.
 
+## Delivery stage
+
+- Stage: harden
+- Time budget: 120 minutes
+- Reason: Validate one narrow workflow-contract concern.
+
 $delivery_profile
 
 ## External operations
@@ -144,7 +150,7 @@ assert_fails 'standard profile rejects high-risk provider mutation' "$repo_root/
 write_feature_issue "$workspace/standard-approval-required.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: standard\n- Reason: Incorrectly classified approval-required operation.'
 assert_fails 'standard profile rejects any approval-required operation' "$repo_root/tools/validate-issue-body.sh" "$workspace/standard-approval-required.md"
 
-write_feature_issue "$workspace/strict-release.md" $'- Operation: appstore.submit_review\n- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: strict\n- Reason: App Store submission is a release boundary.'
+write_feature_issue "$workspace/strict-release.md" $'- Operation: supabase.apply_migrations\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: strict\n- Reason: A production migration is a strict boundary.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/strict-release.md"
 
 write_feature_issue "$workspace/model-neutral-providers.md" $'- Operation: linear.inspect_workspace\n- Service: Linear\n- Environment: production\n- Executor: Claude\n- Approval required: no\n\n- Operation: vercel.inspect_team\n- Service: Vercel\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
@@ -153,7 +159,7 @@ write_feature_issue "$workspace/model-neutral-providers.md" $'- Operation: linea
 write_feature_issue "$workspace/unknown-executor.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Cursor\n- Approval required: no' 'No additional approval.'
 assert_fails 'an external operation executor outside Codex and Claude is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-executor.md"
 
-write_feature_issue "$workspace/approved-external-operation.md" $'- Operation: appstore.submit_review\n- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73'
+write_feature_issue "$workspace/approved-external-operation.md" $'- Operation: supabase.apply_migrations\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/approved-external-operation.md"
 
 write_feature_issue "$workspace/multi-provider.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n- Operation: supabase.inspect_project\n- Service: Supabase\n- Environment: staging\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
@@ -187,8 +193,7 @@ ruby "$repo_root/tools/lib/issue-contract.rb" \
 assert_json "$workspace/approved-external-operation.json" '
   value = JSON.parse(File.read(ARGV[0]))
   details = value.fetch("externalOperationDetails")
-  abort unless details == [{"operation" => "appstore.submit_review", "service" => "App Store Connect", "environment" => "production", "executor" => "Codex", "approvalRequired" => true, "approvalReference" => "Approval reference: #73"}]
-  abort unless value.dig("contract", "externalOperationDetailsDigest") == "sha256:1cd2bd746c9c77fc9fe9b4c367beca33cb25a8a2ad3038ba8fef8818cbdc685b"
+  abort unless details == [{"operation" => "supabase.apply_migrations", "service" => "Supabase", "environment" => "production", "executor" => "Codex", "approvalRequired" => true, "approvalReference" => "Approval reference: #73"}]
 '
 
 cp "$workspace/multi-provider.md" "$workspace/multi-provider-detail-change.md"
@@ -206,7 +211,7 @@ ruby -rjson -e '
 
 "$repo_root/tools/validate-issue-body.sh" --type feature "$workspace/feature.md"
 "$repo_root/tools/validate-issue-body.sh" --type docs "$workspace/feature.md"
-"$repo_root/tools/validate-issue-body.sh" --type release "$workspace/feature.md"
+assert_fails 'release type requires an explicit release stage' "$repo_root/tools/validate-issue-body.sh" --type release "$workspace/feature.md"
 assert_fails 'an unknown Issue type is rejected' "$repo_root/tools/validate-issue-body.sh" --type maintenance "$workspace/feature.md"
 
 sed 's/- Not applicable\./- Target screens\/states: Settings loaded\./' "$workspace/feature.md" > "$workspace/incomplete-ui.md"
@@ -243,6 +248,12 @@ Prevent a merged bug from recurring.
 ## UI verification
 
 - Not applicable.
+
+## Delivery stage
+
+- Stage: harden
+- Time budget: 120 minutes
+- Reason: Correct one narrow regression.
 
 ## External operations
 
@@ -281,9 +292,10 @@ for required in \
   [[ -f "$repo_root/$required" ]] || { echo "missing required workflow file: $required" >&2; exit 1; }
 done
 
-for heading in Goal 'In scope' 'Out of scope' 'Acceptance criteria' 'Spec anchors' Dependencies 'UI verification' 'Delivery profile' 'External operations' 'User approvals'; do
+for heading in Goal 'In scope' 'Out of scope' 'Acceptance criteria' 'Spec anchors' Dependencies 'UI verification' 'Delivery stage' 'Delivery profile' 'External operations' 'User approvals'; do
   rg -Fq "label: $heading" "$repo_root/.github/ISSUE_TEMPLATE/feature.yml" || { echo "feature form lacks $heading" >&2; exit 1; }
 done
+[[ -f "$repo_root/.github/ISSUE_TEMPLATE/release.yml" ]] || { echo 'release form is missing' >&2; exit 1; }
 for operation in github.read_issue github.update_issue github.push_branch github.create_pr github.merge_pr github.delete_branch; do
   rg -Fq -- "Operation: $operation" "$repo_root/.github/ISSUE_TEMPLATE/feature.yml" || { echo "feature form lacks standard operation $operation" >&2; exit 1; }
   rg -Fq -- "Operation: $operation" "$repo_root/.github/ISSUE_TEMPLATE/regression.yml" || { echo "regression form lacks standard operation $operation" >&2; exit 1; }

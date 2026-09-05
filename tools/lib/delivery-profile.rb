@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "delivery-stage"
+
 module IOSTemplate
   module DeliveryProfile
     NAMES = %w[fast standard strict].freeze
@@ -28,7 +30,13 @@ module IOSTemplate
     end
 
     def review_required?(contract)
-      effective_name(contract) != "fast"
+      profile = effective_name(contract)
+      return true if profile == "strict"
+      # Preserve pre-migration profile behavior: legacy standard required
+      # review and legacy fast did not. Explicit stages use the new rule.
+      return profile == "standard" unless DeliveryStage.explicit?(contract)
+
+      DeliveryStage.effective_name(contract) == "release"
     end
 
     def strict_operation?(operation)

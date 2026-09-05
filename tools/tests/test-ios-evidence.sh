@@ -385,7 +385,7 @@ expect_failure scoped-docs "iphone-ja requires application-code verification"
 prepare_fixture scoped-wrong-matrix passed.json normal docs/change.md iphone-ja
 mutate_json "$fixture_root/.artifacts/batches/evidence-fixture/simulator-matrix.json" 'document.delete("scope")'
 refresh_matrix_digest
-expect_failure scoped-wrong-matrix "matrixFile.cases must contain exactly four rows"
+expect_failure scoped-wrong-matrix "matrixFile.cases must contain the exact scoped rows"
 if [[ "${1-}" == scoped ]]; then
   echo "scoped evidence tests passed"
   exit 0
@@ -567,7 +567,7 @@ mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '
   }
 '
 refresh_contract_digest
-expect_failure incomplete-verification-contract "verification.cases must contain the exact four ordered case IDs"
+expect_failure incomplete-verification-contract "issueContract.verification.cases must contain the exact staged ordered case IDs"
 
 prepare_fixture ambiguous-verification-action
 mutate_json "$fixture_root/.artifacts/issues/42/issue-contract.json" '

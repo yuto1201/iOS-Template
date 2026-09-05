@@ -76,6 +76,17 @@ Exercise authenticated workflow state.
 
 - Not applicable.
 
+## Delivery stage
+
+- Stage: harden
+- Time budget: 60 minutes
+- Reason: Exercise one narrow workflow-state concern.
+
+## Delivery profile
+
+- Profile: strict
+- Reason: Exercise the formal review state path.
+
 ## External operations
 
 - Operation: github.read_issue
@@ -273,7 +284,7 @@ state_worktree="$primary_root/.worktrees/$test_issue-workflow-state"
 git -C "$primary_root" worktree add -b "codex/$test_issue-workflow-state" "$state_worktree" "$head_sha" >/dev/null
 ln -s ../../.artifacts "$state_worktree/.artifacts"
 cp "$repo_root/tools/issue-state.sh" "$state_worktree/tools/issue-state.sh"
-cp "$repo_root/tools/lib/workflow-json.rb" "$repo_root/tools/lib/workflow.sh" "$repo_root/tools/lib/issue-contract.rb" "$repo_root/tools/lib/delivery-profile.rb" "$repo_root/tools/lib/verification-scope.rb" "$state_worktree/tools/lib/"
+cp "$repo_root/tools/lib/workflow-json.rb" "$repo_root/tools/lib/workflow.sh" "$repo_root/tools/lib/issue-contract.rb" "$repo_root/tools/lib/delivery-stage.rb" "$repo_root/tools/lib/delivery-profile.rb" "$repo_root/tools/lib/verification-scope.rb" "$state_worktree/tools/lib/"
 export FAKE_GIT_HEAD_WORKTREE="$state_worktree" FAKE_GIT_HEAD_COUNT_FILE="$workspace/head-count"
 contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' ".artifacts/issues/$test_issue/issue-contract.json")"
 cat > ".artifacts/issues/$test_issue/state.json" <<EOF
@@ -334,7 +345,7 @@ rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 printf '0' > "$FAKE_GIT_HEAD_COUNT_FILE"
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha" >/dev/null
 EXPECTED_HEAD="$head_sha" assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="verify-passed" && value["headSha"]==ENV.fetch("EXPECTED_HEAD")'
-assert_fails 'legacy strict Issue cannot skip opposite review' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to approved-for-merge
+assert_fails 'strict harden Issue cannot skip opposite review' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to approved-for-merge
 
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to in-progress >/dev/null
 assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="in-progress" && !value.key?("headSha")'
@@ -383,15 +394,26 @@ assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.re
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$updated_head" >/dev/null
 EXPECTED_HEAD="$updated_head" assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="verify-passed" && value["headSha"]==ENV.fetch("EXPECTED_HEAD")'
 
-# Only an explicit fast contract may take the direct merge-approval path.
-ruby -e 'path=ARGV.fetch(0); text=File.binread(path); marker="## External operations\n"; replacement="## Delivery profile\n\n- Profile: fast\n- Reason: Non-UI low-risk workflow fixture.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$FAKE_GH_ISSUE_BODY"
+# A non-release standard harden contract may take the direct merge-approval path.
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("- Profile: strict\n- Reason: Exercise the formal review state path.", "- Profile: standard\n- Reason: Ordinary focused hardening does not require blocking review.") or abort; File.binwrite(path,text)' "$FAKE_GH_ISSUE_BODY"
+ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+  --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > ".artifacts/issues/$test_issue/issue-contract.json"
+standard_contract_digest="sha256:$(shasum -a 256 ".artifacts/issues/$test_issue/issue-contract.json" | awk '{print $1}')"
+STANDARD_CONTRACT_DIGEST="$standard_contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value.fetch("issueContract")["digest"]=ENV.fetch("STANDARD_CONTRACT_DIGEST"); File.binwrite(path,JSON.generate(value))' ".artifacts/issues/$test_issue/state.json"
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to approved-for-merge >/dev/null
+assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="approved-for-merge" && value["previousState"]=="verify-passed"'
+
+# Explicit fast remains a direct path after migration.
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved-for-merge --to in-progress >/dev/null
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$updated_head" >/dev/null
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("- Profile: standard\n- Reason: Ordinary focused hardening does not require blocking review.", "- Profile: fast\n- Reason: Non-UI low-risk workflow fixture.") or abort; File.binwrite(path,text)' "$FAKE_GH_ISSUE_BODY"
 ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
   --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
   > ".artifacts/issues/$test_issue/issue-contract.json"
 fast_contract_digest="sha256:$(shasum -a 256 ".artifacts/issues/$test_issue/issue-contract.json" | awk '{print $1}')"
 FAST_CONTRACT_DIGEST="$fast_contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value.fetch("issueContract")["digest"]=ENV.fetch("FAST_CONTRACT_DIGEST"); File.binwrite(path,JSON.generate(value))' ".artifacts/issues/$test_issue/state.json"
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to approved-for-merge >/dev/null
-assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="approved-for-merge" && value["previousState"]=="verify-passed"'
 rm -f "$merge_evidence/review.json"
 "$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template --issue "$test_issue" --intended-operation github.merge_pr --expected-head "$head_sha" >/dev/null
 

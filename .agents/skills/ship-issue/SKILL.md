@@ -11,7 +11,7 @@ Resume from durable GitHub/state artifacts; never infer completion from local fi
 
 - Codex and Claude have equal authority. The selected Issue executor runs Claim/state/merge/cleanup tools and authenticated provider operations after the same configured-account preflight.
 - Every authenticated operation uses `external-ops`; the live Issue operation block must name the executing model and match `Config/ownership.yml`.
-- When `standard` or `strict` requires opposite review, always use `cross-model-review`; never invoke a reviewer CLI directly or self-approve. Explicit `fast` omits the blocking review stage.
+- When a `release` stage or `strict` profile requires opposite review, always use `cross-model-review`; never invoke a reviewer CLI directly or self-approve. Explicit non-release `shape`/`harden` work with `standard` and every explicit `fast` Issue omit the blocking review stage.
 
 ## State-driven workflow
 
@@ -21,7 +21,7 @@ Use the exact order:
 approved -> claimed -> in-progress -> verify-passed -> review-requested
 review-requested -> approved-for-merge -> merged -> done
 review-requested -> changes-requested -> in-progress
-verify-passed -> approved-for-merge -> merged -> done  # explicit fast only
+verify-passed -> approved-for-merge -> merged -> done  # review-not-required contract only
 ```
 
 1. Have the selected executor read the durable GitHub state first:
@@ -53,8 +53,14 @@ Dispatch again from `RESUME_STATE`; do not imply that Resume performed the trans
 Transition only through `tools/issue-state.sh`; do not hand-edit labels, markers, or state JSON.
 Every allowed recovery into `in-progress` clears the old durable Head binding. Treat that state as unverified: re-resolve the current Issue worktree Head and repeat verification before creating a new binding; never reuse an earlier Head or its evidence.
 
-2. Only in `in-progress`, implement the Issue contract. Apply TDD and commit locally. During implementation run targeted checks only; do not create canonical scope-specific evidence for each intermediate commit. A changed Head invalidates prior canonical verification/review.
-3. Use `ios-verify`. `fast` uses focused Build and selected Unit Test; `standard`/`strict` use the sealed scope at a stable Head: explicit iphone-ja is one case, absent/full is four. Adaptation/release and foundation/identity/gate changes require full. Deferred English/iPad polish stays in the shared finishing Issue, not new feature ACs or a passed result. Transition to `verify-passed` only after canonical `verify.json` validates for current Head; documentation-only work uses that skill's `tools/publish-documentation-verify.sh` path, not a skipped check. From the canonical Issue worktree, bind the exact current Head accepted by the state tool:
+2. Only in `in-progress`, implement the Issue contract. Apply TDD and commit locally. During implementation run the affected test first, then related regression tests; do not create canonical evidence for each intermediate commit. A changed Head invalidates prior canonical verification/review. For a `shape` Issue, monitor the sealed Time budget. If it will be exceeded, narrow scope, split focused harden work, stop as `blocked:environment`, or use `blocked:user`; do not accumulate quality work in the same Issue.
+3. Use `ios-verify` at a stable Head. Route by Delivery stage, independently of risk profile:
+   - `shape`: Build, critical Unit Tests, and the sealed `iphone-ja` smoke path. No screenshots, complete accessibility audit, full matrix, or release claim.
+   - `harden`: only the affected checks and sealed `targeted` cases. Do not rerun a complete matrix for an unrelated quality concern.
+   - `release` or a legacy contract without Delivery stage: complete `full` verification and release evidence.
+   - explicit `fast`: focused non-UI evidence; documentation-only work uses `tools/publish-documentation-verify.sh`.
+
+Transition to `verify-passed` only after canonical `verify.json` validates for current Head. Never describe shape/harden evidence as `release ready` or `fully verified`. From the canonical Issue worktree, bind the exact current Head accepted by the state tool:
 
 ```sh
 ISSUE_WORKTREE="$(git rev-parse --show-toplevel)"
@@ -63,7 +69,7 @@ cd "$ISSUE_WORKTREE"
 tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" --from in-progress --to verify-passed --head-sha "$HEAD_SHA"
 ```
 
-4. For explicit `fast`, transition directly from `verify-passed` to `approved-for-merge`; the state tool rejects this shortcut for `standard`, `strict`, and legacy Issues. For `standard`/`strict`, transition to `review-requested`, then run the exact opposite-model handoff:
+4. Ask the canonical contract helper whether review is required. A `strict` profile, `release` stage, or legacy contract requires review. An explicit `fast` contract and a non-release `standard` shape/harden contract transition directly from `verify-passed` to `approved-for-merge`; the state tool enforces this decision. When review is required, transition to `review-requested`, then run the exact opposite-model handoff:
 
 ```sh
 tools/cross-model-review.sh \

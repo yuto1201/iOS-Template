@@ -46,6 +46,17 @@ Recover an interrupted Claim.
 
 - Not applicable.
 
+## Delivery stage
+
+- Stage: harden
+- Time budget: 60 minutes
+- Reason: Verify one Claim recovery concern.
+
+## Delivery profile
+
+- Profile: standard
+- Reason: Local workflow recovery without a release gate.
+
 ## External operations
 
 - Operation: github.read_issue

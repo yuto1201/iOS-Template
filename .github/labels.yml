@@ -55,7 +55,7 @@ labels:
     description: Blocked by missing Xcode Runtime or Simulator
   - name: state:blocked:repeated-failure
     color: B60205
-    description: Blocked after three consecutive identical failures
+    description: Blocked after two consecutive identical failures
   - name: agent:codex
     color: 5319E7
     description: Primary implementer is Codex

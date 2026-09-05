@@ -9,6 +9,7 @@ fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
+source "$root/tools/lib/bounded-command.sh"
 
 manifest="Config/template-identity.json"
 bootstrap="tools/bootstrap-app.swift"
@@ -932,12 +933,20 @@ PY
     echo "Foundation failed after disposable bootstrap: $(<"$errors")" >&2
     exit 1
   fi
+  if ! (
+    cd "$fixture"
+    bash tools/tests/test-delivery-stages.sh
+  ) >"$output" 2>"$errors"; then
+    echo "Delivery-stage contracts failed after disposable bootstrap: $(<"$errors")" >&2
+    exit 1
+  fi
   [[ "$historical_plan_hash_before" == "$(shasum "$historical_plan" | awk '{print $1}')" ]] || {
     echo 'historical plan changed during transform' >&2
     exit 1
   }
 
-  if ! DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  if ! bounded_run generated-sample-xcode-list "${IOS_TEMPLATE_BOOTSTRAP_XCODE_TIMEOUT_SECONDS:-300}" \
+    /usr/bin/env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     xcodebuild -list -json -project "$fixture/GardenNotes.xcodeproj" >"$output" 2>"$errors"; then
     echo "xcodebuild -list failed: $(<"$errors")" >&2
     exit 1
@@ -983,7 +992,8 @@ display_name_setting = r'INFOPLIST_KEY_CFBundleDisplayName = "Garden \"Notes\" \
 if content.count(display_name_setting) != 2:
     raise SystemExit(f"expected exactly two escaped display-name settings, found {content.count(display_name_setting)}")
 PY
-  if ! DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  if ! bounded_run generated-sample-quoted-xcode-list "${IOS_TEMPLATE_BOOTSTRAP_XCODE_TIMEOUT_SECONDS:-300}" \
+    /usr/bin/env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
     xcodebuild -list -json -project "$escaped_fixture/QuotedGardenNotes.xcodeproj" >"$output" 2>"$errors"; then
     echo "quoted display-name xcodebuild -list failed: $(<"$errors")" >&2
     exit 1

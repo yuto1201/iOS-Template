@@ -27,23 +27,28 @@ BranchはIssue作成後に作ります。Issue番号を推測して先にBranch�
 
 Issue数を増やすこと自体を目的にしません。セットアップとその成果物が独立して価値を持たない場合、同じIssueへ含めます。
 
-[段階的開発仕様](../specs/development-stages.md)に従い、通常の機能Issueは日本語iPhoneを主対象に計画し、英訳・iPad最適化をまとめる仕上げIssueをリリースIssueの依存にします。変更の危険度と端末・言語の検証範囲は別に記載します。既存の英語・iPad ACを自動的に削除せず、延期対象とその回収先を明示します。
+[段階的開発仕様](../specs/development-stages.md)に従い、最初の操作可能な成果を`shape`、承認後の問題別改善を`harden`、完全検証を`release`へ分けます。一つのharden Issueへ無関係な品質項目を束ねません。変更の危険度、成熟段階、端末・言語範囲を別々に記載します。
 
 ## 3. Issue contract snapshot
 
-通常UIのIssue本文には次を記載します。Reasonは変更に応じて具体化し、Out of scopeまたはEnglish expectationsに実在する共通の英語・iPad仕上げIssueをリンクします。
+新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。
 
 ```markdown
+## Delivery stage
+
+- Stage: shape
+- Time budget: 120 minutes
+- Reason: 主要導線を実画面で確認できる状態にする。
+
 ## Verification scope
 
 - Scope: iphone-ja
-- Stage: feature
-- Reason: 日本語iPhoneで主要フローを確認し、英語・iPadの仕上げは共通Issueへ集約する。
+- Reason: 日本語iPhone 1条件で主要導線をSmoke確認する。
 ```
 
-対応するVerification JSONのcasesはiphone-jaだけとし、ACごとのchecksもそのscopeのstage・case・visualに限定します。fullは従来の4件順序です。Scope・Stage・Reasonの順序、非空理由、未知値・重複節・nullの拒否を共通producerで検証し、仕上げ・リリースはfull、release stageはstrict、App Store操作もfullを要求します。明示scopeをdocumentation-onlyまたはfast経路で完了させません。
+shapeのVerification JSONは`iphone-ja`のSmoke Test 1件とBuild／重要Unit Test mappingを持ち、visual checkを持ちません。hardenは`targeted`なcanonical case部分集合、releaseは固定4件と全visual checkを持ちます。Stage／Time budget／Reason、Scope／Reasonの順序、未知値、重複、矛盾を共通producerで拒否します。App Store操作は`release / strict / full`だけに許可します。
 
-以下の例は後方互換の`full` contractです。通常機能では任意節`Verification scope`を共通producerが読み、`verificationScope`へ封印します。旧snapshotにfieldを補完せず、省略は`full`。新規通常UIは`standard` + `iphone-ja / feature`、仕上げは`full / adaptation`、リリースは`strict` + `full / release`です。理由・scope・stageのClaim後変更もlive再照合で拒否します。
+Claim済みで`deliveryStage`を持たない旧snapshotへfieldを補完せず、従来のprofile／scope gateを維持します。新規Issueのstage省略は拒否します。理由・scope・stageのClaim後変更もlive再照合で拒否します。
 
 選択された実行モデルはClaim時にGitHub Issueを読み、共通producerで`.artifacts/issues/${issueNumber}/issue-contract.json`へ次のsanitized snapshotを保存します。Bootstrapも同じproducerを使い、canonical contractを手書きで生成・縮小しません。
 
@@ -67,6 +72,16 @@ Issue数を増やすこと自体を目的にしません。セットアップと
 }
 ```
 
+新規snapshotには、たとえば次を追加します。
+
+```json
+{
+  "deliveryStage": {"name":"shape","timeBudgetMinutes":120,"reason":"主要導線を確認する。"},
+  "deliveryProfile": {"name":"standard","reason":"通常UI変更。"},
+  "verificationScope": {"name":"iphone-ja","reason":"代表的な日本語iPhone Smoke。"}
+}
+```
+
 `externalOperations` は順序付きの操作ID配列です。`externalOperationDetailsDigest` はIssue本文の各五field blockを `operation`、`service`、`environment`、`executor`、`approvalRequired`、正規化したnullまたはstringの`approvalReference`へ変換し、同じ順序のcanonical JSONへ計算したSHA-256です。したがってIDが同じでもservice、environment、executor、承認条件または承認参照が変わればsnapshot bytesとdigestが変わります。
 
 新規Issueは`Delivery profile`節へ`Profile`と`Reason`を記載し、snapshotへ次を追加します。
@@ -81,7 +96,7 @@ Issue数を増やすこと自体を目的にしません。セットアップと
 
 application検証を実行するIssueは任意の`Verification`節へ、次の例のように完全なJSON objectを記載します。生のJSONまたは単一の`json` code fenceを使い、外側の`verification` wrapperは書きません。`tools/validate-issue-body.sh`とClaimが同じ`tools/lib/issue-contract.rb`で入力を検証し、canonical snapshotの`verification`へ格納します。Feature／Regression formにも入力欄があります。Configや環境変数から暗黙の既定値を補わず、このIssue本文だけを入力の正本とします。
 
-許可するkeyは`bundleIdentifier`、`unitTestIdentifier`、scopeで定まる固定順1件／4件の`cases`、受け入れ条件と同じ順の`acceptanceMappings`だけです。`unitTestIdentifier`とcaseの`testIdentifier`はどちらも`Target/Class/testMethod`（末尾の`()`は任意）です。各caseは`id`に加え、`testIdentifier`または`assertion`のちょうど一方を持ちます。許可する機械smoke assertionはexact `{"kind":"launch-succeeded"}`です。未知・欠落・重複key、case／AC／checkの不正順序、両actionはClaim前に拒否します。
+許可するkeyは`bundleIdentifier`、`unitTestIdentifier`、scopeで定まるfixed 1件／targeted部分集合／fixed 4件の`cases`、受け入れ条件と同じ順の`acceptanceMappings`だけです。`shape`のcaseは操作を確認する`testIdentifier`を必須とします。各caseは`testIdentifier`またはexact `{"kind":"launch-succeeded"}`の一方だけを持ちます。
 
 documentation-only Issueでは節を省略するか、`Not applicable`／GitHub空欄の`_No response_`にします。この場合、従来のsnapshot bytesに`verification`を追加しません。空のJSON、空節、部分設定を「省略」には読み替えません。`fast`へapplication Verificationを指定することも拒否します。application実行時のobject不在は、引き続きBuild前に失敗します。
 
@@ -137,7 +152,7 @@ proposed
 | `claimed` | `in-progress`, `blocked:conflict`, `paused` |
 | `in-progress` | `verify-passed`, 任意の`blocked:*`, `paused` |
 | `verify-passed` | `review-requested`, `in-progress`, `blocked:review` |
-| `verify-passed` | `approved-for-merge`（explicit `fast`のみ） |
+| `verify-passed` | `approved-for-merge`（review不要のexplicit `fast`または非release `standard` shape／harden） |
 | `review-requested` | `changes-requested`, `approved-for-merge`, `blocked:review` |
 | `changes-requested` | `in-progress`, `blocked:user`, `paused` |
 | `approved-for-merge` | `merged`, `in-progress`, `blocked:conflict`, `blocked:ops` |
@@ -159,7 +174,7 @@ Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approve
 - `blocked:conflict`: 同一ファイルまたはBranchの競合
 - `blocked:dependency`: 依存Issueが未完了
 - `blocked:environment`: Xcode、Runtime、Simulator不足
-- `blocked:repeated-failure`: 同一原因の3回連続失敗
+- `blocked:repeated-failure`: 同一原因の2回連続失敗
 - `paused`: ユーザーが明示的に停止
 - `superseded`: 別Issueまたは決定に置き換えられた
 
@@ -187,25 +202,26 @@ CodexとClaudeは同じ手順で1、4、5、6とGitHub上の状態変更を実�
 5. 小さな意味単位でcommitする。
 6. Scope外の必要作業を発見したら、勝手に含めず追跡Issue候補へ記録する。
 
-開発中は日本語iPhoneと対象Unit/UI Test、Build、lint、repository testなど、失敗原因へ直接対応する安価な確認を反復します。文字列・レイアウトの土台を保ち、英訳・iPad最適化は仕上げへ集約します。canonical証拠は中間commitごとに作らず、diffとACを自己監査し、既知の対象Testが成功した最終候補Headで作成します。変更が英語・iPad固有の問題や共通基盤へ直接及ぶ場合は、そのIssueでfullを要求します。
+開発中は対象Test、関連回帰Test、stage標準検証の順で広げます。shapeのTime budgetを超えそうならScope縮小、harden分離、環境停止、または`blocked:user`を選び、品質項目を積み増しません。release完全検証は候補Headが安定してから一度実行します。
 
 ### 5.3 Verify
 
-1. `fast`は`verify-fast-issue.sh`で一つのSimulator上のBuildと指定Unit Testだけを実行する。matrix、Screenshot、視覚評価は作らない。
-2. `standard`／`strict`は`ios-verify`が範囲別にバッチ固定済みSimulatorマトリクスを読み、Build、対象Test、操作、Screenshot、視覚評価を実行する。Issueで宣言した`iphone-ja`のexact 1件または`full`のexact 4件を確認する。
-3. IssueがRepository toolやworkflowを変更する場合、profileに関係なく`run-repository-tests.sh`でtracked `tools/tests/test-*.sh`全件をclean detached worktree上で実行し、同じHeadとAC対応を封印する。
-4. `verify.json` にprofile、実行route、Head SHAを対応させる。
-5. 同じHeadを明示して`in-progress -> verify-passed`へ遷移し、durable stateへ固定する。
+1. 非UI`fast`は`verify-fast-issue.sh`でBuildと指定Unit Testだけを実行する。
+2. `shape`はBuild、重要Unit Test、`iphone-ja` 1条件のSmoke Testを実行し、Screenshot／visual reviewなしの`xcodebuild-stage`証拠を発行する。
+3. `harden`は対象Test、関連回帰、宣言した`targeted` caseだけを実行する。visual checkを明示した場合だけ対象画像を評価する。
+4. `release`は`full` 4条件、visual、accessibility、統合UI、同一Head evidenceを実行する。
+5. IssueがRepository toolやworkflowを変更する場合、profileに関係なく全tracked repository testsをclean detached worktree上で実行する。
+6. 同じHeadを明示して`in-progress -> verify-passed`へ遷移する。
 
 canonical検証が失敗した場合、原因へ直接対応する対象Testが成功するまで要求scopeの検証を再実行しません。別Headのcanonical evidenceを作り続けることを進捗として扱いません。
 
 ### 5.4 Opposite-model review
 
-- `fast`: blocking reviewを行わず、`verify-passed -> approved-for-merge`へ直接進む
+- `fast`および`standard`の`shape`／`harden`: blocking reviewを行わず、`verify-passed -> approved-for-merge`へ進む
 - Codex実装: Claudeへread-onlyレビューを依頼
 - Claude実装: Codexへread-onlyレビューを依頼
 
-`standard`／`strict`のレビュー対象はIssue、仕様、Base SHA、Head SHA、Verify SHA、diff、テスト結果、UI画像です。レビュー結果が `changes-requested` なら同じIssueで修正し、原因へ対応する対象確認を先に成功させてから最終検証とレビューをやり直します。
+`strict`または`release`のレビュー対象はIssue、仕様、Base SHA、Head SHA、Verify SHA、diff、テスト結果、要求画像です。レビュー結果が`changes-requested`なら対象確認からやり直します。
 
 レビューのタイムアウトは10分です。利用不能時は `blocked:review` とし、独立Issueを進めます。自己承認はしません。
 
@@ -266,7 +282,7 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 - Merge後または実機確認で見つかった問題: Regression Issue
 - 同じ障害を重複起票しない
 - Regression IssueからさらにRegression Issueを自動連鎖させない
-- 同じ原因の失敗が3回続いたら状態をblockedへ移す
+- 同じ原因の失敗が2回続いたら状態をblockedへ移す
 
 ## 8. 止まらず進める範囲
 

@@ -55,11 +55,22 @@ body:
     id: ui-verification
     attributes:
       label: UI verification
-      description: "For UI work, describe the selected scope. Japanese iPhone features may defer English/iPad polish to one linked finishing Issue. Non-UI work may say Not applicable."
+      description: "For UI work, describe the selected shape scope. Defer only needed English/iPad or other quality work to focused harden Issues. Non-UI work may say Not applicable."
       placeholder: |
         - Target screens/states: Settings screen, loaded state
-        - English expectations: Deferred/unverified; link the shared English/iPad finishing Issue here.
+        - English expectations: Deferred/unverified; link a focused harden Issue if this release needs it.
         - Japanese expectations: Title and controls are complete in Japanese.
+    validations:
+      required: true
+  - type: textarea
+    id: delivery-stage
+    attributes:
+      label: Delivery stage
+      description: "Use shape to make the primary flow operable first. Split focused quality work into harden; use release only for a release candidate. Change the 120-minute budget when the Issue justifies it."
+      value: |
+        - Stage: shape
+        - Time budget: 120 minutes
+        - Reason: Produce an operable Japanese-iPhone primary flow before broad quality work.
     validations:
       required: true
   - type: textarea
@@ -76,11 +87,10 @@ body:
     id: verification-scope
     attributes:
       label: Verification scope
-      description: "Normal UI work uses iphone-ja / feature. Choose full for adaptation, release, foundation or cross-device changes. Remove this section for documentation-only or fast work. Link deferred work in Out of scope."
+      description: "shape uses iphone-ja. harden uses targeted with the ordered affected cases in Verification. release uses full. Delivery stage is declared only in its own section."
       value: |
         - Scope: iphone-ja
-        - Stage: feature
-        - Reason: Japanese iPhone first; English/iPad finishing is tracked in the shared finishing Issue.
+        - Reason: One representative Japanese iPhone is enough to inspect the initial shape.
     validations:
       required: false
   - type: textarea
@@ -97,7 +107,7 @@ body:
           ],
           "acceptanceMappings": [
             {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},
-            {"id": "AC-2", "checks": ["case:iphone-ja", "visual:iphone-ja"]}
+            {"id": "AC-2", "checks": ["case:iphone-ja"]}
           ]
         }
     validations:

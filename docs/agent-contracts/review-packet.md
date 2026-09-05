@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-`standard`／`strict` Issueでは、主開発モデルとは異なるモデルが現在のHead SHAに対して受け入れ条件、実装、検証証拠をread-onlyで評価します。自己承認と、古い差分に対する承認を防ぎます。explicit `fast`はblocking reviewを要求せず、review packetを作成しません。profile未導入の既存Issueは`strict`です。
+`strict`または`release` Issueでは、主開発モデルとは異なるモデルが現在のHead SHAに対して受け入れ条件、実装、検証証拠をread-onlyで評価します。`standard`の`shape`／`harden`とexplicit `fast`はblocking reviewを要求せず、review packetを作成しません。stage未導入のClaim済みIssueは旧release-level reviewを維持します。
 
 ## 2. Review packet
 
@@ -82,7 +82,7 @@
 
 スタイル上の好みだけをBlocking findingにしません。
 
-[段階的開発仕様](../../specs/development-stages.md)に従い、明示`iphone-ja`の通常機能は1条件、未指定／`full`は4条件の証拠を確認します。延期した英訳・iPad最適化を追加ACとして要求せず、未検証を成功と解釈しません。仕上げ・リリース・全体整合は`full`。packetはsealed contractへdigestで束縛され、手作業のcase省略や別scope流用は拒否します。
+[段階的開発仕様](../../specs/development-stages.md)に従い、review-required Issueの宣言scopeだけを確認します。strict shapeは`iphone-ja`、strict hardenは`targeted`、releaseは`full`です。shape／hardenをrelease readyと解釈せず、packetはsealed contractへdigestで束縛します。
 
 ## 4. Result schema
 
@@ -129,7 +129,7 @@ Severity:
 - `medium`: 実在する品質問題。今回のScopeで修正可能
 - `low`: 非Blockingの改善提案
 
-`critical`、`high`、未解決の`medium`があれば `changes-requested` とします。
+`approved`は`findings: []`かつ全ACが`supported`の場合だけ許可します。severityに関係なくfindingを返す場合は`changes-requested`とします。non-blockingな将来提案は正式findingへ混ぜず、別Issue候補として主agentへ伝えます。
 
 Reviewerは各 `AC-*` について `supported` または `unsupported` と証拠参照を返します。`unsupported` が一つでもあれば `approved` にできません。
 

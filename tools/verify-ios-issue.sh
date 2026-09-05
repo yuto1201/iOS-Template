@@ -168,6 +168,9 @@ evidence_dir="$repository_root/.artifacts/issues/$issue/$head_sha"
 stage="preflight"
 fail() {
   local message="$1"
+  if [[ -n "${IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE-}" ]]; then
+    message="$message; $IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE"
+  fi
   if [[ -z "${XCODE_SWIFT_PATH-}" ]]; then
     select_initial_xcode_environment >/dev/null 2>&1 || true
   fi
@@ -240,9 +243,22 @@ config_check() {
     --config "$config" --digest "$config_digest" --check >/dev/null
 }
 verification_scope="$(config_value verificationScope)"
+delivery_stage="$(config_value deliveryStage)"
+visual_required="$(config_value visualRequired)"
+case_count="$(config_value caseCount)"
+[[ "$delivery_stage" == shape || "$delivery_stage" == harden || "$delivery_stage" == release ]] || fail "Delivery stage is invalid"
+[[ "$visual_required" == true || "$visual_required" == false ]] || fail "visual verification policy is invalid"
+[[ "$case_count" =~ ^[1-4]$ ]] || fail "verification case count is invalid"
+case_ids=()
+case_indexes=()
+for ((case_index = 0; case_index < case_count; case_index++)); do
+  case_indexes+=("$case_index")
+  case_ids+=("$(config_value cases.$case_index.id)")
+done
 case "$verification_scope" in
-  iphone-ja) case_ids=(iphone-ja); case_indexes=(0) ;;
-  full) case_ids=(iphone-en iphone-ja ipad-en ipad-ja); case_indexes=(0 1 2 3) ;;
+  iphone-ja) [[ "${case_ids[*]}" == "iphone-ja" ]] || fail "verification scope is invalid" ;;
+  targeted) ;;
+  full) [[ "${case_ids[*]}" == "iphone-en iphone-ja ipad-en ipad-ja" ]] || fail "verification scope is invalid" ;;
   *) fail "verification scope is invalid" ;;
 esac
 active_case_id=""
@@ -332,6 +348,7 @@ run_xcrun_bounded() {
   stop_probe_group "$active_probe_pid" || result=125
   active_probe_pid=""
   [[ "$result" -eq 0 ]] || return "$result"
+  IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $stage; elapsedSeconds=5; timeoutSeconds=5"
   return 124
 }
 
@@ -390,15 +407,36 @@ project="$(config_value buildProjectPath)"
 source_root="$(config_value sourceRoot)"
 project_digest="$(config_value project.digest)"
 source_digest="$(config_value sourceTree.digest)"
-run_snapshot_xcodebuild() (
+run_snapshot_xcodebuild() {
+  local previous_directory command_status=0
+  previous_directory="$(/bin/pwd -P)" || return 1
   unset CDPATH
-  builtin cd -P -- "$source_root" >/dev/null
-  run_xcodebuild "$@"
-)
+  builtin cd -P -- "$source_root" >/dev/null || return 1
+  run_xcodebuild "$@" || command_status=$?
+  builtin cd -P -- "$previous_directory" >/dev/null || return 1
+  return "$command_status"
+}
 contract_digest="$(config_value contractDigest)"
 matrix_digest="$(config_value matrixDigest)"
+verification_timeout_seconds="${IOS_TEMPLATE_VERIFICATION_TIMEOUT_SECONDS:-7200}"
+positive_timeout "$verification_timeout_seconds" || fail "verification timeout must be a positive integer"
+assert_verification_lock_alive() {
+  local lock_status=0
+  [[ -n "$lock_holder_pid" ]] || fail "verification lock is not held"
+  if /bin/kill -0 "$lock_holder_pid" >/dev/null 2>&1; then
+    return 0
+  fi
+  wait "$lock_holder_pid" >/dev/null 2>&1 || lock_status="$?"
+  lock_holder_pid=""
+  if [[ "$lock_status" -eq 124 ]]; then
+    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at verification-lock; elapsedSeconds=$verification_timeout_seconds; timeoutSeconds=$verification_timeout_seconds"
+    fail "verification lock expired during verification"
+  fi
+  fail "verification lock ended during verification"
+}
 verify_live_inputs() {
   local input_diagnostic
+  assert_verification_lock_alive
   config_check || fail "verification config changed during verification"
   if ! input_diagnostic="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-inputs \
     --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
@@ -413,6 +451,8 @@ verify_live_inputs() {
     esac
   fi
 }
+IOS_TEMPLATE_COMMAND_STAGE=verification-lock \
+IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS="$verification_timeout_seconds" \
 run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-lock-holder \
   --config "$config" --digest "$config_digest" <"$lock_control_fifo" >"$lock_ready_fifo" &
 lock_holder_pid="$!"
@@ -425,18 +465,20 @@ if ! read -r -t 30 lock_status <"$lock_ready_fifo" || [[ "$lock_status" != "LOCK
   fail "verification lock is already held"
 fi
 
-stage="publication-recovery"
-verify_live_inputs
-if ! recovered_draft="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-recover-publication \
-  --config "$config" --digest "$config_digest" --issue "$issue" \
-  --expected-base "$expected_base" --expected-head "$head_sha" \
-  2>"$run_state/publication-recovery-error")"; then
-  fail "interrupted draft publication could not be recovered"
-fi
-if [[ -n "$recovered_draft" ]]; then
-  [[ "$recovered_draft" == "$evidence_dir/verify-draft.json" ]] || fail "interrupted draft publication could not be recovered"
-  printf '%s\n' "$recovered_draft"
-  exit 0
+if [[ "$visual_required" == true ]]; then
+  stage="publication-recovery"
+  verify_live_inputs
+  if ! recovered_draft="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-recover-publication \
+    --config "$config" --digest "$config_digest" --issue "$issue" \
+    --expected-base "$expected_base" --expected-head "$head_sha" \
+    2>"$run_state/publication-recovery-error")"; then
+    fail "interrupted draft publication could not be recovered"
+  fi
+  if [[ -n "$recovered_draft" ]]; then
+    [[ "$recovered_draft" == "$evidence_dir/verify-draft.json" ]] || fail "interrupted draft publication could not be recovered"
+    printf '%s\n' "$recovered_draft"
+    exit 0
+  fi
 fi
 
 stage="simulator-ownership"
@@ -462,12 +504,14 @@ test_result="$attempt_root/Tests.xcresult"
 first_udid="$(config_value cases.0.udid)"
 
 stage="build"
+active_case_id="${case_ids[0]}"
 build_log="$run_state/build.log"
 if ! run_snapshot_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
   -destination "platform=iOS Simulator,id=$first_udid" -derivedDataPath "$derived_data" \
   -resultBundlePath "$build_result" -parallel-testing-enabled NO build-for-testing >"$build_log" 2>&1; then
   fail "build command failed"
 fi
+verify_live_inputs
 build_diagnostics="$run_state/build-diagnostics.json"
 run_xcrun xcresulttool get build-results --schema-version 0.1.0 --path "$build_result" --compact >"$build_diagnostics" 2>"$run_state/build-diagnostics-error" || fail "build diagnostics failed"
 json_tool diagnostics "$build_diagnostics" succeeded 2>"$run_state/build-diagnostics-parse-error" || fail "build warnings are not allowed"
@@ -631,13 +675,15 @@ for index in "${case_indexes[@]}"; do
     run_xcrun_bounded /dev/null "$run_state/$case_id-post-check-liveness-error" \
       simctl spawn "$udid" /bin/kill -0 "$launch_pid" || case_failed="post-check process liveness"
   fi
-  screenshot_source="$attempt_root/Screenshots/$case_id.png"
-  [[ ! -e "$screenshot_source" ]] || case_failed="screenshot collision"
-  [[ -n "$case_failed" ]] || run_xcrun simctl io "$udid" screenshot "$screenshot_source" >/dev/null 2>&1 || case_failed="screenshot"
-  if [[ -z "$case_failed" ]]; then
-    run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-seal-png \
-      --config "$config" --digest "$config_digest" --case "$case_id" \
-      --source "$screenshot_source" >/dev/null 2>"$run_state/$case_id-screenshot-validation-error" || case_failed="screenshot validation"
+  if [[ "$visual_required" == true ]]; then
+    screenshot_source="$attempt_root/Screenshots/$case_id.png"
+    [[ ! -e "$screenshot_source" ]] || case_failed="screenshot collision"
+    [[ -n "$case_failed" ]] || run_xcrun simctl io "$udid" screenshot "$screenshot_source" >/dev/null 2>&1 || case_failed="screenshot"
+    if [[ -z "$case_failed" ]]; then
+      run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-seal-png \
+        --config "$config" --digest "$config_digest" --case "$case_id" \
+        --source "$screenshot_source" >/dev/null 2>"$run_state/$case_id-screenshot-validation-error" || case_failed="screenshot validation"
+    fi
   fi
   if [[ -z "$case_failed" ]]; then
     stage="case-$case_id-input-stability"
@@ -657,17 +703,26 @@ stage="input-stability"
 verify_live_inputs
 [[ "$(run_git rev-parse HEAD)" == "$head_sha" ]] || fail "current Git Head changed during verification"
 
-stage="draft-publication"
-draft_path="$evidence_dir/verify-draft.json"
-if ! published_draft="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-publish-draft \
+if [[ "$visual_required" == true ]]; then
+  stage="draft-publication"
+  publication_mode="--runner-publish-draft"
+  published_path="$evidence_dir/verify-draft.json"
+else
+  stage="stage-evidence-publication"
+  publication_mode="--runner-publish-stage"
+  published_path="$evidence_dir/verify.json"
+fi
+if ! published_evidence="$(run_xcode_swift "$script_dir/validate-verify-json.swift" "$publication_mode" \
     --config "$config" --digest "$config_digest" --issue "$issue" \
     --expected-base "$expected_base" --expected-head "$head_sha" --scheme "$scheme" \
     --derived-data "$derived_data" --build-result "$build_result" --test-result "$test_result" \
     --passed "$passed" --failed "$failed" --skipped "$skipped" 2>&1)"; then
-  fail "atomic draft publication failed"
+  fail "atomic staged evidence publication failed"
 fi
-[[ "$published_draft" == "$draft_path" ]] || fail "atomic draft publication failed"
+if [[ "$published_evidence" != "$published_path" && "$repository_root/$published_evidence" != "$published_path" ]]; then
+  fail "atomic staged evidence publication failed"
+fi
 runner_succeeded=1
 trap - EXIT
 release_runner
-printf '%s\n' "$draft_path"
+printf '%s\n' "$published_path"

@@ -67,6 +67,7 @@ struct Arguments {
     let batchID: String
     let resolvedAt: String
     let scope: String
+    let caseIDs: [String]
 }
 
 enum ResolverError: Error {
@@ -81,7 +82,7 @@ enum ResolverError: Error {
     var message: String {
         switch self {
         case .usage:
-            return "usage: resolve-simulator-matrix.swift --runtimes <path> --device-types <path> --devices <path> --batch-id <id> [--resolved-at <ISO-8601 timestamp>] [--scope iphone-ja|full]"
+            return "usage: resolve-simulator-matrix.swift --runtimes <path> --device-types <path> --devices <path> --batch-id <id> [--resolved-at <ISO-8601 timestamp>] [--scope iphone-ja|targeted|full] [--case-ids id,id]"
         case .unreadableInput(let path):
             return "blocked:environment: unable to decode simctl JSON input: \(path)"
         case .noAvailableIOSRuntime:
@@ -99,7 +100,7 @@ enum ResolverError: Error {
 }
 
 func parseArguments(_ arguments: [String]) throws -> Arguments {
-    guard [8, 10, 12].contains(arguments.count) else {
+    guard arguments.count >= 8, arguments.count <= 14, arguments.count.isMultiple(of: 2) else {
         throw ResolverError.usage
     }
 
@@ -108,7 +109,7 @@ func parseArguments(_ arguments: [String]) throws -> Arguments {
     while index < arguments.count {
         let flag = arguments[index]
         let value = arguments[index + 1]
-        guard ["--runtimes", "--device-types", "--devices", "--batch-id", "--resolved-at", "--scope"].contains(flag),
+        guard ["--runtimes", "--device-types", "--devices", "--batch-id", "--resolved-at", "--scope", "--case-ids"].contains(flag),
               values[flag] == nil,
               !value.isEmpty else {
             throw ResolverError.usage
@@ -126,14 +127,27 @@ func parseArguments(_ arguments: [String]) throws -> Arguments {
 
     let resolvedAt = values["--resolved-at"] ?? ISO8601DateFormatter().string(from: Date())
     let scope = values["--scope"] ?? "full"
-    guard ["iphone-ja", "full"].contains(scope) else { throw ResolverError.usage }
+    guard ["iphone-ja", "targeted", "full"].contains(scope) else { throw ResolverError.usage }
+    let fullIDs = ["iphone-en", "iphone-ja", "ipad-en", "ipad-ja"]
+    let caseIDs: [String]
+    if scope == "targeted" {
+        guard let raw = values["--case-ids"] else { throw ResolverError.usage }
+        caseIDs = raw.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        guard !caseIDs.isEmpty, Set(caseIDs).count == caseIDs.count,
+              caseIDs.allSatisfy(fullIDs.contains),
+              caseIDs == fullIDs.filter(caseIDs.contains) else { throw ResolverError.usage }
+    } else {
+        guard values["--case-ids"] == nil else { throw ResolverError.usage }
+        caseIDs = scope == "iphone-ja" ? ["iphone-ja"] : fullIDs
+    }
     return Arguments(
         runtimesPath: runtimesPath,
         deviceTypesPath: deviceTypesPath,
         devicesPath: devicesPath,
         batchID: batchID,
         resolvedAt: resolvedAt,
-        scope: scope
+        scope: scope,
+        caseIDs: caseIDs
     )
 }
 
@@ -294,30 +308,24 @@ func resolve(_ arguments: Arguments) throws -> Matrix {
     guard devices.devices[runtime.identifier] != nil else {
         throw ResolverError.missingRuntimeDevices(runtime.identifier)
     }
-    let iPhone = try newestIPhonePro(from: deviceTypes.devicetypes)
-    let iPhoneType = reference(for: iPhone)
-    if arguments.scope == "iphone-ja" {
-        return Matrix(
-            schemaVersion: 1, scope: "iphone-ja", batchId: arguments.batchID, resolvedAt: arguments.resolvedAt,
-            runtime: RuntimeReference(identifier: runtime.identifier, version: runtime.version),
-            cases: [MatrixCase(id: "iphone-ja", family: "iPhone", deviceType: iPhoneType, locale: "ja_JP", language: "ja")]
-        )
-    }
-    let iPad = try newestIPadAir(from: deviceTypes.devicetypes)
-    let iPadType = reference(for: iPad)
+    let needsIPhone = arguments.caseIDs.contains { $0.hasPrefix("iphone-") }
+    let needsIPad = arguments.caseIDs.contains { $0.hasPrefix("ipad-") }
+    let iPhoneType = try needsIPhone ? reference(for: newestIPhonePro(from: deviceTypes.devicetypes)) : nil
+    let iPadType = try needsIPad ? reference(for: newestIPadAir(from: deviceTypes.devicetypes)) : nil
+    let allCases: [MatrixCase] = [
+        iPhoneType.map { MatrixCase(id: "iphone-en", family: "iPhone", deviceType: $0, locale: "en_US", language: "en") },
+        iPhoneType.map { MatrixCase(id: "iphone-ja", family: "iPhone", deviceType: $0, locale: "ja_JP", language: "ja") },
+        iPadType.map { MatrixCase(id: "ipad-en", family: "iPad", deviceType: $0, locale: "en_US", language: "en") },
+        iPadType.map { MatrixCase(id: "ipad-ja", family: "iPad", deviceType: $0, locale: "ja_JP", language: "ja") }
+    ].compactMap { $0 }
 
     return Matrix(
         schemaVersion: 1,
-        scope: nil,
+        scope: arguments.scope == "full" ? nil : arguments.scope,
         batchId: arguments.batchID,
         resolvedAt: arguments.resolvedAt,
         runtime: RuntimeReference(identifier: runtime.identifier, version: runtime.version),
-        cases: [
-            MatrixCase(id: "iphone-en", family: "iPhone", deviceType: iPhoneType, locale: "en_US", language: "en"),
-            MatrixCase(id: "iphone-ja", family: "iPhone", deviceType: iPhoneType, locale: "ja_JP", language: "ja"),
-            MatrixCase(id: "ipad-en", family: "iPad", deviceType: iPadType, locale: "en_US", language: "en"),
-            MatrixCase(id: "ipad-ja", family: "iPad", deviceType: iPadType, locale: "ja_JP", language: "ja")
-        ]
+        cases: allCases.filter { arguments.caseIDs.contains($0.id) }
     )
 }
 

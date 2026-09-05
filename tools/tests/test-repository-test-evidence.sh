@@ -15,6 +15,7 @@ cp "$source_repo/tools/lib/run-repository-tests.rb" \
   "$source_repo/tools/lib/review-artifacts.rb" \
   "$source_repo/tools/lib/review-contract.rb" \
   "$source_repo/tools/lib/verification-scope.rb" \
+  "$source_repo/tools/lib/delivery-stage.rb" \
   "$source_repo/tools/lib/review-sealing.rb" \
   "$source_repo/tools/lib/prepare-review-packet.rb" \
   "$repo/tools/lib/"
@@ -140,5 +141,19 @@ if (cd "$repo" && tools/run-repository-tests.sh --issue 44 --expected-base "$bas
   exit 1
 fi
 grep -Fq 'acceptance mappings must match every Issue contract AC exactly once' "$scratch/missing.err"
+
+ruby -I"$source_repo/tools/lib" -rrun-repository-tests -e '
+  unrelated = Process.spawn("/bin/sleep", "30", pgroup: true)
+  begin
+    _, _, status, timed_out, elapsed = IOSTemplate::RepositoryTests.capture3_bounded(
+      {}, "/bin/bash", "-c", "/bin/sleep 30 & wait", chdir: Dir.pwd, timeout_seconds: 1
+    )
+    abort "repository child was not timed out" unless timed_out && elapsed < 8 && !status.success?
+    Process.kill(0, unrelated)
+  ensure
+    begin Process.kill("TERM", -unrelated); rescue Errno::ESRCH; end
+    begin Process.wait(unrelated); rescue Errno::ECHILD; end
+  end
+'
 
 echo 'PASS: current-Head repository tests are isolated, sanitized, AC-mapped, and sealed into the review packet'

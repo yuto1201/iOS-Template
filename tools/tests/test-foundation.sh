@@ -27,15 +27,23 @@ required_files=(
   tools/check-markdown-links.swift
   tools/publish-documentation-verify.sh
   tools/verify-fast-issue.sh
+  tools/lib/bounded-command.rb
+  tools/lib/bounded-command.sh
+  tools/lib/delivery-stage.rb
   tools/lib/delivery-profile.rb
   tools/lib/verification-scope.rb
   tools/lib/release-verification.rb
   tools/run-repository-tests.sh
   tools/lib/run-repository-tests.rb
   tools/tests/test-repository-test-evidence.sh
+  tools/tests/test-bounded-command.sh
+  tools/tests/test-delivery-stages.sh
   tools/lib/review-receipt.rb
   tools/lib/validate-review-receipt.rb
   tools/with-ios-simulator-lock.sh
+  .github/ISSUE_TEMPLATE/feature.yml
+  .github/ISSUE_TEMPLATE/regression.yml
+  .github/ISSUE_TEMPLATE/release.yml
   .agents/skills/app-bootstrap/SKILL.md
   .agents/skills/cross-model-review/SKILL.md
   .agents/skills/ios-verify/SKILL.md
@@ -116,6 +124,13 @@ for file in "${required_files[@]}"; do
     exit 1
   fi
 done
+
+xcode_library="$repo_root/tools/lib/xcode.sh"
+zsh_bounded_command=$(/bin/zsh -c 'source "$1"; print -r -- "$BOUNDED_COMMAND_PATH"' xcode-library "$xcode_library")
+[[ "$zsh_bounded_command" == "$repo_root/tools/lib/bounded-command.rb" ]] || {
+  echo "Xcode timeout wrapper did not resolve its own directory when sourced from zsh" >&2
+  exit 1
+}
 
 for removed in \
   .claude/hooks/guard-external-ops.sh \

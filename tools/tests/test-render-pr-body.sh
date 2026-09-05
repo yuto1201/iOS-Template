@@ -21,6 +21,7 @@ cp "$source_root/tools/lib/descriptor-files.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-contract.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-sealing.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/delivery-profile.rb" "$primary/tools/lib/"
+cp "$source_root/tools/lib/delivery-stage.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/verification-scope.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/prepare-review-packet.rb" "$source_root/tools/lib/review-artifacts.rb" "$primary/tools/lib/"
 printf '%s\n' '{}' >"$primary/TemplateApp.xcodeproj/project.pbxproj"
@@ -342,7 +343,7 @@ CONTRACT="$contract" VERIFY="$verify" STATE="$issue_dir/state.json" ruby -rjson 
 contract_path=ENV.fetch("CONTRACT"); contract=JSON.parse(File.binread(contract_path)); contract.delete("verification"); contract["deliveryProfile"]={"name"=>"fast","reason"=>"Non-UI low-risk renderer fixture."}; File.binwrite(contract_path,JSON.generate(contract)); digest="sha256:#{Digest::SHA256.file(contract_path).hexdigest}"; verify_path=ENV.fetch("VERIFY"); verify=JSON.parse(File.binread(verify_path)); verify.fetch("issueContract")["digest"]=digest; File.binwrite(verify_path,JSON.pretty_generate(verify)+"\n"); state_path=ENV.fetch("STATE"); state=JSON.parse(File.binread(state_path)); state.fetch("issueContract")["digest"]=digest; File.binwrite(state_path,JSON.generate(state))'
 rm -f "$review" "$review_packet" "$review_diff" "$head_dir/review-receipt.json"
 fast_body=$(run_renderer)
-grep -Fq 'Not required for explicit `fast` delivery profile.' <<<"$fast_body" || { echo 'fast PR body did not record the review waiver' >&2; exit 1; }
+grep -Fq 'Not required by this non-release, non-strict contract.' <<<"$fast_body" || { echo 'fast PR body did not record the review waiver' >&2; exit 1; }
 
 echo 'PASS: PR body readiness is bound to canonical current visual evidence and documentation-only validation remains available'
 bash "$source_root/tools/tests/test-render-pr-body.sh" scoped

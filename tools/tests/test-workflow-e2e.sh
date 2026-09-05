@@ -33,6 +33,7 @@ pr_state_file="$fake_state/pr-state"
 pr_head_file="$fake_state/pr-head"
 operation_log="$workspace/operations.log"
 date_counter="$workspace/date-counter"
+tracked_archive="$workspace/tracked-files.tar"
 declared_origin="https://github.com/$repository.git"
 real_git=$(command -v git)
 
@@ -50,7 +51,9 @@ line_number() {
 }
 
 mkdir -p "$seed" "$fake_bin" "$fake_state"
-(cd "$source_root" && git ls-files -z | tar --null -T - -cf -) | (cd "$seed" && tar -xf -)
+(cd "$source_root" && git ls-files -z | tar --null -T - -cf "$tracked_archive")
+(cd "$seed" && tar -xf "$tracked_archive")
+rm -f "$tracked_archive"
 git -C "$seed" init -q -b main
 git -C "$seed" config user.name 'Workflow E2E Fixture'
 git -C "$seed" config user.email 'workflow-e2e@example.invalid'
@@ -101,6 +104,17 @@ Exercise the complete documentation-only Issue shipping workflow.
 ## UI verification
 
 - Not applicable.
+
+## Delivery stage
+
+- Stage: harden
+- Time budget: 120 minutes
+- Reason: Exercise one documentation workflow without claiming release readiness.
+
+## Delivery profile
+
+- Profile: strict
+- Reason: The fixture intentionally exercises the formal review and premerge path.
 
 ## External operations
 

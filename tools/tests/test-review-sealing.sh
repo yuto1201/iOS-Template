@@ -5,6 +5,7 @@ source_repo=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-review-sealing.XXXXXX")
 workspace=$(cd "$workspace" && pwd -P)
 repo="$workspace/repo"
+tracked_archive="$workspace/tracked-files.tar"
 issue=424249
 trap 'rm -rf "$workspace"' EXIT
 
@@ -19,7 +20,9 @@ assert_fails() {
 digest() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print "sha256:" $1}'; }
 
 mkdir "$repo"
-(cd "$source_repo" && tar -cf - --exclude=.git --exclude=.artifacts --exclude=.worktrees --exclude=.superpowers .) | (cd "$repo" && tar -xf -)
+(cd "$source_repo" && git ls-files -z | tar --null -T - -cf "$tracked_archive")
+(cd "$repo" && tar -xf "$tracked_archive")
+rm -f "$tracked_archive"
 git -C "$repo" init -q
 git -C "$repo" config user.name 'Review Seal Fixture'
 git -C "$repo" config user.email 'review-seal@example.invalid'

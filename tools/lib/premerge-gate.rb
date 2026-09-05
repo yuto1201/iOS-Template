@@ -232,7 +232,8 @@ begin
   issue_type = type_labels.first.delete_prefix("type:")
   parsed_contract = IOSTemplate::IssueContract.parse(
     live_issue["body"], issue_type: issue_type, issue: issue,
-    repository: repository, fetched_at: contract["fetchedAt"]
+    repository: repository, fetched_at: contract["fetchedAt"],
+    allow_legacy_delivery_stage: !contract.key?("deliveryStage")
   )
   reconstructed_contract = parsed_contract.contract
   reconstructed_bytes = JSON.generate(canonical(reconstructed_contract))

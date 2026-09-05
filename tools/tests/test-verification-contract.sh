@@ -48,7 +48,10 @@ class VerificationContractTest < Minitest::Test
   end
 
   def parse(text)
-    IOSTemplate::IssueContract.parse(text, issue: 42, repository: "yuto1201/iOS-Template", fetched_at: "2026-08-31T00:00:00Z").contract
+    IOSTemplate::IssueContract.parse(
+      text, issue: 42, repository: "yuto1201/iOS-Template", fetched_at: "2026-08-31T00:00:00Z",
+      allow_legacy_delivery_stage: true
+    ).contract
   end
 
   def test_inline_and_fenced_json_generate_exact_ac_specific_configuration
@@ -172,13 +175,13 @@ class VerificationContractTest < Minitest::Test
     Dir.mktmpdir("verification-contract-") do |directory|
       path = File.join(directory, "issue.md")
       File.write(path, body(JSON.generate(verification)))
-      stdout, stderr, status = Open3.capture3("ruby", File.join(REPO_ROOT, "tools/lib/issue-contract.rb"), "--body", path, "--format", "contract", "--issue", "42", "--repo", "yuto1201/iOS-Template", "--fetched-at", "2026-08-31T00:00:00Z")
+      stdout, stderr, status = Open3.capture3("ruby", File.join(REPO_ROOT, "tools/lib/issue-contract.rb"), "--allow-legacy-delivery-stage", "--body", path, "--format", "contract", "--issue", "42", "--repo", "yuto1201/iOS-Template", "--fetched-at", "2026-08-31T00:00:00Z")
       assert status.success?, stderr
       assert_equal verification, JSON.parse(stdout)["verification"]
-      _, stderr, status = Open3.capture3("bash", File.join(REPO_ROOT, "tools/validate-issue-body.sh"), path)
+      _, stderr, status = Open3.capture3("bash", File.join(REPO_ROOT, "tools/validate-issue-body.sh"), "--allow-legacy-delivery-stage", path)
       assert status.success?, stderr
       File.write(path, body('{"cases":[]}'))
-      _, _, status = Open3.capture3("bash", File.join(REPO_ROOT, "tools/validate-issue-body.sh"), path)
+      _, _, status = Open3.capture3("bash", File.join(REPO_ROOT, "tools/validate-issue-body.sh"), "--allow-legacy-delivery-stage", path)
       refute status.success?, "validator accepted an incomplete verification object"
     end
   end
@@ -199,17 +202,24 @@ class VerificationContractTest < Minitest::Test
   end
 
   def test_issue_form_examples_are_consumable_without_rewriting_the_schema
-    %w[feature regression].each do |type|
+    %w[feature regression release].each do |type|
       form = YAML.load_file(File.join(REPO_ROOT, ".github/ISSUE_TEMPLATE/#{type}.yml"))
       field = form.fetch("body").find { |entry| entry["id"] == "verification" }
       refute_nil field, "#{type} form has no Verification input"
       example = field.fetch("attributes").fetch("placeholder")
       scope = form.fetch("body").find { |entry| entry["id"] == "verification-scope" }.fetch("attributes").fetch("value")
+      stage = form.fetch("body").find { |entry| entry["id"] == "delivery-stage" }.fetch("attributes").fetch("value")
       profile = form.fetch("body").find { |entry| entry["id"] == "delivery-profile" }.fetch("attributes").fetch("value")
-      contract = parse(body(example) + "\n## Verification scope\n#{scope}\n## Delivery profile\n#{profile}")
+      form_body = body(example).sub(
+        "## UI verification\nNot applicable",
+        "## UI verification\n- Target screens/states: Welcome flow.\n- English expectations: Stage-specific.\n- Japanese expectations: Primary flow."
+      )
+      contract = parse(form_body + "\n## Delivery stage\n#{stage}\n## Verification scope\n#{scope}\n## Delivery profile\n#{profile}")
       assert_equal JSON.parse(example), contract.fetch("verification")
-      assert_equal "iphone-ja", contract.dig("verificationScope", "name")
-      assert_equal "standard", contract.dig("deliveryProfile", "name")
+      expected_scope = {"feature"=>"iphone-ja", "regression"=>"targeted", "release"=>"full"}.fetch(type)
+      expected_profile = type == "release" ? "strict" : "standard"
+      assert_equal expected_scope, contract.dig("verificationScope", "name")
+      assert_equal expected_profile, contract.dig("deliveryProfile", "name")
     end
   end
 end
