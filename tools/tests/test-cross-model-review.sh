@@ -8,10 +8,13 @@ if [[ "${IOS_TEMPLATE_REVIEW_FIXTURE_READY:-0}" != 1 ]]; then
   fixture_workspace=$(cd "$fixture_workspace" && pwd -P)
   fixture_primary="$fixture_workspace/primary"
   fixture_linked="$fixture_primary/.worktrees/reviewer"
+  fixture_archive="$fixture_workspace/tracked-files.tar"
   trap 'rm -rf "$fixture_workspace"' EXIT
 
   mkdir -p "$fixture_primary"
-  (cd "$repo_root" && git ls-files -z | tar --null -T - -cf -) | (cd "$fixture_primary" && tar -xf -)
+  (cd "$repo_root" && git ls-files -z | tar --null -T - -cf "$fixture_archive")
+  (cd "$fixture_primary" && tar -xf "$fixture_archive")
+  rm -f "$fixture_archive"
   git -C "$fixture_primary" init -q
   git -C "$fixture_primary" config user.name 'Review Fixture'
   git -C "$fixture_primary" config user.email 'review-fixture@example.invalid'
