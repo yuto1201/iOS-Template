@@ -102,6 +102,7 @@ integration_skills=(
   app-icon
   supabase-ops
   ios-media-assets
+  ios-3d-assets
   prepare-appstore-assets
   submit-appstore-release
 )
@@ -176,6 +177,12 @@ if rg -n -i 'codex-only|codex only|delegate(d)? to codex|delegated to codex|code
 fi
 if rg -n 'CodexOperationTransport|run-codex-transport|Codex result' tools/lib/workflow-json.rb; then
   echo 'obsolete Codex-only external operation transport must not remain in shared workflow code' >&2
+  exit 1
+fi
+
+unsupported_agent_name=$(printf '%s%s' 'Cur' 'sor')
+if git grep -in "$unsupported_agent_name" -- .; then
+  echo 'tracked repository content must not retain the removed third-party development path' >&2
   exit 1
 fi
 

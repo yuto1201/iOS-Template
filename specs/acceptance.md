@@ -12,6 +12,7 @@ Date: 2026-09-06
 - [ ] Unit TestとUI Testのサンプルが実行できる。
 - [ ] 日本語と英語を切り替えて主要画面を検証できる。
 - [ ] CodexとClaudeが同じ外部操作権限を持ち、設定済みアカウント／targetを照合する。
+- [ ] ClaudeとCodexの一般開発を同等に許可しつつ、3D asset authoringは共有`ios-3d-assets` skillによりCodexのexact model `gpt-6-astra`だけへrouteされ、利用不能時に別modelへfallbackしない。
 - [ ] IssueからSquash Merge・Branch削除までのdry-run testが通る。
 - [ ] Delivery stageに応じて1条件、targeted部分集合、4条件を固定できる。
 - [ ] 条件付きUI Direction Gateが、必要なUI作業だけを明示選択まで停止し、Identity bootstrapと独立した非UI作業を停止しない。
@@ -44,6 +45,7 @@ Date: 2026-09-06
 - App Icon IssueはIdentity bootstrapに依存し、確定済みの目的・方向性とIdentityから同条件・同fidelityのシンプルな画像生成候補をexactly 2案作る。提示済み候補を上書きせず、ユーザーがstable concept IDを一つ明示選択するまで`blocked:user`とする。組合せや重要な変更は新revisionへ再生成して再選択する。
 - App Icon Issueは`bounded direction-neutral` routeで、App Home Screen／Settings等のicon表示をlive UI verificationに記録し、選択が画面階層、navigation、primary-flow interactionを決めずUI Direction Gateを満たさないことをReasonと関連product anchorから復元可能にする。最初のユーザー向けUI `shape`は完了済みApp Icon Issueへ依存し、独立した非UI作業は依存しない。
 - 選択済みアプリアイコンは1024 x 1024の不透明PNGで、system masking前の正方形、単一の認識しやすい主題、単純な背景、少ない形と色を基本とする。`tools/validate-app-icon.sh`が`Config/app-identity.json`、default AppIcon entry、PNGの寸法・透明性、`Config/app-icon.json`のasset path／prompt summary／generator／exact SHA-256を一致検証する。
+- 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更を含むIssueは`ios-3d-assets`を使い、authoring modelをexact `gpt-6-astra`としてIssue／PR証拠へ記録する。Claudeまたは別のCodex modelは要件整理、既存asset統合、形式検証、RealityKit実装、Build／Test、レビューを担当できるが、3D asset bytesをauthoringしない。exact modelが利用不能なら`blocked:environment`とし、別modelの成果へ置換しない。
 
 D-030 cutoverは`2026-09-06T00:31:41Z`である。封印済みIssue contractの`fetchedAt`がcutoverより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合はpre-D-030 legacyとして、routeを推測せず、遡及的なHTML比較やroute宣言を要求せず、contractを変更・再封印せずに元の封印済みAC、spec anchors、Dependencies、current-Head evidenceを検証する。cutoverより前でも候補が一つ以上あれば通常規則へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。`fetchedAt`がcutoverと同時刻または後のcontractにも同じexactly-one／完全性を必須とし、cutover後のpre-Claim Issueも完全な宣言なしではDefinition of Readyを満たさない。prefix外のroute語は候補として数えない。
 

@@ -270,7 +270,7 @@ write_feature_issue "$workspace/strict-release.md" $'- Operation: supabase.apply
 write_feature_issue "$workspace/model-neutral-providers.md" $'- Operation: linear.inspect_workspace\n- Service: Linear\n- Environment: production\n- Executor: Claude\n- Approval required: no\n\n- Operation: vercel.inspect_team\n- Service: Vercel\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/model-neutral-providers.md"
 
-write_feature_issue "$workspace/unknown-executor.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Cursor\n- Approval required: no' 'No additional approval.'
+write_feature_issue "$workspace/unknown-executor.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Unsupported\n- Approval required: no' 'No additional approval.'
 assert_fails 'an external operation executor outside Codex and Claude is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-executor.md"
 
 write_feature_issue "$workspace/approved-external-operation.md" $'- Operation: supabase.apply_migrations\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73'

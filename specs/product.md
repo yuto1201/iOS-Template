@@ -1,7 +1,7 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 1.7
+Version: 1.8
 Date: 2026-09-06
 
 ## 1. 目的
@@ -25,6 +25,8 @@ Date: 2026-09-06
 - 外部操作実行者: Issueで指定されたCodexまたはClaude
 - 反対モデル評価者: 主開発者ではない側のモデル
 - 最終実機確認者: ユーザー本人
+
+ClaudeとCodexは一般の仕様化、実装、検証、レビュー、設定済み外部操作を同等に担当できる。モデル固有の品質差を理由に全体を主従化せず、3D authoringだけを§5.1の限定例外として扱う。
 
 ## 3. 標準プラットフォーム
 
@@ -105,6 +107,12 @@ Identity/bootstrap完了後の通常機能開発は、まず`shape`で日本語i
 - `paid_plan_required`、権限拒否、moderation、著作権拒否、課金成否が曖昧な要求は自動再試行せず、`blocked:ops` または `blocked:user` として止める。
 - 生成・変換・アップロードに使う素材の権利または同意が確認できない場合は処理しない。
 - メディアが不要なアプリにはElevenLabs SDKやメディア生成パイプラインを追加しない。
+
+### 5.1 3Dモデル制作方針
+
+3Dモデル、mesh、material、rig、animationの新規作成、生成、または形状・構造を変えるrevisionは、共有の[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)を使用し、Codexのexact model `gpt-6-astra`だけがauthoringする。作業をClaudeまたは別のCodex modelが開始した場合は、authoring部分を`gpt-6-astra`へ依頼する。exact modelを利用できない場合は別modelへfallbackせず`blocked:environment`として停止する。
+
+ClaudeとCodexの一般開発方針は維持する。Claudeや別のCodex modelは、3D要件・制約の仕様化、参照資料の整理、受領済みassetのアプリ統合、GLB／USDZ等の決定論的検証、RealityKit実装、Build／Test、視覚確認、レビューを担当できる。ただし3D asset bytesを生成・編集した主体として扱わない。3Dを含むIssue／PR証拠にはauthoring modelのexact identifierを記録し、確認できない生成物をこの経路の成果として承認しない。
 
 ## 6. App Store 方針
 

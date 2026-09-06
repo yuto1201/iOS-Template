@@ -810,6 +810,7 @@ if [[ "$mode" == "transform" ]]; then
   cp "$root/tools/validate-app-icon.sh" "$fixture/tools/validate-app-icon.sh"
   cp "$root/tools/inspect-app-icon.swift" "$fixture/tools/inspect-app-icon.swift"
   cp "$root/tools/tests/test-issue-contract.sh" "$fixture/tools/tests/test-issue-contract.sh"
+  cp "$root/tools/tests/test-provider-preflight.sh" "$fixture/tools/tests/test-provider-preflight.sh"
   cp "$root/tools/tests/test-ui-direction-skill.sh" "$fixture/tools/tests/test-ui-direction-skill.sh"
   cp "$root/tools/lib/issue-contract.rb" "$fixture/tools/lib/issue-contract.rb"
   cp "$root/.agents/skills/app-bootstrap/SKILL.md" "$fixture/.agents/skills/app-bootstrap/SKILL.md"
@@ -844,8 +845,13 @@ if [[ "$mode" == "transform" ]]; then
   cp "$root/.agents/skills/app-icon/SKILL.md" "$fixture/.agents/skills/app-icon/SKILL.md"
   rm -f "$fixture/.claude/skills/app-icon"
   ln -s ../../.agents/skills/app-icon "$fixture/.claude/skills/app-icon"
+  mkdir -p "$fixture/.agents/skills/ios-3d-assets"
+  cp "$root/.agents/skills/ios-3d-assets/SKILL.md" "$fixture/.agents/skills/ios-3d-assets/SKILL.md"
+  rm -f "$fixture/.claude/skills/ios-3d-assets"
+  ln -s ../../.agents/skills/ios-3d-assets "$fixture/.claude/skills/ios-3d-assets"
   ui_direction_skill_hash_before="$(shasum "$fixture/.agents/skills/ui-direction/SKILL.md" | awk '{print $1}')"
   app_icon_skill_hash_before="$(shasum "$fixture/.agents/skills/app-icon/SKILL.md" | awk '{print $1}')"
+  ios_3d_skill_hash_before="$(shasum "$fixture/.agents/skills/ios-3d-assets/SKILL.md" | awk '{print $1}')"
   app_bootstrap_test_hash_before="$(shasum "$fixture/tools/tests/test-app-bootstrap.sh" | awk '{print $1}')"
   foundation_test_hash_before="$(shasum "$fixture/tools/tests/test-foundation.sh" | awk '{print $1}')"
   issue_contract_hash_before="$(shasum "$fixture/tools/lib/issue-contract.rb" | awk '{print $1}')"
@@ -853,6 +859,7 @@ if [[ "$mode" == "transform" ]]; then
   ui_direction_test_hash_before="$(shasum "$fixture/tools/tests/test-ui-direction-skill.sh" | awk '{print $1}')"
   ui_direction_symlink_before="$(readlink "$fixture/.claude/skills/ui-direction")"
   app_icon_symlink_before="$(readlink "$fixture/.claude/skills/app-icon")"
+  ios_3d_symlink_before="$(readlink "$fixture/.claude/skills/ios-3d-assets")"
   historical_plan="$fixture/docs/superpowers/plans/2026-08-22-app-bootstrap.md"
   historical_plan_hash_before="$(shasum "$historical_plan" | awk '{print $1}')"
   pbx_uuid_hash_before="$(rg -o '[A-F0-9]{24}' "$fixture/TemplateApp.xcodeproj/project.pbxproj" | LC_ALL=C sort -u | shasum | awk '{print $1}')"
@@ -950,6 +957,14 @@ PY
     echo 'portable Claude App icon skill link changed during transform' >&2
     exit 1
   }
+  [[ "$ios_3d_skill_hash_before" == "$(shasum "$fixture/.agents/skills/ios-3d-assets/SKILL.md" | awk '{print $1}')" ]] || {
+    echo 'iOS 3D assets skill changed during transform' >&2
+    exit 1
+  }
+  [[ -L "$fixture/.claude/skills/ios-3d-assets" && "$ios_3d_symlink_before" == "$(readlink "$fixture/.claude/skills/ios-3d-assets")" && -f "$fixture/.claude/skills/ios-3d-assets/SKILL.md" ]] || {
+    echo 'portable Claude iOS 3D assets skill link changed during transform' >&2
+    exit 1
+  }
   for executable in tools/install-app-icon.sh tools/validate-app-icon.sh tools/tests/test-app-icon-workflow.sh; do
     [[ -x "$fixture/$executable" ]] || { echo "App icon executable lost its mode: $executable" >&2; exit 1; }
   done
@@ -962,6 +977,8 @@ root = Path(sys.argv[1])
 contracts = {
     "AGENTS.md": (
         ".agents/skills/app-icon/SKILL.md",
+        ".agents/skills/ios-3d-assets/SKILL.md",
+        "`gpt-6-astra`",
         ".agents/skills/ui-direction/SKILL.md",
         "UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>",
         "prefix外のroute語は数えない",
@@ -971,6 +988,7 @@ contracts = {
     "README.md": (
         "### App icon",
         ".agents/skills/app-icon/SKILL.md",
+        ".agents/skills/ios-3d-assets/SKILL.md",
         "tools/install-app-icon.sh",
         ".agents/skills/ui-direction/SKILL.md",
         "2〜3個の自己完結HTML案",
@@ -978,6 +996,8 @@ contracts = {
     ),
     "specs/product.md": (
         "### 3.2 アプリアイコン",
+        "### 5.1 3Dモデル制作方針",
+        "`gpt-6-astra`",
         "exactly 2案",
         "development-stages.md#11-適用判定",
         "Gateに依存するUI Issue",
@@ -993,6 +1013,8 @@ contracts = {
     ),
     "specs/acceptance.md": (
         "tools/validate-app-icon.sh",
+        "3D asset authoring",
+        "`gpt-6-astra`",
         "stable concept ID",
         "UI Direction Gateの適用判定",
         "immutable revisionとexact SHA-256",
@@ -1001,6 +1023,7 @@ contracts = {
     ),
     "specs/architecture.md": (
         "### 2.2 App Icon境界",
+        "`ios-3d-assets`",
         "Config/app-icon.json",
         "### 4.1 UI Direction成果物の境界",
         "Content Security Policy",
@@ -1010,12 +1033,16 @@ contracts = {
     "specs/decisions.md": (
         "## D-031: Identity確定後にシンプルな画像生成アプリアイコンを必須化する",
         "Related Issue: #49",
+        "## D-032: 3D asset authoringをCodex GPT-6 Astraへ固定する",
+        "Related Issue: #51",
         "## D-030: 方向未確定の主要UIに条件付きHTML比較を導入する",
         "追記型Decision",
         "Related Issue: #47",
     ),
     "docs/workflow.md": (
         "### 2.2 App Icon Gate",
+        "### 2.3 3D authoring route",
+        "`gpt-6-astra`",
         "../.agents/skills/app-icon/SKILL.md",
         "### 2.1 shape前のUI Direction Gate",
         ".artifacts/ui-direction/<flow-slug>/<revision>/comparison.html",
@@ -1024,6 +1051,8 @@ contracts = {
     ),
     "docs/verification.md": (
         "tools/validate-app-icon.sh",
+        "3D asset authoring",
+        "`gpt-6-astra`",
         "default AppIcon entry",
         "../.agents/skills/ui-direction/SKILL.md",
         "decision-support artifact",
@@ -1043,6 +1072,11 @@ contracts = {
         "authoritative declaration to be sealed",
         "2026-09-06T00:31:41Z",
         "Ambiguity fails closed into the gate",
+    ),
+    ".agents/skills/ios-3d-assets/SKILL.md": (
+        "exact model identifier `gpt-6-astra`",
+        "blocked:environment",
+        "RealityKit",
     ),
     ".agents/skills/plan-issue-batch/SKILL.md": (
         "../ui-direction/SKILL.md",
