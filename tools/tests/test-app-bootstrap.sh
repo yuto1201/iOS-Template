@@ -805,6 +805,10 @@ if [[ "$mode" == "transform" ]]; then
   cp "$root/Config/ownership.yml" "$fixture/Config/ownership.yml"
   cp "$root/tools/tests/test-app-bootstrap.sh" "$fixture/tools/tests/test-app-bootstrap.sh"
   cp "$root/tools/tests/test-foundation.sh" "$fixture/tools/tests/test-foundation.sh"
+  cp "$root/tools/tests/test-app-icon-workflow.sh" "$fixture/tools/tests/test-app-icon-workflow.sh"
+  cp "$root/tools/install-app-icon.sh" "$fixture/tools/install-app-icon.sh"
+  cp "$root/tools/validate-app-icon.sh" "$fixture/tools/validate-app-icon.sh"
+  cp "$root/tools/inspect-app-icon.swift" "$fixture/tools/inspect-app-icon.swift"
   cp "$root/tools/tests/test-issue-contract.sh" "$fixture/tools/tests/test-issue-contract.sh"
   cp "$root/tools/tests/test-ui-direction-skill.sh" "$fixture/tools/tests/test-ui-direction-skill.sh"
   cp "$root/tools/lib/issue-contract.rb" "$fixture/tools/lib/issue-contract.rb"
@@ -822,6 +826,7 @@ if [[ "$mode" == "transform" ]]; then
     specs/decisions.md
     docs/workflow.md
     docs/verification.md
+    docs/references.md
     docs/agent-contracts/review-packet.md
     docs/agent-contracts/spec-reviewer.md
     docs/agent-contracts/ios-reviewer.md
@@ -835,13 +840,19 @@ if [[ "$mode" == "transform" ]]; then
   cp "$root/.agents/skills/ui-direction/SKILL.md" "$fixture/.agents/skills/ui-direction/SKILL.md"
   rm -f "$fixture/.claude/skills/ui-direction"
   ln -s ../../.agents/skills/ui-direction "$fixture/.claude/skills/ui-direction"
+  mkdir -p "$fixture/.agents/skills/app-icon"
+  cp "$root/.agents/skills/app-icon/SKILL.md" "$fixture/.agents/skills/app-icon/SKILL.md"
+  rm -f "$fixture/.claude/skills/app-icon"
+  ln -s ../../.agents/skills/app-icon "$fixture/.claude/skills/app-icon"
   ui_direction_skill_hash_before="$(shasum "$fixture/.agents/skills/ui-direction/SKILL.md" | awk '{print $1}')"
+  app_icon_skill_hash_before="$(shasum "$fixture/.agents/skills/app-icon/SKILL.md" | awk '{print $1}')"
   app_bootstrap_test_hash_before="$(shasum "$fixture/tools/tests/test-app-bootstrap.sh" | awk '{print $1}')"
   foundation_test_hash_before="$(shasum "$fixture/tools/tests/test-foundation.sh" | awk '{print $1}')"
   issue_contract_hash_before="$(shasum "$fixture/tools/lib/issue-contract.rb" | awk '{print $1}')"
   issue_contract_test_hash_before="$(shasum "$fixture/tools/tests/test-issue-contract.sh" | awk '{print $1}')"
   ui_direction_test_hash_before="$(shasum "$fixture/tools/tests/test-ui-direction-skill.sh" | awk '{print $1}')"
   ui_direction_symlink_before="$(readlink "$fixture/.claude/skills/ui-direction")"
+  app_icon_symlink_before="$(readlink "$fixture/.claude/skills/app-icon")"
   historical_plan="$fixture/docs/superpowers/plans/2026-08-22-app-bootstrap.md"
   historical_plan_hash_before="$(shasum "$historical_plan" | awk '{print $1}')"
   pbx_uuid_hash_before="$(rg -o '[A-F0-9]{24}' "$fixture/TemplateApp.xcodeproj/project.pbxproj" | LC_ALL=C sort -u | shasum | awk '{print $1}')"
@@ -931,6 +942,17 @@ PY
     echo 'portable Claude UI direction skill link changed during transform' >&2
     exit 1
   }
+  [[ "$app_icon_skill_hash_before" == "$(shasum "$fixture/.agents/skills/app-icon/SKILL.md" | awk '{print $1}')" ]] || {
+    echo 'App icon skill changed during transform' >&2
+    exit 1
+  }
+  [[ -L "$fixture/.claude/skills/app-icon" && "$app_icon_symlink_before" == "$(readlink "$fixture/.claude/skills/app-icon")" && -f "$fixture/.claude/skills/app-icon/SKILL.md" ]] || {
+    echo 'portable Claude App icon skill link changed during transform' >&2
+    exit 1
+  }
+  for executable in tools/install-app-icon.sh tools/validate-app-icon.sh tools/tests/test-app-icon-workflow.sh; do
+    [[ -x "$fixture/$executable" ]] || { echo "App icon executable lost its mode: $executable" >&2; exit 1; }
+  done
 
   python3 - "$fixture" <<'PY'
 from pathlib import Path
@@ -939,6 +961,7 @@ import sys
 root = Path(sys.argv[1])
 contracts = {
     "AGENTS.md": (
+        ".agents/skills/app-icon/SKILL.md",
         ".agents/skills/ui-direction/SKILL.md",
         "UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>",
         "prefix外のroute語は数えない",
@@ -946,11 +969,16 @@ contracts = {
         "現在Head",
     ),
     "README.md": (
+        "### App icon",
+        ".agents/skills/app-icon/SKILL.md",
+        "tools/install-app-icon.sh",
         ".agents/skills/ui-direction/SKILL.md",
         "2〜3個の自己完結HTML案",
         "WKWebView実装",
     ),
     "specs/product.md": (
+        "### 3.2 アプリアイコン",
+        "exactly 2案",
         "development-stages.md#11-適用判定",
         "Gateに依存するUI Issue",
         "依存しない非UI Issue",
@@ -964,29 +992,39 @@ contracts = {
         "現在Head",
     ),
     "specs/acceptance.md": (
+        "tools/validate-app-icon.sh",
+        "stable concept ID",
         "UI Direction Gateの適用判定",
         "immutable revisionとexact SHA-256",
         "アプリ固有の確定specと追記型Decision",
         "HTML比較をnative iOS証拠として代用しない",
     ),
     "specs/architecture.md": (
+        "### 2.2 App Icon境界",
+        "Config/app-icon.json",
         "### 4.1 UI Direction成果物の境界",
         "Content Security Policy",
         "新しいIssue-contract field",
         "HTML用canonical evidence schema",
     ),
     "specs/decisions.md": (
+        "## D-031: Identity確定後にシンプルな画像生成アプリアイコンを必須化する",
+        "Related Issue: #49",
         "## D-030: 方向未確定の主要UIに条件付きHTML比較を導入する",
         "追記型Decision",
         "Related Issue: #47",
     ),
     "docs/workflow.md": (
+        "### 2.2 App Icon Gate",
+        "../.agents/skills/app-icon/SKILL.md",
         "### 2.1 shape前のUI Direction Gate",
         ".artifacts/ui-direction/<flow-slug>/<revision>/comparison.html",
         "blocked:dependency",
         "新しいmutable contract fieldは追加しません",
     ),
     "docs/verification.md": (
+        "tools/validate-app-icon.sh",
+        "default AppIcon entry",
         "../.agents/skills/ui-direction/SKILL.md",
         "decision-support artifact",
         "current-Head Build／Test／Simulator",
@@ -998,6 +1036,8 @@ contracts = {
         "`Not applicable`",
     ),
     ".agents/skills/app-bootstrap/SKILL.md": (
+        "../app-icon/SKILL.md",
+        "dependent App Icon Issue",
         "../ui-direction/SKILL.md",
         "treat Identity bootstrap itself as non-UI work",
         "authoritative declaration to be sealed",
@@ -1148,6 +1188,13 @@ PY
     bash tools/tests/test-ui-direction-skill.sh
   ) >"$output" 2>"$errors"; then
     echo "UI direction policy failed after disposable bootstrap: $(<"$errors")" >&2
+    exit 1
+  fi
+  if ! (
+    cd "$fixture"
+    bash tools/tests/test-app-icon-workflow.sh
+  ) >"$output" 2>"$errors"; then
+    echo "App icon workflow failed after disposable bootstrap: $(<"$errors")" >&2
     exit 1
   fi
   if ! (

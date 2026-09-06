@@ -54,6 +54,14 @@ gateは次の順で進めます。
 
 選択待ちは`blocked:user`、記録PRの未mergeは`blocked:dependency`です。gateに依存しないIdentity bootstrapや非UIレーンは継続できます。HTMLとdigestはdecision-support artifactであり、仕様の正本、SwiftUI source、pixel仕様、canonical iOS evidenceではありません。
 
+### 2.2 App Icon Gate
+
+新しいアプリでは目的・方向性と4つのIdentity入力を確定し、Identity bootstrapをマージした後、最初のユーザー向けUI `shape`より先にApp Icon Issueを作ります。このIssueはIdentity bootstrapへ依存し、画面階層、navigation、primary-flow interactionを決めない`bounded direction-neutral` routeとして扱います。アプリアイコン選択はUI Direction Gateの代用になりません。
+
+[`app-icon`](../.agents/skills/app-icon/SKILL.md)は同じ確定briefから、built-in画像生成によるsimpleかつ意味の異なるexactly 2候補をimmutable revisionへ作ります。ユーザーがstable concept IDを一つ明示選択した場合だけ、選択済みPNGとsanitized recordをIssue worktreeへ組み込みます。組合せまたは重要な変更は新revisionを生成して再選択し、提示済みcandidateを上書きしません。選択待ちは`blocked:user`ですが、独立した非UI Issueは続行できます。
+
+installerは`Config/app-identity.json`からmodule pathを解決し、1024 x 1024、不透明、system mask前の正方形PNGとdefault AppIcon entryを検証します。現在のApple公式ガイダンスを生成直前に再確認し、選択済みasset、`Contents.json`、`Config/app-icon.json`だけをcommitします。候補、provider response、previewは`.artifacts/app-icon/`へ置き、canonical iOS evidenceや製品assetとして扱いません。
+
 ## 3. Issue contract snapshot
 
 cutover後にClaimする新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。UI変更の3 field `UI verification`はClaim前のlive guidanceに限ります。既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持たせ、AC本文先頭を`UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、適用事実をReasonの後へ、確定anchorを`Spec anchors`、選択前提をDependenciesへ記載します。Identity bootstrapと純非UIの`UI verification`はexact `Not applicable`だけとし、scope／非UI理由をGoal／In scope等と`not-applicable`宣言へ、関連product／spec anchorを`Spec anchors`へ分けます。新しいmutable contract fieldは追加しません。選択の正本は、Issue contractへ封印される`Spec anchors`が参照する確定仕様と追記型Decisionです。pre-D-030 legacy contractにはこの新規要件を補完しません。

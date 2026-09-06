@@ -18,6 +18,13 @@ Codexの共有プロジェクトスキルは `.agents/skills/`、プロジェク
 
 Claude CodeのプロジェクトHookは `.claude/settings.json`、エージェントは `.claude/agents/`、スキルは `.claude/skills/` に置けます。Claude Codeがスキルのシンボリックリンクを解決できることを利用し、共有スキルの正本を一つにします。
 
+## Apple app icons
+
+- [App icons - Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/app-icons)
+- [Configuring your app icon using an asset catalog](https://developer.apple.com/documentation/xcode/configuring-your-app-icon)
+
+アプリアイコン生成時は公式資料を再確認します。現在のテンプレートはdefaultの正方形1024 x 1024 iconをAsset Catalogへ設定し、system maskingに任せます。simpleで小サイズでも認識しやすい主題を使い、appearanceやlayer要件が変わった場合は公式資料を優先します。
+
 ## Supabase
 
 - [Local development with schema migrations](https://supabase.com/docs/guides/local-development/overview)

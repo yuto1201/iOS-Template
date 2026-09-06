@@ -1,7 +1,7 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 1.6
+Version: 1.7
 Date: 2026-09-06
 
 ## 1. 目的
@@ -11,6 +11,7 @@ Date: 2026-09-06
 テンプレートの価値は、機能コードの量ではなく、次の一貫性です。
 
 - 未決事項を抱えたまま実装しない。
+- アプリの目的・方向性と名前を確定した段階で、シンプルな画像生成候補からアプリアイコンを選び、最初のユーザー向けUIより先に組み込む。
 - 取っ掛かりのないUIを一案の推測で作らず、必要な場合は比較可能な方向案からユーザーが選んだ後に実装する。
 - Issue の塊を指定すれば、AI が独立性と依存関係を判断して止まらず進める。
 - 各IssueはDelivery stageに応じた検証を完了し、`strict`または`release`では反対モデルレビューも完了してからマージする。
@@ -43,12 +44,13 @@ Date: 2026-09-06
 
 テンプレートから新しいリポジトリを作成した後は、機能開発より先に次の順序を完了します。
 
-1. Identity入力として、アプリの表示名、Swift モジュール名、アプリ Slug、Bundle IDの4値を確定する。Deployment TargetはIdentity入力とは別のアプリ仕様として確定する。
+1. アプリの目的、対象ユーザー、中心的な価値と雰囲気をアプリ固有仕様へ確定し、Identity入力として表示名、Swift モジュール名、アプリ Slug、Bundle IDの4値を確定する。Deployment TargetはIdentity入力とは別のアプリ仕様として確定する。
 2. Identity Bootstrap Issue と専用 Branch/worktree を作成する。
 3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換する。
 4. Build、Test、標準Simulatorマトリクス、反対モデルレビュー、Squash Mergeを完了する。
-5. 変換済みIdentityを基準にアプリ固有仕様を確定し、続くnative UIごとに[条件付きUI Direction Gate](development-stages.md#11-適用判定)の明示指示と通常triggerを評価する。Identity bootstrap自体はUI方向を決めない。
-6. Gateに依存するUI Issueは選択結果を記録した仕様変更のマージ後に`approved`／Claim可能とし、依存しない非UI Issueは並行して進められる。
+5. Identity Bootstrapに依存するApp Icon Issueを作成し、同じ確定briefから画像生成したシンプルな2案を提示する。ユーザーが明示選択した1案だけをAppIconへ組み込み、検証してマージする。
+6. 変換済みIdentityと選択済みアプリアイコンを基準にアプリ固有仕様を確定し、続くnative UIごとに[条件付きUI Direction Gate](development-stages.md#11-適用判定)の明示指示と通常triggerを評価する。Identity bootstrapとアプリアイコン選択自体は画面階層、navigationまたは主要flowを決めない。
+7. 最初のUI IssueはApp Icon Issueの完了後に進める。Gateに依存するUI Issueは選択結果を記録した仕様変更のマージ後に`approved`／Claim可能とし、依存しない非UI Issueは並行して進められる。
 
 アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、選択された実行モデルはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
 
@@ -64,7 +66,17 @@ route宣言の導入cutoverは`2026-09-06T00:31:41Z`である。封印済みcont
 
 テンプレートリポジトリ自身には将来の実アプリ名を固定しません。GitHub上のリポジトリ名はテンプレートからリポジトリを作成するときに決め、bootstrapツールは認証済みリモート名変更を行いません。
 
-### 3.2 日本語iPhone優先の機能開発
+### 3.2 アプリアイコン
+
+アプリの目的・方向性とIdentityが確定し、Identity bootstrapが完了したら、[App Icon skill](../.agents/skills/app-icon/SKILL.md)を使う専用Issueを最初のユーザー向けUI `shape`より先に完了する。表示名、目的、対象ユーザー、中心的な価値、雰囲気、色の希望・除外、視覚的な比喩を一つの確定briefへまとめ、同じ条件で意味の異なるシンプルな画像生成候補をexactly 2案作る。
+
+既定は、一つの認識しやすい主題、単純な背景、少ない形と色、十分な小サイズ判別性を持つ構成とする。文字、イニシャル、数字、スクリーンショット、Apple製品の複製、第三者mark、watermark、焼き込んだ角丸mask、細かい装飾を含めない。現在のApple公式ガイダンスを生成直前に確認し、正方形1024 x 1024、実透明pixelなし、system mask前提のPNGとして扱う。
+
+ユーザーがstable concept IDを一つ明示選択した場合だけ採用する。組合せや重要な修正は提示済みbytesを上書きせず新revisionとして再生成し、再度一案を選択する。候補は`.artifacts/app-icon/<revision>/`の判断補助であり、選択済みPNG、Asset Catalogの`Contents.json`、sanitizedな`Config/app-icon.json`だけを同じcommitへ含める。選択は画面階層、navigation、主要flowを承認せず、[UI Direction Gate](development-stages.md#11-適用判定)を満たしたことにもならない。
+
+最初のユーザー向けUIだけがApp Icon Issueの完了を依存に持つ。選択待ちは`blocked:user`とし、domain、dataその他の独立した非UI作業は継続できる。
+
+### 3.3 日本語iPhone優先の機能開発
 
 Identity/bootstrap完了後の通常機能開発は、まず`shape`で日本語iPhoneの主要導線と重要ロジックを操作可能にする。承認された形に必要な英訳、iPad最適化、Dark Mode、Dynamic Type、VoiceOver、44pt、復旧、性能などは、問題ごとの狭い`harden` Issueで進める。`release`で日本語・英語 × iPhone・iPadと提出前品質を完全確認する。最初から文字列管理、可変レイアウト、データ・権限・課金の安全な土台を維持し、最終的な対応範囲は減らさない。
 
@@ -84,6 +96,8 @@ Identity/bootstrap完了後の通常機能開発は、まず`shape`で日本語i
 ## 5. 音声素材方針
 
 テキスト読み上げ、スピーチ変換・文字起こし、効果音、音声分離、音楽、画像、動画が受け入れ条件に必要な場合、CodexまたはClaudeが共有のElevenLabsメディアスキルを使用します。
+
+新しいアプリの必須アプリアイコンはこの汎用メディア経路ではなく、§3.2のbuilt-in画像生成と`app-icon` skillを使う。アプリアイコンのためだけにElevenLabs account、SDKまたはprovider接続を有効化しない。
 
 - 外部生成の実行前に、実行モデルが設定済みAccount／Workspaceとentitlementを照合する。
 - 処理前に用途、入出力、長さ・寸法、言語・Voice、ループ、権利・同意、保持方針、ライセンス記録先をモードに応じて仕様化する。

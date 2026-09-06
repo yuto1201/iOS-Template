@@ -93,6 +93,7 @@ tools/verify-fast-issue.sh \
 - `bounded direction-neutral`では、対象方向が未確定でも3 triggerのいずれもなく、Acceptance criteriaと実装がhierarchy、navigation、primary-flow interactionを決めないこと。route宣言のScope／ReasonとReason後の非決定境界、関連する確定済みproduct／behavior anchorが一致すること
 - 現在の明示的な比較省略では、`explicit-skip`宣言のScope／ReasonとReason後の指示の現行性、権限、比較指示との非矛盾が封印済みAcceptance criterionから裏付けられ、関連する確定済みproduct／spec／Decision anchorが`Spec anchors`にあること
 - Identity bootstrapまたは純非UIでは、封印済みGoal／Acceptance criteriaとcurrent-Head差分から非UI scope／理由が裏付けられ、関連する確定済みproduct／spec anchorがある一方、UI方向anchorを要求していないこと。live bodyの`UI verification` exact `Not applicable`形式はClaim前に検証し、最終証拠として代用しないこと。Gateを評価するのは依存する後続native UIであること
+- App Icon Issueでは、ユーザーが明示選択したstable concept IDと確定brief、選択済みPNG、default AppIcon entry、`Config/app-icon.json`のprompt summary／generator／dimensions／asset path／exact SHA-256が一致し、`tools/validate-app-icon.sh`が成功すること。候補やpreviewを製品assetまたはcanonical iOS evidenceとして扱わず、この選択でUI Direction Gateを満たしたと推測しないこと
 
 ### Stage B: Build and unit tests
 

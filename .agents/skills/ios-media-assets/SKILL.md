@@ -1,11 +1,13 @@
 ---
 name: ios-media-assets
-description: Create or transform iOS app speech, transcripts, sound effects, isolated audio, music, images, or videos with ElevenLabs when an approved Issue explicitly requires a media asset.
+description: Create or transform iOS app speech, transcripts, sound effects, isolated audio, music, general images, or videos with ElevenLabs when an approved Issue explicitly requires a media asset; use app-icon for the required new-app icon.
 ---
 
 # iOS Media Assets
 
 Use ElevenLabs to fill media-production gaps that Codex or Claude cannot satisfy locally. Keep the integration dormant until an approved Issue makes one media output an acceptance criterion; never add the ElevenLabs SDK to the app merely to generate development assets.
+
+Do not route the required new-app icon through this skill. Use [`app-icon`](../app-icon/SKILL.md) and built-in image generation so creating an app icon does not activate an ElevenLabs account, entitlement, SDK, or provider dependency.
 
 ## Route by mode
 

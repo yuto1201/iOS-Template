@@ -1,13 +1,14 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 2.1
+Version: 2.2
 Date: 2026-09-06
 
 ## 1. テンプレート完成条件
 
 - [ ] 最小のSwiftUIアプリがiPhoneとiPadで起動する。
 - [ ] Identity bootstrapがXcode project、Target、Scheme、Module、Test、Bundle ID、設定を一貫して変換できる。
+- [ ] アプリの目的・方向性とIdentity確定後、シンプルな画像生成候補2案からユーザーが選んだアプリアイコンを検証済みAsset Catalogへ組み込める。
 - [ ] Unit TestとUI Testのサンプルが実行できる。
 - [ ] 日本語と英語を切り替えて主要画面を検証できる。
 - [ ] CodexとClaudeが同じ外部操作権限を持ち、設定済みアカウント／targetを照合する。
@@ -40,6 +41,9 @@ Date: 2026-09-06
 - cutover後にClaimするIdentity bootstrapと純粋な非UI Issueはnot-applicable routeであり、UI方向anchorを必要としない。`UI verification`本文はexact `Not applicable`だけとし、対象scopeと非UIである理由をGoal／In scope等へ記録し、一つのAcceptance criterion本文を`UI-direction route: not-applicable; Scope: <nonempty>; Reason: <nonempty>`で開始して、関連する確定済みproduct／spec anchorを`Spec anchors`へ記録し、依存する後続native UIだけをGate判定する。
 - Gateが必須の場合、一つの確定briefから作成された同条件・同fidelityの2–3案がimmutable revisionとexact SHA-256で提示され、ユーザーが一つのconcept IDまたは全採用要素をsource concept IDへ対応付けたexhaustive hybridを明示している。hybridのselected／base concept IDはユーザーがbaseを明示選択した場合だけ必要とする。
 - Gateに依存するUI Issueは、対象scope、artifact path／revision、提示bytesのexact SHA-256、採用・不採用要素、対象screen／state、native適応範囲という共通記録に加え、単一案ならselected concept ID、hybridなら全採用要素からsource concept IDへのexhaustive mappingを記録したアプリ固有の確定specと追記型Decisionが専用Issueでマージ済みである。HTML単体、感想、順位、沈黙、曖昧または非網羅なhybridはDefinition of Readyを満たさない。
+- App Icon IssueはIdentity bootstrapに依存し、確定済みの目的・方向性とIdentityから同条件・同fidelityのシンプルな画像生成候補をexactly 2案作る。提示済み候補を上書きせず、ユーザーがstable concept IDを一つ明示選択するまで`blocked:user`とする。組合せや重要な変更は新revisionへ再生成して再選択する。
+- App Icon Issueは`bounded direction-neutral` routeで、App Home Screen／Settings等のicon表示をlive UI verificationに記録し、選択が画面階層、navigation、primary-flow interactionを決めずUI Direction Gateを満たさないことをReasonと関連product anchorから復元可能にする。最初のユーザー向けUI `shape`は完了済みApp Icon Issueへ依存し、独立した非UI作業は依存しない。
+- 選択済みアプリアイコンは1024 x 1024の不透明PNGで、system masking前の正方形、単一の認識しやすい主題、単純な背景、少ない形と色を基本とする。`tools/validate-app-icon.sh`が`Config/app-identity.json`、default AppIcon entry、PNGの寸法・透明性、`Config/app-icon.json`のasset path／prompt summary／generator／exact SHA-256を一致検証する。
 
 D-030 cutoverは`2026-09-06T00:31:41Z`である。封印済みIssue contractの`fetchedAt`がcutoverより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合はpre-D-030 legacyとして、routeを推測せず、遡及的なHTML比較やroute宣言を要求せず、contractを変更・再封印せずに元の封印済みAC、spec anchors、Dependencies、current-Head evidenceを検証する。cutoverより前でも候補が一つ以上あれば通常規則へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。`fetchedAt`がcutoverと同時刻または後のcontractにも同じexactly-one／完全性を必須とし、cutover後のpre-Claim Issueも完全な宣言なしではDefinition of Readyを満たさない。prefix外のroute語は候補として数えない。
 
