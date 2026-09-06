@@ -303,8 +303,10 @@ service_role_allowed = {
     "docs/security.md",
     "docs/superpowers/plans/2026-08-21-integrations-appstore-release.md",
     "specs/product.md",
+    "tools/install-app-icon.sh",
     "tools/tests/test-foundation.sh",
     "tools/tests/test-supabase-skill.sh",
+    "tools/validate-app-icon.sh",
 }
 violations = []
 service_role_paths = set()
