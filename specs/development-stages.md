@@ -1,14 +1,76 @@
 # 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 2.0
-Date: 2026-09-02
+Version: 2.1
+Date: 2026-09-06
 
 ## 1. 原則
 
-開発順序は、操作可能な形を作る、実画面で方向性を承認する、問題別に品質を固める、リリース候補を完全検証する、の順とする。最終品質は下げず、高コストな横断検証を変更が収束した後へ移す。
+開発順序は、必要な場合に比較案からUI方向を確定する、操作可能な形を作る、実画面で方向性を再確認する、問題別に品質を固める、リリース候補を完全検証する、の順とする。最終品質は下げず、高コストな横断検証を変更が収束した後へ移す。
 
 Delivery stageはIssue type、workflow state、危険度を表すDelivery profileとは別の一項目である。新規Issueは`shape`、`harden`、`release`のいずれか、正のTime budget、理由を持つ。
+
+### 1.1 適用判定
+
+現在のユーザー指示が対象範囲のHTML比較を明示的に求めた場合は、確定済み方向の有無にかかわらず最優先でUI Direction Gateを実行する。現在の指示が代わりに比較省略を明示した場合は、その指示の対象scope、現行性、権限が明確で、現在の比較指示と矛盾しないときだけ通常判定を上書きできる。cutover後のClaim前に、一つのAcceptance criterion本文の先頭（`AC-*:`の直後）を`UI-direction route: explicit-skip; Scope: <nonempty>; Reason: <nonempty>`で開始し、Reasonの後に指示の現行性、権限、比較指示との非矛盾を明記して、関連する確定済みproduct／spec／Decision anchorを`Spec anchors`へ記録する。いずれかが曖昧または矛盾する場合、依存するUI作業を`blocked:user`にする。
+
+上記の明示指示がない通常判定では、まず確定済みUI方向／specが予定する変更のexact hierarchyとflowを覆うか確認する。覆う場合は作業名が構造変更でもconfirmed-direction reuse routeとし、cutover後のClaim前に一つのAcceptance criterion本文を`UI-direction route: confirmed-direction reuse; Scope: <nonempty>; Reason: <nonempty>`で開始する。覆われるhierarchy／flowはReasonの後へ明記し、再利用する確定済みUI方向anchorを`Spec anchors`へ記録する。
+
+exact scopeを覆う確定方向がなく、予定する変更の**対象範囲のUI方向が確定しておらず**、かつ次のいずれかを行うときにGateを必須とする。
+
+- 新しいアプリで最初のユーザー向けUIを作る。
+- 最上位navigationまたはinformation hierarchyを新設・変更する。
+- 主要flowの構造またはinteractionを大幅に再設計する。
+
+上の必須条件を一つでも満たす場合、IssueがRegression、標準的なform、accessibility修正などに分類されていてもGateを省略しない。Issue typeや作業名ではなく、実際に変える階層・flow・interactionで判定する。
+
+対象方向が未確定でも上の構造triggerを一つも満たさない場合は、Acceptance criteriaがhierarchy、navigation、primary-flow interactionを決めないときだけbounded direction-neutral UI routeを許可する。cutover後のClaim前に一つのAcceptance criterion本文を`UI-direction route: bounded direction-neutral; Scope: <nonempty>; Reason: <nonempty>`で開始する。この非決定境界はReasonの後へ明記し、関連する確定済みproduct／behavior spec anchorを`Spec anchors`へ記録する。受け入れ条件がいずれかの方向を決める場合はGateを実行する。
+
+cutover後にClaimするIdentity bootstrapと純粋な非UI作業はnot-applicable routeであり、UI方向anchorを必要としない。Issueの`UI verification`本文はexact `Not applicable`だけとし、対象scopeと非UIである理由をGoal／In scope等の既存scope節へ記載し、一つのAcceptance criterion本文を`UI-direction route: not-applicable; Scope: <nonempty>; Reason: <nonempty>`で開始して、関連する確定済みproduct／spec anchorを`Spec anchors`へ記録する。Gateを評価するのは、それらに続いて方向選択へ依存するnative UI作業である。
+
+`UI verification`はClaim前に参照できるlive guidanceだがIssue contractへ封印されない。UI Issueでは既存の3 fieldをexactな順序で保ち、`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`のrouteを補助的に示してよいが、最終レビューの根拠をこの節だけに置かない。cutover後にClaimするcontractは、既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持つ。宣言は一つのAcceptance criterion本文の先頭（`AC-*:`の直後）にexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で置き、`<route>`は`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`のいずれかだけを使う。route固有の適用事実はReasonの後へ続けてよい。別の位置に現れるroute名や全routeを説明する文など、prefixに一致しない偶発的な語は宣言として数えない。`Spec anchors`と必要なDependenciesを揃え、review packetだけから宣言と根拠を復元可能にする。`comparison`では単一案のselected concept IDまたはhybridのexhaustive mappingが到達可能な確定spec／Decisionと、完了済みの選択前提を記録する。新しいIssue fieldは追加しない。
+
+D-030のcutoverは`2026-09-06T00:31:41Z`（置き換え後のIssue #47の`createdAt`）とする。封印済みIssue contractの`fetchedAt`をUTC instantとして比較し、cutoverより前かつAcceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合だけpre-D-030 legacyとして扱う。そのcontractへrouteを推測・追記・再封印せず、遡及的なHTML比較も要求せず、元の封印済みAcceptance criteria、spec anchors、Dependenciesと証拠をそのまま検証する。cutoverより前でも候補が一つ以上あれば通常のroute規則へ進み、候補がexactly oneで完全な`UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`宣言になっているかを検証する。候補の複数、許可外route、空のScope／Reasonはrejectする。`fetchedAt`がcutoverと同時刻または後にも同じexactly-one／完全性を要求し、候補ゼロもrejectする。cutover後のpre-Claim workflowは必ず完全な宣言を作ってからClaimする。Issue番号、Issue更新時刻、file mtime、live `UI verification`、またはprefix外の偶発的なroute語からcutoverやlegacy状態を推測しない。
+
+方向のcoverage、trigger該当性、direction-neutral境界が曖昧な場合は自動で省略したり質問待ちにしたりせず、Gateを実行する側へfail closedする。明示的な省略指示の対象scope、現行性、権限、理由またはspec anchorが曖昧な場合や、比較実行と省略を同時に求めるなど現在の指示が矛盾する場合だけ、依存するUI作業を`blocked:user`にして確認する。
+
+Gateが止めるのは方向選択に依存するUI作業だけである。Identity bootstrapと、選択結果に依存しない仕様化・domain・data・その他の非UI作業は進めてよい。
+
+### 1.2 確定brief
+
+比較案を作る前に、アプリ固有の確定仕様とユーザー指示から一つのrequirements briefを作る。briefは少なくとも次を固定する。
+
+- プロダクトの目的、対象ユーザー、ユーザーが完了したいtask。
+- primary flow、対象screen、開始・成功・空・読み込み・失敗など必要なstate。
+- 表示するcontent、合成data、主要actionと優先順位。
+- iOS／端末／言語／accessibility上の制約、技術・法務・privacy上の制約。
+- 今回のnon-goalと参照する確定spec anchor。
+
+比較により決めるUI構造以外に、受け入れ条件を変える不確定事項を残さない。briefの差が受け入れ条件を変える場合は案を作る前に`blocked:user`とし、ユーザーが仕様を確定してから再開する。
+
+### 1.3 HTML比較revision
+
+一つの確定briefから、同じtask、viewport、content、合成data、state集合を使う2–3案を、一つのself-contained HTMLへ同じfidelityで収録する。各案は安定したconcept IDを持ち、information hierarchy、navigationまたはinteraction hypothesisの少なくとも一つが実質的に異ならなければならない。色、角丸、影、余白だけを変えた案は比較案として扱わない。
+
+各案には、hypothesis、trade-off、想定するnative iOSへの翻訳、accessibility上の考慮、およびstatic prototypeでは確認できない事項を併記する。比較には合成dataだけを使い、credential、秘密、個人情報、本番data、tracking、remote script／font／image／asset、`fetch`／XHR／WebSocket、送信先を持つform、`iframe`／`object`／`embed`、CSS import／remote URLなどのnetwork依存を含めない。
+
+提示するHTMLは次のrevision pathへ保存し、提示したbytesのexact SHA-256を算出する。
+
+```text
+.artifacts/ui-direction/<flow-slug>/<revision>/comparison.html
+```
+
+提示済みrevisionを上書きしない。brief、案、注記またはHTML bytesが変わった場合は新しいrevisionとdigestを作り、変更後の比較に対する選択を改めて得る。
+
+### 1.4 明示選択とnative実装への引き渡し
+
+承認として受理できるのは、ユーザーが一つのconcept IDを明示するか、採用する全要素をそれぞれsource concept IDへ対応付けたexhaustiveなhybridを明示した場合だけである。hybridにselected／base concept IDを要求するのは、ユーザーがそのbaseを明示選択した場合だけとする。好意的な感想、順位、沈黙、「A寄り」などの曖昧な表現を選択として扱わない。hybridの対応が曖昧または非網羅の場合は確認するか、組み合わせた新しい比較revisionを提示して明示選択を得る。
+
+選択後は共通して、対象scope、comparison path／revision、提示bytesのexact SHA-256、採用・不採用の要素、影響するscreen／state、native実装で許容する適応を、アプリ固有の確定specと追記型Decisionへ記録する。単一案なら選択したconcept IDを記録する。hybridなら採用する全要素からsource concept IDへのexhaustive mappingを記録し、ユーザーがbaseを明示選択した場合だけselected／base concept IDも記録する。既存方向を変える場合は過去のDecisionを書き換えず、新しいDecisionで置き換えを記録する。
+
+選択待ちは`blocked:user`とする。選択後、この記録は専用Issue、Branch、PRでマージする。記録PRが未マージなら依存するUI Issueは`blocked:dependency`であり、`approved`への移行、Claim、`in-progress`への移行を禁止する。選択前に依存Issueを下書きすることはできるが、実装開始の根拠にはできない。
+
+HTML、screenshot、concept IDは判断補助であり、製品仕様、pixel仕様、SwiftUI source、またはcanonical iOS検証証拠ではない。SwiftUI実装は選択されたinformation hierarchy、flow、state intentをnative component、Safe Area、可変layout、Dynamic Type、VoiceOver、keyboard、navigation／sheet semanticsへ翻訳し、HTMLを`WKWebView`で組み込んだりCSS pixelを転記したりしない。動作と表示の完了は、引き続き現在HeadのBuild、Test、SimulatorおよびDelivery stageに応じたnative証拠で判断する。
 
 ## 2. Delivery stage
 

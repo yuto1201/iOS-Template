@@ -20,6 +20,9 @@
 - 1 Issue = 1 Branch = 1 PR。
 - `main` へ直接コミットまたは直接 Push しない。
 - Issue の受け入れ条件外へ機能を広げない。
+- 現在のユーザーが対象範囲のHTML比較を明示した場合は確定方向の有無にかかわらず最優先で[UI Direction skill](.agents/skills/ui-direction/SKILL.md)を使い、明示省略は現行性、scope、権限、理由が明確で比較指示と矛盾しないときだけ通常判定を上書きする。それ以外は、exact hierarchy／flowを覆う確定方向があればconfirmed-direction reuse、覆う方向がなく対象方向が未確定かつ最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかならGate、方向未確定かつその3 triggerなしならAcceptance criteriaがhierarchy／navigation／primary-flow interactionを決めない範囲だけbounded direction-neutralとし、曖昧ならGateを実行する。
+- cutover後にClaimするcontractは、既存Acceptance criteria全体でexactly oneの有効な宣言を持つ。一つのAC本文先頭（`AC-*:`直後）をexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、routeは`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`だけを許可する。固有事実はReason後へ続け、prefix外のroute語は数えない。確定anchorを`Spec anchors`、選択前提をDependenciesへ置く。cutover後のIdentity bootstrapと純非UIは`not-applicable`を宣言し、`UI verification`はexact `Not applicable`だけ、scope／非UI理由はGoal／In scope等と宣言、関連product／spec anchorは`Spec anchors`へ分け、UI方向anchorを要求しない。UI Issueの3 field `UI verification`はlive guidanceであり、最終reviewの正本にしない。
+- D-030 cutoverは`2026-09-06T00:31:41Z`。封印済みcontractの`fetchedAt`がこれより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合だけpre-D-030 legacyとし、routeを推測せず、HTMLやroute宣言を遡及要求せず、contractを変更・再封印しない。cutover前でも候補が一つ以上あれば通常検証へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。cutoverと同時刻以降とcutover後のpre-Claim Issueにも同じexactly-one／完全性を必須とする。prefix外のroute語は候補に数えない。
 - 実行していない Build、Test、Simulator 操作を成功として報告しない。
 - `release`または`strict`は反対モデルの承認を必須とする。`shape`／`harden`の`standard`は、現在Headの段階別証拠でマージできる。
 - マージはIssueで指定されたCodexまたはClaudeが `--squash` と Head SHA 照合を使って実行する。
@@ -44,6 +47,8 @@ ClaudeとCodexは同じ権限を持ち、どちらもローカル作業と認証
 検証は対象Test、関連回帰、stage標準、release完全検証の順に広げます。Xcode、Test、Simulator操作は必ず有限timeoutで実行し、timeout時は当該呼び出しのprocess groupと所有Simulatorだけを回収します。同じ原因は最大2回で停止し、長時間検証を自動反復しません。
 
 `shape`は`iphone-ja`、applicationを検証する`harden`はcanonical部分集合の`targeted`、`release`は`full`を使用します。いずれもバッチ開始時に最新の利用可能なiOS Runtimeを解決し、そのバッチ内で固定します。未確認の条件は延期・未検証として報告します。
+
+UI方向比較のHTMLは選択を助ける作業artifactであり、仕様の正本、pixel仕様、Build／Test／Simulator／画像評価の証拠にはしません。実装は選択した情報階層、主要導線、状態とaccessibility意図をnative SwiftUIへ翻訳します。
 
 - 最新 iPhone Pro（Pro Max を除く）、英語
 - 最新 iPhone Pro（Pro Max を除く）、日本語

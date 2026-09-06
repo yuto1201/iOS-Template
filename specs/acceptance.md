@@ -1,8 +1,8 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 2.0
-Date: 2026-09-02
+Version: 2.1
+Date: 2026-09-06
 
 ## 1. テンプレート完成条件
 
@@ -13,6 +13,7 @@ Date: 2026-09-02
 - [ ] CodexとClaudeが同じ外部操作権限を持ち、設定済みアカウント／targetを照合する。
 - [ ] IssueからSquash Merge・Branch削除までのdry-run testが通る。
 - [ ] Delivery stageに応じて1条件、targeted部分集合、4条件を固定できる。
+- [ ] 条件付きUI Direction Gateが、必要なUI作業だけを明示選択まで停止し、Identity bootstrapと独立した非UI作業を停止しない。
 - [ ] Head SHAが異なる古い検証・レビューではpre-merge gateが失敗する。
 - [ ] 秘密値が追跡ファイル、ログ、Issue／PR本文へ混入していない。
 - [ ] `App Store/`に提出情報の構造と検証scriptがある。
@@ -32,20 +33,32 @@ Date: 2026-09-02
 - `release`は`strict`、完全4条件、全caseのvisual evidenceを持つ。
 - 外部サービスはservice、environment、Executorを指定し、法務、課金、本番破壊操作は必要なユーザー承認を明示する。
 - Feature Issueではアプリ固有の`specs/product.md`と`specs/acceptance.md`が確定し、Issueと矛盾しない。受け入れ条件を変える未決事項は`blocked:user`。
+- UIを変更するIssueは、[UI Direction Gateの適用判定](development-stages.md#11-適用判定)をClaim前に行う。現在のユーザーが対象範囲のHTML比較を明示した場合は方向の有無にかかわらずGateが必須であり、明示省略は現行性、scope、権限、理由が明確で比較指示と矛盾しない場合だけ通常判定を上書きする。
+- 明示指示がない通常判定は、exact hierarchy／flowを覆う確定方向があればconfirmed-direction reuse、覆う方向がなく対象方向が未確定かつ最初のユーザー向けUI、最上位navigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかならGate、方向未確定かつ構造triggerなしならAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない範囲だけbounded direction-neutralとする。coverage、triggerまたはneutralityが曖昧ならGateを実行する。
+- cutover後にClaimするcontractは、既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持つ。一つのAcceptance criterion本文の先頭（`AC-*:`の直後）をexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、`<route>`は`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`のいずれかだけとする。route固有の適用事実はReasonの後へ続けてよく、prefix外のroute語は宣言として数えない。`confirmed-direction reuse`は再利用するUI方向anchor、`bounded direction-neutral`は関連product／behavior anchor、`explicit-skip`は関連product／spec／Decision anchorを`Spec anchors`へ置き、`comparison`は選択spec／Decisionを`Spec anchors`、完了済み専用IssueをDependenciesへ置く。
+- UI Issueの`UI verification`は`Target screens/states`、`English expectations`、`Japanese expectations`のexact 3 fieldをこの順で持つlive guidanceであり、Issue contractやreview packetへ封印されない。pre-Claimはlive guidanceと封印対象の有効なroute宣言の両方を確認する。最終reviewはrouteをAC本文先頭の宣言だけから識別し、Goal、Acceptance criteria、`Spec anchors`、Dependencies、リンク済み確定spec／Decision、current-Head差分／証拠でScope、Reasonとroute固有事実を検証する。
+- cutover後にClaimするIdentity bootstrapと純粋な非UI Issueはnot-applicable routeであり、UI方向anchorを必要としない。`UI verification`本文はexact `Not applicable`だけとし、対象scopeと非UIである理由をGoal／In scope等へ記録し、一つのAcceptance criterion本文を`UI-direction route: not-applicable; Scope: <nonempty>; Reason: <nonempty>`で開始して、関連する確定済みproduct／spec anchorを`Spec anchors`へ記録し、依存する後続native UIだけをGate判定する。
+- Gateが必須の場合、一つの確定briefから作成された同条件・同fidelityの2–3案がimmutable revisionとexact SHA-256で提示され、ユーザーが一つのconcept IDまたは全採用要素をsource concept IDへ対応付けたexhaustive hybridを明示している。hybridのselected／base concept IDはユーザーがbaseを明示選択した場合だけ必要とする。
+- Gateに依存するUI Issueは、対象scope、artifact path／revision、提示bytesのexact SHA-256、採用・不採用要素、対象screen／state、native適応範囲という共通記録に加え、単一案ならselected concept ID、hybridなら全採用要素からsource concept IDへのexhaustive mappingを記録したアプリ固有の確定specと追記型Decisionが専用Issueでマージ済みである。HTML単体、感想、順位、沈黙、曖昧または非網羅なhybridはDefinition of Readyを満たさない。
 
-stage未導入のClaim済みIssueはcanonical contractを変更せず、旧profile／scope gateを維持する。legacy standard／strictはfullと正式review、legacy explicit fastはfocused evidenceのままとする。新規Issueではstage省略を許さない。
+D-030 cutoverは`2026-09-06T00:31:41Z`である。封印済みIssue contractの`fetchedAt`がcutoverより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合はpre-D-030 legacyとして、routeを推測せず、遡及的なHTML比較やroute宣言を要求せず、contractを変更・再封印せずに元の封印済みAC、spec anchors、Dependencies、current-Head evidenceを検証する。cutoverより前でも候補が一つ以上あれば通常規則へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。`fetchedAt`がcutoverと同時刻または後のcontractにも同じexactly-one／完全性を必須とし、cutover後のpre-Claim Issueも完全な宣言なしではDefinition of Readyを満たさない。prefix外のroute語は候補として数えない。
+
+Gate必須で選択を待つ間は`blocked:user`、選択後にspec／Decisionの記録PRを待つ間は`blocked:dependency`とする。記録PRがマージされるまで、依存するUI Issueを`approved`にせず、Claimまたは`in-progress`へ移行しない。
+
+stage未導入のClaim済みIssueはcanonical contractを変更せず、旧profile／scope gateを維持する。legacy standard／strictはfullと正式review、legacy explicit fastはfocused evidenceのままとする。このDelivery-stage legacy判定と上記pre-D-030 UI-direction legacy判定は別々に適用する。新規Issueではstage省略を許さない。
 
 ## 3. Issue Definition of Done
 
 全stage共通で次を満たす。
 
 1. Issue Scope内で受け入れ条件を満たす。
-2. コンパイル、重要な金額・日付・保存ロジックのTest、データ非破壊、秘密非露出を確認する。
-3. stageとprofileが要求するBuild／Test／Simulatorを現在Headで実行し、未実行を成功と報告しない。
-4. canonical evidenceのCommit SHAが現在Headと一致する。
-5. profileまたはstageが要求するレビューが現在Headへ承認済みである。
-6. PR本文にIssue、仕様、stage、検証、レビュー要否、release readinessを記載する。
-7. 指定ExecutorがSquash Mergeし、remote Branch、local Branch、worktreeを安全に片付け、Issueが完了状態である。
+2. UI Direction Gateを通過したUI変更は、選択済みのinformation hierarchy、flow、state intentをnative SwiftUIへ翻訳し、HTML／CSSのpixel転記や`WKWebView`組み込みを行っていない。
+3. コンパイル、重要な金額・日付・保存ロジックのTest、データ非破壊、秘密非露出を確認する。
+4. stageとprofileが要求するBuild／Test／Simulatorを現在Headで実行し、未実行を成功と報告しない。
+5. canonical evidenceのCommit SHAが現在Headと一致する。HTML比較をnative iOS証拠として代用しない。
+6. profileまたはstageが要求するレビューが現在Headへ承認済みである。
+7. PR本文にIssue、仕様、stage、検証、レビュー要否、release readinessを記載する。
+8. 指定ExecutorがSquash Mergeし、remote Branch、local Branch、worktreeを安全に片付け、Issueが完了状態である。
 
 `shape`と`harden`の完了はアプリ全体のrelease readyを意味しない。必ず`not release-ready`と報告し、未確認の英語、iPad、visual／accessibility範囲を成功と推測しない。ユーザーの実機確認はAIのDefinition of Done後に行い、発見した問題は狭いRegression／harden Issueへ分ける。
 

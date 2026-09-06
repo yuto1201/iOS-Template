@@ -1,8 +1,8 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.2
-Date: 2026-08-30
+Version: 1.3
+Date: 2026-09-06
 
 ## 1. 設計原則
 
@@ -81,6 +81,8 @@ TemplateApp/
 
 View から Supabase SDK、SwiftData の複雑な問い合わせ、外部生成APIを直接呼びません。テスト可能な境界を設けますが、1画面だけのアプリに過剰な層を導入しません。
 
+UI Direction Gateで選択したHTML conceptをアプリへ同梱せず、`WKWebView`を製品UIの代替にしません。SwiftUIは選択済みspecのinformation hierarchy、flow、state intentをnative componentへ翻訳し、Safe Area、可変layout、Dynamic Type、VoiceOver、keyboard、navigationとsheetのplatform semanticsを実装側で満たします。HTMLのCSS pixel値はsource architectureではありません。
+
 ## 4. 仕様と運用の責務
 
 | 場所 | 正本となる内容 |
@@ -91,8 +93,18 @@ View から Supabase SDK、SwiftData の複雑な問い合わせ、外部生成A
 | `.codex/agents/` | Codex のカスタムエージェント定義 |
 | `.claude/agents/` | Claude のカスタムサブエージェント定義 |
 | `tools/` | 人間とスキルの双方が呼べる決定論的スクリプト |
-| `.artifacts/` | ローカル検証生成物。Git管理外 |
+| `.artifacts/` | 名前空間を分けたローカル生成物。検証証拠とUI方向比較は混同せず、Git管理外 |
 | GitHub Issue/PR | 作業状態、受け入れ条件、レビューと検証の永続的な要約 |
+
+### 4.1 UI Direction成果物の境界
+
+UI比較は`.artifacts/ui-direction/<flow-slug>/<revision>/comparison.html`に一つのself-contained HTMLとして置く。提示したrevisionをimmutableとし、exact SHA-256で同定する。HTMLはnetworkを拒否する制限的なContent Security Policyを持ち、remote dependency、tracking、credential、秘密、個人情報、本番dataを含めない。
+
+このHTMLとdigestはユーザーが見た比較revisionを同定するためのdecision inputであり、`specs/`の正本でも、SwiftUI sourceでも、canonical iOS verification evidenceでもない。選択結果の正本は、対象scope、artifact path／revision、提示bytesのexact SHA-256、採用・不採用要素、対象screen／state、native適応範囲を共通して持つアプリ固有の確定specと追記型Decisionである。単一案はselected concept IDを持ち、hybridは全採用要素からsource concept IDへのexhaustive mappingを持つ。hybridのselected／base concept IDはユーザーがbaseを明示した場合だけ持つ。選択結果を保持するために新しいIssue-contract field、mutableな未封印heading、HTML用canonical evidence schemaを追加しない。
+
+routeの正本も新しいfieldには置かない。cutover後のClaim前に、既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持たせる。一つのAcceptance criterion本文の先頭（`AC-*:`の直後）をexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、`<route>`は`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`のいずれかだけとする。route固有の適用事実はReasonの後へ続けてよい。prefix外のroute語は宣言として数えない。`Spec anchors`が確定anchorを、Dependenciesが必要な選択前提を持つ。UI Issueの`UI verification`はexact 3 fieldのlive guidanceであり、Issue contractやreview packetには封印されない。Identity bootstrapと純非UIでは本文をexact `Not applicable`だけにし、scope／非UI理由をGoal／In scope等へ分け、route宣言を`UI-direction route: not-applicable; Scope: <nonempty>; Reason: <nonempty>`としてAcceptance criterion本文の先頭へ、関連product／spec anchorを`Spec anchors`へ置く。
+
+互換判定は封印済みcontractの`fetchedAt`と、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補、D-030 cutover `2026-09-06T00:31:41Z`だけで行う。cutoverより前で候補がゼロならpre-D-030 legacyとして元のcontractを変更・再封印せず、routeやHTMLを推測・遡及要求しない。cutover前でも候補が一つ以上あれば通常検証へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。cutoverと同時刻以降にも同じexactly-one／完全性を要求する。prefix外のroute語は候補や互換判定に使わない。review packetはlive bodyを追加せず、legacyか宣言候補を持つかを判定できる元のIssue contract descriptor／digestを保持する。
 
 ## 5. スキル構成
 
@@ -115,6 +127,7 @@ View から Supabase SDK、SwiftData の複雑な問い合わせ、外部生成A
 
 | スキル | 追加条件 |
 | --- | --- |
+| `ui-direction` | 現在のユーザーが対象範囲のHTML比較を明示したとき、または対象範囲のUI方向が未確定で、最初のユーザー向けUI、最上位navigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかを行うとき |
 | `supabase-ops` | アプリ仕様でSupabase使用を確定したとき |
 | `ios-media-assets` | 音声、文字起こし、効果音、音声分離、音楽、画像または動画が受け入れ条件になったとき |
 | `prepare-appstore-assets` | App Store 提出準備を開始するとき |

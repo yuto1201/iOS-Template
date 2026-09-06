@@ -14,6 +14,12 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 stage未指定のClaim済みcontractは旧release-level gateを維持します。未実行は`deferred / unverified`であり成功ではありません。shape／hardenをrelease readyと報告しません。
 
+[UI Direction Gate](../.agents/skills/ui-direction/SKILL.md)は、現在のユーザーが対象範囲のHTML比較を明示した場合に方向の有無を問わず最優先で適用します。現在の明示省略は、現行性、exact scope、権限、理由、比較指示との非矛盾が明確な場合だけ`explicit-skip` routeとして通常判定を上書きし、曖昧または矛盾する場合は依存UIを`blocked:user`にします。それ以外は、exact hierarchy／flowを覆う確定方向があれば`confirmed-direction reuse`、対象方向が未確定で最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかなら`comparison`、方向未確定かつ3 triggerのいずれもなくAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない場合だけ`bounded direction-neutral`とします。coverage、triggerまたはneutralityが曖昧ならGateを実行します。Identity bootstrapと純非UIは`not-applicable`で、Gateを評価するのは依存する後続native UIだけです。
+
+比較HTMLは、実装前に情報階層や操作仮説を比較するdecision-support artifactです。revision IDやSHA-256は「ユーザーがどの提示bytesを選択したか」を固定しますが、SwiftUIの動作、Safe Area、Dynamic Type、VoiceOver、keyboard、sheet、navigation、見た目のcanonical evidenceにはなりません。liveな`UI verification`もIssue contract／review packetへ封印されないため、検証・最終reviewは封印済みGoal／Acceptance criteria／Spec anchors／Dependencies、リンク済み確定spec／Decision、current-Head差分と証拠から、有効なroute宣言またはpre-D-030 legacy適用を判断します。Gate後もこの文書のcurrent-Head Build／Test／Simulator経路を省略しません。
+
+宣言候補はAcceptance criterion本文がexact `UI-direction route:` prefixで始まる場合だけです。完全なroute宣言は、候補がexactly oneで、その本文先頭（`AC-*:`の直後）がexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`を満たす場合だけです。`<route>`は`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`のいずれかとし、route固有の適用事実はReasonの後へ続けます。prefix外のroute語は候補として数えません。D-030 cutover `2026-09-06T00:31:41Z`より封印済みIssue contractの`fetchedAt`が前で候補がゼロの場合だけpre-D-030 legacyです。routeを推測せず、HTMLやroute宣言を遡及要求せず、contractを変更・再封印せず、元の封印済みAC／spec／Dependencies／current-Head evidenceを検証します。cutover前でも候補が一つ以上あれば通常のroute検証へ進み、malformed、unknown、multipleをrejectします。cutoverと同時刻以降にも同じexactly-one／完全性を要求し、候補ゼロもrejectします。
+
 ## 2. 環境の解決
 
 `tools/resolve-simulator-matrix.sh` はIssueバッチ開始時に一度だけ実行します。
@@ -81,6 +87,12 @@ tools/verify-fast-issue.sh \
 - 追跡対象への秘密混入スキャン
 - 日本語の文字列、localization可能な管理、既存翻訳の破壊がないこと。新規英訳の完成確認は仕上げ範囲で行い、延期箇所は記録する
 - Compile-time warningの差分
+- pre-D-030 legacy以外では、封印済みAcceptance criteria全体でexactly oneの有効なroute宣言があり、一つのAC本文先頭がexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、許可済みroute、非空Scope／Reason、Reason後の適用事実を満たすこと。prefix外のroute語を数えず、確定anchorが`Spec anchors`、選択前提がDependenciesにあること。qualifying legacyでは宣言を要求せず、元の封印済みAC／spec／Dependenciesを検証すること
+- `comparison`では、scope、artifact path／revision、提示bytesのexact SHA-256、採用・不採用要素、対象screen／state、native adaptation範囲という共通記録が確定仕様と追記型Decisionへmergeされ、Issueのsealed `Spec anchors`から到達できること。単一案はselected concept IDを持ち、hybridは全採用要素からsource concept IDへのexhaustive mappingを持つ。hybridのselected／base concept IDはユーザーがbaseを明示した場合だけ持つこと
+- `confirmed-direction reuse`では、route宣言のScope／Reason、Reason後の覆われるhierarchy／flowと、再利用する確定済みUI方向anchorが一致すること
+- `bounded direction-neutral`では、対象方向が未確定でも3 triggerのいずれもなく、Acceptance criteriaと実装がhierarchy、navigation、primary-flow interactionを決めないこと。route宣言のScope／ReasonとReason後の非決定境界、関連する確定済みproduct／behavior anchorが一致すること
+- 現在の明示的な比較省略では、`explicit-skip`宣言のScope／ReasonとReason後の指示の現行性、権限、比較指示との非矛盾が封印済みAcceptance criterionから裏付けられ、関連する確定済みproduct／spec／Decision anchorが`Spec anchors`にあること
+- Identity bootstrapまたは純非UIでは、封印済みGoal／Acceptance criteriaとcurrent-Head差分から非UI scope／理由が裏付けられ、関連する確定済みproduct／spec anchorがある一方、UI方向anchorを要求していないこと。live bodyの`UI verification` exact `Not applicable`形式はClaim前に検証し、最終証拠として代用しないこと。Gateを評価するのは依存する後続native UIであること
 
 ### Stage B: Build and unit tests
 
@@ -118,6 +130,8 @@ contractで指定されたexact 1条件／targeted部分集合／4条件それ�
 
 shapeは`testIdentifier`による主要導線Smokeを必須とし、単なるlaunch assertionだけでは完了しません。`fast`と純粋な文書変更はSimulator検証を`not-applicable`とします。
 
+UI Direction Gateを通したshapeでは、HTMLのDOMやCSSではなく、確定仕様に採用した情報階層、主要task、navigation、代表stateをnative画面とSmoke Testで確認します。HTMLを開けること、HTML screenshotが似ていること、digestが一致することだけではcase成功にしません。
+
 ### Stage D: AI visual evaluation（visual-requiredのみ）
 
 AIはスクリーンショットごとに次を評価します。
@@ -128,7 +142,7 @@ AIはスクリーンショットごとに次を評価します。
 - 日本語と英語の文字量差
 - Dynamic Typeとタップ領域への明白な問題
 - Sheet、alert、keyboard、orientationなど対象状態
-- 参照デザインがある場合の差異
+- 参照デザインがある場合の差異。UI Direction Gate由来の場合は確定仕様に採用した階層・導線・状態を比較し、CSS pixel一致は要求しない
 
 releaseでは主開発モデルが一次評価し、反対モデルレビューへ画像を含めます。visual checkを明示したhardenは対象画像だけを評価します。shapeではこの段階を実行しません。
 
