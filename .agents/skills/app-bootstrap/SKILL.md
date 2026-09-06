@@ -11,7 +11,7 @@ Complete the identity conversion before Feature development. Treat `Config/templ
 
 ## Feature gate
 
-Before any Feature Issue starts, confirm that the app-specific `specs/product.md` and `specs/acceptance.md` are both `Status: 確定` and consistent with the Issue acceptance criteria. If either document is missing, not 確定, or inconsistent, have the Issue-selected Codex or Claude executor transition the Issue to `blocked:user`. Do not create its Branch/worktree and do not implement it.
+Before any Feature Issue starts, confirm that the app-specific `specs/product.md` and `specs/acceptance.md` are both `Status: 確定` and consistent with the Issue acceptance criteria. If either document is missing, not 確定, or inconsistent, have the Issue-selected Codex or Claude executor transition the Issue to `blocked:user`. Do not create its Branch/worktree and do not implement it. After Identity bootstrap, use [`app-icon`](../app-icon/SKILL.md) and complete its dependent Issue before the first user-facing UI `shape`; do not block independent non-UI work on that selection.
 
 For a post-D-030 Claim, treat Identity bootstrap itself as non-UI work: set its UI verification body to exactly `Not applicable`, put its exact scope and non-UI reason in Goal/In scope or another existing scope section, start one acceptance-criterion text immediately after its `AC-*:` ID with `UI-direction route: not-applicable; Scope: <nonempty>; Reason: <nonempty>`, and cite the relevant confirmed product/specification anchor in Spec anchors. It needs no confirmed UI-direction anchor.
 
@@ -55,6 +55,7 @@ Also inspect `Config/app-identity.json` and confirm the Head SHA is unchanged. R
 6. Resolve the latest installed iOS Runtime as described in [`docs/verification.md`](../../../docs/verification.md). Run and visually evaluate the four fixed Simulator cases: latest iPhone Pro in English and Japanese, and latest iPad Air in English and Japanese. Preserve Head-SHA-bound evidence.
 7. Request the required opposite-model read-only review for the same Head SHA. Address blocking findings and repeat every affected verification before proceeding.
 8. Let the Issue's selected executor verify the configured personal GitHub account, push only the Issue Branch, create the PR, compare the reviewed/verified Head SHA, Squash Merge, confirm Issue closure, delete the merged remote Branch, and clean up the local Branch/worktree.
+9. Create the dependent App Icon Issue from the confirmed app purpose/direction and Identity. Use [`app-icon`](../app-icon/SKILL.md) to generate exactly two simple candidates, obtain one explicit user selection, and install the selected icon before the first user-facing UI `shape`. This selection does not satisfy or bypass `ui-direction`; independent non-UI work may proceed while selection is pending.
 
 Codex and Claude may both perform the local and authenticated steps. Every authenticated GitHub operation must use the account and target checks in [`docs/AUTHORITY.md`](../../../docs/AUTHORITY.md) and the shared `external-ops` skill.
 

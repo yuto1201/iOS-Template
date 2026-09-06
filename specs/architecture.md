@@ -1,7 +1,7 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.3
+Version: 1.4
 Date: 2026-09-06
 
 ## 1. 設計原則
@@ -58,6 +58,19 @@ iOS-Template/
 - 変換結果を固定する`Config/app-identity.json`
 
 履歴として残すFoundation実装計画、汎用スキル名、`iOS-Template`の秘密保存namespace、Simulator管理prefixなど、テンプレートの運用Identityは一括置換しません。変換はクリーンな非default Branchから開始し、隔離された一時worktreeで全変更を検証してから、検証済みpatchだけを呼び出し元へ適用します。
+
+### 2.2 App Icon境界
+
+テンプレート自身には将来のアプリ固有アイコンを同梱しない。Identity bootstrap後の専用App Icon Issueで画像生成候補を作り、ユーザーが明示選択した1案を次へ保存する。
+
+```text
+${ModuleName}/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+Config/app-icon.json
+```
+
+`Config/app-icon.json`はdisplay name、stable concept ID、sanitized prompt summary、generator、寸法、format、asset path、exact SHA-256を持つ非秘密の採用recordとする。preselection／rejected候補、prompt revision、small-size previewは`.artifacts/app-icon/`へ置きGit管理しない。installerは`Config/app-identity.json`からmodule pathを解決し、caller指定pathから別Targetへ書かない。
+
+Asset Catalogへはsystem mask前の正方形かつ不透明な1024 x 1024 PNGをdefault iconとして設定し、既存のdark／tinted appearance entryを削除・置換しない。App Icon Issueは画面階層、navigation、primary-flow interactionを決めないため、その選択はUI Direction Gateの代わりにならない。
 
 ## 3. iOS ソースの初期構成
 
@@ -122,6 +135,7 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | `cross-model-review` | `strict`または`release`で反対モデルへレビューを依頼し、Head SHA付き結果を保存する。非releaseのstandard shape/hardenと`fast`ではblocking gateにしない |
 | `external-ops` | CodexとClaudeに共通のアカウント／target照合後、認証済み外部操作を実行する |
 | `app-bootstrap` | 新規リポジトリのXcode・Swift・設定Identityを機能開発前に安全に初期化する |
+| `app-icon` | Identity確定後にシンプルな画像生成候補から1案を選び、検証済みAppIconへ組み込む |
 
 ### 条件付き
 

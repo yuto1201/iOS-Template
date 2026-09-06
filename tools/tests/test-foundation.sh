@@ -24,6 +24,10 @@ required_files=(
   tools/bootstrap-app.sh
   tools/bootstrap-app.swift
   tools/tests/test-app-bootstrap.sh
+  tools/install-app-icon.sh
+  tools/validate-app-icon.sh
+  tools/inspect-app-icon.swift
+  tools/tests/test-app-icon-workflow.sh
   tools/tests/test-ui-direction-skill.sh
   tools/check-markdown-links.swift
   tools/publish-documentation-verify.sh
@@ -95,6 +99,7 @@ workflow_skills=(
 )
 
 integration_skills=(
+  app-icon
   supabase-ops
   ios-media-assets
   prepare-appstore-assets
@@ -240,6 +245,7 @@ RUBY
 done
 
 for executable in \
+  tools/install-app-icon.sh tools/validate-app-icon.sh tools/tests/test-app-icon-workflow.sh \
   tools/tests/test-ui-direction-skill.sh \
   tools/secret-store.sh tools/run-with-secret.sh tools/run-with-private-key.sh tools/provider-preflight.sh \
   tools/validate-appstore-package.sh tools/capture-appstore-screenshots.sh tools/build-appstore-screenshot-set.sh \
@@ -332,6 +338,8 @@ from pathlib import Path
 
 readme = Path("README.md").read_text()
 required = (
+    "### App icon",
+    ".agents/skills/app-icon/SKILL.md",
     "## 条件付き統合と秘密管理",
     ".agents/skills/supabase-ops/SKILL.md",
     ".agents/skills/ios-media-assets/SKILL.md",

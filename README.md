@@ -165,7 +165,7 @@ REPO='OWNER/REPO'
 tools/sync-github-labels.sh --repo "$REPO" --executor codex # または claude
 ```
 
-その後、アプリ固有の最小仕様を`specs/`で確定し、Foundation、Identity bootstrap、Simulator verificationの3つのBootstrap Issueを依存順に起票します。Issue作成後にだけ各Branch/worktreeを作り、Identity bootstrapが完了するまでFeature実装を開始しません。
+その後、アプリ固有の目的・方向性と最小仕様を`specs/`で確定し、Foundation、Identity bootstrap、Simulator verificationの3つのBootstrap Issueを依存順に起票します。Issue作成後にだけ各Branch/worktreeを作り、Identity bootstrapが完了するまでFeature実装を開始しません。Identity bootstrap後はApp Icon Issueを作り、最初のユーザー向けUIより先に選択済みアイコンを組み込みます。
 
 ### Identity bootstrap
 
@@ -198,9 +198,30 @@ Identity Bootstrapはdelivery gateを変えるrelease/strict Issueなので、�
 
 同じ4入力で再実行すると`already-complete`を返して何も変更しません。1値でも異なる再実行は、既存結果と競合するため変更前に失敗します。GitHub上のリポジトリ名変更とApple側のBundle ID登録はこのコマンドに含まれず、Issueで指定された実行モデルが設定済みアカウントを確認して別操作として行います。
 
+### App icon
+
+アプリの目的・方向性と4つのIdentity入力が確定し、Identity bootstrapがマージされたら、最初のユーザー向けUI `shape`より前に[App Icon skill](./.agents/skills/app-icon/SKILL.md)を使います。同じ確定briefから画像生成した、意味が異なるシンプルな2案をstable concept ID付きで提示し、ユーザーが明示選択した1案だけを採用します。組合せや重要な修正は新しいimmutable revisionとして再生成し、提示済み候補を上書きしません。
+
+既定のデザインは一つの認識しやすい主題、単純な背景、少ない形と色、十分な小サイズ判別性を持ち、文字、イニシャル、数字、スクリーンショット、Apple製品の複製、第三者mark、watermark、焼き込んだ角丸、細かい装飾を避けます。生成直前に[Apple公式App icon guidance](https://developer.apple.com/design/human-interface-guidelines/app-icons)を再確認します。
+
+選択後、App Icon Issueのクリーンな非default Branch/worktreeで次を実行します。
+
+```sh
+tools/install-app-icon.sh \
+  --root "$PWD" \
+  --source "/absolute/path/to/selected-concept.png" \
+  --concept-id concept-a \
+  --prompt-file "/absolute/path/to/selected-prompt.txt" \
+  --generator builtin-imagegen
+
+tools/validate-app-icon.sh --root "$PWD"
+```
+
+installerは`Config/app-identity.json`から対象moduleを解決し、1024 x 1024、実透明pixelなし、system mask前の正方形PNGだけをdefault AppIconへ設定します。選択済みPNG、Asset Catalogの`Contents.json`、sanitizedな`Config/app-icon.json`だけを同じcommitへ含め、候補やpreviewは`.artifacts/app-icon/`へ残してGit管理しません。アプリアイコン選択は画面階層、navigation、主要flowの承認ではなく、UI Direction Gateを満たしたことにもなりません。選択待ちでも独立した非UI作業は続行できます。
+
 ### Feature開発開始ゲート
 
-Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに`Status: 確定`で、そのIssueの受け入れ条件と一致していることを確認します。未作成、確定前、または不一致なら、実行モデルがIssueを`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しません。
+Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに`Status: 確定`で、そのIssueの受け入れ条件と一致していることを確認します。未作成、確定前、または不一致なら、実行モデルがIssueを`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しません。最初のユーザー向けUI `shape`は完了済みApp Icon Issueにも依存しますが、独立した非UI Featureはアイコン選択を待たずに進められます。
 
 現在のユーザーが対象範囲のHTML比較を明示した場合は、確定済み方向の有無にかかわらず[UI Direction skill](./.agents/skills/ui-direction/SKILL.md)を最優先で使用します。明示省略は現行性、scope、権限、理由が明確で比較指示と矛盾しないときだけ通常判定を上書きします。それ以外は、exact hierarchy／flowを覆う確定方向があればconfirmed-direction reuse、覆う方向がなく対象方向が未確定かつ最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかならGate、方向未確定かつ構造triggerなしならAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない範囲だけbounded direction-neutralとします。coverage／trigger／neutralityが曖昧ならGateを実行します。
 
@@ -217,7 +238,7 @@ HTMLは情報階層や操作仮説を早く比較するための資料です。�
 Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundation のアプリ本体へ組み込まれていません。必要性を確定仕様と Issue の受け入れ条件に明記した場合だけ、別 Issue で有効化します。テンプレートの状態では root `supabase/`、外部 SDK、認証済み接続を持たず、不要なサービスの保守や権限を発生させません。
 
 - データベース、認証、同期、Storageが必要なアプリでは [Supabase operations skill](./.agents/skills/supabase-ops/SKILL.md)を使用します。`Status: 確定`かつ`Supabase: required`の仕様だけが有効化でき、`supabase/migrations/`を唯一のスキーマ履歴としてRLSとPolicyを同時に追加します。CodexとClaudeのどちらもlocal／remote作業を実行できますが、remoteではOrganization IDとProject Refを照合します。
-- 読み上げ、Voice Changer、文字起こし、効果音、音声分離、音楽、画像、動画が必要な場合は [iOS media assets skill](./.agents/skills/ios-media-assets/SKILL.md)を使用します。実行モデルが設定済みElevenLabs Account／Workspaceとmode別entitlementを先に確認し、受理した出力とsanitized manifestだけを統合します。
+- 読み上げ、Voice Changer、文字起こし、効果音、音声分離、音楽、一般画像、動画が必要な場合は [iOS media assets skill](./.agents/skills/ios-media-assets/SKILL.md)を使用します。実行モデルが設定済みElevenLabs Account／Workspaceとmode別entitlementを先に確認し、受理した出力とsanitized manifestだけを統合します。必須アプリアイコンだけは前述の`app-icon`とbuilt-in画像生成を使い、そのためにElevenLabsを有効化しません。
 - GitHub、Supabase、Cloudflare、Linear、Vercel、ElevenLabs、App Store Connectを含む認証済み外部操作は、CodexとClaudeが同じ [external operations skill](./.agents/skills/external-ops/SKILL.md)を使い、実行直前に設定済みアカウントと対象を照合します。
 - 一行の秘密値はmacOS Keychainへ保存し、`tools/run-with-secret.sh`が子プロセスの環境だけへ渡します。App Store Connectの`.p8`は`~/Library/Application Support/iOS-Template/secrets/${appSlug}/`の`0700`ディレクトリ／`0600`ファイルだけを`tools/run-with-private-key.sh`で使用します。取得値を表示するコマンドはなく、`.secrets/`と`secret-staging/`もGit管理外です。
 
