@@ -699,7 +699,7 @@ document = {
   "goal" => "Run reproducible iOS verification",
   "specAnchors" => ["docs/verification.md#4-execution-draft"],
   "acceptanceCriteria" => [
-    {"id" => "AC-1", "text" => "Build and tests pass once"},
+    {"id" => "AC-1", "text" => "UI-direction route: not-applicable; Scope: iOS verification runner fixture; Reason: This synthetic fixture validates verification tooling and does not change product UI; build and tests pass once"},
     {"id" => "AC-2", "text" => "Four localized cases pass mechanically"}
   ],
   "dependencies" => [], "externalOperations" => [],
