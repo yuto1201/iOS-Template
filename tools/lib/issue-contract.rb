@@ -65,6 +65,15 @@ module IOSTemplate
     ].freeze
 
     ENVIRONMENTS = %w[local preview staging production].freeze
+    UI_DIRECTION_ROUTE_CUTOFF = Time.iso8601("2026-09-06T00:31:41Z").freeze
+    UI_DIRECTION_ROUTES = [
+      "comparison",
+      "explicit-skip",
+      "confirmed-direction reuse",
+      "bounded direction-neutral",
+      "not-applicable"
+    ].freeze
+    UI_DIRECTION_DECLARATION_PREFIX = "UI-direction route:"
     SNAPSHOT_REQUIRED_KEYS = %w[
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
@@ -242,10 +251,11 @@ module IOSTemplate
         end
         failures << "Issue number must be a positive integer" unless issue_number&.positive?
         failures << "Repository must be OWNER/REPO" unless repository&.match?(/\A[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\z/)
-        begin
+        parsed_fetched_at = begin
           Time.iso8601(fetched_at.to_s)
         rescue ArgumentError
           failures << "fetchedAt must be an ISO 8601 timestamp"
+          nil
         end
 
         numeric_acceptance = acceptance.each_line.map do |line|
@@ -258,6 +268,7 @@ module IOSTemplate
         if numeric_acceptance.length != acceptance_items.length
           failures << "Canonical acceptance criteria must use numeric AC-1 through AC-n identifiers"
         end
+        validate_ui_direction_route_declaration(numeric_acceptance, parsed_fetched_at, failures) if parsed_fetched_at
 
         goal = sections.fetch("Goal", "").strip
         anchors = spec_anchor_section.scan(/\[[^\]]+\]\(([^)]+)\)/).flatten.map do |raw|
@@ -618,14 +629,63 @@ module IOSTemplate
         failures << error.message
       end
       failures << "Issue contract operation-details digest is invalid" unless value["externalOperationDetailsDigest"].is_a?(String) && value["externalOperationDetailsDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
-      begin
+      fetched_at = begin
         Time.iso8601(value["fetchedAt"].to_s)
       rescue ArgumentError
         failures << "Issue contract fetchedAt is invalid"
+        nil
       end
+      validate_ui_direction_route_declaration(criteria, fetched_at, failures) if fetched_at && criteria.is_a?(Array)
       raise ValidationError, failures unless failures.empty?
 
       value
+    end
+
+    def validate_ui_direction_route_declaration(criteria, fetched_at, failures)
+      declarations = criteria.each_with_object([]) do |criterion, matches|
+        next unless criterion.is_a?(Hash)
+
+        text = criterion["text"]
+        next unless text.is_a?(String) && text.start_with?(UI_DIRECTION_DECLARATION_PREFIX)
+
+        matches << [criterion["id"], text]
+      end
+
+      return if fetched_at < UI_DIRECTION_ROUTE_CUTOFF && declarations.empty?
+
+      if declarations.empty?
+        failures << "UI-direction route declaration is required at or after #{UI_DIRECTION_ROUTE_CUTOFF.utc.iso8601}"
+        return
+      end
+
+      if declarations.length != 1
+        failures << "exactly one UI-direction route declaration must appear at the start of exactly one acceptance criterion"
+      end
+
+      declarations.each do |criterion_id, text|
+        match = text.match(
+          /\AUI-direction route: (?<route>[^;\r\n]*); Scope: (?<scope>[^;\r\n]*); Reason: (?<reason>[^;\r\n]*)(?<assertions>(?:; [^;\r\n]*)*)\z/
+        )
+        unless match
+          failures << "malformed UI-direction route declaration in #{criterion_id || 'acceptance criterion'}"
+          next
+        end
+
+        route = match[:route]
+        unless UI_DIRECTION_ROUTES.include?(route)
+          failures << "malformed UI-direction route declaration in #{criterion_id || 'acceptance criterion'}: route must be one of #{UI_DIRECTION_ROUTES.join(', ')}"
+        end
+        if match[:scope].strip.empty?
+          failures << "malformed UI-direction route declaration in #{criterion_id || 'acceptance criterion'}: Scope must be nonempty"
+        end
+        if match[:reason].strip.empty?
+          failures << "malformed UI-direction route declaration in #{criterion_id || 'acceptance criterion'}: Reason must be nonempty"
+        end
+        assertions = match[:assertions].scan(/; ([^;\r\n]*)/).flatten
+        if assertions.any? { |assertion| assertion.strip.empty? }
+          failures << "malformed UI-direction route declaration in #{criterion_id || 'acceptance criterion'}: trailing assertions must be nonempty"
+        end
+      end
     end
 
     def operation_declared?(contract, operation)

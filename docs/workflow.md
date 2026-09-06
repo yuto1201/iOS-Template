@@ -29,9 +29,34 @@ Issue数を増やすこと自体を目的にしません。セットアップと
 
 [段階的開発仕様](../specs/development-stages.md)に従い、最初の操作可能な成果を`shape`、承認後の問題別改善を`harden`、完全検証を`release`へ分けます。一つのharden Issueへ無関係な品質項目を束ねません。変更の危険度、成熟段階、端末・言語範囲を別々に記載します。
 
+### 2.1 shape前のUI Direction Gate
+
+現在のユーザーが対象範囲のHTML比較を明示した場合は、確定済み方向の有無にかかわらず最優先で[UI Direction skill](../.agents/skills/ui-direction/SKILL.md)を実行します。明示省略は現行性、scope、権限、理由が明確で比較指示と矛盾しないときだけ通常判定を上書きします。
+
+それ以外の通常判定では、exact hierarchy／flowを覆う確定方向があればconfirmed-direction reuse routeを使います。覆う方向がなく対象範囲のUI方向が未確定で、最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかに該当するときは、dependentなSwiftUI `shape`より先にGateを実行します。方向未確定かつ構造triggerなしなら、Acceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない範囲だけbounded direction-neutral routeを許可します。Issue分類ではなくexact scopeで判定し、coverage／trigger／neutralityが曖昧ならGateへfail closedします。
+
+cutover後のClaim前に、既存のAcceptance criteria全体でexactly oneの有効なroute宣言を記録します。一つのAcceptance criterion本文の先頭（`AC-*:`の直後）をexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、`<route>`は`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`のいずれかだけとします。route固有の適用事実はReasonの後へ続け、prefix外のroute語は宣言として数えません。`confirmed-direction reuse`は再利用するUI方向anchor、`bounded direction-neutral`は関連product／behavior anchor、`explicit-skip`は関連product／spec／Decision anchorを`Spec anchors`へ置きます。`comparison`では選択spec／Decisionを`Spec anchors`、完了済み専用IssueをDependenciesへ置きます。明示省略の現行性、scope、権限、理由または比較指示との関係が曖昧なら依存UIを`blocked:user`にします。沈黙や曖昧な同意を選択またはskipに読み替えません。
+
+cutover後にClaimするIdentity bootstrapと純粋な非UI作業はnot-applicable routeであり、UI方向anchorを必要としません。`UI verification`本文はexact `Not applicable`だけとし、対象scopeと非UI理由をGoal／In scope等の既存scope節へ記録し、一つのAcceptance criterion本文を`UI-direction route: not-applicable; Scope: <nonempty>; Reason: <nonempty>`で開始して、関連する確定済みproduct／spec anchorを`Spec anchors`へ記録します。それらに続く方向選択依存のnative UIだけをGate判定します。
+
+UI Issueの`UI verification`は`Target screens/states`、`English expectations`、`Japanese expectations`のexact 3 fieldをこの順で持つlive guidanceです。routeを補助的に示してよいもののIssue contractへ封印されず、review packetにも入りません。最終reviewはrouteをAC本文先頭の有効な宣言だけから識別し、Goal、Acceptance criteria、`Spec anchors`、Dependencies、リンク済み確定spec／Decisionとcurrent-Head差分／証拠でScope、Reasonとroute固有事実を検証できるようにします。新しいfieldは追加しません。
+
+D-030 cutoverは置き換え後のIssue #47の`createdAt`である`2026-09-06T00:31:41Z`です。封印済みIssue contractの`fetchedAt`をUTC instantとして比較し、cutoverより前でAcceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合だけpre-D-030 legacyとします。legacy contractへrouteを推測・追記・再封印せず、HTML比較を遡及要求せず、元の封印済みAC、spec anchors、Dependencies、current-Head evidenceで継続します。cutoverより前でも候補が一つ以上あれば通常検証へ進み、候補がexactly oneかつ許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectします。cutoverと同時刻以降のcontractにも同じexactly-one／完全性を必須とします。Issue番号、Issue更新時刻、file mtime、live `UI verification`、prefix外のroute語は互換判定に使いません。
+
+gateは次の順で進めます。
+
+1. 確定仕様から、目的、対象ユーザーとjob、画面／状態、主要task、content／data、platform／accessibility制約、対象外、仕様anchorを一つのrequirements briefへまとめる。受け入れ条件を変える未決事項は案で補完せず`blocked:user`にする。
+2. 同じviewport、content、合成data、対象state、task、同等の完成度を使い、画面階層、navigationまたは主要interactionの仮説が実質的に異なるstable ID付き2〜3案を、一つの自己完結HTMLへ作る。色や角丸だけの案分けは行わない。
+3. 各案へ仮説、trade-off、iOSへの翻訳方針、accessibility上の考慮、静的HTMLでは確認できない制約を記載する。秘密、実個人情報、tracking、remote script／font／image、network requestを含めない。
+4. `.artifacts/ui-direction/<flow-slug>/<revision>/comparison.html` の提示bytesをSHA-256とrevision IDへ固定する。提示済みrevisionを上書きせず、brief、HTML、concept IDまたはscopeを変更した場合は新revisionを発行する。
+5. ユーザーから一つのconcept ID、または全採用要素からsource concept IDへのexhaustive mappingを持つexact hybridを受け取る。hybridのselected／base concept IDはユーザーがbaseを明示した場合だけ求める。称賛、順位、部分的感想、無回答、曖昧または非網羅なhybridは承認ではない。必要なら組合せ案を新revisionとして再提示する。
+6. scope、artifact path／revision ID、提示bytesのexact SHA-256、採用・不採用要素、対象画面／状態、native adaptation範囲を共通して確定仕様と追記型Decisionへ記録する。単一案ではselected concept ID、hybridでは全採用要素からsource concept IDへのexhaustive mappingを加え、ユーザーがbaseを明示した場合だけselected／base concept IDも加える。その仕様変更を独立Issue／Branch／PRでmergeしてからdependent UI Issueを`approved`またはClaimへ進める。
+
+選択待ちは`blocked:user`、記録PRの未mergeは`blocked:dependency`です。gateに依存しないIdentity bootstrapや非UIレーンは継続できます。HTMLとdigestはdecision-support artifactであり、仕様の正本、SwiftUI source、pixel仕様、canonical iOS evidenceではありません。
+
 ## 3. Issue contract snapshot
 
-新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。
+cutover後にClaimする新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。UI変更の3 field `UI verification`はClaim前のlive guidanceに限ります。既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持たせ、AC本文先頭を`UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、適用事実をReasonの後へ、確定anchorを`Spec anchors`、選択前提をDependenciesへ記載します。Identity bootstrapと純非UIの`UI verification`はexact `Not applicable`だけとし、scope／非UI理由をGoal／In scope等と`not-applicable`宣言へ、関連product／spec anchorを`Spec anchors`へ分けます。新しいmutable contract fieldは追加しません。選択の正本は、Issue contractへ封印される`Spec anchors`が参照する確定仕様と追記型Decisionです。pre-D-030 legacy contractにはこの新規要件を補完しません。
 
 ```markdown
 ## Delivery stage
@@ -62,13 +87,13 @@ Claim済みで`deliveryStage`を持たない旧snapshotへfieldを補完せず�
   "goal": "通知時刻を変更できるようにする",
   "specAnchors": ["specs/features/settings.md#notification-time"],
   "acceptanceCriteria": [
-    {"id": "AC-1", "text": "通知時刻を保存できる"},
-    {"id": "AC-2", "text": "日本語と英語で時刻が表示される"}
+    {"id": "AC-1", "text": "UI-direction route: confirmed-direction reuse; Scope: 通知時刻設定行; Reason: リンク済み仕様が同じhierarchyとflowを確定済み。 Covered hierarchy/flow: settings list > notification-time row > time picker."},
+    {"id": "AC-2", "text": "通知時刻を保存して日本語で表示できる"}
   ],
   "dependencies": [],
   "externalOperations": ["github.push_branch", "github.create_pr", "github.merge_pr"],
   "externalOperationDetailsDigest": "sha256:948c57dcd48bcede8fc5ad4707bd140ab260564f2c1960891e00959a4236c92c",
-  "fetchedAt": "2026-08-21T12:00:00+09:00"
+  "fetchedAt": "2026-09-06T00:31:41Z"
 }
 ```
 
@@ -184,9 +209,11 @@ Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approve
 
 ### 5.1 Claim
 
+この手順でcutover後に新しく封印するcontractは完全なroute宣言をexactly one必須とします。すでに封印済みのcontractを再開する場合は先に`fetchedAt`で互換判定し、cutoverより前かつAcceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロのpre-D-030 legacyならcontractを変更・再封印せず、元のscope／AC／spec／evidenceで再開します。cutover前でも候補が一つ以上あるcontractは通常のroute validationへ進め、malformed、unknown、multipleをrejectします。
+
 1. 実行モデルがIssue読取の直前に設定済みGitHubアカウントとRepositoryを確認し、live Issue contractの`github.read_issue`宣言を検証する。
-2. IssueのGoal、Scope、Acceptance criteria、Dependenciesを読む。
-3. Definition of Readyを満たさなければ作業を開始しない。
+2. live IssueのGoal、Scope、Acceptance criteria、Dependencies、`UI verification`を読む。現在の明示的なHTML比較を最優先とし、明示省略は現行性、exact scope、権限、理由と比較指示との非矛盾が明確な場合だけ`explicit-skip`とする。明示overrideがなければ、exact hierarchy／flowを覆う確定方向は`confirmed-direction reuse`、対象方向が未確定で最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかは`comparison`、方向未確定かつ3 triggerなしでAcceptance criteriaが方向を決めない場合だけ`bounded direction-neutral`とする。Identity bootstrap／純非UIは`not-applicable`とし、曖昧なUI分類はGateへfail closedする。
+3. UI Issueのlive `UI verification`がexact 3 field、Identity bootstrap／純非UIがexact `Not applicable`であることを確認する。さらに既存Acceptance criteria全体でexactly oneの有効な宣言があり、AC本文の先頭をexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、許可済みroute、非空Scope／Reason、Reason後の適用事実を満たすこと、`Spec anchors`が確定anchorを、Dependenciesが必要な選択前提を持つことを確認する。prefix外のroute語は数えない。`comparison`のexact selection記録が確定仕様と追記型Decisionへmergeされていない場合を含め、live guidanceと封印対象fieldの両方がDefinition of Readyを満たさなければcutover後の新規contractを作成しない。
 4. 通常のshippingに必要な`github.read_issue`、`github.update_issue`、`github.push_branch`、`github.create_pr`、`github.merge_pr`、`github.delete_branch`がすべてlive Issue contractへ宣言されていることを確認し、`issue-contract.json` を作成してdigestを記録する。
 5. Primary agentをIssueへ記録する。
 6. Branch、worktree、共有artifact link、sealed contract、durable stateを順に作成してからremoteの`claimed` labelと所有者markerを公開する。各境界はjournalで再開可能にし、同じagentとexact contractだけが続行できる。
@@ -204,6 +231,8 @@ CodexとClaudeは同じ手順で1、4、5、6とGitHub上の状態変更を実�
 
 開発中は対象Test、関連回帰Test、stage標準検証の順で広げます。shapeのTime budgetを超えそうならScope縮小、harden分離、環境停止、または`blocked:user`を選び、品質項目を積み増しません。release完全検証は候補Headが安定してから一度実行します。
 
+UI Direction Gateを通したshapeでは、確定仕様にある情報階層、主要task、navigation、代表state、accessibility意図をnative SwiftUIへ翻訳します。HTMLをWKWebViewで製品化したり、CSSのpixel一致を実装条件にしたりしません。
+
 ### 5.3 Verify
 
 1. 非UI`fast`は`verify-fast-issue.sh`でBuildと指定Unit Testだけを実行する。
@@ -214,6 +243,8 @@ CodexとClaudeは同じ手順で1、4、5、6とGitHub上の状態変更を実�
 6. 同じHeadを明示して`in-progress -> verify-passed`へ遷移する。
 
 canonical検証が失敗した場合、原因へ直接対応する対象Testが成功するまで要求scopeの検証を再実行しません。別Headのcanonical evidenceを作り続けることを進捗として扱いません。
+
+HTML、HTML screenshot、revision IDまたはHTML digestはnative検証の代用にしません。gateを通したUIは、選択を記録した確定spec anchorとcurrent-HeadのSwiftUI、Build、Test、stage別Simulator evidenceの対応で確認します。
 
 ### 5.4 Opposite-model review
 

@@ -111,7 +111,7 @@ Make the Settings screen deterministic.
 
 ## Acceptance criteria
 
-- AC-1: The Settings screen branch is ready for implementation.
+- AC-1: UI-direction route: explicit-skip; Scope: deterministic Settings screen Claim fixture; Reason: the current fixture author explicitly skips comparison only for this synthetic Claim-mechanics scope and provides no conflicting comparison request; the Settings screen branch is ready for implementation.
 - AC-2: The Issue can resume from its durable claim marker.
 
 ## Spec anchors

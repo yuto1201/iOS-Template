@@ -32,7 +32,7 @@ Recover an interrupted Claim.
 
 ## Acceptance criteria
 
-- AC-1: Every Claim boundary can resume exactly once.
+- AC-1: UI-direction route: not-applicable; Scope: Claim recovery fixture; Reason: the fixture changes no product UI; every Claim boundary can resume exactly once.
 
 ## Spec anchors
 
@@ -44,7 +44,7 @@ Recover an interrupted Claim.
 
 ## UI verification
 
-- Not applicable.
+Not applicable
 
 ## Delivery stage
 

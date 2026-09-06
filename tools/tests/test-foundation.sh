@@ -24,6 +24,7 @@ required_files=(
   tools/bootstrap-app.sh
   tools/bootstrap-app.swift
   tools/tests/test-app-bootstrap.sh
+  tools/tests/test-ui-direction-skill.sh
   tools/check-markdown-links.swift
   tools/publish-documentation-verify.sh
   tools/verify-fast-issue.sh
@@ -85,7 +86,8 @@ required_files=(
   tools/tests/test-appstore-skills.sh
 )
 
-shipping_skills=(
+workflow_skills=(
+  ui-direction
   plan-issue-batch
   ship-issue
   ship-issue-batch
@@ -99,7 +101,7 @@ integration_skills=(
   submit-appstore-release
 )
 
-for skill in "${shipping_skills[@]}"; do
+for skill in "${workflow_skills[@]}"; do
   required_files+=(".agents/skills/$skill/SKILL.md")
 done
 
@@ -238,6 +240,7 @@ RUBY
 done
 
 for executable in \
+  tools/tests/test-ui-direction-skill.sh \
   tools/secret-store.sh tools/run-with-secret.sh tools/run-with-private-key.sh tools/provider-preflight.sh \
   tools/validate-appstore-package.sh tools/capture-appstore-screenshots.sh tools/build-appstore-screenshot-set.sh \
   .agents/skills/supabase-ops/scripts/activate.sh .agents/skills/supabase-ops/scripts/validate-migrations.sh \
@@ -562,32 +565,32 @@ if [[ ! -f "$claude_skill/SKILL.md" ]]; then
   exit 1
 fi
 
-for skill in "${shipping_skills[@]}"; do
+for skill in "${workflow_skills[@]}"; do
   shared_skill=".agents/skills/$skill/SKILL.md"
-  claude_shipping_skill=".claude/skills/$skill"
-  expected_shipping_target="../../.agents/skills/$skill"
+  claude_workflow_skill=".claude/skills/$skill"
+  expected_workflow_target="../../.agents/skills/$skill"
 
   ruby -ryaml - "$shared_skill" "$skill" <<'RUBY'
 path, expected_name = ARGV
 text = File.read(path)
 frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
-abort "missing shared shipping skill frontmatter: #{path}" unless frontmatter
+abort "missing shared workflow skill frontmatter: #{path}" unless frontmatter
 data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
-abort "unexpected shared shipping skill name: #{path}" unless data["name"] == expected_name
+abort "unexpected shared workflow skill name: #{path}" unless data["name"] == expected_name
 description = data["description"]
-abort "missing shared shipping skill description: #{path}" unless description.is_a?(String) && description.start_with?("Use when")
+abort "missing shared workflow skill description: #{path}" unless description.is_a?(String) && description.start_with?("Use when")
 RUBY
 
-  if [[ ! -L "$claude_shipping_skill" ]]; then
-    echo "Claude shipping skill must be a symbolic link, not a copied directory: $claude_shipping_skill" >&2
+  if [[ ! -L "$claude_workflow_skill" ]]; then
+    echo "Claude workflow skill must be a symbolic link, not a copied directory: $claude_workflow_skill" >&2
     exit 1
   fi
-  if [[ $(readlink "$claude_shipping_skill") != "$expected_shipping_target" ]]; then
-    echo "Claude shipping skill has a nonportable or incorrect target: $claude_shipping_skill" >&2
+  if [[ $(readlink "$claude_workflow_skill") != "$expected_workflow_target" ]]; then
+    echo "Claude workflow skill has a nonportable or incorrect target: $claude_workflow_skill" >&2
     exit 1
   fi
-  if [[ ! -f "$claude_shipping_skill/SKILL.md" ]]; then
-    echo "Claude shipping skill link does not resolve: $claude_shipping_skill" >&2
+  if [[ ! -f "$claude_workflow_skill/SKILL.md" ]]; then
+    echo "Claude workflow skill link does not resolve: $claude_workflow_skill" >&2
     exit 1
   fi
 done
@@ -666,9 +669,9 @@ RUBY
   done
 done
 
-fixture_dir=$(mktemp -d)
-spec_fixture_dir="$repo_root/.artifacts/spec-workflow-test-$$"
-trap 'rm -rf "$fixture_dir" "$spec_fixture_dir"' EXIT
+fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-foundation.XXXXXX")
+spec_fixture_dir="$fixture_dir/spec-workflow"
+trap 'rm -rf -- "$fixture_dir" "$ignore_probe_root"' EXIT
 printf '%s\n' '# Target' > "$fixture_dir/target.md"
 printf '%s\n' '[Target](target.md)' > "$fixture_dir/valid.md"
 printf '%s\n' '[Missing](missing.md)' > "$fixture_dir/invalid.md"
@@ -704,10 +707,10 @@ Status: 提案
 Implementation acceptance may not rely on this choice yet.
 EOF
 
-relative_spec_path=${spec_fixture_dir#"$repo_root/"}/spec.md
-printf '[Confirmed](%s#confirmed-choice)\n' "$relative_spec_path" > "$spec_fixture_dir/confirmed-issue.md"
-printf '[Pending](%s#pending-choice)\n' "$relative_spec_path" > "$spec_fixture_dir/pending-issue.md"
-printf '[Proposed](%s#proposed-choice)\n' "$relative_spec_path" > "$spec_fixture_dir/proposed-issue.md"
+absolute_spec_path="$spec_fixture_dir/spec.md"
+printf '[Confirmed](<%s#confirmed-choice>)\n' "$absolute_spec_path" > "$spec_fixture_dir/confirmed-issue.md"
+printf '[Pending](<%s#pending-choice>)\n' "$absolute_spec_path" > "$spec_fixture_dir/pending-issue.md"
+printf '[Proposed](<%s#proposed-choice>)\n' "$absolute_spec_path" > "$spec_fixture_dir/proposed-issue.md"
 printf '%s\n' 'No specification reference.' > "$spec_fixture_dir/unlinked-issue.md"
 
 "$spec_checker" "$spec_fixture_dir/confirmed-issue.md"

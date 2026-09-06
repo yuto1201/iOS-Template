@@ -4,7 +4,7 @@ CodexとClaudeを同等の実装・外部操作担当として使う個人向け
 
 Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、英語・日本語、iPhone・iPad、共有仕様スキル、Codex/Claude 共通責務の read-only 評価エージェントを含みます。運用自動化は [実装計画索引](./docs/superpowers/plans/README.md) に従って段階的に追加します。
 
-開発順序は**shapeで日本語iPhoneの主要導線を動かす → hardenで必要な品質を対象別に固める → releaseで完全検証する**です。[段階的開発仕様](./specs/development-stages.md)に従い、通常UIのshapeは既定120分・`standard` + `iphone-ja`、hardenは`targeted`、releaseは`strict` + `full`で検証します。文字列管理・可変レイアウトと安全の土台は初期から維持します。既存のClaim済みIssueは自動で縮小せず、旧release-level契約を維持します。
+開発順序は**条件に該当すればHTMLでUI方向を比較・選択する → shapeで日本語iPhoneの主要導線を動かす → hardenで必要な品質を対象別に固める → releaseで完全検証する**です。現在のユーザーによる対象範囲のHTML比較指示を最優先し、それ以外では対象範囲のUI方向が未確定で、初回のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかに該当するときだけ比較Gateを必須にします。[段階的開発仕様](./specs/development-stages.md)に従い、通常UIのshapeは既定120分・`standard` + `iphone-ja`、hardenは`targeted`、releaseは`strict` + `full`で検証します。文字列管理・可変レイアウトと安全の土台は初期から維持します。既存のClaim済みIssueは自動で縮小せず、旧release-level契約を維持します。
 
 ## Foundation の検証
 
@@ -201,6 +201,16 @@ Identity Bootstrapはdelivery gateを変えるrelease/strict Issueなので、�
 ### Feature開発開始ゲート
 
 Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに`Status: 確定`で、そのIssueの受け入れ条件と一致していることを確認します。未作成、確定前、または不一致なら、実行モデルがIssueを`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しません。
+
+現在のユーザーが対象範囲のHTML比較を明示した場合は、確定済み方向の有無にかかわらず[UI Direction skill](./.agents/skills/ui-direction/SKILL.md)を最優先で使用します。明示省略は現行性、scope、権限、理由が明確で比較指示と矛盾しないときだけ通常判定を上書きします。それ以外は、exact hierarchy／flowを覆う確定方向があればconfirmed-direction reuse、覆う方向がなく対象方向が未確定かつ最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかならGate、方向未確定かつ構造triggerなしならAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない範囲だけbounded direction-neutralとします。coverage／trigger／neutralityが曖昧ならGateを実行します。
+
+比較では同じ要件と合成dataで2〜3個の自己完結HTML案を作ります。共通選択記録はscope、artifact path／revision、提示bytesのexact SHA-256、採用・不採用要素、screen／state、native適応範囲を持ち、単一案はselected concept ID、hybridは全採用要素からsource concept IDへのexhaustive mappingを持ちます。selected／base concept IDはhybridのbaseをユーザーが明示した場合だけ記録します。この確定仕様と追記型DecisionをmergeしてからdependentなSwiftUI `shape` IssueをClaimします。
+
+cutover後にClaimするcontractは、既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持ちます。一つのAcceptance criterion本文の先頭（`AC-*:`の直後）をexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、`<route>`には`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`だけを使います。route固有の事実はReasonの後へ続け、prefix外のroute語は宣言として数えません。確定anchorを`Spec anchors`、選択前提をDependenciesへ置きます。UI Issueの3 field `UI verification`はlive guidanceであり封印されないため、routeの正本にはしません。cutover後のIdentity bootstrapと純粋な非UI作業は`not-applicable`を宣言してUI方向anchorを必要とせず、`UI verification`本文をexact `Not applicable`だけとし、scope／非UI理由をGoal／In scope等と宣言へ、関連する確定済みproduct／spec anchorを`Spec anchors`へ記録して、後続UIだけをGate判定します。
+
+D-030 cutoverは`2026-09-06T00:31:41Z`です。封印済みcontractの`fetchedAt`がこれより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合だけpre-D-030 legacyとし、routeやHTMLを遡及要求せず元の封印済みAC／spec／evidenceをreviewします。cutover前でも候補が一つ以上あれば通常検証へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectします。cutoverと同時刻以降のcontractとcutover後のpre-Claim Issueにも同じexactly-one／完全性を要求します。legacy contractは変更・再封印せず、prefix外のroute語は候補として数えません。
+
+HTMLは情報階層や操作仮説を早く比較するための資料です。製品の正本、CSS pixel仕様、WKWebView実装、またはnativeなBuild／Test／Simulator証拠として扱いません。
 
 ## 条件付き統合と秘密管理
 

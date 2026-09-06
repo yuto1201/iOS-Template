@@ -90,7 +90,7 @@ Exercise the complete documentation-only Issue shipping workflow.
 
 ## Acceptance criteria
 
-- AC-1: The documentation-only change is verified and reviewed at the exact Head.
+- AC-1: UI-direction route: not-applicable; Scope: documentation-only workflow fixture; Reason: the fixture changes no product UI; the exact Head is verified and reviewed.
 - AC-2: Merge and cleanup preserve unrelated Branch and worktree state.
 
 ## Spec anchors
@@ -103,7 +103,7 @@ Exercise the complete documentation-only Issue shipping workflow.
 
 ## UI verification
 
-- Not applicable.
+Not applicable
 
 ## Delivery stage
 

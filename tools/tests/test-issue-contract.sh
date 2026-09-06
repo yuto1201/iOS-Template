@@ -135,6 +135,120 @@ assert_json "$workspace/fast-profile.json" 'value=JSON.parse(File.read(ARGV[0]))
 assert_fails 'fast snapshot rejects a forged UI verification object' ruby -I"$repo_root/tools/lib" -rjson -rissue-contract -e '
 value=JSON.parse(File.binread(ARGV.fetch(0))); value["verification"]={}; IOSTemplate::IssueContract.validate_snapshot!(value,issue:42,repository:"yuto1201/iOS-Template")' "$workspace/fast-profile.json"
 
+# Plain body validation remains structural so an unsealed legacy body can be
+# inspected. Snapshot production is the cutover-aware Claim boundary.
+"$repo_root/tools/validate-issue-body.sh" "$workspace/feature.md"
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/feature.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:40Z \
+  > "$workspace/pre-route-cutoff-legacy.json"
+assert_json "$workspace/pre-route-cutoff-legacy.json" '
+  value = JSON.parse(File.binread(ARGV.fetch(0)))
+  expected_keys = %w[acceptanceCriteria deliveryStage dependencies externalOperationDetailsDigest externalOperations fetchedAt goal issue repository schemaVersion specAnchors]
+  abort unless value.keys.sort == expected_keys.sort
+  abort unless value.fetch("acceptanceCriteria").fetch(0).fetch("text") == "A complete Feature Issue passes validation."
+'
+
+assert_fails 'the cutoff rejects a route-free snapshot' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/feature.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:41Z
+rg -Fq 'UI-direction route declaration is required' "$workspace/output"
+
+sed 's/A complete Feature Issue passes validation\./The comparison and explicit-skip route words here are incidental, not a declaration./' \
+  "$workspace/feature.md" > "$workspace/incidental-route-words.md"
+assert_fails 'incidental route words do not satisfy the cutoff gate' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/incidental-route-words.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:41Z
+rg -Fq 'UI-direction route declaration is required' "$workspace/output"
+
+route_index=0
+while IFS= read -r route; do
+  route_index=$((route_index + 1))
+  route_body="$workspace/valid-route-$route_index.md"
+  route_contract="$workspace/valid-route-$route_index.json"
+  sed "s/A complete Feature Issue passes validation\./UI-direction route: $route; Scope: Workflow contract; Reason: The route is explicitly classified; the remaining acceptance behavior is unchanged./" \
+    "$workspace/feature.md" > "$route_body"
+  ruby "$repo_root/tools/lib/issue-contract.rb" \
+    --body "$route_body" --type feature --format contract \
+    --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:41Z \
+    > "$route_contract"
+  ROUTE="$route" ruby -I"$repo_root/tools/lib" -rjson -rissue-contract -e '
+    value = JSON.parse(File.binread(ARGV.fetch(0)))
+    expected = "UI-direction route: #{ENV.fetch("ROUTE")}; Scope: Workflow contract; Reason: The route is explicitly classified; the remaining acceptance behavior is unchanged."
+    abort unless value.fetch("acceptanceCriteria").fetch(0).fetch("text") == expected
+    IOSTemplate::IssueContract.validate_snapshot!(value, issue: 42, repository: "yuto1201/iOS-Template")
+  ' "$route_contract"
+done <<'ROUTES'
+comparison
+explicit-skip
+confirmed-direction reuse
+bounded direction-neutral
+not-applicable
+ROUTES
+
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/valid-route-1.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:40Z \
+  > "$workspace/pre-cutoff-valid-route.json"
+
+sed 's/A complete Feature Issue passes validation\./UI-direction route: future-route; Scope: Workflow contract; Reason: Unknown routes cannot be sealed./' \
+  "$workspace/feature.md" > "$workspace/unknown-route.md"
+assert_fails 'an unknown canonical route is rejected' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/unknown-route.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:41Z
+rg -Fq 'malformed UI-direction route declaration' "$workspace/output"
+
+sed 's/A complete Feature Issue passes validation\./UI-direction route: comparison; Scope: Workflow contract./' \
+  "$workspace/feature.md" > "$workspace/malformed-route.md"
+assert_fails 'a malformed canonical route is rejected even before the cutoff' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/malformed-route.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:40Z
+rg -Fq 'malformed UI-direction route declaration' "$workspace/output"
+
+sed 's/A complete Feature Issue passes validation\./UI-direction route: comparison; Scope: ; Reason: Scope cannot be empty./' \
+  "$workspace/feature.md" > "$workspace/empty-route-scope.md"
+assert_fails 'a canonical route with empty Scope is rejected' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/empty-route-scope.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:41Z
+rg -Fq 'Scope must be nonempty' "$workspace/output"
+
+sed 's/A complete Feature Issue passes validation\./UI-direction route: comparison; Scope: Workflow contract; Reason: ; trailing assertion./' \
+  "$workspace/feature.md" > "$workspace/empty-route-reason.md"
+assert_fails 'a canonical route with empty Reason is rejected' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/empty-route-reason.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:41Z
+rg -Fq 'Reason must be nonempty' "$workspace/output"
+
+sed \
+  -e 's/A complete Feature Issue passes validation\./UI-direction route: comparison; Scope: Workflow contract; Reason: A comparison is required./' \
+  -e 's/Each AC ID is stable and unique\./UI-direction route: explicit-skip; Scope: Workflow contract; Reason: A second declaration is forbidden./' \
+  "$workspace/feature.md" > "$workspace/multiple-routes.md"
+assert_fails 'multiple canonical routes are rejected at the cutoff' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/multiple-routes.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:41Z
+rg -Fq 'exactly one UI-direction route declaration' "$workspace/output"
+assert_fails 'multiple canonical routes are rejected before the cutoff once declared' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/multiple-routes.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-09-06T00:31:40Z
+rg -Fq 'exactly one UI-direction route declaration' "$workspace/output"
+
+assert_fails 'snapshot validation applies the route cutoff to legacy bytes' ruby -I"$repo_root/tools/lib" -rjson -rissue-contract -e '
+  value = JSON.parse(File.binread(ARGV.fetch(0)))
+  value["fetchedAt"] = "2026-09-06T00:31:41Z"
+  IOSTemplate::IssueContract.validate_snapshot!(value, issue: 42, repository: "yuto1201/iOS-Template")
+' "$workspace/pre-route-cutoff-legacy.json"
+rg -Fq 'UI-direction route declaration is required' "$workspace/output"
+
+CLAIM_SOURCE="$repo_root/tools/claim-issue.sh" ruby -e '
+  source = File.binread(ENV.fetch("CLAIM_SOURCE"))
+  producer = source.rindex(%q{--body "$body" --type "$issue_type" --format contract})
+  branch_mutation = source.index(%q{git -C "$repo_root" branch "$branch"})
+  worktree_mutation = source.index(%q{git -C "$repo_root" worktree add})
+  abort "Claim does not invoke the snapshot contract producer" unless producer
+  abort "Claim route validation occurs after Branch mutation" unless branch_mutation && producer < branch_mutation
+  abort "Claim route validation occurs after worktree mutation" unless worktree_mutation && producer < worktree_mutation
+'
+
 sed 's/Profile: fast/Profile: turbo/' "$workspace/fast-profile.md" > "$workspace/unknown-profile.md"
 assert_fails 'an unknown delivery profile is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-profile.md"
 

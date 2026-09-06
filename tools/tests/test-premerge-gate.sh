@@ -56,7 +56,7 @@ cat > "$issue_body" <<'EOF'
 
 ## Acceptance criteria
 
-- AC-1: The verified Head is current.
+- AC-1: UI-direction route: not-applicable; Scope: premerge safety fixture; Reason: this fixture validates workflow gating without changing application UI; the verified Head is current.
 - AC-2: Every acceptance criterion has one evidence mapping.
 
 ## Spec anchors

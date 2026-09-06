@@ -7,7 +7,7 @@ labels:
 body:
   - type: markdown
     attributes:
-      value: "Complete every field. An Issue that is not Definition of Ready remains blocked:user."
+      value: "Complete every field. An Issue that is not Definition of Ready remains blocked:user. A current user request for an HTML comparison takes priority regardless of an existing direction; a current explicit skip overrides only with clear currentness, exact scope, authority, reason, and no conflicting comparison request. Otherwise use confirmed-direction reuse when a confirmed specification covers the exact hierarchy/flow; gate an unconfirmed direction when work creates the first user-facing UI, creates or changes root navigation/information architecture, or materially redesigns a primary flow; permit bounded direction-neutral UI only when none of those triggers applies and acceptance decides no hierarchy, navigation, or primary-flow interaction. Ambiguity gates. Identity/bootstrap and pure non-UI work use not-applicable."
   - type: textarea
     id: goal
     attributes:
@@ -34,28 +34,28 @@ body:
     id: acceptance-criteria
     attributes:
       label: Acceptance criteria
-      description: "Use stable, unique IDs such as `AC-1: User can save a setting`."
+      description: "Use stable, unique IDs. Every contract claimed at or after the `2026-09-06T00:31:41Z` cutover must have exactly one valid declaration across existing ACs: start one AC text immediately after its ID with `AC-1: UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`. `<route>` must be exactly `comparison`, `explicit-skip`, `confirmed-direction reuse`, `bounded direction-neutral`, or `not-applicable`; add selection/reuse/neutral/current-skip/non-UI facts after Reason. Incidental route words elsewhere do not count."
     validations:
       required: true
   - type: textarea
     id: spec-anchors
     attributes:
       label: Spec anchors
-      description: Add local Markdown links with exact section anchors, for example `specs/acceptance.md#2-issue-definition-of-ready`.
+      description: Add local Markdown links with exact section anchors, for example `specs/acceptance.md#2-issue-definition-of-ready`. Apply `.agents/skills/ui-direction/SKILL.md` when its trigger matches. `comparison` links the merged selection specification and Decision containing the exact presented-bytes SHA-256 and element decisions; `confirmed-direction reuse` links the exact reusable UI-direction anchor; `bounded direction-neutral` links the relevant confirmed product/behavior requirement; `explicit-skip` links its confirmed product/specification or Decision basis; `not-applicable` links the relevant product/specification requirement without requiring a UI-direction anchor. Comparison HTML and live UI verification alone are not spec anchors.
     validations:
       required: true
   - type: textarea
     id: dependencies
     attributes:
       label: Dependencies
-      description: List prerequisite Issues and blockers, or write `None`.
+      description: List prerequisite Issues and blockers, or write `None`. A gated native UI Issue depends on the merged direction-selection specification Issue.
     validations:
       required: true
   - type: textarea
     id: ui-verification
     attributes:
       label: UI verification
-      description: "For UI work, describe the selected shape scope. Defer only needed English/iPad or other quality work to focused harden Issues. Non-UI work may say Not applicable."
+      description: "For every UI Issue, keep exactly three ordered lines: `Target screens/states`, `English expectations`, and `Japanese expectations`. This is live guidance and is not part of the sealed Issue contract or review packet; put the authoritative `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>` declaration at the start of one existing AC, route-specific facts after Reason, anchors in Spec anchors, and prerequisite Issues in Dependencies. For Identity/bootstrap or pure non-UI work, enter exactly `Not applicable` and nothing else here; put scope/non-UI reason in Goal/In scope, start one AC with `UI-direction route: not-applicable; Scope: <nonempty>; Reason: <nonempty>`, and put the relevant product/specification anchor in Spec anchors. Defer only needed English/iPad or other quality work to focused harden Issues."
       placeholder: |
         - Target screens/states: Settings screen, loaded state
         - English expectations: Deferred/unverified; link a focused harden Issue if this release needs it.

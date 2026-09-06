@@ -1,8 +1,8 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 1.5
-Date: 2026-09-02
+Version: 1.6
+Date: 2026-09-06
 
 ## 1. 目的
 
@@ -11,6 +11,7 @@ Date: 2026-09-02
 テンプレートの価値は、機能コードの量ではなく、次の一貫性です。
 
 - 未決事項を抱えたまま実装しない。
+- 取っ掛かりのないUIを一案の推測で作らず、必要な場合は比較可能な方向案からユーザーが選んだ後に実装する。
 - Issue の塊を指定すれば、AI が独立性と依存関係を判断して止まらず進める。
 - 各IssueはDelivery stageに応じた検証を完了し、`strict`または`release`では反対モデルレビューも完了してからマージする。
 - 設定済みの個人用外部アカウント以外を使用しない。
@@ -46,9 +47,20 @@ Date: 2026-09-02
 2. Identity Bootstrap Issue と専用 Branch/worktree を作成する。
 3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換する。
 4. Build、Test、標準Simulatorマトリクス、反対モデルレビュー、Squash Mergeを完了する。
-5. 変換済みIdentityを基準にFeature Issueを開始する。
+5. 変換済みIdentityを基準にアプリ固有仕様を確定し、続くnative UIごとに[条件付きUI Direction Gate](development-stages.md#11-適用判定)の明示指示と通常triggerを評価する。Identity bootstrap自体はUI方向を決めない。
+6. Gateに依存するUI Issueは選択結果を記録した仕様変更のマージ後に`approved`／Claim可能とし、依存しない非UI Issueは並行して進められる。
 
 アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、選択された実行モデルはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
+
+現在のユーザーが対象範囲のHTML比較を明示的に求めた場合は、既存方向の有無にかかわらず同Gateを最優先で実行する。現在の明示省略は、その現行性、scope、権限、理由が明確で比較指示と矛盾しないときだけ通常判定を上書きし、曖昧または矛盾する場合は依存UIを`blocked:user`とする。それ以外は、exact hierarchy／flowを覆う確定方向があればconfirmed-direction reuse、覆う方向がなく対象方向が未確定かつ最初のユーザー向けUI、最上位navigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかならGate、方向未確定かつ構造triggerなしならAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない範囲だけbounded direction-neutralとする。coverage、triggerまたはneutralityが曖昧ならGateを実行する。
+
+Gateは一つの確定briefから2–3案のHTML比較を提示し、ユーザーによる単一案または正確なhybridの明示選択をアプリ固有仕様と追記型Decisionへ確定する。共通記録は対象scope、artifact path／revision、提示bytesのexact SHA-256、採用・不採用要素、対象screen／state、native適応範囲を含む。単一案はselected concept IDを、hybridは全採用要素からsource concept IDへのexhaustive mappingを含み、selected／base concept IDはユーザーがbaseを明示した場合だけ含む。HTML自体は判断補助であり、製品仕様、pixel仕様、SwiftUI実装、Simulator検証証拠の正本にはしない。
+
+cutover後にClaimするcontractは、既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持つ。一つのAcceptance criterion本文の先頭（`AC-*:`の直後）をexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、`<route>`は`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`のいずれかだけとする。route固有の適用事実はReasonの後へ続けてよく、prefixに一致しない偶発的なroute語は宣言として数えない。`confirmed-direction reuse`はUI方向anchor、`bounded direction-neutral`はproduct／behavior anchor、`explicit-skip`はproduct／spec／Decision anchorを`Spec anchors`へ置き、`comparison`は選択spec／Decisionを`Spec anchors`、専用IssueをDependenciesへ置く。UI Issueの3 field `UI verification`はlive guidanceであり、封印済みcontract fieldの代わりにしない。
+
+cutover後にClaimするIdentity bootstrapと純粋な非UI作業はnot-applicable routeであり、確定済みUI方向anchorを必要としない。`UI verification`本文はexact `Not applicable`だけとし、対象scopeと非UIである理由をGoal／In scope等へ記録し、一つのAcceptance criterion本文を`UI-direction route: not-applicable; Scope: <nonempty>; Reason: <nonempty>`で開始して、関連する確定済みproduct／spec anchorを`Spec anchors`へ記録する。それらに依存する後続UIだけをGate判定する。
+
+route宣言の導入cutoverは`2026-09-06T00:31:41Z`である。封印済みcontractの`fetchedAt`がこれより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合だけpre-D-030 legacyとし、routeやHTMLを遡及要求せず元の封印済みAC／spec／evidenceを検証する。cutover前でも候補が一つ以上あれば通常検証へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。cutoverと同時刻以降のcontractとcutover後のpre-Claim Issueにも同じexactly-one／完全性を必須とする。legacy contractは変更・再封印せず、prefix外のroute語は候補や非legacy判定に使わない。
 
 テンプレートリポジトリ自身には将来の実アプリ名を固定しません。GitHub上のリポジトリ名はテンプレートからリポジトリを作成するときに決め、bootstrapツールは認証済みリモート名変更を行いません。
 

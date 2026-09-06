@@ -6,7 +6,9 @@
 
 ## 2. Review packet
 
-`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。`repository-tests.json` が同じIssue/Headに存在する場合は、全tracked `tools/tests/test-*.sh` の結果、runner bytes、実行時刻、AC別対応を検証し、`repositoryTests` としてpacket内へ値ごと封印します。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。schema v1は通常レビューの既存成果物を読む場合に限る互換形式で、pre-merge gateは受理しません。
+`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。`repository-tests.json` が同じIssue/Headに存在する場合は、全tracked `tools/tests/test-*.sh` の結果、runner bytes、実行時刻、AC別対応を検証し、`repositoryTests` としてpacket内へ値ごと封印します。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。liveな`UI verification`本文はIssue contractにもreview packetにも含めません。
+
+UI-direction compatibility is determined only from the sealed Issue contract. A declaration candidate is any existing acceptance-criterion text that begins with the exact `UI-direction route:` prefix, immediately after its `AC-*:` ID. It is valid only in the exact form `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`, where `<route>` is exactly `comparison`, `explicit-skip`, `confirmed-direction reuse`, `bounded direction-neutral`, or `not-applicable`; route-specific facts may follow Reason. Incidental route words outside that prefix, including prose that lists every route, do not create a candidate. Compare `fetchedAt` as a UTC instant with `2026-09-06T00:31:41Z`: an earlier contract is pre-D-030 legacy only when it has zero candidates, so the packet/reviewer must not infer a route, demand retroactive HTML or a route declaration, or modify/reseal that contract; review its original sealed AC, spec anchors, Dependencies, and current-Head evidence. If an earlier contract has one or more candidates, validate it normally and reject unless exactly one candidate is fully valid; malformed, unknown-route, empty Scope/Reason, and multiple-candidate cases are not legacy. A contract at or after the cutoff has the same exactly-one and validity requirements, including rejection when no candidate exists. The packet preserves the Issue-contract path and digest needed for that classification and never substitutes Issue number, update time, file mtime, or live UI verification. For non-legacy contracts, formal reviewers identify the route only from the valid AC-text declaration and validate its Scope, Reason, and route-specific facts using the packet-bound Issue contract's Goal, Acceptance criteria, Spec anchors, Dependencies, linked confirmed spec/Decision, current-Head diff, and evidence. schema v1は通常レビューの既存成果物を読む場合に限る互換形式で、pre-merge gateは受理しません。
 
 ```json
 {
@@ -23,8 +25,8 @@
   },
   "specAnchors": ["specs/features/settings.md#notification-time"],
   "acceptanceCriteria": [
-    {"id": "AC-1", "text": "通知時刻を保存できる"},
-    {"id": "AC-2", "text": "日本語と英語で時刻が正しく表示される"}
+    {"id": "AC-1", "text": "UI-direction route: confirmed-direction reuse; Scope: 通知時刻設定行; Reason: リンク済み仕様が同じhierarchyとflowを確定済み。 Covered hierarchy/flow: settings list > notification-time row > time picker."},
+    {"id": "AC-2", "text": "通知時刻を保存して日本語で正しく表示できる"}
   ],
   "diff": {
     "path": ".artifacts/issues/42/0123456789abcdef0123456789abcdef01234567/review.diff",

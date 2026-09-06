@@ -803,8 +803,45 @@ if [[ "$mode" == "transform" ]]; then
   git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
   cp "$root/README.md" "$fixture/README.md"
   cp "$root/Config/ownership.yml" "$fixture/Config/ownership.yml"
+  cp "$root/tools/tests/test-app-bootstrap.sh" "$fixture/tools/tests/test-app-bootstrap.sh"
   cp "$root/tools/tests/test-foundation.sh" "$fixture/tools/tests/test-foundation.sh"
+  cp "$root/tools/tests/test-issue-contract.sh" "$fixture/tools/tests/test-issue-contract.sh"
+  cp "$root/tools/tests/test-ui-direction-skill.sh" "$fixture/tools/tests/test-ui-direction-skill.sh"
+  cp "$root/tools/lib/issue-contract.rb" "$fixture/tools/lib/issue-contract.rb"
   cp "$root/.agents/skills/app-bootstrap/SKILL.md" "$fixture/.agents/skills/app-bootstrap/SKILL.md"
+  ui_direction_fixture_files=(
+    AGENTS.md
+    .github/ISSUE_TEMPLATE/feature.yml
+    .agents/skills/plan-issue-batch/SKILL.md
+    .agents/skills/ship-issue/SKILL.md
+    .agents/skills/ship-issue-batch/SKILL.md
+    specs/product.md
+    specs/development-stages.md
+    specs/acceptance.md
+    specs/architecture.md
+    specs/decisions.md
+    docs/workflow.md
+    docs/verification.md
+    docs/agent-contracts/review-packet.md
+    docs/agent-contracts/spec-reviewer.md
+    docs/agent-contracts/ios-reviewer.md
+    docs/agent-contracts/visual-reviewer.md
+    docs/agent-contracts/acceptance-auditor.md
+  )
+  for path in "${ui_direction_fixture_files[@]}"; do
+    cp "$root/$path" "$fixture/$path"
+  done
+  mkdir -p "$fixture/.agents/skills/ui-direction"
+  cp "$root/.agents/skills/ui-direction/SKILL.md" "$fixture/.agents/skills/ui-direction/SKILL.md"
+  rm -f "$fixture/.claude/skills/ui-direction"
+  ln -s ../../.agents/skills/ui-direction "$fixture/.claude/skills/ui-direction"
+  ui_direction_skill_hash_before="$(shasum "$fixture/.agents/skills/ui-direction/SKILL.md" | awk '{print $1}')"
+  app_bootstrap_test_hash_before="$(shasum "$fixture/tools/tests/test-app-bootstrap.sh" | awk '{print $1}')"
+  foundation_test_hash_before="$(shasum "$fixture/tools/tests/test-foundation.sh" | awk '{print $1}')"
+  issue_contract_hash_before="$(shasum "$fixture/tools/lib/issue-contract.rb" | awk '{print $1}')"
+  issue_contract_test_hash_before="$(shasum "$fixture/tools/tests/test-issue-contract.sh" | awk '{print $1}')"
+  ui_direction_test_hash_before="$(shasum "$fixture/tools/tests/test-ui-direction-skill.sh" | awk '{print $1}')"
+  ui_direction_symlink_before="$(readlink "$fixture/.claude/skills/ui-direction")"
   historical_plan="$fixture/docs/superpowers/plans/2026-08-22-app-bootstrap.md"
   historical_plan_hash_before="$(shasum "$historical_plan" | awk '{print $1}')"
   pbx_uuid_hash_before="$(rg -o '[A-F0-9]{24}' "$fixture/TemplateApp.xcodeproj/project.pbxproj" | LC_ALL=C sort -u | shasum | awk '{print $1}')"
@@ -862,6 +899,172 @@ PY
     echo 'AGENTS heading was not transformed with the display name' >&2
     exit 1
   }
+  [[ "$ui_direction_skill_hash_before" == "$(shasum "$fixture/.agents/skills/ui-direction/SKILL.md" | awk '{print $1}')" ]] || {
+    echo 'UI direction skill changed during transform' >&2
+    exit 1
+  }
+  [[ "$app_bootstrap_test_hash_before" == "$(shasum "$fixture/tools/tests/test-app-bootstrap.sh" | awk '{print $1}')" ]] || {
+    echo 'app bootstrap policy test changed during transform' >&2
+    exit 1
+  }
+  [[ "$foundation_test_hash_before" == "$(shasum "$fixture/tools/tests/test-foundation.sh" | awk '{print $1}')" && -x "$fixture/tools/tests/test-foundation.sh" ]] || {
+    echo 'foundation policy test changed or lost its executable bit during transform' >&2
+    exit 1
+  }
+  [[ "$issue_contract_hash_before" == "$(shasum "$fixture/tools/lib/issue-contract.rb" | awk '{print $1}')" ]] || {
+    echo 'Issue-contract route parser changed during transform' >&2
+    exit 1
+  }
+  [[ "$issue_contract_test_hash_before" == "$(shasum "$fixture/tools/tests/test-issue-contract.sh" | awk '{print $1}')" && -x "$fixture/tools/tests/test-issue-contract.sh" ]] || {
+    echo 'Issue-contract route tests changed or lost their executable bit during transform' >&2
+    exit 1
+  }
+  [[ "$ui_direction_test_hash_before" == "$(shasum "$fixture/tools/tests/test-ui-direction-skill.sh" | awk '{print $1}')" ]] || {
+    echo 'UI direction policy test changed during transform' >&2
+    exit 1
+  }
+  [[ -x "$fixture/tools/tests/test-ui-direction-skill.sh" ]] || {
+    echo 'UI direction policy test lost its executable bit during transform' >&2
+    exit 1
+  }
+  [[ -L "$fixture/.claude/skills/ui-direction" && "$ui_direction_symlink_before" == "$(readlink "$fixture/.claude/skills/ui-direction")" && -f "$fixture/.claude/skills/ui-direction/SKILL.md" ]] || {
+    echo 'portable Claude UI direction skill link changed during transform' >&2
+    exit 1
+  }
+
+  python3 - "$fixture" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+contracts = {
+    "AGENTS.md": (
+        ".agents/skills/ui-direction/SKILL.md",
+        "UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>",
+        "prefix外のroute語は数えない",
+        "UI Issueの3 field `UI verification`はlive guidance",
+        "現在Head",
+    ),
+    "README.md": (
+        ".agents/skills/ui-direction/SKILL.md",
+        "2〜3個の自己完結HTML案",
+        "WKWebView実装",
+    ),
+    "specs/product.md": (
+        "development-stages.md#11-適用判定",
+        "Gateに依存するUI Issue",
+        "依存しない非UI Issue",
+    ),
+    "specs/development-stages.md": (
+        "### 1.1 適用判定",
+        ".artifacts/ui-direction/<flow-slug>/<revision>/comparison.html",
+        "exact SHA-256",
+        "専用Issue、Branch、PRでマージ",
+        "`WKWebView`",
+        "現在Head",
+    ),
+    "specs/acceptance.md": (
+        "UI Direction Gateの適用判定",
+        "immutable revisionとexact SHA-256",
+        "アプリ固有の確定specと追記型Decision",
+        "HTML比較をnative iOS証拠として代用しない",
+    ),
+    "specs/architecture.md": (
+        "### 4.1 UI Direction成果物の境界",
+        "Content Security Policy",
+        "新しいIssue-contract field",
+        "HTML用canonical evidence schema",
+    ),
+    "specs/decisions.md": (
+        "## D-030: 方向未確定の主要UIに条件付きHTML比較を導入する",
+        "追記型Decision",
+        "Related Issue: #47",
+    ),
+    "docs/workflow.md": (
+        "### 2.1 shape前のUI Direction Gate",
+        ".artifacts/ui-direction/<flow-slug>/<revision>/comparison.html",
+        "blocked:dependency",
+        "新しいmutable contract fieldは追加しません",
+    ),
+    "docs/verification.md": (
+        "../.agents/skills/ui-direction/SKILL.md",
+        "decision-support artifact",
+        "current-Head Build／Test／Simulator",
+        "HTMLのDOMやCSSではなく",
+    ),
+    ".github/ISSUE_TEMPLATE/feature.yml": (
+        ".agents/skills/ui-direction/SKILL.md",
+        "direction-selection specification Issue",
+        "`Not applicable`",
+    ),
+    ".agents/skills/app-bootstrap/SKILL.md": (
+        "../ui-direction/SKILL.md",
+        "treat Identity bootstrap itself as non-UI work",
+        "authoritative declaration to be sealed",
+        "2026-09-06T00:31:41Z",
+        "Ambiguity fails closed into the gate",
+    ),
+    ".agents/skills/plan-issue-batch/SKILL.md": (
+        "../ui-direction/SKILL.md",
+        "separate specification/Decision Issue",
+        "may continue independently",
+    ),
+    ".agents/skills/ship-issue/SKILL.md": (
+        "../ui-direction/SKILL.md",
+        "packet-sealed AC-text prefix",
+        "never ship the comparison HTML",
+    ),
+    ".agents/skills/ship-issue-batch/SKILL.md": (
+        "../ui-direction/SKILL.md",
+        "dependency is `done`",
+        "bounded direction-neutral UI",
+        "Ambiguity gates",
+    ),
+    "docs/agent-contracts/spec-reviewer.md": (
+        "../../.agents/skills/ui-direction/SKILL.md",
+        "merged confirmed selection record",
+        "Comparison HTML alone is not approval or a specification anchor",
+    ),
+    "docs/agent-contracts/review-packet.md": (
+        "liveな`UI verification`本文はIssue contractにもreview packetにも含めません",
+        "2026-09-06T00:31:41Z",
+        "earlier contract has one or more candidates",
+        "malformed, unknown-route, empty Scope/Reason, and multiple-candidate cases are not legacy",
+        "packet-bound Issue contract's Goal, Acceptance criteria, Spec anchors, Dependencies, linked confirmed spec/Decision, current-Head diff, and evidence",
+    ),
+    "docs/agent-contracts/ios-reviewer.md": (
+        "../../.agents/skills/ui-direction/SKILL.md",
+        "current-Head native Build/Test/Simulator evidence",
+        "Never rely on live UI verification",
+        "not-applicable Identity/bootstrap or pure non-UI work",
+    ),
+    "docs/agent-contracts/visual-reviewer.md": (
+        "../../.agents/skills/ui-direction/SKILL.md",
+        "CSS-pixel parity",
+        "HTML comparison as native evidence",
+    ),
+    "docs/agent-contracts/acceptance-auditor.md": (
+        "../../.agents/skills/ui-direction/SKILL.md",
+        "review packet does not contain live UI verification",
+        "packet-sealed Goal",
+        "current-Head native implementation evidence",
+    ),
+}
+
+missing = []
+for relative, anchors in contracts.items():
+    path = root / relative
+    if not path.is_file():
+        missing.append(f"{relative}: missing file")
+        continue
+    text = path.read_text()
+    absent = [anchor for anchor in anchors if anchor not in text]
+    if absent:
+        missing.append(f"{relative}: {absent!r}")
+
+if missing:
+    raise SystemExit("bootstrap did not preserve the UI direction policy:\n" + "\n".join(missing))
+PY
 
   python3 - "$fixture/Config/app-identity.json" <<'PY'
 import json
@@ -938,6 +1141,20 @@ PY
     bash tools/tests/test-delivery-stages.sh
   ) >"$output" 2>"$errors"; then
     echo "Delivery-stage contracts failed after disposable bootstrap: $(<"$errors")" >&2
+    exit 1
+  fi
+  if ! (
+    cd "$fixture"
+    bash tools/tests/test-ui-direction-skill.sh
+  ) >"$output" 2>"$errors"; then
+    echo "UI direction policy failed after disposable bootstrap: $(<"$errors")" >&2
+    exit 1
+  fi
+  if ! (
+    cd "$fixture"
+    bash tools/tests/test-issue-contract.sh
+  ) >"$output" 2>"$errors"; then
+    echo "Issue-contract route behavior failed after disposable bootstrap: $(<"$errors")" >&2
     exit 1
   fi
   [[ "$historical_plan_hash_before" == "$(shasum "$historical_plan" | awk '{print $1}')" ]] || {
