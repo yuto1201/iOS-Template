@@ -255,4 +255,4 @@
 - Context: ClaudeとCodexはどちらもアプリ開発を進められる一方、3Dモデル制作ではCodexのGPT-6 Astraが特に優れているため、一般開発を一方へ固定せず制作能力の差を狭い責務境界として明示する必要がある。あわせて、このiOS templateでは第三の開発経路を考慮しないことがユーザーから指定された。
 - Decision: [3Dモデル制作方針](product.md#51-3dモデル制作方針)に従い、3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は共有`ios-3d-assets` skillへrouteし、Codexのexact model `gpt-6-astra`だけがauthoringする。Claudeまたは別のCodex modelが作業を開始した場合もauthoring部分を同モデルへ依頼し、利用不能時は別modelへfallbackせず`blocked:environment`とする。ClaudeとCodexはそれ以外の仕様化、実装、検証、レビュー、設定済み外部操作を同等に担当できる。
 - Consequence: Claudeや別のCodex modelは3D要件、参照、受領済みassetの統合、GLB／USDZ等の形式検証、RealityKit実装、Build／Test、視覚確認、reviewを担当できるが、3D asset bytesのauthoring主体にはならない。3Dを含むIssue／PR証拠へexact authoring modelを記録する。現行tracked repositoryから第三の開発経路への参照を除去し、unsupported executorの拒否テストはprovider-neutralな値で維持する。
-- Related Issue: #51
+- Related Issue: #51（元の依頼）、#59（実装の引き継ぎ）
