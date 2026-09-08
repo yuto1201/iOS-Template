@@ -94,7 +94,8 @@ missing_contracts = contracts.reject { |_, pattern| text.match?(pattern) }.keys
 abort "UI direction skill lacks behavioral contracts: #{missing_contracts.inspect}" unless missing_contracts.empty?
 RUBY
 
-ruby - "$development_policy" "$acceptance_policy" "$architecture_policy" "$workflow_policy" "$verification_policy" "$review_packet_policy" <<'RUBY'
+ruby -E UTF-8 - "$development_policy" "$acceptance_policy" "$architecture_policy" "$workflow_policy" "$verification_policy" "$review_packet_policy" <<'RUBY'
+# encoding: UTF-8
 development_path, acceptance_path, architecture_path, workflow_path, verification_path, review_packet_path = ARGV
 development = File.read(development_path, encoding: "UTF-8")
 acceptance = File.read(acceptance_path, encoding: "UTF-8")
@@ -490,7 +491,8 @@ Status: 確定
 - Prerequisite: Direction-selection Issue #44 is merged and done.
 EOF
 
-ruby - "$selection_spec" "$selection_decision" "$comparison_fixture" "$comparison_digest" <<'RUBY'
+ruby -E UTF-8 - "$selection_spec" "$selection_decision" "$comparison_fixture" "$comparison_digest" <<'RUBY'
+# encoding: UTF-8
 require "digest"
 
 spec_path, decision_path, comparison_path, expected_digest = ARGV
@@ -673,7 +675,8 @@ ruby tools/lib/issue-contract.rb \
   --repo yuto1201/iOS-Template \
   --fetched-at 2026-09-06T00:31:41Z > "$workspace/non-ui-fast-contract.json"
 
-ruby -rjson - "$workspace/non-ui-fast-issue.md" "$workspace/non-ui-fast-contract.json" <<'RUBY'
+ruby -E UTF-8 -rjson - "$workspace/non-ui-fast-issue.md" "$workspace/non-ui-fast-contract.json" <<'RUBY'
+# encoding: UTF-8
 body = File.read(ARGV.fetch(0), encoding: "UTF-8")
 contract = JSON.parse(File.binread(ARGV.fetch(1)))
 

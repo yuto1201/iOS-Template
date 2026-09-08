@@ -204,6 +204,21 @@ expect_refusal() {
 }
 
 body=$(run_renderer)
+for locale_profile in unset C POSIX en_US.UTF-8; do
+  locale_command=(env -u LANG -u LC_ALL -u LC_CTYPE)
+  if [[ "$locale_profile" != unset ]]; then
+    locale_command+=("LANG=$locale_profile" "LC_ALL=$locale_profile" "LC_CTYPE=$locale_profile")
+  fi
+  locale_body=$("${locale_command[@]}" "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head")
+  [[ "$locale_body" == "$body" ]] || {
+    echo "PR body bytes changed under locale $locale_profile" >&2; exit 1;
+  }
+  printf '\n' >>"$matrix"
+  if "${locale_command[@]}" "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head" >"$scratch/locale-$locale_profile.out" 2>"$scratch/locale-$locale_profile.err"; then
+    echo "corrupt matrix accepted under locale $locale_profile" >&2; exit 1
+  fi
+  cp "$scratch/matrix.good" "$matrix"
+done
 if [[ "$scope" == scoped ]]; then
   grep -Fq 'iPhone Pro / Japanese (`iphone-ja`): `passed`' <<<"$body"
   [[ "$(grep -c 'deferred / unverified' <<<"$body")" == 3 ]]
