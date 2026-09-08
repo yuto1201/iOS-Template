@@ -1,4 +1,8 @@
 schemaVersion: 1
+# These release checks are not per-field draft/confirmed/remote-saved states.
+# Preparation rows and unresolved reasons belong in the app's reviewed draft;
+# see docs/agent-contracts/appstore-submission.md in the repository root.
+# Do not set a flag from draft completeness or skip deferred screenshots.
 metadataValidated: false
 privacyAudited: false
 legalConfirmedForFirstPublication: false

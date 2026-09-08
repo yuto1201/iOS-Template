@@ -1,8 +1,8 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 2.2
-Date: 2026-09-06
+Version: 2.3
+Date: 2026-09-09
 
 ## 1. テンプレート完成条件
 
@@ -121,3 +121,14 @@ profileを下げてstage要件を回避しない。`shape`はUIを含むので`f
 ## 7. Bootstrap Issue
 
 Foundation、Identity bootstrap、Simulator verificationなどテンプレート全体のgateを変更するIssueは`strict`で扱う。自動化tool自身が未実装の間だけ手動実行を許すが、Build、Test、要求stageのSimulator、必要な反対モデルreview、Head一致を免除しない。生成後の使い捨てrepositoryでもshapeとreleaseの契約／runnerを確認する。
+
+## 8. App Store原稿と登録準備
+
+[正本と登録準備](architecture.md#91-原稿の正本と登録準備)の実装は、次を満たす。#53は設計・文書の完了であり、以下の自動検出・登録経路を実装済みとは報告しない。
+
+- field inventoryがidentity、localized原稿、version、locale、SKU、category、copyright、公開URL、review contact、privacy、age rating、IAP、Team/App/accessを覆い、各値のsource・確認分類・ASC欄を追跡できる。
+- Bootstrapで導出できる値と個別確認値を区別し、原稿台帳の`draft`、`confirmed`、`remote-saved`を取り違えない。source変更で影響fieldの確認を失効させ、未決理由を列挙する。
+- 新規登録前に正しい個人Team、同一Bundleの既存App、platform/name/primary language/Bundle/SKU/accessを確認する。成功不明時はreadbackしてから再開し、名前だけの一致で再利用したり、重複作成したりしない。
+- Team未設定・別Team、Bundle未登録、App未作成、名前重複、権限不足、契約更新を区別する。契約同意、初回法務本文、価格、アクセス変更はユーザーへ引き継ぎ、秘密・連絡先実値は保存しない。
+- [必須fixtureとreadiness例](../docs/agent-contracts/appstore-submission.md#readiness-report-and-required-fixtures)で、テンプレートBundle/文面、invalid・未公開URL、広告SDKとprivacyの乖離、age rating未回答、IAP本番未設定、確認済みsourceの変更、曖昧なremote応答を検出する。正常な合成アプリでは根拠付きfieldだけを確認済みとし、独立欄の準備を継続できる。
+- 既存package/result/checklistの互換性、完全release gate、初回法務承認、外部operation境界を維持する。スクリーンショットは別途依頼・確定前に生成しない。文書リンクと現在Headの反対モデルレビューを完了する。

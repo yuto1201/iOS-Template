@@ -7,6 +7,12 @@ description: Prepare, validate, review, and immutably seal localized App Store m
 
 Build the package from the confirmed product specification and exact release candidate. This skill proves readiness; it does not open or mutate App Store Connect.
 
+## Source preparation before a release candidate
+
+For inventory, draft promotion or a new App record's prerequisites, first follow the [source inventory and registration preparation](../../../docs/agent-contracts/appstore-submission.md#source-inventory-and-registration-preparation), including its field-level readiness report. Keep draft/confirmed/remote-saved distinct; report missing Team, naming/SKU choices, production IAP, age-rating answers, public URLs and SDK/privacy re-audit needs. The current package validator is not proof that every new preparation requirement is automated. Do not add unsupported schema keys, invoke registration operations or mark the release checklist complete from a partial draft.
+
+Independent text preparation can continue before complete release inputs exist. If screenshots are explicitly deferred or their scope remains for the user to decide, stop before capture; do not execute the screenshot steps below or seal a complete package. Continue the complete preparation sequence only when its prerequisites and screenshot scope are established. This does not waive any release gate or authorize partial remote saves.
+
 ## Preconditions
 
 1. Read the release Issue, confirmed `specs/` documents, `App Store/README.md`, `docs/AUTHORITY.md`, and `docs/agent-contracts/release-auditor.md`.
