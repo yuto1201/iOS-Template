@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goldie — ストア用スクショ"
+  short_description: "実際のiOS画面から日英のApp Store用画像を制作・編集する"
+  default_prompt: "$goldie で、このアプリのストア用スクショを日本語と英語で作ってください。動画は不要です。"
