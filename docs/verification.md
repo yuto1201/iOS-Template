@@ -34,6 +34,25 @@ stage未指定のClaim済みcontractは旧release-level gateを維持します�
 
 名前に合う端末が見つからない場合、別端末へ自動フォールバックしません。`blocked:environment` として、利用可能な候補一覧を報告します。
 
+### 2.1 Repository test prerequisites
+
+`tools/tests/test-*.sh` はmacOSのBashと標準コマンド（`cat`、`cp`、`dirname`、`grep`、`mktemp`、`sed`、`tar`、`shasum`など）が使える開発環境を前提とします。追加・開発用コマンドは各entrypoint先頭の`require_test_commands`に宣言し、直接呼ぶものだけでなくfixtureや子toolが使うものも含めます。
+
+| 依存 | 使用範囲・準備 |
+| --- | --- |
+| `rg`（ripgrep） | foundation、bootstrap、Claim／state／workflow、App Store screenshots／skills、runner回帰等の検索・assertion・fake-gh分岐。PATH上の実行ファイルが必須。未導入なら例として`brew install ripgrep`で導入する |
+| `git`、`ruby`、`jq` | repository／contract／JSON／fixture操作。各testが使うものを宣言。Rubyの標準ライブラリを含む。`jq`もPATH上の実行ファイルが必要 |
+| `swift`、`swiftc`、`/usr/bin/swiftc`、`/usr/bin/xcrun` | Swift validator、画像／動画inspection、bootstrap、evidence等。Xcodeの開発ツールが利用可能なこと。runner／premergeがabsolute pathで使うコンパイラも個別に確認する |
+| `python3` | app-icon、mediaのfixtureとbootstrap。foundationは`tomllib`を使うためPython 3.11以上が必要。foundationを子として実行するbootstrapも同じ条件を開始前に確認する |
+| `${CC:-cc}` | `test-cross-model-review.sh`と`test-review-shared-artifacts.sh`のnative reviewer fixtureコンパイル。`CC`は単一の実行ファイル名またはパスとし、flagsを混ぜない |
+| `codex` | `test-cross-model-review.sh`だけが実際のnative Mach-O Codex sandboxを使用。他のtestには一律要求しない。既存のMach-O／sandbox検査も維持する |
+
+`tools/tests/lib/prerequisites.sh`はfixture作成・assertion前に外部実行ファイルの有無を確認します。shell alias／関数だけでは満たしません。不足時は`test prerequisite unavailable`、test名、不足コマンドをstderrへ出し、exit 69で停止します。skipや成功ではなく環境不足であり、assertionが製品の不具合を検出した結果とも区別します。Pythonのversion／module不足も同じ扱いです。PATH全体や認証情報は出力しません。
+
+テスト内でmockする`gh`、`claude`、`security`、`xcodebuild`、`xcrun`やprovider接続を、本物のアカウント／認証要件へ置き換えません。上表の実コンパイル／inspectionとは区別します。各testの開始前チェックはコマンド存在確認であり、実行成功やXcode／Simulator／外部サービスの検証を代用しません。
+
+不足環境の回帰は`bash tools/tests/test-prerequisites.sh`で実行します。private PATHを使い、ホストからコマンドを削除せず、実際の入口がfixture作成前に止まることを確認します。依存が揃った状態の正式な全件成功は、引き続き`tools/run-repository-tests.sh`によるcurrent-Head証拠で確認します。
+
 ## 3. 固定されるmatrix
 
 ```json

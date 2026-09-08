@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" git jq ruby swift
+
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 [[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
 scope="${1:-full}"

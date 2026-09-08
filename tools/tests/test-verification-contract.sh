@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" ruby git
+
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 ruby -I"$repo_root/tools/lib" -rissue-contract -rreview-contract -rminitest/autorun -rjson -ropen3 -rtmpdir -ryaml - "$repo_root" <<'RUBY'
 REPO_ROOT = ARGV.shift

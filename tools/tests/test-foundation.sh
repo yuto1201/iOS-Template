@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" rg git jq ruby swift python3
+require_test_python_tomllib "$0"
+
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 cd "$repo_root"
 ignore_probe_root=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-ignore-probe.XXXXXX")
