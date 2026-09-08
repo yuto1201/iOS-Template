@@ -15,7 +15,8 @@ fi
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
 repo_root=$(cd "$script_dir/../../../.." && pwd -P)
 
-ruby - "$repo_root" "$issue_body" <<'RUBY'
+ruby -E UTF-8 - "$repo_root" "$issue_body" <<'RUBY'
+# encoding: UTF-8
 require "pathname"
 require "uri"
 

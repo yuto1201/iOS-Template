@@ -13,7 +13,8 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$issue" =~ ^[1-9][0-9]*$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || usage
 
-ruby -rjson -rdigest -rtime -ropen3 -I"$repo_root/tools/lib" -rdescriptor-files -rreview-contract -rreview-sealing -rdelivery-profile - "$repo_root" "$issue" "$head_sha" <<'RUBY'
+ruby -E UTF-8 -rjson -rdigest -rtime -ropen3 -I"$repo_root/tools/lib" -rdescriptor-files -rreview-contract -rreview-sealing -rdelivery-profile - "$repo_root" "$issue" "$head_sha" <<'RUBY'
+# encoding: UTF-8
 repo, issue_text, head = ARGV
 issue = Integer(issue_text)
 
