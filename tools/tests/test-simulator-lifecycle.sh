@@ -256,7 +256,9 @@ EOF
 cmp -s "$expected_create_log" "$log" || { diff -u "$expected_create_log" "$log"; exit 1; }
 
 : >"$log"
+cp "$matrix" "$scratch/frozen-full.json"
 run bash tools/resolve-simulator-matrix.sh --batch-id "$batch_id" --output "$matrix"
+cmp "$matrix" "$scratch/frozen-full.json"
 printf 'simctl\tlist\tdevices\t-j\n' >"$scratch/expected-reuse.log"
 cmp -s "$scratch/expected-reuse.log" "$log" || { diff -u "$scratch/expected-reuse.log" "$log"; exit 1; }
 assert_test_tmp_clean
@@ -406,6 +408,149 @@ for symlink_component in artifacts batches; do
     exit 1
   fi
 done
+
+security_primary="$scratch/security-primary"
+mkdir -p "$security_primary/.artifacts" "$scratch/security-outside"
+security_primary="$(cd "$security_primary" && pwd -P)"
+git init -q -b main "$security_primary"
+git -C "$security_primary" -c user.name='Matrix Fixture' -c user.email='matrix-fixture@example.invalid' commit -qm 'fixture base' --allow-empty
+mkdir "$security_primary/.worktrees"
+git -C "$security_primary" worktree add -q --detach "$security_primary/.worktrees/bound"
+ln -s ../../.artifacts "$security_primary/.worktrees/bound/.artifacts"
+production_io="$scratch/simulator-matrix-io-production"
+swiftc tools/simulator-matrix-io.swift -o "$production_io"
+ruby -rtimeout - "$io_helper" "$production_io" "$security_primary" "$scratch/security-outside" <<'RUBY'
+helper, production, primary, outside = ARGV
+worktree = File.join(primary, ".worktrees/bound")
+artifact_link = File.join(worktree, ".artifacts")
+File.write(File.join(outside, "sentinel"), "user-owned fixture bytes")
+
+def invoke(helper, worktree, operation: "exists", batch: "linked-security", environment: {})
+  pid = Process.spawn(environment, helper, "--operation", operation, "--repo", worktree,
+                      "--batch", batch, "--name", "simulator-matrix.json",
+                      chdir: worktree, in: File::NULL, out: File::NULL, err: File::NULL, pgroup: true)
+  status = Timeout.timeout(10) { Process.waitpid2(pid).last }
+  pid = nil
+  status
+ensure
+  if pid
+    Process.kill("KILL", -pid) rescue Errno::ESRCH
+    Process.waitpid(pid) rescue Errno::ECHILD
+  end
+end
+
+def replace_with_link(path, target)
+  held = "#{path}.matrix-held"
+  raise "fixture backup already exists" if File.exist?(held) || File.symlink?(held)
+  File.rename(path, held)
+  begin
+    File.symlink(target, path)
+    yield
+  ensure
+    File.unlink(path) if File.symlink?(path)
+    File.rename(held, path)
+  end
+end
+
+raise "canonical linked helper failed" unless invoke(helper, worktree).success?
+raise "production helper honors a test-only pause" unless invoke(production, worktree,
+  environment: {"MATRIX_IO_TEST_LAYOUT_BARRIER" => "stop-before-batch"}).success?
+
+raw_links = [outside, "../../../security-outside", "../../.artifacts/", "../..//.artifacts", "../../missing"]
+raw_links.each_with_index do |target, index|
+  replace_with_link(artifact_link, target) do
+    raise "accepted noncanonical artifact link" if invoke(helper, worktree, operation: "store", batch: "rejected-raw-#{index}").success?
+  end
+end
+
+metadata_path = File.read(File.join(worktree, ".git")).delete_prefix("gitdir: ").chomp
+back_reference = File.join(metadata_path, "gitdir")
+original_reference = File.binread(back_reference)
+begin
+  File.write(back_reference, "#{outside}/.git\n")
+  raise "accepted a foreign Git back-reference" if invoke(helper, worktree, operation: "store", batch: "rejected-back-reference").success?
+ensure
+  File.binwrite(back_reference, original_reference)
+end
+
+race_entries = %w[.artifacts .worktrees .git].map { |component| File.join(primary, component) }
+race_entries.concat([artifact_link, back_reference])
+race_entries.each_with_index do |entry, index|
+  # Swap after the helper holds the original directories but before it creates
+  # a batch. No path lookup may redirect the write into the outside sentinel.
+  pid = Process.spawn({"MATRIX_IO_TEST_LAYOUT_BARRIER" => "stop-before-batch"}, helper,
+    "--operation", "store", "--repo", worktree, "--batch", "rejected-race-#{index}",
+    "--name", "simulator-matrix.json", chdir: worktree,
+    in: File::NULL, out: File::NULL, err: File::NULL, pgroup: true)
+  begin
+    stopped = Timeout.timeout(10) { Process.waitpid2(pid, Process::WUNTRACED).last }
+    raise "helper did not reach held-directory barrier" unless stopped.stopped?
+    replace_with_link(entry, outside) do
+      Process.kill("CONT", pid)
+      status = Timeout.timeout(10) { Process.waitpid2(pid).last }
+      pid = nil
+      raise "accepted swapped directory, artifact link or Git metadata" if status.success?
+    end
+  ensure
+    if pid
+      Process.kill("KILL", -pid) rescue Errno::ESRCH
+      Process.waitpid(pid) rescue Errno::ECHILD
+    end
+  end
+end
+
+raise "refused path created a batch" unless Dir.glob(File.join(primary, ".artifacts/batches/rejected-*")).empty?
+raise "outside directory was mutated" unless Dir.children(outside) == ["sentinel"] &&
+  File.binread(File.join(outside, "sentinel")) == "user-owned fixture bytes"
+raise "canonical layout was not restored" unless invoke(helper, worktree).success?
+puts "linked matrix raw paths, Git identity and ancestor replacement tests passed"
+RUBY
+
+# Execute the exact documented shell block from an isolated linked worktree.
+# Only the native verification boundary is a recording stub here; canonical
+# current-Head iOS verification separately exercises the real native runner.
+command_worktree="$security_primary/.worktrees/bound"
+command_batch="skill-$RANDOM-$RANDOM"
+command_base="$(git -C "$command_worktree" rev-parse HEAD)"
+cp -R "$repo_root/tools" "$command_worktree/"
+mkdir -p "$command_worktree/.artifacts/issues/42"
+ruby -rjson - "$repo_root/.agents/skills/ios-verify/SKILL.md" "$scratch/skill-command.sh" "$command_worktree/.artifacts/issues/42/issue-contract.json" <<'RUBY'
+skill, script, contract = ARGV
+section = File.read(skill).split("## Application verification\n", 2).fetch(1)
+block = section.match(/```sh\n(.*?)\n```/m) or abort "missing application verification command"
+File.write(script, block[1] + "\n")
+File.write(contract, JSON.generate({
+  "deliveryStage" => {"name" => "release", "timeBudgetMinutes" => 240, "reason" => "command fixture"},
+  "deliveryProfile" => {"name" => "strict", "reason" => "command fixture"},
+  "verificationScope" => {"name" => "full", "reason" => "command fixture"},
+  "verification" => {}
+}))
+RUBY
+cat >"$command_worktree/tools/verify-ios-issue.sh" <<'RUBY'
+#!/usr/bin/ruby --disable-gems
+require "json"
+abort "verification left its Issue worktree" unless Dir.pwd == ENV.fetch("COMMAND_EXPECTED_ROOT")
+lock = File.join(Dir.pwd, "tools/with-ios-simulator-lock.sh")
+abort "verification ran outside the Simulator lock" if system(lock, "--timeout", "0", "--", "/usr/bin/true", out: File::NULL, err: File::NULL)
+File.write(ENV.fetch("COMMAND_VERIFY_RECORD"), JSON.generate({"cwd" => Dir.pwd, "arguments" => ARGV}))
+RUBY
+chmod +x "$command_worktree/tools/verify-ios-issue.sh"
+(
+  cd "$command_worktree"
+  export ISSUE=42 BASE_SHA="$command_base" BATCH_ID="$command_batch" PROJECT=Fixture.xcodeproj SCHEME=Fixture
+  export COMMAND_EXPECTED_ROOT="$command_worktree" COMMAND_VERIFY_RECORD="$scratch/skill-verify.json"
+  run /bin/bash "$scratch/skill-command.sh"
+)
+ruby -rjson - "$scratch/skill-verify.json" "$command_worktree" "$command_base" "$command_batch" <<'RUBY'
+record, worktree, base, batch = ARGV
+value = JSON.parse(File.read(record))
+expected = ["--issue", "42", "--expected-base", base, "--issue-contract", ".artifacts/issues/42/issue-contract.json",
+            "--matrix", ".artifacts/batches/#{batch}/simulator-matrix.json", "--project", "Fixture.xcodeproj", "--scheme", "Fixture"]
+abort "documented verification arguments differ" unless value == {"cwd" => worktree, "arguments" => expected}
+matrix = JSON.parse(File.read(File.join(worktree, ".artifacts/batches/#{batch}/simulator-matrix.json")))
+abort "documented resolver did not produce a complete matrix" unless matrix.fetch("cases").map { |entry| entry.fetch("id") } == %w[iphone-en iphone-ja ipad-en ipad-ja]
+puts "exact documented locked command resolved from the Issue worktree and reached verification"
+RUBY
 
 io_batch="io-$RANDOM-$RANDOM"
 io_source="$scratch/source.json"

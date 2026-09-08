@@ -49,16 +49,12 @@ tools/with-ios-simulator-lock.sh --timeout 0 -- /bin/bash -c '
   SCOPE="$6"
   CASE_IDS="$7"
   MATRIX=".artifacts/batches/${BATCH_ID}/simulator-matrix.json"
-  PRIMARY_ROOT="$(ruby tools/lib/review-artifacts.rb "$PWD" | jq -er .primaryRoot)"
-  (
-    cd "$PRIMARY_ROOT"
-    case "$SCOPE" in
-      full) tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" ;;
-      iphone-ja) tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" --scope iphone-ja ;;
-      targeted) tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" --scope targeted --case-ids "$CASE_IDS" ;;
-      *) printf "Unsupported scope: %s\n" "$SCOPE" >&2; exit 2 ;;
-    esac
-  )
+  case "$SCOPE" in
+    full) tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" ;;
+    iphone-ja) tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" --scope iphone-ja ;;
+    targeted) tools/resolve-simulator-matrix.sh --batch-id "$BATCH_ID" --output "$MATRIX" --scope targeted --case-ids "$CASE_IDS" ;;
+    *) printf "Unsupported scope: %s\n" "$SCOPE" >&2; exit 2 ;;
+  esac
   tools/verify-ios-issue.sh \
     --issue "$ISSUE" \
     --expected-base "$BASE_SHA" \
@@ -69,7 +65,7 @@ tools/with-ios-simulator-lock.sh --timeout 0 -- /bin/bash -c '
 ' ios-verify "$ISSUE" "$BASE_SHA" "$BATCH_ID" "$PROJECT" "$SCHEME" "$SCOPE" "$CASE_IDS"
 ```
 
-Use a separate BATCH_ID per stage and scope. The physical-primary lifecycle call is the existing linked-artifact workaround (Issue #20), not its fix. The primary must have the scoped resolver; do not substitute full or replace the artifact link. Verification stays in the Issue worktree under the same lock.
+Use a separate BATCH_ID per stage and scope. Run both resolution and verification from the canonical Issue worktree under the same lock. The matrix IO helper validates the exact shared artifact link and Git back-references, then accesses the primary's physical store through held directory descriptors. Do not replace the artifact link, switch to primary's tool sources, or substitute a different scope.
 
 The lifecycle command preserves frozen bytes and rejects scope changes before Simulator mutation. `iphone-ja` resolves only the Japanese iPhone; `targeted` resolves only its ordered contract cases. `full` selects the latest installed available iOS Runtime, iPhone Pro excluding Pro Max, and latest iPad Air, with exact ordered rows `iphone-en`, `iphone-ja`, `ipad-en`, and `ipad-ja`. Never repair a partial frozen matrix or fall back to another device family. Treat missing dedicated devices or changed frozen bytes as `blocked:environment`.
 
