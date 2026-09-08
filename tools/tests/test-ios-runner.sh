@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" rg git jq ruby /usr/bin/ruby /usr/bin/swiftc
+
 [[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == stubborn || "$1" == all ) ) ]] || exit 64
 if [[ "${1-}" == all ]]; then
   runner_tests_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" rg git jq ruby swift python3 /usr/bin/xcrun
+require_test_python_tomllib "$0"
+
 mode="${1:-}"
 if [[ "$mode" != "validation" && "$mode" != "transform" && "$mode" != "transaction" && "$mode" != "trunk-default" && "$mode" != "cleanup-failure" && "$mode" != "safety" && "$mode" != "all" ]]; then
   echo "usage: $0 validation|transform|transaction|trunk-default|cleanup-failure|safety|all" >&2

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" jq ruby
+
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 test_workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-provider-preflight.XXXXXX")
 trap 'rm -rf -- "$test_workspace"' EXIT

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" git jq ruby swift codex "${CC:-cc}"
+
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 
 if [[ "${IOS_TEMPLATE_REVIEW_FIXTURE_READY:-0}" != 1 ]]; then

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" git ruby swift
+
 source_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 builder="$source_repo/tools/visual-review-packet.sh"
 scratch="$(mktemp -d -t ios-visual-packet.XXXXXX)"
