@@ -61,6 +61,10 @@ Codex and Claude may both perform the local and authenticated steps. Every authe
 
 Remote repository rename and Bundle ID registration are separate authenticated operations. The bootstrap command does not perform or authorize them.
 
+## App Store handoff
+
+After conversion, use the [source inventory and registration preparation](../../../docs/agent-contracts/appstore-submission.md#source-inventory-and-registration-preparation) when preparing store metadata. The current identity manifest does not rewrite `App Store/metadata/`: compare its Bundle ID and copy to the verified app identity, and keep store name, SKU, Team, public URLs and privacy/SDK facts as separate confirmations. Bootstrap success does not establish remote Bundle registration, App creation or release readiness. Promote reviewed temporary copy into the app's `App Store/` sources without inventing unresolved values or changing existing schemas; registration automation remains dependent implementation work.
+
 ## Re-running
 
 - The same four Identity inputs after a completed conversion must return `already-complete` and make no changes.

@@ -1,8 +1,8 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.5
-Date: 2026-09-06
+Version: 1.6
+Date: 2026-09-09
 
 ## 1. 設計原則
 
@@ -199,3 +199,17 @@ supabase/
 `App Store/` のテキストと構造はコミットします。生成途中の秘密、認証セッション、未加工の個人データは置きません。スクリーンショットは、提出対象として採用された最終版だけを管理します。
 
 App Store用スクリーンショットの端末集合は、通常検証のiPhone Pro／iPad Airマトリクスとは別に、その時点の公式要件から解決します。提出要件が求める場合はiPhone Pro Maxも使用できます。
+
+### 9.1 原稿の正本と登録準備
+
+App Store準備は、原稿の確認、remote保存、release readiness、提出を区別する。アプリ共通のfield inventoryとsource→ASC対応、登録前の照合、解除条件付きreadiness reportは[App Store運用契約](../docs/agent-contracts/appstore-submission.md#source-inventory-and-registration-preparation)に従う。
+
+- アプリ固有の表示名・module・slug・Bundle IDは`Config/app-identity.json`と確定仕様、実際のXcode設定から照合する。localized store nameは内部display nameと別の判断であり、名前衝突を理由にどちらも自動変更しない。
+- `Config/template-identity.json`の現行変換対象に`App Store/metadata/`は含まれない。Bootstrap完了を原稿変換・remote Bundle登録・App作成・privacy監査完了と解釈しない。変換可能なidentity値は原稿への導出元とし、SKU、Team、公開URL、法務・価格・SDK申告は別確認する。
+- 一時文案は出所と実装根拠を確認してから`App Store/`のreviewed draftへ昇格する。既存schemaで表現できる原稿は既存ファイルへ、表現できない登録field・確認記録は`App Store/metadata/reviewed-draft.md`へ置く。これは必要なアプリで作る人間可読の原稿台帳であり、現行validatorへ未知のYAML keyや新しいcanonical schemaを渡さない。
+- 各fieldを`draft`／`confirmed`／`remote-saved`として、source path/anchor、revision/digest、確認根拠、未決理由、対象locale/sectionへ結び付ける。`remote-saved`には同一Team/App/Bundleとsource digestに一致するreadbackが必要であり、ローカルの確認だけから昇格しない。原稿、SDK、機能、権限、公開本文が変われば影響fieldを再監査し、古い確認を流用しない。
+- 未決fieldの送信だけを止め、独立fieldの下書き・確認は続ける。ただし部分準備を完全packageや提出許可とせず、現行のpackage seal、全画像、full iOS、反対モデルreview、初回法務承認を省略しない。スクリーンショット延期の指示がある場合、準備仕様を理由に生成を開始しない。
+- Team ID未設定時はユーザーが個人membershipの実値を確認して設定を承認する。表示名、メール、Xcodeの自動選択から推測して設定しない。設定後の実操作はactive Teamの完全一致preflightを改めて通す。
+- 新規Bundle/App作成は既存Appの更新と別のoperationである。対応するallowlist・契約・承認・再開検証を実装した後続Issueが完了するまでは実行不可。準備仕様は既存の権限を拡張しない。
+
+この節は確定した設計要件であり、field台帳、登録preflight、包括的なSDK不整合検出の実装済み証拠ではない。既存checklistのschema、keys、booleanと封印済みpackage/resultは変更しない。原稿検証・read-only登録準備は#53に依存する[#62](https://github.com/yuto1201/iOS-Template/issues/62)で、[受け入れ条件 §8](acceptance.md#8-app-store原稿と登録準備)のfixtureを満たす。実登録mutationはそのIssueにも含めず、別の明示契約と必要な承認を要する。AppLibraryの具体的な配置・公開URLは[未決の境界](product.md#61-applibraryでの法務ページ公開方針)のまま保持する。

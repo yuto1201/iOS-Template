@@ -256,3 +256,13 @@
 - Decision: [3Dモデル制作方針](product.md#51-3dモデル制作方針)に従い、3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は共有`ios-3d-assets` skillへrouteし、Codexのexact model `gpt-6-astra`だけがauthoringする。Claudeまたは別のCodex modelが作業を開始した場合もauthoring部分を同モデルへ依頼し、利用不能時は別modelへfallbackせず`blocked:environment`とする。ClaudeとCodexはそれ以外の仕様化、実装、検証、レビュー、設定済み外部操作を同等に担当できる。
 - Consequence: Claudeや別のCodex modelは3D要件、参照、受領済みassetの統合、GLB／USDZ等の形式検証、RealityKit実装、Build／Test、視覚確認、reviewを担当できるが、3D asset bytesのauthoring主体にはならない。3Dを含むIssue／PR証拠へexact authoring modelを記録する。現行tracked repositoryから第三の開発経路への参照を除去し、unsupported executorの拒否テストはprovider-neutralな値で維持する。
 - Related Issue: #51（元の依頼）、#59（実装の引き継ぎ）
+
+## D-033: App Store原稿の確認状態と新規登録準備を分離する
+
+- Date: 2026-09-09
+- Status: 確定
+- Supersedes: None。D-014の原稿集約を具体化し、D-024の権限、D-026の未決公開先、D-029のrelease gateを維持する。
+- Context: Identity変換後もApp Store原稿に仮Bundleや下書きが残り、SDK追加後のprivacy申告や一時文案と正本が乖離しうる。App未作成、Team未設定、契約、名前重複を一つの登録失敗として扱うと、安全な再開ができない。
+- Decision: [原稿の正本と登録準備](architecture.md#91-原稿の正本と登録準備)に従い、fieldごとの導出元、確認根拠、未決理由、draft/confirmed/remote-savedを記録する。登録前には個人TeamとBundleによる既存App照合を行い、名前・SKU・access等の判断と契約・法務・価格のhandoffを分ける。一時原稿はレビュー後にApp Storeへ昇格し、SDKと実装変更で関連申告を再監査する。
+- Consequence: 独立欄の準備は継続できるが、部分準備を完全packageや提出承認にしない。既存schema/validatorと封印済み証拠をこの文書変更で書き換えず、自動検出・登録operationは依存する後続実装Issueへ分離する。公開先や実アプリの値は捏造せず、スクリーンショットは別途確定前に生成しない。
+- Related Issue: #53
