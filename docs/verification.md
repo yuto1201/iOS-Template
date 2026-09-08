@@ -94,6 +94,7 @@ tools/verify-fast-issue.sh \
 - 現在の明示的な比較省略では、`explicit-skip`宣言のScope／ReasonとReason後の指示の現行性、権限、比較指示との非矛盾が封印済みAcceptance criterionから裏付けられ、関連する確定済みproduct／spec／Decision anchorが`Spec anchors`にあること
 - Identity bootstrapまたは純非UIでは、封印済みGoal／Acceptance criteriaとcurrent-Head差分から非UI scope／理由が裏付けられ、関連する確定済みproduct／spec anchorがある一方、UI方向anchorを要求していないこと。live bodyの`UI verification` exact `Not applicable`形式はClaim前に検証し、最終証拠として代用しないこと。Gateを評価するのは依存する後続native UIであること
 - App Icon Issueでは、ユーザーが明示選択したstable concept IDと確定brief、選択済みPNG、default AppIcon entry、`Config/app-icon.json`のprompt summary／generator／dimensions／asset path／exact SHA-256が一致し、`tools/validate-app-icon.sh`が成功すること。候補やpreviewを製品assetまたはcanonical iOS evidenceとして扱わず、この選択でUI Direction Gateを満たしたと推測しないこと
+- 3D asset authoringを含むIssueでは、共有`ios-3d-assets` routeが使われ、Issue／PR証拠のauthoring modelがexact `gpt-6-astra`であること。Claudeや別のCodex modelが作成・形状変更した3D bytesへfallbackしていないこと。統合・format validation・RealityKit実装・Build／Test・reviewは一般のClaude／Codex経路で検証してよい
 
 ### Stage B: Build and unit tests
 

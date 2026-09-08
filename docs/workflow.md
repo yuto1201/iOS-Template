@@ -62,6 +62,12 @@ gateは次の順で進めます。
 
 installerは`Config/app-identity.json`からmodule pathを解決し、1024 x 1024、不透明、system mask前の正方形PNGとdefault AppIcon entryを検証します。現在のApple公式ガイダンスを生成直前に再確認し、選択済みasset、`Contents.json`、`Config/app-icon.json`だけをcommitします。候補、provider response、previewは`.artifacts/app-icon/`へ置き、canonical iOS evidenceや製品assetとして扱いません。
 
+### 2.3 3D authoring route
+
+ClaudeとCodexは通常のIssueを同じworkflowで担当します。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更だけは[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteし、Codexのexact model `gpt-6-astra`がauthoringします。Claudeまたは別のCodex modelがIssueを担当している場合も、3D asset bytesのauthoring部分だけを同モデルへ依頼します。
+
+`gpt-6-astra`を利用できない場合は`blocked:environment`とし、Claudeや別modelへfallbackしません。要件整理、受領済みassetの統合、決定論的なformat validation、RealityKit実装、Build／Test、視覚確認、reviewはClaudeまたはCodexが継続できます。Issue／PR証拠へexact authoring modelを記録し、確認できない生成物を承認済み3D成果として扱いません。
+
 ## 3. Issue contract snapshot
 
 cutover後にClaimする新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。UI変更の3 field `UI verification`はClaim前のlive guidanceに限ります。既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持たせ、AC本文先頭を`UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、適用事実をReasonの後へ、確定anchorを`Spec anchors`、選択前提をDependenciesへ記載します。Identity bootstrapと純非UIの`UI verification`はexact `Not applicable`だけとし、scope／非UI理由をGoal／In scope等と`not-applicable`宣言へ、関連product／spec anchorを`Spec anchors`へ分けます。新しいmutable contract fieldは追加しません。選択の正本は、Issue contractへ封印される`Spec anchors`が参照する確定仕様と追記型Decisionです。pre-D-030 legacy contractにはこの新規要件を補完しません。

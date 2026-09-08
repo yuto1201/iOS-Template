@@ -109,7 +109,7 @@ assert_fails_without_artifact 'ElevenLabs video entitlement' elevenlabs "$fixtur
 assert_fails_without_artifact 'ElevenLabs invalid operation' elevenlabs "$fixture_root/elevenlabs-personal.json" --executor claude --operation dubbing
 assert_fails_without_artifact 'App Store Team and Bundle mismatch' app-store "$fixture_root/app-store-company.json" --executor codex --version 1.0
 assert_fails_without_artifact 'App Store version mismatch' app-store "$fixture_root/app-store-personal.json" --executor claude --version 2.0
-assert_fails_without_artifact 'unknown executor' github "$fixture_root/github-personal.json" --executor cursor --target yuto1201/iOS-Template
+assert_fails_without_artifact 'unknown executor' github "$fixture_root/github-personal.json" --executor unsupported --target yuto1201/iOS-Template
 
 missing_ownership="$test_workspace/missing-ownership.yml"
 /bin/cp "$ownership" "$missing_ownership"

@@ -246,3 +246,13 @@
 - Decision: [アプリアイコン方針](product.md#32-アプリアイコン)に従い、Identity bootstrap後、最初のユーザー向けUI `shape`より前に専用App Icon Issueを完了する。一つの確定briefからbuilt-in画像生成でstable ID付きのシンプルな2案を作り、ユーザーが明示選択した1案だけを1024 x 1024の不透明PNGとしてAsset Catalogへ統合する。組合せや重要な変更は提示済みrevisionを上書きせず再生成する。選択済みassetとsanitized recordだけをGit管理し、現在のApple公式要件を実行時に再確認する。
 - Consequence: アプリ名と目的に整合する識別可能なiconを早期に確定できる。選択待ちは`blocked:user`だが独立した非UI作業は続行できる。アプリアイコンは画面階層、navigation、primary-flow interactionを承認しないため、D-030のUI Direction Gateを満たしたことにはならない。テンプレート自身にはアプリ固有iconを追加せず、既存生成済みrepositoryへ自動適用しない。
 - Related Issue: #49
+
+## D-032: 3D asset authoringをCodex GPT-6 Astraへ固定する
+
+- Date: 2026-09-06
+- Status: 確定
+- Supersedes: None。D-024のClaude／Codex同等権限を一般開発で維持し、3D authoringだけに限定したmodel routeを追加する。
+- Context: ClaudeとCodexはどちらもアプリ開発を進められる一方、3Dモデル制作ではCodexのGPT-6 Astraが特に優れているため、一般開発を一方へ固定せず制作能力の差を狭い責務境界として明示する必要がある。あわせて、このiOS templateでは第三の開発経路を考慮しないことがユーザーから指定された。
+- Decision: [3Dモデル制作方針](product.md#51-3dモデル制作方針)に従い、3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は共有`ios-3d-assets` skillへrouteし、Codexのexact model `gpt-6-astra`だけがauthoringする。Claudeまたは別のCodex modelが作業を開始した場合もauthoring部分を同モデルへ依頼し、利用不能時は別modelへfallbackせず`blocked:environment`とする。ClaudeとCodexはそれ以外の仕様化、実装、検証、レビュー、設定済み外部操作を同等に担当できる。
+- Consequence: Claudeや別のCodex modelは3D要件、参照、受領済みassetの統合、GLB／USDZ等の形式検証、RealityKit実装、Build／Test、視覚確認、reviewを担当できるが、3D asset bytesのauthoring主体にはならない。3Dを含むIssue／PR証拠へexact authoring modelを記録する。現行tracked repositoryから第三の開発経路への参照を除去し、unsupported executorの拒否テストはprovider-neutralな値で維持する。
+- Related Issue: #51（元の依頼）、#59（実装の引き継ぎ）

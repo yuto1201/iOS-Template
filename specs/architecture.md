@@ -1,7 +1,7 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.4
+Version: 1.5
 Date: 2026-09-06
 
 ## 1. 設計原則
@@ -11,6 +11,7 @@ Date: 2026-09-06
 - ディレクトリは責務が発生した時点で追加し、空の抽象層を作らない。
 - 仕様、運用、実行手順、生成証拠を混在させない。
 - Codex と Claude の機能名は揃え、ネイティブ形式だけを分ける。
+- 一般開発のClaude／Codex同等性を維持し、3D asset authoringだけをCodex `gpt-6-astra`へ固定する。モデル固有routeは共有skillへ閉じ込め、アプリ本体のarchitectureを実行モデルへ依存させない。
 
 ## 2. 完成時のルート構成
 
@@ -144,6 +145,7 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | `ui-direction` | 現在のユーザーが対象範囲のHTML比較を明示したとき、または対象範囲のUI方向が未確定で、最初のユーザー向けUI、最上位navigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかを行うとき |
 | `supabase-ops` | アプリ仕様でSupabase使用を確定したとき |
 | `ios-media-assets` | 音声、文字起こし、効果音、音声分離、音楽、画像または動画が受け入れ条件になったとき |
+| `ios-3d-assets` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。authoringはCodexのexact model `gpt-6-astra`だけが行う |
 | `prepare-appstore-assets` | App Store 提出準備を開始するとき |
 | `submit-appstore-release` | 提出情報が監査済みで、Codexが提出するとき |
 

@@ -2,6 +2,8 @@
 
 CodexとClaudeを同等の実装・外部操作担当として使う個人向けiOS開発テンプレートです。仕様、Issue、ブランチ、リスクに応じた検証・レビュー、PR、Squash Mergeまでを一貫したワークフローとして扱います。
 
+通常の開発はClaudeとCodexのどちらでも進められます。3Dモデルの作成・生成・形状変更だけは品質を固定するため、[iOS 3D assets skill](./.agents/skills/ios-3d-assets/SKILL.md)に従ってCodexのexact model `gpt-6-astra`が担当します。Claudeや別のCodex modelは要件整理、組み込み、形式検証、レビューを担当できますが、3D asset bytesは作成しません。
+
 Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、英語・日本語、iPhone・iPad、共有仕様スキル、Codex/Claude 共通責務の read-only 評価エージェントを含みます。運用自動化は [実装計画索引](./docs/superpowers/plans/README.md) に従って段階的に追加します。
 
 開発順序は**条件に該当すればHTMLでUI方向を比較・選択する → shapeで日本語iPhoneの主要導線を動かす → hardenで必要な品質を対象別に固める → releaseで完全検証する**です。現在のユーザーによる対象範囲のHTML比較指示を最優先し、それ以外では対象範囲のUI方向が未確定で、初回のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかに該当するときだけ比較Gateを必須にします。[段階的開発仕様](./specs/development-stages.md)に従い、通常UIのshapeは既定120分・`standard` + `iphone-ja`、hardenは`targeted`、releaseは`strict` + `full`で検証します。文字列管理・可変レイアウトと安全の土台は初期から維持します。既存のClaim済みIssueは自動で縮小せず、旧release-level契約を維持します。
@@ -239,6 +241,7 @@ Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundat
 
 - データベース、認証、同期、Storageが必要なアプリでは [Supabase operations skill](./.agents/skills/supabase-ops/SKILL.md)を使用します。`Status: 確定`かつ`Supabase: required`の仕様だけが有効化でき、`supabase/migrations/`を唯一のスキーマ履歴としてRLSとPolicyを同時に追加します。CodexとClaudeのどちらもlocal／remote作業を実行できますが、remoteではOrganization IDとProject Refを照合します。
 - 読み上げ、Voice Changer、文字起こし、効果音、音声分離、音楽、一般画像、動画が必要な場合は [iOS media assets skill](./.agents/skills/ios-media-assets/SKILL.md)を使用します。実行モデルが設定済みElevenLabs Account／Workspaceとmode別entitlementを先に確認し、受理した出力とsanitized manifestだけを統合します。必須アプリアイコンだけは前述の`app-icon`とbuilt-in画像生成を使い、そのためにElevenLabsを有効化しません。
+- 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が必要な場合は [iOS 3D assets skill](./.agents/skills/ios-3d-assets/SKILL.md)を使用し、authoringをCodexのexact model `gpt-6-astra`へ固定します。利用不能時は別modelへfallbackせず停止します。既存assetの組み込み、変換結果の検査、RealityKit側の実装、レビューはClaudeまたはCodexが担当できます。
 - GitHub、Supabase、Cloudflare、Linear、Vercel、ElevenLabs、App Store Connectを含む認証済み外部操作は、CodexとClaudeが同じ [external operations skill](./.agents/skills/external-ops/SKILL.md)を使い、実行直前に設定済みアカウントと対象を照合します。
 - 一行の秘密値はmacOS Keychainへ保存し、`tools/run-with-secret.sh`が子プロセスの環境だけへ渡します。App Store Connectの`.p8`は`~/Library/Application Support/iOS-Template/secrets/${appSlug}/`の`0700`ディレクトリ／`0600`ファイルだけを`tools/run-with-private-key.sh`で使用します。取得値を表示するコマンドはなく、`.secrets/`と`secret-staging/`もGit管理外です。
 
