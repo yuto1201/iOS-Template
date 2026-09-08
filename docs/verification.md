@@ -108,6 +108,10 @@ BuildとUnit Testは同じHead SHAにつき一度実行し、4つのlocaleごと
 
 Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evidence producer自体へ依存する場合は、iOSのUnit Testだけで代用しません。`tools/run-repository-tests.sh` を使い、current Headのtracked `tools/tests/test-*.sh` 全件をrunner所有のclean detached worktreeで実行します。各ACへ関連test pathをexactに一度対応付け、成功した全testのexit status、sanitized output digest、時刻、runner bytesを `.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-tests.json` へno-replaceで保存します。test本文のstdout/stderrはartifactへ保存しません。失敗、Head変更、dirty caller、contract不一致、mapping不足、既存artifact衝突のどれかがあればcanonical evidenceは発行しません。
 
+iOS runner回帰は、共通の`tools/tests/lib/ios-runner-fixture.sh`と独立した10個のtracked entrypointへ分けています。引数なしの`bash tools/tests/test-ios-runner.sh`はshape／scope／timeout群だけを実行します。`scoped`も同じ群、`stubborn`は従来のTERM無視probe診断です。残る群は`test-ios-runner-{startup,baseline,identity,inputs,publication,resources,recovery,locking,finalization}.sh`で、各群は自身のtemporary repository、fake Xcode／Simulator、adapter stateを作り、終了時に自身のscratchだけを回収します。
+
+全runner回帰だけをローカル診断する場合は`bash tools/tests/test-ios-runner.sh all`を使います。このコマンドは各群を900秒上限で順番に実行し、一つでも失敗すれば失敗します。canonical repository runnerも既存の`test-*.sh`探索で全10群を実行し、群ごとの結果と開始・終了時刻を記録します。単一群の成功を全suiteの成功として扱わず、正式証拠には引き続き`tools/run-repository-tests.sh`を使います。productionの検証、case、assertion、timeout、証拠公開条件は変更しません。
+
 ```bash
 tools/run-repository-tests.sh \
   --issue "${ISSUE}" \
