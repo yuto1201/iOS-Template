@@ -266,6 +266,78 @@ rescue ArgumentError
   fail_closed('state record timestamp is invalid')
 end
 
+def validated_transition_pending(bytes, issue, repository, from, to, head_sha, executor)
+  value = JSON.parse(bytes)
+  exact_keys(value, %w[executor from headSha issue repository resumeState schemaVersion timestamp to], 'pending transition')
+  fail_closed('pending transition identity differs') unless value['schemaVersion'] == 1 && value['issue'] == Integer(issue) && value['repository'] == repository && value['from'] == from && value['to'] == to && value['executor'] == executor
+  expected_head = head_sha == 'null' ? nil : head_sha
+  fail_closed('pending transition Head differs') unless value['headSha'] == expected_head
+  workflow_state(value['resumeState'], 'pending resumeState', nullable: true)
+  begin
+    Time.iso8601(value.fetch('timestamp'))
+  rescue ArgumentError, KeyError
+    fail_closed('pending timestamp is invalid')
+  end
+  fail_closed('pending transition is not canonical') unless bytes == canonical_json(value)
+  value
+end
+
+# Bind cleanup to the exact physical ancestry, inode and bytes observed before
+# remote work. Reopening an identically named replacement is not authorization
+# to delete it. SnapshotSet verifies held descriptors and uses unlinkat.
+def with_transition_pending(path)
+  fail_closed('pending path must be absolute') unless path.start_with?('/') && File.expand_path(path) == path
+  snapshots = IOSTemplate::ReviewSealing::SnapshotSet.new('/', at: 'pending filesystem root')
+  directory = snapshots.root
+  ancestry = []
+  path.split('/').reject(&:empty?)[0...-1].each do |component|
+    directory = snapshots.directory(directory, component, at: 'pending directory')
+    ancestry << [directory.stat.dev, directory.stat.ino]
+  end
+  stat = File.lstat(path)
+  fail_closed('pending must be a regular single-link file') unless stat.file? && stat.nlink == 1
+  leaf = snapshots.leaf(directory, File.basename(path), at: 'pending transition')
+  signature = {'ancestry' => ancestry, 'device' => leaf.stat.dev, 'inode' => leaf.stat.ino,
+               'digest' => Digest::SHA256.hexdigest(leaf.bytes)}
+  snapshots.verify!
+  yield snapshots, directory, leaf, canonical_json(signature).strip
+rescue IOSTemplate::ReviewSealing::SealError, SystemCallError, IOError, JSON::ParserError, TypeError, ArgumentError => error
+  fail_closed("pending transition cannot be safely inspected: #{error.message}")
+ensure
+  snapshots&.close
+end
+
+def applied_transition_pending?(pending, state, document, owner, issue, repository)
+  workflow_state(pending['from'], 'pending from')
+  workflow_state(pending['to'], 'pending to')
+  fail_closed('pending transition edge is invalid') unless transition_allowed?(pending['from'], pending['to'])
+  verification = pending['from'] == 'in-progress' && pending['to'] == 'verify-passed'
+  if verification
+    sha(pending['headSha'], 'pending verification Head')
+  else
+    fail_closed('pending transition has a forbidden Head') unless pending['headSha'].nil?
+  end
+  if state.key?('schemaVersion')
+    full_state_record(state, issue, repository)
+    return false unless state['previousState'] == pending['from'] && state['transitionedAt'] == pending['timestamp']
+    return false if verification && state['headSha'] != pending['headSha']
+    if pending['to'] == 'in-progress' && %w[verify-passed changes-requested approved-for-merge].include?(pending['from'])
+      return false if state.key?('headSha')
+    end
+  else
+    live_preclaim_state_record(state, pending['to'])
+    return false unless state['timestamp'] == pending['timestamp']
+  end
+  return false unless state['state'] == pending['to'] &&
+    %w[executor from to resumeState].all? { |key| state[key] == pending[key] }
+  labels = document.fetch('labels').map { |label| label.fetch('name') }.select { |label| label.start_with?('state:') }
+  return false unless labels == ["state:#{pending['to']}"]
+  marker = latest_owned_state_marker(document, pending['to'], owner)
+  expected = pending.select { |key, _| %w[executor from to resumeState timestamp].include?(key) }
+  fail_closed('owned marker differs from applied pending transition') unless marker == expected
+  true
+end
+
 def contained_path(value, name, repo_root, allowed, required_type)
   nonempty_string(value, name)
   fail_closed("#{name} contains unsafe characters") if value.match?(/[\x00-\x1f\x7f]/)
@@ -824,19 +896,38 @@ when 'validate-state-transition-pending'
   fail_closed('validate-state-transition-pending arguments are invalid') unless ARGV.length == 7 && issue.match?(/\A[1-9][0-9]*\z/) && %w[codex claude].include?(executor)
   fail_closed('pending transition path is a symlink') if File.symlink?(path)
   bytes = File.binread(path)
-  value = JSON.parse(bytes)
-  exact_keys(value, %w[executor from headSha issue repository resumeState schemaVersion timestamp to], 'pending transition')
-  fail_closed('pending transition identity differs') unless value['schemaVersion'] == 1 && value['issue'] == Integer(issue) && value['repository'] == repository && value['from'] == from && value['to'] == to && value['executor'] == executor
-  expected_head = head_sha == 'null' ? nil : head_sha
-  fail_closed('pending transition Head differs') unless value['headSha'] == expected_head
-  workflow_state(value['resumeState'], 'pending resumeState', nullable: true)
-  begin
-    Time.iso8601(value.fetch('timestamp'))
-  rescue ArgumentError, KeyError
-    fail_closed('pending timestamp is invalid')
-  end
-  fail_closed('pending transition is not canonical') unless bytes == canonical_json(value)
+  value = validated_transition_pending(bytes, issue, repository, from, to, head_sha, executor)
   puts canonical_json(value)
+when 'snapshot-state-transition-pending'
+  fail_closed('snapshot-state-transition-pending arguments are invalid') unless ARGV.length == 1
+  with_transition_pending(ARGV.fetch(0)) { |_snapshots, _directory, _leaf, signature| puts signature }
+when 'finish-state-transition-pending'
+  path, signature, expected = ARGV
+  fail_closed('finish-state-transition-pending arguments are invalid') unless ARGV.length == 3
+  with_transition_pending(path) do |snapshots, directory, leaf, actual|
+    fail_closed('pending transition identity changed before cleanup') unless signature == actual && leaf.bytes == expected
+    snapshots.verify!
+    fail_closed('pending transition changed during cleanup') unless snapshots.unlink_if_same(directory, leaf)
+  end
+when 'recover-applied-state-transition'
+  path, issue, repository, executor, owner, signature = ARGV
+  fail_closed('recover-applied-state-transition arguments are invalid') unless ARGV.length == 6 && issue.match?(/\A[1-9][0-9]*\z/) && %w[codex claude].include?(executor) && owner.match?(/\A[A-Za-z0-9-]+\z/)
+  fail_closed('pending recovery path is noncanonical') unless path.end_with?("/.artifacts/issues/#{issue}/state-transition.pending.json")
+  document = JSON.parse(STDIN.read)
+  with_transition_pending(path) do |snapshots, directory, leaf, actual|
+    fail_closed('pending transition identity changed before recovery') unless signature == actual
+    value = JSON.parse(leaf.bytes)
+    object(value, 'pending transition')
+    pending = validated_transition_pending(leaf.bytes, issue, repository, value['from'], value['to'], value['headSha'] || 'null', executor)
+    state_leaf = snapshots.leaf(directory, 'state.json', at: 'pending durable state')
+    state = JSON.parse(state_leaf.bytes)
+    applied = applied_transition_pending?(pending, state, document, owner, Integer(issue), repository)
+    snapshots.verify!
+    if applied
+      fail_closed('applied pending transition changed during recovery') unless snapshots.unlink_if_same(directory, leaf)
+    end
+    puts applied ? 'recovered' : 'unapplied'
+  end
 when 'sanitize-result'
   path, request_path = ARGV
   fail_closed('sanitize-result arguments are invalid') unless ARGV.length == 2

@@ -219,6 +219,21 @@ Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approve
 
 状態はGitHub Issueのlabelとcommentを正本とします。ローカルの状態ファイルは再開を補助しますが、GitHubと矛盾する場合は実行モデルがGitHubを再確認します。
 
+### Pending transitionの寿命と復旧
+
+`state-transition.pending.json` は `.artifacts/issues/<Issue>/` に置く二相コミットの途中記録です。remote label変更より前に作成し、所有者markerの投稿とdurable `state.json` の書き込みが成功した後、観測済みの同一ファイルだけを削除します。削除失敗を成功として返しません。途中で停止した場合はpendingを残し、次の実行が同じ遷移を再開できます。
+
+次の異なる遷移を要求した時にpendingが残っていれば、実行モデルのaccount／Issue操作権限を再確認してlive Issueを読み、pendingのexact schema・canonical bytes・Issue／repository／executor・遷移・時刻・Headと、durable identity／遷移履歴、現在のlabel、最新の有効な所有者markerを照合します。すべて一致する**適用済み**記録だけを回収して要求された遷移へ進みます。これは検証・reviewの免除やstateの強制変更ではありません。未適用、履歴欠落、矛盾、別identity、symlink／hardlink、途中で差し替わったfile／directoryは回収しません。
+
+未完了のpendingが残る場合は、出力されたエラーとGitHubの状態を確認し、pendingに記録された元の `from`／`to` で同じコマンドを再実行します。例えば `verify-passed -> review-requested` が中断した場合:
+
+```sh
+tools/issue-state.sh transition --repo OWNER/REPO --issue NUMBER \
+  --from verify-passed --to review-requested
+```
+
+元の遷移が `in-progress -> verify-passed` の場合は、同じcanonical Issue worktreeからpendingと一致する `--head-sha` が必要です。別Headの証拠へ読み替えません。適用済みであることを確証できない記録を手作業で消す、`state.json`を編集する、labelを直接付け替える方法は使いません。復旧できない場合はpendingとエラーを保持し、欠けたidentityや履歴を正規手順で確認します。終了コードとstderrを確認し、出力を捨てて成功と報告しないでください。
+
 ## 5. Issue実行フロー
 
 ### 5.1 Claim

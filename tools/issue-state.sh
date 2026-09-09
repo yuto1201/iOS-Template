@@ -159,8 +159,51 @@ fi
 # Validate the durable record before any GitHub mutation. This preserves Task 4
 # identity records and makes malformed or escaping state fail closed.
 current_record=$(prepare_state "$current" null "$current" null)
+# prepare_state runs in command substitution; resolve its validated parent in
+# this shell too, so descriptor-based cleanup never traverses the artifact link.
+state_file="$(ruby -e 'puts File.realpath(File.dirname(ARGV.fetch(0)))' "$state_file")/state.json"
 state_executor=$(jq -er '.executor | select(. == "codex" or . == "claude")' <<< "$current_record") || { echo 'durable state executor is invalid' >&2; exit 1; }
 require_transition_head
+pending_path="$(dirname "$state_file")/state-transition.pending.json"
+load_pending() {
+  ruby "$json_tool" validate-state-transition-pending "$pending_path" "$issue" "$repo" "$from" "$to" "${head_sha:-null}" "$state_executor"
+}
+write_pending() {
+  local document=$1 temporary
+  [[ ! -L "$pending_path" ]] || { echo 'pending state transition path is a symlink' >&2; exit 1; }
+  temporary=$(mktemp "${pending_path}.tmp.XXXXXX")
+  printf '%s' "$document" > "$temporary"
+  chmod 600 "$temporary"
+  mv -f "$temporary" "$pending_path"
+}
+finish_pending() {
+  [[ "${IOS_TEMPLATE_STATE_FAIL_AFTER_DURABLE:-0}" != 1 ]] || { echo 'injected failure after durable state' >&2; exit 97; }
+  ruby "$json_tool" finish-state-transition-pending "$pending_path" "$pending_signature" "$pending"
+}
+
+preauthorized_from_document=''
+if [[ -e "$pending_path" || -L "$pending_path" ]]; then
+  pending_signature=$(ruby "$json_tool" snapshot-state-transition-pending "$pending_path") || exit 1
+  # Only a different requested edge needs recovery. The original edge keeps
+  # its existing two-phase resume behavior, including incomplete remote work.
+  pending_identity=$(jq -er '[.from,.to,(.headSha // "null")] | join(" ")' "$pending_path") || exit 1
+  if [[ "$pending_identity" != "$from $to ${head_sha:-null}" ]]; then
+    issue_json=$(read_issue)
+    current=$(state_from_issue "$issue_json")
+    require_issue_operation "$issue_json" github.update_issue || exit 1
+    recovery=$(ruby "$json_tool" recover-applied-state-transition "$pending_path" "$issue" "$repo" "$state_executor" "$expected_owner" "$pending_signature" <<< "$issue_json") || exit 1
+    if [[ "$recovery" == recovered ]]; then
+      echo 'recovered exact applied pending state transition' >&2
+    fi
+  fi
+fi
+if [[ -e "$pending_path" || -L "$pending_path" ]]; then
+  pending=$(load_pending) || { echo 'pending state transition is malformed or belongs to another transition' >&2; exit 1; }
+  timestamp=$(jq -er '.timestamp' <<< "$pending")
+  pending_resume=$(jq -r '.resumeState // "null"' <<< "$pending")
+fi
+# Reject a protected pending identity before blocked-history recovery can
+# mutate labels. A partly applied remote label is not a new transition.
 resume_state=null
 if workflow_is_blocked "$from" || [[ "$from" == paused ]]; then
   resume_state=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-from-comments "$from" "$expected_owner" 2>/dev/null || true)
@@ -179,28 +222,7 @@ if workflow_is_blocked "$from" || [[ "$from" == paused ]]; then
 fi
 if workflow_is_blocked "$to" || [[ "$to" == paused ]]; then resume_state=$from; fi
 
-pending_path="$(dirname "$state_file")/state-transition.pending.json"
-load_pending() {
-  ruby "$json_tool" validate-state-transition-pending "$pending_path" "$issue" "$repo" "$from" "$to" "${head_sha:-null}" "$state_executor"
-}
-write_pending() {
-  local document=$1 temporary
-  [[ ! -L "$pending_path" ]] || { echo 'pending state transition path is a symlink' >&2; exit 1; }
-  temporary=$(mktemp "${pending_path}.tmp.XXXXXX")
-  printf '%s' "$document" > "$temporary"
-  chmod 600 "$temporary"
-  mv -f "$temporary" "$pending_path"
-}
-finish_pending() {
-  [[ ! -L "$pending_path" ]] || { echo 'pending state transition path became a symlink' >&2; exit 1; }
-  rm -f "$pending_path"
-}
-
-preauthorized_from_document=''
 if [[ -e "$pending_path" || -L "$pending_path" ]]; then
-  pending=$(load_pending) || { echo 'pending state transition is malformed or belongs to another transition' >&2; exit 1; }
-  timestamp=$(jq -er '.timestamp' <<< "$pending")
-  pending_resume=$(jq -r '.resumeState // "null"' <<< "$pending")
   [[ "$pending_resume" == "$resume_state" ]] || { echo 'pending state transition resume state differs' >&2; exit 1; }
 else
   [[ "$current" == "$from" ]] || { echo "compare-and-set failed: expected state:$from, found state:$current" >&2; exit 1; }
@@ -209,6 +231,7 @@ else
   workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || { echo 'GitHub account preflight failed before Issue mutation' >&2; exit 1; }
   pending=$(ruby "$json_tool" state-transition-pending "$issue" "$repo" "$from" "$to" "$resume_state" "$timestamp" "${head_sha:-null}" "$state_executor")
   write_pending "$pending"
+  pending_signature=$(ruby "$json_tool" snapshot-state-transition-pending "$pending_path") || exit 1
 fi
 
 transition_record=$(prepare_state "$to" "$from" "$to" "$resume_state" "${head_sha:-null}")
