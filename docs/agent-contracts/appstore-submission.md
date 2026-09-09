@@ -1,10 +1,10 @@
 # App Store submission contract
 
-This contract separates release readiness from authenticated App Store Connect mutation. A prepared package does not authorize submission.
+This contract separates offline drafts, selective metadata saves, release readiness and authenticated submission. A prepared package does not authorize submission. The selective-save procedure is a specification for a future entrypoint, not an available remote-write capability.
 
 ## Source inventory and registration preparation
 
-This section implements the documentation requirements of #53 and [architecture §9.1](../../specs/architecture.md#91-原稿の正本と登録準備). It is a preparation procedure, not a new executable registration or partial-save mode. The authority, immutable release-package and ordered submission gates below still apply to actual remote writes. Source-readiness schema/validation and read-only registration preflight are tracked separately in [#62](https://github.com/yuto1201/iOS-Template/issues/62); partial metadata-save semantics are specified in #52. Any future registration mutation needs its own explicit implementation/operation contract and approvals; #62 does not authorize it.
+This section implements the documentation requirements of #53 and [architecture §9.1](../../specs/architecture.md#91-原稿の正本と登録準備). It is a preparation procedure, not a new executable registration or partial-save mode. All current remote-write scripts retain their authority, immutable release-package and ordered submission gates. Source-readiness schema/validation and read-only registration preflight are tracked separately in [#62](https://github.com/yuto1201/iOS-Template/issues/62); #52 specifies the separate future save route below. Any future registration mutation needs its own explicit implementation/operation contract and approvals; neither Issue authorizes it.
 
 ### Field inventory and source-to-ASC map
 
@@ -22,7 +22,7 @@ Maintain one row per field and locale, not one blanket “metadata complete” c
 | SKU | Approved stable internal identifier in reviewed draft; existing remote value on resume | New App SKU | user + account |
 | Categories, copyright | `metadata/app.yml.category` / `copyright`; secondary category if needed in reviewed draft | App Information / version information | derive + user |
 | Support, privacy, marketing and other required public URLs | Existing app.yml URL fields; remaining URLs in reviewed draft; exact user-designated app pages | Version Support/Marketing URL; localized Privacy Policy URL | public + user |
-| Review contact and demo access | `metadata/app.yml.reviewContactReference`, `App Store/review/` instructions; Keychain-only actual contact/credentials | App Review Information | user + account |
+| Review notes, contact and demo access | `App Store/review/` non-secret instructions/notes; `metadata/app.yml.reviewContactReference`, Keychain-only actual contact/credentials | App Review Information, including Notes (version-specific; do not invent a localized remote field) | derive + user + account |
 | Privacy, tracking, permissions, account deletion | `App Store/privacy/data-use.yml`, actual feature/dependency inventory, SDK configuration and privacy manifests | App Privacy declarations; related review information | derive + user |
 | Age rating, content rights and export/compliance answers | App behavior and reviewed-draft questionnaire with explicit unanswered fields | App Information questionnaires / build compliance | derive + user |
 | Legal documents / EULA choice | `App Store/legal/`, approved data-use facts and public-page comparison | Privacy policy link / applicable license agreement | user + public |
@@ -84,7 +84,107 @@ The implementation Issue must turn these into synthetic positive/negative fixtur
 
 Do not toggle the current `submission/checklist.yml` booleans merely because draft rows are filled. Full package validation, privacy audit, first-publication legal approval, screenshots and release-auditor approval retain their existing meanings. Preserve AppLibrary's unresolved public routing below. No screenshot generation, Apple account inspection/mutation, product registration or legal publication is part of #53.
 
+## Operation modes and selective metadata save
+
+Reuse the inventory above; do not create a second field schema. Select the narrowest mode that matches the requested outcome:
+
+| Mode | Required input | Output | Forbidden in this mode |
+| --- | --- | --- | --- |
+| `draft` | App facts/specifications, existing `App Store/` sources, requested fields/locales and unresolved reasons | Reviewed source rows and a proposed diff; unknowns stay draft | Authenticated inspection without its own authority; any remote write, capture/upload, package seal or submission |
+| `save` (future entrypoint) | Confirmed selected rows, fixed source digests, current requirements, exact authorized Team/App/Bundle/platform/version, field/locale scope, remote baseline and known publication effect | Per-field/per-locale verified readbacks or explicit failed/unknown/blocked/deferred results in a separate journal | Unconfirmed or unrelated fields, unknown-to-empty overwrites, registration, screenshots/capture/upload, build upload/selection, pricing, agreements, automatic legal approval, review submission or release |
+| `ready` | Complete candidate sources, distribution build, all required images/declarations/legal approval, full app verification and release audit | Existing immutable schema-2 `${VERSION}-package.json`, produced by `prepare-appstore-assets` | Remote writes or submission; calling a partial save record a complete package |
+| `submit` | Exact ready package plus Issue-bound operations/executor and explicit permission to submit that candidate | Existing ordered `${VERSION}-result.json` with fresh remote readback; `submitted` only after the final action | Unsealed values, drift, unapproved declarations/legal claims, unauthorized publication or claiming Apple approval |
+
+`save` can precede `ready`; it never replaces it. Missing screenshots, build or unapproved privacy/legal rows defer those rows and full release readiness, not an independent confirmed general description. The actual remote form may still require coupled fields: if those cannot be supplied safely, defer that entire form while continuing other independent drafts/forms. General copy that makes a privacy, legal, price or unsupported feature claim is not exempt merely because it is in Description.
+
+The existing `submit-appstore-release` skill routes requests to this contract, offline preparation or its complete release workflow. Its scripts do **not** implement selective save. Until the [dedicated implementation](../../specs/architecture.md#92-原稿保存と正式提出の分離) is merged, return the draft/diff and the missing implementation dependency; do not invent a `--draft` flag, feed incomplete inputs to `record-section.sh`, or bypass it with manual authenticated browser input. #52 itself performs no Apple operation.
+
+### Selective-save preconditions and transaction
+
+For the future entrypoint, each save attempt must meet all of the following; no whole-package prerequisite is silently weakened in the existing release entrypoint:
+
+1. Read the live and sealed Issue scope, exact executor, `appstore.inspect_app` and `appstore.update_metadata` declarations, required user approvals and configured ownership. Confirm the active Team, exact existing App Apple ID/Bundle, platform/version and current app/version status with fresh provider evidence. Missing/mismatched identity, role or authentication blocks all authenticated work. A build may be absent for metadata-only save; record that absence, never fabricate a build or select one. If the current provider cannot represent this mode safely, implement its bounded contract first rather than bypassing preflight.
+2. Freeze the selected source files' exact SHA-256 and revision, field/locale mapping, confirmation references and intended non-secret values. Use the existing app-information versus version-information inventory. Name/subtitle and categories may affect the app more broadly than one version; review Notes are not necessarily localized. Match actual remote fields, not the local file organization. Unknown/missing is different from an explicitly authorized empty value or deletion.
+3. Refresh Apple's field requirements, editability and actual save effect for this app status. A button named Save does not prove private staging: some metadata changes affect a public page without a new version. Defer public-impact fields unless that exact impact is explicitly authorized with all applicable approvals; unknown effect always stops the field/form. Never change release settings, accept agreements or create an App/version to make a form editable. [Apple editing procedure](https://developer.apple.com/help/app-store-connect/create-an-app-record/view-and-edit-app-information/) and [version properties](https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information/) (checked 2026-09-09).
+4. Read the complete remote form that will be saved, including coupled fields and pending edits, and compare it to the fixed intended patch. Confirm required fields and keep unselected values unchanged. If any required value is unconfirmed, an unrelated pending change would be committed, the baseline drifts, or the adapter cannot isolate the authorized patch, stop that form and record the cause. Never discard another person's pending edits or overwrite them with an old local copy.
+5. Record the sanitized intent/baseline before dispatch, recheck identity/source/baseline immediately before the mutation, then save only that patch. Use conditional version/etag protection when available; otherwise detect conflicts through pre/post readback and report the limitation rather than claiming an atomic compare-and-set. A failed or ambiguous response remains failed/unknown until a fresh same-identity readback resolves it; do not blindly retry.
+6. Read all saved and preserved fields back from the same remote form. Compare selected fields to intended values and unselected fields to the baseline. Only exact agreement, including the source digest and locale/section, supports `remote-saved`. Report each locale separately. A conflicting readback is not success; do not auto-restore values. No capture/upload step may be called because images are deferred.
+
+Use only confirmed general text for early saves. Unapproved privacy/legal declarations, questionnaire answers, URLs with unresolved public destinations, review contact/credentials, prices and access decisions remain outside the patch. Existing approved independent data on a coupled form may be preserved, but cannot be silently reconfirmed or modified. Missing independent information does not authorize a false no-data declaration or a placeholder URL.
+
+### Separate save journal and resume
+
+The future versioned format is `recordType: appstore-metadata-save`, `schemaVersion: 1`; it is neither an Issue verification record nor an ASC release result. Store append-only intent/outcome events under the owning app repository's `.artifacts/appstore-metadata/<issue>/<attempt>/`, outside `App Store/` and canonical `.artifacts/issues/` evidence. Each attempt has a unique ID and references its preceding attempt when resuming. Reject existing different bytes, unsafe paths/symlinks and unowned directories; never clean up another attempt or user file. Retain sanitized history for resume; missing history requires a fresh inventory, not invented success. Do not change package hash exclusions or add an active journal inside a sealed package.
+
+Each event binds Issue/contract reference, executor, source revision, selected source relative path/anchor/digest, operation and approval references, requirement URLs/check time, Team/App/Bundle/platform/version, current status/public effect, locale/section/field, full-form baseline digest, intended patch digest, save outcome, remote reference, readback digest, UTC time and blocked/deferred reason. Distinguish `eventType: intent` (null outcome/readback, no completion claim) from `eventType: outcome`; an intent left without an outcome requires remote reconciliation before retry. Use repository-relative source paths that resolve to permitted regular sources; reject escapes. A shared app field still records the selected version as context and its actual app-wide scope. Keep non-secret reviewed values in `App Store/`, not the journal.
+
+Illustrative **non-executable** event below is synthetic; angle-bracket tokens are not valid evidence. Production digests must be exact SHA-256 of observed bytes, never this example:
+
+```yaml
+recordType: appstore-metadata-save
+schemaVersion: 1
+eventType: outcome
+issue: 123
+attempt: example-02
+previousAttempt: example-01
+contractReference: <exact issue contract path and digest>
+executor: codex
+operation: appstore.update_metadata
+approvalReference: <scope and any required publication approval>
+sourceRevision: <40-hex commit>
+requirements: {checkedAt: <UTC time>, sources: [<official field requirements URL>]}
+target: {teamId: EXAMPLETEAM, appAppleId: "1234567890", bundleId: com.example.sample, platform: iOS, version: "1.0"}
+remoteState: {appStatus: <observed>, versionStatus: <observed>, build: null, publicEffect: <verified effect>}
+field: description
+section: version-localization
+locale: ja
+source: {path: App Store/metadata/localizations/ja.yml, anchor: description, digest: <sha256 of exact file>}
+confirmationReference: <source-bound confirmation>
+baselineDigest: <sha256 of full sanitized form projection>
+intendedPatchDigest: <sha256 of selected field patch>
+outcome: remote-saved
+remoteReference: asc://apps/1234567890/versions/1.0/localizations/ja
+readbackDigest: <sha256 of full sanitized form readback>
+checkedAt: <UTC time>
+reason: null
+```
+
+The writer defines a versioned deterministic UTF-8 serialization of field IDs, locales and non-secret values for patch/form digests; it must distinguish absent, null and empty string, preserve exact Unicode content and use the same serializer for baseline/intended/readback comparisons. Do not silently trim, normalize or truncate. Raw credentials, contact details, authenticated transcripts and their value hashes do not enter the projection or logs; when an authorized complete-form comparison needs them, compare transiently in the protected process and retain only a sanitized verification reference. If that cannot be done safely, stop the form.
+
+Outcomes are `remote-saved`, `unchanged-verified`, `failed`, `unknown`, `blocked`, `deferred`, or `stale`. `unchanged-verified` requires current matching readback without a new save. No dispatched mutation/readback means a null corresponding digest, not a made-up hash. For example, a Japanese description may be `remote-saved`, English description `failed` with `remote-validation` reason, screenshots `deferred` with `user-deferred` reason, and privacy `blocked` with `approval-missing` reason. Only the Japanese row is verified; the batch is partial, not ready/submitted. Deferred rows record the affected field/locale and known source/identity references, null unavailable data and an unblock condition.
+
+On resume:
+
+1. Reauthenticate and revalidate the exact configured identity, Issue/executor/operations and approvals. A stored successful preflight is not current authority.
+2. Resolve the current source files, revision/digests, confirmation dependencies and official requirements; retain old events. Source or SDK/legal changes mark affected rows stale and require reconfirmation before writing.
+3. Read the actual current app/version status, editability, public effect and **every** previously saved form, not merely failed rows. Compare against both the former readback and the current intended source. Local success flags alone never skip a field.
+4. If current remote equals current confirmed intent and preserved fields match, append `unchanged-verified`. If remote changed, compute a new authorized diff against that baseline; unresolved conflicts stop for the user's decision rather than restoring old text. Resolve an ambiguous prior save by readback before another attempt; if observation is unavailable, keep it unknown and stop.
+5. Process only still-authorized independent patches through the transaction above, append new outcomes and report partial results/deferred causes. Never promote the journal into `${VERSION}-result.json`, flip checklist booleans, or infer release readiness from saved text.
+
+### Selective-save verification plan
+
+Use the same fixtures for English and Japanese where applicable. This table specifies manual/behavioral checks for the future implementation; #52 does not claim an authenticated save test. Use synthetic app data only, including the example request “enter confirmed text; leave screenshots for later.”
+
+| Case | Expected observation and action |
+| --- | --- |
+| Screenshots deferred, build absent, independent description confirmed | Save only the eligible description after preflight/form checks; images/build remain deferred, no capture/upload/build selection calls, no ready package |
+| Japanese save succeeds, English fails validation | Read back each locale; record Japanese only as saved and English failed, preserve source and remote English values; resume by rereading both |
+| Another editor changes remote text or a coupled field | Detect baseline/readback drift, recompute the permitted diff or stop for conflict resolution; never overwrite the changed field from old success flags |
+| Length at limit and over limit, ASCII/Japanese/combining accents/emoji/newlines | Refresh exact field units and limits; reject excess without truncation, require confirmed corrected copy; test byte and character boundaries separately |
+| Placeholder, `.invalid`, login-only or catalog-top support/privacy URL | Defer the URL/form until an approved exact public page matches the source; no placeholder save, while independent valid drafts continue |
+| Privacy/legal unapproved, including such a claim inside Description | Do not submit those claims or infer approval from AI review; save only independent confirmed general text, retain the release blocker |
+| Authentication expires or Team/App/Bundle/version differs | No mutation; record sanitized auth/identity blocker and rerun live preflight before resume, never switch accounts |
+| Save response times out after remote success | Mark unknown, reread same form/identity and resolve exact values before any retry; no duplicate action based on a missing local result |
+| App is already live and promotional text has public effect, or effect is unknown | Reject private-draft assumption; known public effect requires explicit scoped permission/approvals, unknown effect stops; no release-setting changes |
+| Required field unresolved, pending edit unrelated, unknown value supplied as empty | Refuse the entire coupled form; preserve all existing values and user edits, continue only independent work |
+| Source revision/digest changes or a saved row's remote value drifts on resume | Mark stale and recompare/reconfirm affected rows; unchanged source does not prove unchanged remote |
+| Partial journal supplied to full-release entrypoint | Reject it; preserve required images/build/declarations/legal/audit/full verification and explicit submission permission, with old package/result compatibility |
+
+Check current [Apple version-field requirements](https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information/), [app information](https://developer.apple.com/help/app-store-connect/reference/app-information/app-information/) and [required/localizable/editable properties](https://developer.apple.com/help/app-store-connect/reference/app-information/required-localizable-and-editable-properties/) at each new save batch/resume; record check time and public source references without editing an already sealed requirement snapshot. At the 2026-09-09 check, keywords allow 100 **bytes**, description 4,000 characters and promotional text 170 characters. Do not equate visible glyphs, code points, UTF-16 units and UTF-8 bytes; retain exact source content, check the actual field's documented unit and remote validation, and stop if its counting rule is unresolved. Table extraction that loses checkmarks is not evidence of editability. A bundled validator or a previously cached limit is not current Apple authority. Turn these cases into real-entrypoint fake-adapter tests in the implementation Issue, including no-write assertions, journal redaction/path ownership and immutable release regressions.
+
 ## Authority and entry conditions
+
+The following sections govern the existing complete release workflow, not the future selective-save entrypoint. Before any final submission require an explicit, still-current authorization for this exact candidate; earlier permission to prepare or save text is insufficient. The separate save journal cannot satisfy these gates.
 
 - Codex and Claude may execute App Store Connect, authenticated browser, upload, signing-account, and provider operations when named as the Issue executor.
 - The release Issue must declare each intended production operation, including inspection, section updates, screenshot upload, build selection, and submission for review. No skill invocation broadens Issue authority.
@@ -101,7 +201,7 @@ AppLibrary's layout and Vercel migration are still being developed separately. T
 
 ## Immutable inputs
 
-Schema-2 preparation also binds the canonical full application verification Issue, trusted Base, path and digest. Require the same current Head and Bundle ID, completed English/iPad adaptation, and all four cases. Before external writes and on resume, run `ruby tools/lib/release-verification.rb "$PWD" "$PACKAGE_MANIFEST" "$HEAD_SHA" "$BUNDLE_ID"`; it is read-only and does not grant authority. Old manifests without this proof require resealing. The section recorder rejects stale, partial or changed proof independently.
+Schema-2 preparation also binds the canonical full application verification Issue, trusted Base, path and digest. Require the same current Head and Bundle ID, completed English/iPad adaptation, and all four cases. Before external writes in the complete release workflow and on its resume, run `ruby tools/lib/release-verification.rb "$PWD" "$PACKAGE_MANIFEST" "$HEAD_SHA" "$BUNDLE_ID"`; it is read-only and does not grant authority. Old manifests without this proof require resealing. The section recorder rejects stale, partial or changed proof independently.
 
 The prepared manifest binds the Bundle ID, version, source SHA, build digest, package tree digest, requirement cache, screenshot manifest, release audit, and first-publication approval. Recompute them at workflow start and resume. Any mismatch invalidates all unperformed sections; never repair a mismatch by editing the manifest or remote values.
 

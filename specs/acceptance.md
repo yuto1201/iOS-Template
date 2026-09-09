@@ -1,7 +1,7 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 2.3
+Version: 2.4
 Date: 2026-09-09
 
 ## 1. テンプレート完成条件
@@ -138,3 +138,10 @@ Foundation、Identity bootstrap、Simulator verificationなどテンプレート
 - Team未設定・別Team、Bundle未登録、App未作成、名前重複、権限不足、契約更新を区別する。契約同意、初回法務本文、価格、アクセス変更はユーザーへ引き継ぎ、秘密・連絡先実値は保存しない。
 - [必須fixtureとreadiness例](../docs/agent-contracts/appstore-submission.md#readiness-report-and-required-fixtures)で、テンプレートBundle/文面、invalid・未公開URL、広告SDKとprivacyの乖離、age rating未回答、IAP本番未設定、確認済みsourceの変更、曖昧なremote応答を検出する。正常な合成アプリでは根拠付きfieldだけを確認済みとし、独立欄の準備を継続できる。
 - 既存package/result/checklistの互換性、完全release gate、初回法務承認、外部operation境界を維持する。スクリーンショットは別途依頼・確定前に生成しない。文書リンクと現在Headの反対モデルレビューを完了する。
+
+原稿先行保存は同じ基盤の拡張とし、[構成 §9.2](architecture.md#92-原稿保存と正式提出の分離)と[保存契約](../docs/agent-contracts/appstore-submission.md#operation-modes-and-selective-metadata-save)に従う。#52は仕様とroutingの完了であり、次のremote操作やTestを実装・実行済みとは報告しない。
+
+- `draft`／`save`／`ready`／`submit`の入力、出力、禁止操作を区別する。画像・build・法務が未完でも、独立した確認済み一般原稿の保存だけを正しいTeam/App/Bundle/version/localeと操作権限の下で進められる。公開影響や必須form fieldが不明・未許可ならその保存を止める。
+- package外の別形式にsource相対path・anchor・revision/digest、locale/section、remote identity、差分・保存結果・readback digest、blocked/deferred理由を記録する。片言語だけの成功を全件成功とせず、source/remote driftと認証を再確認してから再開する。
+- [手動検証表](../docs/agent-contracts/appstore-submission.md#selective-save-verification-plan)の全caseを確認し、後続実装では実入口の合成fixtureへ落とす。英語／日本語、Unicode、byteと文字数、Apple公式要件の再取得を含み、未知値の空文字上書き、権限外のform同時保存、曖昧応答の盲目的再試行を拒否する。
+- 部分保存記録では全素材・申告・法務・release audit・明示提出許可を満たせず、既存release journalに流用できない。実装Issueのwrite-setとTest計画は§9.2で定め、#62のread-only準備と実保存を混同しない。
