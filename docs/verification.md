@@ -32,6 +32,8 @@ stage未指定のClaim済みcontractは旧release-level gateを維持します�
 6. `full`は4行、`iphone-ja`は日本語iPhoneの1行、`targeted`はIssueで宣言したcanonical部分集合を作る。
 7. `.artifacts/batches/${batchId}/simulator-matrix.json` へ保存する。
 
+Claim／Resume後のIssue worktreeから、[ios-verifyのlocked command](../.agents/skills/ios-verify/SKILL.md#application-verification)をそのまま実行します。resolverとrunnerはいずれもそのworktreeの実装を使います。matrix IOはraw `../../.artifacts`、primary直下の`.worktrees`配置、Git metadataの往復参照を照合し、primaryの物理artifact storeを`O_NOFOLLOW`付きdescriptorで開きます。親directoryとmetadataを操作終了まで保持・再照合するため、任意linkや途中の差し替えは拒否します。clean detached test worktreeの物理的なprivate storeも維持します。凍結済みの完全なmatrixの再利用では、そのbyte列を変更しません。
+
 名前に合う端末が見つからない場合、別端末へ自動フォールバックしません。`blocked:environment` として、利用可能な候補一覧を報告します。
 
 ### 2.1 Repository test prerequisites

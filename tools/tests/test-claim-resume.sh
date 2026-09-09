@@ -2,7 +2,7 @@
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" rg git jq ruby
+require_test_commands "$0" rg git jq ruby swift swiftc
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-claim-resume.XXXXXX")
@@ -367,6 +367,12 @@ assert_fails 'resume rejects an unsafe shared artifact link without replacing it
 [[ -L "$clone/.worktrees/42-settings-screen/.artifacts" && "$(readlink "$clone/.worktrees/42-settings-screen/.artifacts")" == '../../outside' ]] || { echo 'resume replaced an unsafe artifact link' >&2; exit 1; }
 rm "$clone/.worktrees/42-settings-screen/.artifacts"
 ln -s ../../.artifacts "$clone/.worktrees/42-settings-screen/.artifacts"
+
+# Run the real lifecycle entrypoint in the worktree produced by Claim and
+# restored by Resume. Its private platform fixtures exercise fresh resolution,
+# frozen reuse and rejection paths without touching the host's Simulators.
+cp -R "$clone/.agents" "$clone/.worktrees/42-settings-screen/"
+(cd "$clone/.worktrees/42-settings-screen" && /bin/bash tools/tests/test-simulator-lifecycle.sh)
 
 cp "$comments_file" "$workspace/claim-comments.json"
 
