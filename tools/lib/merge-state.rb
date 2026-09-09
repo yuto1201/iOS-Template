@@ -4,6 +4,7 @@
 require "digest"
 require "json"
 require "time"
+require "open3"
 require_relative "descriptor-files"
 require_relative "issue-contract"
 require_relative "delivery-profile"
@@ -68,7 +69,7 @@ def canonical_topology(root, issue, mode)
   [root, primary, issue_dir, handles]
 end
 
-def validate_state(root, repository, issue, mode)
+def validate_state(root, repository, issue, mode, recover_missing_pr: false)
   repository!(repository, "requested repository")
   positive_integer!(issue, "requested Issue")
   root, primary, issue_dir, handles = canonical_topology(root, issue, mode)
@@ -115,7 +116,7 @@ def validate_state(root, repository, issue, mode)
     refuse("approved state history is invalid") unless state["previousState"] == expected_previous && state["resumeState"].nil? && state["from"] == expected_previous && state["to"] == "approved-for-merge"
   when "merged"
     refuse("merged state history is invalid") unless state["previousState"] == "approved-for-merge" && state["resumeState"].nil? && state["from"] == "approved-for-merge" && state["to"] == "merged"
-    positive_integer!(state["pullRequest"], "merged state pullRequest")
+    positive_integer!(state["pullRequest"], "merged state pullRequest") unless recover_missing_pr && state["pullRequest"].nil?
   else
     refuse("state must be approved-for-merge or merged")
   end
@@ -165,6 +166,11 @@ def validate_state(root, repository, issue, mode)
     "externalOperations" => contract.fetch("externalOperations"),
     "title" => "Issue ##{issue}: #{title_goal}"
   }
+  if recover_missing_pr
+    refuse("PR recovery requires durable merged state") unless state_name == "merged"
+    result["transitionedAt"] = state.fetch("transitionedAt")
+    result["contract"] = contract
+  end
   handles.reverse_each { |handle| handle.close unless handle.closed? }
   result
 rescue IOSTemplate::IssueContract::ValidationError => error
@@ -179,7 +185,7 @@ ensure
   handles&.reverse_each { |handle| handle.close unless handle.closed? }
 end
 
-def atomic_update_state(identity)
+def atomic_update_state(identity, guard: nil)
   handles = DescriptorFiles.open_components(identity.fetch("primaryRoot"), [".artifacts", "issues", identity.fetch("issue").to_s])
   directory = handles.last
   directory.flock(File::LOCK_EX)
@@ -195,9 +201,23 @@ def atomic_update_state(identity)
     "mtimeSec" => original_stat.mtime.to_i, "mtimeNsec" => original_stat.mtime.nsec
   }
   refuse("durable state bytes or metadata changed after validation") unless digest == identity.fetch("stateDigest") && exact_metadata
+  guard&.call
   value = JSON.parse(bytes)
   yield value
-  DescriptorFiles.atomic_replace_at(directory, "state.json", JSON.generate(value), bytes, original_stat)
+  published_bytes = JSON.generate(value)
+  guard&.call
+  published_stat = DescriptorFiles.atomic_replace_at(directory, "state.json", published_bytes, bytes, original_stat)
+  if guard
+    begin
+      guard.call
+    rescue StandardError
+      # Undo only our exact publication. Never overwrite a concurrent writer.
+      current_bytes, current_stat = DescriptorFiles.read_regular_at(directory, "state.json")
+      raise IOError, "state changed after guarded publication" unless current_bytes == published_bytes && DescriptorFiles.metadata_equal?(published_stat, current_stat)
+      DescriptorFiles.atomic_replace_at(directory, "state.json", bytes, current_bytes, current_stat)
+      raise IOError, "recovery inputs changed during publication; PR binding rolled back"
+    end
+  end
   value
 rescue JSON::ParserError, IOError, SystemCallError, ArgumentError => error
   refuse("descriptor-bound state publication failed: #{error.message}")
@@ -206,8 +226,113 @@ ensure
   handles&.reverse_each { |handle| handle.close unless handle.closed? }
 end
 
+def recovery_command(root, stage, *arguments, input: "", timeout: 120)
+  output, _error, status = Open3.capture3(
+    "/usr/bin/ruby", File.join(root, "tools/lib/bounded-command.rb"),
+    "--stage", stage, "--timeout-seconds", timeout.to_s, "--", *arguments,
+    stdin_data: input, chdir: root
+  )
+  refuse("#{stage} failed; no PR binding was published") unless status.success?
+  output
+rescue SystemCallError, IOError
+  refuse("#{stage} unavailable; no PR binding was published")
+end
+
+def recovery_git_identity!(root, identity)
+  git = ->(*arguments) { recovery_command(root, "recovery-git", "git", "-C", root, *arguments, timeout: 30).strip }
+  refuse("recovery Git top-level differs") unless git.call("rev-parse", "--show-toplevel") == root
+  refuse("recovery Git common directory differs") unless git.call("rev-parse", "--path-format=absolute", "--git-common-dir") == File.join(identity.fetch("primaryRoot"), ".git")
+  refuse("recovery Branch differs") unless git.call("branch", "--show-current") == identity.fetch("branch")
+  refuse("recovery Head or raw Branch ref differs") unless git.call("rev-parse", "HEAD") == identity.fetch("headSha") && git.call("rev-parse", "refs/heads/#{identity.fetch('branch')}") == identity.fetch("headSha")
+  %w[baseSha headSha].each { |key| refuse("recovery #{key} is not a commit") unless git.call("cat-file", "-t", identity.fetch(key)) == "commit" }
+  git.call("merge-base", "--is-ancestor", identity.fetch("baseSha"), identity.fetch("headSha"))
+  refuse("recovery worktree is dirty") unless git.call("status", "--porcelain").empty?
+  repository = identity.fetch("repository")
+  origins = ["https://github.com/#{repository}", "https://github.com/#{repository}.git", "git@github.com:#{repository}", "git@github.com:#{repository}.git", "ssh://git@github.com/#{repository}", "ssh://git@github.com/#{repository}.git"]
+  refuse("recovery origin differs") unless origins.include?(git.call("remote", "get-url", "origin"))
+end
+
+def recovery_preflight!(root, identity)
+  refuse("sealed contract does not authorize PR inspection") unless identity.fetch("externalOperations").include?("github.read_issue")
+  JSON.parse(recovery_command(root, "recovery-account", File.join(root, "tools/github-account-preflight.sh"),
+    "--repo", identity.fetch("repository"), "--issue", identity.fetch("issue").to_s,
+    "--intended-operation", "github.read_issue", "--expected-head", identity.fetch("headSha")))
+end
+
+def recover_merged_pr(root, repository, issue, pr, expected_head)
+  require_relative "review-sealing"
+  identity = validate_state(root, repository, issue, "worktree", recover_missing_pr: true)
+  root = identity.fetch("worktreePath")
+  snapshots = IOSTemplate::ReviewSealing::SnapshotSet.new(identity.fetch("primaryRoot"), at: "recovery primary")
+  held_contract = snapshots.relative_leaf(".artifacts/issues/#{issue}/issue-contract.json", at: "recovery contract")
+  snapshots.relative_leaf("#{identity.fetch('worktree')}/Config/ownership.yml", at: "recovery ownership")
+  snapshots.relative_leaf("#{identity.fetch('worktree')}/.git", at: "recovery Git link")
+  refuse("held recovery contract differs") unless "sha256:#{Digest::SHA256.hexdigest(held_contract.bytes)}" == identity.fetch("contractDigest")
+  guard = lambda do
+    root_stat = File.lstat(identity.fetch("primaryRoot"))
+    held_root = snapshots.root.stat
+    raise IOError, "recovery primary identity changed" unless root_stat.directory? && !root_stat.symlink? && [root_stat.dev, root_stat.ino] == [held_root.dev, held_root.ino]
+    snapshots.verify!
+  end
+  guard.call
+  refuse("requested recovery Head differs") unless identity.fetch("headSha") == expected_head
+  refuse("existing PR binding conflicts") unless identity["pullRequest"].nil? || identity["pullRequest"] == pr
+  recovery_git_identity!(root, identity)
+  preflight = recovery_preflight!(root, identity)
+  owner = preflight.fetch("account")
+  refuse("recovery preflight target differs") unless preflight["repository"] == repository && preflight["issue"] == issue && preflight["headSha"] == expected_head && preflight["defaultBranch"] == "main" && preflight["intendedOperation"] == "github.read_issue"
+  issue_bytes = recovery_command(root, "recovery-issue-read", "gh", "issue", "view", issue.to_s, "--repo", repository,
+    "--json", "number,state,url,body,labels,comments")
+  live = JSON.parse(issue_bytes)
+  exact_keys!(live, %w[number state url body labels comments], [], "recovery live Issue")
+  refuse("recovery Issue is not exactly closed") unless live["number"] == issue && live["state"] == "CLOSED" && live["url"] == "https://github.com/#{repository}/issues/#{issue}"
+  helper = File.join(root, "tools/lib/workflow-json.rb")
+  state = recovery_command(root, "recovery-workflow-label", "/usr/bin/ruby", helper, "state-from-issue", input: issue_bytes).strip
+  refuse("remote workflow is not merged") unless state == "merged"
+  marker = JSON.parse(recovery_command(root, "recovery-owned-history", "/usr/bin/ruby", helper, "latest-state-marker", "merged", owner, input: issue_bytes))
+  expected_marker = {"executor"=>identity.fetch("primaryImplementer"), "from"=>"approved-for-merge", "to"=>"merged", "resumeState"=>nil, "timestamp"=>identity.fetch("transitionedAt")}
+  refuse("remote owned transition differs from durable history") unless marker == expected_marker
+  types = live.fetch("labels").map { |label| label["name"].delete_prefix("type:") if label.is_a?(Hash) && label["name"].is_a?(String) && label["name"].start_with?("type:") }.compact
+  refuse("remote Issue type is ambiguous") if types.length > 1
+  parsed = IOSTemplate::IssueContract.parse(live.fetch("body"), issue_type: types.fetch(0, "feature"), issue: issue,
+    repository: repository, fetched_at: identity.fetch("contract").fetch("fetchedAt"), allow_legacy_delivery_stage: true)
+  refuse("live operation authority differs from sealed contract") unless parsed.contract.fetch("externalOperationDetailsDigest") == identity.fetch("contract").fetch("externalOperationDetailsDigest")
+  permission = parsed.external_operation_details.find { |entry| entry["operation"] == "github.read_issue" }
+  refuse("live PR read executor differs") unless permission && permission["executor"].downcase == identity.fetch("primaryImplementer") && permission["environment"] == "production"
+
+  recovery_preflight!(root, identity)
+  fields = %w[number state baseRefName headRefName headRefOid headRepository headRepositoryOwner isCrossRepository closingIssuesReferences mergeCommit url]
+  document = JSON.parse(recovery_command(root, "recovery-pr-read", "gh", "pr", "view", pr.to_s, "--repo", repository, "--json", fields.join(",")))
+  exact_keys!(document, fields, [], "recovery PR")
+  refuse("recovery PR number, URL or merged state differs") unless document["number"] == pr && document["url"] == "https://github.com/#{repository}/pull/#{pr}" && document["state"] == "MERGED"
+  refuse("recovery PR Base, Branch or Head differs") unless document["baseRefName"] == "main" && document["headRefName"] == identity.fetch("branch") && document["headRefOid"] == expected_head
+  target_owner, target_name = repository.split("/", 2)
+  refuse("recovery PR source repository differs") unless document["isCrossRepository"] == false && document.dig("headRepository", "nameWithOwner") == repository && document.dig("headRepositoryOwner", "login") == target_owner
+  closing = document["closingIssuesReferences"]
+  refuse("recovery PR does not close exactly this Issue") unless closing.is_a?(Array) && closing.length == 1 && closing[0].is_a?(Hash) && closing[0]["number"] == issue && closing[0]["url"] == "https://github.com/#{repository}/issues/#{issue}" && closing[0].dig("repository", "name") == target_name && closing[0].dig("repository", "owner", "login") == target_owner
+  sha!(document.dig("mergeCommit", "oid"), "recovery merge commit")
+
+  recovery_git_identity!(root, identity)
+  refreshed = validate_state(root, repository, issue, "worktree", recover_missing_pr: true)
+  refuse("durable identity changed during remote inspection") unless refreshed == identity
+  value = atomic_update_state(identity, guard: guard) do |current|
+    refuse("PR binding changed before recovery publication") unless current["pullRequest"].nil? || current["pullRequest"] == pr
+    current["pullRequest"] = pr
+  end
+  {"status"=>"recorded", "issue"=>issue, "pullRequest"=>value.fetch("pullRequest"), "headSha"=>expected_head}
+rescue JSON::ParserError, KeyError, TypeError, NoMethodError, IOError, SystemCallError, IOSTemplate::IssueContract::ValidationError, IOSTemplate::ReviewSealing::SealError
+  refuse("invalid remote recovery evidence or authority")
+ensure
+  snapshots&.close
+end
+
 command = ARGV.shift
 case command
+when "recover-merged-pr"
+  root, repository, issue_text, pr_text, head = ARGV
+  refuse("invalid recovery arguments") unless ARGV.length == 5 && issue_text&.match?(/\A[1-9][0-9]*\z/) && pr_text&.match?(/\A[1-9][0-9]*\z/)
+  sha!(head, "requested recovery Head")
+  puts JSON.generate(recover_merged_pr(root, repository, Integer(issue_text), Integer(pr_text), head))
 when "validate-worktree", "validate-primary"
   root, repository, issue_text = ARGV
   refuse("invalid arguments") unless root && repository && issue_text&.match?(/\A[1-9][0-9]*\z/)

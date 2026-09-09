@@ -20,7 +20,7 @@ assert_fails() { local label=$1; shift; if "$@" >"$CASE_ROOT/out" 2>"$CASE_ROOT/
 assert_no_mutation() { [[ ! -s "$CASE_MUTATIONS" ]] || { cat "$CASE_MUTATIONS" >&2; fail_test "$1 performed an external mutation"; }; }
 
 make_case() {
-  local name=$1 state_name=${2:-approved-for-merge} persisted_pr=${3:-none}
+  local name=$1 state_name=${2:-approved-for-merge} persisted_pr=${3:-none} fixture_mode=${4:-normal}
   CASE_ROOT="$scratch/$name"; CASE_PRIMARY="$CASE_ROOT/repo"; CASE_REMOTE="$CASE_ROOT/remote.git"
   CASE_WORKTREE="$CASE_PRIMARY/$worktree_relative"; CASE_GH="$CASE_ROOT/gh"; CASE_BIN="$CASE_ROOT/bin"
   CASE_LOG="$CASE_ROOT/operations.log"; CASE_MUTATIONS="$CASE_ROOT/mutations.log"
@@ -39,6 +39,11 @@ make_case() {
   mkdir -p "$CASE_WORKTREE/tools/lib" "$CASE_WORKTREE/Config" "$CASE_PRIMARY/.artifacts/issues/$issue"
   cp "$source_root/Config/ownership.yml" "$CASE_WORKTREE/Config/ownership.yml"
   cp "$source_root/tools/merge-issue.sh" "$source_root/tools/render-pr-body.sh" "$source_root/tools/issue-state.sh" "$source_root/tools/validate-verify-json.swift" "$source_root/tools/prepare-review-packet.sh" "$CASE_WORKTREE/tools/"
+  cp "$source_root/tools/cleanup-issue.sh" "$CASE_WORKTREE/tools/"
+  if [[ -f "$source_root/tools/record-merged-pr.sh" ]]; then
+    cp "$source_root/tools/record-merged-pr.sh" "$CASE_WORKTREE/tools/"
+  fi
+  cp "$source_root/tools/lib/bounded-command.rb" "$CASE_WORKTREE/tools/lib/"
   cp "$source_root/tools/lib/merge-state.rb" "$source_root/tools/lib/descriptor-files.rb" "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/delivery-stage.rb" "$source_root/tools/lib/delivery-profile.rb" "$source_root/tools/lib/verification-scope.rb" "$source_root/tools/lib/ownership.rb" "$source_root/tools/lib/workflow.sh" "$source_root/tools/lib/workflow-json.rb" "$source_root/tools/lib/review-artifacts.rb" "$source_root/tools/lib/review-contract.rb" "$source_root/tools/lib/review-sealing.rb" "$source_root/tools/lib/prepare-review-packet.rb" "$CASE_WORKTREE/tools/lib/"
   ln -s ../../.artifacts "$CASE_WORKTREE/.artifacts"
   printf '.artifacts\n' >>"$(git -C "$CASE_WORKTREE" rev-parse --git-path info/exclude)"
@@ -70,6 +75,9 @@ if [[ "$label" == final ]]; then
   gh pr merge "$FAKE_PR" --repo "$FAKE_REPO" --squash --match-head-commit "$FAKE_HEAD"
 fi
 EOF
+  if [[ "$fixture_mode" == recovery ]]; then
+    cp "$source_root/tools/github-account-preflight.sh" "$CASE_WORKTREE/tools/"
+  fi
   chmod +x "$CASE_WORKTREE/tools/"*.sh "$CASE_WORKTREE/tools/lib/merge-state.rb"
   git -C "$CASE_WORKTREE" add tools Config && git -C "$CASE_WORKTREE" commit -m tools >/dev/null
   CASE_BASE=$(git -C "$CASE_WORKTREE" rev-parse HEAD)
@@ -102,7 +110,7 @@ log=${FAKE_LOG:?}; mutations=${FAKE_MUTATIONS:?}; state=${FAKE_GH:?}; repo=${FAK
 fields='number,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,closingIssuesReferences,mergeCommit,url'
 pr_json() { local status=$1; PR_STATE="$status" ruby -rjson -e 'state=ENV.fetch("PR_STATE"); repo=ENV.fetch("FAKE_SOURCE_REPO",ENV.fetch("FAKE_REPO")); owner=repo.split("/",2).first; target_owner,target_name=ENV.fetch("FAKE_REPO").split("/",2); issue=Integer(ENV.fetch("FAKE_CLOSING_ISSUE",ENV.fetch("FAKE_ISSUE"))); puts JSON.generate({"number"=>Integer(ENV.fetch("FAKE_PR")),"state"=>state,"baseRefName"=>"main","headRefName"=>ENV.fetch("FAKE_BRANCH"),"headRefOid"=>ENV.fetch("FAKE_HEAD"),"headRepository"=>{"nameWithOwner"=>repo},"headRepositoryOwner"=>{"login"=>owner},"isCrossRepository"=>ENV.fetch("FAKE_CROSS_REPO","false")=="true","closingIssuesReferences"=>[{"number"=>issue,"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/issues/#{issue}","repository"=>{"id"=>"R_fixture","name"=>target_name,"owner"=>{"id"=>"U_fixture","login"=>target_owner}}}],"mergeCommit"=>state=="MERGED" ? {"oid"=>ENV.fetch("FAKE_MERGE")} : nil,"url"=>"https://github.com/#{ENV.fetch("FAKE_REPO")}/pull/#{ENV.fetch("FAKE_PR")}"})'; }
 case "$1 $2" in
-  'auth status') [[ "$*" == 'auth status --active' ]] || exit 2; printf 'gh auth status active\n' >>"$log"; printf 'Logged in to github.com account yuto1201 (keychain)\n  - Active account: true\n' ;;
+  'auth status') [[ "$*" == 'auth status --active' ]] || exit 2; printf 'gh auth status active\n' >>"$log"; printf 'Logged in to github.com account %s (keychain)\n  - Active account: true\n' "${FAKE_ACCOUNT:-yuto1201}" ;;
   'repo view') [[ "$*" == "repo view $repo --json nameWithOwner,defaultBranchRef,url" ]] || exit 2; printf 'gh repo view exact\n' >>"$log"; jq -cn --arg repo "$repo" '{nameWithOwner:$repo,defaultBranchRef:{name:"main"},url:("https://github.com/"+$repo)}' ;;
   'pr list')
     [[ "$*" == "pr list --repo $repo --head $branch --state all --json $fields" || "$*" == "pr list --repo $repo --head $branch --state open --json $fields" ]] || { echo 'invalid pr list argv' >&2; exit 2; }
@@ -114,7 +122,9 @@ case "$1 $2" in
   'pr view') [[ "$*" == "pr view $pr --repo $repo --json $fields" ]] || { echo 'invalid pr view argv' >&2; exit 2; }; printf 'gh pr view %s\n' "$pr" >>"$log"; jq -e 'length==1' "$state/prs.json" >/dev/null; jq '.[0]' "$state/prs.json" ;;
   'pr merge') [[ "$*" == "pr merge $pr --repo $repo --squash --match-head-commit $head" ]] || { echo 'invalid pr merge argv' >&2; exit 2; }; printf 'gh pr merge %s exact-squash\n' "$pr" >>"$log"; printf 'pr-merge\n' >>"$mutations"; pr_json MERGED | jq -s . >"$state/prs.json"; printf 'CLOSED\n' >"$state/issue-state" ;;
   'issue view')
-    if [[ "$*" == *'--json number,state,url' ]]; then printf 'gh issue view identity\n' >>"$log"; jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" '{number:$number,state:$state,url:$url}'
+    if [[ "$*" == "issue view $issue --repo $repo --json number,state,url,body,labels,comments" ]]; then
+      jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" --rawfile body "$state/body.md" --arg label "$(cat "$state/issue-label")" --slurpfile comments "$state/comments.json" '{number:$number,state:$state,url:$url,body:$body,labels:[{name:$label}],comments:$comments[0]}'
+    elif [[ "$*" == *'--json number,state,url' ]]; then printf 'gh issue view identity\n' >>"$log"; jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" '{number:$number,state:$state,url:$url}'
     elif [[ "$*" == *'labels,comments'* ]]; then printf 'gh issue view labels-comments\n' >>"$log"; jq -cn --arg label "$(cat "$state/issue-label")" '{title:"Merge exact verified work",body:"fixture",labels:[{name:$label}],comments:[]}'
     else printf 'gh issue view labels\n' >>"$log"; jq -cn --arg label "$(cat "$state/issue-label")" '{labels:[{name:$label}]}' ; fi ;;
   'issue edit') printf 'gh issue edit approved-to-merged\n' >>"$log"; printf 'issue-edit\n' >>"$mutations"; printf 'state:merged\n' >"$state/issue-label" ;;
@@ -128,6 +138,12 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == "-C ${FAKE_WORKTREE:?} remote get-url origin" ]]; then printf 'https://github.com/%s.git\n' "${FAKE_REPO:?}"; exit 0; fi
+if [[ -n "${FAKE_PRIMARY:-}" && "$*" == "-C $FAKE_PRIMARY remote get-url origin" ]]; then printf 'https://github.com/%s.git\n' "${FAKE_REPO:?}"; exit 0; fi
+if [[ -n "${FAKE_PRIMARY:-}" && "$*" == "-C $FAKE_PRIMARY push --force-with-lease=refs/heads/${FAKE_BRANCH:?}:${FAKE_HEAD:?} origin :refs/heads/$FAKE_BRANCH" ]]; then
+  printf 'remote-delete\n' >>"${FAKE_MUTATIONS:?}"
+fi
+if [[ -n "${FAKE_PRIMARY:-}" && "$*" == "-C $FAKE_PRIMARY worktree remove ${FAKE_WORKTREE:?}" ]]; then printf 'worktree-remove\n' >>"${FAKE_MUTATIONS:?}"; fi
+if [[ -n "${FAKE_PRIMARY:-}" && "$*" == "-C $FAKE_PRIMARY update-ref -d refs/heads/${FAKE_BRANCH:?} ${FAKE_HEAD:?}" ]]; then printf 'local-delete\n' >>"${FAKE_MUTATIONS:?}"; fi
 if [[ "$*" == *' push origin '* ]]; then
   [[ "$*" == "-C ${FAKE_WORKTREE:?} push origin ${FAKE_HEAD:?}:refs/heads/${FAKE_BRANCH:?}" ]] || { echo 'push did not bind exact Head' >&2; exit 2; }
   printf 'git-push\n' >>"${FAKE_MUTATIONS:?}"; printf 'git %s\n' "$*" >>"${FAKE_LOG:?}"
@@ -208,6 +224,201 @@ RUBY
 run_persist_pr_with_injection() {
   env RUBYOPT="-I$CASE_WORKTREE/tools/lib -rdescriptor-files -r$CASE_ROOT/cas-patch.rb" CAS_INJECTION="$1" CAS_STATE_PATH="$CASE_PRIMARY/.artifacts/issues/42/state.json" CAS_REPLACEMENT_PATH="${2:-$CASE_ROOT/unused}" ruby "$CASE_WORKTREE/tools/lib/merge-state.rb" persist-pr "$CASE_WORKTREE" "$repo_name" "$issue" "$pr"
 }
+
+run_recovery_command() {
+  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_PRIMARY="$CASE_PRIMARY" \
+    FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" \
+    FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" \
+    FAKE_ACCOUNT="${FAKE_ACCOUNT:-yuto1201}" FAKE_MUTATIONS="$CASE_MUTATIONS" "$@"
+}
+
+run_recovery() {
+  run_recovery_command "$CASE_WORKTREE/tools/record-merged-pr.sh" --repo "$repo_name" --issue "$issue" \
+    --pull-request "${RECOVERY_PR:-$pr}" --expected-head "${RECOVERY_HEAD:-$CASE_HEAD}"
+}
+
+make_case manual-merged-missing-pr merged none recovery
+set_contract_operations '["github.push_branch","github.create_pr","github.merge_pr","github.delete_branch"]'
+write_pr MERGED
+printf 'CLOSED\n' >"$CASE_GH/issue-state"
+printf 'state:merged\n' >"$CASE_GH/issue-label"
+ruby -rjson -e '
+  contract=JSON.parse(File.binread(ARGV.fetch(0)))
+  sections={"Goal"=>contract.fetch("goal"),"In scope"=>"Record an already merged PR.","Out of scope"=>"New merges and gate changes.","Acceptance criteria"=>"- AC-1: Merge exact Head.","Spec anchors"=>"- [Acceptance](specs/acceptance.md#3-issue-definition-of-done)","Dependencies"=>"None","UI verification"=>"Not applicable","External operations"=>contract.fetch("externalOperations").map{|operation|"- Operation: #{operation}\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no"}.join("\n\n"),"User approvals"=>"None"}
+  File.write(ARGV.fetch(1),sections.map{|heading,body|"## #{heading}\n\n#{body}\n"}.join("\n"))
+  marker={"executor"=>"codex","from"=>"approved-for-merge","to"=>"merged","resumeState"=>nil,"timestamp"=>"2026-08-24T00:03:00Z"}
+  File.write(ARGV.fetch(2),JSON.generate([{"author"=>{"login"=>"yuto1201"},"createdAt"=>"2026-08-24T00:03:01Z","body"=>"<!-- ios-template-state #{JSON.generate(marker)} -->"}]))
+' "$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" "$CASE_GH/body.md" "$CASE_GH/comments.json"
+assert_fails 'normal merge still rejects a missing merged PR binding' run_merge
+assert_no_mutation 'normal missing-PR rejection'
+cp "$CASE_PRIMARY/.artifacts/issues/42/state.json" "$CASE_ROOT/state-before-recovery.json"
+if ! run_recovery >"$CASE_ROOT/recovery-result.json" 2>"$CASE_ROOT/recovery.err"; then
+  cat "$CASE_ROOT/recovery.err" >&2
+  fail_test 'manual merged PR recovery did not reach the public entrypoint successfully'
+fi
+ruby -rjson -e 'before,after=ARGV.map{|p|JSON.parse(File.binread(p))}; abort "recovery changed durable identity/history" unless after==before.merge("pullRequest"=>57)' \
+  "$CASE_ROOT/state-before-recovery.json" "$CASE_PRIMARY/.artifacts/issues/42/state.json"
+assert_no_mutation 'PR recovery must not merge, publish, or delete remotely'
+run_recovery >"$CASE_ROOT/recovery-resumed.json"
+assert_no_mutation 'idempotent recovery must re-read without remote mutations'
+
+# Each negative goes through the real public entrypoint against this same
+# immutable Git fixture. Reset only its synthetic remote/local state inputs.
+cp "$CASE_GH/prs.json" "$CASE_ROOT/pr-good.json"
+cp "$CASE_GH/comments.json" "$CASE_ROOT/comments-good.json"
+cp "$CASE_GH/body.md" "$CASE_ROOT/body-good.md"
+cp "$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" "$CASE_ROOT/contract-good.json"
+reset_recovery_inputs() {
+  cp "$CASE_ROOT/state-before-recovery.json" "$CASE_PRIMARY/.artifacts/issues/42/state.json"
+  cp "$CASE_ROOT/pr-good.json" "$CASE_GH/prs.json"
+  cp "$CASE_ROOT/comments-good.json" "$CASE_GH/comments.json"
+  cp "$CASE_ROOT/body-good.md" "$CASE_GH/body.md"
+  cp "$CASE_ROOT/contract-good.json" "$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json"
+  printf 'CLOSED\n' >"$CASE_GH/issue-state"
+  printf 'state:merged\n' >"$CASE_GH/issue-label"
+  : >"$CASE_LOG"; : >"$CASE_MUTATIONS"
+}
+assert_recovery_rejected() {
+  local label=$1
+  cp "$CASE_PRIMARY/.artifacts/issues/42/state.json" "$CASE_ROOT/rejected-state-before.json"
+  assert_fails "$label" run_recovery
+  cmp -s "$CASE_ROOT/rejected-state-before.json" "$CASE_PRIMARY/.artifacts/issues/42/state.json" || fail_test "$label overwrote state"
+  assert_no_mutation "$label"
+}
+for mutation in \
+  '.[0].state="OPEN" | .[0].mergeCommit=null' \
+  '.[0].state="CLOSED" | .[0].mergeCommit=null' \
+  '.[0].number=58' '.[0].url="https://github.com/foreign/project/pull/57"' \
+  '.[0].baseRefName="develop"' '.[0].headRefName="codex/43-foreign"' \
+  '.[0].headRefOid="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
+  '.[0].headRepository.nameWithOwner="foreign/project"' '.[0].isCrossRepository=true' \
+  '.[0].headRepositoryOwner.login="foreign"' '.[0].closingIssuesReferences[0].number=43' \
+  '.[0].closingIssuesReferences[0].url="https://github.com/foreign/project/issues/42"' \
+  '.[0].closingIssuesReferences[0].repository.owner.login="foreign"' \
+  '.[0].closingIssuesReferences += .[0].closingIssuesReferences' \
+  '.[0].mergeCommit=null' '.[0].headRepository="invalid"'; do
+  reset_recovery_inputs
+  jq "$mutation" "$CASE_ROOT/pr-good.json" >"$CASE_GH/prs.json"
+  assert_recovery_rejected "recovery PR mismatch: $mutation"
+done
+reset_recovery_inputs
+FAKE_ACCOUNT=foreign assert_recovery_rejected 'wrong active account'
+reset_recovery_inputs
+RECOVERY_PR=58 assert_recovery_rejected 'wrong requested PR'
+reset_recovery_inputs
+RECOVERY_HEAD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb assert_recovery_rejected 'wrong requested Head'
+reset_recovery_inputs
+printf 'OPEN\n' >"$CASE_GH/issue-state"
+assert_recovery_rejected 'Issue is not closed'
+reset_recovery_inputs
+printf 'state:approved-for-merge\n' >"$CASE_GH/issue-label"
+assert_recovery_rejected 'remote workflow is not merged'
+for mutation in '[]' '. + .' '.[0].author.login="foreign"' '.[0].body="invalid marker"'; do
+  reset_recovery_inputs
+  jq "$mutation" "$CASE_ROOT/comments-good.json" >"$CASE_GH/comments.json"
+  assert_recovery_rejected "untrusted or ambiguous owned history: $mutation"
+done
+reset_recovery_inputs
+sed 's/Executor: Codex/Executor: Claude/g' "$CASE_ROOT/body-good.md" >"$CASE_GH/body.md"
+assert_recovery_rejected 'live executor differs'
+for mutation in '.pullRequest=58' '.previousState="in-progress"' '.headSha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' '.issueContract.digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'; do
+  reset_recovery_inputs
+  jq "$mutation" "$CASE_ROOT/state-before-recovery.json" >"$CASE_PRIMARY/.artifacts/issues/42/state.json"
+  assert_recovery_rejected "durable recovery mismatch: $mutation"
+done
+
+reset_recovery_inputs
+ruby -rjson -rdigest -e '
+  contract_path,state_path=ARGV; c=JSON.parse(File.read(contract_path)); c["externalOperations"].delete("github.read_issue")
+  File.write(contract_path,JSON.generate(c)); s=JSON.parse(File.read(state_path)); s["issueContract"]["digest"]="sha256:#{Digest::SHA256.file(contract_path).hexdigest}"; File.write(state_path,JSON.generate(s))
+' "$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" "$CASE_PRIMARY/.artifacts/issues/42/state.json"
+assert_recovery_rejected 'sealed read permission missing'
+[[ ! -s "$CASE_LOG" ]] || fail_test 'missing read permission reached remote inspection'
+
+# Inject at the final publication boundary, not through a production bypass.
+cat >"$CASE_ROOT/recovery-race.rb" <<'RUBY'
+require 'json'
+require 'fileutils'
+require 'descriptor-files'
+module DescriptorFiles
+  class << self
+    alias_method :recovery_original_replace, :atomic_replace_at
+    def atomic_replace_at(directory, destination, bytes, expected_bytes, expected_stat)
+      mode=ENV['RECOVERY_RACE']; marker=ENV['RECOVERY_RACE_MARKER']
+      inject=destination=='state.json' && mode && !File.exist?(marker)
+      if inject
+        File.write(marker,'injected')
+        if mode=='contract-before'
+          path=ENV.fetch('RECOVERY_CONTRACT'); FileUtils.cp(path,"#{path}.replacement"); File.rename("#{path}.replacement",path)
+        elsif mode=='state-before'
+          path=ENV.fetch('RECOVERY_STATE'); s=JSON.parse(File.read(path)); s['transitionedAt']='2026-08-24T00:03:01Z'; File.write(path,JSON.generate(s))
+        end
+      end
+      published=recovery_original_replace(directory,destination,bytes,expected_bytes,expected_stat)
+      if inject && %w[contract-after state-same-bytes-after].include?(mode)
+        contract=ENV.fetch('RECOVERY_CONTRACT'); FileUtils.cp(contract,"#{contract}.replacement"); File.rename("#{contract}.replacement",contract)
+        if mode=='state-same-bytes-after'
+          path=ENV.fetch('RECOVERY_STATE'); FileUtils.cp(path,"#{path}.replacement"); File.rename("#{path}.replacement",path)
+          File.write("#{marker}.inode",File.stat(path).ino.to_s)
+        end
+      end
+      published
+    end
+  end
+end
+RUBY
+for race in contract-before contract-after state-before state-same-bytes-after; do
+  reset_recovery_inputs
+  assert_fails "recovery publication race: $race" env \
+    RUBYOPT="-I$CASE_WORKTREE/tools/lib -r$CASE_ROOT/recovery-race.rb" \
+    RECOVERY_RACE="$race" RECOVERY_RACE_MARKER="$CASE_ROOT/race-$race" \
+    RECOVERY_CONTRACT="$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" \
+    RECOVERY_STATE="$CASE_PRIMARY/.artifacts/issues/42/state.json" \
+    PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_PRIMARY="$CASE_PRIMARY" \
+    FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" \
+    FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" \
+    "$CASE_WORKTREE/tools/record-merged-pr.sh" --repo "$repo_name" --issue "$issue" --pull-request "$pr" --expected-head "$CASE_HEAD"
+  [[ -f "$CASE_ROOT/race-$race" ]] || fail_test 'recovery race did not reach publication'
+  case "$race" in
+    contract-*) cmp -s "$CASE_ROOT/state-before-recovery.json" "$CASE_PRIMARY/.artifacts/issues/42/state.json" || fail_test 'contract race left our PR binding' ;;
+    state-before) jq -e '.transitionedAt=="2026-08-24T00:03:01Z" and (has("pullRequest")|not)' "$CASE_PRIMARY/.artifacts/issues/42/state.json" >/dev/null || fail_test 'raced state was overwritten' ;;
+    state-same-bytes-after) [[ "$(stat -f '%i' "$CASE_PRIMARY/.artifacts/issues/42/state.json")" == "$(cat "$CASE_ROOT/race-$race.inode")" ]] || fail_test 'rollback overwrote another writer with identical bytes' ;;
+  esac
+  assert_no_mutation "recovery race: $race"
+done
+
+# General development authority remains symmetric for the Claude executor.
+reset_recovery_inputs
+original_branch=$branch
+branch=claude/42-merge-e2e
+git -C "$CASE_WORKTREE" branch -m "$branch"
+ruby -rjson -rdigest -e '
+  contract_path,state_path,body_path,comments_path,pr_path,branch=ARGV
+  c=JSON.parse(File.read(contract_path)); details=c.fetch("externalOperations").map{|operation|{"operation"=>operation,"service"=>"GitHub","environment"=>"production","executor"=>"Claude","approvalRequired"=>false,"approvalReference"=>nil}}
+  def canonical(v); v.is_a?(Hash) ? v.keys.sort.to_h{|k|[k,canonical(v[k])]} : v.is_a?(Array) ? v.map{|x|canonical(x)} : v; end
+  c["externalOperationDetailsDigest"]="sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(details)))}"; File.write(contract_path,JSON.generate(c))
+  s=JSON.parse(File.read(state_path)); s.merge!("branch"=>branch,"primaryImplementer"=>"claude","executor"=>"claude"); s["issueContract"]["digest"]="sha256:#{Digest::SHA256.file(contract_path).hexdigest}"; File.write(state_path,JSON.generate(s))
+  File.write(body_path,File.read(body_path).gsub("Executor: Codex","Executor: Claude"))
+  comments=JSON.parse(File.read(comments_path)); comments[0]["body"]=comments[0]["body"].sub("codex","claude"); File.write(comments_path,JSON.generate(comments))
+  prs=JSON.parse(File.read(pr_path)); prs[0]["headRefName"]=branch; File.write(pr_path,JSON.generate(prs))
+' "$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" "$CASE_PRIMARY/.artifacts/issues/42/state.json" "$CASE_GH/body.md" "$CASE_GH/comments.json" "$CASE_GH/prs.json" "$branch"
+run_recovery >"$CASE_ROOT/claude-recovery.json"
+jq -e '.pullRequest==57 and .primaryImplementer=="claude" and .executor=="claude"' "$CASE_PRIMARY/.artifacts/issues/42/state.json" >/dev/null
+assert_no_mutation 'Claude recovery'
+git -C "$CASE_WORKTREE" branch -m "$original_branch"
+branch=$original_branch
+
+reset_recovery_inputs
+run_recovery >"$CASE_ROOT/recovery-before-cleanup.json"
+git -C "$CASE_WORKTREE" push origin "$branch" >/dev/null
+: >"$CASE_MUTATIONS"
+run_recovery_command "$CASE_PRIMARY/tools/cleanup-issue.sh" --repo "$repo_name" --issue "$issue" >"$CASE_ROOT/cleanup-result.json"
+jq -e '.status=="cleaned" and .pullRequest==57' "$CASE_ROOT/cleanup-result.json" >/dev/null
+[[ ! -e "$CASE_WORKTREE" && ! -L "$CASE_WORKTREE" ]] || fail_test 'manual recovery cleanup left worktree'
+if git -C "$CASE_PRIMARY" show-ref --verify --quiet "refs/heads/$branch"; then fail_test 'manual recovery cleanup left local branch'; fi
+if git -C "$CASE_PRIMARY" ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null; then fail_test 'manual recovery cleanup left remote branch'; fi
+printf 'remote-delete\nworktree-remove\nlocal-delete\n' >"$CASE_ROOT/expected-cleanup.log"
+diff -u "$CASE_ROOT/expected-cleanup.log" "$CASE_MUTATIONS" || fail_test 'manual recovery cleanup order differs'
 
 make_case cas-inplace
 write_cas_patch
