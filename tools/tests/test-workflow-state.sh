@@ -13,6 +13,9 @@ if [[ -f "$source_root/.git" ]]; then
   repo_root="$workspace/repository"
   git clone --quiet --no-local "$source_root" "$repo_root"
   git -C "$repo_root" checkout --quiet --detach "$source_head"
+  # Exercise current worktree edits as well as committed clean-checkout runs.
+  cp "$source_root/tools/issue-state.sh" "$repo_root/tools/issue-state.sh"
+  cp "$source_root/tools/lib/workflow-json.rb" "$repo_root/tools/lib/workflow-json.rb"
 fi
 primary_root="$repo_root"
 test_issue=424249
@@ -139,6 +142,21 @@ printf '["state:proposed"]' > "$FAKE_GH_LABELS_FILE"
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
 assert_fails 'approved to claimed cannot run before Claim seals identity' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+
+# The pre-Claim six-field durable format remains supported as well.
+cp "$artifact_issue/state.json" "$workspace/preclaim-approved.json"
+cp "$FAKE_GH_COMMENTS_FILE" "$workspace/preclaim-approved-comments.json"
+ruby -rjson -e '
+  state=JSON.parse(File.binread(ARGV[0]))
+  pending=state.reject { |key,_| key=="state" }.merge("schemaVersion"=>1,
+    "issue"=>Integer(ARGV[2]),"repository"=>"yuto1201/iOS-Template","headSha"=>nil)
+  File.binwrite(ARGV[1],JSON.generate(pending.sort.to_h))
+' "$artifact_issue/state.json" "$artifact_issue/state-transition.pending.json" "$test_issue"
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to paused >/dev/null
+[[ ! -e "$artifact_issue/state-transition.pending.json" ]]
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to approved >/dev/null
+cp "$workspace/preclaim-approved.json" "$artifact_issue/state.json"
+cp "$workspace/preclaim-approved-comments.json" "$FAKE_GH_COMMENTS_FILE"
 
 printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"
 assert_fails 'stale minimal pre-Claim state cannot authorize a post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
@@ -319,6 +337,96 @@ cp "$workspace/state-before-ambient-env.json" ".artifacts/issues/$test_issue/sta
 assert_fails 'Head argument is forbidden outside in-progress to verify-passed' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from claimed --to in-progress --head-sha "$head_sha"
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from claimed --to in-progress >/dev/null
 
+# Recreate only the pending file of the just-completed transition. Its exact
+# timestamp, durable identity and owned remote marker must permit the next edge.
+pending_path="$artifact_issue/state-transition.pending.json"
+[[ ! -e "$pending_path" ]] || { echo 'successful transition left pending state' >&2; exit 1; }
+ruby -rjson -e '
+  state=JSON.parse(File.binread(ARGV.fetch(0)))
+  pending={"schemaVersion"=>1,"issue"=>state.fetch("issue"),"repository"=>state.fetch("repository"),
+    "from"=>state.fetch("from"),"to"=>state.fetch("to"),"resumeState"=>state.fetch("resumeState"),
+    "executor"=>state.fetch("executor"),"timestamp"=>state.fetch("transitionedAt"),"headSha"=>nil}
+  File.binwrite(ARGV.fetch(1),JSON.generate(pending.sort.to_h))
+' "$artifact_issue/state.json" "$pending_path"
+cp "$pending_path" "$workspace/applied-pending.json"
+cp "$artifact_issue/state.json" "$workspace/applied-state.json"
+cp "$FAKE_GH_COMMENTS_FILE" "$workspace/applied-comments.json"
+for corruption in issue repository executor timestamp headSha resumeState noncanonical; do
+  cp "$workspace/applied-pending.json" "$pending_path"
+  ruby -rjson -e '
+    path,key=ARGV; value=JSON.parse(File.binread(path))
+    changes={"issue"=>9,"repository"=>"other/repo","executor"=>"claude",
+      "timestamp"=>"2020-01-01T00:00:00Z","headSha"=>"0"*40,"resumeState"=>"approved"}
+    value[key]=changes.fetch(key) unless key=="noncanonical"
+    File.binwrite(path,JSON.generate(value.sort.to_h)+(key=="noncanonical" ? "\n" : ""))
+  ' "$pending_path" "$corruption"
+  cp "$pending_path" "$workspace/rejected-pending.json"
+  : > "$FAKE_GH_LOG"
+  assert_fails "applied pending rejects $corruption" "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
+  cmp -s "$pending_path" "$workspace/rejected-pending.json"
+  cmp -s "$artifact_issue/state.json" "$workspace/applied-state.json"
+  ! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
+done
+cp "$workspace/applied-pending.json" "$pending_path"
+# A successful remote label is not proof that the durable transition completed.
+ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v["previousState"]="approved";File.binwrite(p,JSON.generate(v))' "$artifact_issue/state.json"
+assert_fails 'unapplied pending protects the original edge' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
+cmp -s "$pending_path" "$workspace/applied-pending.json"
+cp "$workspace/applied-state.json" "$artifact_issue/state.json"
+printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+assert_fails 'pending requires the owned remote marker' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
+cmp -s "$pending_path" "$workspace/applied-pending.json"
+cp "$workspace/applied-comments.json" "$FAKE_GH_COMMENTS_FILE"
+
+# Even identical bytes at a replacement inode or directory are not the file
+# observed before remote work; cleanup must preserve the replacement.
+pending_signature=$(ruby "$repo_root/tools/lib/workflow-json.rb" snapshot-state-transition-pending "$pending_path")
+mv "$pending_path" "$workspace/original-pending-inode.json"
+cp "$workspace/original-pending-inode.json" "$pending_path"
+assert_fails 'cleanup rejects a replacement inode' ruby "$repo_root/tools/lib/workflow-json.rb" finish-state-transition-pending "$pending_path" "$pending_signature" "$(<"$pending_path")"
+cmp -s "$pending_path" "$workspace/applied-pending.json"
+rm "$pending_path"
+ln -s "$workspace/original-pending-inode.json" "$pending_path"
+assert_fails 'cleanup rejects a pending symlink' ruby "$repo_root/tools/lib/workflow-json.rb" snapshot-state-transition-pending "$pending_path"
+rm "$pending_path"
+ln "$workspace/original-pending-inode.json" "$pending_path"
+assert_fails 'cleanup rejects a pending hardlink' ruby "$repo_root/tools/lib/workflow-json.rb" snapshot-state-transition-pending "$pending_path"
+rm "$pending_path"
+mv "$workspace/original-pending-inode.json" "$pending_path"
+pending_signature=$(ruby "$repo_root/tools/lib/workflow-json.rb" snapshot-state-transition-pending "$pending_path")
+mv "$artifact_issue" "$workspace/original-issue-directory"
+mkdir "$artifact_issue"
+cp "$workspace/original-issue-directory/state-transition.pending.json" "$pending_path"
+assert_fails 'cleanup rejects replacement ancestry' ruby "$repo_root/tools/lib/workflow-json.rb" finish-state-transition-pending "$pending_path" "$pending_signature" "$(<"$pending_path")"
+cmp -s "$pending_path" "$workspace/applied-pending.json"
+rm "$pending_path"
+rmdir "$artifact_issue"
+mv "$workspace/original-issue-directory" "$artifact_issue"
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused >/dev/null
+[[ ! -e "$pending_path" ]] || { echo 'recovered transition left pending state' >&2; exit 1; }
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress >/dev/null
+IOS_TEMPLATE_STATE_FAIL_AFTER_DURABLE=1 assert_fails 'interruption after durable state leaves a recoverable pending' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
+[[ -f "$pending_path" ]]
+assert_json "$artifact_issue/state.json" 'abort unless JSON.parse(File.binread(ARGV[0]))["state"]=="paused"'
+"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress >/dev/null
+[[ ! -e "$pending_path" ]] || { echo 'durable interruption recovery left pending state' >&2; exit 1; }
+# Earlier interruptions must retain two-phase retry of the original edge.
+for boundary in LABEL COMMENT; do
+  printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+  injection="IOS_TEMPLATE_STATE_FAIL_AFTER_$boundary"
+  assert_fails "interruption after $boundary leaves unapplied pending" env "$injection=1" "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
+  cp "$pending_path" "$workspace/unapplied-pending.json"
+  cp "$artifact_issue/state.json" "$workspace/unapplied-state.json"
+  : > "$FAKE_GH_LOG"
+  assert_fails "different edge cannot consume pending after $boundary" "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+  cmp -s "$pending_path" "$workspace/unapplied-pending.json"
+  cmp -s "$artifact_issue/state.json" "$workspace/unapplied-state.json"
+  ! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
+  "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused >/dev/null
+  [[ ! -e "$pending_path" ]]
+  "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress >/dev/null
+done
+
 : > "$FAKE_GH_LOG"
 cp ".artifacts/issues/$test_issue/state.json" "$workspace/in-progress-state.json"
 assert_fails 'verify-passed requires an explicit Head' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed
@@ -346,11 +454,13 @@ printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
 rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 
 printf '0' > "$FAKE_GIT_HEAD_COUNT_FILE"
-"$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha" >/dev/null
+IOS_TEMPLATE_STATE_FAIL_AFTER_DURABLE=1 assert_fails 'verification Head remains bound after durable interruption' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha"
+EXPECTED_HEAD="$head_sha" assert_json "$pending_path" 'abort unless JSON.parse(File.binread(ARGV[0]))["headSha"]==ENV.fetch("EXPECTED_HEAD")'
 EXPECTED_HEAD="$head_sha" assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="verify-passed" && value["headSha"]==ENV.fetch("EXPECTED_HEAD")'
 assert_fails 'strict harden Issue cannot skip opposite review' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to approved-for-merge
 
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to in-progress >/dev/null
+[[ ! -e "$pending_path" ]] || { echo 'verification Head recovery left pending state' >&2; exit 1; }
 assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="in-progress" && !value.key?("headSha")'
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha" >/dev/null
 
