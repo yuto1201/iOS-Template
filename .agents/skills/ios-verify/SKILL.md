@@ -126,13 +126,15 @@ The publisher derives the exact identity, contract digest, not-applicable fields
 
 For either path, set the canonical evidence path before preparing the review handoff:
 
+When one sealed AC starts with exact `Repository-test scope: base-and-head; `, follow [the Base/Head repository-evidence route](../../../docs/verification.md#baseとheadの全repository-tests). The current producer runs each revision's complete tracked suite in a separate clean detached worktree. Supply Head `--map` entries for every AC and `--base-map` only for baseline/regression claims; the scope-declaring AC must map both complete inventories. Do not infer Base success from Head, reuse another Issue's run, or convert old evidence. The canonical packet requires the exact-byte record reference as well as both revisions. Contracts without this declaration retain the existing Head-only format.
+
 ```sh
 EVIDENCE=".artifacts/issues/${ISSUE}/${HEAD_SHA}/verify.json"
 ```
 
 External account/provider preflights are separate merge-time artifacts that Codex or Claude may produce under the same configured-account policy. This skill alone does not authorize GitHub, provider, signing-account, App Store Connect, or other authenticated operations.
 
-Independently validate the exact canonical evidence and derive its digest only after validation exits zero. If the Issue changes repository delivery tools, guards, workflow state, or evidence producers, also run every tracked `tools/tests/test-*.sh` through `tools/run-repository-tests.sh` in its clean detached worktree and supply one exact `--map AC-N=...` for every acceptance criterion. The command publishes only current-Head, sanitized, no-replace `repository-tests.json`; any failed test or incomplete mapping blocks completion. Prepare a schema-v2 review packet only when the canonical `DeliveryProfile.review_required?` helper returns true. Never hand-author review artifacts or substitute another packet schema.
+Independently validate the exact canonical evidence and derive its digest only after validation exits zero. If the Issue changes repository delivery tools, guards, workflow state, or evidence producers, also run every tracked `tools/tests/test-*.sh` through `tools/run-repository-tests.sh` in its clean detached worktree and supply one exact `--map AC-N=...` for every acceptance criterion. The command publishes sanitized, no-replace `repository-tests.json` in the contract-selected Head-only or Base-and-Head format; any failed test or incomplete mapping blocks completion. Prepare a schema-v2 review packet only when the canonical `DeliveryProfile.review_required?` helper returns true. Never hand-author review artifacts or substitute another packet schema.
 
 ```sh
 swift tools/validate-verify-json.swift \

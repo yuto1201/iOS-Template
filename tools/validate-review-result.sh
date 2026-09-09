@@ -16,7 +16,7 @@ done
 [[ ( "$primary" == codex || "$primary" == claude ) && -n "$packet" ]] || usage
 
 topology=$(ruby "$repo_root/tools/lib/review-artifacts.rb" "$repo_root") || exit 1
-ruby -I "$repo_root/tools/lib" -rjson -rdigest -rtime -rfiddle/import -rreview-contract - "$topology" "$primary" "$packet" "$result" <<'RUBY'
+ruby -I "$repo_root/tools/lib" -rjson -rdigest -rtime -rfiddle/import -rreview-contract -rreview-sealing - "$topology" "$primary" "$packet" "$result" <<'RUBY'
 topology_json, primary, packet_input, result_input = ARGV
 
 def reject(message)
@@ -49,7 +49,7 @@ def digest!(value, at)
 end
 
 def json_file!(file, at)
-  JSON.parse(file.fetch(:bytes))
+  JSON.parse(file.fetch(:bytes).dup)
 rescue JSON::ParserError => error
   reject("#{at} is not readable JSON: #{error.message}")
 end
@@ -97,6 +97,7 @@ def secure_file!(path, root, at, expected_root_identity = nil)
   reject("#{at} did not resolve to a file") unless file
   descriptor_stat = file.stat
   reject("#{at} must be a regular single-link file") unless descriptor_stat.file? && descriptor_stat.nlink == 1
+  file.binmode
   bytes = file.read
   current_path = root
   components.each_with_index do |component, index|
@@ -224,9 +225,25 @@ exact_keys!(verify["issueContract"], %w[path digest], "verify.issueContract")
 reject("verify issue-contract reference does not match packet") unless verify["issueContract"]["path"] == expected_contract_path && verify["issueContract"]["digest"] == contract_digest
 
 begin
+  repository_snapshot = nil
+  repository_tests_file = nil
+  revision_context = nil
+  if IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head"
+    repository_snapshot = IOSTemplate::ReviewSealing::SnapshotSet.new(artifacts, at: "artifact root", expected_identity: artifacts_identity)
+    # Keep the contract/packet and record together until this invocation exits.
+    held_packet = repository_snapshot.relative_leaf("issues/#{issue}/#{head_sha}/review-packet.json", at: "review packet")
+    held_contract = repository_snapshot.relative_leaf("issues/#{issue}/issue-contract.json", at: "issue contract")
+    reject("packet or contract changed before repository validation") unless held_packet.bytes == packet_file.fetch(:bytes) && held_contract.bytes == contract_file.fetch(:bytes)
+    repository_tests_file = repository_snapshot.relative_leaf("issues/#{issue}/#{head_sha}/repository-tests.json", at: "repository tests")
+    revision_context = IOSTemplate::ReviewContract.repository_revision_context(repo: repo, base_sha: base_sha, head_sha: head_sha)
+    at_exit { repository_snapshot.close }
+  end
   IOSTemplate::ReviewContract.validate_contract!(packet, contract, contract_digest, issue)
   IOSTemplate::ReviewContract.validate_scope!(packet, contract)
   IOSTemplate::ReviewContract.validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, false)
+  IOSTemplate::ReviewContract.validate_repository_closure!(packet: packet, contract: contract, contract_digest: contract_digest,
+    issue: issue, base_sha: base_sha, head_sha: head_sha,
+    repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context)
   if schema == 2
     IOSTemplate::ReviewContract.validate_strict_closure!(
       packet: packet, packet_bytes: packet_file.fetch(:bytes), verify: verify,
@@ -235,11 +252,12 @@ begin
       actual_diff_bytes: IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: base_sha, head_sha: head_sha)
     )
   end
-rescue IOSTemplate::ReviewContract::ValidationError => error
+rescue IOSTemplate::ReviewContract::ValidationError, IOSTemplate::ReviewSealing::SealError, SystemCallError => error
   reject(error.message)
 end
 
 if result_input.empty?
+  repository_snapshot&.verify!
   puts JSON.generate(packet.merge("issueContractRepository" => repository))
   exit 0
 end
@@ -319,10 +337,12 @@ begin
     verify_bytes: verify_file.fetch(:bytes), contract_bytes: contract_file.fetch(:bytes),
     primary: primary, issue: issue, base_sha: base_sha, head_sha: head_sha,
     strict: schema == 2, diff_bytes: diff_file.fetch(:bytes), image_bytes: image_files,
+    repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context,
     actual_diff_bytes: (schema == 2 ? IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: base_sha, head_sha: head_sha) : nil)
   )
 rescue IOSTemplate::ReviewContract::ValidationError => error
   reject(error.message)
 end
+repository_snapshot&.verify!
 puts JSON.generate(result)
 RUBY

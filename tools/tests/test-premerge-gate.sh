@@ -18,6 +18,9 @@ cp "$repo_root/tools/validate-verify-json.swift" "$repo/tools/"
 cp "$repo_root/tools/premerge-gate.sh" "$repo/tools/"
 cp "$repo_root/tools/cross-model-review.sh" "$repo/tools/"
 cp "$repo_root/tools/prepare-review-packet.sh" "$repo/tools/"
+cp "$repo_root/tools/run-repository-tests.sh" "$repo/tools/"
+mkdir -p "$repo/tools/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/tools/tests/test-gate-probe.sh"
 cp "$repo_root/tools/render-pr-body.sh" "$repo/tools/"
 cp -R "$repo_root/tools/lib" "$repo/tools/"
 cp -R "$repo_root/.agents" "$repo/"
@@ -767,6 +770,53 @@ write_review
 FAKE_SKIP_SWIFT=1 FINAL_GATE_SWAP_TARGET="$final_image" assert_fails 'packet-bound image swap after final PR validation' run_gate_merge
 grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo 'final image lease fixture did not reach PR refresh' >&2; exit 1; }
 [[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'final lease merged after packet-bound image changed' >&2; exit 1; }
+
+# The actual new producer runs both small fixture inventories. This is not
+# evidence that either revision of the real repository's suite has passed.
+cp "$issue_body" "$scratch/pre-revision-issue.md"
+ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!("AC-2: Every", "AC-2: Repository-test scope: base-and-head; Every") or abort; File.write(path,text)' "$issue_body"
+canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
+contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+write_verify
+(cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
+  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh \
+  --base-map AC-2=tools/tests/test-gate-probe.sh) >/dev/null
+review_at=$(timestamp 1)
+transition_at=$(timestamp 2)
+preflight_at=$(timestamp 3)
+DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+write_review_packet
+write_review
+review_record="$repo/.artifacts/issues/42/$head_sha/review.json"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["acceptanceAssessment"].each_with_index{|entry,i|entry["evidence"]=["repository-tests.json#acceptanceEvidence/#{i}"]}; File.write(path,JSON.generate(value))' "$review_record"
+write_receipt
+write_preflight
+write_supabase_preflight
+run_gate >/dev/null
+revision_record="$repo/.artifacts/issues/42/$head_sha/repository-tests.json"
+cp "$revision_record" "$scratch/revision-record.saved"
+mv "$revision_record" "$revision_record.absent"
+assert_fails 'new contract cannot merge without repository record' run_gate
+mv "$revision_record.absent" "$revision_record"
+printf '\n' >> "$revision_record"
+assert_fails 'repository record exact bytes are checked at merge' run_gate
+cp "$scratch/revision-record.saved" "$revision_record"
+mv "$revision_record" "$revision_record.real"
+ln -s "$(basename "$revision_record.real")" "$revision_record"
+assert_fails 'repository record symlink is rejected at merge' run_gate
+rm "$revision_record"
+mv "$revision_record.real" "$revision_record"
+: > "$FAKE_GH_LOG"
+: > "$FAKE_MERGE_MUTATIONS"
+FINAL_GATE_SWAP_TARGET="$revision_record" assert_fails 'repository record swap after final PR refresh blocks actual merge' run_gate_merge
+grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo 'repository record lease did not reach final PR refresh' >&2; exit 1; }
+[[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'record swap reached merge command' >&2; exit 1; }
+cp "$scratch/revision-record.saved" "$revision_record"
+: > "$FAKE_MERGE_MUTATIONS"
+run_gate_merge >/dev/null
+[[ $(cat "$FAKE_MERGE_MUTATIONS") == merged ]] || { echo 'valid Base/Head closure did not reach exact merge' >&2; exit 1; }
+cp "$scratch/pre-revision-issue.md" "$issue_body"
+rm "$revision_record"
 
 # Explicit fast accepts the same current-Head and account gates without any
 # opposite-model artifact. Rebuild the exact live contract so stale strict
