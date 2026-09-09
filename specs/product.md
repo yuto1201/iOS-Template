@@ -1,8 +1,8 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 1.8
-Date: 2026-09-06
+Version: 1.9
+Date: 2026-09-09
 
 ## 1. 目的
 
@@ -126,6 +126,10 @@ ClaudeとCodexの一般開発方針は維持する。Claudeや別のCodex model�
 - `submission/`: 申請前チェックと提出結果。秘密値は含めない
 
 申請文面と画像はCodexまたはClaudeが作成・検証し、App Store Connectへの認証済み入力もIssueで指定された実行モデルが行います。法的文書はテンプレートの雛形をそのまま公開せず、アプリのデータ利用実態に合わせて確定します。
+
+原稿の`draft`（offline準備）、`save`（確認済み項目だけのremote保存）、`ready`（完全素材の監査・seal）、`submit`（明示許可された審査提出）を分ける。スクリーンショット、build、法務が未完成でも、独立した一般説明文の確認と保存を進められる設計とし、未確定項目を空文字で消したり、画像を勝手に生成・uploadしたりしない。保存にも正しいTeam/App/Bundle/version/locale、Issueのoperation・executor、秘密保護が必要である。Saveが公開ページを更新する場合や効果が不明な場合は、私的な下書き保存とみなさず対象操作を止め、公開影響を含む必要な許可を確認する。
+
+入出力・部分結果・再開は[metadata保存契約](../docs/agent-contracts/appstore-submission.md#operation-modes-and-selective-metadata-save)を正とする。#52は仕様と既存skillのroutingだけを変更し、専用save entrypointは[後続実装](architecture.md#92-原稿保存と正式提出の分離)が完了するまで使用できない。現在の提出scriptの完全package要件を回避して手動入力する許可ではない。正式提出には従来の全画像・build・申告・法務承認・release audit・明示提出許可を維持し、部分保存記録を提出証拠に流用しない。
 
 ### 6.1 AppLibraryでの法務ページ公開方針
 

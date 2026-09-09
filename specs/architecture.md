@@ -1,7 +1,7 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.6
+Version: 1.7
 Date: 2026-09-09
 
 ## 1. 設計原則
@@ -147,7 +147,7 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | `ios-media-assets` | 音声、文字起こし、効果音、音声分離、音楽、画像または動画が受け入れ条件になったとき |
 | `ios-3d-assets` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。authoringはCodexのexact model `gpt-6-astra`だけが行う |
 | `prepare-appstore-assets` | App Store 提出準備を開始するとき |
-| `submit-appstore-release` | 提出情報が監査済みで、Codexが提出するとき |
+| `submit-appstore-release` | CodexまたはClaudeが原稿準備／先行保存と正式提出を振り分け、監査済みpackageを明示許可の下で提出・再開するとき。先行save実装は§9.2の後続Issue |
 
 ## 6. エージェント構成
 
@@ -213,3 +213,16 @@ App Store準備は、原稿の確認、remote保存、release readiness、提出
 - 新規Bundle/App作成は既存Appの更新と別のoperationである。対応するallowlist・契約・承認・再開検証を実装した後続Issueが完了するまでは実行不可。準備仕様は既存の権限を拡張しない。
 
 この節は確定した設計要件であり、field台帳、登録preflight、包括的なSDK不整合検出の実装済み証拠ではない。既存checklistのschema、keys、booleanと封印済みpackage/resultは変更しない。原稿検証・read-only登録準備は#53に依存する[#62](https://github.com/yuto1201/iOS-Template/issues/62)で、[受け入れ条件 §8](acceptance.md#8-app-store原稿と登録準備)のfixtureを満たす。実登録mutationはそのIssueにも含めず、別の明示契約と必要な承認を要する。AppLibraryの具体的な配置・公開URLは[未決の境界](product.md#61-applibraryでの法務ページ公開方針)のまま保持する。
+
+### 9.2 原稿保存と正式提出の分離
+
+§9.1のfield inventoryを再利用し、[4モードの入出力と保存・再開契約](../docs/agent-contracts/appstore-submission.md#operation-modes-and-selective-metadata-save)を適用する。原稿正本と確認根拠は`App Store/`、部分保存の実行記録はpackage外の`.artifacts/appstore-metadata/<issue>/<attempt>/`、正式releaseのpackage/resultは既存の`App Store/submission/`へ分離する。別形式の部分記録を既存recorderへ入力せず、package tree digestの除外規則も変えない。
+
+#52で実装するのは文書と既存`submit-appstore-release`の薄いmode routingだけである。実行可能なsave modeを追加する後続Issueは、#52とread-only準備の#62に依存し、次のwrite-setとTestをClaim前に確定する。
+
+- 専用の共有`.agents/skills/save-appstore-metadata/`、対応する`.claude/skills/`相対symlink、§5のrouting。これは予定名であり、現在使えるskillや既存scriptの新flagではない。
+- そのskillのpublic entrypointと、field/locale差分・source固定・account/target照合・保存・readback・履歴公開を行うhelper。既存provider adapterで表現できない観察項目や権限は、その変更ファイルと安全確認もIssueに明示し、広い操作へ代用しない。
+- 合成providerとfixture、実public entrypointを通す`tools/tests/test-appstore-metadata-save.sh`。契約の[手動検証表](../docs/agent-contracts/appstore-submission.md#selective-save-verification-plan)を正常／拒否／部分成功／曖昧応答の回帰へ変換する。実AppleアカウントをTestに使わない。
+- 既存`test-appstore-skills.sh`／`test-appstore-package.sh`で完全package、法務承認、ordered result、drift検出が維持されることを検証する。封印済みpackage/result/checklistのschemaやhash除外を変えず、save記録からrelease-ready/submittedへ昇格できないことを確認する。
+
+後続Issueにも登録、画像生成・upload、build選択、審査提出、価格・契約・法務の自動承認を混ぜない。専用entrypoint未実装中はofflineの原稿と差分計画を返し、現在のfull-release入口やブラウザ手動操作でsave gateを迂回しない。

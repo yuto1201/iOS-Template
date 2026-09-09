@@ -276,3 +276,13 @@
 - Decision: Claim前の一つのAC本文先頭をexact `Repository-test scope: base-and-head; `で開始し、その後に非空の受け入れ条件を続ける。この宣言だけが新しいschema v2 repository recordを要求する。重複・不完全・未知のscope宣言は拒否し、宣言なしの既存sealed contractには旧Head-only経路を維持する。新しいcontract fieldや任意のCLI modeで選択しない。
 - Consequence: 現在Headのproducerが各revision自身の全tracked testをclean detached worktreeで実行し、BaseとHeadのinventory、tested SHA、有限timeout、argv、結果、時刻、digestを別々に記録する。宣言ACは両方の全suiteへ対応付ける。Base mappingはbaseline／regressionの証拠であり、Headで追加した機能の実装証拠ではない。packet内の値とcanonical recordのexact bytesを束縛し、reviewerへの引き渡し、result／receipt publication、premergeで欠落・改ざん・差し替えを拒否する。旧record／packet／receiptを変換・再封印しない。
 - Related Issue: #60
+
+## D-035: App Store原稿の先行保存と正式提出を別モードにする
+
+- Date: 2026-09-09
+- Status: 確定
+- Supersedes: None。D-033のfield inventoryと確認状態を拡張し、D-024の権限、D-026の未決公開先、D-029のrelease gateを維持する。
+- Context: 画像を保留して確認済み原稿だけ先に入力したい依頼を、全素材とbuildの完成を要求する提出入口では表現できない。一方、Saveの公開影響、locale別の部分成功、remote driftを無視すると未許可の公開や誤った再開を招く。
+- Decision: [保存と提出の分離](architecture.md#92-原稿保存と正式提出の分離)に従い、offline draft、認可済みの選択的save、完全packageのready、明示許可されたsubmitを区別する。保存はsourceと正しいremote identityに束縛し、form全体の差分・公開影響を確認した後に行い、再読取で結果を検証する。未確定画像・build・法務は独立した一般原稿を止めないが、それら自体の更新やrelease readinessを許可しない。
+- Consequence: 部分保存の別形式journalはpackage外に置き、既存package/result/checklistを変更・流用しない。#52は仕様と薄いroutingのみで、専用save実装は後続Issueへ分離する。未実装の間は既存提出scriptや手動操作で代用しない。正式提出の全素材、申告、法務承認、audit、明示提出許可は維持する。
+- Related Issue: #52
