@@ -164,6 +164,7 @@ echo 'PASS: current-Head repository tests are isolated, sanitized, AC-mapped, an
 # The older revision intentionally has neither the future runner nor the Head
 # inventory. Only the current producer may orchestrate both clean revisions.
 ruby -I"$source_repo/tools/lib" -rrun-repository-tests -rprepare-review-packet - "$source_repo" <<'RUBY'
+# encoding: UTF-8
 source = ARGV.fetch(0)
 runner = IOSTemplate::RepositoryTests
 review = IOSTemplate::ReviewContract
