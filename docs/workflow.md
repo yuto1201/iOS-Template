@@ -346,3 +346,25 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むため選択された実行モデルが同じ手順を手動実行します。手動であってもIssue、Branch、PR、4条件Simulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。
 
 Bootstrap IssueのPRには、各受け入れ条件IDと証拠、GitHub account preflightのsanitized要約、Verify対象SHA、Review対象SHAを記載します。Simulator verificationが入った後は`verify.json`を使用し、Security and workflowが入った後は全Issueを自動状態機械へ移行します。
+
+### 9.1 手動Squash Merge後のPR記録とcleanup
+
+Bootstrap例外は自動化tool自体がまだ使用できない場合に限ります。通常の`merge-issue.sh`やpremergeを迂回する理由にはしません。手動経路でも先に受け入れ条件、現在Headの要求検証、必要な反対モデル承認を揃え、PR本文へ証拠を記載します。
+
+必須の順序は次のとおりです。
+
+1. canonical Issue worktreeでBranch、Base、Head、sealed contractを確認し、指定Executorが許可されたGitHub accountでexact PRを作成・確認する。
+2. 必要な手動検証・レビューを完了し、正規の状態遷移で`approved-for-merge`へ進める。PRのrepository、main向けBase、Branch、Head、唯一のclosing Issueを照合して、同じHeadを`--squash --match-head-commit`でマージする。
+3. exact PRが`MERGED`、`mergeCommit`あり、Issueが`CLOSED`であることをreadbackし、`issue-state.sh transition --repo OWNER/REPO --issue NUMBER --from approved-for-merge --to merged`でmerged履歴を記録する。成功不明のマージを再実行しない。
+4. durable stateの`pullRequest`が欠けている場合、元のexact-Head worktreeから[record-merged-pr.sh](../tools/record-merged-pr.sh)を実行する。
+
+   ```sh
+   tools/record-merged-pr.sh --repo "$REPO" --issue "$ISSUE" \
+     --pull-request "$PR_NUMBER" --expected-head "$HEAD_SHA"
+   ```
+
+5. 記録成功後、primary checkoutの`tools/cleanup-issue.sh --repo "$REPO" --issue "$ISSUE"`を実行し、正規の`merged -> done`遷移とPR／Issue／Branch／worktreeの独立した完了確認を行う。
+
+復旧コマンドは既にmergedのdurable identityだけを対象にし、account／read権限、live Issueの指定Executor、所有者のmerged履歴、PR番号・URL・repository・Branch・Head・closing Issueを再取得・検証します。既存の異なるPRを上書きせず、書き込む値は欠けている`pullRequest`だけです。同じPRで再開する場合もremoteを再確認します。新規マージ、PR作成、状態遷移、Branch削除、検証・レビューの免除は行いません。
+
+不一致・未取得・timeoutでは停止し、durable stateを手編集したりcleanupの削除部分を手動転記したりしません。すでにPRが記録された通常経路は従来どおり`merge-issue.sh`／`cleanup-issue.sh`で再開します。

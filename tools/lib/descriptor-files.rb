@@ -121,6 +121,7 @@ module DescriptorFiles
     output.write(bytes)
     output.flush
     output.fsync
+    published_stat = output.stat
     output.close
     current, current_stat = open_regular_at(directory, destination)
     current_bytes = read_opened(current, current_stat)
@@ -131,6 +132,9 @@ module DescriptorFiles
     system_error!("unlinkat exchanged destination") unless result.zero?
     temporary = nil
     directory.fsync
+    # Callers that need guarded rollback can identify only this publication.
+    # Existing callers may continue to ignore the return value.
+    published_stat
   ensure
     output&.close unless output&.closed?
     current&.close unless current&.closed?
