@@ -144,6 +144,30 @@ tools/run-repository-tests.sh \
 
 `prepare-review-packet.sh` はこのcanonical evidenceが存在する場合だけ検証してpacket内の `repositoryTests` へ封印します。したがってreviewerとpre-merge gateは、iOS smoke testとは別に、現在Headで実際に通過したRepository test suiteと各ACの対応を評価できます。
 
+#### BaseとHeadの全repository tests
+
+Claim前に一つのAC本文をexact `Repository-test scope: base-and-head; `で開始し、その後に非空の条件を置く。runnerと全review consumerはsealed contractのこの宣言から新形式を必須と判断する。重複・未知scope・不完全な宣言は拒否し、宣言なしの既存contractは旧Head-only recordのまま扱う。`--base-map`を渡しただけでは新形式へ切り替えられない。
+
+全ACへ`--map AC-N=TEST[,TEST...]`でHeadの実装／回帰testを対応付ける。Baseの結果を引用するACにだけ`--base-map AC-N=TEST[,TEST...]`を追加する。scopeを宣言したACには、BaseとHeadそれぞれ自身の全tracked test pathを対応付ける。Baseにはまだ存在しないHeadの新testを要求しない。Base mappingなしは空配列となり、Baseが新機能を証明したとは記録しない。
+
+```bash
+tools/run-repository-tests.sh --issue "${ISSUE}" --expected-base "${BASE_SHA}" \
+  --map AC-1=tools/tests/test-feature.sh \
+  --map "AC-2=${ALL_HEAD_TEST_PATHS_COMMA_SEPARATED}" \
+  --base-map "AC-2=${ALL_BASE_TEST_PATHS_COMMA_SEPARATED}"
+```
+
+上はAC-2にscope宣言がある場合の形式例であり、各revisionの実在する全inventoryを使用する。現在HeadのproducerがBase、Headの順で別々のclean detached worktreeを作り、各revisionの全tracked testを実行する。各testの既定900秒、process groupの回収、既存の引数規則は維持し、新形式は900秒超を許可しない。失敗・timeout・不足したmappingなら成功recordを発行しない。対象fixtureの成功は実repository全suiteの成功とは別である。
+
+canonical pathは同じ`repository-tests.json`だが、新recordは`schemaVersion: 2`、`scope: base-and-head`とし、以下を持つ。
+
+- 共通identity: Issue、Base SHA、Head SHA、exact contract path/digest、開始／完了時刻、`status: passed`。
+- `producer`: 実行を統括した現在の`headSha`と、二つのrunner fileのexact Head bytes digestを持つ`files`。Baseに新producerがあるとは仮定しない。
+- `revisions`: `base`、`head`のexact順序で`role`、`testedSha`、全`suite`／`tests`、開始／完了時刻を記録する。各testは`path`、そのrevisionの`sourceDigest`、`arguments`、完全な`command`、`status`、`exitStatus`、sanitized `outputDigest`、`timeoutSeconds`、`elapsedSeconds`、開始／完了時刻を持つ。
+- `acceptanceEvidence`: 全AC順の`id`、`status`、`baseTests`、`headTests`。scope宣言ACは両側の全inventoryに一致し、他ACのBase mappingは省略できる。
+
+validatorはrecordの自己申告ではなく、callerが信頼済みBase／Headのimmutable Git objectから独立に取得した全inventoryとsource／producer digestへ照合する。packetは値`repositoryTests`に加え、canonical recordのpath/digestを`repositoryTestsFile`として封印する。この新形式ではrecordがないとpacketを作れず、packet-only検証、result検証、publication、premergeでも同じclosureを要求する。古いschema v1 recordとそれを含むpacketのbytesは変更しない。
+
 ### Stage C: UI and acceptance matrix
 
 contractで指定されたexact 1条件／targeted部分集合／4条件それぞれで次を行います。

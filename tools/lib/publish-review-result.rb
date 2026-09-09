@@ -7,6 +7,8 @@ require "json"
 require "open3"
 require "time"
 require_relative "review-receipt"
+require_relative "review-contract"
+require_relative "review-sealing"
 
 class PublishError < StandardError; end
 
@@ -42,6 +44,7 @@ def physical_source(path)
   source = open_child(parent_file, name, flags)
   stat = source.stat
   reject("source must be a regular single-link file") unless stat.file? && stat.nlink == 1
+  source.binmode
   bytes = source.read
   current = File.lstat(path)
   reject("source changed while it was read") unless current.file? && current.nlink == 1 && current.dev == stat.dev && current.ino == stat.ino
@@ -78,7 +81,7 @@ topology = JSON.parse(topology_output)
 artifacts = topology.fetch("artifactsRoot")
 expected_root = [topology.fetch("artifactsDevice"), topology.fetch("artifactsInode")]
 source = physical_source(source_path)
-source_value = JSON.parse(source.bytes)
+source_value = JSON.parse(source.bytes.dup)
 packet = packet_path ? physical_source(packet_path) : nil
 if source_value["schemaVersion"] == 2
   reject("schema v2 result publication requires the exact review packet") unless packet
@@ -93,6 +96,30 @@ end
 bytes = source.bytes
 if primary
   reject("receipt publication arguments are incomplete") unless %w[codex claude].include?(primary) && started_at && completed_at && packet
+end
+
+# For the new route, the record visible to the reviewer remains in the same
+# held closure until both result and receipt have finished publication.
+repository_snapshots = nil
+if packet
+  packet_value = JSON.parse(packet.bytes.dup)
+  if packet_value.key?("repositoryTestsFile") || IOSTemplate::ReviewContract.repository_test_scope(packet_value.fetch("acceptanceCriteria")) == "base-and-head"
+    repository_snapshots = IOSTemplate::ReviewSealing::SnapshotSet.new(artifacts, at: "artifact root", expected_identity: expected_root)
+    held_packet = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/review-packet.json", at: "review packet")
+    held_contract = repository_snapshots.relative_leaf("issues/#{issue_text}/issue-contract.json", at: "issue contract")
+    held_tests = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/repository-tests.json", at: "repository tests")
+    reject("publication packet differs from canonical bytes") unless held_packet.bytes == packet.bytes
+    contract_value = JSON.parse(held_contract.bytes.dup)
+    contract_digest = IOSTemplate::ReviewContract.digest(held_contract.bytes)
+    IOSTemplate::ReviewContract.validate_contract!(packet_value, contract_value, contract_digest, Integer(issue_text))
+    IOSTemplate::ReviewContract.validate_scope!(packet_value, contract_value)
+    context = IOSTemplate::ReviewContract.repository_revision_context(repo: repo, base_sha: packet_value.fetch("baseSha"), head_sha: head_sha)
+    IOSTemplate::ReviewContract.validate_repository_closure!(packet: packet_value, contract: contract_value, contract_digest: contract_digest,
+      issue: Integer(issue_text), base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
+      repository_tests_bytes: held_tests.bytes, revision_context: context)
+    IOSTemplate::ReviewContract.validate_repository_assessments!(source_value, packet_value.fetch("repositoryTests"))
+    repository_snapshots.verify!
+  end
 end
 
 flags = File::RDONLY | File::NOFOLLOW
@@ -110,6 +137,7 @@ end
 head_directory = current
 verify_source!(source, "review source")
 verify_source!(packet, "review packet") if packet
+repository_snapshots&.verify!
 publish_flags = File::RDWR | File::CREAT | File::EXCL | File::NOFOLLOW
 published = open_child(head_directory, "review.json", publish_flags, 0o600)
 descriptors << published
@@ -165,13 +193,15 @@ if primary
   reject("published receipt descriptor changed") unless final_receipt_bytes == receipt_bytes && final_receipt_stat.file? && final_receipt_stat.nlink == 1 && final_receipt_stat.dev == receipt_stat.dev && final_receipt_stat.ino == receipt_stat.ino
   reject("published receipt path changed before completion") unless final_receipt_target_stat.file? && !final_receipt_target_stat.symlink? && final_receipt_target_stat.nlink == 1 && final_receipt_target_stat.dev == receipt_stat.dev && final_receipt_target_stat.ino == receipt_stat.ino
 end
+repository_snapshots&.verify!
 created = false
 receipt_created = false
 puts JSON.generate({"path" => target, "sha256" => "sha256:#{Digest::SHA256.hexdigest(written)}", "size" => written.bytesize, "receiptPath" => receipt_target})
-rescue PublishError, IOSTemplate::ReviewReceipt::ValidationError, SystemCallError, JSON::ParserError, KeyError, Errno::ENOENT, Errno::EACCES => error
+rescue PublishError, IOSTemplate::ReviewReceipt::ValidationError, IOSTemplate::ReviewContract::ValidationError, IOSTemplate::ReviewSealing::SealError, SystemCallError, JSON::ParserError, KeyError, Errno::ENOENT, Errno::EACCES => error
   warn "review publication failed: #{error.message}"
   exit 1
 ensure
+  repository_snapshots&.close
   if receipt_created && head_directory && receipt_stat
     begin
       current = open_child(head_directory, "review-receipt.json", File::RDONLY | File::NOFOLLOW)

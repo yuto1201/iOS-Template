@@ -145,6 +145,7 @@ identity = parse_object(ENV.fetch("PREMERGE_IDENTITY_JSON", ""), "merge identity
 refuse("merge identity differs from caller") unless identity["repository"] == repository && identity["issue"] == issue && identity["headSha"] == head_sha && identity["state"] == "approved-for-merge"
 refuse("merge PR differs from durable identity") if merge_pr && identity["pullRequest"] != merge_pr
 primary = identity.fetch("primaryRoot")
+base_sha = identity.fetch("baseSha")
 
 artifact_snapshots = HeldSnapshots.new(primary, "primary checkout")
 source_snapshots = HeldSnapshots.new(root, "Issue worktree")
@@ -169,6 +170,8 @@ begin
   ownership = IOSTemplate::Ownership.parse(ownership_file.bytes)
 
   diff_file = nil
+  repository_tests_file = nil
+  revision_context = nil
   image_files = {}
   if review_required
     review_references = IOSTemplate::ReviewContract.strict_references!(
@@ -177,6 +180,12 @@ begin
     evidence_prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
     diff_relative = review_references.fetch("diff").fetch("path").delete_prefix(evidence_prefix)
     diff_file = artifact_snapshots.relative_leaf(head_directory, diff_relative, "review.diff")
+    if review_references.key?("repositoryTestsFile")
+      repository_tests_file = artifact_snapshots.leaf(head_directory, "repository-tests.json", "repository-tests.json")
+    end
+    if IOSTemplate::ReviewContract.repository_test_scope(contract.fetch("acceptanceCriteria")) == "base-and-head"
+      revision_context = IOSTemplate::ReviewContract.repository_revision_context(repo: root, base_sha: base_sha, head_sha: head_sha)
+    end
     image_files = review_references.fetch("imageFiles").to_h do |reference|
       path = reference.fetch("path")
       relative = path.delete_prefix(evidence_prefix)
@@ -264,7 +273,6 @@ begin
   end
 
   verify = parse_object(verify_file.bytes, "verify.json")
-  base_sha = identity.fetch("baseSha")
   actual_diff_bytes = IOSTemplate::ReviewContract.actual_diff(repo: root, base_sha: base_sha, head_sha: head_sha)
   verify_digest = "sha256:#{Digest::SHA256.hexdigest(verify_file.bytes)}"
   validator_output, validator_status = Open3.capture2e(
@@ -284,6 +292,7 @@ begin
       require_temporal_order: true, strict: true,
       diff_bytes: diff_file.bytes,
       image_bytes: image_files.transform_values(&:bytes),
+      repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context,
       actual_diff_bytes: actual_diff_bytes
     )
     refuse("opposite-model review is not approved") unless review_values.fetch("result").fetch("verdict") == "approved"

@@ -40,9 +40,11 @@ module IOSTemplate
         contract_digest = ReviewContract.digest(contract_file.bytes)
         validate_inputs!(contract, verify, issue, base_sha, head_sha, contract_digest)
         repository_tests = repository_tests_file && parse_object(repository_tests_file.bytes, "repository-tests.json")
+        dual_revision = ReviewContract.repository_test_scope(contract.fetch("acceptanceCriteria")) == "base-and-head"
+        revision_context = dual_revision ? ReviewContract.repository_revision_context(repo: repo, base_sha: base_sha, head_sha: head_sha) : nil
         ReviewContract.validate_repository_tests!(
           repository_tests, issue: issue, base_sha: base_sha, head_sha: head_sha,
-          contract_digest: contract_digest, criteria: contract.fetch("acceptanceCriteria")
+          contract_digest: contract_digest, criteria: contract.fetch("acceptanceCriteria"), revision_context: revision_context
         ) if repository_tests
 
         image_references = ReviewContract.verified_image_references!(verify, issue: issue, head_sha: head_sha)
@@ -70,6 +72,12 @@ module IOSTemplate
           "imageFiles" => image_references
         }
         packet["repositoryTests"] = repository_tests if repository_tests
+        if dual_revision && repository_tests_file
+          packet["repositoryTestsFile"] = {"path"=>"#{prefix}repository-tests.json", "digest"=>ReviewContract.digest(repository_tests_file.bytes)}
+        end
+        ReviewContract.validate_repository_closure!(packet: packet, contract: contract, contract_digest: contract_digest,
+          issue: issue, base_sha: base_sha, head_sha: head_sha,
+          repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context)
         packet_bytes = JSON.generate(packet).b
 
         validate_git_identity!(repo, base_sha, head_sha)

@@ -160,3 +160,213 @@ ruby -I"$source_repo/tools/lib" -rrun-repository-tests -e '
 '
 
 echo 'PASS: current-Head repository tests are isolated, sanitized, AC-mapped, and sealed into the review packet'
+
+# The older revision intentionally has neither the future runner nor the Head
+# inventory. Only the current producer may orchestrate both clean revisions.
+ruby -I"$source_repo/tools/lib" -rrun-repository-tests -rprepare-review-packet - "$source_repo" <<'RUBY'
+# encoding: UTF-8
+source = ARGV.fetch(0)
+runner = IOSTemplate::RepositoryTests
+review = IOSTemplate::ReviewContract
+Dir.mktmpdir("repository-two-revisions-") do |scratch|
+  scratch = File.realpath(scratch)
+  repo = File.join(scratch, "repo")
+  FileUtils.mkdir_p(File.join(repo, "tools/tests"))
+  git = ->(*args) { runner.git!(repo, *args).strip }
+  git.call("init", "-q", "-b", "main")
+  git.call("config", "user.name", "Fixture")
+  git.call("config", "user.email", "fixture@example.invalid")
+  File.write(File.join(repo, ".gitignore"), "/.artifacts\n")
+  File.write(File.join(repo, "tools/tests/test-alpha.sh"), "test -f tools/tests/test-baseline.sh || test -f tools/tests/test-beta.sh\n")
+  File.write(File.join(repo, "tools/tests/test-baseline.sh"), "test ! -e tools/run-repository-tests.sh\ncase \"${BASE_CASE:-pass}\" in fail) exit 7;; timeout) sleep 10;; esac\n")
+  git.call("add", ".")
+  git.call("commit", "-qm", "older source and baseline-only inventory")
+  base = git.call("rev-parse", "HEAD")
+  FileUtils.mkdir_p(File.join(repo, "tools/lib"))
+  %w[run-repository-tests.sh prepare-review-packet.sh validate-review-result.sh cross-model-review.sh].each do |name|
+    FileUtils.cp(File.join(source, "tools", name), File.join(repo, "tools", name))
+  end
+  Dir[File.join(source, "tools/lib/*.rb")].each { |file| FileUtils.cp(file, File.join(repo, "tools/lib")) }
+  File.unlink(File.join(repo, "tools/tests/test-baseline.sh"))
+  File.write(File.join(repo, "tools/tests/test-beta.sh"), "test -f tools/run-repository-tests.sh\n")
+  git.call("add", ".")
+  git.call("commit", "-qm", "current producer and different Head inventory")
+  head = git.call("rev-parse", "HEAD")
+  directory = File.join(repo, ".artifacts/issues/42", head)
+  FileUtils.mkdir_p(directory)
+  criteria = [{"id" => "AC-1", "text" => "現在Headの機能"},
+              {"id" => "AC-2", "text" => "Repository-test scope: base-and-head; Full baseline and Head regression"}]
+  contract = {"schemaVersion"=>1, "issue"=>42, "repository"=>"example/repo", "goal"=>"Two revisions",
+              "specAnchors"=>["specs/test.md#evidence"], "acceptanceCriteria"=>criteria,
+              "dependencies"=>[], "externalOperations"=>[], "externalOperationDetailsDigest"=>"sha256:#{'0' * 64}",
+              "fetchedAt"=>"2026-08-25T00:00:00Z"}
+  contract_bytes = JSON.generate(contract)
+  File.write(File.join(repo, ".artifacts/issues/42/issue-contract.json"), contract_bytes)
+  mappings = {"AC-1"=>["tools/tests/test-beta.sh"], "AC-2"=>["tools/tests/test-alpha.sh", "tools/tests/test-beta.sh"]}
+  base_mappings = {"AC-2"=>["tools/tests/test-alpha.sh", "tools/tests/test-baseline.sh"]}
+  result = runner.run(repo: repo, issue: 42, expected_base: base, mappings: mappings, base_mappings: base_mappings)
+  record_path = File.join(directory, "repository-tests.json")
+  record_bytes = File.binread(record_path)
+  record = JSON.parse(record_bytes.dup)
+  abort "two-revision schema missing" unless record.values_at("schemaVersion", "scope") == [2, "base-and-head"]
+  abort "wrong role/SHA order" unless record.fetch("revisions").map { |entry| entry.values_at("role", "testedSha") } == [["base", base], ["head", head]]
+  abort "inventories were conflated" unless record.fetch("revisions").map { |entry| entry.fetch("tests").map { |test| test.fetch("path") } } == [base_mappings.fetch("AC-2"), mappings.fetch("AC-2")]
+  abort "baseline falsely proves a Head feature" unless record.fetch("acceptanceEvidence").first.fetch("baseTests") == []
+  abort "producer not bound to current Head" unless record.fetch("producer").fetch("headSha") == head
+  abort "runner result totals differ" unless result.values_at("total", "passed", "failed") == [4, 4, 0]
+  record.fetch("revisions").each do |revision|
+    revision.fetch("tests").each do |test|
+      abort "missing finite bound" unless test.fetch("timeoutSeconds") == 900 && test.fetch("elapsedSeconds") >= 0
+      abort "wrong argv" unless test.fetch("command") == ["/bin/bash", "-p", test.fetch("path")]
+    end
+  end
+  context = review.repository_revision_context(repo: repo, base_sha: base, head_sha: head)
+  ["Repository-test scope: other; unsupported", "Repository-test scope: base-and-head;",
+   "Repository-test scope: base-and-head; "].each do |declaration|
+    begin
+      review.repository_test_scope([{ "id"=>"AC-1", "text"=>declaration }])
+      abort "malformed repository scope accepted"
+    rescue IOSTemplate::ReviewContract::ValidationError
+    end
+  end
+  begin
+    review.repository_test_scope([criteria.last, criteria.last])
+    abort "duplicate repository scope accepted"
+  rescue IOSTemplate::ReviewContract::ValidationError
+  end
+  validate = ->(value) { review.validate_repository_tests!(value, issue: 42, base_sha: base, head_sha: head,
+    contract_digest: review.digest(contract_bytes), criteria: criteria, revision_context: context) }
+  validate.call(record)
+  mutations = {
+    "missing Base" => ->(v) { v["revisions"].shift },
+    "duplicate revision" => ->(v) { v["revisions"][0] = v["revisions"][1] },
+    "wrong Issue" => ->(v) { v["issue"] = 43 },
+    "wrong contract" => ->(v) { v["issueContract"]["digest"] = "sha256:#{'1' * 64}" },
+    "wrong tested SHA" => ->(v) { v["revisions"][0]["testedSha"] = head },
+    "duplicate test" => ->(v) { v["revisions"][0]["tests"][0] = v["revisions"][0]["tests"][1] },
+    "self-consistent subset" => ->(v) { r = v["revisions"][0]; r["tests"].pop; r["suite"]["total"] = r["suite"]["passed"] = 1; v["acceptanceEvidence"][1]["baseTests"].pop },
+    "wrong producer" => ->(v) { v["producer"]["files"][0]["digest"] = "sha256:#{'2' * 64}" },
+    "wrong source" => ->(v) { v["revisions"][0]["tests"][0]["sourceDigest"] = "sha256:#{'3' * 64}" },
+    "escaping test path" => ->(v) { v["revisions"][0]["tests"][0]["path"] = "../tools/tests/test-alpha.sh" },
+    "wrong argv" => ->(v) { v["revisions"][0]["tests"][0]["command"] = ["/bin/true"] },
+    "failed test" => ->(v) { v["revisions"][0]["tests"][0]["status"] = "failed" },
+    "timeout" => ->(v) { v["revisions"][0]["tests"][0]["status"] = "timed-out" },
+    "unbounded test" => ->(v) { v["revisions"][0]["tests"][0]["timeoutSeconds"] = 0 }
+  }
+  mutations.each do |name, mutate|
+    altered = JSON.parse(record_bytes.dup)
+    mutate.call(altered)
+    begin
+      validate.call(altered)
+      abort "accepted #{name}"
+    rescue IOSTemplate::ReviewContract::ValidationError
+      # Expected rejection, not evidence of real suite execution.
+    end
+  end
+  abort "validation rewrote sealed bytes" unless File.binread(record_path) == record_bytes
+  verify = {"schemaVersion"=>1, "status"=>"not-applicable", "issue"=>42, "baseSha"=>base, "headSha"=>head,
+    "issueContract"=>record.fetch("issueContract"), "visualEvaluation"=>{"status"=>"not-applicable", "findings"=>[]},
+    "completedAt"=>Time.now.utc.iso8601(6)}
+  File.write(File.join(directory, "verify.json"), JSON.generate(verify))
+  prepare = -> { IOSTemplate::PrepareReviewPacket.prepare(repo: repo, primary: "codex", issue: 42, base_sha: base, head_sha: head) }
+  prepare.call
+  packet_path = File.join(directory, "review-packet.json")
+  packet_bytes = File.binread(packet_path)
+  packet = JSON.parse(packet_bytes.dup)
+  abort "record not bound by exact bytes" unless packet.fetch("repositoryTestsFile") == {"path"=>result.fetch("path"), "digest"=>review.digest(record_bytes)}
+  packet_error = nil
+  validate_packet = lambda do |result_file = nil|
+    command = ["/bin/bash", File.join(repo, "tools/validate-review-result.sh"), "--primary", "codex", "--packet", ".artifacts/issues/42/#{head}/review-packet.json"]
+    command += ["--result", result_file] if result_file
+    _, packet_error, status = Open3.capture3(*command, chdir: repo)
+    status.success?
+  end
+  abort "real packet preflight rejected Base and Head: #{packet_error}" unless validate_packet.call
+  File.write(record_path, record_bytes + "\n")
+  abort "packet preflight accepted changed record bytes" if validate_packet.call
+  File.write(record_path, record_bytes)
+  File.rename(record_path, record_path + ".link-target")
+  File.symlink(File.basename(record_path) + ".link-target", record_path)
+  abort "packet preflight accepted a symlink record" if validate_packet.call
+  File.unlink(record_path)
+  File.link(record_path + ".link-target", record_path)
+  abort "packet preflight accepted a hardlinked record" if validate_packet.call
+  File.unlink(record_path)
+  File.rename(record_path + ".link-target", record_path)
+  altered_packet = JSON.parse(packet_bytes.dup)
+  altered_packet.delete("repositoryTests")
+  altered_packet.delete("repositoryTestsFile")
+  File.write(packet_path, JSON.generate(altered_packet))
+  abort "packet preflight ignored a missing required Base record" if validate_packet.call
+  File.write(packet_path, packet_bytes)
+  result_value = {"schemaVersion"=>2, "issue"=>42, "reviewerModel"=>"claude", "baseSha"=>base, "headSha"=>head,
+    "verifySha"=>head, "issueContractDigest"=>review.digest(contract_bytes), "reviewPacketDigest"=>review.digest(packet_bytes),
+    "verdict"=>"approved", "findings"=>[], "reviewedAt"=>Time.now.utc.iso8601(6),
+    "acceptanceAssessment"=>criteria.each_with_index.map { |c,i| {"id"=>c["id"], "status"=>"supported", "evidence"=>["repository-tests.json#acceptanceEvidence/#{i}"]} }}
+  result_file = File.join(scratch, "review-result.json")
+  File.write(result_file, JSON.generate(result_value))
+  abort "real result validator rejected Base and Head" unless validate_packet.call(result_file)
+  result_value["acceptanceAssessment"][0]["evidence"] = ["repository-tests.json#acceptanceEvidence/1"]
+  File.write(result_file, JSON.generate(result_value))
+  abort "result accepted another AC mapping as proof" if validate_packet.call(result_file)
+  result_value["acceptanceAssessment"][0]["evidence"] = ["repository-tests.json#acceptanceEvidence/0"]
+  File.write(result_file, JSON.generate(result_value))
+  publish_args = [File.join(repo, "tools/lib/publish-review-result.rb"), repo, "42", head, result_file,
+    packet_path, "codex", result_value["reviewedAt"], Time.now.utc.iso8601(6)]
+  _, error, status = Open3.capture3("/usr/bin/ruby", *publish_args)
+  abort "new result/receipt publication failed: #{error}" unless status.success?
+  receipt = JSON.parse(File.binread(File.join(directory, "review-receipt.json")))
+  abort "receipt does not bind exact two-revision packet" unless receipt.fetch("reviewPacketDigest") == review.digest(packet_bytes)
+  %w[review.json review-receipt.json].each { |name| File.unlink(File.join(directory, name)) }
+  # Interpose only in the isolated fixture process: alter the record after
+  # result/receipt creation, just before the publisher's final held check.
+  shim = File.join(scratch, "publication-race.rb")
+  File.write(shim, <<~SHIM)
+    require #{File.join(repo, "tools/lib/review-sealing.rb").inspect}
+    module RecordRace
+      def verify!
+        @fixture_checks = (@fixture_checks || 0) + 1
+        if @fixture_checks == 3
+          path = #{record_path.inspect}
+          bytes = File.binread(path)
+          File.rename(path, path + ".before-race")
+          File.binwrite(path, bytes)
+        end
+        super
+      end
+    end
+    IOSTemplate::ReviewSealing::SnapshotSet.prepend(RecordRace)
+  SHIM
+  _, _, status = Open3.capture3("/usr/bin/ruby", "-r", shim, *publish_args)
+  abort "result/receipt publication accepted a replaced record" if status.success?
+  abort "publication race did not execute" unless File.exist?(record_path + ".before-race")
+  abort "failed closure left a published result/receipt" if %w[review.json review-receipt.json].any? { |name| File.exist?(File.join(directory, name)) }
+  File.unlink(record_path)
+  File.rename(record_path + ".before-race", record_path)
+  %w[fail timeout].each_with_index do |mode, index|
+    fixture_issue = 43 + index
+    failed_directory = File.join(repo, ".artifacts/issues/#{fixture_issue}", head)
+    FileUtils.mkdir_p(failed_directory)
+    File.write(File.join(File.dirname(failed_directory), "issue-contract.json"), JSON.generate(contract.merge("issue"=>fixture_issue)))
+    environment = {"BASE_CASE"=>mode, "IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS"=>"1"}
+    _, error, status = Open3.capture3(environment, "/bin/bash", File.join(repo, "tools/run-repository-tests.sh"),
+      "--issue", fixture_issue.to_s, "--expected-base", base,
+      "--map", "AC-1=tools/tests/test-beta.sh", "--map", "AC-2=#{mappings['AC-2'].join(',')}",
+      "--base-map", "AC-2=#{base_mappings['AC-2'].join(',')}", chdir: repo)
+    abort "#{mode} Base suite was accepted" if status.success?
+    abort "wrong failure for #{mode}: #{error}" unless error.include?(mode == "timeout" ? "repository test timed out" : "base repository test failed")
+    abort "failed Base suite published success" if File.exist?(File.join(failed_directory, "repository-tests.json"))
+  end
+  File.unlink(packet_path)
+  File.unlink(File.join(directory, "review.diff"))
+  begin
+    IOSTemplate::PrepareReviewPacket.prepare(repo: repo, primary: "codex", issue: 42, base_sha: base, head_sha: head,
+      before_publish: -> { File.rename(record_path, record_path + ".original"); File.write(record_path, record_bytes) })
+    abort "publication accepted a same-byte record inode swap"
+  rescue IOSTemplate::PrepareReviewPacket::PreparationError
+    abort "raced packet was published" if File.exist?(packet_path)
+  end
+  abort "detached worktree leaked" unless git.call("worktree", "list", "--porcelain").scan(/^worktree /).length == 1
+end
+puts 'PASS: actual Base and Head inventories, producer identity, finite results, and rejection fixtures'
+RUBY

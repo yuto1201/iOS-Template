@@ -21,7 +21,7 @@ module IOSTemplate
     RUNNER_PATHS = %w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb].freeze
     DEFAULT_CHILD_TIMEOUT_SECONDS = 900
 
-    def run(repo:, issue:, expected_base:, mappings:)
+    def run(repo:, issue:, expected_base:, mappings:, base_mappings: {}, before_publish: nil)
       reject("repository root must be a physical absolute directory") unless repo.start_with?("/") && File.realpath(repo) == repo
       reject("issue must be a positive integer") unless issue.is_a?(Integer) && issue.positive?
       reject("expected Base SHA is invalid") unless expected_base.match?(SHA)
@@ -49,17 +49,45 @@ module IOSTemplate
         reject("Issue contract identity differs") unless contract["schemaVersion"] == 1 && contract["issue"] == issue
         criteria = contract.fetch("acceptanceCriteria")
         validate_criteria!(criteria)
+        dual_revision = ReviewContract.repository_test_scope(criteria) == "base-and-head"
+        reject("Base mappings require a Base and Head contract") if !dual_revision && !base_mappings.empty?
+        context = dual_revision ? ReviewContract.repository_revision_context(repo: repo, base_sha: expected_base, head_sha: head_sha) : nil
 
-        tests = tracked_tests(repo, head_sha)
+        tests = dual_revision ? context.fetch("inventories")[1].map { |entry| entry.fetch("path") } : tracked_tests(repo, head_sha)
         reject("no tracked repository tests were found") if tests.empty?
         acceptance = validate_mappings!(mappings, criteria, tests)
+        if dual_revision
+          base_tests = context.fetch("inventories")[0].map { |entry| entry.fetch("path") }
+          reject("no tracked Base repository tests were found") if base_tests.empty?
+          reject("Base mapping contains an unknown AC") unless (base_mappings.keys - mappings.keys).empty?
+          base_mappings.each do |id, paths|
+            reject("Base mapping #{id} must reference unique tracked Base tests") unless paths.is_a?(Array) && !paths.empty? && paths.uniq == paths && paths.all? { |path| base_tests.include?(path) }
+          end
+          declaration_id = criteria.find { |entry| entry["text"].start_with?("Repository-test scope:") }.fetch("id")
+          reject("repository scope AC must map both complete suites") unless base_mappings[declaration_id]&.sort == base_tests && mappings[declaration_id].sort == tests
+          reject("repository test timeout cannot exceed 900 seconds") if repository_test_timeout_seconds > DEFAULT_CHILD_TIMEOUT_SECONDS
+          acceptance = acceptance.map { |entry| {"id"=>entry["id"], "status"=>"passed", "baseTests"=>base_mappings.fetch(entry["id"], []), "headTests"=>entry["tests"]} }
+        end
         runner_files = RUNNER_PATHS.map do |path|
           bytes = git!(repo, "show", "#{head_sha}:#{path}").b
           {"path" => path, "digest" => ReviewContract.digest(bytes)}
         end
 
         suite_started = Time.now.utc
-        results = execute_in_detached_worktree(repo, head_sha, tests)
+        if dual_revision
+          revisions = [["base", expected_base], ["head", head_sha]].each_with_index.map do |(role, sha), index|
+            started = Time.now.utc
+            inventory = context.fetch("inventories")[index]
+            revision_results = execute_in_detached_worktree(repo, sha, inventory.map { |entry| entry["path"] }, inventory: inventory)
+            failure = revision_results.find { |entry| entry["status"] != "passed" }
+            reject("#{role} repository test failed: #{failure.fetch('path')}") if failure
+            {"role"=>role, "testedSha"=>sha, "suite"=>suite_summary(revision_results), "tests"=>revision_results,
+             "startedAt"=>started.iso8601(6), "completedAt"=>Time.now.utc.iso8601(6)}
+          end
+          results = revisions.flat_map { |revision| revision.fetch("tests") }
+        else
+          results = execute_in_detached_worktree(repo, head_sha, tests)
+        end
         suite_completed = Time.now.utc
         failure = results.find { |entry| entry["status"] != "passed" }
         reject("repository test failed: #{failure.fetch('path')}") if failure
@@ -91,11 +119,26 @@ module IOSTemplate
           "startedAt" => suite_started.iso8601(6),
           "completedAt" => suite_completed.iso8601(6)
         }
+        if dual_revision
+          %w[runnerFiles suite tests].each { |key| evidence.delete(key) }
+          evidence.merge!("schemaVersion"=>2, "scope"=>"base-and-head", "producer"=>{"headSha"=>head_sha, "files"=>runner_files}, "revisions"=>revisions)
+          ReviewContract.validate_repository_tests!(evidence, issue: issue, base_sha: expected_base, head_sha: head_sha,
+            contract_digest: ReviewContract.digest(contract_file.bytes), criteria: criteria, revision_context: context)
+          reject("repository execution predates Issue contract") if suite_started < Time.iso8601(contract.fetch("fetchedAt"))
+        end
         bytes = JSON.generate(evidence).b
+        before_publish&.call
         snapshots.verify!
         reject("current Head changed before evidence publication") unless git!(repo, "rev-parse", "HEAD").strip == head_sha
+        reject("Issue worktree changed before evidence publication") if dual_revision && !git!(repo, "status", "--porcelain").empty?
         leaf = snapshots.publish_exclusive(head_directory, "repository-tests.json", bytes, at: "repository-tests.json")
-        snapshots.verify!
+        begin
+          snapshots.verify!
+          reject("current Head changed during evidence publication") if dual_revision && git!(repo, "rev-parse", "HEAD").strip != head_sha
+        rescue StandardError
+          snapshots.unlink_if_same(head_directory, leaf) if dual_revision
+          raise
+        end
 
         {
           "path" => ".artifacts/issues/#{issue}/#{head_sha}/repository-tests.json",
@@ -112,7 +155,13 @@ module IOSTemplate
       raise RunnerError, error.message
     end
 
-    def execute_in_detached_worktree(repo, head_sha, tests)
+    def suite_summary(results)
+      {"path"=>"tools/tests", "pattern"=>"test-*.sh", "total"=>results.length,
+       "passed"=>results.count { |entry| entry["status"] == "passed" },
+       "failed"=>results.count { |entry| entry["status"] != "passed" }}
+    end
+
+    def execute_in_detached_worktree(repo, head_sha, tests, inventory: nil)
       results = []
       Dir.mktmpdir("ios-template-repository-tests-") do |temporary|
         worktree = File.join(temporary, "worktree")
@@ -120,6 +169,12 @@ module IOSTemplate
         begin
           reject("detached test worktree resolved an unexpected Head") unless git!(worktree, "rev-parse", "HEAD").strip == head_sha
           tests.each do |path|
+            if inventory
+              reject("detached revision worktree is dirty") unless git!(worktree, "status", "--porcelain").empty?
+              expected = inventory.find { |entry| entry["path"] == path }.fetch("sourceDigest")
+              source = File.join(worktree, path)
+              reject("detached test source differs from revision") unless File.lstat(source).file? && ReviewContract.digest(File.binread(source)) == expected
+            end
             arguments = test_arguments(path)
             started = Time.now.utc
             timeout_seconds = repository_test_timeout_seconds
@@ -139,6 +194,11 @@ module IOSTemplate
               "startedAt" => started.iso8601(6),
               "completedAt" => completed.iso8601(6)
             }
+            if inventory
+              results.last.merge!("sourceDigest"=>expected, "command"=>["/bin/bash", "-p", path, *arguments],
+                "timeoutSeconds"=>timeout_seconds, "elapsedSeconds"=>elapsed.round(6))
+              reject("detached revision worktree changed during tests") unless git!(worktree, "rev-parse", "HEAD").strip == head_sha && git!(worktree, "status", "--porcelain").empty?
+            end
             reject("repository test timed out: #{path}; elapsedSeconds=#{format('%.3f', elapsed)}") if timed_out
             break unless status.success?
           end
@@ -277,13 +337,15 @@ if $PROGRAM_NAME == __FILE__
   issue = nil
   expected_base = nil
   mapping_arguments = []
+  base_mapping_arguments = []
   until ARGV.empty?
     case ARGV.shift
     when "--issue" then issue = ARGV.shift
     when "--expected-base" then expected_base = ARGV.shift
     when "--map" then mapping_arguments << ARGV.shift
+    when "--base-map" then base_mapping_arguments << ARGV.shift
     else
-      warn "usage: run-repository-tests.sh --issue NUMBER --expected-base SHA --map AC-N=TEST[,TEST...] ..."
+      warn "usage: run-repository-tests.sh --issue NUMBER --expected-base SHA --map AC-N=TEST[,TEST...] ... [--base-map AC-N=TEST[,TEST...] ...]"
       exit 2
     end
   end
@@ -292,14 +354,20 @@ if $PROGRAM_NAME == __FILE__
     exit 2
   end
   begin
-    mappings = {}
-    mapping_arguments.each do |argument|
-      id, paths = argument.split("=", 2)
-      IOSTemplate::RepositoryTests.reject("acceptance mapping is invalid") unless id&.match?(/\AAC-[1-9][0-9]*\z/) && paths && !paths.empty? && !mappings.key?(id)
-      mappings[id] = paths.split(",", -1)
+    parse_mappings = lambda do |arguments|
+      parsed = {}
+      arguments.each do |argument|
+        IOSTemplate::RepositoryTests.reject("acceptance mapping is invalid") unless argument.is_a?(String)
+        id, paths = argument.split("=", 2)
+        IOSTemplate::RepositoryTests.reject("acceptance mapping is invalid") unless id&.match?(/\AAC-[1-9][0-9]*\z/) && paths && !paths.empty? && !parsed.key?(id)
+        parsed[id] = paths.split(",", -1)
+      end
+      parsed
     end
+    mappings = parse_mappings.call(mapping_arguments)
+    base_mappings = parse_mappings.call(base_mapping_arguments)
     result = IOSTemplate::RepositoryTests.run(
-      repo: repo, issue: Integer(issue), expected_base: expected_base, mappings: mappings
+      repo: repo, issue: Integer(issue), expected_base: expected_base, mappings: mappings, base_mappings: base_mappings
     )
     puts JSON.generate(result)
   rescue IOSTemplate::RepositoryTests::RunnerError => error

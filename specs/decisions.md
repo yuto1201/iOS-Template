@@ -266,3 +266,13 @@
 - Decision: [原稿の正本と登録準備](architecture.md#91-原稿の正本と登録準備)に従い、fieldごとの導出元、確認根拠、未決理由、draft/confirmed/remote-savedを記録する。登録前には個人TeamとBundleによる既存App照合を行い、名前・SKU・access等の判断と契約・法務・価格のhandoffを分ける。一時原稿はレビュー後にApp Storeへ昇格し、SDKと実装変更で関連申告を再監査する。
 - Consequence: 独立欄の準備は継続できるが、部分準備を完全packageや提出承認にしない。既存schema/validatorと封印済み証拠をこの文書変更で書き換えず、自動検出・登録operationは依存する後続実装Issueへ分離する。公開先や実アプリの値は捏造せず、スクリーンショットは別途確定前に生成しない。
 - Related Issue: #53
+
+## D-034: BaseとHeadの全repository test証拠を明示契約へ束縛する
+
+- Date: 2026-09-09
+- Status: 確定
+- Supersedes: None。D-029のstage／profileと既存の封印済みcontract・証拠の互換性を維持する。
+- Context: BaseとHeadの両方で全repository testsを要求するIssueを、Headだけの記録で完了させてはいけない。#60のAC-1とAC-6が新形式の選択条件と、このIssue自身での両revisionの実行を要求する。
+- Decision: Claim前の一つのAC本文先頭をexact `Repository-test scope: base-and-head; `で開始し、その後に非空の受け入れ条件を続ける。この宣言だけが新しいschema v2 repository recordを要求する。重複・不完全・未知のscope宣言は拒否し、宣言なしの既存sealed contractには旧Head-only経路を維持する。新しいcontract fieldや任意のCLI modeで選択しない。
+- Consequence: 現在Headのproducerが各revision自身の全tracked testをclean detached worktreeで実行し、BaseとHeadのinventory、tested SHA、有限timeout、argv、結果、時刻、digestを別々に記録する。宣言ACは両方の全suiteへ対応付ける。Base mappingはbaseline／regressionの証拠であり、Headで追加した機能の実装証拠ではない。packet内の値とcanonical recordのexact bytesを束縛し、reviewerへの引き渡し、result／receipt publication、premergeで欠落・改ざん・差し替えを拒否する。旧record／packet／receiptを変換・再封印しない。
+- Related Issue: #60

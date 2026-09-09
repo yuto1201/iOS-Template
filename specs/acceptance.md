@@ -88,6 +88,12 @@ stage未導入のClaim済みIssueはcanonical contractを変更せず、旧profi
 
 profileを下げてstage要件を回避しない。`shape`はUIを含むので`fast`にしない。strict対象operationを`fast`／`standard`へ指定したIssueは開始前に拒否する。
 
+### 3.3 Repository testsのBase／Head要件
+
+一つのAC本文先頭にexact `Repository-test scope: base-and-head; `と非空の条件を宣言したIssueは、現在HeadのproducerでBaseとHeadそれぞれの全tracked `tools/tests/test-*.sh`を実行する。宣言ACは両revisionの全suiteへ対応付け、各ACのHead実装証拠とBaseのbaseline／regression証拠を区別する。canonical schema v2 record、packetのexact-byte参照、同じpacketに束縛したreview／receipt、premergeの再検証まで完了条件に含める。片方の欠落、subset、別SHA／Issue／contract、失敗／timeout／未完了、差し替えは成功ではない。
+
+選択条件と互換境界は[D-034](decisions.md#d-034-baseとheadの全repository-test証拠を明示契約へ束縛する)、手順とschemaは[repository evidence](../docs/verification.md#baseとheadの全repository-tests)を正とする。宣言を持たない既存sealed contractと旧Head-only record／packet／receiptのbytesを変更せず、旧証拠からBase実行の証拠を作らない。
+
 ## 4. Simulator scope
 
 | Case | Device | Locale | Language |

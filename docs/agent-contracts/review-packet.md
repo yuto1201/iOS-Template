@@ -72,6 +72,14 @@ UI-direction compatibility is determined only from the sealed Issue contract. A 
 
 ## 3. Reviewer questions
 
+### BaseとHeadを要求するcontract
+
+sealed AC本文先頭にexact `Repository-test scope: base-and-head; `と非空の条件が一つある場合、[新repository record](../verification.md#baseとheadの全repository-tests)を必須にする。packet schemaは2を維持し、`repositoryTests`にはschema v2 record全体、`repositoryTestsFile`にはexact canonical `.artifacts/issues/ISSUE/HEAD/repository-tests.json`のpath/digestを持つ。片方だけのfield、欠落record、recordと埋め込み値の相違を受理しない。宣言なしの旧contractではschema v1 recordを引き続き受理し、旧packetへ新fieldを追加しない。
+
+reviewerはordered `revisions`のBase／Head各SHAと全inventory、producerの現在Head、実行結果・時刻・timeout、AC mappingを確認する。Baseはbaseline／regressionの根拠であり、Headの新機能を実装済みと証明しない。新形式の各`supported` ACには、同じACのzero-based indexを使ったexact `repository-tests.json#acceptanceEvidence/INDEX`を含める。たとえばAC-1は`repository-tests.json#acceptanceEvidence/0`であり、別ACのmapping、存在しないpointer、prose、Headだけの参照で置き換えない。必要なiOS証拠は追加引用する。
+
+このrouteでは`strict_references!`も`repositoryTestsFile`を返す。descriptor-owning callerはそのrecordを保持し、pure `validate!`へ`repository_tests_bytes:`と、信頼済みBase／Headから独立取得した`revision_context:`を渡す。contextは`ReviewContract.repository_revision_context(repo:, base_sha:, head_sha:)`で取得し、artifactのtested SHAや自己申告inventoryから組み立てない。packet-only preflight、結果検証、result／receipt publication、最終mergeの各ownerがrecordのdescriptor・path identity・bytesを確認する。receipt schemaは変更せず、recordを含むexact packet digestへ従来どおり束縛する。
+
 レビューでは次の順に確認します。
 
 1. 各受け入れ条件に実装と証拠があるか。
