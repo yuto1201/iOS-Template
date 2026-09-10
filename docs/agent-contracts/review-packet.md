@@ -137,7 +137,7 @@ Findingは次を含みます。
 `findings[].file` is a file path, not an evidence pointer or prose. Source paths
 are relative to the executing Issue worktree root (or repository root in a
 direct checkout), never the primary checkout's source tree or the caller's cwd.
-Use `TemplateApp/Settings/NotificationSettings.swift`, for example.
+Use the source-relative `file` example above.
 
 Current packet artifacts may use the exact
 `.artifacts/issues/ISSUE/HEAD/<path>` form. The packet's exact Issue contract path
