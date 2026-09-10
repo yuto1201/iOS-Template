@@ -134,6 +134,75 @@ validated_repository=$(jq -r '.issueContractRepository // "MISSING"' <<<"$valida
 "$primary/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" >/dev/null
 
 export FAKE_REVIEWER_MODE=approved
+# Findings use the caller's source tree or the current packet's artifact root,
+# never an arbitrary symlink target. Keep reviewer-authored fields unchanged.
+write_finding() {
+  write_result claude
+  ruby -rjson -e '
+    path, file = ARGV
+    value = JSON.parse(File.binread(path))
+    value["verdict"] = "changes-requested"
+    value["findings"] = [{"severity" => "high", "category" => "correctness",
+      "file" => file, "line" => 1, "title" => "Retained finding",
+      "evidence" => "Evidence needs correction", "requiredChange" => "Correct the evidence"}]
+    File.binwrite(path, JSON.generate(value))
+  ' "$workspace/result.json" "$1"
+}
+for finding_file in README.md verify.json iphone-en.png ".artifacts/issues/$issue/$head_sha/iphone-en.png"; do
+  write_finding "$finding_file"
+  "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result.json" > "$workspace/validated-finding.json"
+  ruby -rjson -e 'abort unless JSON.parse(File.read(ARGV[0])) == JSON.parse(File.read(ARGV[1]))' "$workspace/result.json" "$workspace/validated-finding.json"
+done
+
+for finding_file in ../README.md /etc/passwd ".artifacts/issues/$issue/$base_sha/verify.json" ".artifacts/issues/123/$head_sha/verify.json"; do
+  write_finding "$finding_file"
+  assert_fails 'finding cannot escape the current source or evidence root' "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result.json"
+done
+ln -s "$workspace/result.json" "$artifact_head/external-finding.json"
+write_finding ".artifacts/issues/$issue/$head_sha/external-finding.json"
+assert_fails 'finding cannot follow an artifact leaf symlink' "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result.json"
+rm "$artifact_head/external-finding.json"
+ln -s "$workspace" "$artifact_head/external-finding-dir"
+write_finding ".artifacts/issues/$issue/$head_sha/external-finding-dir/result.json"
+assert_fails 'finding cannot follow an artifact directory symlink' "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result.json"
+rm "$artifact_head/external-finding-dir"
+cp "$artifact_head/iphone-en.png" "$workspace/hardlink-source"
+ln "$workspace/hardlink-source" "$artifact_head/hardlinked-finding.json"
+write_finding ".artifacts/issues/$issue/$head_sha/hardlinked-finding.json"
+assert_fails 'finding cannot read a hardlinked artifact' "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result.json"
+rm "$artifact_head/hardlinked-finding.json"
+
+write_finding missing-review-target.txt
+reset_review_requested
+assert_fails 'an unresolved finding is retained without approval' "$linked/tools/cross-model-review.sh" --primary codex --packet "$packet_relative" --output "$output_relative"
+[[ ! -e "$artifact_head/review.json" && ! -e "$artifact_head/review-receipt.json" ]]
+ruby -rjson -e '
+  files = Dir.glob(File.join(ARGV[0], "review-rejected-*.json"))
+  abort "missing retained result" unless files.length == 1
+  retained = JSON.parse(File.binread(files.first))
+  abort "result changed" unless retained.fetch("result") == JSON.parse(File.binread(ARGV[1]))
+  abort "not diagnostic-only" unless retained.fetch("status") == "rejected"
+' "$artifact_head" "$workspace/result.json"
+[[ $(jq -r '.[0]' "$FAKE_GH_LABELS_FILE") == state:blocked:review ]]
+
+# Both primary-model routes retain invalid results, and a repeated attempt
+# must add a new diagnostic without replacing the previous judgment.
+write_packet claude codex
+ruby -rjson -e 'p=ARGV[0]; v=JSON.parse(File.read(p)); v["reviewerModel"]="codex"; File.write(p,JSON.generate(v))' "$workspace/result.json"
+cp "$workspace/result.json" "$artifact_head/fixture-review-result.json"
+reset_review_requested
+(cd "$linked" && assert_fails 'Codex reviewer unresolved result is retained too' tools/cross-model-review.sh --primary claude --packet "$packet_relative" --output "$output_relative")
+[[ ! -e "$artifact_head/review.json" && ! -e "$artifact_head/review-receipt.json" ]]
+ruby -rjson -e '
+  files=Dir.glob(File.join(ARGV[0],"review-rejected-*.json"))
+  abort "expected two retained results; #{File.read(ARGV[1])}" unless files.length == 2
+  values=files.map { |p| JSON.parse(File.read(p)).fetch("result") }
+  abort unless values.map { |v| v.fetch("reviewerModel") }.sort == %w[claude codex]
+  abort unless values.all? { |v| v.fetch("findings").first.fetch("file") == "missing-review-target.txt" }
+' "$artifact_head" "$workspace/output"
+rm "$artifact_head/fixture-review-result.json"
+write_packet codex claude
+
 write_result claude
 reset_review_requested
 (cd "$linked" && tools/cross-model-review.sh --primary codex --packet "$packet_relative" --output "$output_relative" >/dev/null)

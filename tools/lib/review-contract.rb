@@ -451,6 +451,22 @@ module IOSTemplate
       end
     end
 
+    # Classify without probing the filesystem: a failed source lookup must not
+    # fall through to some other file with the same name.
+    def finding_reference!(file, packet, at:)
+      safe_relative!(string!(file, at), at)
+      prefix = ".artifacts/issues/#{packet.fetch('issue')}/#{packet.fetch('headSha')}/"
+      if file.start_with?(".artifacts/")
+        reject("#{at} is outside the current Issue/Head") unless file.start_with?(prefix) || file == packet.fetch("issueContract").fetch("path")
+        return ["artifact", file]
+      end
+      images = packet.fetch("imageFiles").map { |entry| entry.is_a?(Hash) ? entry.fetch("path").delete_prefix(prefix) : entry }
+      aliases = %w[verify.json review.diff review-packet.json]
+      aliases << "repository-tests.json" if packet.key?("repositoryTests")
+      return ["artifact", prefix + file] if (aliases + images).include?(file)
+      ["source", file]
+    end
+
     def validate_result!(result, schema, packet_bytes, reviewer, issue, base_sha, head_sha, contract_digest, criteria, completed_at, now, require_temporal_order)
       exact_keys!(result, schema == 2 ? RESULT_V2_KEYS : RESULT_V1_KEYS, "result")
       reject("result.schemaVersion must equal packet.schemaVersion") unless result["schemaVersion"] == schema
@@ -470,7 +486,7 @@ module IOSTemplate
         exact_keys!(finding, %w[severity category file line title evidence requiredChange], "result.findings[#{index}]")
         reject("result.findings[#{index}].severity is invalid") unless %w[critical high medium low].include?(finding["severity"])
         reject("result.findings[#{index}].category is invalid") unless string!(finding["category"], "result.findings[#{index}].category").match?(/\A[a-z][a-z-]*\z/)
-        safe_relative!(string!(finding["file"], "result.findings[#{index}].file"), "result.findings[#{index}].file")
+        finding_reference!(finding["file"], JSON.parse(packet_bytes), at: "result.findings[#{index}].file")
         reject("result.findings[#{index}].line must be positive") unless finding["line"].is_a?(Integer) && finding["line"].positive?
         %w[title evidence requiredChange].each { |key| string!(finding[key], "result.findings[#{index}].#{key}") }
       end

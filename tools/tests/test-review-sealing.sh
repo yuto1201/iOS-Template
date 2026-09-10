@@ -105,6 +105,20 @@ cp "$artifact_head/iphone-en/screenshot.png" "$workspace/image.good"
 cp "$artifact_head/review-packet.json" "$workspace/packet.good"
 cp "$workspace/result.json" "$workspace/result.good"
 
+for finding_file in review-seal-fixture.txt verify.json iphone-en/screenshot.png ".artifacts/issues/$issue/$head_sha/iphone-en/screenshot.png"; do
+  ruby -rjson -e '
+    source, output, file = ARGV
+    value=JSON.parse(File.read(source))
+    value["verdict"]="changes-requested"
+    value["findings"]=[{"severity"=>"high","category"=>"correctness","file"=>file,"line"=>1,
+      "title"=>"Exact finding", "evidence"=>"Current packet evidence", "requiredChange"=>"Correct evidence"}]
+    File.write(output,JSON.generate(value))
+  ' "$workspace/result.good" "$workspace/result.json" "$finding_file"
+  "$repo/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result.json" > "$workspace/finding-validated.json"
+  ruby -rjson -e 'abort unless JSON.parse(File.read(ARGV[0])) == JSON.parse(File.read(ARGV[1]))' "$workspace/result.json" "$workspace/finding-validated.json"
+done
+cp "$workspace/result.good" "$workspace/result.json"
+
 printf 'bogus diff\n' > "$artifact_head/review.diff"
 assert_fails 'bogus diff bytes' "$repo/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result.json"
 : > "$artifact_head/review.diff"

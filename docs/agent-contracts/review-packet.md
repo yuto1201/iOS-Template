@@ -132,7 +132,51 @@ Findingは次を含みます。
 }
 ```
 
-Severity:
+### Finding file resolution
+
+`findings[].file` is a file path, not an evidence pointer or prose. Source paths
+are relative to the executing Issue worktree root (or repository root in a
+direct checkout), never the primary checkout's source tree or the caller's cwd.
+Use the source-relative `file` example above.
+
+Current packet artifacts may use the exact
+`.artifacts/issues/ISSUE/HEAD/<path>` form. The packet's exact Issue contract path
+is also allowed. Only the validated canonical `.artifacts` link is mapped to the
+primary physical store; no other symlink is followed. Absolute paths, traversal,
+other Issues/Heads, nested symlinks, leaf symlinks and hardlinks are rejected.
+
+The unprefixed names `verify.json`, `review.diff`, `review-packet.json`,
+`repository-tests.json` (when included in the packet), and the packet's image
+paths are relative to the current packet's Issue/Head directory. These explicit
+artifact aliases take precedence over same-named source files. All other paths
+are source-relative; a missing source does not trigger a search in another root.
+For other current-Head artifacts use the fully qualified `.artifacts/...` form.
+Path resolution never rewrites the reviewer's finding or judgment.
+
+### Rejected result recovery
+
+If a parsed reviewer result fails validation, the fixed cross-model launcher
+retains its complete JSON value (including verdict and findings) in a unique
+`review-rejected-<uuid>.json` in the current Issue/Head directory. This diagnostic
+has `status: rejected`, the launcher's Issue/Head, packet digest, rejection
+classification and unmodified `result`. It is **not** `review.json`, an execution
+receipt, approval evidence or a merge authorization. Raw provider envelopes and
+authentication/session telemetry are not copied into it. The diagnostic uses
+single-link, no-follow, exclusive 0600 publication and does not overwrite an
+earlier attempt. If retention fails, the private workspace is kept and its path
+is reported instead of deleting the only copy.
+
+Validation failure returns nonzero and moves `review-requested` to
+`blocked:review`. Read the diagnostic as untrusted reviewer output. Do not edit
+it into a canonical review, delete findings, or reinterpret the verdict. After
+addressing the reference problem, use the state tool to restore the recorded
+`resumeState` (`review-requested`) and rerun the same canonical
+`cross-model-review.sh` command for the same verified Head/packet. The opposite
+reviewer must issue a fresh result; only a fully validated result/receipt pair
+can advance the Issue. Retained diagnostics neither prevent a fresh run nor
+replace current-Head verification if the implementation changes.
+
+### Severity levels
 
 - `critical`: データ消失、秘密漏えい、権限逸脱、主要機能不能
 - `high`: 受け入れ条件違反、Crash、重大な誤動作
