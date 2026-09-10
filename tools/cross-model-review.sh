@@ -37,7 +37,8 @@ snapshot_after="$review_workspace/snapshot-after"
 raw_output="$review_workspace/raw-output"
 normalized_output="$review_workspace/normalized-output"
 validated="$review_workspace/validated"
-trap 'rm -rf "$review_workspace"' EXIT
+preserve_workspace=0
+trap 'if [[ "$preserve_workspace" == 0 ]]; then rm -rf "$review_workspace"; else echo "Rejected reviewer output retained in private workspace: $review_workspace" >&2; fi' EXIT
 
 complete_existing_review() {
   [[ -f "$output_absolute" && ! -L "$output_absolute" ]] || { echo 'existing review output is not a regular file' >&2; exit 1; }
@@ -215,7 +216,39 @@ if value.is_a?(Hash) && value["result"].is_a?(String) && !value.key?("schemaVers
 end
 File.binwrite(normalized, JSON.generate(value))
 RUBY
-"$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$normalized_output" > "$validated"
+if ! "$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$normalized_output" > "$validated"; then
+  # Diagnostic only: retain the reviewer's judgment verbatim, never publish a
+  # canonical review/receipt for an invalid result or repair its fields here.
+  preserve_workspace=1
+  ruby -I "$repo_root/tools/lib" -rjson -rdigest -rsecurerandom -rreview-sealing - "$topology" "$issue" "$head_sha" "$normalized_output" <<'RUBY'
+topology_json, issue, head, source = ARGV
+topology = JSON.parse(topology_json)
+store = IOSTemplate::ReviewSealing::SnapshotSet.new(topology.fetch("artifactsRoot"), at: "rejected review store",
+  expected_identity: [topology.fetch("artifactsDevice"), topology.fetch("artifactsInode")])
+input = IOSTemplate::ReviewSealing::SnapshotSet.new(File.dirname(source), at: "review output")
+begin
+  output = input.relative_leaf(File.basename(source), at: "review output")
+  packet = store.relative_leaf("issues/#{issue}/#{head}/review-packet.json", at: "review packet")
+  directory = packet.parent
+  record = {"schemaVersion" => 1, "status" => "rejected", "issue" => Integer(issue), "headSha" => head,
+    "reviewPacketDigest" => "sha256:#{Digest::SHA256.hexdigest(packet.bytes)}",
+    "result" => JSON.parse(output.bytes), "reason" => "result-validation-failed"}
+  input.verify!
+  store.verify!
+  name = "review-rejected-#{SecureRandom.uuid}.json"
+  store.publish_exclusive(directory, name, JSON.generate(record), at: "rejected review diagnostic")
+  store.verify!
+  warn "Review result retained for recovery: .artifacts/issues/#{issue}/#{head}/#{name} (not approval evidence)"
+ensure
+  input.close
+  store.close
+end
+RUBY
+  preserve_workspace=0
+  "$repo_root/tools/issue-state.sh" transition --repo "$repository" --issue "$issue" --from review-requested --to blocked:review >/dev/null
+  echo 'Review result is invalid; correct the reference through a new reviewer run, not by editing the result.' >&2
+  exit 1
+fi
 
 publication_packet=$("$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet")
 [[ $(jq -er '.issue' <<<"$publication_packet") == "$issue" && $(jq -er '.headSha' <<<"$publication_packet") == "$head_sha" ]] || { echo 'review packet identity changed before publication' >&2; exit 1; }

@@ -55,5 +55,10 @@ PROMPT="$prompt" /usr/bin/ruby -rjson -rdigest -e '
     "reviewedAt" => "2026-08-24T00:01:00Z"
   }
   result["reviewPacketDigest"] = "sha256:#{Digest::SHA256.file(packet_path).hexdigest}" if packet.fetch("schemaVersion") == 2
+  # A local synthetic result within the already-allowed evidence root lets
+  # tests exercise rejected output without passing fixture flags/secrets through
+  # the sanitized production reviewer environment.
+  fixture = File.join(File.dirname(packet_path), "fixture-review-result.json")
+  result = JSON.parse(File.binread(fixture)) if File.file?(fixture)
   puts JSON.generate(result)
 '

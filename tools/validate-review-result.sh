@@ -298,7 +298,18 @@ findings.each_with_index do |finding, index|
   reject("result.findings[#{index}].severity is invalid") unless %w[critical high medium low].include?(finding["severity"])
   reject("result.findings[#{index}].category is invalid") unless string!(finding["category"], "result.findings[#{index}].category").match?(/\A[a-z][a-z-]*\z/)
   file = string!(finding["file"], "result.findings[#{index}].file")
-  regular_inside!(repo, file, repo, "result.findings[#{index}].file", repo_identity)
+  at = "result.findings[#{index}].file"
+  begin
+    kind, reference = IOSTemplate::ReviewContract.finding_reference!(file, packet, at: at)
+  rescue IOSTemplate::ReviewContract::ValidationError => error
+    reject(error.message)
+  end
+  if kind == "artifact"
+    canonical_root = reference == expected_contract_path ? issue_root : head_root
+    artifact_file!(artifacts, reference, canonical_root, at, artifacts_identity)
+  else
+    regular_inside!(repo, reference, repo, at, repo_identity)
+  end
   reject("result.findings[#{index}].line must be positive") unless finding["line"].is_a?(Integer) && finding["line"].positive?
   %w[title evidence requiredChange].each { |field| string!(finding[field], "result.findings[#{index}].#{field}") }
 end
