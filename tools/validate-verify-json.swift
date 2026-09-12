@@ -2651,6 +2651,45 @@ func validateRunnerPNG(source: String) throws {
     try validatePNGData(data)
 }
 
+func validateRunnerSystemLocale(
+    configPath: String, expectedDigest: String, caseID: String, phase: String
+) throws {
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
+    let expectedIDs = try runnerConfigCaseIDs(config)
+    guard expectedIDs.contains(caseID), ["prepared", "capture"].contains(phase) else {
+        throw ValidationFailure("system locale case or phase is outside the sealed scope")
+    }
+    let cases = try requireArray(config["cases"]!, at: "runner config cases")
+    let entry = try requireObject(cases[expectedIDs.firstIndex(of: caseID)!], at: "system locale case")
+    let language = try requireString(entry["language"]!, at: "system locale language")
+    let locale = try requireString(entry["locale"]!, at: "system locale region")
+    let systemLanguage: String
+    switch (language, locale) {
+    case ("en", "en_US"): systemLanguage = "en-US"
+    case ("ja", "ja_JP"): systemLanguage = "ja-JP"
+    default: throw ValidationFailure("system locale declaration is not canonical")
+    }
+    let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
+    let snapshot = attemptRoot + "/\(caseID)-system-preferences-\(phase).plist"
+    guard snapshot.hasPrefix("/tmp/ios-template-verify/") else {
+        throw ValidationFailure("system locale observation path is invalid")
+    }
+    let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
+    defer { close(temporary) }
+    let data = try readBoundRegularFile(
+        rootFileDescriptor: temporary,
+        components: relativeComponents(String(snapshot.dropFirst("/tmp/".count)), at: "system locale observation"),
+        at: "system locale observation"
+    )
+    guard data.count <= 1_048_576,
+          let preferences = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? JSONObject,
+          let languages = preferences["AppleLanguages"] as? [String], languages == [systemLanguage],
+          let actualLocale = preferences["AppleLocale"] as? String, actualLocale == locale else {
+        throw ValidationFailure("Simulator system language or locale differs from the sealed matrix")
+    }
+}
+
 func validateRunnerSimulators(
     configPath: String,
     expectedDigest: String,
@@ -5507,6 +5546,14 @@ do {
             configPath: arguments[2], expectedDigest: arguments[4],
             caseID: arguments[6], source: arguments[8]
         ))
+    } else if arguments.first == "--runner-check-system-locale" {
+        guard arguments.count == 9, arguments[1] == "--config", arguments[3] == "--digest",
+              arguments[5] == "--case", arguments[7] == "--phase" else {
+            throw ValidationFailure("invalid runner system locale arguments")
+        }
+        try validateRunnerSystemLocale(
+            configPath: arguments[2], expectedDigest: arguments[4], caseID: arguments[6], phase: arguments[8]
+        )
     } else if arguments.first == "--runner-check-simulators" {
         guard arguments.count == 7 || arguments.count == 9 || arguments.count == 11,
               arguments[1] == "--config", arguments[3] == "--digest", arguments[5] == "--devices" else {
