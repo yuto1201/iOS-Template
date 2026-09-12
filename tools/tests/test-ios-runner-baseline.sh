@@ -157,10 +157,10 @@ actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequen
 end
 expected = %w[
   xcode-version build build-diagnostics unit-test unit-diagnostics unit-summary unit-tests
-  iphone-en-boot iphone-en-bootstatus iphone-en-install iphone-en-get_app_container iphone-en-terminate iphone-en-launch iphone-en-spawn iphone-en-ui-test iphone-en-diagnostics iphone-en-summary iphone-en-tests iphone-en-terminate iphone-en-launch iphone-en-get_app_container iphone-en-spawn iphone-en-spawn iphone-en-screenshot iphone-en-terminate
-  iphone-ja-boot iphone-ja-bootstatus iphone-ja-install iphone-ja-get_app_container iphone-ja-terminate iphone-ja-launch iphone-ja-spawn iphone-ja-spawn iphone-ja-screenshot iphone-ja-terminate
-  ipad-en-boot ipad-en-bootstatus ipad-en-install ipad-en-get_app_container ipad-en-terminate ipad-en-launch ipad-en-spawn ipad-en-ui-test ipad-en-diagnostics ipad-en-summary ipad-en-tests ipad-en-terminate ipad-en-launch ipad-en-get_app_container ipad-en-spawn ipad-en-spawn ipad-en-screenshot ipad-en-terminate
-  ipad-ja-boot ipad-ja-bootstatus ipad-ja-install ipad-ja-get_app_container ipad-ja-terminate ipad-ja-launch ipad-ja-spawn ipad-ja-spawn ipad-ja-screenshot ipad-ja-terminate
+  iphone-en-boot iphone-en-bootstatus iphone-en-spawn iphone-en-spawn iphone-en-boot iphone-en-bootstatus iphone-en-spawn iphone-en-install iphone-en-get_app_container iphone-en-terminate iphone-en-launch iphone-en-spawn iphone-en-ui-test iphone-en-diagnostics iphone-en-summary iphone-en-tests iphone-en-terminate iphone-en-launch iphone-en-get_app_container iphone-en-spawn iphone-en-spawn iphone-en-spawn iphone-en-screenshot iphone-en-terminate
+  iphone-ja-boot iphone-ja-bootstatus iphone-ja-spawn iphone-ja-spawn iphone-ja-boot iphone-ja-bootstatus iphone-ja-spawn iphone-ja-install iphone-ja-get_app_container iphone-ja-terminate iphone-ja-launch iphone-ja-spawn iphone-ja-spawn iphone-ja-spawn iphone-ja-screenshot iphone-ja-terminate
+  ipad-en-boot ipad-en-bootstatus ipad-en-spawn ipad-en-spawn ipad-en-boot ipad-en-bootstatus ipad-en-spawn ipad-en-install ipad-en-get_app_container ipad-en-terminate ipad-en-launch ipad-en-spawn ipad-en-ui-test ipad-en-diagnostics ipad-en-summary ipad-en-tests ipad-en-terminate ipad-en-launch ipad-en-get_app_container ipad-en-spawn ipad-en-spawn ipad-en-spawn ipad-en-screenshot ipad-en-terminate
+  ipad-ja-boot ipad-ja-bootstatus ipad-ja-spawn ipad-ja-spawn ipad-ja-boot ipad-ja-bootstatus ipad-ja-spawn ipad-ja-install ipad-ja-get_app_container ipad-ja-terminate ipad-ja-launch ipad-ja-spawn ipad-ja-spawn ipad-ja-spawn ipad-ja-screenshot ipad-ja-terminate
 ]
 abort "unexpected Xcode/Simulator command order:\n#{actual.join("\n")}" unless actual == expected
 RUBY
