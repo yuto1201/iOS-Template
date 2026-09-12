@@ -82,6 +82,16 @@ Claim／Resume後のIssue worktreeから、[ios-verifyのlocked command](../.age
 
 この値は形式例です。実際のversionとDevice Typeはそのバッチで取得した値を使います。
 
+### 3.1 Simulatorのシステム言語と地域
+
+matrixの`language` / `locale`は、アプリ起動引数とUI Testだけでなく、各caseの専用Simulatorのシステム設定にも適用します。runnerは封印済みmatrixの`en` / `en_US`から`AppleLanguages = [en-US]`と`AppleLocale = en_US`、`ja` / `ja_JP`から`[ja-JP]`と`ja_JP`を導出します。呼出し元の環境変数や追加引数でこの値を置き換えません。
+
+アプリをインストールする前に、所有権を照合したBootedデバイスへ設定を書き込み、その専用デバイスだけをshutdown／bootしてSpringBoardへ反映します。この再起動では設定を消すeraseを行いません。再起動後と各caseの撮影直前（画像を作らないstageでは操作検査の終了時）にglobal preferencesを読み戻し、言語配列・地域が宣言と完全一致しなければcaseを失敗にします。書込み、再起動、読取りの失敗や不正なplistも成功へ読み替えません。個人用Simulator、別batchのデバイス、Macの言語設定は変更しません。
+
+画像評価ではアプリ本文に加えてステータスバー等のsystem chromeを確認します。特にiPadの日付が英語caseでは英語、日本語caseでは日本語で表示されることを実際の画像から確認し、アプリ起動引数だけをシステム言語の証拠にしません。case終了時の既存の専用デバイス回収は維持します。
+
+`tools/tests/test-ios-runner-system-locale.sh`は、4条件の値・再起動順序・環境変数の非採用と、言語／地域不一致、欠落・型違い・不正plist、書込み／読取り失敗、再起動後の設定消失、UI操作後の設定変化を検査します。fake Simulatorによる回帰テストは実Simulatorの表示確認とは別の証拠です。
+
 ## 4. 実行段階
 
 ### Fast route: focused Build and Test
@@ -130,9 +140,9 @@ BuildとUnit Testは同じHead SHAにつき一度実行し、4つのlocaleごと
 
 Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evidence producer自体へ依存する場合は、iOSのUnit Testだけで代用しません。`tools/run-repository-tests.sh` を使い、current Headのtracked `tools/tests/test-*.sh` 全件をrunner所有のclean detached worktreeで実行します。各ACへ関連test pathをexactに一度対応付け、成功した全testのexit status、sanitized output digest、時刻、runner bytesを `.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-tests.json` へno-replaceで保存します。test本文のstdout/stderrはartifactへ保存しません。失敗、Head変更、dirty caller、contract不一致、mapping不足、既存artifact衝突のどれかがあればcanonical evidenceは発行しません。
 
-iOS runner回帰は、共通の`tools/tests/lib/ios-runner-fixture.sh`と独立した14個のtracked entrypointへ分けています。引数なしの`bash tools/tests/test-ios-runner.sh`はshape／scope／timeout群だけを実行します。`scoped`も同じ群、`stubborn`は従来のTERM無視probe診断です。残る群はstartup、baseline、identity、inputs、publication、resources、recovery、recovery-before-rename、recovery-after-rename、recovery-final、locking、finalization、finalization-integrityで、`tools/tests/test-ios-runner-<群名>.sh`を実行します。各群は自身のtemporary repository、fake Xcode／Simulator、adapter stateを作り、終了時に自身のscratchだけを回収します。
+iOS runner回帰は、共通の`tools/tests/lib/ios-runner-fixture.sh`と独立した15個のtracked entrypointへ分けています。引数なしの`bash tools/tests/test-ios-runner.sh`はshape／scope／timeout群だけを実行します。`scoped`も同じ群、`stubborn`は従来のTERM無視probe診断です。残る群はstartup、baseline、identity、inputs、publication、resources、recovery、recovery-before-rename、recovery-after-rename、recovery-final、locking、finalization、finalization-integrity、system-localeで、`tools/tests/test-ios-runner-<群名>.sh`を実行します。各群は自身のtemporary repository、fake Xcode／Simulator、adapter stateを作り、終了時に自身のscratchだけを回収します。
 
-全runner回帰だけをローカル診断する場合は`bash tools/tests/test-ios-runner.sh all`を使います。このコマンドは各群を900秒上限で順番に実行し、一つでも失敗すれば失敗します。canonical repository runnerも既存の`test-*.sh`探索で全14群を実行し、群ごとの結果と開始・終了時刻を記録します。単一群の成功を全suiteの成功として扱わず、正式証拠には引き続き`tools/run-repository-tests.sh`を使います。productionの検証、case、assertion、timeout、証拠公開条件は変更しません。
+全runner回帰だけをローカル診断する場合は`bash tools/tests/test-ios-runner.sh all`を使います。このコマンドは各群を900秒上限で順番に実行し、一つでも失敗すれば失敗します。canonical repository runnerも既存の`test-*.sh`探索で全15群を実行し、群ごとの結果と開始・終了時刻を記録します。単一群の成功を全suiteの成功として扱わず、正式証拠には引き続き`tools/run-repository-tests.sh`を使います。productionの検証、case、assertion、timeout、証拠公開条件は変更しません。
 
 ```bash
 tools/run-repository-tests.sh \

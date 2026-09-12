@@ -470,6 +470,15 @@ fi
 command="${2-}"
 case "$command" in
   boot)
+    if [[ "$(state system_locale_mode)" == restart-lost ]]; then
+      /bin/rm -f "$state_dir/system-language-${3-}"
+    fi
+    for preference in language locale; do
+      /bin/rm -f "$state_dir/active-system-$preference-${3-}"
+      if [[ -f "$state_dir/system-$preference-${3-}" ]]; then
+        /bin/cp "$state_dir/system-$preference-${3-}" "$state_dir/active-system-$preference-${3-}"
+      fi
+    done
     if [[ "$(state prebooted)" == 1 ]]; then
       printf '%s\n' Booted >"$state_dir/device-state-${3-}"
       exit 1
@@ -539,6 +548,8 @@ RUBY
     erase_count=0
     [[ ! -f "$erase_count_file" ]] || erase_count="$(/bin/cat "$erase_count_file")"
     printf '%s\n' "$((erase_count + 1))" >"$erase_count_file"
+    /bin/rm -f "$state_dir/system-language-${3-}" "$state_dir/system-locale-${3-}" \
+      "$state_dir/active-system-language-${3-}" "$state_dir/active-system-locale-${3-}"
     ;;
   bootstatus) exit 0 ;;
   get_app_container)
@@ -599,6 +610,43 @@ RUBY
     printf '%s: %s\n' "${4-}" "$launch_pid"
     ;;
   spawn)
+    if [[ "${4-}" == defaults ]]; then
+      [[ "$(state "device-state-${3-}")" == Booted ]] || { echo 'preferences require Booted device' >&2; exit 1; }
+      if [[ "${5-}" == write && "${6-}" == -g && "${7-}" == AppleLanguages && "${8-}" == -array && $# == 9 ]]; then
+        [[ "$(state system_locale_mode)" != write-language ]] || exit 1
+        printf '%s\n' "${9-}" >"$state_dir/system-language-${3-}"
+      elif [[ "${5-}" == write && "${6-}" == -g && "${7-}" == AppleLocale && "${8-}" == -string && $# == 9 ]]; then
+        [[ "$(state system_locale_mode)" != write-locale ]] || exit 1
+        printf '%s\n' "${9-}" >"$state_dir/system-locale-${3-}"
+      elif [[ "${5-}" == export && "${6-}" == -g && "${7-}" == - && $# == 7 ]]; then
+        [[ "$(state system_locale_mode)" != read-failure ]] || exit 1
+        /usr/bin/ruby --disable-gems - "$state_dir" "${3-}" "$(state system_locale_mode)" <<'RUBY'
+directory, udid, mode = ARGV
+read = ->(name) { path = File.join(directory, "#{name}-#{udid}"); File.file?(path) ? File.read(path).strip : nil }
+language, locale = read.call("system-language"), read.call("system-locale")
+abort "SpringBoard did not reload the declared preferences" unless language == read.call("active-system-language") && locale == read.call("active-system-locale")
+if mode == "malformed"
+  puts "not a property list"
+  exit
+end
+language = "fr-FR" if mode == "wrong-language" || (mode == "post-ui-drift" && File.exist?(File.join(directory, "ui-ran-iphone-en")))
+locale = "fr_FR" if mode == "wrong-locale"
+language = nil if mode == "missing-language"
+languages = if mode == "wrong-type"
+  "<key>AppleLanguages</key><string>#{language}</string>"
+elsif language
+  extra = mode == "extra-language" ? "<string>fr-FR</string>" : ""
+  "<key>AppleLanguages</key><array><string>#{language}</string>#{extra}</array>"
+else
+  ""
+end
+puts %(<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>#{languages}<key>AppleLocale</key><string>#{locale}</string></dict></plist>)
+RUBY
+      else
+        echo 'unexpected system preferences command' >&2; exit 1
+      fi
+      exit 0
+    fi
     if [[ "$(state case_mode)" == term-blocked-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && "${4-}" == /bin/kill ]]; then
       printf '%s\n' "$$" >"$state_dir/term-blocked-probe-pid"
       /bin/ps -o pgid= -p "$$" | /usr/bin/tr -d ' ' >"$state_dir/term-blocked-probe-pgid"
@@ -831,7 +879,7 @@ prepare_repo() {
   : >"$poison_log"
   /bin/rm -f "$poison_sentinel"
   for key in build_mode test_mode ui_mode case_mode mutate_input mutate_after_case prebooted preferred_invalid \
-    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race publication_kill publication_kill_target publication_kill_after_target mutate_worktree mutate_worktree_path simulator_identity_mode resource_failure; do
+    hold_file collide_draft collide_final png_mode config_mode candidate_mode app_mode publication_race publication_kill publication_kill_target publication_kill_after_target mutate_worktree mutate_worktree_path simulator_identity_mode resource_failure system_locale_mode; do
     set_state "$key" ""
   done
   for spawn_state in "$adapter_state"/spawn-*; do
@@ -845,6 +893,7 @@ prepare_repo() {
   /bin/rm -f "$adapter_state"/stubborn-probe-*
   /bin/rm -f "$adapter_state"/term-blocked-probe-* "$adapter_state/term-blocked-runner-pid" "$adapter_state/term-cleanup-before-probe-stop"
   /bin/rm -f "$adapter_state"/device-state-* "$adapter_state"/erase-count-*
+  /bin/rm -f "$adapter_state"/system-language-* "$adapter_state"/system-locale-* "$adapter_state"/active-system-*
   for udid in \
     00000000-0000-0000-0000-000000000001 \
     00000000-0000-0000-0000-000000000002 \
@@ -897,6 +946,7 @@ run_execute() {
   set_state app_mode "${FAKE_APP_MODE-}"
   set_state simulator_identity_mode "${FAKE_SIMULATOR_IDENTITY_MODE-}"
   set_state resource_failure "${FAKE_RESOURCE_FAILURE-}"
+  set_state system_locale_mode "${FAKE_SYSTEM_LOCALE_MODE-}"
   set_state publication_race "${FAKE_PUBLICATION_RACE-}"
   set_state publication_kill "${FAKE_PUBLICATION_KILL-}"
   set_state publication_kill_target "${FAKE_PUBLICATION_KILL_TARGET-}"

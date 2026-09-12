@@ -383,6 +383,42 @@ case_udid() {
   return 1
 }
 
+check_system_locale() {
+  local case_id="$1" phase="$2" udid snapshot
+  [[ "$phase" == prepared || "$phase" == capture ]] || return 1
+  udid="$(case_udid "$case_id")" || return 1
+  capture_simulator_identities "locale-$phase-$case_id" "$case_id" Booted || return 1
+  snapshot="$run_state/$case_id-system-preferences-$phase.plist"
+  # Never overwrite a prior observation or follow an injected destination link.
+  (set -o noclobber; run_xcrun simctl spawn "$udid" defaults export -g - \
+    >"$snapshot" 2>"$snapshot.error") || return 1
+  run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-system-locale \
+    --config "$config" --digest "$config_digest" --case "$case_id" --phase "$phase" \
+    >/dev/null 2>"$run_state/$case_id-system-preferences-$phase-validation-error"
+}
+
+prepare_system_locale() {
+  local case_id="$1" udid system_language
+  udid="$(case_udid "$case_id")" || return 1
+  # language/locale are read from the sealed case, never caller environment.
+  case "$language:$locale" in
+    en:en_US) system_language=en-US ;;
+    ja:ja_JP) system_language=ja-JP ;;
+    *) return 1 ;;
+  esac
+  capture_simulator_identities "locale-write-$case_id" "$case_id" Booted || return 1
+  run_xcrun simctl spawn "$udid" defaults write -g AppleLanguages -array "$system_language" >/dev/null 2>&1 || return 1
+  run_xcrun simctl spawn "$udid" defaults write -g AppleLocale -string "$locale" >/dev/null 2>&1 || return 1
+  # SpringBoard must consume the new preferences. Preserve them across this
+  # owned-device restart; reclaim_owned_simulator would erase them again.
+  capture_simulator_identities "locale-restart-$case_id" "$case_id" Booted || return 1
+  run_xcrun simctl shutdown "$udid" >/dev/null 2>&1 || return 1
+  capture_simulator_identities "locale-stopped-$case_id" "$case_id" Shutdown || return 1
+  run_xcrun simctl boot "$udid" >/dev/null 2>&1 || return 1
+  run_xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || return 1
+  check_system_locale "$case_id" prepared
+}
+
 reclaim_owned_simulator() {
   local case_id="$1" label="$2" udid
   udid="$(case_udid "$case_id")" || return 1
@@ -574,6 +610,7 @@ for index in "${case_indexes[@]}"; do
     [[ -n "$case_failed" ]] || json_tool simulator-booted "$simulator_state" "$udid" >/dev/null 2>&1 || case_failed="boot state"
   fi
   [[ -n "$case_failed" ]] || run_xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || case_failed="bootstatus"
+  [[ -n "$case_failed" ]] || prepare_system_locale "$case_id" || case_failed="system language/locale preparation"
   if [[ -z "$case_failed" ]]; then
     run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-check-app \
       --config "$config" --digest "$config_digest" --app "$app_path" \
@@ -675,6 +712,7 @@ for index in "${case_indexes[@]}"; do
     run_xcrun_bounded /dev/null "$run_state/$case_id-post-check-liveness-error" \
       simctl spawn "$udid" /bin/kill -0 "$launch_pid" || case_failed="post-check process liveness"
   fi
+  [[ -n "$case_failed" ]] || check_system_locale "$case_id" capture || case_failed="system language/locale readback"
   if [[ "$visual_required" == true ]]; then
     screenshot_source="$attempt_root/Screenshots/$case_id.png"
     [[ ! -e "$screenshot_source" ]] || case_failed="screenshot collision"
