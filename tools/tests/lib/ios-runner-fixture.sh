@@ -368,8 +368,10 @@ File.open(config.fetch('lockPath'), File::RDWR) do |lock|
 end
 root = config.fetch('attemptRoot')
 abort 'attempt permissions changed before cleanup' unless File.stat(root).mode & 0777 == 0700
-Dir.glob(root + '/Screenshots/*.png').each do |image|
-  receipt = root + '/' + File.basename(image, '.png') + '-screenshot.sha256'
+config.fetch('cases').each do |entry|
+  case_id = entry.fetch('id')
+  image = root + '/Screenshots/' + case_id + '.png'
+  receipt = root + '/' + case_id + '-screenshot.sha256'
   abort 'screenshot was not sealed before cleanup' unless [image, receipt].all? { |path| File.stat(path).mode & 0777 == 0400 }
   abort 'screenshot receipt mismatch before cleanup' unless File.read(receipt).strip == 'sha256:' + Digest::SHA256.file(image).hexdigest
 end
