@@ -16,6 +16,7 @@ FAKE_CASE_MODE=launch-fail expect_execute_failure case-failure "case iphone-ja f
 for mode in install screenshot terminate-after-case shutdown-after-case erase-after-case; do
   prepare_repo "resource-failure-$mode"
   FAKE_RESOURCE_FAILURE="$mode" expect_execute_failure "resource-failure-$mode" "case iphone-en failed"
+  assert_no_failed_attempts
   [[ ! -e "$draft" ]] || { echo "resource failure published draft for $mode" >&2; exit 1; }
   failure_file="$(/usr/bin/find "$(dirname "$draft")/failures" -type f -name 'failure-*.json' -print -quit)"
   [[ -n "$failure_file" ]] || { echo "resource failure lacked sanitized failure evidence for $mode" >&2; exit 1; }
@@ -33,7 +34,11 @@ FAKE_CASE_MODE=post-ui-crash expect_execute_failure post-ui-crash "case iphone-e
 
 prepare_repo ui-pid-replacement
 FAKE_CASE_MODE=pid-replacement run_execute
+assert_no_failed_attempts
 [[ -f "$draft" ]] || { echo "UI PID replacement did not complete verification" >&2; exit 1; }
+for case_id in iphone-en iphone-ja ipad-en ipad-ja; do
+  [[ -f "$(dirname "$draft")/$case_id/screenshot.png" ]] || { echo "cleanup removed canonical screenshot" >&2; exit 1; }
+done
 /usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "spawn" && $5 == "00000000-0000-0000-0000-000000000001" && $6 == "/bin/kill" && $8 == "9876" {found=1} END {exit found ? 0 : 1}' "$fake_log" || {
   echo "runner did not probe the reacquired UI application PID" >&2; exit 1
 }

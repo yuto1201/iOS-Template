@@ -2538,51 +2538,47 @@ func runnerConfigCaseIDs(_ config: JSONObject) throws -> [String] {
     return ids
 }
 
+// Bind both the bytes and sealing metadata to the same config descriptor.
+func readSealedRunnerConfig(directory: Int32, expectedDigest: String?) throws -> JSONObject {
+    let file = openat(directory, "config.json", O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+    guard file >= 0 else { throw ValidationFailure("runner config is unavailable") }
+    defer { close(file) }
+    try checkOwnedRunnerEntry(parent: directory, name: "config.json", descriptor: file, type: S_IFREG)
+    var info = stat()
+    guard fstat(file, &info) == 0, info.st_nlink == 1,
+          (info.st_mode & 0o777) == S_IRUSR else {
+        throw ValidationFailure("runner config is not sealed")
+    }
+    let data = try readAll(file, at: "runner config")
+    if let expectedDigest {
+        guard matches(expectedDigest, regex: digestPattern),
+              "sha256:\(sha256(data: data))" == expectedDigest else {
+            throw ValidationFailure("runner config digest changed")
+        }
+    }
+    try checkOwnedRunnerEntry(parent: directory, name: "config.json", descriptor: file, type: S_IFREG)
+    let config = try readJSONObject(data: data, at: "runner config")
+    _ = try runnerConfigCaseIDs(config)
+    return config
+}
+
 func readSealedRunnerConfig(configPath: String, expectedDigest: String) throws -> JSONObject {
     guard matches(expectedDigest, regex: digestPattern), configPath.hasPrefix("/tmp/") else {
         throw ValidationFailure("runner config identity is invalid")
     }
-    let components = try relativeComponents(
-        String(configPath.dropFirst("/tmp/".count)), at: "runner config"
-    )
-    guard components.count == 7,
-          components[0] == "ios-template-verify",
-          components[2].hasPrefix("issue-"),
-          matches(components[3], regex: shaPattern),
-          components[4] == "Attempts",
-          components[5].hasPrefix("attempt-"),
+    let components = try relativeComponents(String(configPath.dropFirst("/tmp/".count)), at: "runner config")
+    guard components.count == 7, components[0] == "ios-template-verify",
+          components[2].hasPrefix("issue-"), matches(components[3], regex: shaPattern),
+          components[4] == "Attempts", components[5].hasPrefix("attempt-"),
           components[6] == "config.json" else {
         throw ValidationFailure("runner config path is not canonical")
     }
     let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
     defer { close(temporary) }
-    let configData = try readBoundRegularFile(
-        rootFileDescriptor: temporary,
-        components: components,
-        at: "runner config"
-    )
-    guard "sha256:\(sha256(data: configData))" == expectedDigest else {
-        throw ValidationFailure("runner config digest changed")
-    }
-    let configParent = try openBoundDirectory(
-        rootFileDescriptor: temporary,
-        components: Array(components.dropLast()),
-        at: "runner config parent"
-    )
-    defer { close(configParent) }
-    let configFile = openat(configParent, components.last!, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-    guard configFile >= 0 else { throw ValidationFailure("runner config is unavailable") }
-    defer { close(configFile) }
-    var configInfo = stat()
-    guard fstat(configFile, &configInfo) == 0,
-          configInfo.st_uid == getuid(), configInfo.st_nlink == 1,
-          (configInfo.st_mode & 0o777) == S_IRUSR else {
-        throw ValidationFailure("runner config is not sealed")
-    }
-    let config = try readJSONObject(data: configData, at: "runner config")
-    _ = try runnerConfigCaseIDs(config)
-    return config
+    let parent = try openBoundDirectory(rootFileDescriptor: temporary, components: Array(components.dropLast()), at: "runner config parent")
+    defer { close(parent) }
+    return try readSealedRunnerConfig(directory: parent, expectedDigest: expectedDigest)
 }
 
 func runnerConfigValue(configPath: String, expectedDigest: String, keyPath: String) throws -> String {
@@ -2841,25 +2837,152 @@ func sealRunnerPNG(
     return digest
 }
 
-func cleanRunnerAttempt(configPath: String, expectedDigest: String) throws {
-    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
-    let attemptPath = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
-    guard configPath == attemptPath + "/config.json", attemptPath.hasPrefix("/tmp/") else {
+func checkOwnedRunnerEntry(parent: Int32, name: String, descriptor: Int32, type: mode_t) throws {
+    var pathInfo = stat()
+    var boundInfo = stat()
+    guard fstatat(parent, name, &pathInfo, AT_SYMLINK_NOFOLLOW) == 0,
+          fstat(descriptor, &boundInfo) == 0,
+          (pathInfo.st_mode & S_IFMT) == type, (boundInfo.st_mode & S_IFMT) == type,
+          pathInfo.st_uid == getuid(), boundInfo.st_uid == getuid(),
+          pathInfo.st_dev == boundInfo.st_dev, pathInfo.st_ino == boundInfo.st_ino else {
+        throw ValidationFailure("runner cleanup identity changed")
+    }
+}
+
+func openOwnedRunnerDirectory(parent: Int32, name: String) throws -> Int32 {
+    let directory = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard directory >= 0 else { throw ValidationFailure("runner cleanup directory is unavailable") }
+    do {
+        try checkOwnedRunnerEntry(parent: parent, name: name, descriptor: directory, type: S_IFDIR)
+        return directory
+    } catch {
+        close(directory)
+        throw error
+    }
+}
+
+func validateCleanupIdentity(config: JSONObject, attemptPath: String) throws {
+    let components = attemptPath.split(separator: "/").map(String.init)
+    guard components.count == 7, components[0] == "tmp", components[1] == "ios-template-verify",
+          matches(components[3], regex: try NSRegularExpression(pattern: "^issue-[1-9][0-9]*$")),
+          matches(components[4], regex: shaPattern), components[5] == "Attempts",
+          components[6].hasPrefix("attempt-"),
+          UUID(uuidString: String(components[6].dropFirst("attempt-".count))) != nil,
+          let root = config["repositoryRoot"] as? String, root.hasPrefix("/"),
+          config["attemptRoot"] as? String == attemptPath else {
         throw ValidationFailure("runner attempt identity mismatch")
     }
+    let worktreeName = URL(fileURLWithPath: root).lastPathComponent
+        .replacingOccurrences(of: "[^A-Za-z0-9_.-]", with: "-", options: .regularExpression)
+    let workspace = "/" + components.prefix(5).joined(separator: "/")
+    guard components[2] == "\(worktreeName)-\(sha256(data: Data(root.utf8)))",
+          config["workspaceRoot"] as? String == workspace,
+          config["lockPath"] as? String == workspace + "/.verify.lock" else {
+        throw ValidationFailure("runner workspace identity mismatch")
+    }
+}
+
+func removeBoundRunnerAttempt(parent: Int32, name: String, attempt: Int32) throws {
+    try checkOwnedRunnerEntry(parent: parent, name: name, descriptor: attempt, type: S_IFDIR)
+    try removeDirectoryContents(attempt)
+    try checkOwnedRunnerEntry(parent: parent, name: name, descriptor: attempt, type: S_IFDIR)
+    guard unlinkat(parent, name, AT_REMOVEDIR) == 0, fsync(parent) == 0 else {
+        throw ValidationFailure("runner attempt could not be cleaned")
+    }
+}
+
+func cleanRunnerAttempt(configPath: String, expectedDigest: String) throws {
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
+    guard let attemptPath = config["attemptRoot"] as? String,
+          configPath == attemptPath + "/config.json" else {
+        throw ValidationFailure("runner attempt identity mismatch")
+    }
+    try validateCleanupIdentity(config: config, attemptPath: attemptPath)
     let components = try relativeComponents(String(attemptPath.dropFirst("/tmp/".count)), at: "runner attempt")
     let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
     defer { close(temporary) }
     let parent = try openBoundDirectory(rootFileDescriptor: temporary, components: Array(components.dropLast()), at: "runner attempt parent")
     defer { close(parent) }
-    let attempt = openat(parent, components.last!, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-    guard attempt >= 0 else { throw ValidationFailure("runner attempt is unavailable") }
-    try removeDirectoryContents(attempt)
-    close(attempt)
-    guard unlinkat(parent, components.last!, AT_REMOVEDIR) == 0, fsync(parent) == 0 else {
-        throw ValidationFailure("runner attempt could not be cleaned")
+    let name = components.last!
+    let attempt = try openOwnedRunnerDirectory(parent: parent, name: name)
+    defer { close(attempt) }
+    let boundConfig = try readSealedRunnerConfig(directory: attempt, expectedDigest: expectedDigest)
+    try validateCleanupIdentity(config: boundConfig, attemptPath: attemptPath)
+    try removeBoundRunnerAttempt(parent: parent, name: name, attempt: attempt)
+}
+
+// Called only by the lock holder, before Build. The current Head uses its already
+// held lock; every other Head requires a separate nonblocking kernel lock.
+func cleanRunnerOrphans(config: JSONObject) {
+    var removed = 0, skipped = 0, failed = 0
+    defer {
+        FileHandle.standardError.write(Data("runner orphan cleanup: removed=\(removed) skipped=\(skipped) failed=\(failed)\n".utf8))
     }
+    do {
+        guard let currentAttempt = config["attemptRoot"] as? String else {
+            throw ValidationFailure("runner attempt identity missing")
+        }
+        try validateCleanupIdentity(config: config, attemptPath: currentAttempt)
+        let components = currentAttempt.split(separator: "/").map(String.init)
+        let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard temporary >= 0 else { throw ValidationFailure("temporary root unavailable") }
+        defer { close(temporary) }
+        let verification = try openOwnedRunnerDirectory(parent: temporary, name: "ios-template-verify")
+        defer { close(verification) }
+        let worktree = try openOwnedRunnerDirectory(parent: verification, name: components[2])
+        defer { close(worktree) }
+        for issueName in try sortedDirectoryNames(worktree, label: "runner cleanup") {
+            guard matches(issueName, regex: try NSRegularExpression(pattern: "^issue-[1-9][0-9]*$")) else { skipped += 1; continue }
+            do {
+                let issue = try openOwnedRunnerDirectory(parent: worktree, name: issueName)
+                defer { close(issue) }
+                for headName in try sortedDirectoryNames(issue, label: "runner cleanup") {
+                    guard matches(headName, regex: shaPattern) else { skipped += 1; continue }
+                    do {
+                        let head = try openOwnedRunnerDirectory(parent: issue, name: headName)
+                        defer { close(head) }
+                        let isCurrent = issueName == components[3] && headName == components[4]
+                        var lock: Int32 = -1
+                        defer { if lock >= 0 { close(lock) } }
+                        if !isCurrent {
+                            lock = openat(head, ".verify.lock", O_RDWR | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+                            guard lock >= 0 else { skipped += 1; continue }
+                            try checkOwnedRunnerEntry(parent: head, name: ".verify.lock", descriptor: lock, type: S_IFREG)
+                            var info = stat()
+                            guard fstat(lock, &info) == 0, info.st_nlink == 1,
+                                  flock(lock, LOCK_EX | LOCK_NB) == 0 else { skipped += 1; continue }
+                            try checkOwnedRunnerEntry(parent: head, name: ".verify.lock", descriptor: lock, type: S_IFREG)
+                        }
+                        let attempts = try openOwnedRunnerDirectory(parent: head, name: "Attempts")
+                        defer { close(attempts) }
+                        for name in try sortedDirectoryNames(attempts, label: "runner cleanup") {
+                            let path = "/tmp/ios-template-verify/\(components[2])/\(issueName)/\(headName)/Attempts/\(name)"
+                            if path == currentAttempt { continue }
+                            guard name.hasPrefix("attempt-"), UUID(uuidString: String(name.dropFirst(8))) != nil else {
+                                skipped += 1; continue
+                            }
+                            do {
+                                let attempt = try openOwnedRunnerDirectory(parent: attempts, name: name)
+                                defer { close(attempt) }
+                                let orphanConfig = try readSealedRunnerConfig(directory: attempt, expectedDigest: nil)
+                                try validateCleanupIdentity(config: orphanConfig, attemptPath: path)
+                                // Recheck every held ancestor before allowing recursive mutation.
+                                try checkOwnedRunnerEntry(parent: verification, name: components[2], descriptor: worktree, type: S_IFDIR)
+                                try checkOwnedRunnerEntry(parent: worktree, name: issueName, descriptor: issue, type: S_IFDIR)
+                                try checkOwnedRunnerEntry(parent: issue, name: headName, descriptor: head, type: S_IFDIR)
+                                try checkOwnedRunnerEntry(parent: head, name: "Attempts", descriptor: attempts, type: S_IFDIR)
+                                do {
+                                    try removeBoundRunnerAttempt(parent: attempts, name: name, attempt: attempt)
+                                    removed += 1
+                                } catch { failed += 1 }
+                            } catch { skipped += 1 }
+                        }
+                    } catch { skipped += 1 }
+                }
+            } catch { skipped += 1 }
+        }
+    } catch { skipped += 1 }
 }
 
 func holdRunnerLock(configPath: String, expectedDigest: String) throws {
@@ -2881,6 +3004,7 @@ func holdRunnerLock(configPath: String, expectedDigest: String) throws {
           flock(lockFile, LOCK_EX | LOCK_NB) == 0 else {
         throw ValidationFailure("verification lock is already held")
     }
+    cleanRunnerOrphans(config: config)
     FileHandle.standardOutput.write(Data("LOCKED\n".utf8))
     var byte: UInt8 = 0
     while true {

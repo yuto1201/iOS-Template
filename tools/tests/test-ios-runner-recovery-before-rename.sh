@@ -12,6 +12,7 @@ for canonical_name in .verify-publication-journal.json screenshot.png verify-dra
   prepare_repo "$label"
   FAKE_PUBLICATION_KILL_TARGET="$canonical_name" expect_execute_failure "$label" "atomic staged evidence publication failed"
   run_execute
+  assert_no_failed_attempts
   [[ -f "$draft" ]] || { echo "same-Head retry failed after kill before $canonical_name" >&2; exit 1; }
 done
 

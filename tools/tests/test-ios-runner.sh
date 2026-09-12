@@ -7,6 +7,7 @@ require_test_commands "$0" rg git jq ruby /usr/bin/ruby /usr/bin/swiftc
 [[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == stubborn || "$1" == all ) ) ]] || exit 64
 if [[ "${1-}" == all ]]; then
   runner_tests_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  # Includes the tracked cleanup group as well as publication/recovery groups.
   for runner_test in "$runner_tests_dir/test-ios-runner.sh" "$runner_tests_dir"/test-ios-runner-*.sh; do
     /usr/bin/ruby --disable-gems "$runner_tests_dir/../lib/bounded-command.rb" \
       --stage runner-regression-group --timeout-seconds 900 -- /bin/bash "$runner_test"
