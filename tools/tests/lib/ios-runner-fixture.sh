@@ -479,7 +479,9 @@ case "$command" in
         /bin/cp "$state_dir/system-$preference-${3-}" "$state_dir/active-system-$preference-${3-}"
       fi
     done
-    if [[ "$(state prebooted)" == 1 ]]; then
+    prebooted_marker="$state_dir/prebooted-fired-${3-}"
+    if [[ "$(state prebooted)" == 1 && ! -e "$prebooted_marker" ]]; then
+      : >"$prebooted_marker"
       printf '%s\n' Booted >"$state_dir/device-state-${3-}"
       exit 1
     fi
@@ -885,7 +887,7 @@ prepare_repo() {
   for spawn_state in "$adapter_state"/spawn-*; do
     [[ ! -e "$spawn_state" ]] || /bin/rm -f "$spawn_state"
   done
-  /bin/rm -f "$adapter_state/app-mutated"
+  /bin/rm -f "$adapter_state/app-mutated" "$adapter_state"/prebooted-fired-*
   /bin/rm -f "$adapter_state/publication-race-fired"
   /bin/rm -f "$adapter_state/publication-kill-fired" "$adapter_state/mutate-after-case-fired" "$adapter_state"/ui-ran-*
   /bin/rm -f "$adapter_state"/publication-kill-*
