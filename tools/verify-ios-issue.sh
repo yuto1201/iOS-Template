@@ -263,7 +263,6 @@ case "$verification_scope" in
 esac
 active_case_id=""
 active_probe_pid=""
-runner_succeeded=0
 lock_holder_pid=""
 simulator_snapshot_index=0
 run_state="$attempt_root"
@@ -309,17 +308,16 @@ release_runner() {
       [[ "$status" -ne 0 ]] || status=1
     fi
   fi
+  # Dispose of private state before closing the channel that holds the Head lock.
+  if ! run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-clean-attempt \
+      --config "$config" --digest "$config_digest" >/dev/null 2>&1; then
+    echo "iOS verification failed: verification attempt cleanup failed" >&2
+    [[ "$status" -ne 0 ]] || status=1
+  fi
   exec 9>&- || true
   if [[ -n "$lock_holder_pid" ]]; then
     if ! wait "$lock_holder_pid"; then
       echo "iOS verification failed: verification lock release failed" >&2
-      [[ "$status" -ne 0 ]] || status=1
-    fi
-  fi
-  if [[ "$runner_succeeded" -ne 1 ]]; then
-    if ! run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-clean-attempt \
-        --config "$config" --digest "$config_digest" >/dev/null 2>&1; then
-      echo "iOS verification failed: verification attempt cleanup failed" >&2
       [[ "$status" -ne 0 ]] || status=1
     fi
   fi
@@ -493,11 +491,10 @@ run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-lock-holder \
   --config "$config" --digest "$config_digest" <"$lock_control_fifo" >"$lock_ready_fifo" &
 lock_holder_pid="$!"
 exec 9>"$lock_control_fifo"
-if ! read -r -t 30 lock_status <"$lock_ready_fifo" || [[ "$lock_status" != "LOCKED" ]]; then
+if ! read -r -t "$verification_timeout_seconds" lock_status <"$lock_ready_fifo" || [[ "$lock_status" != "LOCKED" ]]; then
   exec 9>&-
   wait "$lock_holder_pid" >/dev/null 2>&1 || true
-  run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-clean-attempt \
-    --config "$config" --digest "$config_digest" >/dev/null 2>&1 || true
+  lock_holder_pid=""
   fail "verification lock is already held"
 fi
 
@@ -760,7 +757,6 @@ fi
 if [[ "$published_evidence" != "$published_path" && "$repository_root/$published_evidence" != "$published_path" ]]; then
   fail "atomic staged evidence publication failed"
 fi
-runner_succeeded=1
 trap - EXIT
 release_runner
 printf '%s\n' "$published_path"

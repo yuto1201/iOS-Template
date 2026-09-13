@@ -5,7 +5,16 @@ source_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 scratch="$(mktemp -d "$HOME/Library/Caches/ios-runner.XXXXXX")"
 scratch="$(cd "$scratch" && pwd -P)"
 unrelated_timeout_pid=''
+cleanup_lock_pid=''
+cleanup_immutable_file=''
 cleanup_test() {
+  if [[ -n "$cleanup_immutable_file" ]]; then
+    chflags nouchg "$cleanup_immutable_file" 2>/dev/null || true
+  fi
+  if [[ -n "$cleanup_lock_pid" ]]; then
+    /bin/kill "$cleanup_lock_pid" >/dev/null 2>&1 || true
+    wait "$cleanup_lock_pid" 2>/dev/null || true
+  fi
   if [[ -n "$unrelated_timeout_pid" ]]; then
     /bin/kill "$unrelated_timeout_pid" >/dev/null 2>&1 || true
     wait "$unrelated_timeout_pid" 2>/dev/null || true
@@ -92,6 +101,11 @@ func round4TestKillDuringDraftPublication() {
           let mode = try? String(contentsOfFile: modePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
           mode == "1",
           FileManager.default.createFile(atPath: markerPath, contents: Data(), attributes: nil) else { return }
+    if (try? String(contentsOfFile: "#{state_dir}/publication_kill_owner", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) == "1",
+       let owner = try? String(contentsOfFile: "#{state_dir}/runner-owner", encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+       let pid = Int32(owner) {
+        _ = kill(pid, SIGKILL)
+    }
     _ = kill(getpid(), SIGKILL)
 }
 
@@ -131,6 +145,12 @@ if text.include?("try beforeLink()")
 else
   text.gsub!("guard linkat(", "round3TestPublicationRace()\n    guard linkat(")
 end
+File.write(path, text)
+RUBY
+/usr/bin/ruby - "$runner" "$adapter_state/runner-owner" <<'RUBY'
+path, owner = ARGV
+text = File.read(path)
+text.sub!('stage="input-validation"', 'printf "%s\\n" "$$" >"' + owner + '"' + "\n" + 'stage="input-validation"')
 File.write(path, text)
 RUBY
 validator_binary="$scratch/validate-verify-json"
@@ -338,6 +358,27 @@ state() { [[ -f "$state_dir/$1" ]] && /bin/cat "$state_dir/$1" || true; }
 run_swift() {
   if [[ "${1-}" == */validate-verify-json.swift ]]; then
     shift
+    if [[ "${1-}" == --runner-clean-attempt && "$(state observe_cleanup)" == 1 ]]; then
+      /usr/bin/ruby -rjson -rdigest -rfileutils - "$3" "$state_dir/cleanup-observation" <<'RUBY'
+config_path, destination = ARGV
+config = JSON.parse(File.read(config_path))
+FileUtils.mkdir_p(destination)
+File.open(config.fetch('lockPath'), File::RDWR) do |lock|
+  abort 'attempt cleanup ran without the Head lock' if lock.flock(File::LOCK_EX | File::LOCK_NB)
+end
+root = config.fetch('attemptRoot')
+abort 'attempt permissions changed before cleanup' unless File.stat(root).mode & 0777 == 0700
+config.fetch('cases').each do |entry|
+  case_id = entry.fetch('id')
+  image = root + '/Screenshots/' + case_id + '.png'
+  receipt = root + '/' + case_id + '-screenshot.sha256'
+  abort 'screenshot was not sealed before cleanup' unless [image, receipt].all? { |path| File.stat(path).mode & 0777 == 0400 }
+  abort 'screenshot receipt mismatch before cleanup' unless File.read(receipt).strip == 'sha256:' + Digest::SHA256.file(image).hexdigest
+end
+FileUtils.cp(config_path, destination + '/config.json')
+File.write(destination + '/checked', 'lock, config, directory mode, screenshot seal and digest')
+RUBY
+    fi
     "$validator_binary" "$@"
   else
     /usr/bin/swift "$@"
@@ -926,7 +967,7 @@ assert_no_failed_attempts() {
   workspace="$(runner_workspace)"
   attempts="$workspace/Attempts"
   if [[ -d "$attempts" ]] && /usr/bin/find "$attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt-*' -print -quit | /usr/bin/grep -q .; then
-    echo "failed verification retained a private attempt" >&2
+    echo "verification retained a private attempt" >&2
     /usr/bin/find "$attempts" -mindepth 1 -maxdepth 2 -print >&2
     exit 1
   fi
@@ -945,12 +986,14 @@ run_execute() {
   set_state collide_draft "${FAKE_COLLIDE_DRAFT-}"
   set_state png_mode "${FAKE_PNG_MODE-}"
   set_state config_mode "${FAKE_CONFIG_MODE-}"
+  set_state observe_cleanup "${FAKE_OBSERVE_CLEANUP-}"
   set_state app_mode "${FAKE_APP_MODE-}"
   set_state simulator_identity_mode "${FAKE_SIMULATOR_IDENTITY_MODE-}"
   set_state resource_failure "${FAKE_RESOURCE_FAILURE-}"
   set_state system_locale_mode "${FAKE_SYSTEM_LOCALE_MODE-}"
   set_state publication_race "${FAKE_PUBLICATION_RACE-}"
   set_state publication_kill "${FAKE_PUBLICATION_KILL-}"
+  set_state publication_kill_owner "${FAKE_PUBLICATION_KILL_OWNER-}"
   set_state publication_kill_target "${FAKE_PUBLICATION_KILL_TARGET-}"
   set_state publication_kill_after_target "${FAKE_PUBLICATION_KILL_AFTER_TARGET-}"
   set_state mutate_worktree "${FAKE_MUTATE_WORKTREE-}"

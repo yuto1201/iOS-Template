@@ -13,6 +13,7 @@ for canonical_name in .verify-publication-journal.json screenshot.png verify-dra
   FAKE_PUBLICATION_KILL_AFTER_TARGET="$canonical_name" expect_execute_failure "$label" "atomic staged evidence publication failed"
   : >"$fake_log"
   run_execute
+  assert_no_failed_attempts
   [[ -f "$draft" ]] || { echo "same-Head retry failed after kill after $canonical_name" >&2; exit 1; }
   if [[ "$canonical_name" == verify-draft.json ]] && /usr/bin/awk -F '\t' '$1 == "xcodebuild" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
     echo "complete canonical draft transaction was re-executed" >&2; exit 1

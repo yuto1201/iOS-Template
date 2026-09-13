@@ -8,9 +8,10 @@ require_test_commands "$0" rg git jq ruby /usr/bin/ruby /usr/bin/swiftc
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ios-runner-fixture.sh"
 
 prepare_repo valid
-run_execute
-resource_config="$(/usr/bin/find "$(runner_workspace)/Attempts" -mindepth 2 -maxdepth 2 -type f -name config.json -print -quit)"
-[[ -n "$resource_config" ]] || { echo "runner did not retain its sealed resource ownership config" >&2; exit 1; }
+FAKE_OBSERVE_CLEANUP=1 run_execute
+assert_no_failed_attempts
+resource_config="$adapter_state/cleanup-observation/config.json"
+[[ -f "$resource_config" ]] || { echo "runner cleanup observation is missing" >&2; exit 1; }
 /usr/bin/ruby -rjson - "$resource_config" <<'RUBY'
 config = JSON.parse(File.read(ARGV.fetch(0)))
 abort "runner config did not seal the batch identity" unless config.fetch("batchId") == "runner-fixture"
@@ -81,18 +82,9 @@ abort "result bundles escaped /tmp" unless %w[buildResultBundlePath testResultBu
 worktree_id = paths.fetch("derivedDataPath").split("/").fetch(3)
 abort "worktree ID lacks full physical-root digest" unless worktree_id.match?(/-[0-9a-f]{64}\z/)
 RUBY
-workspace_root="$(/usr/bin/ruby -rjson -e 'puts File.dirname(JSON.parse(File.read(ARGV[0])).fetch("workspaceArtifacts").fetch("derivedDataPath"))' "$draft")"
-[[ "$(/usr/bin/stat -f '%Lp' "$workspace_root")" == 700 ]] || { echo "workspace is not mode 0700" >&2; exit 1; }
-for case_id in iphone-en iphone-ja ipad-en ipad-ja; do
-  screenshot="$workspace_root/Screenshots/$case_id.png"
-  receipt="$workspace_root/$case_id-screenshot.sha256"
-  [[ "$(/usr/bin/stat -f '%Lp' "$screenshot")" == 400 && "$(/usr/bin/stat -f '%Lp' "$receipt")" == 400 ]] || {
-    echo "case screenshot and digest receipt were not durably sealed" >&2; exit 1
-  }
-  [[ "$(/bin/cat "$receipt")" == "sha256:$(/usr/bin/shasum -a 256 "$screenshot" | /usr/bin/awk '{print $1}')" ]] || {
-    echo "case screenshot receipt does not bind the host PNG" >&2; exit 1
-  }
-done
+# The fixture checks private directory permissions, Screenshot seals and digest
+# receipts before disposal, while the actual Head lock is held.
+[[ -f "$adapter_state/cleanup-observation/checked" ]] || { echo "private resource checks were not observed before cleanup" >&2; exit 1; }
 
 build_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\tbuild-for-testing$/ {count++} END {print count+0}' "$fake_log")"
 test_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\ttest-without-building$/ {count++} END {print count+0}' "$fake_log")"

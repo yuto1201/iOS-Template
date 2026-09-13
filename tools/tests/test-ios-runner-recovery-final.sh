@@ -9,6 +9,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ios-runner-fixture.
 
 prepare_repo kill-before-final
 run_execute
+assert_no_failed_attempts
 write_visual approved
 FAKE_PUBLICATION_KILL_TARGET=verify.json expect_finalize_failure kill-before-final "visual result is invalid"
 run_finalize
@@ -16,6 +17,7 @@ run_finalize
 
 prepare_repo kill-after-final
 run_execute
+assert_no_failed_attempts
 write_visual approved
 if FAKE_PUBLICATION_KILL_AFTER_TARGET=verify.json run_finalize >"$scratch/kill-after-final.stdout" 2>"$scratch/kill-after-final.stderr"; then
   echo "kill-after-final fixture unexpectedly returned success" >&2; exit 1
@@ -26,6 +28,7 @@ run_finalize
 
 prepare_repo corrupt-after-final
 run_execute
+assert_no_failed_attempts
 write_visual approved
 if FAKE_PUBLICATION_KILL_AFTER_TARGET=verify.json run_finalize >"$scratch/corrupt-after-final.stdout" 2>"$scratch/corrupt-after-final.stderr"; then
   echo "corrupt-after-final fixture unexpectedly returned success" >&2; exit 1

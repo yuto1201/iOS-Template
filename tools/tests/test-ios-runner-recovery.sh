@@ -24,9 +24,16 @@ done
 
 
 prepare_repo killed-draft-publication
-FAKE_PUBLICATION_KILL=1 expect_execute_failure killed-draft-publication "atomic staged evidence publication failed"
+# Kill the runner owner as well as its publication child so EXIT cannot clean up.
+if FAKE_PUBLICATION_KILL=1 FAKE_PUBLICATION_KILL_OWNER=1 run_execute >"$scratch/killed-owner.stdout" 2>"$scratch/killed-owner.stderr"; then
+  echo "publication interruption unexpectedly succeeded" >&2; exit 1
+fi
+orphan="$(/usr/bin/find "$(runner_workspace)/Attempts" -mindepth 1 -maxdepth 1 -type d -name 'attempt-*' -print -quit)"
+[[ -n "$orphan" && -f "$orphan/config.json" ]] || { echo "kill fixture did not leave an identifiable orphan" >&2; exit 1; }
 run_execute
 [[ -f "$draft" ]] || { echo "same-Head retry did not recover killed draft publication" >&2; exit 1; }
+assert_no_failed_attempts
+[[ ! -e "$orphan" ]] || { echo "publication recovery retained killed attempt" >&2; exit 1; }
 [[ ! -e "$(dirname "$draft")/.verify-publication-journal.json" ]] || { echo "successful retry left publication journal" >&2; exit 1; }
 
 

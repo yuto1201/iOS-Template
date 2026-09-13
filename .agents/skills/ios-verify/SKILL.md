@@ -71,6 +71,12 @@ The lifecycle command preserves frozen bytes and rejects scope changes before Si
 
 The runner owns exact matrix hashing, Xcode identity, sealed Head inputs, one Build, one selected Unit Test, the scoped serial smoke/UI cases, isolated `/tmp` DerivedData, bounded child processes, owned-Simulator cleanup, and failure evidence. For a nonvisual shape/harden contract, trust only the directly published `.artifacts/issues/${ISSUE}/${HEAD_SHA}/verify.json`; it must state that the stage passed and is not release-ready. It must not contain screenshots or a visual packet.
 
+After canonical draft or stage-final publication, and after failure recording on unsuccessful exits, the runner deletes its private attempt with the sealed config identity/digest and descriptor checks before releasing the Issue/Head lock. Failure JSON and canonical evidence remain in `.artifacts`; finalization/recovery does not reread deleted xcresult or DerivedData. A lock loser also disposes of its own prepared attempt.
+
+At startup, after acquiring the Issue/Head lock and before Build, the lock holder collects orphans only under the same physical-worktree-name plus full physical-root SHA-256. Each other `issue-*/<40hex>` Head requires a nonblocking exclusive `.verify.lock`; active Heads are skipped. An eligible `Attempts/attempt-<uuid>` must open with `O_NOFOLLOW|O_DIRECTORY`, belong to the current uid, match `fstatat`/`fstat` dev/ino, and contain a sealed runner config whose attemptRoot and worktree identity match that exact path. Symlinks, other owners, missing/invalid config, and unidentified directories are skipped. Individual skips/deletion failures only emit aggregate counts to stderr and do not fail verification.
+
+Keep `.verify.lock` and empty parent directories: unlinking the lock file would let an already-open runner and a new runner lock different inodes. Never collect another repository/worktree ID, user files, canonical `.artifacts`, or failure artifacts. DerivedData placement and failure retention policy are unchanged.
+
 Only when the contract is visual-required, trust the returned `.artifacts/issues/${ISSUE}/${HEAD_SHA}/verify-draft.json` and continue with visual review:
 
 Create the visual packet from that draft:
