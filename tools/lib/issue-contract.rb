@@ -194,6 +194,9 @@ module IOSTemplate
 
       delivery_stage = parse_delivery_stage(lines, headings, failures)
       failures << "missing required heading: Delivery stage" if delivery_stage.nil? && !allow_legacy_delivery_stage
+      if delivery_stage&.fetch("name") == "release" && issue_type != "release"
+        failures << "release Delivery stage is reserved for release Issues"
+      end
       verification_scope = parse_verification_scope(lines, headings, failures, delivery_stage)
       scope_name = verification_scope ? verification_scope.fetch("name") : "full"
       case_ids = scope_name == "targeted" ? nil : VerificationScope.case_ids(scope_name)

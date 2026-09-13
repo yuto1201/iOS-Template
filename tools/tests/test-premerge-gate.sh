@@ -818,6 +818,34 @@ run_gate_merge >/dev/null
 cp "$scratch/pre-revision-issue.md" "$issue_body"
 rm "$revision_record"
 
+# Workflow-only strict changes use their sealed AC-mapped repository subset;
+# pre-merge must require that record while leaving application checks N/A.
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); marker="## External operations\n"; replacement="## Delivery stage\n\n- Stage: harden\n- Time budget: 60 minutes\n- Reason: Bounded workflow-only gate fixture.\n\n## Delivery profile\n\n- Profile: strict\n- Reason: Canonical workflow evidence changes.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
+canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
+contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+(cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
+  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh) >/dev/null
+VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" COMPLETED_AT="$(timestamp 0)" ruby -rjson -e '
+  evidence=["AC-1","AC-2"].each_with_index.map{|id,index|{"id"=>id,"status"=>"passed","evidence"=>["repository-tests.json#acceptanceEvidence/#{index}"]}}
+  value={"schemaVersion"=>1,"status"=>"passed","changeClassification"=>"workflow-only","reason"=>"Workflow repository checks passed; application readiness was not evaluated.","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("CONTRACT_DIGEST")},"matrixFile"=>nil,"matrixDigest"=>nil,"executionRoute"=>"repository-tests","xcode"=>nil,"build"=>{"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil},"tests"=>{"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil},"cases"=>[],"visualEvaluation"=>{"status"=>"not-applicable","findings"=>[]},"acceptanceEvidence"=>evidence,"completedAt"=>ENV.fetch("COMPLETED_AT")}; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(value))'
+review_at=$(timestamp 1)
+transition_at=$(timestamp 2)
+preflight_at=$(timestamp 3)
+DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+write_review_packet
+write_review
+review_record="$repo/.artifacts/issues/42/$head_sha/review.json"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["acceptanceAssessment"].each_with_index{|entry,index|entry["evidence"]=["repository-tests.json#acceptanceEvidence/#{index}"]}; File.write(path,JSON.generate(value))' "$review_record"
+write_receipt
+write_preflight
+run_gate >/dev/null
+workflow_record="$repo/.artifacts/issues/42/$head_sha/repository-tests.json"
+mv "$workflow_record" "$workflow_record.absent"
+assert_fails 'workflow-only premerge requires repository evidence' run_gate
+mv "$workflow_record.absent" "$workflow_record"
+cp "$scratch/pre-revision-issue.md" "$issue_body"
+rm "$workflow_record"
+
 # Explicit fast accepts the same current-Head and account gates without any
 # opposite-model artifact. Rebuild the exact live contract so stale strict
 # review files cannot accidentally authorize this route.

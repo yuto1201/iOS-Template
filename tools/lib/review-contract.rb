@@ -60,7 +60,8 @@ module IOSTemplate
       criteria = validate_scope!(packet, contract)
       validate_repository_closure!(packet: packet, contract: contract, contract_digest: contract_digest,
         issue: issue, base_sha: base_sha, head_sha: head_sha,
-        repository_tests_bytes: repository_tests_bytes, revision_context: revision_context)
+        repository_tests_bytes: repository_tests_bytes, revision_context: revision_context,
+        workflow_required: verify["changeClassification"] == "workflow-only")
       completed_at = validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, require_temporal_order)
 
       if schema == 2
@@ -205,10 +206,11 @@ module IOSTemplate
     end
 
     def validate_repository_closure!(packet:, contract:, contract_digest:, issue:, base_sha:, head_sha:,
-                                     repository_tests_bytes: nil, revision_context: nil)
+                                     repository_tests_bytes: nil, revision_context: nil, workflow_required: false)
       criteria = contract.fetch("acceptanceCriteria")
       required = repository_test_scope(criteria) == "base-and-head"
       reject("Base and Head repository evidence is required") if required && !packet.key?("repositoryTests")
+      reject("workflow-only verification requires repository evidence") if workflow_required && !packet.key?("repositoryTests")
       if required
         reject("Base and Head evidence requires packet schemaVersion 2") unless packet["schemaVersion"] == 2
         reference = reference!(packet["repositoryTestsFile"], "packet.repositoryTestsFile")
@@ -222,6 +224,11 @@ module IOSTemplate
       if packet.key?("repositoryTests")
         validate_repository_tests!(packet["repositoryTests"], issue: issue, base_sha: base_sha, head_sha: head_sha,
           contract_digest: contract_digest, criteria: criteria, revision_context: revision_context)
+        if workflow_required
+          recorded = packet.fetch("repositoryTests").fetch("tests").map { |entry| entry.fetch("path") }
+          mapped = packet.fetch("repositoryTests").fetch("acceptanceEvidence").flat_map { |entry| entry.fetch("tests") }.uniq.sort
+          reject("workflow-only repository test selection differs from its AC mappings") unless recorded == mapped
+        end
         if required
           reject("repository execution predates Issue contract") if iso8601!(packet["repositoryTests"]["startedAt"], "repository start") < iso8601!(contract["fetchedAt"], "contract fetchedAt")
         end

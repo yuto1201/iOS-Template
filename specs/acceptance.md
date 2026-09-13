@@ -1,8 +1,8 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 2.4
-Date: 2026-09-09
+Version: 2.5
+Date: 2026-09-13
 
 ## 1. テンプレート完成条件
 
@@ -33,6 +33,7 @@ Date: 2026-09-09
 - `shape`はBuild、重要Unit Test、日本語iPhone Smoke TestへACを対応付け、完全4条件やvisual evidenceを必須にしなくてよい。
 - `harden`は一つの品質問題と必要なcaseだけを対象にし、無関係な品質項目を束ねない。
 - `release`は`strict`、完全4条件、全caseのvisual evidenceを持つ。
+- `release` Delivery stageは`type:release`の実際のアプリrelease candidateだけに使う。Feature、Regression、workflow-only変更は`release/full`へ分類しない。
 - 外部サービスはservice、environment、Executorを指定し、法務、課金、本番破壊操作は必要なユーザー承認を明示する。
 - Feature Issueではアプリ固有の`specs/product.md`と`specs/acceptance.md`が確定し、Issueと矛盾しない。受け入れ条件を変える未決事項は`blocked:user`。
 - UIを変更するIssueは、[UI Direction Gateの適用判定](development-stages.md#11-適用判定)をClaim前に行う。現在のユーザーが対象範囲のHTML比較を明示した場合は方向の有無にかかわらずGateが必須であり、明示省略は現行性、scope、権限、理由が明確で比較指示と矛盾しない場合だけ通常判定を上書きする。
@@ -88,7 +89,13 @@ stage未導入のClaim済みIssueはcanonical contractを変更せず、旧profi
 
 profileを下げてstage要件を回避しない。`shape`はUIを含むので`fast`にしない。strict対象operationを`fast`／`standard`へ指定したIssueは開始前に拒否する。
 
-### 3.3 Repository testsのBase／Head要件
+### 3.3 Workflow-only検証
+
+delivery tool、review schema、validator、evidence producerだけを変更する`harden + strict` Issueは、application `Verification`と`Verification scope`を持たないworkflow-only経路を選べる。Base..Headの全pathがworkflow allowlist内で、App Store／TestFlight pathとoperationを含まないことをcurrent Headから再判定する。canonical `verify.json`は`changeClassification: workflow-only`、`executionRoute: repository-tests`、`status: passed`を持ち、Xcode、Build、Unit、Simulator case、Screenshot、visual evaluationを`not-applicable`として固定する。
+
+workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、仕様anchor、contract digest、Base／Head、strict review、blocking finding、PR、pre-merge gateを省略しない。#78のimpact manifest導入前はworkflow-onlyに限り、全ACの`--map`が参照するtracked test pathのexact unionを対象集合として各1回実行し、recordのtest集合とAC mappingのunionが一致しなければ拒否する。workflow-only以外の従来Head-only contractは全tracked testを維持する。application path、Xcode project、asset、localization、Bundle設定、release operation、別Issue／Head／contract、改ざん済みrepository evidenceを拒否する。
+
+### 3.4 Repository testsのBase／Head要件
 
 一つのAC本文先頭にexact `Repository-test scope: base-and-head; `と非空の条件を宣言したIssueは、現在HeadのproducerでBaseとHeadそれぞれの全tracked `tools/tests/test-*.sh`を実行する。宣言ACは両revisionの全suiteへ対応付け、各ACのHead実装証拠とBaseのbaseline／regression証拠を区別する。canonical schema v2 record、packetのexact-byte参照、同じpacketに束縛したreview／receipt、premergeの再検証まで完了条件に含める。片方の欠落、subset、別SHA／Issue／contract、失敗／timeout／未完了、差し替えは成功ではない。
 

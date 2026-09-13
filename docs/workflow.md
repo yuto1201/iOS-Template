@@ -72,6 +72,8 @@ ClaudeとCodexは通常のIssueを同じworkflowで担当します。3Dモデル
 
 cutover後にClaimする新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。UI変更の3 field `UI verification`はClaim前のlive guidanceに限ります。既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持たせ、AC本文先頭を`UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、適用事実をReasonの後へ、確定anchorを`Spec anchors`、選択前提をDependenciesへ記載します。Identity bootstrapと純非UIの`UI verification`はexact `Not applicable`だけとし、scope／非UI理由をGoal／In scope等と`not-applicable`宣言へ、関連product／spec anchorを`Spec anchors`へ分けます。新しいmutable contract fieldは追加しません。選択の正本は、Issue contractへ封印される`Spec anchors`が参照する確定仕様と追記型Decisionです。pre-D-030 legacy contractにはこの新規要件を補完しません。
 
+workflow-only Issueは`harden + strict`とし、`Verification`／`Verification scope`を省略します。差分がapplication、Xcode、asset、localization、Bundle設定、App Store／TestFlight経路を含む場合はこの分類を使えません。`release` stageは`type:release`の実アプリrelease candidateだけに予約します。
+
 ```markdown
 ## Delivery stage
 
@@ -268,7 +270,7 @@ UI Direction Gateを通したshapeでは、確定仕様にある情報階層、�
 2. `shape`はBuild、重要Unit Test、`iphone-ja` 1条件のSmoke Testを実行し、Screenshot／visual reviewなしの`xcodebuild-stage`証拠を発行する。
 3. `harden`は対象Test、関連回帰、宣言した`targeted` caseだけを実行する。visual checkを明示した場合だけ対象画像を評価する。
 4. `release`は`full` 4条件、visual、accessibility、統合UI、同一Head evidenceを実行する。
-5. IssueがRepository toolやworkflowを変更する場合、profileに関係なく全tracked repository testsをclean detached worktree上で実行する。
+5. IssueがRepository toolやworkflowを変更する場合、canonical repository testsをclean detached worktree上で実行する。#77のworkflow-onlyは全AC mappingのexact unionを各1回、その他の対象選定contract未導入IssueはHead全件、導入済みIssueはmanifestから決定した範囲だけとし、Base／Head全件は明示宣言時だけ実行する。
 6. 同じHeadを明示して`in-progress -> verify-passed`へ遷移する。
 
 canonical検証が失敗した場合、原因へ直接対応する対象Testが成功するまで要求scopeの検証を再実行しません。別Headのcanonical evidenceを作り続けることを進捗として扱いません。

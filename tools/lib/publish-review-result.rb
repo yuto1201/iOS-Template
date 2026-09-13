@@ -141,6 +141,7 @@ repository_snapshots&.verify!
 publish_flags = File::RDWR | File::CREAT | File::EXCL | File::NOFOLLOW
 published = open_child(head_directory, "review.json", publish_flags, 0o600)
 descriptors << published
+published.binmode
 published_stat = published.stat
 created = true
 reject("published review permissions cannot be constrained") unless NativePublish.fchmod(published.fileno, 0o600).zero?
@@ -171,6 +172,7 @@ if primary
   )
   receipt = open_child(head_directory, "review-receipt.json", publish_flags, 0o600)
   descriptors << receipt
+  receipt.binmode
   receipt_stat = receipt.stat
   receipt_created = true
   reject("published receipt permissions cannot be constrained") unless NativePublish.fchmod(receipt.fileno, 0o600).zero?

@@ -1,8 +1,8 @@
 # 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 2.1
-Date: 2026-09-06
+Version: 2.2
+Date: 2026-09-13
 
 ## 1. 原則
 
@@ -80,6 +80,8 @@ HTML、screenshot、concept IDは判断補助であり、製品仕様、pixel仕
 | `harden` | 承認済みの形に対し、一つの品質問題を狭く改善する | 対象Test、関連回帰、明示した`targeted` Simulator case。変更に必要な品質確認だけ | 「対象をharden済み。release-readyではない」 |
 | `release` | リリース候補Headの全体品質と提出準備を確定する | §5の完全検証 | 完全検証が成功した場合だけrelease-ready |
 
+アプリsource、Xcode project、asset、localization、Bundle設定、App Store／TestFlight経路へ触れないdelivery tool、schema、validator、review、evidence producerの変更は`harden + strict`のworkflow-only経路を使う。application `Verification`と`Verification scope`を持たず、Build、Unit Test、Simulator、Screenshot、visual evaluationは`not-applicable`とする。一方で対象repository tests、仕様整合、current-Head、strict review、pre-merge gateは省略しない。allowlist外pathまたはApp Store operationが混ざればworkflow-onlyを拒否する。
+
 `shape`のTime budget既定値は120分とし、Issueで変更できる。超過しそうならScopeを狭める、`harden` Issueへ分ける、環境障害で停止する、または受け入れ条件を変える判断だけを`blocked:user`にする。追加の品質項目を同じIssueへ積み増して延長しない。
 
 `harden`では、保存失敗復旧、特定画面のDynamic Type、特定導線のVoiceOver、localization、Dark Mode、accessibility、performance、回帰不具合などを別々に扱う。無関係な品質項目を一つのIssueへ束ねない。
@@ -144,7 +146,7 @@ Runtime、Device Type、case集合はバッチ内で固定する。古いHead、
 
 新規Issueの`Delivery stage`節は`Stage`、`Time budget`、`Reason`をこの順で持つ。`Verification scope`節は`Scope`と`Reason`を持ち、stageを重複記載しない。Feature formは`shape / 120 minutes / standard / iphone-ja`、Regression formは`harden / targeted`、Release formは`release / strict / full`を既定とする。
 
-`shape`と`harden`の`standard`はblockingな反対モデルレビューを要求しない。`strict`または`release`は現在Headの正式な反対モデルレビューを必須とする。shape/hardenのPRと完了報告は必ずnot release-readyを明記する。
+`shape`と`harden`の`standard`はblockingな反対モデルレビューを要求しない。`strict`または`release`は現在Headの正式な反対モデルレビューを必須とする。shape/hardenのPRと完了報告は必ずnot release-readyを明記する。`release`は`type:release`の実際のアプリrelease candidateだけに使用し、Feature／Regression／workflow変更を完全検証へ迂回させない。
 
 Claim済みで`deliveryStage`を持たない既存contractはcanonical bytesを変更せず、従来のprofile／scope gateを維持する。すなわちlegacy standard／strictはfullと正式review、legacy explicit fastは従来どおりfocused evidenceを使う。新しいIssue validatorはstage未指定を拒否する。既存Issueを縮小したい場合は、暗黙変換せずユーザー承認の上で新しいIssueへ分離する。
 

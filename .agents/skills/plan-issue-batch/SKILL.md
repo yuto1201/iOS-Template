@@ -17,6 +17,7 @@ Produce a reviewable Issue graph before Claim. Keep setup with its first useful 
    - `harden`: improve one approved behavior or one quality concern. Use `targeted` with the exact affected ordered Simulator cases when application verification is needed. Do not combine unrelated localization, accessibility, Dark Mode, recovery, performance, or regression work.
    - `release`: verify one explicit release candidate. Use `strict` + `full`, the complete four-case matrix and visual/accessibility/integration/review gates. Product changes discovered here become separate shape or harden Issues.
    - Delivery stage is independent from workflow state, Issue type, and risk profile. Existing sealed Issues without it remain legacy release-level contracts; do not rewrite or shrink them after Claim.
+   - Reserve `release` for a `type:release` application release candidate. Pure delivery-tool/schema/validator/review/evidence work uses `harden + strict`, exact `UI verification: Not applicable`, and no application Verification or Verification scope; its canonical workflow-only route keeps repository tests, current-Head review, and pre-merge checks without Xcode or Simulator work.
    - `fast`: non-UI, local, low-risk work. No approval-required or strict provider operation.
    - `standard`: ordinary user-visible UI, localization, or accessibility work.
    - `strict`: auth/authorization, secrets, schema/migration, production/destructive data, billing/plan, privacy/legal, App Store/TestFlight/signing, or delivery-gate changes.
