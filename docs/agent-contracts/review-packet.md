@@ -189,7 +189,7 @@ replace current-Head verification if the implementation changes.
 - `medium`: 実在する品質問題。今回のScopeで修正可能
 - `low`: 非Blockingの改善提案
 
-`approved`は`findings: []`かつ全ACが`supported`の場合だけ許可します。severityに関係なくfindingを返す場合は`changes-requested`とします。non-blockingな将来提案は正式findingへ混ぜず、別Issue候補として主agentへ伝えます。
+`approved`は、全ACが`supported`で、`findings`が空または`low`だけの場合に許可します。`low` findingは非Blockingの改善提案として内容を変更・削除せず保持します。`critical`、`high`、`medium`のfindingが一つでもある場合は`changes-requested`とします。
 
 Reviewerは各 `AC-*` について `supported` または `unsupported` と証拠参照を返します。`unsupported` が一つでもあれば `approved` にできません。
 

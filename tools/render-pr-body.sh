@@ -387,6 +387,7 @@ if review_required
   puts "- Verified SHA: `#{review["verifySha"]}`"
   puts "- Verdict: `#{review["verdict"]}`"
   puts "- Blocking findings: `0`"
+  puts "- Non-blocking findings: `#{review.fetch("findings").count { |finding| finding["severity"] == "low" }}`"
 else
   puts "- Not required by this non-release, non-strict contract."
 end
