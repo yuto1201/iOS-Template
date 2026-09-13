@@ -72,6 +72,18 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   abort "single domain did not resolve targeted" unless plan.values_at("requestedScope", "resolvedScope", "testPaths") == ["targeted", "targeted", ["tools/tests/test-alpha.sh"]]
   runner.validate!(plan, repo: repo, issue: 42, base_sha: base, head_sha: head, contract_bytes: contract)
 
+  File.write(File.join(repo, "tools/lib/workflow.rb"), "HEAD = true\n")
+  Fixture.git(repo, "add", ".")
+  Fixture.git(repo, "commit", "-qm", "multi-domain change")
+  multi_domain_head = Fixture.git(repo, "rev-parse", "HEAD")
+  all_mapping = {"AC-1"=>%w[tools/tests/test-alpha.sh tools/tests/test-beta.sh], "AC-2"=>["tools/tests/test-beta.sh"]}
+  multi_domain = runner.build(repo: repo, issue: 42, base_sha: base, head_sha: multi_domain_head,
+    contract_bytes: contract, mappings: all_mapping)
+  abort "multiple domains did not expand to head-all" unless multi_domain["requestedScope"] == "targeted" &&
+    multi_domain["resolvedScope"] == "head-all" &&
+    multi_domain["testPaths"] == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh] &&
+    multi_domain["resolutionReason"].include?("multiple repository-test domains")
+
   altered = Marshal.load(Marshal.dump(plan))
   altered["headSha"] = base
   begin
@@ -84,8 +96,7 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   Fixture.git(repo, "add", ".")
   Fixture.git(repo, "commit", "-qm", "unmatched")
   unmatched_head = Fixture.git(repo, "rev-parse", "HEAD")
-  all_mapping = {"AC-1"=>%w[tools/tests/test-alpha.sh tools/tests/test-beta.sh], "AC-2"=>["tools/tests/test-beta.sh"]}
-  unmatched = runner.build(repo: repo, issue: 42, base_sha: head, head_sha: unmatched_head, contract_bytes: contract, mappings: all_mapping)
+  unmatched = runner.build(repo: repo, issue: 42, base_sha: multi_domain_head, head_sha: unmatched_head, contract_bytes: contract, mappings: all_mapping)
   abort "unmatched path did not expand to head-all" unless unmatched["resolvedScope"] == "head-all" && unmatched["testPaths"].length == 2
 
   File.write(File.join(repo, "tools/tests/test-alpha.sh"), "echo changed\n")
@@ -100,10 +111,21 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   abort "explicit comparison did not remain base-and-head" unless comparison["resolvedScope"] == "base-and-head"
 
   begin
-    runner.build(repo: repo, issue: 42, base_sha: head, head_sha: unmatched_head, contract_bytes: contract,
+    runner.build(repo: repo, issue: 42, base_sha: multi_domain_head, head_sha: unmatched_head, contract_bytes: contract,
       mappings: {"AC-1"=>["tools/tests/test-alpha.sh"], "AC-2"=>["tools/tests/test-alpha.sh"]})
     abort "incomplete mapping union was accepted"
   rescue IOSTemplate::RepositoryTestPlan::PlanError
+  end
+
+  empty_domain_manifest = Fixture.manifest
+  empty_domain_manifest.fetch("domainRules").first["paths"] = []
+  empty_domain_manifest.fetch("domainRules").first["prefixes"] = []
+  begin
+    runner.validate_manifest!(empty_domain_manifest, %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh],
+      tracked_paths: runner.tracked_paths(repo, broad_head))
+    abort "manifest domain with empty coverage was accepted"
+  rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+    abort "empty domain failed for an unexpected reason" unless error.message.include?("domain coverage is empty")
   end
 
   File.write(File.join(repo, "Config/repository-tests.json"), JSON.generate(Fixture.manifest(tests: ["tools/tests/test-alpha.sh"])))
