@@ -106,6 +106,29 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   broad = runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head, contract_bytes: contract, mappings: all_mapping)
   abort "test inventory change did not expand to head-all" unless broad["resolvedScope"] == "head-all"
 
+  valid_manifest_change = Fixture.manifest
+  valid_manifest_change.fetch("domainRules").first.fetch("prefixes") << "docs/review-notes/"
+  valid_manifest_change.fetch("domainRules").first.fetch("prefixes").sort!
+  File.write(File.join(repo, "Config/repository-tests.json"), JSON.generate(valid_manifest_change))
+  Fixture.git(repo, "add", ".")
+  Fixture.git(repo, "commit", "-qm", "valid manifest change")
+  manifest_head = Fixture.git(repo, "rev-parse", "HEAD")
+  manifest_broad = runner.build(repo: repo, issue: 42, base_sha: broad_head, head_sha: manifest_head,
+    contract_bytes: contract, mappings: all_mapping)
+  abort "manifest change did not expand to head-all" unless manifest_broad["resolvedScope"] == "head-all" &&
+    manifest_broad["testPaths"] == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh] &&
+    manifest_broad["resolutionReason"].include?("Config/repository-tests.json")
+
+  File.write(File.join(repo, "tools/lib/run-repository-tests.rb"), "RUNNER = :changed\n")
+  Fixture.git(repo, "add", ".")
+  Fixture.git(repo, "commit", "-qm", "runner change")
+  runner_head = Fixture.git(repo, "rev-parse", "HEAD")
+  runner_broad = runner.build(repo: repo, issue: 42, base_sha: manifest_head, head_sha: runner_head,
+    contract_bytes: contract, mappings: all_mapping)
+  abort "runner change did not expand to head-all" unless runner_broad["resolvedScope"] == "head-all" &&
+    runner_broad["testPaths"] == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh] &&
+    runner_broad["resolutionReason"].include?("tools/lib/run-repository-tests.rb")
+
   base_head_contract = Fixture.contract(issue: 42, scope: "base-and-head")
   comparison = runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head, contract_bytes: base_head_contract, mappings: all_mapping)
   abort "explicit comparison did not remain base-and-head" unless comparison["resolvedScope"] == "base-and-head"
