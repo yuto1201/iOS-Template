@@ -1610,7 +1610,7 @@ func validateWorkflowPath(_ path: String) throws {
           !path.lowercased().contains("testflight") else {
         throw ValidationFailure("workflow-only diff contains a release or App Store path: \(path)")
     }
-    let exact: Set<String> = ["README.md", "AGENTS.md", "Config/repository-tests.yml"]
+    let exact: Set<String> = ["README.md", "AGENTS.md", "Config/repository-tests.json"]
     let prefixes = ["tools/", "docs/", "specs/", ".agents/", ".codex/", ".claude/", ".github/"]
     guard exact.contains(path) || prefixes.contains(where: { path.hasPrefix($0) }) else {
         throw ValidationFailure("workflow-only path is not allowlisted: \(path)")
