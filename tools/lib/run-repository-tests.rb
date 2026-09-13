@@ -53,9 +53,17 @@ module IOSTemplate
         reject("Base mappings require a Base and Head contract") if !dual_revision && !base_mappings.empty?
         context = dual_revision ? ReviewContract.repository_revision_context(repo: repo, base_sha: expected_base, head_sha: head_sha) : nil
 
-        tests = dual_revision ? context.fetch("inventories")[1].map { |entry| entry.fetch("path") } : tracked_tests(repo, head_sha)
-        reject("no tracked repository tests were found") if tests.empty?
-        acceptance = validate_mappings!(mappings, criteria, tests)
+        inventory = dual_revision ? context.fetch("inventories")[1].map { |entry| entry.fetch("path") } : tracked_tests(repo, head_sha)
+        reject("no tracked repository tests were found") if inventory.empty?
+        acceptance = validate_mappings!(mappings, criteria, inventory)
+        # Before the versioned impact manifest lands, only the sealed
+        # workflow-only contract may use its AC map as the execution set.
+        # Every other legacy Head-only contract keeps the full inventory.
+        tests = if dual_revision || !workflow_only_contract?(contract)
+                  inventory
+                else
+                  mappings.values.flatten.uniq.sort
+                end
         if dual_revision
           base_tests = context.fetch("inventories")[0].map { |entry| entry.fetch("path") }
           reject("no tracked Base repository tests were found") if base_tests.empty?
@@ -277,6 +285,12 @@ module IOSTemplate
           criterion.is_a?(Hash) && criterion.keys.sort == %w[id text] &&
           criterion["id"] == "AC-#{index + 1}" && criterion["text"].is_a?(String) && !criterion["text"].empty?
       end
+    end
+
+    def workflow_only_contract?(contract)
+      contract.dig("deliveryStage", "name") == "harden" &&
+        contract.dig("deliveryProfile", "name") == "strict" &&
+        !contract.key?("verification") && !contract.key?("verificationScope")
     end
 
     def validate_mappings!(mappings, criteria, tests)

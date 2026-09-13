@@ -135,6 +135,7 @@ ruby -rjson -e '
 
 write_issue "$workspace/release.md" release 480 strict full "$full_cases" "$full_mappings"
 "$repo_root/tools/validate-issue-body.sh" --type release "$workspace/release.md"
+assert_fails 'release stage is reserved for release Issues' "$repo_root/tools/validate-issue-body.sh" --type feature "$workspace/release.md"
 ruby "$repo_root/tools/lib/issue-contract.rb" --body "$workspace/release.md" --type release \
   --format contract --issue 47 --repo yuto1201/iOS-Template --fetched-at 2026-09-02T00:00:00Z \
   >"$workspace/release.json"

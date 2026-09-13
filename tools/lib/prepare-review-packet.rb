@@ -77,7 +77,8 @@ module IOSTemplate
         end
         ReviewContract.validate_repository_closure!(packet: packet, contract: contract, contract_digest: contract_digest,
           issue: issue, base_sha: base_sha, head_sha: head_sha,
-          repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context)
+          repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context,
+          workflow_required: verify["changeClassification"] == "workflow-only")
         packet_bytes = JSON.generate(packet).b
 
         validate_git_identity!(repo, base_sha, head_sha)

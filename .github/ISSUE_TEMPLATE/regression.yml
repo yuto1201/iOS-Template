@@ -65,7 +65,7 @@ body:
     id: delivery-stage
     attributes:
       label: Delivery stage
-      description: "A post-merge regression normally hardens one approved behavior. Keep the problem and verification target narrow."
+      description: "Use harden for bounded regressions and keep the problem narrow. release is reserved for the Release form."
       value: |
         - Stage: harden
         - Time budget: 180 minutes
@@ -86,7 +86,7 @@ body:
     id: verification-scope
     attributes:
       label: Verification scope
-      description: "Use targeted and list the exact ordered affected Simulator cases in Verification. Do not repeat Delivery stage here. Remove for documentation-only or fast work."
+      description: "Use targeted and list exact affected Simulator cases for application regressions. Omit this field and Verification for workflow-only harden work."
       value: |
         - Scope: targeted
         - Reason: Verify only the device/language cases affected by this regression.
@@ -96,7 +96,7 @@ body:
     id: verification
     attributes:
       label: Verification
-      description: "For application verification, provide this complete JSON object with real app/test identifiers and explicit checks for every AC in order. Omit for documentation-only or fast Issues. The placeholder is an example, not proof of your ACs. See docs/workflow.md."
+      description: "For application verification, provide this complete JSON object with real app/test identifiers and explicit checks for every AC in order. Omit for documentation-only, fast, or workflow-only Issues. The placeholder is an example, not proof of your ACs. See docs/workflow.md."
       placeholder: |
         {
           "bundleIdentifier": "com.example.ExampleApp",

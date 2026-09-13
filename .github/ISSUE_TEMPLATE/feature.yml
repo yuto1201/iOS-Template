@@ -66,7 +66,7 @@ body:
     id: delivery-stage
     attributes:
       label: Delivery stage
-      description: "Use shape to make the primary flow operable first. Split focused quality work into harden; use release only for a release candidate. Change the 120-minute budget when the Issue justifies it."
+      description: "Use shape for application feature work or harden for bounded quality/workflow work. release is reserved for the Release form. Change the 120-minute budget when the Issue justifies it."
       value: |
         - Stage: shape
         - Time budget: 120 minutes
@@ -87,7 +87,7 @@ body:
     id: verification-scope
     attributes:
       label: Verification scope
-      description: "shape uses iphone-ja. harden uses targeted with the ordered affected cases in Verification. release uses full. Delivery stage is declared only in its own section."
+      description: "shape uses iphone-ja. Application harden uses targeted with ordered affected cases. Omit this field and Verification for workflow-only harden work."
       value: |
         - Scope: iphone-ja
         - Reason: One representative Japanese iPhone is enough to inspect the initial shape.
@@ -97,7 +97,7 @@ body:
     id: verification
     attributes:
       label: Verification
-      description: "For application verification, provide this complete JSON object with real app/test identifiers and explicit checks for every AC in order. Omit for documentation-only or fast Issues. The placeholder is an example, not proof of your ACs. See docs/workflow.md."
+      description: "For application verification, provide this complete JSON object with real app/test identifiers and explicit checks for every AC in order. Omit for documentation-only, fast, or workflow-only Issues. The placeholder is an example, not proof of your ACs. See docs/workflow.md."
       placeholder: |
         {
           "bundleIdentifier": "com.example.ExampleApp",

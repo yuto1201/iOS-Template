@@ -50,9 +50,9 @@ class VerificationContractTest < Minitest::Test
     BODY
   end
 
-  def parse(text)
+  def parse(text, issue_type: "feature")
     IOSTemplate::IssueContract.parse(
-      text, issue: 42, repository: "yuto1201/iOS-Template", fetched_at: "2026-08-31T00:00:00Z",
+      text, issue_type: issue_type, issue: 42, repository: "yuto1201/iOS-Template", fetched_at: "2026-08-31T00:00:00Z",
       allow_legacy_delivery_stage: true
     ).contract
   end
@@ -217,7 +217,10 @@ class VerificationContractTest < Minitest::Test
         "## UI verification\nNot applicable",
         "## UI verification\n- Target screens/states: Welcome flow.\n- English expectations: Stage-specific.\n- Japanese expectations: Primary flow."
       )
-      contract = parse(form_body + "\n## Delivery stage\n#{stage}\n## Verification scope\n#{scope}\n## Delivery profile\n#{profile}")
+      contract = parse(
+        form_body + "\n## Delivery stage\n#{stage}\n## Verification scope\n#{scope}\n## Delivery profile\n#{profile}",
+        issue_type: type == "release" ? "release" : "feature"
+      )
       assert_equal JSON.parse(example), contract.fetch("verification")
       expected_scope = {"feature"=>"iphone-ja", "regression"=>"targeted", "release"=>"full"}.fetch(type)
       expected_profile = type == "release" ? "strict" : "standard"

@@ -215,7 +215,7 @@ Make the Settings screen deterministic.
 - None.
 EOF
 
-printf '%s' '["state:approved","type:feature"]' > "$labels_file"
+printf '%s' '["state:approved","type:release"]' > "$labels_file"
 printf '%s' '[]' > "$comments_file"
 export PATH="$fake_bin:$PATH"
 export FAKE_GH_LOG="$gh_log"
@@ -321,7 +321,7 @@ assert_json "$clone/.artifacts/issues/42/state.json" '
 [[ -L "$clone/.worktrees/42-settings-screen/.artifacts" ]] || { echo 'claim did not install the shared artifact link' >&2; exit 1; }
 [[ "$(readlink "$clone/.worktrees/42-settings-screen/.artifacts")" == '../../.artifacts' ]] || { echo 'claim installed a noncanonical artifact link' >&2; exit 1; }
 [[ "$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$clone/.worktrees/42-settings-screen/.artifacts")" == "$(ruby -e 'puts File.realpath(ARGV.fetch(0))' "$clone/.artifacts")" ]] || { echo 'claim artifact link does not resolve to the primary store' >&2; exit 1; }
-assert_json "$labels_file" 'abort unless JSON.parse(File.read(ARGV[0])) == ["type:feature", "state:claimed"]'
+assert_json "$labels_file" 'abort unless JSON.parse(File.read(ARGV[0])) == ["type:release", "state:claimed"]'
 
 # Operational tools run from the Issue worktree must bind that worktree Head
 # while publishing through its exact relative link to the primary artifact store.
@@ -349,7 +349,7 @@ cp "$workspace/issue-body-before-mapping-change.md" "$issue_body_file"
 
 assert_fails 'a different primary implementer cannot claim the same Issue' bash -c "cd '$clone' && '$claim' --repo yuto1201/iOS-Template --issue 42 --agent claude"
 [[ "$before_status" == "$(git -C "$clone" status --porcelain)" ]] || { echo 'conflicting claim changed dirty main checkout' >&2; exit 1; }
-assert_json "$labels_file" 'abort unless JSON.parse(File.read(ARGV[0])) == ["type:feature", "state:claimed"]'
+assert_json "$labels_file" 'abort unless JSON.parse(File.read(ARGV[0])) == ["type:release", "state:claimed"]'
 
 rm "$clone/.artifacts/issues/42/state.json"
 (cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/resume.json"
@@ -378,23 +378,23 @@ cp "$comments_file" "$workspace/claim-comments.json"
 
 # A blocked or paused Issue may resume only to the exact marker resumeState.
 # These valid recoveries exercise the decoded string rather than JSON quoting.
-printf '%s' '["type:feature","state:in-progress"]' > "$labels_file"
+printf '%s' '["type:release","state:in-progress"]' > "$labels_file"
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"blocked:user\",\"resumeState\":\"in-progress\",\"timestamp\":\"2026-08-24T00:00:00Z\",\"to\":\"in-progress\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
 (cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/blocked-resume.json"
 assert_json "$workspace/blocked-resume.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "blocked:user" && value["resumeState"] == "in-progress"'
 assert_json "$clone/.artifacts/issues/42/state.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "blocked:user" && value["resumeState"] == "in-progress"'
 
-printf '%s' '["type:feature","state:in-progress"]' > "$labels_file"
+printf '%s' '["type:release","state:in-progress"]' > "$labels_file"
 cp "$workspace/claim-comments.json" "$comments_file"
 
 # A later third-party marker cannot redirect or deny Resume. Only markers by
 # the configured personal owner participate in deterministic history recovery.
-printf '%s' '["type:feature","state:claimed"]' > "$labels_file"
+printf '%s' '["type:release","state:claimed"]' > "$labels_file"
 ruby -rjson -e 'path=ARGV.fetch(0); comments=JSON.parse(File.read(path)); comments << {"body"=>"<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"blocked:user\",\"resumeState\":\"claimed\",\"timestamp\":\"2026-08-24T23:59:59Z\",\"to\":\"claimed\"} -->", "author"=>{"login"=>"attacker"}, "createdAt"=>"2026-08-24T23:59:59Z"}; File.write(path,JSON.generate(comments))' "$comments_file"
 (cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/third-party-marker.json"
 assert_json "$workspace/third-party-marker.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="claimed" && value["previousState"]=="approved" && value["resumeState"].nil?'
 cp "$workspace/claim-comments.json" "$comments_file"
-printf '%s' '["type:feature","state:in-progress"]' > "$labels_file"
+printf '%s' '["type:release","state:in-progress"]' > "$labels_file"
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments << {"body" => "<!-- ios-template-state {\"executor\":\"codex\",\"from\":\"paused\",\"resumeState\":\"in-progress\",\"timestamp\":\"2026-08-24T00:00:01Z\",\"to\":\"in-progress\"} -->"}; File.write(path, JSON.generate(comments))' "$comments_file"
 (cd "$clone" && "$resume" --repo yuto1201/iOS-Template --issue 42) > "$workspace/paused-resume.json"
 assert_json "$workspace/paused-resume.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "in-progress" && value["previousState"] == "paused" && value["resumeState"] == "in-progress"'
@@ -405,7 +405,7 @@ ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); co
 cp "$clone/.artifacts/issues/42/state.json" "$workspace/state-before-mismatched-resume.json"
 assert_fails 'resume rejects a blocked recovery whose resumeState does not match' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
 cmp -s "$workspace/state-before-mismatched-resume.json" "$clone/.artifacts/issues/42/state.json"
-printf '%s' '["type:feature","state:claimed"]' > "$labels_file"
+printf '%s' '["type:release","state:claimed"]' > "$labels_file"
 cp "$workspace/claim-comments.json" "$comments_file"
 
 # Resume must rebuild the canonical candidate names from the current title and
@@ -439,7 +439,7 @@ cp "$workspace/claim-comments.json" "$comments_file"
 # GitHub transition or changing the existing canonical worktree.
 printf '%s' '[]' > "$comments_file"
 assert_fails 'resume requires a state-transition marker' bash -c "cd '$clone' && '$resume' --repo yuto1201/iOS-Template --issue 42"
-assert_json "$labels_file" 'abort unless JSON.parse(File.read(ARGV[0])) == ["type:feature", "state:claimed"]'
+assert_json "$labels_file" 'abort unless JSON.parse(File.read(ARGV[0])) == ["type:release", "state:claimed"]'
 
 cp "$workspace/claim-comments.json" "$comments_file"
 base_sha=$(git -C "$clone" rev-parse codex/42-settings-screen)

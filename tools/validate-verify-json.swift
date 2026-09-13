@@ -807,6 +807,7 @@ struct IssueContract {
     let verificationStage: String?
     let deliveryStage: DeliveryStageInfo
     let visualRequired: Bool
+    let externalOperations: [String]
 
     var acceptanceIDs: [String] { acceptanceCriteria.map(\.id) }
     var caseIDs: [String] { verification?.cases.map(\.id) ?? verificationScope.fixedCaseIDs ?? [] }
@@ -988,7 +989,7 @@ func validateIssueContract(
             throw ValidationFailure("issueContract.dependencies must be unique")
         }
     }
-    _ = try requireStringArray(
+    let externalOperations = try requireStringArray(
         contract["externalOperations"]!, at: "issueContract.externalOperations", unique: true
     )
     let operationDetailsDigest = try requireString(
@@ -1069,7 +1070,7 @@ func validateIssueContract(
     if deliveryStage.explicit && ["shape", "release"].contains(deliveryStage.name), normalizedVerification == nil {
         throw ValidationFailure("\(deliveryStage.name) requires application Verification")
     }
-    let operations = try requireStringArray(contract["externalOperations"]!, at: "issueContract.externalOperations")
+    let operations = externalOperations
     if deliveryStage.explicit,
        operations.contains(where: { $0.hasPrefix("appstore.") }),
        deliveryStage.name != "release" {
@@ -1093,7 +1094,8 @@ func validateIssueContract(
         verificationScope: verificationScope,
         verificationStage: (contract["verificationScope"] as? JSONObject)?["stage"] as? String,
         deliveryStage: deliveryStage,
-        visualRequired: visualRequired
+        visualRequired: visualRequired,
+        externalOperations: externalOperations
     )
 }
 
@@ -1590,6 +1592,61 @@ func validateDocumentationDiff(expectedBase: String, expectedHead: String) throw
     }
 }
 
+func validateWorkflowPath(_ path: String) throws {
+    guard let data = path.data(using: .utf8), String(data: data, encoding: .utf8) == path else {
+        throw ValidationFailure("workflow-only diff contains a non-UTF-8 path")
+    }
+    guard !path.contains("\\"),
+          !path.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else {
+        throw ValidationFailure("workflow-only diff contains an unsafe path")
+    }
+    let components = try relativeComponents(path, at: "workflow-only path")
+    let deniedPrefixes = [
+        "App Store/", ".agents/skills/prepare-appstore-assets/",
+        ".agents/skills/submit-appstore-release/"
+    ]
+    guard !deniedPrefixes.contains(where: { path.hasPrefix($0) }),
+          !path.lowercased().contains("appstore"),
+          !path.lowercased().contains("testflight") else {
+        throw ValidationFailure("workflow-only diff contains a release or App Store path: \(path)")
+    }
+    let exact: Set<String> = ["README.md", "AGENTS.md", "Config/repository-tests.yml"]
+    let prefixes = ["tools/", "docs/", "specs/", ".agents/", ".codex/", ".claude/", ".github/"]
+    guard exact.contains(path) || prefixes.contains(where: { path.hasPrefix($0) }) else {
+        throw ValidationFailure("workflow-only path is not allowlisted: \(path)")
+    }
+    guard components.allSatisfy({ $0 != ".git" }) else {
+        throw ValidationFailure("workflow-only diff contains an unsafe path")
+    }
+}
+
+func validateWorkflowDiff(expectedBase: String, expectedHead: String) throws {
+    let result = try runGitProcess(["diff", "--raw", "-z", "--no-renames", expectedBase, expectedHead, "--"])
+    guard result.status == 0 else { throw ValidationFailure("unable to inspect trusted workflow-only range") }
+    var fields = result.stdout.split(separator: 0, omittingEmptySubsequences: false)
+    guard fields.last?.isEmpty == true else { throw ValidationFailure("Git raw diff was not NUL terminated") }
+    fields.removeLast()
+    guard !fields.isEmpty, fields.count.isMultiple(of: 2) else {
+        throw ValidationFailure("trusted range contains no classifiable workflow-only changes")
+    }
+    var index = 0
+    while index < fields.count {
+        guard let header = String(data: Data(fields[index]), encoding: .utf8), header.hasPrefix(":"),
+              let path = String(data: Data(fields[index + 1]), encoding: .utf8) else {
+            throw ValidationFailure("Git raw diff contains malformed workflow-only metadata")
+        }
+        let metadata = header.dropFirst().split(separator: " ").map(String.init)
+        guard metadata.count == 5 else { throw ValidationFailure("Git raw diff contains malformed metadata") }
+        let oldMode = metadata[0], newMode = metadata[1], status = metadata[4]
+        let allowedMode = (status == "A" && oldMode == "000000" && ["100644", "100755"].contains(newMode)) ||
+            (status == "D" && ["100644", "100755"].contains(oldMode) && newMode == "000000") ||
+            (status == "M" && oldMode == newMode && ["100644", "100755"].contains(oldMode))
+        guard allowedMode else { throw ValidationFailure("workflow-only diff contains a type or mode change") }
+        try validateWorkflowPath(path)
+        index += 2
+    }
+}
+
 func validateFastDiff(expectedBase: String, expectedHead: String) throws {
     let result = try runGitProcess(["diff", "--name-only", "-z", "--no-renames", expectedBase, expectedHead, "--"])
     guard result.status == 0 else {
@@ -1668,6 +1725,13 @@ struct Options {
 }
 
 struct DocumentationPublishOptions {
+    let issue: Int
+    let expectedBase: String
+    let expectedHead: String
+    let inputPath: String
+}
+
+struct WorkflowPublishOptions {
     let issue: Int
     let expectedBase: String
     let expectedHead: String
@@ -4820,6 +4884,180 @@ func parseDocumentationPublishOptions(_ arguments: [String]) throws -> Documenta
     )
 }
 
+func parseWorkflowPublishOptions(_ arguments: [String]) throws -> WorkflowPublishOptions {
+    var values: [String: String] = [:]
+    var index = 0
+    let allowed = Set(["--issue", "--expected-base", "--expected-head", "--input"])
+    while index < arguments.count {
+        let key = arguments[index]
+        guard allowed.contains(key), values[key] == nil, index + 1 < arguments.count else {
+            throw ValidationFailure("invalid workflow publication arguments")
+        }
+        values[key] = arguments[index + 1]
+        index += 2
+    }
+    guard let issueText = values["--issue"], let issue = Int(issueText), issue > 0,
+          let expectedBase = values["--expected-base"], matches(expectedBase, regex: shaPattern),
+          let expectedHead = values["--expected-head"], matches(expectedHead, regex: shaPattern),
+          let inputPath = values["--input"], values.count == allowed.count else {
+        throw ValidationFailure("invalid workflow publication arguments")
+    }
+    let expectedInput = ".artifacts/issues/\(issue)/workflow-evidence-input.json"
+    guard inputPath == expectedInput else {
+        throw ValidationFailure("workflow evidence input must use the canonical path: \(expectedInput)")
+    }
+    return WorkflowPublishOptions(
+        issue: issue, expectedBase: expectedBase, expectedHead: expectedHead, inputPath: inputPath
+    )
+}
+
+func validateWorkflowRepositoryEvidence(
+    repository: TrustedRepository, issue: Int, base: String, head: String,
+    contractDigest: String, acceptanceIDs: [String]
+) throws -> [[String: Any]] {
+    let path = [".artifacts", "issues", String(issue), head, "repository-tests.json"]
+    let data = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor, components: path,
+        at: "workflow-only repository-test evidence"
+    )
+    let record = try readJSONObject(data: data, at: "workflow-only repository-test evidence")
+    guard try requireInteger(record["schemaVersion"] ?? NSNull(), at: "repositoryTests.schemaVersion") == 1,
+          try requireString(record["status"] ?? NSNull(), at: "repositoryTests.status") == "passed",
+          try requireInteger(record["issue"] ?? NSNull(), at: "repositoryTests.issue", minimum: 1) == issue,
+          try requireString(record["baseSha"] ?? NSNull(), at: "repositoryTests.baseSha") == base,
+          try requireString(record["headSha"] ?? NSNull(), at: "repositoryTests.headSha") == head else {
+        throw ValidationFailure("workflow-only repository-test evidence identity differs")
+    }
+    let reference = try requireObject(record["issueContract"] ?? NSNull(), at: "repositoryTests.issueContract")
+    try requireExactKeys(reference, ["path", "digest"], at: "repositoryTests.issueContract")
+    guard try requireString(reference["path"]!, at: "repositoryTests.issueContract.path") == ".artifacts/issues/\(issue)/issue-contract.json",
+          try requireString(reference["digest"]!, at: "repositoryTests.issueContract.digest") == contractDigest else {
+        throw ValidationFailure("workflow-only repository-test evidence contract differs")
+    }
+    let tests = try requireArray(record["tests"] ?? NSNull(), at: "repositoryTests.tests")
+    let suite = try requireObject(record["suite"] ?? NSNull(), at: "repositoryTests.suite")
+    guard !tests.isEmpty, tests.allSatisfy({ raw in
+        guard let item = raw as? JSONObject else { return false }
+        return item["status"] as? String == "passed" && (item["exitStatus"] as? NSNumber)?.intValue == 0
+    }),
+        (suite["total"] as? NSNumber)?.intValue == tests.count,
+        (suite["passed"] as? NSNumber)?.intValue == tests.count,
+        (suite["failed"] as? NSNumber)?.intValue == 0 else {
+        throw ValidationFailure("workflow-only repository-test evidence contains a failed or empty suite")
+    }
+    let testPaths = try tests.enumerated().map { index, raw in
+        let item = try requireObject(raw, at: "repositoryTests.tests[\(index)]")
+        return try requireString(item["path"] ?? NSNull(), at: "repositoryTests.tests[\(index)].path")
+    }
+    guard testPaths == testPaths.sorted(), Set(testPaths).count == testPaths.count else {
+        throw ValidationFailure("workflow-only repository-test paths must be sorted and unique")
+    }
+    let rawAcceptance = try requireArray(
+        record["acceptanceEvidence"] ?? NSNull(), at: "repositoryTests.acceptanceEvidence"
+    )
+    guard rawAcceptance.count == acceptanceIDs.count else {
+        throw ValidationFailure("workflow-only repository-test evidence must map every acceptance criterion")
+    }
+    var mappedPaths: [String] = []
+    let acceptance = try rawAcceptance.enumerated().map { index, raw in
+        let entry = try requireObject(raw, at: "repositoryTests.acceptanceEvidence[\(index)]")
+        let paths = try requireStringArray(
+            entry["tests"] ?? NSNull(), at: "repositoryTests.acceptanceEvidence[\(index)].tests",
+            nonempty: true, unique: true
+        )
+        guard try requireString(entry["id"] ?? NSNull(), at: "repositoryTests.acceptanceEvidence[\(index)].id") == acceptanceIDs[index],
+              try requireString(entry["status"] ?? NSNull(), at: "repositoryTests.acceptanceEvidence[\(index)].status") == "passed",
+              !paths.isEmpty else {
+            throw ValidationFailure("workflow-only repository-test acceptance mapping differs")
+        }
+        mappedPaths.append(contentsOf: paths)
+        return [
+            "id": acceptanceIDs[index], "status": "passed",
+            "evidence": ["repository-tests.json#acceptanceEvidence/\(index)"]
+        ]
+    }
+    guard Array(Set(mappedPaths)).sorted() == testPaths else {
+        throw ValidationFailure("workflow-only repository test selection differs from its AC mappings")
+    }
+    return acceptance
+}
+
+func validateWorkflowContract(_ contract: IssueContract) throws {
+    guard contract.deliveryStage.explicit, contract.deliveryStage.name == "harden",
+          contract.deliveryProfile == "strict", contract.verification == nil else {
+        throw ValidationFailure("workflow-only evidence requires harden + strict without application Verification")
+    }
+    guard !contract.externalOperations.contains(where: { $0.hasPrefix("appstore.") }) else {
+        throw ValidationFailure("workflow-only evidence cannot authorize App Store operations")
+    }
+}
+
+func publishWorkflowEvidence(_ options: WorkflowPublishOptions) throws -> String {
+    let repository = try validateTrustedRepository(
+        expectedBase: options.expectedBase, expectedHead: options.expectedHead, expectedIssue: options.issue
+    )
+    defer { closeTrustedRepository(repository) }
+    let inputData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: try relativeComponents(options.inputPath, at: "workflow evidence input"),
+        at: "workflow evidence input"
+    )
+    let input = try readJSONObject(data: inputData, at: "workflow evidence input")
+    try requireExactKeys(input, ["schemaVersion", "reason"], at: "workflow evidence input")
+    guard try requireInteger(input["schemaVersion"]!, at: "workflow evidence input.schemaVersion") == 1 else {
+        throw ValidationFailure("workflow evidence input.schemaVersion must be 1")
+    }
+    let reason = try requireString(input["reason"]!, at: "workflow evidence input.reason")
+    let contractPath = ".artifacts/issues/\(options.issue)/issue-contract.json"
+    let contractData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: [".artifacts", "issues", String(options.issue), "issue-contract.json"],
+        at: "issueContract.path"
+    )
+    let contractDigest = "sha256:\(sha256(data: contractData))"
+    let contractReference: [String: Any] = ["path": contractPath, "digest": contractDigest]
+    let contract = try validateIssueContract(reference: contractReference, issue: options.issue, repository: repository)
+    try validateWorkflowContract(contract)
+    try validateWorkflowDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+    let acceptance = try validateWorkflowRepositoryEvidence(
+        repository: repository, issue: options.issue, base: options.expectedBase,
+        head: options.expectedHead, contractDigest: contractDigest, acceptanceIDs: contract.acceptanceIDs
+    )
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let document: [String: Any] = [
+        "schemaVersion": 1, "status": "passed", "changeClassification": "workflow-only",
+        "reason": reason, "issue": options.issue, "baseSha": options.expectedBase,
+        "headSha": options.expectedHead, "issueContract": contractReference,
+        "matrixFile": NSNull(), "matrixDigest": NSNull(), "executionRoute": "repository-tests",
+        "xcode": NSNull(),
+        "build": ["status": "not-applicable", "scheme": NSNull(), "warningsAdded": NSNull(), "project": NSNull(), "sourceTree": NSNull()],
+        "tests": ["status": "not-applicable", "passed": NSNull(), "failed": NSNull(), "skipped": NSNull()],
+        "cases": [], "visualEvaluation": ["status": "not-applicable", "findings": []],
+        "acceptanceEvidence": acceptance,
+        "completedAt": formatter.string(from: max(Date(), contract.fetchedAt))
+    ]
+    let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
+    let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
+    let directory = try ensureCanonicalEvidenceDirectory(repository: repository, issue: options.issue, head: options.expectedHead)
+    defer { close(directory) }
+    try removeInterruptedPublicationCandidates(directory: directory, prefixes: [".verify-candidate-"])
+    let candidateName = ".verify-candidate-\(UUID().uuidString.lowercased())"
+    try writeExclusiveFile(directoryFileDescriptor: directory, name: candidateName, data: data, permissions: S_IRUSR)
+    let candidateFD = openat(directory, candidateName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard candidateFD >= 0 else { throw ValidationFailure("verify.json candidate could not be retained") }
+    defer { heldValidatedCandidateFileDescriptor = nil; close(candidateFD); _ = unlinkat(directory, candidateName, 0) }
+    heldValidatedCandidateFileDescriptor = candidateFD
+    let relativePath = (evidenceComponents + ["verify.json"]).joined(separator: "/")
+    try validate(options: Options(
+        file: repository.rootPath + "/" + relativePath,
+        candidateFile: repository.rootPath + "/" + (evidenceComponents + [candidateName]).joined(separator: "/"),
+        expectedFileDigest: nil, expectedIssue: options.issue, expectedBase: options.expectedBase,
+        expectedHead: options.expectedHead, initialVisualResultData: nil, initialVisualResultDigest: nil
+    ))
+    return relativePath
+}
+
 func parseFocusedPublishOptions(_ arguments: [String]) throws -> FocusedPublishOptions {
     var values: [String: String] = [:]
     var index = 0
@@ -5499,6 +5737,55 @@ func validate(options: Options) throws {
             try validateFastDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
         }
 
+    case "workflow-only":
+        try validateWorkflowContract(contract)
+        guard try requireString(root["status"]!, at: "status") == "passed" else {
+            throw ValidationFailure("workflow-only status must be passed")
+        }
+        _ = try requireString(root["reason"]!, at: "reason")
+        try requireNull(root["matrixFile"]!, at: "matrixFile")
+        try requireNull(root["matrixDigest"]!, at: "matrixDigest")
+        try requireNull(root["xcode"]!, at: "xcode")
+        guard try requireString(root["executionRoute"]!, at: "executionRoute") == "repository-tests" else {
+            throw ValidationFailure("workflow-only executionRoute must be repository-tests")
+        }
+        try validateBuild(root["build"]!, documentationOnly: true)
+        try validateTests(root["tests"]!, documentationOnly: true)
+        guard try requireArray(root["cases"]!, at: "cases").isEmpty else {
+            throw ValidationFailure("workflow-only cases must be empty")
+        }
+        try validateVisual(root["visualEvaluation"]!, documentationOnly: true)
+        try validateAcceptanceEvidence(
+            root["acceptanceEvidence"]!, contractIDs: contract.acceptanceIDs, documentationOnly: false
+        )
+        try validateWorkflowDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+        let contractDigest = try requireString(contractReference["digest"]!, at: "issueContract.digest")
+        let expectedAcceptance = try validateWorkflowRepositoryEvidence(
+            repository: repository, issue: issue, base: baseSha, head: headSha,
+            contractDigest: contractDigest, acceptanceIDs: contract.acceptanceIDs
+        )
+        guard JSONSerialization.isValidJSONObject(expectedAcceptance),
+              JSONSerialization.isValidJSONObject(root["acceptanceEvidence"]!),
+              try JSONSerialization.data(withJSONObject: expectedAcceptance, options: [.sortedKeys]) ==
+                JSONSerialization.data(withJSONObject: root["acceptanceEvidence"]!, options: [.sortedKeys]) else {
+            throw ValidationFailure("workflow-only acceptance evidence differs from repository tests")
+        }
+        candidatePublicationCheck = {
+            let currentHead = try runGitString(["rev-parse", "HEAD"], failure: "unable to recheck current Git HEAD")
+            guard currentHead == options.expectedHead else {
+                throw ValidationFailure("Git Head changed before workflow evidence publication")
+            }
+            let currentContract = try validateIssueContract(
+                reference: contractReference, issue: issue, repository: repository
+            )
+            try validateWorkflowContract(currentContract)
+            try validateWorkflowDiff(expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+            _ = try validateWorkflowRepositoryEvidence(
+                repository: repository, issue: issue, base: baseSha, head: headSha,
+                contractDigest: contractDigest, acceptanceIDs: contract.acceptanceIDs
+            )
+        }
+
     case "documentation-only":
         guard try requireString(root["status"]!, at: "status") == "not-applicable" else {
             throw ValidationFailure("documentation-only status must be not-applicable")
@@ -5566,6 +5853,10 @@ do {
     if arguments.first == "--publish-documentation" {
         print(try publishDocumentationEvidence(
             parseDocumentationPublishOptions(Array(arguments.dropFirst()))
+        ))
+    } else if arguments.first == "--publish-workflow" {
+        print(try publishWorkflowEvidence(
+            parseWorkflowPublishOptions(Array(arguments.dropFirst()))
         ))
     } else if arguments.first == "--publish-focused" {
         print(try publishFocusedEvidence(

@@ -219,6 +219,13 @@ elsif verify["changeClassification"] == "focused-code"
   exact_keys!(verify["visualEvaluation"], %w[status findings], "focused visual evaluation")
   reject("focused verification requires fast profile") unless IOSTemplate::DeliveryProfile.effective_name(contract) == "fast"
   reject("focused verification readiness differs") unless verify["status"] == "passed" && verify["reason"].is_a?(String) && !verify["reason"].empty? && verify["executionRoute"] == "xcodebuild-focused" && verify["xcode"].values.all? { |entry| entry.is_a?(String) && !entry.empty? } && build["status"] == "passed" && build["scheme"].is_a?(String) && !build["scheme"].empty? && build["warningsAdded"] == 0 && build["project"].nil? && build["sourceTree"].nil? && tests["status"] == "passed" && tests["passed"].is_a?(Integer) && tests["passed"].positive? && tests["failed"] == 0 && tests["skipped"] == 0 && cases == [] && verify["matrixFile"].nil? && verify["matrixDigest"].nil? && verify["visualEvaluation"] == {"status"=>"not-applicable","findings"=>[]}
+elsif verify["changeClassification"] == "workflow-only"
+  exact_keys!(build, %w[status scheme warningsAdded project sourceTree], "workflow build")
+  exact_keys!(tests, %w[status passed failed skipped], "workflow tests")
+  exact_keys!(verify["visualEvaluation"], %w[status findings], "workflow visual evaluation")
+  reject("workflow-only verification requires harden + strict without application Verification") unless delivery_stage == "harden" && IOSTemplate::DeliveryProfile.effective_name(contract) == "strict" && !contract.key?("verification") && !contract.key?("verificationScope")
+  reject("workflow-only verification readiness differs") unless verify["status"] == "passed" && verify["reason"].is_a?(String) && !verify["reason"].empty? && verify["executionRoute"] == "repository-tests" && verify["xcode"].nil? && build == {"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil} && tests == {"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil} && cases == [] && verify["matrixFile"].nil? && verify["matrixDigest"].nil? && verify["visualEvaluation"] == {"status"=>"not-applicable","findings"=>[]}
+  reject("workflow-only verification requires sealed repository tests") unless review_packet.is_a?(Hash) && review_packet["repositoryTests"].is_a?(Hash)
 else
   exact_keys!(build, %w[status scheme warningsAdded project sourceTree], "application build")
   exact_keys!(tests, %w[status passed failed skipped], "application tests")
@@ -275,7 +282,7 @@ else
   validate_canonical_verify!(repo, issue, head, verify["baseSha"], verify_digest)
 end
 
-if %w[documentation-only focused-code].include?(verify["changeClassification"])
+if %w[documentation-only focused-code workflow-only].include?(verify["changeClassification"])
   validate_canonical_verify!(repo, issue, head, verify["baseSha"], verify_digest)
 end
 

@@ -12,6 +12,8 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 `shape`はBuild、重要Unit Test、主要導線の日本語iPhone Smokeを実行し、Screenshotやvisual reviewなしでcanonical `verify.json`を発行します。理由は`Delivery stage shape passed; not release-ready.`です。`harden`もvisual checkを明示しない限り同じ非visual経路を使います。`release`とvisual checkを持つhardenだけがdraft、Screenshot、visual result、finalizeの二段階経路を使います。
 
+非applicationのdelivery tool／schema／validator／review／evidence変更はworkflow-only経路です。`harden + strict`、application `Verification`／`Verification scope`なし、allowlist内の差分だけを受理します。先にcanonical repository-test evidenceを発行し、次に`.artifacts/issues/${ISSUE}/workflow-evidence-input.json`へschemaVersion 1と非空reasonを書き、`tools/publish-workflow-verify.sh`で`verify.json`を発行します。この経路はXcode、Build、Unit、Simulator matrix、Screenshot、visual evaluationを起動せず、repository evidenceのAC mappingをverifyへ固定します。
+
 stage未指定のClaim済みcontractは旧release-level gateを維持します。未実行は`deferred / unverified`であり成功ではありません。shape／hardenをrelease readyと報告しません。
 
 [UI Direction Gate](../.agents/skills/ui-direction/SKILL.md)は、現在のユーザーが対象範囲のHTML比較を明示した場合に方向の有無を問わず最優先で適用します。現在の明示省略は、現行性、exact scope、権限、理由、比較指示との非矛盾が明確な場合だけ`explicit-skip` routeとして通常判定を上書きし、曖昧または矛盾する場合は依存UIを`blocked:user`にします。それ以外は、exact hierarchy／flowを覆う確定方向があれば`confirmed-direction reuse`、対象方向が未確定で最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかなら`comparison`、方向未確定かつ3 triggerのいずれもなくAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない場合だけ`bounded direction-neutral`とします。coverage、triggerまたはneutralityが曖昧ならGateを実行します。Identity bootstrapと純非UIは`not-applicable`で、Gateを評価するのは依存する後続native UIだけです。
@@ -138,7 +140,7 @@ tools/verify-fast-issue.sh \
 
 BuildとUnit Testは同じHead SHAにつき一度実行し、4つのlocaleごとに重複実行しません。
 
-Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evidence producer自体へ依存する場合は、iOSのUnit Testだけで代用しません。`tools/run-repository-tests.sh` を使い、current Headのtracked `tools/tests/test-*.sh` 全件をrunner所有のclean detached worktreeで実行します。各ACへ関連test pathをexactに一度対応付け、成功した全testのexit status、sanitized output digest、時刻、runner bytesを `.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-tests.json` へno-replaceで保存します。test本文のstdout/stderrはartifactへ保存しません。失敗、Head変更、dirty caller、contract不一致、mapping不足、既存artifact衝突のどれかがあればcanonical evidenceは発行しません。
+Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evidence producer自体へ依存する場合は、iOSのUnit Testだけで代用しません。`tools/run-repository-tests.sh` を使い、current Headのtracked `tools/tests/test-*.sh`をrunner所有のclean detached worktreeで実行します。各ACへ関連test pathをexactに一度対応付け、成功したtestのexit status、sanitized output digest、時刻、runner bytesを `.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-tests.json` へno-replaceで保存します。test本文のstdout/stderrはartifactへ保存しません。失敗、Head変更、dirty caller、contract不一致、mapping不足、既存artifact衝突のどれかがあればcanonical evidenceは発行しません。#77のworkflow-only contractだけは全AC mappingのexact unionをcurrent Headで各1回実行し、review packetでもrecordのtest集合との一致を再検証します。workflow-only以外のrisk-based scope未導入contractは従来どおりHead全件を使い、#78以降のcontractだけがmanifestで決まるsubsetを使います。
 
 iOS runner回帰は、共通の`tools/tests/lib/ios-runner-fixture.sh`と独立した16個のtracked entrypointへ分けています。引数なしの`bash tools/tests/test-ios-runner.sh`はshape／scope／timeout群だけを実行します。`scoped`も同じ群、`stubborn`は従来のTERM無視probe診断です。残る群はcleanup、startup、baseline、identity、inputs、publication、resources、recovery、recovery-before-rename、recovery-after-rename、recovery-final、locking、finalization、finalization-integrity、system-localeで、`tools/tests/test-ios-runner-<群名>.sh`を実行します。各群は自身のtemporary repository、fake Xcode／Simulator、adapter stateを作り、終了時に自身のscratchだけを回収します。
 

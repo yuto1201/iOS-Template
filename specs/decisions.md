@@ -286,3 +286,13 @@
 - Decision: [保存と提出の分離](architecture.md#92-原稿保存と正式提出の分離)に従い、offline draft、認可済みの選択的save、完全packageのready、明示許可されたsubmitを区別する。保存はsourceと正しいremote identityに束縛し、form全体の差分・公開影響を確認した後に行い、再読取で結果を検証する。未確定画像・build・法務は独立した一般原稿を止めないが、それら自体の更新やrelease readinessを許可しない。
 - Consequence: 部分保存の別形式journalはpackage外に置き、既存package/result/checklistを変更・流用しない。#52は仕様と薄いroutingのみで、専用save実装は後続Issueへ分離する。未実装の間は既存提出scriptや手動操作で代用しない。正式提出の全素材、申告、法務承認、audit、明示提出許可は維持する。
 - Related Issue: #52
+
+## D-036: 非application workflow変更をXcode不要のharden経路へ分離する
+
+- Date: 2026-09-13
+- Status: 確定
+- Supersedes: D-025のdelivery gateを一律strict完全検証へ結び付ける部分と、D-029のworkflow変更にapplication検証の例外がなかった部分。D-029の段階別品質、D-034の明示的Base／Head契約、account・Head・review・pre-merge境界は維持する。
+- Context: delivery tool、schema、validator、review、evidence producerだけの変更でもXcode Build、Simulator 4条件、visual確認を行うと、アプリ挙動を一切変えないIssueの検証が実装より長くなり、英語／iPad仕上げを最後へ寄せる方針も機械的に実現できない。
+- Decision: application source、Xcode project、asset、localization、Bundle設定、App Store／TestFlight経路へ触れない非UI workflow変更は`harden + strict`のworkflow-only経路で検証する。application `Verification`／`Verification scope`は持たず、Xcode、Build、Unit、Simulator、Screenshot、visual evaluationを正当な`not-applicable`とする。対象repository tests、仕様整合、contract、current-Head、strict review、blocking finding、pre-merge gateは維持する。`release`は`type:release`の実アプリrelease candidateだけに限定する。
+- Consequence: workflow gateの安全性を下げずに、無関係なiPhone／iPad・日本語／英語matrixを起動しない。allowlist外path、application／release path、App Store operation、Verification混入、repository evidence欠落またはidentity不一致はfail closedになる。impact manifest導入前のworkflow-onlyだけは全AC mappingのexact unionを対象testとして封印し、それ以外の従来Head-only contractは全tracked testを維持する。一般の変更影響による対象選定は後続Issue #78で独立して決定論化する。
+- Related Issue: #77

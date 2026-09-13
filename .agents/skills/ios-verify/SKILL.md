@@ -19,6 +19,8 @@ Classify the trusted Base-to-Head range before touching Simulator state. Only `R
 
 Read `deliveryStage.name`, `deliveryProfile.name`, and Verification scope from the canonical Issue contract. A missing Delivery stage or profile is a sealed legacy contract and remains release-level/strict. Never reseal a claimed contract or infer a narrower scope.
 
+For a non-application delivery-tool/schema/validator/review/evidence change, use workflow-only verification only when the sealed contract is `harden + strict`, omits application Verification and Verification scope, and the exact Base..Head paths pass the workflow allowlist. Publish canonical repository-test evidence first, then use `tools/publish-workflow-verify.sh`. Do not start Xcode or a Simulator for this route. Never use it for application, project, asset, localization, Bundle, App Store, or TestFlight changes.
+
 - `shape`: use `iphone-ja`; require Build, critical Unit Test, and one primary-flow smoke test. Do not capture screenshots or claim release readiness.
 - `harden`: use the exact `targeted` canonical subset declared by the contract. Verify only the affected behavior and related regressions. A harden contract requests visual evidence only when an AC explicitly contains a `visual:` check.
 - `release` or legacy: use `full`; require all four cases, visual/accessibility/integration evidence, same-Head review preparation, and the release gate.

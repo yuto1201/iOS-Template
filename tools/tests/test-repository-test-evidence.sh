@@ -47,7 +47,13 @@ set -euo pipefail
 [[ "${FAIL_BETA:-0}" == 0 ]]
 printf '%s\n' 'beta passed'
 EOF
-chmod +x "$repo/tools/tests/test-alpha.sh" "$repo/tools/tests/test-beta.sh"
+cat > "$repo/tools/tests/test-unmapped.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'an unmapped repository test must not run' >&2
+exit 9
+EOF
+chmod +x "$repo/tools/tests/test-alpha.sh" "$repo/tools/tests/test-beta.sh" "$repo/tools/tests/test-unmapped.sh"
 git -C "$repo" add tools
 git -C "$repo" commit -q -m head
 head_sha=$(git -C "$repo" rev-parse HEAD)
@@ -56,7 +62,7 @@ contract="$repo/.artifacts/issues/42/issue-contract.json"
 head_dir="$repo/.artifacts/issues/42/$head_sha"
 mkdir -p "$head_dir"
 cat > "$contract" <<JSON
-{"schemaVersion":1,"issue":42,"repository":"example/repo","goal":"Evidence","specAnchors":["specs/test.md#evidence"],"acceptanceCriteria":[{"id":"AC-1","text":"Alpha passes"},{"id":"AC-2","text":"Beta passes"}],"dependencies":[],"externalOperations":[],"externalOperationDetailsDigest":"sha256:$(printf '0%.0s' {1..64})","fetchedAt":"2026-08-25T00:00:00Z"}
+{"schemaVersion":1,"issue":42,"repository":"example/repo","goal":"Evidence","specAnchors":["specs/test.md#evidence"],"acceptanceCriteria":[{"id":"AC-1","text":"Alpha passes"},{"id":"AC-2","text":"Beta passes"}],"dependencies":[],"externalOperations":[],"externalOperationDetailsDigest":"sha256:$(printf '0%.0s' {1..64})","fetchedAt":"2026-08-25T00:00:00Z","deliveryStage":{"name":"harden","timeBudgetMinutes":60,"reason":"Workflow-only fixture."},"deliveryProfile":{"name":"strict","reason":"Canonical workflow evidence."}}
 JSON
 
 output=$(cd "$repo" && tools/run-repository-tests.sh \
@@ -144,6 +150,30 @@ if (cd "$repo" && tools/run-repository-tests.sh --issue 44 --expected-base "$bas
   exit 1
 fi
 grep -Fq 'acceptance mappings must match every Issue contract AC exactly once' "$scratch/missing.err"
+
+# A non-workflow Head-only contract retains the legacy full tracked inventory;
+# an AC mapping is not a general-purpose exclusion list.
+cat > "$repo/tools/tests/test-beta.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' 'beta restored'
+EOF
+git -C "$repo" add tools/tests/test-beta.sh
+git -C "$repo" commit -q -m legacy-head
+legacy_head=$(git -C "$repo" rev-parse HEAD)
+mkdir -p "$repo/.artifacts/issues/45/$legacy_head"
+CONTRACT="$contract" OUTPUT="$repo/.artifacts/issues/45/issue-contract.json" ruby -rjson -e '
+  value=JSON.parse(File.binread(ENV.fetch("CONTRACT")))
+  value["issue"]=45
+  value.delete("deliveryStage")
+  value.delete("deliveryProfile")
+  File.binwrite(ENV.fetch("OUTPUT"),JSON.generate(value))
+'
+if (cd "$repo" && tools/run-repository-tests.sh --issue 45 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) >"$scratch/legacy.out" 2>"$scratch/legacy.err"; then
+  echo 'legacy Head-only contract silently excluded an unmapped test' >&2
+  exit 1
+fi
+grep -Fq 'repository test failed: tools/tests/test-unmapped.sh' "$scratch/legacy.err"
 
 ruby -I"$source_repo/tools/lib" -rrun-repository-tests -e '
   unrelated = Process.spawn("/bin/sleep", "30", pgroup: true)

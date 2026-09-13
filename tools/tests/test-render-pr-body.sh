@@ -20,6 +20,7 @@ issue=42
 mkdir -p "$primary/tools/lib" "$primary/docs" "$primary/TemplateApp.xcodeproj"
 cp "$source_root/tools/render-pr-body.sh" "$primary/tools/"
 cp "$source_root/tools/validate-verify-json.swift" "$primary/tools/"
+cp "$source_root/tools/run-repository-tests.sh" "$primary/tools/"
 cp "$source_root/tools/lib/descriptor-files.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-contract.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-sealing.rb" "$primary/tools/lib/"
@@ -27,6 +28,10 @@ cp "$source_root/tools/lib/delivery-profile.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/delivery-stage.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/verification-scope.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/prepare-review-packet.rb" "$source_root/tools/lib/review-artifacts.rb" "$primary/tools/lib/"
+cp "$source_root/tools/lib/run-repository-tests.rb" "$primary/tools/lib/"
+mkdir -p "$primary/tools/tests"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$primary/tools/tests/test-renderer-probe.sh"
+chmod +x "$primary/tools/tests/test-renderer-probe.sh"
 printf '%s\n' '{}' >"$primary/TemplateApp.xcodeproj/project.pbxproj"
 printf '%s\n' '# Initial' >"$primary/docs/initial.md"
 git -C "$primary" init -q
@@ -184,7 +189,10 @@ result = {
   "schemaVersion" => 2, "issue" => 42, "reviewerModel" => "claude", "baseSha" => base,
   "headSha" => head, "verifySha" => head, "issueContractDigest" => IOSTemplate::ReviewContract.digest(contract_bytes),
   "verdict" => "approved", "findings" => [],
-  "acceptanceAssessment" => verify.fetch("acceptanceEvidence").map { |item| {"id" => item.fetch("id"), "status" => "supported", "evidence" => ["verify.json#acceptanceEvidence"]} },
+  "acceptanceAssessment" => verify.fetch("acceptanceEvidence").each_with_index.map { |item, index|
+    evidence = verify["changeClassification"] == "workflow-only" ? "repository-tests.json#acceptanceEvidence/#{index}" : "verify.json#acceptanceEvidence"
+    {"id" => item.fetch("id"), "status" => "supported", "evidence" => [evidence]}
+  },
   "reviewedAt" => "2026-08-21T13:01:00+09:00", "reviewPacketDigest" => IOSTemplate::ReviewContract.digest(packet_bytes)
 }
 File.binwrite(result_path, JSON.generate(result))
@@ -354,6 +362,26 @@ v=JSON.parse(File.read(ENV.fetch("VERIFY")));r=JSON.parse(File.read(ENV.fetch("R
 seal_review
 documentation_body=$(run_renderer)
 grep -Fq 'Verify status: `not-applicable`' <<<"$documentation_body" || { echo 'documentation-only PR body was rejected' >&2; exit 1; }
+cp "$contract" "$scratch/pre-workflow-contract.json"
+cp "$verify" "$scratch/pre-workflow-verify.json"
+cp "$issue_dir/state.json" "$scratch/pre-workflow-state.json"
+
+# Workflow-only rendering accepts the sealed AC-mapped repository subset and
+# keeps every application/Simulator field explicitly not applicable.
+restore_application
+CONTRACT="$contract" VERIFY="$verify" STATE="$issue_dir/state.json" RECORD="$head_dir/repository-tests.json" REPOSITORY="$worktree" HEAD="$head" BASE="$base" COMPLETED_AT="2026-08-21T12:30:00+09:00" ruby -rjson -rdigest -rtime -e '
+contract_path=ENV.fetch("CONTRACT"); contract=JSON.parse(File.binread(contract_path)); contract.delete("verification"); contract.delete("verificationScope"); contract["deliveryStage"]={"name"=>"harden","timeBudgetMinutes"=>60,"reason"=>"Workflow-only renderer fixture."}; contract["deliveryProfile"]={"name"=>"strict","reason"=>"Canonical workflow evidence."}; File.binwrite(contract_path,JSON.generate(contract)); digest="sha256:#{Digest::SHA256.file(contract_path).hexdigest}";
+record={"schemaVersion"=>1,"status"=>"passed","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>digest},"runnerFiles"=>%w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb].map{|path|{"path"=>path,"digest"=>"sha256:#{Digest::SHA256.hexdigest(IO.popen(["git","-C",ENV.fetch("REPOSITORY"),"show","#{ENV.fetch("HEAD")}:#{path}"],"rb", &:read))}"}},"suite"=>{"path"=>"tools/tests","pattern"=>"test-*.sh","total"=>1,"passed"=>1,"failed"=>0},"tests"=>[{"path"=>"tools/tests/test-renderer-probe.sh","arguments"=>[],"status"=>"passed","exitStatus"=>0,"outputDigest"=>"sha256:#{"0"*64}","startedAt"=>Time.now.utc.iso8601,"completedAt"=>Time.now.utc.iso8601}],"acceptanceEvidence"=>[{"id"=>"AC-1","status"=>"passed","tests"=>["tools/tests/test-renderer-probe.sh"]},{"id"=>"AC-2","status"=>"passed","tests"=>["tools/tests/test-renderer-probe.sh"]}],"startedAt"=>Time.now.utc.iso8601,"completedAt"=>Time.now.utc.iso8601}; File.binwrite(ENV.fetch("RECORD"),JSON.generate(record));
+verify={"schemaVersion"=>1,"status"=>"passed","changeClassification"=>"workflow-only","reason"=>"Workflow repository checks passed; application release readiness was not evaluated.","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>record.fetch("issueContract"),"matrixFile"=>nil,"matrixDigest"=>nil,"executionRoute"=>"repository-tests","xcode"=>nil,"build"=>{"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil},"tests"=>{"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil},"cases"=>[],"visualEvaluation"=>{"status"=>"not-applicable","findings"=>[]},"acceptanceEvidence"=>record.fetch("acceptanceEvidence").each_with_index.map{|entry,index|{"id"=>entry.fetch("id"),"status"=>"passed","evidence"=>["repository-tests.json#acceptanceEvidence/#{index}"]}},"completedAt"=>ENV.fetch("COMPLETED_AT")}; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(verify)); state=JSON.parse(File.binread(ENV.fetch("STATE"))); state.fetch("issueContract")["digest"]=digest; File.binwrite(ENV.fetch("STATE"),JSON.generate(state))'
+seal_review
+workflow_body=$(run_renderer)
+grep -Fq 'Verify status: `passed`' <<<"$workflow_body" || { echo 'workflow-only PR body was rejected' >&2; exit 1; }
+grep -Fq -- '- Build: `not-applicable`' <<<"$workflow_body" || { echo 'workflow-only PR body omitted build deferral' >&2; exit 1; }
+grep -Fq 'iPad Air / English: `not-applicable` (workflow-only)' <<<"$workflow_body" || { echo 'workflow-only PR body omitted Simulator deferral' >&2; exit 1; }
+rm -f "$head_dir/repository-tests.json"
+cp "$scratch/pre-workflow-contract.json" "$contract"
+cp "$scratch/pre-workflow-verify.json" "$verify"
+cp "$scratch/pre-workflow-state.json" "$issue_dir/state.json"
 
 # Explicit fast renders current-Head evidence without opening or requiring any
 # opposite-model artifact.
