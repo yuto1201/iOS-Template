@@ -29,6 +29,7 @@ prepare_fixture() {
   issue_root="$repo/.artifacts/issues/42"
   /bin/mkdir -p "$issue_root/$head_sha"
   ISSUE_ROOT="$issue_root" BASE="$base_sha" HEAD="$head_sha" /usr/bin/ruby --disable-gems -rjson -rdigest -rtime <<'RUBY'
+# encoding: UTF-8
 root = ENV.fetch("ISSUE_ROOT")
 contract = {
   "schemaVersion"=>1, "issue"=>42, "repository"=>"yuto1201/iOS-Template",

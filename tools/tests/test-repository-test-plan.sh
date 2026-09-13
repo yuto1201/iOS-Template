@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" git ruby
+
+source_repo=$(cd "$(dirname "$0")/../.." && pwd -P)
+ruby -I"$source_repo/tools/lib" -rrepository-test-plan -rfileutils -rtmpdir -rjson <<'RUBY'
+module Fixture
+  module_function
+
+  def git(repo, *args)
+    IOSTemplate::RepositoryTestPlan.git!(repo, *args).strip
+  end
+
+  def manifest(tests: %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh])
+    {
+      "schemaVersion" => 1,
+      "headAllPaths" => ["Config/repository-tests.json", "tools/lib/repository-test-plan.rb", "tools/lib/run-repository-tests.rb", "tools/run-repository-tests.sh"],
+      "headAllPrefixes" => ["tools/tests/"],
+      "domainRules" => [
+        {"domain" => "review", "paths" => ["tools/lib/review-contract.rb"], "prefixes" => ["docs/review/"]},
+        {"domain" => "workflow", "paths" => ["tools/lib/workflow.rb"], "prefixes" => ["docs/workflow/"]}
+      ],
+      "tests" => tests.map do |path|
+        {"path" => path, "domains" => [path.end_with?("alpha.sh") ? "review" : "workflow"]}
+      end
+    }
+  end
+
+  def contract(issue:, scope: "targeted")
+    criteria = [
+      {"id" => "AC-1", "text" => "UI-direction route: not-applicable; Scope: tests; Reason: no UI."},
+      {"id" => "AC-2", "text" => "Repository-test scope: #{scope}; Reason: fixture policy."}
+    ]
+    JSON.generate({"schemaVersion"=>1, "issue"=>issue, "repository"=>"example/repo", "goal"=>"Plan tests",
+      "specAnchors"=>["specs/test.md#plan"], "acceptanceCriteria"=>criteria, "dependencies"=>[],
+      "externalOperations"=>[], "externalOperationDetailsDigest"=>"sha256:#{'0' * 64}",
+      "fetchedAt"=>"2026-09-13T13:03:38Z", "deliveryStage"=>{"name"=>"harden", "timeBudgetMinutes"=>60, "reason"=>"fixture"},
+      "deliveryProfile"=>{"name"=>"strict", "reason"=>"fixture"}})
+  end
+end
+
+runner = IOSTemplate::RepositoryTestPlan
+Dir.mktmpdir("repository-test-plan-") do |scratch|
+  repo = File.join(scratch, "repo")
+  FileUtils.mkdir_p(File.join(repo, "Config"))
+  FileUtils.mkdir_p(File.join(repo, "tools/tests"))
+  FileUtils.mkdir_p(File.join(repo, "tools/lib"))
+  Fixture.git(repo, "init", "-q", "-b", "main")
+  Fixture.git(repo, "config", "user.name", "Fixture")
+  Fixture.git(repo, "config", "user.email", "fixture@example.invalid")
+  File.write(File.join(repo, "tools/tests/test-alpha.sh"), "exit 0\n")
+  File.write(File.join(repo, "tools/tests/test-beta.sh"), "exit 0\n")
+  File.write(File.join(repo, "tools/lib/review-contract.rb"), "BASE = true\n")
+  File.write(File.join(repo, "tools/lib/workflow.rb"), "BASE = true\n")
+  File.write(File.join(repo, "tools/lib/repository-test-plan.rb"), "PLAN = true\n")
+  File.write(File.join(repo, "tools/lib/run-repository-tests.rb"), "RUNNER = true\n")
+  File.write(File.join(repo, "tools/run-repository-tests.sh"), "exit 0\n")
+  File.write(File.join(repo, "Config/repository-tests.json"), JSON.generate(Fixture.manifest))
+  Fixture.git(repo, "add", ".")
+  Fixture.git(repo, "commit", "-qm", "base")
+  base = Fixture.git(repo, "rev-parse", "HEAD")
+
+  File.write(File.join(repo, "tools/lib/review-contract.rb"), "HEAD = true\n")
+  Fixture.git(repo, "add", ".")
+  Fixture.git(repo, "commit", "-qm", "review change")
+  head = Fixture.git(repo, "rev-parse", "HEAD")
+  contract = Fixture.contract(issue: 42)
+  mappings = {"AC-1"=>["tools/tests/test-alpha.sh"], "AC-2"=>["tools/tests/test-alpha.sh"]}
+  plan = runner.build(repo: repo, issue: 42, base_sha: base, head_sha: head, contract_bytes: contract, mappings: mappings)
+  abort "single domain did not resolve targeted" unless plan.values_at("requestedScope", "resolvedScope", "testPaths") == ["targeted", "targeted", ["tools/tests/test-alpha.sh"]]
+  runner.validate!(plan, repo: repo, issue: 42, base_sha: base, head_sha: head, contract_bytes: contract)
+
+  altered = Marshal.load(Marshal.dump(plan))
+  altered["headSha"] = base
+  begin
+    runner.validate!(altered, repo: repo, issue: 42, base_sha: base, head_sha: head, contract_bytes: contract)
+    abort "tampered plan was accepted"
+  rescue IOSTemplate::RepositoryTestPlan::PlanError
+  end
+
+  File.write(File.join(repo, "unmatched.txt"), "broad\n")
+  Fixture.git(repo, "add", ".")
+  Fixture.git(repo, "commit", "-qm", "unmatched")
+  unmatched_head = Fixture.git(repo, "rev-parse", "HEAD")
+  all_mapping = {"AC-1"=>%w[tools/tests/test-alpha.sh tools/tests/test-beta.sh], "AC-2"=>["tools/tests/test-beta.sh"]}
+  unmatched = runner.build(repo: repo, issue: 42, base_sha: head, head_sha: unmatched_head, contract_bytes: contract, mappings: all_mapping)
+  abort "unmatched path did not expand to head-all" unless unmatched["resolvedScope"] == "head-all" && unmatched["testPaths"].length == 2
+
+  File.write(File.join(repo, "tools/tests/test-alpha.sh"), "echo changed\n")
+  Fixture.git(repo, "add", ".")
+  Fixture.git(repo, "commit", "-qm", "inventory infrastructure")
+  broad_head = Fixture.git(repo, "rev-parse", "HEAD")
+  broad = runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head, contract_bytes: contract, mappings: all_mapping)
+  abort "test inventory change did not expand to head-all" unless broad["resolvedScope"] == "head-all"
+
+  base_head_contract = Fixture.contract(issue: 42, scope: "base-and-head")
+  comparison = runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head, contract_bytes: base_head_contract, mappings: all_mapping)
+  abort "explicit comparison did not remain base-and-head" unless comparison["resolvedScope"] == "base-and-head"
+
+  begin
+    runner.build(repo: repo, issue: 42, base_sha: head, head_sha: unmatched_head, contract_bytes: contract,
+      mappings: {"AC-1"=>["tools/tests/test-alpha.sh"], "AC-2"=>["tools/tests/test-alpha.sh"]})
+    abort "incomplete mapping union was accepted"
+  rescue IOSTemplate::RepositoryTestPlan::PlanError
+  end
+
+  File.write(File.join(repo, "Config/repository-tests.json"), JSON.generate(Fixture.manifest(tests: ["tools/tests/test-alpha.sh"])))
+  Fixture.git(repo, "add", ".")
+  Fixture.git(repo, "commit", "-qm", "missing manifest test")
+  invalid_head = Fixture.git(repo, "rev-parse", "HEAD")
+  begin
+    runner.build(repo: repo, issue: 42, base_sha: broad_head, head_sha: invalid_head, contract_bytes: contract, mappings: mappings)
+    abort "manifest missing a tracked test was accepted"
+  rescue IOSTemplate::RepositoryTestPlan::PlanError
+  end
+
+  invalid_manifest = Fixture.manifest
+  invalid_manifest["headAllPaths"] += ["tools/missing.sh"]
+  invalid_manifest["headAllPaths"].sort!
+  begin
+    runner.validate_manifest!(invalid_manifest, %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh],
+      tracked_paths: runner.tracked_paths(repo, invalid_head))
+    abort "manifest exact path missing at Head was accepted"
+  rescue IOSTemplate::RepositoryTestPlan::PlanError
+  end
+end
+
+puts "PASS: repository-test plans are diff-derived, scope-bounded, AC-mapped, and tamper-evident"
+RUBY
+
+SOURCE_REPO="$source_repo" ruby -I"$source_repo/tools/lib" -rfileutils -rtmpdir -rjson -ropen3 -rtime -rdigest <<'RUBY'
+source = ENV.fetch("SOURCE_REPO")
+Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
+  scratch = File.realpath(scratch)
+  repo = File.join(scratch, "repo")
+  FileUtils.mkdir_p([File.join(repo, "tools/lib"), File.join(repo, "tools/tests"),
+    File.join(repo, "Config"), File.join(repo, ".artifacts/issues/82")])
+  repo = File.realpath(repo)
+  git = lambda do |*arguments|
+    output, status = Open3.capture2e("/usr/bin/git", "-C", repo, *arguments)
+    abort "fixture Git failed: #{arguments.join(' ')}: #{output}" unless status.success?
+    output.strip
+  end
+  git.call("init", "-q", "-b", "main")
+  git.call("config", "user.name", "Fixture")
+  git.call("config", "user.email", "fixture@example.invalid")
+  File.write(File.join(repo, ".gitignore"), "/.artifacts\n")
+  %w[run-repository-tests.sh prepare-review-packet.sh validate-review-result.sh cross-model-review.sh].each do |name|
+    FileUtils.cp(File.join(source, "tools", name), File.join(repo, "tools", name))
+  end
+  Dir[File.join(source, "tools/lib/*.rb")].each { |path| FileUtils.cp(path, File.join(repo, "tools/lib")) }
+  File.write(File.join(repo, "tools/tests/test-alpha.sh"), "#!/bin/bash\nexit 0\n")
+  File.write(File.join(repo, "tools/tests/test-beta.sh"), "#!/bin/bash\nexit 0\n")
+  FileUtils.chmod(0o755, Dir[File.join(repo, "tools/*.sh")] + Dir[File.join(repo, "tools/tests/*.sh")])
+  File.write(File.join(repo, "tools/lib/workflow.rb"), "WORKFLOW = :base\n")
+  File.write(File.join(repo, "tools/lib/review.rb"), "REVIEW = :base\n")
+  manifest = {
+    "schemaVersion"=>1,
+    "headAllPaths"=>%w[Config/repository-tests.json tools/lib/repository-test-plan.rb tools/lib/run-repository-tests.rb tools/run-repository-tests.sh],
+    "headAllPrefixes"=>["tools/tests/"],
+    "domainRules"=>[
+      {"domain"=>"review", "paths"=>["tools/lib/review.rb"], "prefixes"=>[]},
+      {"domain"=>"workflow", "paths"=>["tools/lib/workflow.rb"], "prefixes"=>[]}
+    ],
+    "tests"=>[
+      {"path"=>"tools/tests/test-alpha.sh", "domains"=>["workflow"]},
+      {"path"=>"tools/tests/test-beta.sh", "domains"=>["review"]}
+    ]
+  }
+  File.write(File.join(repo, "Config/repository-tests.json"), JSON.generate(manifest))
+  git.call("add", ".")
+  git.call("commit", "-qm", "base")
+  base = git.call("rev-parse", "HEAD")
+  File.write(File.join(repo, "tools/lib/workflow.rb"), "WORKFLOW = :head\n")
+  git.call("add", "tools/lib/workflow.rb")
+  git.call("commit", "-qm", "targeted workflow change")
+  head = git.call("rev-parse", "HEAD")
+
+  criteria = [
+    {"id"=>"AC-1", "text"=>"UI-direction route: not-applicable; Scope: plan fixture; Reason: no UI."},
+    {"id"=>"AC-2", "text"=>"Repository-test scope: targeted; Reason: one workflow domain."}
+  ]
+  contract = {"schemaVersion"=>1, "issue"=>82, "repository"=>"example/repo", "goal"=>"Plan execution",
+    "specAnchors"=>["specs/test.md#plan"], "acceptanceCriteria"=>criteria, "dependencies"=>[],
+    "externalOperations"=>[], "externalOperationDetailsDigest"=>"sha256:#{'0' * 64}",
+    "fetchedAt"=>"2026-09-13T13:03:38Z",
+    "deliveryStage"=>{"name"=>"harden", "timeBudgetMinutes"=>60, "reason"=>"fixture"},
+    "deliveryProfile"=>{"name"=>"strict", "reason"=>"fixture"}}
+  issue_root = File.join(repo, ".artifacts/issues/82")
+  head_root = File.join(issue_root, head)
+  FileUtils.mkdir_p(head_root)
+  contract_bytes = JSON.generate(contract)
+  File.binwrite(File.join(issue_root, "issue-contract.json"), contract_bytes)
+  command = [File.join(repo, "tools/run-repository-tests.sh"), "--issue", "82", "--expected-base", base,
+    "--map", "AC-1=tools/tests/test-alpha.sh", "--map", "AC-2=tools/tests/test-alpha.sh"]
+  output, error, status = Open3.capture3(*command, chdir: repo)
+  abort "planned runner failed: #{error}" unless status.success?
+  receipt = JSON.parse(output)
+  plan_path = File.join(head_root, "repository-test-plan.json")
+  record_path = File.join(head_root, "repository-tests.json")
+  plan_bytes = File.binread(plan_path)
+  plan = JSON.parse(plan_bytes)
+  record = JSON.parse(File.binread(record_path))
+  abort "runner did not select one targeted test" unless plan.values_at("resolvedScope", "testPaths") == ["targeted", ["tools/tests/test-alpha.sh"]]
+  abort "schema v3 record differs from plan" unless record.values_at("schemaVersion", "scope") == [3, "targeted"] &&
+    record.fetch("tests").map { |entry| entry.fetch("path") } == plan.fetch("testPaths") && receipt.fetch("total") == 1
+
+  contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
+  verify = {"schemaVersion"=>1, "status"=>"passed", "changeClassification"=>"workflow-only",
+    "reason"=>"Repository tests passed.", "issue"=>82, "baseSha"=>base, "headSha"=>head,
+    "issueContract"=>{"path"=>".artifacts/issues/82/issue-contract.json", "digest"=>contract_digest},
+    "matrixFile"=>nil, "matrixDigest"=>nil, "executionRoute"=>"repository-tests", "xcode"=>nil,
+    "build"=>{"status"=>"not-applicable", "scheme"=>nil, "warningsAdded"=>nil, "project"=>nil, "sourceTree"=>nil},
+    "tests"=>{"status"=>"not-applicable", "passed"=>nil, "failed"=>nil, "skipped"=>nil}, "cases"=>[],
+    "visualEvaluation"=>{"status"=>"not-applicable", "findings"=>[]},
+    "acceptanceEvidence"=>criteria.map { |criterion| {"id"=>criterion.fetch("id"), "status"=>"passed", "evidence"=>["repository-tests.json"]} },
+    "completedAt"=>Time.now.utc.iso8601(6)}
+  File.binwrite(File.join(head_root, "verify.json"), JSON.generate(verify))
+  _, error, status = Open3.capture3(File.join(repo, "tools/prepare-review-packet.sh"), "--primary", "codex",
+    "--issue", "82", "--base-sha", base, "--head-sha", head, chdir: repo)
+  abort "planned packet failed: #{error}" unless status.success?
+  packet = JSON.parse(File.binread(File.join(head_root, "review-packet.json")))
+  abort "packet omitted planned closure" unless packet.fetch("repositoryTestPlan") == plan &&
+    packet.fetch("repositoryTestPlanFile").fetch("digest") == "sha256:#{Digest::SHA256.hexdigest(plan_bytes)}"
+  _, error, status = Open3.capture3(File.join(repo, "tools/validate-review-result.sh"), "--primary", "codex",
+    "--packet", ".artifacts/issues/82/#{head}/review-packet.json", chdir: repo)
+  abort "planned packet preflight failed: #{error}" unless status.success?
+  packet_path = File.join(head_root, "review-packet.json")
+  packet_bytes = File.binread(packet_path)
+  reviewed_at = Time.now.utc.iso8601(6)
+  review_result = {"schemaVersion"=>2, "issue"=>82, "reviewerModel"=>"claude", "baseSha"=>base,
+    "headSha"=>head, "verifySha"=>head, "issueContractDigest"=>contract_digest,
+    "reviewPacketDigest"=>"sha256:#{Digest::SHA256.hexdigest(packet_bytes)}", "verdict"=>"approved", "findings"=>[],
+    "acceptanceAssessment"=>criteria.each_with_index.map { |criterion, index|
+      {"id"=>criterion.fetch("id"), "status"=>"supported", "evidence"=>["repository-tests.json#acceptanceEvidence/#{index}"]}
+    }, "reviewedAt"=>reviewed_at}
+  result_path = File.join(scratch, "review-result.json")
+  File.binwrite(result_path, JSON.generate(review_result))
+  _, error, status = Open3.capture3("/usr/bin/ruby", File.join(repo, "tools/lib/publish-review-result.rb"),
+    repo, "82", head, result_path, packet_path, "codex", reviewed_at, Time.now.utc.iso8601(6))
+  abort "planned result publication failed: #{error}" unless status.success?
+  abort "planned publication omitted review receipt" unless File.file?(File.join(head_root, "review.json")) &&
+    File.file?(File.join(head_root, "review-receipt.json"))
+  File.binwrite(plan_path, plan_bytes + "\n")
+  _, _, status = Open3.capture3(File.join(repo, "tools/validate-review-result.sh"), "--primary", "codex",
+    "--packet", ".artifacts/issues/82/#{head}/review-packet.json", chdir: repo)
+  abort "planned packet accepted changed plan bytes" if status.success?
+end
+puts "PASS: targeted plans drive schema v3 execution and remain sealed through packet validation"
+RUBY

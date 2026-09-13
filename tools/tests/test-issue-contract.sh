@@ -458,4 +458,36 @@ rg -q '^label create agent:codex ' "$FAKE_GH_LOG"
 [[ "$(rg -c '^label list ' "$FAKE_GH_LOG")" == 2 ]] || { echo 'each model-neutral label sync did not use one repository snapshot' >&2; exit 1; }
 rg -q '^label list --repo yuto1201/iOS-Template --limit 1000 --json name,color,description$' "$FAKE_GH_LOG"
 
+# Plan-era workflow-only contracts seal policy/reason, not pre-implementation
+# exact test paths. Older sealed contracts keep their existing route.
+sed -e 's/A complete Feature Issue passes validation\./UI-direction route: not-applicable; Scope: Repository tests; Reason: No application UI changes./' \
+  -e 's/AC-2: Each AC ID is stable and unique\./AC-2: Repository-test scope: targeted; Reason: Resolve the final exact test set from immutable Base..Head inputs./' \
+  "$workspace/feature.md" > "$workspace/repository-plan-contract.md"
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/repository-plan-contract.md" --type feature --format contract \
+  --issue 82 --repo yuto1201/iOS-Template --fetched-at 2026-09-13T13:03:38Z \
+  > "$workspace/repository-plan-contract.json"
+assert_json "$workspace/repository-plan-contract.json" '
+  value=JSON.parse(File.binread(ARGV.fetch(0)))
+  abort unless value.fetch("acceptanceCriteria").fetch(1).fetch("text").start_with?("Repository-test scope: targeted; Reason:")
+'
+ruby -I"$repo_root/tools/lib" -rjson -rissue-contract -e '
+  value=JSON.parse(File.binread(ARGV.fetch(0)))
+  IOSTemplate::IssueContract.validate_snapshot!(value, issue:82, repository:"yuto1201/iOS-Template")
+' "$workspace/repository-plan-contract.json"
+
+sed 's/Repository-test scope: targeted; Reason: Resolve the final exact test set from immutable Base\.\.Head inputs\./The repository test policy is missing./' \
+  "$workspace/repository-plan-contract.md" > "$workspace/repository-plan-missing.md"
+assert_fails 'plan-era workflow-only contract requires repository-test scope' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/repository-plan-missing.md" --type feature --format contract \
+  --issue 82 --repo yuto1201/iOS-Template --fetched-at 2026-09-13T13:03:38Z
+rg -Fq 'repository-test scope declaration' "$workspace/output"
+
+sed 's/Repository-test scope: targeted; Reason: Resolve/Repository-test scope: arbitrary; Reason: Resolve/' \
+  "$workspace/repository-plan-contract.md" > "$workspace/repository-plan-unknown.md"
+assert_fails 'plan-era workflow-only contract rejects unknown repository-test scope' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/repository-plan-unknown.md" --type feature --format contract \
+  --issue 82 --repo yuto1201/iOS-Template --fetched-at 2026-09-13T13:03:38Z
+rg -Fq 'repository-test scope declaration is malformed' "$workspace/output"
+
 echo 'PASS: Issue forms, Definition of Ready validator, PR template, labels, and model-neutral label sync'

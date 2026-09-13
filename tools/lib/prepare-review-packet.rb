@@ -35,16 +35,24 @@ module IOSTemplate
         contract_file = snapshots.leaf(issue_directory, "issue-contract.json", at: "issue contract")
         verify_file = snapshots.leaf(head_directory, "verify.json", at: "verify.json")
         repository_tests_file = existing_leaf(snapshots, head_directory, "repository-tests.json", "repository-tests.json")
+        repository_test_plan_file = existing_leaf(snapshots, head_directory, "repository-test-plan.json", "repository-test-plan.json")
         contract = parse_object(contract_file.bytes, "issue contract")
         verify = parse_object(verify_file.bytes, "verify.json")
         contract_digest = ReviewContract.digest(contract_file.bytes)
         validate_inputs!(contract, verify, issue, base_sha, head_sha, contract_digest)
         repository_tests = repository_tests_file && parse_object(repository_tests_file.bytes, "repository-tests.json")
+        plan_policy = RepositoryTestPlan.policy(contract)
+        planned = plan_policy&.fetch("planRequired")
+        repository_test_plan = repository_test_plan_file && parse_object(repository_test_plan_file.bytes, "repository-test-plan.json")
+        reject("planned repository-test contract requires a canonical plan") if planned && !repository_test_plan
+        RepositoryTestPlan.validate!(repository_test_plan, repo: repo, issue: issue, base_sha: base_sha, head_sha: head_sha,
+          contract_bytes: contract_file.bytes) if repository_test_plan
         dual_revision = ReviewContract.repository_test_scope(contract.fetch("acceptanceCriteria")) == "base-and-head"
-        revision_context = dual_revision ? ReviewContract.repository_revision_context(repo: repo, base_sha: base_sha, head_sha: head_sha) : nil
+        revision_context = (dual_revision || planned) ? ReviewContract.repository_revision_context(repo: repo, base_sha: base_sha, head_sha: head_sha) : nil
         ReviewContract.validate_repository_tests!(
           repository_tests, issue: issue, base_sha: base_sha, head_sha: head_sha,
-          contract_digest: contract_digest, criteria: contract.fetch("acceptanceCriteria"), revision_context: revision_context
+          contract_digest: contract_digest, criteria: contract.fetch("acceptanceCriteria"), revision_context: revision_context,
+          repository_test_plan_bytes: repository_test_plan_file&.bytes
         ) if repository_tests
 
         image_references = ReviewContract.verified_image_references!(verify, issue: issue, head_sha: head_sha)
@@ -72,12 +80,17 @@ module IOSTemplate
           "imageFiles" => image_references
         }
         packet["repositoryTests"] = repository_tests if repository_tests
-        if dual_revision && repository_tests_file
+        if (dual_revision || planned) && repository_tests_file
           packet["repositoryTestsFile"] = {"path"=>"#{prefix}repository-tests.json", "digest"=>ReviewContract.digest(repository_tests_file.bytes)}
+        end
+        if planned && repository_test_plan_file
+          packet["repositoryTestPlan"] = repository_test_plan
+          packet["repositoryTestPlanFile"] = {"path"=>"#{prefix}repository-test-plan.json", "digest"=>ReviewContract.digest(repository_test_plan_file.bytes)}
         end
         ReviewContract.validate_repository_closure!(packet: packet, contract: contract, contract_digest: contract_digest,
           issue: issue, base_sha: base_sha, head_sha: head_sha,
-          repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context,
+          repository_tests_bytes: repository_tests_file&.bytes, repository_test_plan_bytes: repository_test_plan_file&.bytes,
+          revision_context: revision_context,
           workflow_required: verify["changeClassification"] == "workflow-only")
         packet_bytes = JSON.generate(packet).b
 
@@ -128,7 +141,7 @@ module IOSTemplate
       ensure
         snapshots.close
       end
-    rescue ReviewContract::ValidationError, ReviewSealing::SealError, KeyError, JSON::ParserError,
+    rescue ReviewContract::ValidationError, RepositoryTestPlan::PlanError, ReviewSealing::SealError, KeyError, JSON::ParserError,
            SystemCallError, IOError, Errno::ENOENT, Errno::EACCES => error
       raise PreparationError, error.message
     end

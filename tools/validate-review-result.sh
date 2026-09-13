@@ -227,14 +227,24 @@ reject("verify issue-contract reference does not match packet") unless verify["i
 begin
   repository_snapshot = nil
   repository_tests_file = nil
+  repository_test_plan_file = nil
   revision_context = nil
-  if IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head"
+  plan_policy = IOSTemplate::RepositoryTestPlan.policy(contract)
+  planned_repository_tests = plan_policy&.fetch("planRequired")
+  if IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head" || planned_repository_tests
     repository_snapshot = IOSTemplate::ReviewSealing::SnapshotSet.new(artifacts, at: "artifact root", expected_identity: artifacts_identity)
     # Keep the contract/packet and record together until this invocation exits.
     held_packet = repository_snapshot.relative_leaf("issues/#{issue}/#{head_sha}/review-packet.json", at: "review packet")
     held_contract = repository_snapshot.relative_leaf("issues/#{issue}/issue-contract.json", at: "issue contract")
     reject("packet or contract changed before repository validation") unless held_packet.bytes == packet_file.fetch(:bytes) && held_contract.bytes == contract_file.fetch(:bytes)
     repository_tests_file = repository_snapshot.relative_leaf("issues/#{issue}/#{head_sha}/repository-tests.json", at: "repository tests")
+    if planned_repository_tests
+      repository_test_plan_file = repository_snapshot.relative_leaf("issues/#{issue}/#{head_sha}/repository-test-plan.json", at: "repository test plan")
+      IOSTemplate::RepositoryTestPlan.validate!(
+        JSON.parse(repository_test_plan_file.bytes.dup), repo: repo, issue: issue,
+        base_sha: base_sha, head_sha: head_sha, contract_bytes: contract_file.fetch(:bytes)
+      )
+    end
     revision_context = IOSTemplate::ReviewContract.repository_revision_context(repo: repo, base_sha: base_sha, head_sha: head_sha)
     at_exit { repository_snapshot.close }
   end
@@ -243,7 +253,9 @@ begin
   IOSTemplate::ReviewContract.validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, false)
   IOSTemplate::ReviewContract.validate_repository_closure!(packet: packet, contract: contract, contract_digest: contract_digest,
     issue: issue, base_sha: base_sha, head_sha: head_sha,
-    repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context)
+    repository_tests_bytes: repository_tests_file&.bytes,
+    repository_test_plan_bytes: repository_test_plan_file&.bytes,
+    revision_context: revision_context)
   if schema == 2
     IOSTemplate::ReviewContract.validate_strict_closure!(
       packet: packet, packet_bytes: packet_file.fetch(:bytes), verify: verify,
@@ -252,7 +264,8 @@ begin
       actual_diff_bytes: IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: base_sha, head_sha: head_sha)
     )
   end
-rescue IOSTemplate::ReviewContract::ValidationError, IOSTemplate::ReviewSealing::SealError, SystemCallError => error
+rescue IOSTemplate::ReviewContract::ValidationError, IOSTemplate::RepositoryTestPlan::PlanError,
+       IOSTemplate::ReviewSealing::SealError, SystemCallError, JSON::ParserError => error
   reject(error.message)
 end
 
@@ -348,10 +361,12 @@ begin
     verify_bytes: verify_file.fetch(:bytes), contract_bytes: contract_file.fetch(:bytes),
     primary: primary, issue: issue, base_sha: base_sha, head_sha: head_sha,
     strict: schema == 2, diff_bytes: diff_file.fetch(:bytes), image_bytes: image_files,
-    repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context,
+    repository_tests_bytes: repository_tests_file&.bytes,
+    repository_test_plan_bytes: repository_test_plan_file&.bytes,
+    revision_context: revision_context,
     actual_diff_bytes: (schema == 2 ? IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: base_sha, head_sha: head_sha) : nil)
   )
-rescue IOSTemplate::ReviewContract::ValidationError => error
+rescue IOSTemplate::ReviewContract::ValidationError, IOSTemplate::RepositoryTestPlan::PlanError => error
   reject(error.message)
 end
 repository_snapshot&.verify!

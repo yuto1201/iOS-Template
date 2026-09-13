@@ -114,9 +114,19 @@ if packet
     IOSTemplate::ReviewContract.validate_contract!(packet_value, contract_value, contract_digest, Integer(issue_text))
     IOSTemplate::ReviewContract.validate_scope!(packet_value, contract_value)
     context = IOSTemplate::ReviewContract.repository_revision_context(repo: repo, base_sha: packet_value.fetch("baseSha"), head_sha: head_sha)
+    held_plan = nil
+    if packet_value.key?("repositoryTestPlanFile")
+      held_plan = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/repository-test-plan.json", at: "repository test plan")
+      IOSTemplate::RepositoryTestPlan.validate!(
+        JSON.parse(held_plan.bytes.dup), repo: repo, issue: Integer(issue_text),
+        base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
+        contract_bytes: held_contract.bytes
+      )
+    end
     IOSTemplate::ReviewContract.validate_repository_closure!(packet: packet_value, contract: contract_value, contract_digest: contract_digest,
       issue: Integer(issue_text), base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
-      repository_tests_bytes: held_tests.bytes, revision_context: context)
+      repository_tests_bytes: held_tests.bytes, repository_test_plan_bytes: held_plan&.bytes,
+      revision_context: context)
     IOSTemplate::ReviewContract.validate_repository_assessments!(source_value, packet_value.fetch("repositoryTests"))
     repository_snapshots.verify!
   end
@@ -199,7 +209,9 @@ repository_snapshots&.verify!
 created = false
 receipt_created = false
 puts JSON.generate({"path" => target, "sha256" => "sha256:#{Digest::SHA256.hexdigest(written)}", "size" => written.bytesize, "receiptPath" => receipt_target})
-rescue PublishError, IOSTemplate::ReviewReceipt::ValidationError, IOSTemplate::ReviewContract::ValidationError, IOSTemplate::ReviewSealing::SealError, SystemCallError, JSON::ParserError, KeyError, Errno::ENOENT, Errno::EACCES => error
+rescue PublishError, IOSTemplate::ReviewReceipt::ValidationError, IOSTemplate::ReviewContract::ValidationError,
+       IOSTemplate::RepositoryTestPlan::PlanError, IOSTemplate::ReviewSealing::SealError,
+       SystemCallError, JSON::ParserError, KeyError, Errno::ENOENT, Errno::EACCES => error
   warn "review publication failed: #{error.message}"
   exit 1
 ensure

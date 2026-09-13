@@ -6,7 +6,7 @@
 
 ## 2. Review packet
 
-`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。`repository-tests.json` が同じIssue/Headに存在する場合は、全tracked `tools/tests/test-*.sh` の結果、またはworkflow-only contractでは全AC mappingのexact union、runner bytes、実行時刻、AC別対応を検証し、`repositoryTests` としてpacket内へ値ごと封印します。workflow-only packetではrecordのtest集合とAC mappingのunionが一致しなければ拒否します。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。liveな`UI verification`本文はIssue contractにもreview packetにも含めません。
+`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。`repository-tests.json` が同じIssue/Headに存在する場合は、runner bytes、実行時刻、AC別対応を検証し、`repositoryTests` としてpacket内へ値ごと封印します。D-037 plan-required contractではcanonical `repository-test-plan.json`をimmutable Git入力から再計算し、その値／path／digestとschema v3 repository evidenceを同時に封印します。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。liveな`UI verification`本文はIssue contractにもreview packetにも含めません。
 
 UI-direction compatibility is determined only from the sealed Issue contract. A declaration candidate is any existing acceptance-criterion text that begins with the exact `UI-direction route:` prefix, immediately after its `AC-*:` ID. It is valid only in the exact form `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`, where `<route>` is exactly `comparison`, `explicit-skip`, `confirmed-direction reuse`, `bounded direction-neutral`, or `not-applicable`; route-specific facts may follow Reason. Incidental route words outside that prefix, including prose that lists every route, do not create a candidate. Compare `fetchedAt` as a UTC instant with `2026-09-06T00:31:41Z`: an earlier contract is pre-D-030 legacy only when it has zero candidates, so the packet/reviewer must not infer a route, demand retroactive HTML or a route declaration, or modify/reseal that contract; review its original sealed AC, spec anchors, Dependencies, and current-Head evidence. If an earlier contract has one or more candidates, validate it normally and reject unless exactly one candidate is fully valid; malformed, unknown-route, empty Scope/Reason, and multiple-candidate cases are not legacy. A contract at or after the cutoff has the same exactly-one and validity requirements, including rejection when no candidate exists. The packet preserves the Issue-contract path and digest needed for that classification and never substitutes Issue number, update time, file mtime, or live UI verification. For non-legacy contracts, formal reviewers identify the route only from the valid AC-text declaration and validate its Scope, Reason, and route-specific facts using the packet-bound Issue contract's Goal, Acceptance criteria, Spec anchors, Dependencies, linked confirmed spec/Decision, current-Head diff, and evidence. schema v1は通常レビューの既存成果物を読む場合に限る互換形式で、pre-merge gateは受理しません。
 
@@ -68,17 +68,21 @@ UI-direction compatibility is determined only from the sealed Issue contract. A 
 }
 ```
 
-例のパスと値は形式を示します。実際のIssue、仕様、SHA、画像を使用します。`repositoryTests` は同じHeadのcanonical `repository-tests.json` がある場合だけ存在します。reviewerは各ACについて、iOS evidenceだけでなくこのAC別test mappingも参照できます。
+例のパスと値は旧schema v1形式を示します。実際のIssue、仕様、SHA、画像を使用します。`repositoryTests` は同じHeadのcanonical `repository-tests.json` がある場合だけ存在します。plan-required packetは追加で`repositoryTestsFile`、`repositoryTestPlan`、`repositoryTestPlanFile`を持ち、reviewerはrequested／resolved scope、changed paths、exact test list、AC別mappingを確認します。
 
 ## 3. Reviewer questions
 
 ### BaseとHeadを要求するcontract
 
-sealed AC本文先頭にexact `Repository-test scope: base-and-head; `と非空の条件が一つある場合、[新repository record](../verification.md#baseとheadの全repository-tests)を必須にする。packet schemaは2を維持し、`repositoryTests`にはschema v2 record全体、`repositoryTestsFile`にはexact canonical `.artifacts/issues/ISSUE/HEAD/repository-tests.json`のpath/digestを持つ。片方だけのfield、欠落record、recordと埋め込み値の相違を受理しない。宣言なしの旧contractではschema v1 recordを引き続き受理し、旧packetへ新fieldを追加しない。
+sealed AC本文先頭にcutover前のexact `Repository-test scope: base-and-head; <nonempty>`またはcutover後のexact `Repository-test scope: base-and-head; Reason: <nonempty>`が一つある場合、[両revision repository record](../verification.md#baseとheadの全repository-tests)を必須にする。packet schemaは2を維持する。cutover前はschema v2 recordと`repositoryTestsFile`、cutover後はschema v3 recordに加えて`repositoryTestPlan`／`repositoryTestPlanFile`を持つ。欠落field、canonical bytesと埋め込み値の相違を受理しない。
 
 reviewerはordered `revisions`のBase／Head各SHAと全inventory、producerの現在Head、実行結果・時刻・timeout、AC mappingを確認する。Baseはbaseline／regressionの根拠であり、Headの新機能を実装済みと証明しない。新形式の各`supported` ACには、同じACのzero-based indexを使ったexact `repository-tests.json#acceptanceEvidence/INDEX`を含める。たとえばAC-1は`repository-tests.json#acceptanceEvidence/0`であり、別ACのmapping、存在しないpointer、prose、Headだけの参照で置き換えない。必要なiOS証拠は追加引用する。
 
 このrouteでは`strict_references!`も`repositoryTestsFile`を返す。descriptor-owning callerはそのrecordを保持し、pure `validate!`へ`repository_tests_bytes:`と、信頼済みBase／Headから独立取得した`revision_context:`を渡す。contextは`ReviewContract.repository_revision_context(repo:, base_sha:, head_sha:)`で取得し、artifactのtested SHAや自己申告inventoryから組み立てない。packet-only preflight、結果検証、result／receipt publication、最終mergeの各ownerがrecordのdescriptor・path identity・bytesを確認する。receipt schemaは変更せず、recordを含むexact packet digestへ従来どおり束縛する。
+
+### Plan-required contract
+
+cutover後のworkflow-only contractは`targeted`、`head-all`、`base-and-head`の要求scopeとReasonをsealed ACに持つ。reviewerは`repositoryTestPlan`が示すmanifest／diff digest、changed paths、resolved scope、exact test paths、ordered AC mappingsとschema v3 `repositoryTests`の実行集合が一致することを確認する。descriptor-owning callerは`strict_references!`が返す`repositoryTestsFile`と`repositoryTestPlanFile`の両方を保持し、planをimmutable Base／Head／contract／Head manifestから再計算したうえで`validate!`へ`repository_tests_bytes:`、`repository_test_plan_bytes:`、`revision_context:`を渡す。`targeted`要求が未知path、複数domain、test基盤変更により`head-all`へ昇格することは正当だが、縮小や手書きのtest選択は認めない。
 
 レビューでは次の順に確認します。
 
@@ -146,7 +150,7 @@ primary physical store; no other symlink is followed. Absolute paths, traversal,
 other Issues/Heads, nested symlinks, leaf symlinks and hardlinks are rejected.
 
 The unprefixed names `verify.json`, `review.diff`, `review-packet.json`,
-`repository-tests.json` (when included in the packet), and the packet's image
+`repository-tests.json`, `repository-test-plan.json` (when included in the packet), and the packet's image
 paths are relative to the current packet's Issue/Head directory. These explicit
 artifact aliases take precedence over same-named source files. All other paths
 are source-relative; a missing source does not trigger a search in another root.
@@ -203,7 +207,7 @@ tools/prepare-review-packet.sh \
   --head-sha "${HEAD_SHA}"
 ```
 
-producerは `/usr/bin/git diff --binary --full-index --no-ext-diff --no-textconv --no-renames` の固定形でexact Base..Head `review.diff` を生成します。verifyの `visualEvaluation.cases[].images[]` をcase/image順に平坦化したpath/digestだけが `imageFiles` です。文書例外では空配列です。verify、画像、contract、および存在するrepository test evidenceをsingle-linkかつno-followで開いたdescriptorをpublication完了まで保持し、path/inode/bytes、Git Head、actual diffをpublication前後で再検証します。`repositoryTests` はpacket内の値なので、review resultとpacketをsealする既存のexact-byte closureへそのまま含まれます。
+producerは `/usr/bin/git diff --binary --full-index --no-ext-diff --no-textconv --no-renames` の固定形でexact Base..Head `review.diff` を生成します。verifyの `visualEvaluation.cases[].images[]` をcase/image順に平坦化したpath/digestだけが `imageFiles` です。文書例外では空配列です。verify、画像、contract、repository test evidence、存在するrepository test planをsingle-linkかつno-followで開いたdescriptorをpublication完了まで保持し、path/inode/bytes、Git Head、actual diffをpublication前後で再検証します。`repositoryTests`と`repositoryTestPlan`はpacket内の値なので、review resultとpacketをsealする既存のexact-byte closureへそのまま含まれます。
 
 pre-merge gateのdescriptor-owning callerは、まず次を呼びます。
 
@@ -224,6 +228,9 @@ IOSTemplate::ReviewContract.validate!(
   contract_bytes: held_contract.bytes,
   diff_bytes: held_diff.bytes,
   image_bytes: ordered_held_image_bytes,
+  repository_tests_bytes: held_repository_tests&.bytes,
+  repository_test_plan_bytes: held_repository_test_plan&.bytes,
+  revision_context: immutable_repository_revision_context,
   actual_diff_bytes: independently_generated_base_head_diff,
   primary: primary, issue: issue, base_sha: base_sha, head_sha: head_sha,
   require_temporal_order: true

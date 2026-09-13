@@ -33,7 +33,7 @@ body:
     id: acceptance-criteria
     attributes:
       label: Acceptance criteria
-      description: "Use stable, unique IDs such as `AC-1: The regression no longer occurs`."
+      description: "Use stable, unique IDs. For workflow-only harden + strict work claimed at or after `2026-09-13T13:03:38Z`, start exactly one AC with `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`; choose targeted for one known domain, head-all for broad/test-infrastructure changes, and base-and-head only for explicit revision comparison."
     validations:
       required: true
   - type: textarea

@@ -74,6 +74,9 @@ module IOSTemplate
       "not-applicable"
     ].freeze
     UI_DIRECTION_DECLARATION_PREFIX = "UI-direction route:"
+    REPOSITORY_TEST_PLAN_CUTOFF = Time.iso8601("2026-09-13T13:03:38Z").freeze
+    REPOSITORY_TEST_SCOPES = %w[targeted head-all base-and-head].freeze
+    REPOSITORY_TEST_DECLARATION_PREFIX = "Repository-test scope:"
     SNAPSHOT_REQUIRED_KEYS = %w[
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
@@ -302,6 +305,7 @@ module IOSTemplate
         contract["deliveryStage"] = delivery_stage if delivery_stage
         contract["verification"] = verification if verification
         contract["verificationScope"] = verification_scope if verification_scope
+        validate_repository_test_scope_declaration(contract, numeric_acceptance, parsed_fetched_at, failures) if parsed_fetched_at
       end
 
       raise ValidationError, failures unless failures.empty?
@@ -639,6 +643,7 @@ module IOSTemplate
         nil
       end
       validate_ui_direction_route_declaration(criteria, fetched_at, failures) if fetched_at && criteria.is_a?(Array)
+      validate_repository_test_scope_declaration(value, criteria, fetched_at, failures) if fetched_at && criteria.is_a?(Array)
       raise ValidationError, failures unless failures.empty?
 
       value
@@ -689,6 +694,38 @@ module IOSTemplate
           failures << "malformed UI-direction route declaration in #{criterion_id || 'acceptance criterion'}: trailing assertions must be nonempty"
         end
       end
+    end
+
+    def validate_repository_test_scope_declaration(contract, criteria, fetched_at, failures)
+      declarations = criteria.select do |criterion|
+        criterion.is_a?(Hash) && criterion["text"].is_a?(String) &&
+          criterion["text"].start_with?(REPOSITORY_TEST_DECLARATION_PREFIX)
+      end
+      workflow_only = contract.dig("deliveryStage", "name") == "harden" &&
+        DeliveryProfile.effective_name(contract) == "strict" &&
+        !contract.key?("verification") && !contract.key?("verificationScope")
+
+      return if fetched_at < REPOSITORY_TEST_PLAN_CUTOFF && declarations.empty?
+      return if !workflow_only && declarations.empty?
+
+      if declarations.length != 1
+        failures << "exactly one repository-test scope declaration must appear at the start of exactly one acceptance criterion"
+        return
+      end
+
+      text = declarations.first.fetch("text")
+      if fetched_at < REPOSITORY_TEST_PLAN_CUTOFF && text.match?(/\ARepository-test scope: base-and-head; \S/)
+        return
+      end
+      match = text.match(/\ARepository-test scope: (?<scope>targeted|head-all|base-and-head); Reason: (?<reason>\S(?:.*\S)?)\z/)
+      unless match
+        failures << "repository-test scope declaration is malformed"
+        return
+      end
+      failures << "repository-test scope is not supported" unless REPOSITORY_TEST_SCOPES.include?(match[:scope])
+      failures << "repository-test scope Reason must be nonempty" if match[:reason].strip.empty?
+    rescue ArgumentError
+      failures << "repository-test workflow classification is invalid"
     end
 
     def operation_declared?(contract, operation)

@@ -34,7 +34,7 @@ body:
     id: acceptance-criteria
     attributes:
       label: Acceptance criteria
-      description: "Use stable, unique IDs. Every contract claimed at or after the `2026-09-06T00:31:41Z` cutover must have exactly one valid declaration across existing ACs: start one AC text immediately after its ID with `AC-1: UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`. `<route>` must be exactly `comparison`, `explicit-skip`, `confirmed-direction reuse`, `bounded direction-neutral`, or `not-applicable`; add selection/reuse/neutral/current-skip/non-UI facts after Reason. Incidental route words elsewhere do not count."
+      description: "Use stable, unique IDs. Every contract claimed at or after the `2026-09-06T00:31:41Z` cutover must have exactly one valid UI declaration across existing ACs: `AC-1: UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`. For workflow-only harden + strict work claimed at or after `2026-09-13T13:03:38Z`, also start exactly one AC with `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`; choose targeted for one known domain, head-all for broad/test-infrastructure changes, and base-and-head only for explicit revision comparison."
     validations:
       required: true
   - type: textarea

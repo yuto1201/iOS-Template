@@ -4921,7 +4921,8 @@ func validateWorkflowRepositoryEvidence(
         at: "workflow-only repository-test evidence"
     )
     let record = try readJSONObject(data: data, at: "workflow-only repository-test evidence")
-    guard try requireInteger(record["schemaVersion"] ?? NSNull(), at: "repositoryTests.schemaVersion") == 1,
+    let schema = try requireInteger(record["schemaVersion"] ?? NSNull(), at: "repositoryTests.schemaVersion")
+    guard [1, 2, 3].contains(schema),
           try requireString(record["status"] ?? NSNull(), at: "repositoryTests.status") == "passed",
           try requireInteger(record["issue"] ?? NSNull(), at: "repositoryTests.issue", minimum: 1) == issue,
           try requireString(record["baseSha"] ?? NSNull(), at: "repositoryTests.baseSha") == base,
@@ -4934,20 +4935,55 @@ func validateWorkflowRepositoryEvidence(
           try requireString(reference["digest"]!, at: "repositoryTests.issueContract.digest") == contractDigest else {
         throw ValidationFailure("workflow-only repository-test evidence contract differs")
     }
-    let tests = try requireArray(record["tests"] ?? NSNull(), at: "repositoryTests.tests")
-    let suite = try requireObject(record["suite"] ?? NSNull(), at: "repositoryTests.suite")
-    guard !tests.isEmpty, tests.allSatisfy({ raw in
-        guard let item = raw as? JSONObject else { return false }
-        return item["status"] as? String == "passed" && (item["exitStatus"] as? NSNumber)?.intValue == 0
-    }),
-        (suite["total"] as? NSNumber)?.intValue == tests.count,
-        (suite["passed"] as? NSNumber)?.intValue == tests.count,
-        (suite["failed"] as? NSNumber)?.intValue == 0 else {
-        throw ValidationFailure("workflow-only repository-test evidence contains a failed or empty suite")
+    func passedTestPaths(_ rawTests: Any, _ rawSuite: Any, at: String) throws -> [String] {
+        let tests = try requireArray(rawTests, at: "\(at).tests")
+        let suite = try requireObject(rawSuite, at: "\(at).suite")
+        guard !tests.isEmpty, tests.allSatisfy({ raw in
+            guard let item = raw as? JSONObject else { return false }
+            return item["status"] as? String == "passed" && (item["exitStatus"] as? NSNumber)?.intValue == 0
+        }),
+            (suite["total"] as? NSNumber)?.intValue == tests.count,
+            (suite["passed"] as? NSNumber)?.intValue == tests.count,
+            (suite["failed"] as? NSNumber)?.intValue == 0 else {
+            throw ValidationFailure("workflow-only repository-test evidence contains a failed or empty suite")
+        }
+        return try tests.enumerated().map { index, raw in
+            let item = try requireObject(raw, at: "\(at).tests[\(index)]")
+            return try requireString(item["path"] ?? NSNull(), at: "\(at).tests[\(index)].path")
+        }
     }
-    let testPaths = try tests.enumerated().map { index, raw in
-        let item = try requireObject(raw, at: "repositoryTests.tests[\(index)]")
-        return try requireString(item["path"] ?? NSNull(), at: "repositoryTests.tests[\(index)].path")
+    let scope = schema == 1 ? "head" : try requireString(record["scope"] ?? NSNull(), at: "repositoryTests.scope")
+    let testPaths: [String]
+    if scope == "base-and-head" {
+        guard schema == 2 || schema == 3 else {
+            throw ValidationFailure("workflow-only repository-test scope differs")
+        }
+        let revisions = try requireArray(record["revisions"] ?? NSNull(), at: "repositoryTests.revisions")
+        guard revisions.count == 2 else {
+            throw ValidationFailure("workflow-only repository-test revisions differ")
+        }
+        var pathsByRevision: [[String]] = []
+        for (index, raw) in revisions.enumerated() {
+            let revision = try requireObject(raw, at: "repositoryTests.revisions[\(index)]")
+            let expectedRole = index == 0 ? "base" : "head"
+            let expectedSHA = index == 0 ? base : head
+            guard try requireString(revision["role"] ?? NSNull(), at: "repositoryTests revision role") == expectedRole,
+                  try requireString(revision["testedSha"] ?? NSNull(), at: "repositoryTests revision SHA") == expectedSHA else {
+                throw ValidationFailure("workflow-only repository-test revisions differ")
+            }
+            pathsByRevision.append(try passedTestPaths(
+                revision["tests"] ?? NSNull(), revision["suite"] ?? NSNull(),
+                at: "repositoryTests.revisions[\(index)]"
+            ))
+        }
+        testPaths = pathsByRevision[1]
+    } else {
+        guard scope == "head" || (schema == 3 && ["targeted", "head-all"].contains(scope)) else {
+            throw ValidationFailure("workflow-only repository-test scope differs")
+        }
+        testPaths = try passedTestPaths(
+            record["tests"] ?? NSNull(), record["suite"] ?? NSNull(), at: "repositoryTests"
+        )
     }
     guard testPaths == testPaths.sorted(), Set(testPaths).count == testPaths.count else {
         throw ValidationFailure("workflow-only repository-test paths must be sorted and unique")
@@ -4959,10 +4995,18 @@ func validateWorkflowRepositoryEvidence(
         throw ValidationFailure("workflow-only repository-test evidence must map every acceptance criterion")
     }
     var mappedPaths: [String] = []
+    var normalizedMappings: [[String: Any]] = []
     let acceptance = try rawAcceptance.enumerated().map { index, raw in
         let entry = try requireObject(raw, at: "repositoryTests.acceptanceEvidence[\(index)]")
+        if scope == "base-and-head" {
+            _ = try requireStringArray(
+                entry["baseTests"] ?? NSNull(), at: "repositoryTests.acceptanceEvidence[\(index)].baseTests",
+                unique: true
+            )
+        }
+        let mappingKey = scope == "base-and-head" ? "headTests" : "tests"
         let paths = try requireStringArray(
-            entry["tests"] ?? NSNull(), at: "repositoryTests.acceptanceEvidence[\(index)].tests",
+            entry[mappingKey] ?? NSNull(), at: "repositoryTests.acceptanceEvidence[\(index)].\(mappingKey)",
             nonempty: true, unique: true
         )
         guard try requireString(entry["id"] ?? NSNull(), at: "repositoryTests.acceptanceEvidence[\(index)].id") == acceptanceIDs[index],
@@ -4971,6 +5015,7 @@ func validateWorkflowRepositoryEvidence(
             throw ValidationFailure("workflow-only repository-test acceptance mapping differs")
         }
         mappedPaths.append(contentsOf: paths)
+        normalizedMappings.append(["id": acceptanceIDs[index], "tests": paths])
         return [
             "id": acceptanceIDs[index], "status": "passed",
             "evidence": ["repository-tests.json#acceptanceEvidence/\(index)"]
@@ -4978,6 +5023,36 @@ func validateWorkflowRepositoryEvidence(
     }
     guard Array(Set(mappedPaths)).sorted() == testPaths else {
         throw ValidationFailure("workflow-only repository test selection differs from its AC mappings")
+    }
+    if schema == 3 {
+        let planReference = try requireObject(record["repositoryTestPlan"] ?? NSNull(), at: "repositoryTests.repositoryTestPlan")
+        try requireExactKeys(planReference, ["path", "digest"], at: "repositoryTests.repositoryTestPlan")
+        let expectedPlanPath = ".artifacts/issues/\(issue)/\(head)/repository-test-plan.json"
+        guard try requireString(planReference["path"]!, at: "repositoryTests.repositoryTestPlan.path") == expectedPlanPath else {
+            throw ValidationFailure("workflow-only repository-test plan path differs")
+        }
+        let planData = try readBoundRegularFile(
+            rootFileDescriptor: repository.rootFileDescriptor,
+            components: [".artifacts", "issues", String(issue), head, "repository-test-plan.json"],
+            at: "workflow-only repository-test plan"
+        )
+        guard try requireString(planReference["digest"]!, at: "repositoryTests.repositoryTestPlan.digest") == "sha256:\(sha256(data: planData))" else {
+            throw ValidationFailure("workflow-only repository-test plan digest differs")
+        }
+        let plan = try readJSONObject(data: planData, at: "workflow-only repository-test plan")
+        let planTests = try requireStringArray(plan["testPaths"] ?? NSNull(), at: "repositoryTestPlan.testPaths", nonempty: true, unique: true)
+        let planMappings = try requireArray(plan["acceptanceMappings"] ?? NSNull(), at: "repositoryTestPlan.acceptanceMappings")
+        guard try requireInteger(plan["schemaVersion"] ?? NSNull(), at: "repositoryTestPlan.schemaVersion") == 1,
+              try requireInteger(plan["issue"] ?? NSNull(), at: "repositoryTestPlan.issue", minimum: 1) == issue,
+              try requireString(plan["baseSha"] ?? NSNull(), at: "repositoryTestPlan.baseSha") == base,
+              try requireString(plan["headSha"] ?? NSNull(), at: "repositoryTestPlan.headSha") == head,
+              try requireString(plan["resolvedScope"] ?? NSNull(), at: "repositoryTestPlan.resolvedScope") == scope,
+              planTests == testPaths,
+              JSONSerialization.isValidJSONObject(planMappings), JSONSerialization.isValidJSONObject(normalizedMappings),
+              try JSONSerialization.data(withJSONObject: planMappings, options: [.sortedKeys]) ==
+                JSONSerialization.data(withJSONObject: normalizedMappings, options: [.sortedKeys]) else {
+            throw ValidationFailure("workflow-only repository-test plan differs from execution")
+        }
     }
     return acceptance
 }
