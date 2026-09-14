@@ -67,7 +67,7 @@ cat > "$issue_body" <<'EOF'
 
 ## Acceptance criteria
 
-- AC-1: UI-direction route: not-applicable; Scope: premerge safety fixture; Reason: this fixture validates workflow gating without changing application UI; the verified Head is current.
+- AC-1: UI-direction route: not-applicable; Scope: premerge safety fixture; Reason: this fixture validates workflow gating without changing application UI; the verified Head is current; 日本語を含むpacketも同一bytesとして保持する。
 - AC-2: Every acceptance criterion has one evidence mapping.
 
 ## Spec anchors
