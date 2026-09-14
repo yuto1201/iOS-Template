@@ -120,13 +120,13 @@ class HeldSnapshots
       refuse("#{leaf.at} descriptor identity or metadata changed") unless
         stat.file? && stat.nlink == 1 && self.class.metadata(stat) == self.class.metadata(leaf.stat)
       leaf.io.rewind
-      refuse("#{leaf.at} bytes changed while held") unless leaf.io.read == leaf.bytes
+      refuse("#{leaf.at} bytes changed while held") unless leaf.io.read.b == leaf.bytes.b
       current, current_stat = DescriptorFiles.open_regular_at(leaf.parent.io, leaf.name)
       current.binmode
       current_bytes = current.read
       current.close
       refuse("#{leaf.at} path identity or metadata changed") unless self.class.metadata(current_stat) == self.class.metadata(leaf.stat)
-      refuse("#{leaf.at} path bytes changed") unless current_bytes == leaf.bytes
+      refuse("#{leaf.at} path bytes changed") unless current_bytes.b == leaf.bytes.b
     rescue SystemCallError, IOError => error
       refuse("#{leaf.at} path identity changed: #{error.message}")
     end

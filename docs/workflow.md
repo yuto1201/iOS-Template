@@ -82,6 +82,46 @@ Phase 5で問題を見つけた場合は、問題別のRegression／harden Issue
 
 AI検証用Simulatorは必要時に作成し、使用後にdeviceとdataを削除します。同じMac全体でiPhone／iPad合計最大4台、sessionごと原則1台とし、一つのsessionのmatrixは作成、検証、証拠保存、削除確認、枠返却を逐次行います。共有枠、所有lease、異常終了回収、容量preflightの実装は#93、skillsへの統合は#88で行います。#89は#93への移植元履歴として保持します。それまでは既存lock／固定UDID契約を維持し、手動deviceや不明なdeviceを削除せず、本仕様だけで新運用が稼働済みとは報告しません。
 
+#### Phase recordとIssue binding
+
+Phase-awareなIssueは、Git管理下の`Config/releases/<release-id>/phase-records/<record-id>.json`を参照するexactly oneのAcceptance criterion宣言を持ちます。recordはschema v1のcanonical JSONで、release identifier、current revision、current scopeと、sequence順の追記履歴を保持します。新しいrecordは直前recordのhistoryをbyte-equivalentなprefixとして一件だけ追加した別pathへno-replaceで作り、提示済みrecordを上書きしません。
+
+```markdown
+- AC-N: Release-phase binding: {"phase":4,"reason":"Phase 4 consumes the approved Phase 3 result.","recordDigest":"sha256:<64 lowercase hex>","recordPath":"Config/releases/example-v1/phase-records/record-0008.json","releaseIdentifier":"example-v1","revision":3,"route":"standard","scope":["core","settings"],"workKind":"implementation"}
+```
+
+prefix後は上例と同じ9 keyを辞書順に並べた空白なしcanonical JSON objectとします。`scope`はsortedで重複のないnonempty string arrayです。`workKind`は`implementation`、`research`、`draft`、`independent`、`route`は`standard`、`existing-app`、`emergency`のいずれかです。宣言は既存のsealed `acceptanceCriteria`へそのまま保存されるため、新しいmutable contract fieldやlive guidanceへ依存しません。ClaimはBranchやworktreeを作る前に、exact Base commitのregular Git blobを読み、record digest、release、revision、scope、work kind、routeと前Phase出口を同じvalidatorで照合します。workspace上の未commit fileや別revisionの承認へ読み替えません。
+
+`implementation`は要求Phaseより前の全出口を必要とし、Phase 1、3、4、5の完了eventは`authority: user`とnonempty approval referenceを必須にします。したがってPhase 3のAI作業完了だけではPhase 4実装を開始できません。`research`と`draft`は前Phase未完了でもread-only成果として進められます。`independent`は理由を明記した非依存laneだけを許可し、依存成果の実装を迂回する分類には使いません。
+
+履歴eventは次の意味を持ちます。
+
+- `release-created`: release identity、初期revision、goal、scopeを作る。Phase出口の承認にはしない。
+- `phase-completed`: 同一revision/scopeの出口、承認主体、根拠、evidence、known defects、omitted tests、unverified、carryoversを記録する。
+- `change-classified`: `minor`はrevisionとscopeを変えず既存出口を維持する。`major`はユーザー承認、変更前後、影響spec/Issue、失効・保持証拠を記録してrevisionを一つ進め、`reopenFromPhase`以降だけを無効化する。`unclassified`は依存implementationを停止する。
+- `phase-reused`: `existing-app`または`emergency`について、現在も適用可能なpurpose／identity／ui-direction／data、対象scope、再利用理由、ユーザー承認を記録し、指定Phaseまでを再利用する。
+
+record producer／validatorは次の固定入口を使います。`append`の`--event-json`は上記eventのsequence以外を含み、producerが次sequenceとderived current revision/scopeを決定します。
+
+```sh
+ruby tools/lib/workflow-release-phase-cli.rb init \
+  --release example-v1 --revision 1 --scope-json '["core"]' \
+  --goal 'Ship the first usable flow.' --actor codex \
+  --reason 'Create the approved release unit.' --recorded-at 2026-09-14T00:00:00Z \
+  --output Config/releases/example-v1/phase-records/record-0001.json
+
+ruby tools/lib/workflow-release-phase-cli.rb append \
+  --previous Config/releases/example-v1/phase-records/record-0001.json \
+  --event-json "$EVENT_JSON" \
+  --output Config/releases/example-v1/phase-records/record-0002.json
+
+ruby tools/lib/workflow-release-phase-cli.rb validate \
+  --record Config/releases/example-v1/phase-records/record-0002.json \
+  --previous Config/releases/example-v1/phase-records/record-0001.json
+```
+
+`Release-phase binding:`宣言を持たない既存Issueは`legacy-unbound`として従来のIssue state／stage／profile gateを維持し、phase recordを合成・補完・再封印しません。新規Issue formとskillsへの標準入力追加は#88で行います。#86の証拠適用resolverと#87の不具合許容判断もこのrecordだけから推測しません。
+
 ## 3. Issue contract snapshot
 
 cutover後にClaimする新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。UI変更の3 field `UI verification`はClaim前のlive guidanceに限ります。既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持たせ、AC本文先頭を`UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、適用事実をReasonの後へ、確定anchorを`Spec anchors`、選択前提をDependenciesへ記載します。Identity bootstrapと純非UIの`UI verification`はexact `Not applicable`だけとし、scope／非UI理由をGoal／In scope等と`not-applicable`宣言へ、関連product／spec anchorを`Spec anchors`へ分けます。新しいmutable contract fieldは追加しません。選択の正本は、Issue contractへ封印される`Spec anchors`が参照する確定仕様と追記型Decisionです。pre-D-030 legacy contractにはこの新規要件を補完しません。

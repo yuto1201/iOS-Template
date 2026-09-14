@@ -173,6 +173,7 @@ workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || c
 
 git -C "$repo_root" fetch origin main >/dev/null
 base_sha=$(git -C "$repo_root" rev-parse --verify 'origin/main^{commit}') || { echo 'origin/main is not a verified commit' >&2; exit 1; }
+workflow_release_phase_gate "$repo_root" "$base_sha" "$contract_candidate" || conflict 'release Phase prerequisites are not satisfied by the sealed Base record'
 
 expected_candidates=$(printf '%s\n' "$branches" | sed '/^$/d' | sort -u)
 if [[ -n "$expected_candidates" && "$expected_candidates" != "$branch" ]]; then conflict 'Issue has a conflicting Branch candidate'; fi

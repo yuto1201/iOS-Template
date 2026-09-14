@@ -16,6 +16,10 @@ if [[ -f "$source_root/.git" ]]; then
   # Exercise current worktree edits as well as committed clean-checkout runs.
   cp "$source_root/tools/issue-state.sh" "$repo_root/tools/issue-state.sh"
   cp "$source_root/tools/lib/workflow-json.rb" "$repo_root/tools/lib/workflow-json.rb"
+  cp "$source_root/tools/lib/workflow.sh" "$repo_root/tools/lib/workflow.sh"
+  cp "$source_root/tools/lib/workflow-release-phase.rb" "$repo_root/tools/lib/workflow-release-phase.rb"
+  cp "$source_root/tools/lib/workflow-release-phase-cli.rb" "$repo_root/tools/lib/workflow-release-phase-cli.rb"
+  cp "$source_root/tools/lib/workflow-release-phase-test.rb" "$repo_root/tools/lib/workflow-release-phase-test.rb"
 fi
 primary_root="$repo_root"
 test_issue=424249
@@ -127,6 +131,51 @@ assert_json() {
   local path=$1 code=$2
   ruby -rjson -e "$code" "$path"
 }
+
+ruby "$repo_root/tools/lib/workflow-release-phase-test.rb"
+phase_cli="$repo_root/tools/lib/workflow-release-phase-cli.rb"
+phase_record="$workspace/phase-record-0001.json"
+ruby "$phase_cli" init --release template-v1 --revision 1 --scope-json '["workflow"]' \
+  --goal 'Ship the phase workflow.' --actor codex --reason 'Create a versioned record.' \
+  --recorded-at 2026-09-14T00:00:00Z --output "$phase_record" >/dev/null
+ruby "$phase_cli" validate --record "$phase_record" >/dev/null
+assert_fails 'release phase CLI cannot overwrite an existing record' ruby "$phase_cli" init \
+  --release template-v1 --revision 1 --scope-json '["workflow"]' --goal 'Duplicate.' \
+  --actor codex --reason 'Must fail.' --recorded-at 2026-09-14T00:00:00Z --output "$phase_record"
+
+phase_repo="$workspace/phase-repository"
+mkdir -p "$phase_repo/tools/lib" "$phase_repo/Config/releases/template-v1/phase-records"
+cp "$repo_root/tools/lib/workflow.sh" "$phase_repo/tools/lib/workflow.sh"
+cp "$repo_root/tools/lib/workflow-release-phase.rb" "$phase_repo/tools/lib/workflow-release-phase.rb"
+cp "$repo_root/tools/lib/workflow-release-phase-cli.rb" "$phase_repo/tools/lib/workflow-release-phase-cli.rb"
+phase_repo_record="$phase_repo/Config/releases/template-v1/phase-records/record-0001.json"
+ruby "$phase_repo/tools/lib/workflow-release-phase-cli.rb" init \
+  --release template-v1 --revision 1 --scope-json '["workflow"]' \
+  --goal 'Exercise the exact Base gate.' --actor codex --reason 'Create a Base record.' \
+  --recorded-at 2026-09-14T00:00:00Z --output "$phase_repo_record" >/dev/null
+git -C "$phase_repo" init -b main >/dev/null
+git -C "$phase_repo" config user.name 'Phase Fixture'
+git -C "$phase_repo" config user.email 'phase@example.invalid'
+git -C "$phase_repo" add .
+git -C "$phase_repo" commit -m 'phase fixture' >/dev/null
+phase_base=$(git -C "$phase_repo" rev-parse HEAD)
+phase_contract="$workspace/phase-binding-contract.json"
+RECORD="$phase_repo_record" ruby -rjson -rdigest -e '
+  value={"phase"=>1,"reason"=>"Implement the first Phase.",
+    "recordDigest"=>"sha256:#{Digest::SHA256.file(ENV.fetch("RECORD")).hexdigest}",
+    "recordPath"=>"Config/releases/template-v1/phase-records/record-0001.json",
+    "releaseIdentifier"=>"template-v1","revision"=>1,"route"=>"standard",
+    "scope"=>["workflow"],"workKind"=>"implementation"}
+  text="Release-phase binding: #{JSON.generate(value.sort.to_h)}"
+  puts JSON.generate({"acceptanceCriteria"=>[{"id"=>"AC-1","text"=>text}]})
+' > "$phase_contract"
+source "$phase_repo/tools/lib/workflow.sh"
+workflow_release_phase_gate "$phase_repo" "$phase_base" "$phase_contract"
+printf 'workspace tamper\n' > "$phase_repo_record"
+workflow_release_phase_gate "$phase_repo" "$phase_base" "$phase_contract"
+ruby -rjson -e 'path=ARGV[0]; value=JSON.parse(File.binread(path)); value["acceptanceCriteria"][0]["text"].sub!(/sha256:[0-9a-f]{64}/,"sha256:#{"0"*64}"); File.binwrite(path,JSON.generate(value))' "$phase_contract"
+assert_fails 'Claim phase gate rejects a binding whose digest differs from the Base blob' \
+  workflow_release_phase_gate "$phase_repo" "$phase_base" "$phase_contract"
 
 ruby "$repo_root/tools/lib/workflow-json.rb" state-marker approved claimed null 2026-08-24T00:00:00Z claude > "$workspace/claude-marker.txt"
 rg -Fq '"executor":"claude"' "$workspace/claude-marker.txt" || { echo 'Claude state executor was not preserved' >&2; exit 1; }

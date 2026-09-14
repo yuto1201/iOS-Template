@@ -91,14 +91,14 @@ module IOSTemplate
           leaf.io.rewind
           descriptor_bytes = leaf.io.read
           descriptor_stat = leaf.io.stat
-          raise SealError, "#{leaf.at} descriptor changed" unless metadata_equal?(leaf.stat, descriptor_stat) && descriptor_bytes == leaf.bytes
+          raise SealError, "#{leaf.at} descriptor changed" unless metadata_equal?(leaf.stat, descriptor_stat) && descriptor_bytes.b == leaf.bytes.b
           current = open_at(leaf.parent, leaf.name, leaf.at)
           current.binmode
           current_bytes = current.read
           current_stat = current.stat
           current.close
           raise SealError, "#{leaf.at} path identity changed" unless metadata_equal?(leaf.stat, current_stat)
-          raise SealError, "#{leaf.at} path bytes changed" unless current_bytes == leaf.bytes
+          raise SealError, "#{leaf.at} path bytes changed" unless current_bytes.b == leaf.bytes.b
         end
         true
       end

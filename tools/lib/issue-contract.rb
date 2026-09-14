@@ -77,6 +77,7 @@ module IOSTemplate
     REPOSITORY_TEST_PLAN_CUTOFF = Time.iso8601("2026-09-13T13:03:38Z").freeze
     REPOSITORY_TEST_SCOPES = %w[targeted head-all base-and-head].freeze
     REPOSITORY_TEST_DECLARATION_PREFIX = "Repository-test scope:"
+    RELEASE_PHASE_DECLARATION_PREFIX = "Release-phase binding:"
     SNAPSHOT_REQUIRED_KEYS = %w[
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
@@ -112,6 +113,19 @@ module IOSTemplate
     end
 
     module_function
+
+    def validate_release_phase_binding(contract, failures)
+      criteria = contract["acceptanceCriteria"]
+      return unless criteria.is_a?(Array) && criteria.any? do |criterion|
+        criterion.is_a?(Hash) && criterion["text"].is_a?(String) &&
+          criterion["text"].start_with?(RELEASE_PHASE_DECLARATION_PREFIX)
+      end
+
+      require_relative "workflow-release-phase"
+      ReleasePhase.binding_from_contract!(contract)
+    rescue ReleasePhase::ValidationError => error
+      failures << error.message
+    end
 
     # Shared producer/reconstruction interface. Callers that only validate may
     # omit snapshot metadata. Claim and live pre-merge reconstruction pass all
@@ -171,6 +185,7 @@ module IOSTemplate
       failures << "Acceptance criteria must contain at least one '- AC-*:' item" if acceptance_items.empty?
       duplicate_acceptance = acceptance_items.map { |item| item.fetch("id") }.group_by(&:itself).select { |_, items| items.length > 1 }.keys
       failures << "duplicate acceptance criteria ID: #{duplicate_acceptance.join(', ')}" unless duplicate_acceptance.empty?
+      validate_release_phase_binding({"acceptanceCriteria" => acceptance_items}, failures)
 
       spec_anchor_section = sections.fetch("Spec anchors", "")
       unless spec_anchor_section.match?(/\[[^\]]+\]\((?:<)?(?:\.\/)?specs\/[^)\s]+\.md#[^)\s]+(?:>)?\)/)
@@ -635,6 +650,7 @@ module IOSTemplate
       rescue ArgumentError => error
         failures << error.message
       end
+      validate_release_phase_binding(value, failures)
       failures << "Issue contract operation-details digest is invalid" unless value["externalOperationDetailsDigest"].is_a?(String) && value["externalOperationDetailsDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
       fetched_at = begin
         Time.iso8601(value["fetchedAt"].to_s)

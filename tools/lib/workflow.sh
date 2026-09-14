@@ -84,6 +84,42 @@ workflow_issue_has_sealed_identity() {
   return 0
 }
 
+workflow_release_phase_gate() {
+  local repo_root=$1 base_sha=$2 contract=$3
+  local record_path record_mode record_type record_oid record_file
+  record_path=$(ruby -I"$repo_root/tools/lib" -rjson -rworkflow-release-phase -e '
+    begin
+      contract=JSON.parse(File.binread(ARGV.fetch(0)))
+      binding=IOSTemplate::ReleasePhase.binding_from_contract!(contract)
+      puts binding.fetch("recordPath") if binding
+    rescue IOSTemplate::ReleasePhase::ValidationError => error
+      warn "release phase operation failed: #{error.message}"
+      exit 1
+    end
+  ' "$contract") || return 1
+  if [[ -z "$record_path" ]]; then
+    ruby "$repo_root/tools/lib/workflow-release-phase-cli.rb" gate --contract "$contract" >/dev/null
+    return
+  fi
+  read -r record_mode record_type record_oid < <(
+    GIT_NO_REPLACE_OBJECTS=1 git -C "$repo_root" ls-tree "$base_sha" -- "$record_path" |
+      RECORD_PATH="$record_path" ruby -ne 'metadata, path = $_.split("\t", 2); next unless path&.chomp == ENV.fetch("RECORD_PATH"); puts metadata'
+  )
+  [[ "$record_mode" == 100644 && "$record_type" == blob && "$record_oid" =~ ^[0-9a-f]{40,64}$ ]] || {
+    echo 'bound release phase record is not a regular Base blob' >&2
+    return 1
+  }
+  record_file=$(mktemp "${TMPDIR:-/tmp}/ios-template-release-phase.XXXXXX") || return 1
+  if ! GIT_NO_REPLACE_OBJECTS=1 git -C "$repo_root" cat-file blob "$record_oid" > "$record_file"; then
+    rm -f "$record_file"
+    return 1
+  fi
+  local status=0
+  ruby "$repo_root/tools/lib/workflow-release-phase-cli.rb" gate --contract "$contract" --record "$record_file" >/dev/null || status=$?
+  rm -f "$record_file"
+  return "$status"
+}
+
 workflow_require_issue_operation() {
   local repo_root=$1 repo=$2 issue=$3 issue_json=$4 operation=$5 authorization=${6:-sealed}
   local expected_from=${7:-} expected_to=${8:-} state
