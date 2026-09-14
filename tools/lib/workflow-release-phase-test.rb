@@ -139,6 +139,11 @@ module ReleasePhaseSelfTest
       unclassified
     )
     assert("independent work did not remain available") { independent["workKind"] == "independent" }
+    phase_four_completion = completion(4, authority: "user", actor: "yuto1201", reference: "issue-4")
+    phase_four_completion["recordedAt"] = "2026-09-14T00:11:00Z"
+    rejects("phase completion cannot bypass an unclassified change") do
+      IOSTemplate::ReleasePhase.append(unclassified, phase_four_completion)
+    end
 
     reuse_event = {
       "event" => "phase-reused",
@@ -153,6 +158,9 @@ module ReleasePhaseSelfTest
       "reason" => "Existing foundations remain applicable to this narrow urgent fix.",
       "recordedAt" => "2026-09-14T00:13:00Z"
     }
+    rejects("phase reuse cannot bypass an unclassified change") do
+      IOSTemplate::ReleasePhase.append(unclassified, reuse_event)
+    end
     reused = IOSTemplate::ReleasePhase.append(phase_one, reuse_event)
     IOSTemplate::ReleasePhase.gate!(binding(reused, route: "emergency", reason: "Use the recorded emergency reuse."), reused)
     rejects("implicit standard route over reused foundations") do

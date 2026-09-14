@@ -242,6 +242,7 @@ module IOSTemplate
           nonempty_string!(event["reason"], "release-created.reason")
         when "phase-completed"
           initialized!(current_revision)
+          reject("phase completion cannot resolve an unclassified change") if unclassified
           reject("phase completion revision is stale") unless event["revision"] == current_revision
           reject("phase completion scope differs from the current release scope") unless scope!(event["scope"], "phase completion scope") == current_scope
           number = phase!(event["phase"], "phase completion phase")
@@ -293,6 +294,7 @@ module IOSTemplate
           end
         when "phase-reused"
           initialized!(current_revision)
+          reject("phase reuse cannot resolve an unclassified change") if unclassified
           reject("phase reuse revision is stale") unless event["revision"] == current_revision
           reject("phase reuse scope differs") unless scope!(event["scope"], "phase reuse scope") == current_scope
           reject("phase reuse route is unsupported") unless REUSE_ROUTES.include?(event["route"])
