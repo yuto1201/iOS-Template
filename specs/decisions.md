@@ -367,3 +367,13 @@
 - Decision: `tools/publish-workflow-verify.sh`とその専用testを`workflow-evidence` domainへ移し、review packet／result／receipt／renderer／premergeの変更だけでは選択しない。publisherまたはtest自身を変更した場合は両方を同じdomainから必ず選択する。
 - Consequence: #93の次HeadではGrok reviewとSimulator lifecycleに対応する24件を維持し、未変更publisher testだけを除く。旧Headのtimeoutと単体診断成功を保持し、失敗を成功へ読み替えたり同一Headで無条件再実行したりしない。
 - Related Issue: #93
+
+## D-044: Authority policyとUI directionの回帰domainを分離する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: None。D-042の専用domain原則を補足し、provider実装変更時のprovider-security testsとUI direction変更時の専用testは維持する。
+- Context: `docs/AUTHORITY.md`の反対モデルreview節だけを変更しても、secret-storeとSupabaseを含むprovider-security全体が選ばれていた。また一般的な仕様変更だけで未変更のUI Direction skill testが選ばれ、#93の受け入れ範囲と一致しない小さな実行が累積していた。
+- Decision: authority文書は`authority-policy`へ分離し、account／target所有規則を検査するprovider ownership testを対応付ける。`Config/ownership.yml`、provider preflight、security／secret実装は従来の`provider-security`へ残す。UI Direction skillと専用testは`ui-direction`へ分離し、一般仕様の`specification`変更だけでは選択しない。
+- Consequence: #93ではGrok review authorityの回帰を保持しつつ、変更していないprovider実装3件とUI Direction testを除く。将来それらのproducer／skill／testを変更した場合は各専用domainから再び選択され、未知pathを黙って省略しない。
+- Related Issue: #93

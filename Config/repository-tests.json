@@ -16,6 +16,11 @@
       ]
     },
     {
+      "domain": "authority-policy",
+      "paths": ["docs/AUTHORITY.md"],
+      "prefixes": []
+    },
+    {
       "domain": "bootstrap-assets",
       "paths": [
         "tools/bootstrap-app.sh",
@@ -140,7 +145,6 @@
       "domain": "provider-security",
       "paths": [
         "Config/ownership.yml",
-        "docs/AUTHORITY.md",
         "docs/security.md",
         "tools/github-account-preflight.sh",
         "tools/provider-preflight.sh"
@@ -198,6 +202,11 @@
         ".github/ISSUE_TEMPLATE/",
         "specs/"
       ]
+    },
+    {
+      "domain": "ui-direction",
+      "paths": [],
+      "prefixes": [".agents/skills/ui-direction/"]
     },
     {
       "domain": "workflow-evidence",
@@ -260,7 +269,7 @@
     {"path": "tools/tests/test-merge-issue.sh", "domains": ["merge-publication"]},
     {"path": "tools/tests/test-premerge-gate.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-prerequisites.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-provider-ownership.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-provider-ownership.sh", "domains": ["authority-policy", "provider-security"]},
     {"path": "tools/tests/test-provider-preflight.sh", "domains": ["provider-security"]},
     {"path": "tools/tests/test-render-pr-body.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["repository-testing"]},
@@ -273,7 +282,7 @@
     {"path": "tools/tests/test-simulator-resolver.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-spec-state.sh", "domains": ["specification"]},
     {"path": "tools/tests/test-supabase-skill.sh", "domains": ["provider-security"]},
-    {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["specification"]},
+    {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["ui-direction"]},
     {"path": "tools/tests/test-verification-contract.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-visual-review"]},
     {"path": "tools/tests/test-workflow-e2e.sh", "domains": ["workflow-state"]},
