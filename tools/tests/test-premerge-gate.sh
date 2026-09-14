@@ -588,8 +588,22 @@ write_review
 ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["unexpected"] = true; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
 assert_fails 'review result schema extension is rejected' run_gate
 write_review
-ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["findings"] = [{"severity" => "low", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "nonblocking", "evidence" => "fixture", "requiredChange" => "clarify"}]; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
-assert_fails 'approved review with findings is rejected' run_gate
+ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["findings"] = [{"severity" => "low", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "nonblocking", "evidence" => "fixture", "requiredChange" => "clarify"}, {"severity" => "low", "category" => "maintainability", "file" => "README.md", "line" => 1, "title" => "another nonblocking improvement", "evidence" => "fixture", "requiredChange" => "consider later"}]; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
+write_receipt
+run_gate >/dev/null
+"$issue_worktree/tools/render-pr-body.sh" --issue 42 --head-sha "$head_sha" > "$scratch/pr-body-low.md"
+grep -Fq 'Blocking findings: `0`' "$scratch/pr-body-low.md"
+grep -Fq 'Non-blocking findings: `2`' "$scratch/pr-body-low.md"
+for severity in critical high medium; do
+  write_review
+  SEVERITY="$severity" ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["findings"] = [{"severity" => ENV.fetch("SEVERITY"), "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "blocking", "evidence" => "fixture", "requiredChange" => "fix"}]; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
+  write_receipt
+  assert_fails "approved review with $severity finding is rejected" run_gate
+done
+write_review
+ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value.fetch("acceptanceAssessment").first["status"] = "unsupported"; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
+write_receipt
+assert_fails 'approved review with an unsupported criterion is rejected' run_gate
 write_review
 future_review_at=$(timestamp 600)
 FUTURE="$future_review_at" ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["reviewedAt"] = ENV.fetch("FUTURE"); File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"

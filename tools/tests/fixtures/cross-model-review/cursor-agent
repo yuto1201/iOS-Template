@@ -22,6 +22,14 @@ packet_path = prompt[/Validated review packet:\s*(\S+)/, 1] or abort "packet mis
 reviewed_at = prompt[/reviewedAt to exactly (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/, 1] or abort "reviewedAt missing"
 Time.iso8601(reviewed_at)
 packet = JSON.parse(File.binread(packet_path))
+findings = if File.exist?(File.join(ENV.fetch("HOME"), "low-finding"))
+  [{
+    "severity" => "low", "category" => "maintainability", "file" => "README.md", "line" => 1,
+    "title" => "Nonblocking Grok improvement", "evidence" => "fixture", "requiredChange" => "clarify later"
+  }]
+else
+  []
+end
 result = {
   "schemaVersion" => packet.fetch("schemaVersion"),
   "issue" => packet.fetch("issue"),
@@ -31,7 +39,7 @@ result = {
   "verifySha" => packet.fetch("verifySha"),
   "issueContractDigest" => packet.fetch("issueContract").fetch("digest"),
   "verdict" => "approved",
-  "findings" => [],
+  "findings" => findings,
   "acceptanceAssessment" => packet.fetch("acceptanceCriteria").each_with_index.map do |entry, index|
     {"id" => entry.fetch("id"), "status" => "supported", "evidence" => ["verify.json#acceptanceEvidence/#{index}"]}
   end,

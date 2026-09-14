@@ -616,7 +616,7 @@ module IOSTemplate
       reject("result.reviewedAt must be after verify.completedAt") if require_temporal_order && reviewed_at <= completed_at
       reject("result.reviewedAt is implausibly in the future") if reviewed_at > now + 300
       if verdict == "approved"
-        reject("approved result must have no findings") unless findings.empty?
+        reject("approved result may contain only low-severity findings") unless findings.all? { |finding| finding["severity"] == "low" }
         reject("approved result must support every acceptance criterion") unless assessments.all? { |entry| entry["status"] == "supported" }
       else
         blocking = findings.any? { |finding| %w[critical high medium].include?(finding["severity"]) } || assessments.any? { |entry| entry["status"] == "unsupported" }
