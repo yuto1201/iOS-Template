@@ -232,7 +232,26 @@ if ! ruby -rjson - "$raw_output" "$normalized_output" <<'RUBY'
 raw, normalized = ARGV
 value = JSON.parse(File.binread(raw))
 if value.is_a?(Hash) && value["result"].is_a?(String) && !value.key?("schemaVersion")
-  value = JSON.parse(value.fetch("result"))
+  result = value.fetch("result")
+  begin
+    value = JSON.parse(result)
+  rescue JSON::ParserError
+    candidates = []
+    result.each_byte.with_index do |byte, index|
+      next unless byte == 123
+      begin
+        parsed = JSON.parse(result.byteslice(index..-1))
+        prefix = result.byteslice(0, index).dup.force_encoding(Encoding::UTF_8)
+        next unless parsed.is_a?(Hash) && prefix.valid_encoding? && prefix.bytesize <= 16_384 && !prefix.include?("\0")
+        next if prefix.include?("{") || prefix.include?("}")
+        candidates << parsed
+      rescue JSON::ParserError
+        next
+      end
+    end
+    raise JSON::ParserError, "provider result does not contain one unambiguous terminal JSON object" unless candidates.length == 1
+    value = candidates.first
+  end
 end
 File.binwrite(normalized, JSON.generate(value))
 RUBY

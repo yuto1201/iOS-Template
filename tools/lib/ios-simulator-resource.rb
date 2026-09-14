@@ -351,7 +351,10 @@ module IOSTemplate
       end
       live_matches = live_devices.select { |device| device["udid"] == udid }
       if live_matches.empty?
-        finish_release!(record, reason: "already-absent") unless dry_run
+        unless dry_run
+          raise SimulatorResourceError, "owned Simulator data path remains after the device disappeared" unless data_path_absent?(record["dataPath"])
+          finish_release!(record, reason: "already-absent")
+        end
         return
       end
       raise SimulatorResourceError, "owned Simulator UDID is ambiguous" unless live_matches.length == 1
@@ -373,10 +376,7 @@ module IOSTemplate
       run_simctl("delete", udid)
       remaining = live_devices.select { |device| device["udid"] == udid }
       raise SimulatorResourceError, "simctl delete returned but the owned Simulator is still listed" unless remaining.empty?
-      data_path = record["dataPath"]
-      if data_path && File.exist?(data_path)
-        raise SimulatorResourceError, "owned Simulator data path remains after simctl delete"
-      end
+      raise SimulatorResourceError, "owned Simulator data path remains after simctl delete" unless data_path_absent?(record["dataPath"])
       finish_release!(record, reason: reason)
     rescue SimulatorResourceError
       record["status"] = "cleanup-failed"
@@ -384,16 +384,27 @@ module IOSTemplate
     end
 
     def finish_release!(record, reason:)
+      raise SimulatorResourceError, "owned Simulator data path absence could not be confirmed" unless data_path_absent?(record["dataPath"])
       free_after = available_bytes
       record["status"] = "released"
       record["releasedAt"] = timestamp
       record.fetch("freeSpace")["afterDeleteBytes"] = free_after
       record["cleanup"] = {
         "status" => "passed", "reason" => reason, "deviceAbsent" => true,
-        "dataPathAbsent" => record["dataPath"].nil? || !File.exist?(record["dataPath"]),
+        "dataPathAbsent" => true,
         "observedAt" => timestamp
       }
       add_event(record, "released", "reason" => reason)
+    end
+
+    def data_path_absent?(path)
+      return true if path.nil?
+      File.lstat(path)
+      false
+    rescue Errno::ENOENT, Errno::ENOTDIR
+      true
+    rescue SystemCallError
+      raise SimulatorResourceError, "owned Simulator data path absence could not be verified"
     end
 
     def unique_live_device!(record, udid:)

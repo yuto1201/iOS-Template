@@ -112,6 +112,18 @@ device_count() {
   jq -r '[.devices[] | .[]] | length' "$simctl_state"
 }
 
+drop_device_listing_keep_data() {
+  ruby -rjson - "$simctl_state" "$1" <<'RUBY'
+path, udid = ARGV
+state = JSON.parse(File.read(path))
+entries = state.fetch("devices").values.flatten
+device = entries.find { |entry| entry.fetch("udid") == udid } or abort "fixture device missing"
+state.fetch("devices").each_value { |bucket| bucket.delete_if { |entry| entry.fetch("udid") == udid } }
+File.write(path, JSON.generate(state))
+puts device.fetch("dataPath")
+RUBY
+}
+
 allocations=()
 sessions=()
 for index in 1 2 3 4; do
@@ -208,6 +220,19 @@ release_allocation retry-session "$retry_two" >/dev/null
 release_allocation retry-session "$retry_two" >/dev/null
 [[ "$(active_count)" == 0 && "$(device_count)" == 0 ]]
 
+absent_release="$(allocate absent-release-session absent-release-attempt iphone-ja)"
+IFS=$'\t' read -r absent_release_id absent_release_udid _ <<<"$absent_release"
+absent_release_data="$(drop_device_listing_keep_data "$absent_release_udid")"
+[[ -d "$absent_release_data" && "$(device_count)" == 0 ]]
+if release_allocation absent-release-session "$absent_release_id" >/dev/null 2>"$scratch/absent-release.err"; then
+  echo "device absence with residual data released its slot" >&2; exit 1
+fi
+grep -Fq 'data path remains after the device disappeared' "$scratch/absent-release.err"
+[[ "$(active_count)" == 1 && -d "$absent_release_data" ]] || { echo "residual data cleanup failure released its slot" >&2; exit 1; }
+rm -rf -- "$absent_release_data"
+release_allocation absent-release-session "$absent_release_id" >/dev/null
+[[ "$(active_count)" == 0 && "$(device_count)" == 0 ]]
+
 sleep 30 &
 orphan_owner=$!
 orphan="$(allocate orphan-session orphan-attempt ipad-ja "$orphan_owner")"
@@ -216,6 +241,20 @@ kill "$orphan_owner"
 wait "$orphan_owner" 2>/dev/null || true
 dry_run_before="$("${manager[@]}" recover "${common[@]}" --dry-run)"
 [[ "$(jq -r '.recoveryCandidates | length' <<<"$dry_run_before")" == 1 && "$(device_count)" == 1 ]]
+"${manager[@]}" recover "${common[@]}" >/dev/null
+[[ "$(active_count)" == 0 && "$(device_count)" == 0 ]]
+
+sleep 30 &
+absent_orphan_owner=$!
+absent_orphan="$(allocate absent-orphan-session absent-orphan-attempt ipad-ja "$absent_orphan_owner")"
+IFS=$'\t' read -r absent_orphan_id absent_orphan_udid _ <<<"$absent_orphan"
+kill "$absent_orphan_owner"
+wait "$absent_orphan_owner" 2>/dev/null || true
+absent_orphan_data="$(drop_device_listing_keep_data "$absent_orphan_udid")"
+"${manager[@]}" recover "${common[@]}" >/dev/null
+[[ "$(active_count)" == 1 && -d "$absent_orphan_data" ]] || { echo "orphan recovery released residual Simulator data" >&2; exit 1; }
+[[ "$(jq -r --arg id "$absent_orphan_id" '.allocations[] | select(.allocationId == $id) | [.status, .cleanup.status] | join(":")' "$state_root/state-v1.json")" == cleanup-failed:failed ]]
+rm -rf -- "$absent_orphan_data"
 "${manager[@]}" recover "${common[@]}" >/dev/null
 [[ "$(active_count)" == 0 && "$(device_count)" == 0 ]]
 

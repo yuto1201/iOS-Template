@@ -387,3 +387,23 @@
 - Decision: 固定Grok launcherは、packetとsealed evidence、exact diffの変更production code／対応test、具体的不一致がある場合だけの追加source、という順で一回のbounded passを480秒以内に終えるよう指示する。launcherがpacket bytesからresult identityと全ACのexact evidence reference scaffoldを決定論的に提示するが、verdict、finding、supported／unsupportedはreviewerだけが決める。時間内に支持できないACは探索継続ではなくvalidなchanges-requestedと具体的findingで返す。
 - Consequence: 外側600秒watchdogには結果の返却・検証余地が残る。scaffoldの改ざん、誤った判断、schema不一致、timeout、writeは従来どおり承認にならず、ユーザー承認済みGrok以外へfallbackしない。#93は新Headでcanonical targeted evidenceを作り直してから一度だけ正式reviewを再実行する。
 - Related Issue: #93
+
+## D-046: Device消失後もdata path消失までSimulator枠を保持する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: D-040の`already-absent`を、device一覧だけでなく記録済みdata pathの消失確認まで明確化する。他の所有identity、最大4台、session 1台、逐次実行境界は維持する。
+- Context: #93のGrok正式reviewは、owned UDIDが`simctl list`から消えた一方で記録済みdata pathが残ると、`cleanup_record!`が`finish_release!`を呼び、`dataPathAbsent: false`のままcleanup passed／releasedとして枠を返せることを指摘した。通常のdelete直後だけはdata pathを確認していたため、二重releaseと孤児回収のalready-absent経路に欠落があった。
+- Decision: `finish_release!`自体がno-followのpath存在確認を行い、data pathが残る、symlink等が存在する、またはabsenceを確認できない場合は`cleanup-failed`として枠を保持する。device一覧から消えている場合も同じ確認を通し、path消失後だけ`already-absent`の冪等成功を許可する。
+- Consequence: releaseとorphan recoveryの両方へ「device不在かつdata残留」のproduction-entry testを追加し、失敗中のactive count保持、残留理由、path消失後の安全な再開を確認する。device名や一覧だけでdata削除を推測しない。
+- Related Issue: #93
+
+## D-047: Cursor進捗prefixから唯一の末尾Resultだけを正規化する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: D-041のprovider envelope正規化を、Cursorが`result`先頭へ進捗文を集約する実挙動に限定して補足する。完全schema、finding非改変、receipt、失敗時blockedは維持する。
+- Context: #93のbounded Grok reviewは時間内に具体的なchanges-requested Resultを返したが、その前へ日本語の進捗文が連結され、内側文字列全体のJSON parseに失敗した。手作業でsuffixをコピーするとreview provenanceを失う一方、完全な最終objectを機械的に一意抽出できる境界が必要だった。
+- Decision: provider envelopeの`result`全体がJSONでない場合、各`{`から末尾までをparseし、16 KiB以下のvalid UTF-8 prefixがbrace／NULを含まず、末尾に完全なJSON object候補がexactly oneだけ存在するときに限りそのobjectを正規化する。その後は既存のIssue／Base／Head／digest／reviewer／finding／全AC evidence validatorを一切省略しない。
+- Consequence: progress prefix、raw envelope、telemetryはartifactへ保存しない。複数object、途中object、trailing prose、不正UTF-8、過大prefix、schema不一致はcanonical review／receiptを発行せず`blocked:review`のままとし、主agentがverdictやfindingを修正しない。
+- Related Issue: #93

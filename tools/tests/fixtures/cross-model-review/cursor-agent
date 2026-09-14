@@ -38,5 +38,7 @@ result = {
   "reviewedAt" => reviewed_at
 }
 result["reviewPacketDigest"] = "sha256:#{Digest::SHA256.file(packet_path).hexdigest}" if packet.fetch("schemaVersion") == 2
-puts JSON.generate({"result" => JSON.generate(result)})
+payload = JSON.generate(result)
+payload = "Reviewing the sealed packet before returning the final result.\n#{payload}" if File.exist?(File.join(ENV.fetch("HOME"), "narrate"))
+puts JSON.generate({"result" => payload})
 RUBY
