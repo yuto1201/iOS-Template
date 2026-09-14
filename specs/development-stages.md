@@ -1,12 +1,12 @@
 # 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 2.2
-Date: 2026-09-13
+Version: 3.0
+Date: 2026-09-14
 
 ## 1. 原則
 
-開発順序は、必要な場合に比較案からUI方向を確定する、操作可能な形を作る、実画面で方向性を再確認する、問題別に品質を固める、リリース候補を完全検証する、の順とする。最終品質は下げず、高コストな横断検証を変更が収束した後へ移す。
+開発順序は、必要な場合に比較案からUI方向を確定する、操作可能な形を作る、実画面で方向性を再確認する、問題別に品質を固める、リリース候補を完全検証する、の順とする。この順序を§1.5のリリース単位の6フェーズへ配置し、最終品質は下げず、高コストな横断検証を変更が収束した後へ移す。
 
 Delivery stageはIssue type、workflow state、危険度を表すDelivery profileとは別の一項目である。新規Issueは`shape`、`harden`、`release`のいずれか、正のTime budget、理由を持つ。
 
@@ -71,6 +71,65 @@ Gateが止めるのは方向選択に依存するUI作業だけである。Ident
 選択待ちは`blocked:user`とする。選択後、この記録は専用Issue、Branch、PRでマージする。記録PRが未マージなら依存するUI Issueは`blocked:dependency`であり、`approved`への移行、Claim、`in-progress`への移行を禁止する。選択前に依存Issueを下書きすることはできるが、実装開始の根拠にはできない。
 
 HTML、screenshot、concept IDは判断補助であり、製品仕様、pixel仕様、SwiftUI source、またはcanonical iOS検証証拠ではない。SwiftUI実装は選択されたinformation hierarchy、flow、state intentをnative component、Safe Area、可変layout、Dynamic Type、VoiceOver、keyboard、navigation／sheet semanticsへ翻訳し、HTMLを`WKWebView`で組み込んだりCSS pixelを転記したりしない。動作と表示の完了は、引き続き現在HeadのBuild、Test、SimulatorおよびDelivery stageに応じたnative証拠で判断する。
+
+## 1.5 リリース単位の6開発フェーズ
+
+開発フェーズはアプリ全体へ一度だけ適用する工程ではなく、MVPまたは「この能力を利用可能にして公開する」という一つのリリース目標ごとに適用する。各リリース単位は、安定した識別子、目的、対象利用者、成功条件、対象／対象外、現在revision、現在phase、依存Issue、ユーザー承認、証拠参照、未解決事項と繰越先を追跡する。
+
+Phaseはリリース目標の進捗を表す。個々のIssueに付けるDelivery stage、危険度を表すDelivery profile、端末・言語のVerification scope、GitHub workflow stateとは別軸である。同じPhase内に複数の`shape`／`harden` Issueを持て、Phase 5〜6の実候補を扱う`type:release` Issueは両Phaseをまたいでよい。Phase番号だけからIssueの検証範囲やrelease readinessを推測しない。
+
+### 1.5.1 Phaseの入口・作業・出口
+
+| Phase | 入口 | 作業と成果物 | 出口 |
+| --- | --- | --- | --- |
+| 1 目的・リリース仕様 | リリース候補となる課題または到達目標がある | 対象利用者、課題、MVP／成功条件、対象／対象外、主要導線、データ方針、収益化・外部連携の採否、安全・法務上の制約、未決事項、依存／候補Issueを一つのrelease briefへ記録する | 受け入れ条件を変える未決事項がなく、ユーザーが対象scopeと目標revisionを明示承認する |
+| 2 基盤・UI方向 | Phase 1が完了し、承認済みrelease briefを参照できる | Identity bootstrap、データ／構成設計、依存Issueを整える。新規アプリはIdentity確定後にApp Iconの2案から1案を明示選択する。UI Direction Gate対象は同一briefのHTML 2〜3案から方向を確定し、仕様とDecisionを先にmergeする | 必要な基盤と依存が完了し、対象UIのroute、確定anchor、未実装範囲が明示される。HTML選択だけをnative検証済みとは扱わない |
+| 3 日本語iPhone開発 | Phase 2が完了し、日本語iPhoneで実装するIssueがDefinition of Readyを満たす | 小さなIssue単位で主要機能を実装し、Build、重要Unit Test、日本語iPhoneの主要導線Smokeを行う。安定した文字列key、可変layout、iPad target、既存英語resourceを壊さず、英語／iPadの完成作業はPhase 4へ残せる | AIが主要タスク、現在Headの実行証拠、既知不具合、未検証、繰越を提示し、ユーザーが対象release revisionのPhase 3完了を明示判断する |
+| 4 英語・iPad対応 | Phase 3についてユーザーの完了判断が記録されている | 英訳、locale／日付／数値、iPadのlayout／navigation、対象範囲のaccessibility適応を独立したIssueで仕上げる。Phase 3の機能追加と混ぜず、必要な対象Testとcaseだけを実行する | 承認済みscopeの英語・iPad対応と残件が揃い、ユーザーが品質確認へ進むrevisionを明示判断する |
+| 5 品質保証 | Phase 4が完了し、評価する候補artifact、source Head、config、対象scopeを同定できる | 日本語／英語×iPhone／iPad、回帰、Light／Dark、Dynamic Type、VoiceOver、44pt、目視、主要性能、保存復旧、個人情報、反対モデルreviewを適用可能な範囲で実行する。時間を区切り、既知不具合、テスト省略、未検証を別々に分類する | 必須公開blockerがなく、失敗・省略・未検証が可視化され、非blocking残件と回避策をユーザーが対象releaseについて承認する |
+| 6 リリース | Phase 5の承認済み候補と、提出／公開の対象・権限・必要な明示承認が揃う | artifactとsource／config／SDK／signingの対応、提出固有の検証、素材、metadata、privacy／法務、公開操作を確認する。同じ候補へ適用可能なPhase 5証拠は再実行せず参照する | 許可された提出／公開操作の実応答をreadbackし、成功、部分成功、失敗、未実行と次releaseへの繰越を記録する |
+
+前Phaseが未完了なら、その成果に依存する次Phaseの実装を開始しない。ただしread-only調査、選択肢整理、Issue草案、依存しない作業は先行できる。先行結果は完了証拠や承認として扱わず、依存が満たされた時点で現行revisionへ再照合する。Phase 4はPhase 3の一部ではなく独立した仕上げPhaseであり、英語／iPad実装はPhase 3完了判断より前に先取りしない。
+
+### 1.5.2 ユーザー判断と委任
+
+最終決定権は常にユーザーにある。ユーザー承認を必須とするのは、少なくともPhase 1、3、4、5の出口、公開範囲、目的・MVP・主要flow・採用system・重大riskを変えるrevisionである。承認はrelease identifier、revision、scope、判断内容、時刻へ束縛し、沈黙や別revisionへの承認を転用しない。
+
+AIは承認済みscope内で、文言の微修正、余白、同一flow内の小さな操作改善、内部実装、対象Testの選定、狭い不具合修正、Issue分割を判断できる。判断根拠と結果はhandoffへ残す。外部公開、法務、課金、破壊的変更、契約で別承認を要求する操作を委任と推測しない。
+
+### 1.5.3 アジャイル修正と部分再gate
+
+Phase 1〜3の軽微な修正は、目的、MVP境界、主要hierarchy／flow、採用system、data互換性、重大riskを変えず、既存Acceptance criteria内に収まる場合に同じPhaseで継続できる。例として、承認済み文言の明確化、余白調整、同じ保存契約内の内部refactor、既存主要導線の局所的なcrash修正は全面的なPhase巻き戻しを要求しない。
+
+目的、対象利用者、MVPの追加／削除、主要navigation／information hierarchy、primary flow、永続化形式、認証／課金／外部systemの採否、privacy／法務、安全上の重大riskが変わる場合はmajor changeである。変更前後と影響範囲を記録し、影響する最も早いPhaseだけをreopenedとしてユーザー判断へ戻す。影響しないPhase／Issueは停止しない。
+
+具体例として、Phase 3でラベル文言だけを直す場合はPhase 3内で継続する。必須onboardingを追加する場合はPhase 1のMVP範囲とPhase 2のUI方向を再承認し、依存するPhase 3実装だけを戻す。Phase 5で保存不具合を発見した場合は狭い実装／harden Issueへ戻り、修正で失効した証拠だけを再取得してPhase 5を再開する。全Phaseを機械的に未完了へ戻さない。
+
+### 1.5.4 Revision、証拠、不具合
+
+release revisionを変える記録は追記型とし、少なくとも変更前、変更後、理由、判断者または委任根拠、影響する仕様／Issue／Phase、失効する証拠、再利用する証拠と根拠、繰越、記録時刻を持つ。過去のDecisionとsealed Issue contractを上書きしない。同一Issue contractの正式revision経路が実装されるまでは、既存contractを改訂・再封印したと報告しない。
+
+品質証拠は同一candidate artifact、source Head、config、SDK／signing context、scopeに対してだけ適用可能性を評価する。Head変更時に旧証拠を現Headの実行結果として付け替えない。changed pathsと依存関係から影響がないことを説明できる証拠だけを再利用候補とし、不明なら検証範囲を拡大する。設定や署名変更を一律に無害としない。Phase 5と6で同じ候補を扱う場合は、適用可能な証拠を参照して重複実行を避けるが、#86の検証・再利用機構が実装されるまでは、この仕様だけを根拠にcanonical証拠を再利用・改訂しない。
+
+既知不具合、意図的なテスト省略、未検証は別の状態として記録し、成功へ読み替えない。許容候補には対象release、影響、回避策、修正費用、承認者、追跡Issue、再評価時点を記録する。データ消失、秘密漏洩、誤課金、重大な金額／日時計算誤り、主要導線crash、認証／privacy／法務の必須条件違反は公開blockerであり、軽微な残件として許容しない。
+
+品質確認は有限のTime budgetで行う。時間超過時は同じ長時間検証を自動反復せず、対象縮小、Issue分割、延期、未検証の明示、またはユーザー判断へ移る。安全条件を失敗した状態で時間節約を理由に公開へ進まない。
+
+### 1.5.5 既存アプリと緊急修正
+
+既存アプリの緊急修正は、確定済みの目的、Identity、UI方向、基盤を現在も適用可能と説明できる範囲で再利用し、影響する最も早いPhaseから開始できる。毎回Phase 1からやり直したり、変更と無関係なApp Icon／HTML比較を繰り返したりしない。一方、Issue、Branch、PR、現在Headの対象Test、安全確認、必要なreview／外部操作承認は省略しない。修正後に得た一般的な改善は、次releaseのPhase 1またはテンプレート改善Issueへ戻す。
+
+### 1.5.6 AI検証用Simulatorの資源契約
+
+全PhaseのAI検証用iPhone／iPad Simulatorは必要時に作成し、最終使用後にdeviceとそのdataを削除する使い捨て資源とする。停止またはeraseだけを削除完了とせず、device一覧とdata残留を確認してから利用枠を返す。成功、失敗、timeout、cancel、部分作成失敗をcleanup対象とし、強制終了で回収できなかったowned deviceはdurable記録から次回起動時に回収する。
+
+同じMacの全application、repository、worktree、AI sessionを合計して、作成中の予約、作成済み、一時Shutdown、削除待ちを含むiPhone／iPad Simulatorを最大4台とする。4台は上限であって常設poolや稼働目標ではない。一つのsessionが同時に作成・保持できるdeviceは原則1台であり、子process／test workerは親sessionの枠を継承する。例外は対象と理由についてユーザーの明示判断を得るが、Mac全体の4台上限は引き上げない。
+
+作成前にMac共通枠とsession枠を原子的に取得する。5台目または同一sessionの2台目は作成せず、取消可能かつ有限の待機にする。空き容量／memoryが不足する場合は4台未満でも新規作成と長時間検証を止め、現在のユーザー資源を削除して枠を作らない。同一sessionの日本語／英語×iPhone／iPad条件は、device作成、検証、必要証拠のdevice外保存、削除確認、枠返却を一条件ずつ行う。
+
+削除対象は作成記録、exact UDID、repository／worktree／session／run owner、lease、非活動状態を照合できるdeviceだけとする。手動device、他owner、使用中、不明なdeviceを削除せず、名前やShutdown状態だけで所有を推測しない。蓄積済みdeviceはinventoryとdry-runで候補を示し、所有と未使用を証明できる対象だけを回収する。Runtime、Xcode、共通cache、ユーザーのDerivedData、canonical evidenceを一括削除しない。検証前後の空き容量と残留数を記録し、削除失敗は未回収として報告する。
+
+この資源契約の実装は#89、skills／既存Issue移行は#88で行う。それまでは既存の固定UDID、repository単位lock、matrix証拠を維持し、本仕様の追加だけでMac共通上限、使用後削除、孤児回収が実装済みとは報告しない。旧sealed contractと既存証拠を変更せず、移行後もRuntime／Device Type／case順の固定と、実行ごとのUDID寿命を別々に管理する。
 
 ## 2. Delivery stage
 
@@ -152,8 +211,10 @@ D-037 cutover後のworkflow-only `harden + strict` Issueは、既存Acceptance c
 
 `shape`と`harden`の`standard`はblockingな反対モデルレビューを要求しない。`strict`または`release`は現在Headの正式な反対モデルレビューを必須とする。shape/hardenのPRと完了報告は必ずnot release-readyを明記する。`release`は`type:release`の実際のアプリrelease candidateだけに使用し、Feature／Regression／workflow変更を完全検証へ迂回させない。
 
+Release PhaseはこのIssue分類から独立して記録する。Phase 3の完了を`shape` Issueのmergeだけから推測せず、Phase 5に`harden`、Phase 6に`release`を機械的に割り当てない。対象release revisionのPhase出口、Issueごとのstage証拠、必要なユーザー判断をそれぞれ確認する。
+
 Claim済みで`deliveryStage`を持たない既存contractはcanonical bytesを変更せず、従来のprofile／scope gateを維持する。すなわちlegacy standard／strictはfullと正式review、legacy explicit fastは従来どおりfocused evidenceを使う。新しいIssue validatorはstage未指定を拒否する。既存Issueを縮小したい場合は、暗黙変換せずユーザー承認の上で新しいIssueへ分離する。
 
 ## 8. 依存関係
 
-Issue #44がこの仕様、Issue forms、skills、validator、runner、repository tests、bootstrap後repositoryを同じ契約へ揃える。以後のアプリではshapeの実画面承認後に必要なharden Issueを作り、それらを依存にしたrelease Issueで完全検証する。
+Issue #44がDelivery stage、Issue forms、skills、validator、runner、repository tests、bootstrap後repositoryを同じ契約へ揃えた。D-038のPhase記録／部分再gateは#85、証拠適用は#86、不具合判断は#87、Simulator資源契約は#89、skills／既存Issue移行は#88で実装する。それまでは本仕様を実装済みの自動gateまたは証拠再利用として扱わない。

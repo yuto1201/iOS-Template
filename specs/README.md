@@ -9,7 +9,7 @@
 | [product.md](./product.md) | テンプレートの目的、標準技術、対象・対象外 |
 | [architecture.md](./architecture.md) | リポジトリ構造、責務、条件付きモジュール |
 | [acceptance.md](./acceptance.md) | テンプレートとIssueの完了条件 |
-| [development-stages.md](./development-stages.md) | 日本語iPhone優先の開発順序、仕上げ、検証範囲と移行境界 |
+| [development-stages.md](./development-stages.md) | リリース単位の6開発フェーズ、日本語iPhone優先の開発順序、仕上げ、検証範囲と移行境界 |
 | [decisions.md](./decisions.md) | 確定した判断と変更理由 |
 
 ## 判断の状態
@@ -34,6 +34,8 @@
 7. 既存コードからの推測
 
 `specs/decisions.md` は、上位の判断がなぜ存在するかを記録します。過去の決定と現行仕様が異なる場合は、最新の有効な決定を採用します。
+
+アプリ開発では、[リリース単位の6開発フェーズ](./development-stages.md#15-リリース単位の6開発フェーズ)を計画の正本とします。Phaseはリリース目標の進捗、Delivery stageは個々のIssue成果物の成熟度、Delivery profileは危険度、Verification scopeは端末・言語範囲を表し、相互に置き換えません。
 
 ## 仕様変更手順
 

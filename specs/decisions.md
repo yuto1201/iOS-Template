@@ -307,3 +307,13 @@
 - Decision: cutover以後のworkflow-only `harden + strict` contractは、一つのAC本文先頭にexact `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`を宣言する。contractは要求scopeと理由だけを封印し、実装後のimmutable Base、Head、contract bytes、Headの`Config/repository-tests.json`、Base..Head changed pathsからrunnerがresolved scopeとexact ordered test pathsを決定する。`targeted`は全changed pathが一つの既知domainへ解決した場合だけ許可し、unmatched path、複数domain、manifest／runner／test inventory変更は`head-all`へ昇格する。`head-all`はHead全件、`base-and-head`は両revision全件を実行する。
 - Consequence: exact test一覧、manifest／diff digest、要求／解決理由、全ACのordered mappingをimmutable `repository-test-plan.json`へno-replaceで保存し、schema v3 `repository-tests.json`、review packet/result/receipt、PR本文、pre-merge gateが同じplan bytesを再計算・照合する。開発中は関連testだけを使い、canonical全件は最終候補Headで必要な場合に一度実行する。旧schema v1／v2とcutover前contractは変換しない。
 - Related Issue: #82
+
+## D-038: リリース目標ごとに6開発フェーズと部分再承認を適用する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: D-027の日本語iPhoneから英語／iPadへ進む二段階を、目的・基盤・開発・適応・品質・公開の6フェーズへ一般化する。D-029のDelivery stage、段階別検証、安全境界は維持し、Phaseとは別軸にする。
+- Context: 前工程を完了してから次へ進む規律を保ちつつ、Phase 1〜3の軽微な仕様修正や後段で見つかった問題まで全面的な巻き戻しにすると、個人開発の速度と意思決定履歴の両方を損なう。開発中の全条件テストを減らして英語／iPadと完全品質確認を後段へ分ける一方、証拠の付替えや重大不具合の安易な許容を防ぐ必要がある。並列検証ではSimulatorの競合とdata蓄積もMac全体で管理する必要がある。
+- Decision: 一つのMVPまたは公開目標をrelease unitとし、Phase 1 目的・リリース仕様、Phase 2 基盤・UI方向、Phase 3 日本語iPhone開発、Phase 4 英語・iPad対応、Phase 5 品質保証、Phase 6 リリースを適用する。依存する次Phase実装は前Phase完了まで開始しないが、read-only調査、草案、依存しない作業は先行できる。Phase 1〜3の軽微変更は委任範囲で継続し、目的、MVP、主要flow、採用system、data、重大riskの変更だけを影響する最も早いPhaseへ部分的に戻す。最終判断はユーザーとし、特にPhase 1、3、4、5の出口と公開範囲をrelease revisionへ束縛する。変更、証拠適用、不具合許容、テスト省略、未検証を追記型で区別し、重大な安全／認証／課金／privacy／法務違反は公開blockerとする。Phase 5〜6の同一候補では適用可能な証拠を重複実行しないが、#86の実装前にcanonical証拠の再利用・改訂を許可しない。AI検証用Simulatorは必要時作成・使用後削除、Mac全体でiPhone／iPad合計最大4台、sessionごと原則1台とし、枠取得、逐次matrix、証拠保全、所有確認、異常終了回収、容量停止を要求する。
+- Consequence: PhaseはDelivery stage／profile／verification scope／workflow stateを置き換えず、各Issueは従来どおり現在Headの必要検証とreviewを持つ。既存アプリと緊急修正は適用可能な確定基盤を再利用して影響Phaseから開始できる。SimulatorのMac共通lease、削除、孤児回収と既存固定UDID移行は#89、Phase記録／再gateは#85、証拠適用は#86、不具合判断は#87、skills／既存Issue移行は#88で実装し、この仕様だけを稼働証拠にしない。既存sealed contractと過去のDecisionは変更しない。
+- Related Issue: #83、#84、#85、#86、#87、#88、#89
