@@ -146,15 +146,16 @@ Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evi
 
 `2026-09-13T13:03:38Z`以後にClaimするworkflow-only `harden + strict` Issueは、一つのAC本文先頭へexact `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`を置きます。Issue contractは要求scopeと理由だけを封印します。exact test pathは実装後、current Headのproducerがimmutable Base／Head／contract bytes、Headの`Config/repository-tests.json`、sorted Base..Head changed pathsから解決し、`.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-test-plan.json`へno-replaceで保存します。
 
-- `targeted`: changed pathがすべてmanifestの一つのdomainへ解決した場合だけ、そのdomainに属するtestを選ぶ。
-- `head-all`: Issueの明示要求、未知path、複数domain、manifest／runner／`tools/tests/`変更のいずれかならHeadの全inventoryへ昇格する。
+- `targeted`: changed pathが解決する既知の単一または複数domainに属するtestのsorted unionを選ぶ。changed testはmanifest上の自身のdomainへ解決する。
+- 未知path: 全件へ昇格せずplan生成を拒否し、manifest coverageまたはIssue scopeを修正する。
+- `head-all`: release、nightly相当の明示実行、またはユーザーがIssue contractで明示要求した場合だけHeadの全inventoryを選ぶ。manifest／runner／`tools/tests/`変更から自動選択しない。
 - `base-and-head`: baseline／regression比較をACが明示するときだけ、BaseとHeadそれぞれの全inventoryを実行する。
 
-planはIssue／Base／Head／contract digest、要求・解決scopeと理由、manifest digest、changed pathsとdiff digest、sorted exact test paths、全AC順のmappingを持ちます。mappingは各ACをexactly once含み、参照のunionがplanのtest集合と一致しなければ生成しません。schema v3 `repository-tests.json`はplan path/digest、resolved scope、current-Head producer、実行結果を持ち、review packet、result publication、PR本文、pre-merge gateは同じplan bytesをimmutable Git入力から再計算します。開発中は関連testだけを直接実行し、canonical runnerは安定した最終候補Headで一度だけ使います。
+planはIssue／Base／Head／contract digest、要求・解決scopeと理由、manifest digest、changed pathsとdiff digest、sorted exact test paths、全AC順のmappingを持ちます。mappingは各ACをexactly once含み、参照のunionがplanのtest集合と一致しなければ生成しません。schema v3 `repository-tests.json`はplan path/digest、resolved scope、current-Head producer、実行結果を持ち、review packet、result publication、PR本文、pre-merge gateは同じplan bytesをimmutable Git入力から再計算します。開発中の対象testは1件300秒、通常完了の`targeted` suiteはaggregate 900秒を上限とし、canonical runnerは安定した最終候補Headで一度だけ使います。runnerは開始前にscope、ordered tests、test count、child／aggregate上限を表示します。
 
 iOS runner回帰は、共通の`tools/tests/lib/ios-runner-fixture.sh`と独立した16個のtracked entrypointへ分けています。引数なしの`bash tools/tests/test-ios-runner.sh`はshape／scope／timeout群だけを実行します。`scoped`も同じ群、`stubborn`は従来のTERM無視probe診断です。残る群はcleanup、startup、baseline、identity、inputs、publication、resources、recovery、recovery-before-rename、recovery-after-rename、recovery-final、locking、finalization、finalization-integrity、system-localeで、`tools/tests/test-ios-runner-<群名>.sh`を実行します。各群は自身のtemporary repository、fake Xcode／Simulator、adapter stateを作り、終了時に自身のscratchだけを回収します。
 
-全runner回帰だけをローカル診断する場合は`bash tools/tests/test-ios-runner.sh all`を使います。このコマンドは各群を900秒上限で順番に実行し、一つでも失敗すれば失敗します。canonical repository runnerはplanが選んだ群だけを実行し、`head-all`／`base-and-head`の場合に全16群を含めます。単一群の成功を全suiteの成功として扱わず、正式証拠には引き続き`tools/run-repository-tests.sh`を使います。productionの検証、case、assertion、timeout、証拠公開条件は変更しません。
+全runner回帰だけをrelease／明示診断する場合は`bash tools/tests/test-ios-runner.sh all`を使います。このコマンドは各群を900秒上限で順番に実行し、一つでも失敗すれば失敗します。通常のcanonical repository runnerはplanが選んだ関連群だけを実行し、`head-all`／`base-and-head`を明示した場合だけ全16群を含めます。単一群の成功を全suiteの成功として扱わず、正式証拠には引き続き`tools/run-repository-tests.sh`を使います。productionの検証、case、assertion、timeout、証拠公開条件は変更しません。
 
 ```bash
 tools/run-repository-tests.sh \
@@ -460,7 +461,7 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 
 すべての`xcodebuild`／Unit／UI Testは既定1200秒、`xcrun`／`simctl`は180秒、Swift validatorは600秒の有限timeoutを持ちます。各値は正の秒数へ明示overrideできます。timeout wrapperはcommandごとに新しいprocess groupを作り、そのgroupだけへTERM、5秒grace、必要時KILLを送ります。`killall`、Xcode終了、`simctl shutdown all`は行いません。
 
-timeoutはexit 124と`stage`、`elapsedSeconds`、`timeoutSeconds`を返します。runnerはそのattemptのactive Simulator、private workspace、Issue／Head lockだけを回収し、成功形式の`verify.json`を発行しません。同じ原因は対象Testで診断したうえで最大2回までとし、同じ長時間検証を自動反復しません。
+timeoutはexit 124と`stage`、`elapsedSeconds`、`timeoutSeconds`を返します。runnerはそのattemptのactive Simulator、private workspace、Issue／Head lockだけを回収し、成功形式の`verify.json`を発行しません。repository runnerは失敗／timeoutをIssue／Head／scope／attemptへ記録し、直接再実行を拒否します。選択済み対象testを`--retry-after-targeted`で診断して成功した場合だけ1回再試行でき、2回目の失敗後は停止します。
 
 ## 6. 排他制御
 

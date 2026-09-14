@@ -46,9 +46,9 @@ ClaudeとCodexは同じ権限を持ち、どちらもローカル作業と認証
 
 すべてのstageで、コンパイル可能性、重要な金額・日付・保存ロジック、データ非破壊、秘密・個人情報の非保存、ユーザー所有ファイル保護、Scope境界、実行結果の正確な報告を省略しません。`strict`対象の認証・migration・本番データ・課金・法務・workflow gateは、stageが早くても対象別安全確認と必要な承認を維持します。
 
-検証は対象Test、関連回帰、stage標準、release完全検証の順に広げます。Xcode、Test、Simulator操作は必ず有限timeoutで実行し、timeout時は当該呼び出しのprocess groupと所有Simulatorだけを回収します。同じ原因は最大2回で停止し、長時間検証を自動反復しません。
+検証は対象Test、関連回帰、stage標準、release完全検証の順に広げます。通常開発の対象testは1 command 300秒、Issue完了用`targeted` repository suiteはaggregate 900秒で停止します。Xcode、Test、Simulator操作は必ず有限timeoutで実行し、timeout時は当該呼び出しのprocess groupと所有Simulatorだけを回収します。同一Issue／Head／scopeの失敗後は直接再実行せず、対象test診断後の再試行1回までで停止します。
 
-`shape`は`iphone-ja`、applicationを検証する`harden`はcanonical部分集合の`targeted`、`release`は`full`を使用します。いずれもバッチ開始時に最新の利用可能なiOS Runtimeを解決し、そのバッチ内で固定します。未確認の条件は延期・未検証として報告します。
+`shape`は`iphone-ja`、applicationを検証する`harden`はcanonical部分集合の`targeted`、`release`は`full`を使用します。repository testの`targeted`は既知domainの関連testだけを選び、manifest、runner、tracked test、複数domainを理由に全件へ自動昇格しません。未知pathは開始前に停止し、`head-all`／`base-and-head`と4条件検証はrelease、nightly相当の明示実行、またはユーザーのIssue contract上の明示要求に限定します。未確認の条件は延期・未検証として報告します。
 
 UI方向比較のHTMLは選択を助ける作業artifactであり、仕様の正本、pixel仕様、Build／Test／Simulator／画像評価の証拠にはしません。実装は選択した情報階層、主要導線、状態とaccessibility意図をnative SwiftUIへ翻訳します。
 

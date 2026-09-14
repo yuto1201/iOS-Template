@@ -20,9 +20,13 @@ module IOSTemplate
     SHA = /\A[0-9a-f]{40}\z/
     TEST_PATH = %r{\Atools/tests/test-[a-z0-9-]+\.sh\z}
     RUNNER_PATHS = %w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb tools/lib/repository-test-plan.rb].freeze
-    DEFAULT_CHILD_TIMEOUT_SECONDS = 900
+    DEFAULT_TARGETED_CHILD_TIMEOUT_SECONDS = 300
+    DEFAULT_TARGETED_SUITE_TIMEOUT_SECONDS = 900
+    DEFAULT_FULL_CHILD_TIMEOUT_SECONDS = 900
+    DEFAULT_FULL_SUITE_TIMEOUT_SECONDS = 14_400
+    FAILURE_FILE_PREFIX = "repository-test-failure-attempt-"
 
-    def run(repo:, issue:, expected_base:, mappings:, base_mappings: {}, before_publish: nil)
+    def run(repo:, issue:, expected_base:, mappings:, base_mappings: {}, retry_after_targeted: nil, before_publish: nil)
       reject("repository root must be a physical absolute directory") unless repo.start_with?("/") && File.realpath(repo) == repo
       reject("issue must be a positive integer") unless issue.is_a?(Integer) && issue.positive?
       reject("expected Base SHA is invalid") unless expected_base.match?(SHA)
@@ -96,8 +100,22 @@ module IOSTemplate
           end
           declaration_id = criteria.find { |entry| entry["text"].start_with?("Repository-test scope:") }.fetch("id")
           reject("repository scope AC must map both complete suites") unless base_mappings[declaration_id]&.sort == base_tests && mappings[declaration_id].sort == tests
-          reject("repository test timeout cannot exceed 900 seconds") if repository_test_timeout_seconds > DEFAULT_CHILD_TIMEOUT_SECONDS
           acceptance = acceptance.map { |entry| {"id"=>entry["id"], "status"=>"passed", "baseTests"=>base_mappings.fetch(entry["id"], []), "headTests"=>entry["tests"]} }
+        end
+        execution_scope = plan ? plan.fetch("resolvedScope") : dual_revision ? "base-and-head" : "legacy-head"
+        child_timeout_seconds = repository_test_timeout_seconds(execution_scope)
+        suite_timeout_seconds = repository_test_suite_timeout_seconds(execution_scope, contract)
+        previous_failures = repository_test_failures(snapshots, head_directory, issue: issue, head_sha: head_sha,
+          scope: execution_scope)
+        reject("repository tests already failed twice for this Issue, Head, and scope") if previous_failures.length >= 2
+        reject("repository test retry is allowed only after one failed attempt") if retry_after_targeted && previous_failures.length != 1
+        if previous_failures.length == 1 && retry_after_targeted.nil?
+          reject("repository tests already failed for this Issue, Head, and scope; run one selected targeted diagnostic and pass --retry-after-targeted PATH")
+        end
+        if retry_after_targeted
+          expected_diagnostic = previous_failures.first.fetch("failedTest")
+          reject("previous repository failure has no selected diagnostic test") unless expected_diagnostic
+          reject("retry diagnostic must match the failed selected repository test") unless retry_after_targeted == expected_diagnostic
         end
         runner_paths = plan ? RUNNER_PATHS : RUNNER_PATHS.first(2)
         runner_files = runner_paths.map do |path|
@@ -106,24 +124,43 @@ module IOSTemplate
         end
 
         suite_started = Time.now.utc
-        if dual_revision
-          revisions = [["base", expected_base], ["head", head_sha]].each_with_index.map do |(role, sha), index|
-            started = Time.now.utc
-            inventory = context.fetch("inventories")[index]
-            revision_results = execute_in_detached_worktree(repo, sha, inventory.map { |entry| entry["path"] }, inventory: inventory)
-            failure = revision_results.find { |entry| entry["status"] != "passed" }
-            reject("#{role} repository test failed: #{failure.fetch('path')}") if failure
-            {"role"=>role, "testedSha"=>sha, "suite"=>suite_summary(revision_results), "tests"=>revision_results,
-             "startedAt"=>started.iso8601(6), "completedAt"=>Time.now.utc.iso8601(6)}
+        suite_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + suite_timeout_seconds
+        warn "repository test execution plan: #{JSON.generate({scope: execution_scope, testCount: tests.length,
+          tests: tests, childTimeoutSeconds: child_timeout_seconds, suiteTimeoutSeconds: suite_timeout_seconds})}"
+        begin
+          if retry_after_targeted
+            diagnostic_inventory = plan ? plan_context.fetch("inventories")[1].select { |entry| entry.fetch("path") == retry_after_targeted } : nil
+            diagnostic_results = execute_in_detached_worktree(repo, head_sha, [retry_after_targeted], inventory: diagnostic_inventory,
+              deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds)
+            diagnostic_failure = diagnostic_results.find { |entry| entry["status"] != "passed" }
+            reject("retry diagnostic failed: #{diagnostic_failure.fetch('path')}") if diagnostic_failure
           end
-          results = revisions.flat_map { |revision| revision.fetch("tests") }
-        else
-          selected_inventory = plan ? plan_context.fetch("inventories")[1].select { |entry| tests.include?(entry.fetch("path")) } : nil
-          results = execute_in_detached_worktree(repo, head_sha, tests, inventory: selected_inventory)
+          if dual_revision
+            revisions = [["base", expected_base], ["head", head_sha]].each_with_index.map do |(role, sha), index|
+              started = Time.now.utc
+              inventory = context.fetch("inventories")[index]
+              revision_results = execute_in_detached_worktree(repo, sha, inventory.map { |entry| entry["path"] }, inventory: inventory,
+                deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds)
+              failure = revision_results.find { |entry| entry["status"] != "passed" }
+              reject("#{role} repository test failed: #{failure.fetch('path')}") if failure
+              {"role"=>role, "testedSha"=>sha, "suite"=>suite_summary(revision_results), "tests"=>revision_results,
+               "startedAt"=>started.iso8601(6), "completedAt"=>Time.now.utc.iso8601(6)}
+            end
+            results = revisions.flat_map { |revision| revision.fetch("tests") }
+          else
+            selected_inventory = plan ? plan_context.fetch("inventories")[1].select { |entry| tests.include?(entry.fetch("path")) } : nil
+            results = execute_in_detached_worktree(repo, head_sha, tests, inventory: selected_inventory,
+              deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds)
+          end
+          failure = results.find { |entry| entry["status"] != "passed" }
+          reject("repository test failed: #{failure.fetch('path')}") if failure
+        rescue RunnerError => error
+          publish_repository_test_failure!(snapshots, head_directory, issue: issue, head_sha: head_sha,
+            scope: execution_scope, attempt: previous_failures.length + 1, tests: tests, started_at: suite_started,
+            suite_timeout_seconds: suite_timeout_seconds, error: error.message)
+          raise
         end
         suite_completed = Time.now.utc
-        failure = results.find { |entry| entry["status"] != "passed" }
-        reject("repository test failed: #{failure.fetch('path')}") if failure
 
         reject("current Head changed during repository tests") unless git!(repo, "rev-parse", "HEAD").strip == head_sha
         reject("Issue worktree changed during repository tests") unless git!(repo, "status", "--porcelain").empty?
@@ -209,14 +246,18 @@ module IOSTemplate
        "failed"=>results.count { |entry| entry["status"] != "passed" }}
     end
 
-    def execute_in_detached_worktree(repo, head_sha, tests, inventory: nil)
+    def execute_in_detached_worktree(repo, head_sha, tests, inventory: nil, deadline:, child_timeout_seconds:)
       results = []
       Dir.mktmpdir("ios-template-repository-tests-") do |temporary|
         worktree = File.join(temporary, "worktree")
         git!(repo, "worktree", "add", "--detach", worktree, head_sha)
         begin
           reject("detached test worktree resolved an unexpected Head") unless git!(worktree, "rev-parse", "HEAD").strip == head_sha
-          tests.each do |path|
+          tests.each_with_index do |path, index|
+            remaining_seconds = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            unfinished = tests.drop(index)
+            remaining_whole_seconds = remaining_seconds.floor
+            reject("repository test suite reached its aggregate timeout; unexecuted tests: #{unfinished.join(',')}") unless remaining_whole_seconds.positive?
             if inventory
               reject("detached revision worktree is dirty") unless git!(worktree, "status", "--porcelain").empty?
               expected = inventory.find { |entry| entry["path"] == path }.fetch("sourceDigest")
@@ -225,7 +266,8 @@ module IOSTemplate
             end
             arguments = test_arguments(path)
             started = Time.now.utc
-            timeout_seconds = repository_test_timeout_seconds
+            timeout_seconds = [child_timeout_seconds, remaining_whole_seconds].min
+            aggregate_limited = timeout_seconds < child_timeout_seconds
             stdout, stderr, status, timed_out, elapsed = capture3_bounded(
               {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil},
               "/bin/bash", "-p", path, *arguments,
@@ -247,7 +289,12 @@ module IOSTemplate
                 "timeoutSeconds"=>timeout_seconds, "elapsedSeconds"=>elapsed.round(6))
               reject("detached revision worktree changed during tests") unless git!(worktree, "rev-parse", "HEAD").strip == head_sha && git!(worktree, "status", "--porcelain").empty?
             end
-            reject("repository test timed out: #{path}; elapsedSeconds=#{format('%.3f', elapsed)}") if timed_out
+            if timed_out
+              if aggregate_limited
+                reject("repository test suite reached its aggregate timeout; unexecuted tests: #{unfinished.join(',')}")
+              end
+              reject("repository test timed out: #{path}; elapsedSeconds=#{format('%.3f', elapsed)}; unexecuted tests: #{tests.drop(index + 1).join(',')}")
+            end
             break unless status.success?
           end
         ensure
@@ -261,13 +308,69 @@ module IOSTemplate
       results
     end
 
-    def repository_test_timeout_seconds
-      raw = ENV.fetch("IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS", DEFAULT_CHILD_TIMEOUT_SECONDS.to_s)
+    def repository_test_timeout_seconds(scope)
+      maximum = scope == "targeted" ? DEFAULT_TARGETED_CHILD_TIMEOUT_SECONDS : DEFAULT_FULL_CHILD_TIMEOUT_SECONDS
+      raw = ENV.fetch("IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS", maximum.to_s)
       value = Integer(raw, 10)
       reject("repository test timeout must be a positive integer") unless value.positive?
+      reject("repository test timeout exceeds the #{maximum}-second #{scope} limit") if value > maximum
       value
     rescue ArgumentError
       reject("repository test timeout must be a positive integer")
+    end
+
+    def repository_test_suite_timeout_seconds(scope, contract)
+      maximum = scope == "targeted" ? DEFAULT_TARGETED_SUITE_TIMEOUT_SECONDS : DEFAULT_FULL_SUITE_TIMEOUT_SECONDS
+      if scope != "targeted"
+        issue_limit = contract.dig("deliveryStage", "timeBudgetMinutes")
+        maximum = [maximum, issue_limit * 60].min if issue_limit.is_a?(Integer) && issue_limit.positive?
+      end
+      raw = ENV.fetch("IOS_TEMPLATE_REPOSITORY_TEST_SUITE_TIMEOUT_SECONDS", maximum.to_s)
+      value = Integer(raw, 10)
+      reject("repository test suite timeout must be a positive integer") unless value.positive?
+      reject("repository test suite timeout exceeds the #{maximum}-second #{scope} limit") if value > maximum
+      value
+    rescue ArgumentError
+      reject("repository test suite timeout must be a positive integer")
+    end
+
+    def repository_test_failures(snapshots, head_directory, issue:, head_sha:, scope:)
+      failures = []
+      (1..2).each do |attempt|
+        leaf = existing_leaf(snapshots, head_directory, "#{FAILURE_FILE_PREFIX}#{attempt}.json")
+        next unless leaf
+        value = JSON.parse(leaf.bytes.dup)
+        reject("repository test failure record is invalid") unless value.is_a?(Hash) &&
+          value.values_at("schemaVersion", "issue", "headSha", "scope", "attempt") == [1, issue, head_sha, scope, attempt]
+        failed_test = value.fetch("failedTest")
+        reject("repository test failure record is invalid") unless failed_test.nil? || value.fetch("testPaths").include?(failed_test)
+        failures << value
+      end
+      reject("repository test failure attempt sequence is incomplete") if failures.map { |entry| entry.fetch("attempt") } != (1..failures.length).to_a
+      failures
+    rescue JSON::ParserError, KeyError
+      reject("repository test failure record is invalid")
+    end
+
+    def publish_repository_test_failure!(snapshots, head_directory, issue:, head_sha:, scope:, attempt:, tests:, started_at:,
+                                         suite_timeout_seconds:, error:)
+      reject("repository test failure attempt is invalid") unless (1..2).cover?(attempt)
+      failed_test = tests.find { |path| error.include?(path) }
+      document = {
+        "schemaVersion" => 1,
+        "issue" => issue,
+        "headSha" => head_sha,
+        "scope" => scope,
+        "attempt" => attempt,
+        "testPaths" => tests,
+        "failedTest" => failed_test,
+        "suiteTimeoutSeconds" => suite_timeout_seconds,
+        "error" => error,
+        "startedAt" => started_at.iso8601(6),
+        "completedAt" => Time.now.utc.iso8601(6)
+      }
+      snapshots.publish_exclusive(head_directory, "#{FAILURE_FILE_PREFIX}#{attempt}.json", JSON.generate(document).b,
+        at: "repository test failure attempt #{attempt}")
     end
 
     def capture3_bounded(environment, *command, chdir:, timeout_seconds:)
@@ -392,14 +495,16 @@ if $PROGRAM_NAME == __FILE__
   expected_base = nil
   mapping_arguments = []
   base_mapping_arguments = []
+  retry_after_targeted = nil
   until ARGV.empty?
     case ARGV.shift
     when "--issue" then issue = ARGV.shift
     when "--expected-base" then expected_base = ARGV.shift
     when "--map" then mapping_arguments << ARGV.shift
     when "--base-map" then base_mapping_arguments << ARGV.shift
+    when "--retry-after-targeted" then retry_after_targeted = ARGV.shift
     else
-      warn "usage: run-repository-tests.sh --issue NUMBER --expected-base SHA --map AC-N=TEST[,TEST...] ... [--base-map AC-N=TEST[,TEST...] ...]"
+      warn "usage: run-repository-tests.sh --issue NUMBER --expected-base SHA --map AC-N=TEST[,TEST...] ... [--base-map AC-N=TEST[,TEST...] ...] [--retry-after-targeted TEST]"
       exit 2
     end
   end
@@ -421,7 +526,8 @@ if $PROGRAM_NAME == __FILE__
     mappings = parse_mappings.call(mapping_arguments)
     base_mappings = parse_mappings.call(base_mapping_arguments)
     result = IOSTemplate::RepositoryTests.run(
-      repo: repo, issue: Integer(issue), expected_base: expected_base, mappings: mappings, base_mappings: base_mappings
+      repo: repo, issue: Integer(issue), expected_base: expected_base, mappings: mappings, base_mappings: base_mappings,
+      retry_after_targeted: retry_after_targeted
     )
     puts JSON.generate(result)
   rescue IOSTemplate::RepositoryTests::RunnerError => error

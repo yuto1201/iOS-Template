@@ -144,6 +144,32 @@ if (cd "$repo" && tools/run-repository-tests.sh --issue 43 --expected-base "$bas
 fi
 [[ ! -e "$repo/.artifacts/issues/43/$failed_head/repository-tests.json" ]] || { echo 'failed suite published canonical evidence' >&2; exit 1; }
 grep -Fq 'repository test failed: tools/tests/test-beta.sh' "$scratch/fail.err"
+failure_one="$repo/.artifacts/issues/43/$failed_head/repository-test-failure-attempt-1.json"
+jq -e '.issue == 43 and .attempt == 1 and .scope == "legacy-head" and .failedTest == "tools/tests/test-beta.sh"' "$failure_one" >/dev/null
+if (cd "$repo" && tools/run-repository-tests.sh --issue 43 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) >"$scratch/repeat.out" 2>"$scratch/repeat.err"; then
+  echo 'same-Head repository suite repeated without a diagnostic' >&2
+  exit 1
+fi
+grep -Fq 'already failed for this Issue, Head, and scope' "$scratch/repeat.err"
+if (cd "$repo" && tools/run-repository-tests.sh --issue 43 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh \
+  --retry-after-targeted tools/tests/test-alpha.sh) >"$scratch/wrong-diagnostic.out" 2>"$scratch/wrong-diagnostic.err"; then
+  echo 'unrelated targeted diagnostic was accepted' >&2
+  exit 1
+fi
+grep -Fq 'retry diagnostic must match the failed selected repository test' "$scratch/wrong-diagnostic.err"
+if (cd "$repo" && tools/run-repository-tests.sh --issue 43 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh \
+  --retry-after-targeted tools/tests/test-beta.sh) >"$scratch/retry.out" 2>"$scratch/retry.err"; then
+  echo 'failing targeted diagnostic permitted a successful retry' >&2
+  exit 1
+fi
+grep -Fq 'retry diagnostic failed: tools/tests/test-beta.sh' "$scratch/retry.err"
+jq -e '.issue == 43 and .attempt == 2' "$repo/.artifacts/issues/43/$failed_head/repository-test-failure-attempt-2.json" >/dev/null
+if (cd "$repo" && tools/run-repository-tests.sh --issue 43 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh \
+  --retry-after-targeted tools/tests/test-beta.sh) >"$scratch/retry-twice.out" 2>"$scratch/retry-twice.err"; then
+  echo 'third same-Head repository attempt was accepted' >&2
+  exit 1
+fi
+grep -Fq 'already failed twice' "$scratch/retry-twice.err"
 
 mkdir -p "$repo/.artifacts/issues/44/$failed_head"
 sed 's/"issue":42/"issue":44/' "$contract" > "$repo/.artifacts/issues/44/issue-contract.json"
@@ -176,6 +202,29 @@ if (cd "$repo" && tools/run-repository-tests.sh --issue 45 --expected-base "$bas
   exit 1
 fi
 grep -Fq 'repository test failed: tools/tests/test-unmapped.sh' "$scratch/legacy.err"
+
+cat > "$repo/tools/tests/test-alpha.sh" <<'EOF'
+#!/usr/bin/env bash
+sleep 10
+EOF
+git -C "$repo" add tools/tests/test-alpha.sh
+git -C "$repo" commit -q -m aggregate-timeout-head
+aggregate_head=$(git -C "$repo" rev-parse HEAD)
+mkdir -p "$repo/.artifacts/issues/46/$aggregate_head"
+CONTRACT="$contract" OUTPUT="$repo/.artifacts/issues/46/issue-contract.json" ruby -rjson -e '
+  value=JSON.parse(File.binread(ENV.fetch("CONTRACT")))
+  value["issue"]=46
+  File.binwrite(ENV.fetch("OUTPUT"),JSON.generate(value))
+'
+if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=5 IOS_TEMPLATE_REPOSITORY_TEST_SUITE_TIMEOUT_SECONDS=2 \
+  tools/run-repository-tests.sh --issue 46 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) \
+  >"$scratch/aggregate.out" 2>"$scratch/aggregate.err"; then
+  echo 'aggregate repository-test timeout was accepted' >&2
+  exit 1
+fi
+grep -Fq 'reached its aggregate timeout; unexecuted tests:' "$scratch/aggregate.err"
+jq -e '.issue == 46 and .attempt == 1 and .suiteTimeoutSeconds == 2' \
+  "$repo/.artifacts/issues/46/$aggregate_head/repository-test-failure-attempt-1.json" >/dev/null
 
 ruby -I"$source_repo/tools/lib" -rrun-repository-tests -e '
   unrelated = Process.spawn("/bin/sleep", "30", pgroup: true)

@@ -92,6 +92,8 @@ Phase 5と6で同じcandidate artifact、Head、config、SDK／signing context�
 
 `shape`がTime budgetを超えそうな場合、Scope縮小、harden分離、`blocked:environment`、受け入れ条件判断が必要なら`blocked:user`のいずれかを選ぶ。
 
+通常開発は変更へ直接対応するtestから始め、1 commandを300秒で停止する。workflow-only Issueのcanonical `targeted` repository suiteはaggregate 900秒を超えて実行しない。既知の複数domain、manifest、runner、tracked test変更は関連testのunionを選び、`head-all`へ自動昇格しない。未知pathはplan生成を拒否する。全repository testsと4条件matrixはrelease、nightly相当の明示実行、またはユーザーがIssue contractで明示要求した場合だけ完了条件にする。
+
 ### 3.2 Delivery profile
 
 | Profile | 使用条件 | 追加ゲート |
@@ -146,7 +148,7 @@ AI検証用deviceは必要時作成・最終使用後削除とし、同じMac全
 - `xcodebuild`、Unit Test、UI Test、Simulator／Swift操作は有限timeoutで実行する。
 - timeout時は当該呼び出しのprocess groupだけを停止し、現在attemptが所有するSimulatorとlockだけを回収する。別Issue、別repository、ユーザーのXcode／Simulatorへglobal kill／shutdownを行わない。
 - failure recordへ停止stage、elapsed、timeoutを残し、成功形式の`verify.json`を生成しない。
-- 同じ原因は最大2回で停止する。自動で同じ長時間検証を繰り返さない。
+- 同一Issue／Head／scopeの失敗・timeout後は直接再実行を拒否する。選択済み対象testの診断成功後に限り1回だけ再試行し、2回目も同じ原因で失敗したら停止する。
 - 再実行は対象Test、関連回帰Test、stage標準検証、release完全検証の順に広げる。
 - 正式証拠へ別attemptの部分結果を混ぜないが、診断用の成功結果は修正判断に利用する。
 - review不能は`blocked:review`、外部認証／rate limitは`blocked:ops`、Xcode／Runtime／Simulator不足は`blocked:environment`、仕様判断不足は`blocked:user`、依存未完了は`blocked:dependency`。
