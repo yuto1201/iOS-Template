@@ -68,7 +68,6 @@
     {
       "domain": "review-contract",
       "paths": [
-        "docs/agent-contracts/review-packet.md",
         "tools/cross-model-review.sh",
         "tools/lib/premerge-gate.rb",
         "tools/lib/prepare-review-packet.rb",
@@ -85,6 +84,7 @@
       "domain": "specification",
       "paths": [
         "AGENTS.md",
+        "docs/agent-contracts/review-packet.md",
         "docs/verification.md",
         "docs/workflow.md"
       ],

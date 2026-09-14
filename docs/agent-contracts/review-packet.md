@@ -82,7 +82,7 @@ reviewerはordered `revisions`のBase／Head各SHAと全inventory、producerの�
 
 ### Plan-required contract
 
-cutover後のworkflow-only contractは`targeted`、`head-all`、`base-and-head`の要求scopeとReasonをsealed ACに持つ。reviewerは`repositoryTestPlan`が示すmanifest／diff digest、changed paths、resolved scope、exact test paths、ordered AC mappingsとschema v3 `repositoryTests`の実行集合が一致することを確認する。descriptor-owning callerは`strict_references!`が返す`repositoryTestsFile`と`repositoryTestPlanFile`の両方を保持し、planをimmutable Base／Head／contract／Head manifestから再計算したうえで`validate!`へ`repository_tests_bytes:`、`repository_test_plan_bytes:`、`revision_context:`を渡す。`targeted`要求が未知path、複数domain、test基盤変更により`head-all`へ昇格することは正当だが、縮小や手書きのtest選択は認めない。
+cutover後のworkflow-only contractは`targeted`、`head-all`、`base-and-head`の要求scopeとReasonをsealed ACに持つ。reviewerは`repositoryTestPlan`が示すmanifest／diff digest、changed paths、resolved scope、exact test paths、ordered AC mappingsとschema v3 `repositoryTests`の実行集合が一致することを確認する。descriptor-owning callerは`strict_references!`が返す`repositoryTestsFile`と`repositoryTestPlanFile`の両方を保持し、planをimmutable Base／Head／contract／Head manifestから再計算したうえで`validate!`へ`repository_tests_bytes:`、`repository_test_plan_bytes:`、`revision_context:`を渡す。D-039以後の`targeted`は既知の単一または複数domainに属するtestのunionを維持し、manifest、runner、tracked test変更から自動`head-all`へ昇格しない。未知pathはplan生成を拒否し、`head-all`／`base-and-head`はsealed contractの明示要求だけを認める。縮小や手書きのtest選択は認めない。
 
 レビューでは次の順に確認します。
 
