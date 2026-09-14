@@ -1,7 +1,7 @@
 # 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 3.1
+Version: 3.2
 Date: 2026-09-14
 
 ## 1. 原則
@@ -129,7 +129,7 @@ release revisionを変える記録は追記型とし、少なくとも変更前�
 
 削除対象は作成記録、exact UDID、repository／worktree／session／run owner、lease、非活動状態を照合できるdeviceだけとする。手動device、他owner、使用中、不明なdeviceを削除せず、名前やShutdown状態だけで所有を推測しない。蓄積済みdeviceはinventoryとdry-runで候補を示し、所有と未使用を証明できる対象だけを回収する。Runtime、Xcode、共通cache、ユーザーのDerivedData、canonical evidenceを一括削除しない。検証前後の空き容量と残留数を記録し、削除失敗は未回収として報告する。
 
-#89以後の新規matrixはschema v2としてRuntime／Device Type／locale／case順だけを封印し、実行UDIDはcaseごとのversioned allocation記録へ分離する。runnerはrepository lockの内側でMac共通枠を取得し、一台ずつ作成・検証・証拠保全・削除する。旧schema v1の固定UDID matrix、sealed contract、既存証拠は書き換えずlegacy consumerとして維持する。skills全体と既存Issueの移行は#88で行い、未移行の旧証拠をschema v2の実行結果へ付け替えない。
+#93以後の新規matrixはschema v2としてRuntime／Device Type／locale／case順だけを封印し、実行UDIDはcaseごとのversioned allocation記録へ分離する。runnerはrepository lockの内側でMac共通枠を取得し、一台ずつ作成・検証・証拠保全・削除する。旧schema v1の固定UDID matrix、sealed contract、既存証拠は書き換えずlegacy consumerとして維持する。#89は移植元の履歴として保持し、skills全体と既存Issueの移行は#88で行い、未移行の旧証拠をschema v2の実行結果へ付け替えない。
 
 ## 2. Delivery stage
 
@@ -213,10 +213,12 @@ D-037 cutover後のworkflow-only `harden + strict` Issueは、既存Acceptance c
 
 `shape`と`harden`の`standard`はblockingな反対モデルレビューを要求しない。`strict`または`release`は現在Headの正式な反対モデルレビューを必須とする。shape/hardenのPRと完了報告は必ずnot release-readyを明記する。`release`は`type:release`の実際のアプリrelease candidateだけに使用し、Feature／Regression／workflow変更を完全検証へ迂回させない。
 
+既定のreviewer pairはCodex primary→Claude、Claude primary→Codexである。Claudeが利用不能な場合も自動置換せず、ユーザー承認を一つのsealed ACへexact形式で記録したCodex-primary Issueだけが`cursor-grok-4.6-xhigh`を固定・非対話・read-only・有限timeoutのlauncherで使える。packet、result、receipt、PR、premergeは同じrouteとlauncher bytesを照合し、利用不能、不正出力、write検出はcanonical approvalを発行せず`blocked:review`とする。
+
 Release PhaseはこのIssue分類から独立して記録する。Phase 3の完了を`shape` Issueのmergeだけから推測せず、Phase 5に`harden`、Phase 6に`release`を機械的に割り当てない。対象release revisionのPhase出口、Issueごとのstage証拠、必要なユーザー判断をそれぞれ確認する。
 
 Claim済みで`deliveryStage`を持たない既存contractはcanonical bytesを変更せず、従来のprofile／scope gateを維持する。すなわちlegacy standard／strictはfullと正式review、legacy explicit fastは従来どおりfocused evidenceを使う。新しいIssue validatorはstage未指定を拒否する。既存Issueを縮小したい場合は、暗黙変換せずユーザー承認の上で新しいIssueへ分離する。
 
 ## 8. 依存関係
 
-Issue #44がDelivery stage、Issue forms、skills、validator、runner、repository tests、bootstrap後repositoryを同じ契約へ揃えた。D-038のPhase記録／部分再gateは#85、証拠適用は#86、不具合判断は#87、Simulator資源契約は#89、skills／既存Issue移行は#88で実装する。それまでは本仕様を実装済みの自動gateまたは証拠再利用として扱わない。
+Issue #44がDelivery stage、Issue forms、skills、validator、runner、repository tests、bootstrap後repositoryを同じ契約へ揃えた。D-038のPhase記録／部分再gateは#85、証拠適用は#86、不具合判断は#87、Simulator資源契約と明示承認Grok review fallbackは#93、skills／既存Issue移行は#88で実装する。#89は#93の移植元履歴として保持する。それまでは本仕様を実装済みの自動gateまたは証拠再利用として扱わない。

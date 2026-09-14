@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+/usr/bin/ruby -e 'exit(STDIN.stat.rdev == File.stat("/dev/null").rdev ? 0 : 1)' || exit 91
+[[ $# -eq 11 ]] || exit 92
+[[ "$1" == --print && "$2" == --output-format && "$3" == json ]] || exit 93
+[[ "$4" == --mode && "$5" == ask && "$6" == --trust ]] || exit 94
+[[ "$7" == --workspace && "$8" == /* ]] || exit 95
+[[ "$9" == --model && "${10}" == cursor-grok-4.6-xhigh ]] || exit 96
+prompt=${11:-}
+[[ "$prompt" == *'Validated review packet: '* ]] || exit 98
+[[ "$prompt" == *'Set reviewerModel to exactly cursor-grok-4.6-xhigh'* ]] || exit 99
+
+for forbidden in GH_TOKEN GITHUB_TOKEN SUPABASE_ACCESS_TOKEN CURSOR_API_KEY OPENAI_API_KEY FAKE_REVIEWER_RESULT FAKE_REVIEWER_MODE; do
+  [[ -z "${!forbidden:-}" ]] || exit 100
+done
+printf '%s\n' "$*" > "$HOME/cursor-reviewer.log"
+
+PROMPT="$prompt" /usr/bin/ruby -rjson -rdigest -rtime <<'RUBY'
+prompt = ENV.fetch("PROMPT")
+packet_path = prompt[/Validated review packet:\s*(\S+)/, 1] or abort "packet missing"
+reviewed_at = prompt[/reviewedAt to exactly (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/, 1] or abort "reviewedAt missing"
+Time.iso8601(reviewed_at)
+packet = JSON.parse(File.binread(packet_path))
+result = {
+  "schemaVersion" => packet.fetch("schemaVersion"),
+  "issue" => packet.fetch("issue"),
+  "reviewerModel" => "cursor-grok-4.6-xhigh",
+  "baseSha" => packet.fetch("baseSha"),
+  "headSha" => packet.fetch("headSha"),
+  "verifySha" => packet.fetch("verifySha"),
+  "issueContractDigest" => packet.fetch("issueContract").fetch("digest"),
+  "verdict" => "approved",
+  "findings" => [],
+  "acceptanceAssessment" => packet.fetch("acceptanceCriteria").each_with_index.map do |entry, index|
+    {"id" => entry.fetch("id"), "status" => "supported", "evidence" => ["verify.json#acceptanceEvidence/#{index}"]}
+  end,
+  "reviewedAt" => reviewed_at
+}
+result["reviewPacketDigest"] = "sha256:#{Digest::SHA256.file(packet_path).hexdigest}" if packet.fetch("schemaVersion") == 2
+puts JSON.generate({"result" => JSON.generate(result)})
+RUBY

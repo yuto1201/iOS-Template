@@ -337,3 +337,13 @@
 - Decision: 新規matrix producerはschema v2としてbatch内のXcode、Runtime、Device Type、locale、language、case順だけをimmutableに固定する。runnerはstable session identityを子processへ継承し、repository lockの内側でMac共通の原子的leaseを取得する。iPhone／iPad合計4枠、sessionごと1枠、作成前の空き容量確認を強制し、caseごとに新規UDIDを作成、検証、sanitized allocation receipt保全、exact UDIDのshutdown/delete、一覧とdata path消失確認を終えてから枠を返す。owner processが消えた予約／deviceはPID start identityとlive device identityを照合して次回起動時に回収し、管理外・改ざん・symlink・identity不一致は保護する。
 - Consequence: 4条件も一台ずつ順次実行され、4台を常設するpoolは作らない。最終証拠はmatrix digestに加えてcase順のallocation ID、UDID、session／attempt、receipt path／digest、削除結果、作成前／削除後の空き容量を固定するため、device削除後もreviewとfinalizationが可能になる。旧schema v1 matrix／contract／verifyは書き換えずlegacy経路で受理し、新しいattemptは旧UDIDの証拠へ付け替えない。inventoryはdurable owner recordと管理外保護対象を区別し、`simctl delete unavailable`や全件削除を代替にしない。
 - Related Issue: #89
+
+## D-041: 明示承認したCodex-primary IssueだけGrok review fallbackを許可する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: D-007の固定Codex→Claude pairを、Claude利用不能かつIssue単位のユーザー明示承認がある場合だけ拡張する。D-007の独立review、D-025のcurrent-Head証拠、D-038〜D-040の段階・時間・Simulator境界は維持する。
+- Context: #89のSimulator lifecycle実装はtargeted testsを通過したが、Claude reviewerの認証不能により正式reviewを完了できなかった。Grokによる助言は不足していたtimeout cleanupを発見した一方、既存schemaではadvisory結果を正式approvalへ昇格できず、無断fallbackや手書きreviewを許すと独立性とprovenanceを失う。
+- Decision: reviewerの既定pairはCodex primary→Claude、Claude primary→Codexのままとする。例外はAcceptance criterion本文先頭のexact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`がsealed contract全体でexactly one存在するIssueだけとし、Codex primaryからexact model `cursor-grok-4.6-xhigh`を固定launcherで呼ぶ。launcherはCursorの`ask` mode、非対話、read-only指示、閉じたstdin、600秒以下のtimeoutとprocess-group回収を強制し、ambient provider／repository credentialを子processへ継承しない。packet、result、receipt、PR renderer、premerge gateは同じroute、reviewer model、launcher bytes、Issue／contract／Base／Head／Verifyとdigestを照合する。
+- Consequence: silent／automatic fallback、Claude primary→Grok、任意Grok alias、primary自身の承認、旧contractへの遡及適用はできない。起動失敗、timeout、空／不正JSON、schema／evidence不一致、repository／artifact write検出はreview／receiptを公開せず`blocked:review`にする。provider envelopeはvalidな内側Resultだけを正規化し、認証identityやtelemetryをartifactへ保存しない。#89のcommitは#93へ移植してcurrent-Head evidenceを作り直し、#93完了後も#89を削除せずsuperseded履歴として保持する。
+- Related Issue: #93（#89を移植して完了）

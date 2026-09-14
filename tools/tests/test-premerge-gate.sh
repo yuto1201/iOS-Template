@@ -17,6 +17,7 @@ cp "$repo_root/tools/validate-issue-body.sh" "$repo/tools/"
 cp "$repo_root/tools/validate-verify-json.swift" "$repo/tools/"
 cp "$repo_root/tools/premerge-gate.sh" "$repo/tools/"
 cp "$repo_root/tools/cross-model-review.sh" "$repo/tools/"
+cp "$repo_root/tools/request-grok-review.sh" "$repo/tools/"
 cp "$repo_root/tools/prepare-review-packet.sh" "$repo/tools/"
 cp "$repo_root/tools/run-repository-tests.sh" "$repo/tools/"
 mkdir -p "$repo/tools/tests"
@@ -28,7 +29,7 @@ cp -R "$repo_root/specs" "$repo/"
 cp "$repo_root/Config/ownership.yml" "$repo/Config/"
 ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
 cat > "$repo/Config/repository-tests.json" <<'JSON'
-{"schemaVersion":1,"headAllPaths":["Config/repository-tests.json","tools/lib/repository-test-plan.rb","tools/lib/run-repository-tests.rb","tools/run-repository-tests.sh"],"headAllPrefixes":["tools/tests/"],"domainRules":[{"domain":"gate","paths":["README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]}]}
+{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"gate","paths":["README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]}]}
 JSON
 printf '.artifacts\n' > "$repo/.gitignore"
 printf 'fixture\n' > "$repo/README.md"
@@ -48,6 +49,7 @@ verify_at=$(timestamp -180)
 review_at=$(timestamp -120)
 transition_at=$(timestamp -60)
 preflight_at=$(timestamp -30)
+reviewer_model=claude
 
 issue_body="$scratch/issue.md"
 cat > "$issue_body" <<'EOF'
@@ -110,10 +112,10 @@ write_verify() {
 write_review() {
   verdict=${1:-approved}
   packet_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/$head_sha/review-packet.json" | awk '{print $1}')"
-  VERDICT="$verdict" REVIEW_PACKET_DIGEST="$packet_digest" ISSUE_CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" REVIEWED_AT="$review_at" ruby -rjson -e '
+  VERDICT="$verdict" REVIEWER="$reviewer_model" REVIEW_PACKET_DIGEST="$packet_digest" ISSUE_CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" REVIEWED_AT="$review_at" ruby -rjson -e '
     findings = ENV.fetch("VERDICT") == "approved" ? [] : [{"severity" => "high", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "blocking", "evidence" => "fixture", "requiredChange" => "fix"}]
     assessments = ["AC-1", "AC-2"].map { |id| {"id" => id, "status" => ENV.fetch("VERDICT") == "approved" ? "supported" : "unsupported", "evidence" => ["verify.json#acceptanceEvidence"]} }
-    puts JSON.generate({"schemaVersion" => 2, "issue" => 42, "reviewerModel" => "claude", "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContractDigest" => ENV.fetch("ISSUE_CONTRACT_DIGEST"), "reviewPacketDigest" => ENV.fetch("REVIEW_PACKET_DIGEST"), "verdict" => ENV.fetch("VERDICT"), "findings" => findings, "acceptanceAssessment" => assessments, "reviewedAt" => ENV.fetch("REVIEWED_AT")})
+    puts JSON.generate({"schemaVersion" => 2, "issue" => 42, "reviewerModel" => ENV.fetch("REVIEWER"), "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContractDigest" => ENV.fetch("ISSUE_CONTRACT_DIGEST"), "reviewPacketDigest" => ENV.fetch("REVIEW_PACKET_DIGEST"), "verdict" => ENV.fetch("VERDICT"), "findings" => findings, "acceptanceAssessment" => assessments, "reviewedAt" => ENV.fetch("REVIEWED_AT")})
   ' > "$repo/.artifacts/issues/42/$head_sha/review.json"
   write_receipt
 }
@@ -121,10 +123,10 @@ write_review() {
 write_receipt() {
   local packet="$repo/.artifacts/issues/42/$head_sha/review-packet.json"
   local review="$repo/.artifacts/issues/42/$head_sha/review.json"
-  local launcher="$repo/tools/cross-model-review.sh"
-  RECEIPT="$repo/.artifacts/issues/42/$head_sha/review-receipt.json" ISSUE=42 HEAD="$head_sha" PACKET="$packet" REVIEW="$review" LAUNCHER="$launcher" STARTED_AT="$review_at" COMPLETED_AT="$review_at" ruby -rjson -rdigest -e '
-    digest = ->(path) { "sha256:#{Digest::SHA256.file(path).hexdigest}" }
-    value={"schemaVersion"=>1,"issue"=>Integer(ENV.fetch("ISSUE")),"headSha"=>ENV.fetch("HEAD"),"primaryModel"=>"codex","reviewerModel"=>"claude","launcher"=>"tools/cross-model-review.sh","launcherDigest"=>digest.call(ENV.fetch("LAUNCHER")),"reviewerLauncher"=>"tools/cross-model-review.sh","reviewerLauncherDigest"=>digest.call(ENV.fetch("LAUNCHER")),"reviewPacketDigest"=>digest.call(ENV.fetch("PACKET")),"validatedResultDigest"=>digest.call(ENV.fetch("REVIEW")),"publishedReviewDigest"=>digest.call(ENV.fetch("REVIEW")),"startedAt"=>ENV.fetch("STARTED_AT"),"completedAt"=>ENV.fetch("COMPLETED_AT"),"exitStatus"=>0}
+  RECEIPT="$repo/.artifacts/issues/42/$head_sha/review-receipt.json" REPO="$repo" ISSUE=42 HEAD="$head_sha" PACKET="$packet" REVIEW="$review" STARTED_AT="$review_at" COMPLETED_AT="$review_at" ruby -I "$repo/tools/lib" -rjson -rreview-receipt -e '
+    packet_bytes = File.binread(ENV.fetch("PACKET"))
+    review_bytes = File.binread(ENV.fetch("REVIEW"))
+    value = IOSTemplate::ReviewReceipt.build(repo: ENV.fetch("REPO"), primary: "codex", issue: Integer(ENV.fetch("ISSUE")), head_sha: ENV.fetch("HEAD"), packet_bytes: packet_bytes, validated_result_bytes: review_bytes, published_review_bytes: review_bytes, started_at: ENV.fetch("STARTED_AT"), completed_at: ENV.fetch("COMPLETED_AT"))
     File.binwrite(ENV.fetch("RECEIPT"),JSON.generate(value))
   '
 }
@@ -292,6 +294,32 @@ jq -e --arg head "$head_sha" '.status == "passed" and .headSha == $head' "$scrat
 expected_gh="issue view 42 --repo yuto1201/iOS-Template --json number,url,body,labels"
 [[ "$(tail -n 1 "$FAKE_GH_LOG")" == "$expected_gh" ]] || { echo 'gate used an unexpected gh command' >&2; exit 1; }
 CTIME_ONLY_HELD_TARGET="$repo/.artifacts/issues/42/github-preflight.json" run_gate >/dev/null
+
+# The same Gate and renderer must accept only the exact reviewer selected by a
+# sealed, user-explicit Codex-primary Grok declaration.
+cp "$issue_body" "$scratch/default-review-route-issue.md"
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("- AC-2: Every acceptance criterion has one evidence mapping.", "- AC-2: Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: Claude is unavailable and the user approved this exact fixture.") or abort; File.binwrite(path,text)' "$issue_body"
+canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
+contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+DIGEST="$contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value.fetch("issueContract")["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+write_verify
+write_review_packet
+reviewer_model=cursor-grok-4.6-xhigh
+write_review
+write_preflight
+run_gate >/dev/null
+"$issue_worktree/tools/render-pr-body.sh" --issue 42 --head-sha "$head_sha" > "$scratch/grok-pr-body.md"
+grep -Fq 'Reviewer model: `cursor-grok-4.6-xhigh`' "$scratch/grok-pr-body.md"
+
+cp "$scratch/default-review-route-issue.md" "$issue_body"
+canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
+contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+DIGEST="$contract_digest" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value.fetch("issueContract")["digest"]=ENV.fetch("DIGEST"); File.binwrite(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+reviewer_model=claude
+write_verify
+write_review_packet
+write_review
+write_preflight
 
 rm "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
 assert_fails 'approved review without an opposite-model execution receipt is rejected' run_gate

@@ -1,7 +1,7 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 2.7
+Version: 2.8
 Date: 2026-09-14
 
 ## 1. テンプレート完成条件
@@ -17,6 +17,7 @@ Date: 2026-09-14
 - [ ] Delivery stageに応じて1条件、targeted部分集合、4条件を固定できる。
 - [ ] 条件付きUI Direction Gateが、必要なUI作業だけを明示選択まで停止し、Identity bootstrapと独立した非UI作業を停止しない。
 - [ ] Head SHAが異なる古い検証・レビューではpre-merge gateが失敗する。
+- [ ] 反対モデルレビューは既定pairを維持し、ユーザー承認をsealed contractへ明示したCodex-primary Issueだけがexact `cursor-grok-4.6-xhigh`の固定read-only fallbackを使える。
 - [ ] 秘密値が追跡ファイル、ログ、Issue／PR本文へ混入していない。
 - [ ] `App Store/`に提出情報の構造と検証scriptがある。
 - [ ] README、仕様、運用文書、skill、tool間のlink検証が通る。
@@ -50,6 +51,7 @@ Date: 2026-09-14
 - 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更を含むIssueは`ios-3d-assets`を使い、authoring modelをexact `gpt-6-astra`としてIssue／PR証拠へ記録する。Claudeまたは別のCodex modelは要件整理、既存asset統合、形式検証、RealityKit実装、Build／Test、レビューを担当できるが、3D asset bytesをauthoringしない。exact modelが利用不能なら`blocked:environment`とし、別modelの成果へ置換しない。
 - application releaseに属するIssueは、release identifier、revision、現在Phase、依存する前Phaseの完了記録へ到達できる。Phase 1のscope承認、Phase 3のユーザー完了判断、Phase 4の独立した対応範囲、Phase 5の残件承認、Phase 6の公開権限を別々に記録する。workflow-onlyのテンプレート改善Issueへ架空のapplication Phaseを付けない。
 - 前Phaseが未完了でもread-only調査、選択肢、Issue草案、依存しない作業は可能だが、その結果を次Phaseの実装開始または完了証拠にしない。依存する実装は前Phase完了と現行revisionの再照合まで開始しない。
+- 反対モデルreviewerは既定でCodex primary→Claude、Claude primary→Codexとする。Claudeが利用不能でユーザーがそのIssueに限り明示承認した場合だけ、一つのAC本文先頭にexact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`を置ける。重複、不完全、別primary／model、推測承認はGrok routeを成立させず、silent／automatic fallback、Claude-primary→Grok、primary自身の承認を許可しない。
 
 D-030 cutoverは`2026-09-06T00:31:41Z`である。封印済みIssue contractの`fetchedAt`がcutoverより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合はpre-D-030 legacyとして、routeを推測せず、遡及的なHTML比較やroute宣言を要求せず、contractを変更・再封印せずに元の封印済みAC、spec anchors、Dependencies、current-Head evidenceを検証する。cutoverより前でも候補が一つ以上あれば通常規則へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。`fetchedAt`がcutoverと同時刻または後のcontractにも同じexactly-one／完全性を必須とし、cutover後のpre-Claim Issueも完全な宣言なしではDefinition of Readyを満たさない。prefix外のroute語は候補として数えない。
 
@@ -66,7 +68,7 @@ stage未導入のClaim済みIssueはcanonical contractを変更せず、旧profi
 3. コンパイル、重要な金額・日付・保存ロジックのTest、データ非破壊、秘密非露出を確認する。
 4. stageとprofileが要求するBuild／Test／Simulatorを現在Headで実行し、未実行を成功と報告しない。
 5. canonical evidenceのCommit SHAが現在Headと一致する。HTML比較をnative iOS証拠として代用しない。
-6. profileまたはstageが要求するレビューが現在Headへ承認済みである。
+6. profileまたはstageが要求するレビューが、sealed contractから決まるauthorized reviewer、固定launcher、現在Headのpacket／result／receiptで承認済みである。
 7. PR本文にIssue、仕様、stage、検証、レビュー要否、release readinessを記載する。
 8. 指定ExecutorがSquash Mergeし、remote Branch、local Branch、worktreeを安全に片付け、Issueが完了状態である。
 
@@ -131,7 +133,7 @@ AI検証用deviceは必要時作成・最終使用後削除とし、同じMac全
 
 成功、失敗、timeout、cancel、部分作成失敗、強制終了後の孤児をcleanup対象とする。証拠をdevice外へ保存し、exact UDIDとowner／lease／非活動状態を確認してからdeviceとdataを削除し、一覧とdata残留の確認後だけ枠を返す。停止／erase、名前一致、Shutdownだけを削除完了や所有根拠にしない。手動device、他repository／session、使用中、不明なdevice、Runtime、Xcode、共通cache、ユーザーDerivedData、canonical evidenceを保護する。
 
-容量／memoryが不足すれば4台未満でも新規作成と長時間反復を止める。#89以後のschema v2 matrixはMac共通lease、session上限、孤児回収、容量preflightを使い、実行UDIDと削除receiptをversioned artifactへ固定する。旧schema v1の固定UDID matrixと既存証拠はimmutable legacyとして受理し、遡及変換しない。skills全体と既存Issueの移行は#88で扱う。
+容量／memoryが不足すれば4台未満でも新規作成と長時間反復を止める。#93以後のschema v2 matrixはMac共通lease、session上限、孤児回収、容量preflightを使い、実行UDIDと削除receiptをversioned artifactへ固定する。#89は#93への移植元履歴として保持する。旧schema v1の固定UDID matrixと既存証拠はimmutable legacyとして受理し、遡及変換しない。skills全体と既存Issueの移行は#88で扱う。
 
 ## 5. 常設品質ゲート
 

@@ -22,6 +22,7 @@ Produce a reviewable Issue graph before Claim. Keep setup with its first useful 
    - `fast`: non-UI, local, low-risk work. No approval-required or strict provider operation.
    - `standard`: ordinary user-visible UI, localization, or accessibility work.
    - `strict`: auth/authorization, secrets, schema/migration, production/destructive data, billing/plan, privacy/legal, App Store/TestFlight/signing, or delivery-gate changes.
+   - Keep opposite review on the default Codex→Claude／Claude→Codex pair. Only when Claude is unavailable and the current user explicitly authorizes Grok for one Codex-primary Issue, start exactly one existing AC with `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`. Never infer, generalize, or add a runtime fallback.
    - An existing Issue without an explicit profile remains `strict`; never downgrade it by inference.
    - Keep risk and maturity separate: a security-sensitive shape can be `strict` without becoming a release candidate; a normal harden Issue can remain `standard` while using targeted evidence.
    - Plan English/iPad, Dark Mode, Dynamic Type, VoiceOver, 44pt boundaries, performance, and recovery as focused harden Issues only when needed. Make the release Issue depend on the required ones. Preserve String Catalog keys, flexible layout and critical auth/data/billing tests from the beginning; do not require finished English/iPad UI per shape Issue.

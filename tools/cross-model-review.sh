@@ -18,6 +18,7 @@ packet_json=$("$repo_root/tools/validate-review-result.sh" --primary "$primary" 
 issue=$(jq -er '.issue' <<<"$packet_json")
 head_sha=$(jq -er '.headSha' <<<"$packet_json")
 base_sha=$(jq -er '.baseSha' <<<"$packet_json")
+reviewer_model=$(jq -er '.reviewerModel' <<<"$packet_json")
 topology=$(ruby "$repo_root/tools/lib/review-artifacts.rb" "$repo_root") || exit 1
 artifacts_root=$(jq -er '.artifactsRoot' <<<"$topology")
 artifact_issue_root="$artifacts_root/issues/$issue"
@@ -100,7 +101,7 @@ RUBY
 snapshot_repository > "$snapshot_before"
 review_status=0
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-if [[ "$primary" == codex ]]; then
+if [[ "$primary:$reviewer_model" == codex:claude ]]; then
   instruction="You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. If repositoryTests is present, assess its recorded execution and per-AC mappings as sealed evidence. If repositoryTestPlan is present, verify its requested/resolved scope, manifest/diff identity, exact test paths, ordered AC mappings, repositoryTestPlanFile exact-byte reference, and agreement with schema v3 repositoryTests. For scope base-and-head, verify both ordered revisions, their distinct tested SHA and full inventory, and the repositoryTestsFile exact-byte reference. Base tests support only baseline/regression claims, never a new Head feature. For each supported AC-N, include its exact zero-based mapping reference repository-tests.json#acceptanceEvidence/N-1 (replace N-1 with the numeric index); another AC mapping, prose, or reduced evidence is insufficient. Evidence references must be relative to the packet's canonical Issue/Head artifact directory: use validator-readable references such as verify.json#acceptanceEvidence/0 or repository-tests.json#acceptanceEvidence/0, never repository source paths, review-packet.json shorthand, absolute paths, or prose. Return exactly one raw JSON object conforming to docs/agent-contracts/review-packet.md Result schema, including the exact reviewPacketDigest from the schema v2 packet bytes. Set reviewedAt to exactly $started_at; do not infer the current date or time. Do not add prose or Markdown fences before or after the JSON object."
   if ruby -rtimeout -e '
     command = ARGV
@@ -184,31 +185,50 @@ Validated review packet: $packet_absolute" </dev/null > "$raw_output"; then
   else
     review_status=$?
   fi
-else
+elif [[ "$primary:$reviewer_model" == codex:cursor-grok-4.6-xhigh ]]; then
+  if "$repo_root/tools/request-grok-review.sh" --packet "$packet" --reviewed-at "$started_at" > "$raw_output"; then
+    :
+  else
+    review_status=$?
+  fi
+elif [[ "$primary:$reviewer_model" == claude:codex ]]; then
   if "$repo_root/tools/request-codex-review.sh" --packet "$packet" --output "$output" > "$raw_output"; then
     :
   else
     review_status=$?
   fi
+else
+  echo 'sealed review route has no authorized launcher' >&2
+  exit 1
 fi
 completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 snapshot_repository > "$snapshot_after"
+block_review() {
+  if ! "$repo_root/tools/issue-state.sh" transition --repo "$repository" --issue "$issue" --from review-requested --to blocked:review >/dev/null; then
+    echo 'review failure could not transition the Issue to blocked:review' >&2
+  fi
+}
 if ! cmp -s "$snapshot_before" "$snapshot_after"; then
   echo 'reviewer attempted to write inside the repository; review was rejected' >&2
   rm -f "$output_absolute"
+  block_review
   exit 1
 fi
 if [[ "$review_status" -ne 0 ]]; then
+  block_review
   if [[ "$review_status" -eq 124 ]]; then
-    "$repo_root/tools/issue-state.sh" transition --repo "$repository" --issue "$issue" --from review-requested --to blocked:review >/dev/null
     echo 'opposite-model review timed out; moved to blocked:review' >&2
   else
-    echo "opposite-model reviewer failed with status:$review_status; no review was published" >&2
+    echo "opposite-model reviewer failed with status:$review_status; moved to blocked:review and no review was published" >&2
   fi
   exit "$review_status"
 fi
-[[ "$(git -C "$repo_root" rev-parse HEAD)" == "$head_sha" ]] || { echo 'Head changed during review; no review was published' >&2; exit 1; }
-ruby -rjson - "$raw_output" "$normalized_output" <<'RUBY'
+if [[ "$(git -C "$repo_root" rev-parse HEAD)" != "$head_sha" ]]; then
+  block_review
+  echo 'Head changed during review; moved to blocked:review and no review was published' >&2
+  exit 1
+fi
+if ! ruby -rjson - "$raw_output" "$normalized_output" <<'RUBY'
 raw, normalized = ARGV
 value = JSON.parse(File.binread(raw))
 if value.is_a?(Hash) && value["result"].is_a?(String) && !value.key?("schemaVersion")
@@ -216,6 +236,11 @@ if value.is_a?(Hash) && value["result"].is_a?(String) && !value.key?("schemaVers
 end
 File.binwrite(normalized, JSON.generate(value))
 RUBY
+then
+  block_review
+  echo 'opposite-model reviewer returned empty or malformed JSON; moved to blocked:review' >&2
+  exit 1
+fi
 if ! "$repo_root/tools/validate-review-result.sh" --primary "$primary" --packet "$packet" --result "$normalized_output" > "$validated"; then
   # Diagnostic only: retain the reviewer's judgment verbatim, never publish a
   # canonical review/receipt for an invalid result or repair its fields here.

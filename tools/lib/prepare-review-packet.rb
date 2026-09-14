@@ -64,11 +64,12 @@ module IOSTemplate
         end
         actual_diff = ReviewContract.actual_diff(repo: repo, base_sha: base_sha, head_sha: head_sha)
         prefix = ".artifacts/issues/#{issue}/#{head_sha}/"
+        reviewer = ReviewContract.reviewer_for(contract, primary)
         packet = {
           "schemaVersion" => 2,
           "issue" => issue,
           "primaryModel" => primary,
-          "reviewerModel" => primary == "codex" ? "claude" : "codex",
+          "reviewerModel" => reviewer,
           "baseSha" => base_sha,
           "headSha" => head_sha,
           "verifySha" => head_sha,

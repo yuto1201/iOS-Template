@@ -155,12 +155,19 @@
         "tools/lib/prepare-review-packet.rb",
         "tools/lib/publish-review-result.rb",
         "tools/lib/review-contract.rb",
+        "tools/lib/review-receipt.rb",
+        "tools/lib/review-route.rb",
         "tools/lib/review-sealing.rb",
+        "tools/lib/validate-review-receipt.rb",
         "tools/prepare-review-packet.sh",
         "tools/render-pr-body.sh",
+        "tools/request-grok-review.sh",
         "tools/validate-review-result.sh"
       ],
-      "prefixes": [".agents/skills/cross-model-review/"]
+      "prefixes": [
+        ".agents/skills/cross-model-review/",
+        "tools/tests/fixtures/cross-model-review/"
+      ]
     },
     {
       "domain": "specification",
@@ -241,6 +248,7 @@
     {"path": "tools/tests/test-render-pr-body.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["repository-testing"]},
+    {"path": "tools/tests/test-review-route.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-review-sealing.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-review-shared-artifacts.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-secret-store.sh", "domains": ["provider-security"]},

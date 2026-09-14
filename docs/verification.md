@@ -14,6 +14,8 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 非applicationのdelivery tool／schema／validator／review／evidence変更はworkflow-only経路です。`harden + strict`、application `Verification`／`Verification scope`なし、allowlist内の差分だけを受理します。先にcanonical repository-test evidenceを発行し、次に`.artifacts/issues/${ISSUE}/workflow-evidence-input.json`へschemaVersion 1と非空reasonを書き、`tools/publish-workflow-verify.sh`で`verify.json`を発行します。この経路はXcode、Build、Unit、Simulator matrix、Screenshot、visual evaluationを起動せず、repository evidenceのAC mappingをverifyへ固定します。
 
+正式reviewerはsealed contractから決めます。既定はCodex primary→Claude、Claude primary→Codexです。Codex-primary contractがexactly oneの完全な`Opposite-review route: grok-fallback`宣言とユーザー明示承認を持つ場合だけ、exact `cursor-grok-4.6-xhigh`を固定Cursor `ask` launcherで使います。packet、result、receipt、PR renderer、premerge gateはreviewer modelとlauncher bytesを同じIssue／contract／Base／Headへ束縛し、別model、手書き証拠、自己承認を拒否します。
+
 stage未指定のClaim済みcontractは旧release-level gateを維持します。未実行は`deferred / unverified`であり成功ではありません。shape／hardenをrelease readyと報告しません。
 
 [UI Direction Gate](../.agents/skills/ui-direction/SKILL.md)は、現在のユーザーが対象範囲のHTML比較を明示した場合に方向の有無を問わず最優先で適用します。現在の明示省略は、現行性、exact scope、権限、理由、比較指示との非矛盾が明確な場合だけ`explicit-skip` routeとして通常判定を上書きし、曖昧または矛盾する場合は依存UIを`blocked:user`にします。それ以外は、exact hierarchy／flowを覆う確定方向があれば`confirmed-direction reuse`、対象方向が未確定で最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかなら`comparison`、方向未確定かつ3 triggerのいずれもなくAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない場合だけ`bounded direction-neutral`とします。coverage、triggerまたはneutralityが曖昧ならGateを実行します。Identity bootstrapと純非UIは`not-applicable`で、Gateを評価するのは依存する後続native UIだけです。
@@ -50,6 +52,7 @@ Claim／Resume後のIssue worktreeから、[ios-verifyのlocked command](../.age
 | `python3` | app-icon、mediaのfixtureとbootstrap。foundationは`tomllib`を使うためPython 3.11以上が必要。foundationを子として実行するbootstrapも同じ条件を開始前に確認する |
 | `${CC:-cc}` | `test-cross-model-review.sh`と`test-review-shared-artifacts.sh`のnative reviewer fixtureコンパイル。`CC`は単一の実行ファイル名またはパスとし、flagsを混ぜない |
 | `codex` | `test-cross-model-review.sh`だけが実際のnative Mach-O Codex sandboxを使用。他のtestには一律要求しない。既存のMach-O／sandbox検査も維持する |
+| `cursor-agent` | sealed Grok fallbackを実際に実行するときだけ、認証済みCLIとexact `cursor-grok-4.6-xhigh`が必要。repository testはsanitized環境を検査するfixtureを使用し、実accountやnetworkを要求しない |
 
 `tools/tests/lib/prerequisites.sh`はfixture作成・assertion前に外部実行ファイルの有無を確認します。shell alias／関数だけでは満たしません。不足時は`test prerequisite unavailable`、test名、不足コマンドをstderrへ出し、exit 69で停止します。skipや成功ではなく環境不足であり、assertionが製品の不具合を検出した結果とも区別します。Pythonのversion／module不足も同じ扱いです。PATH全体や認証情報は出力しません。
 
@@ -524,7 +527,7 @@ gateはprimary checkoutのartifactをpathごとに読み直しません。Issue 
 - review-requiredの場合、現在のHead SHA = review.jsonのheadSha
 - verify status = passedまたは正当なnot-applicable
 - review-requiredの場合、review verdict = approved
-- review-requiredの場合、schema v2 packet／result／receiptのexact bytes、Base／Head／Verify SHA、model、Issue contract digestが一致
+- review-requiredの場合、schema v2 packet／result／receiptのexact bytes、Base／Head／Verify SHA、sealed routeから決まるprimary／reviewer model、固定launcher path／bytes、Issue contract digestが一致
 - review-requiredの場合、approved reviewのFinding = 0、全Acceptance criteria = supported、`reviewedAt`がverify完了後かつ未来でない
 - Acceptance criteriaの証拠欠落 = 0
 - `gh issue view`のfixed fieldsがcaller Issueと一致し、許可されたIssue typeがexact一つ存在

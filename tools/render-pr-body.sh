@@ -201,7 +201,7 @@ begin
   end
   primary_model = review_packet["primaryModel"]
   reject("review primary model is invalid") unless %w[codex claude].include?(primary_model)
-  reviewer = primary_model == "codex" ? "claude" : "codex"
+  reviewer = IOSTemplate::ReviewContract.reviewer_for(contract, primary_model)
   IOSTemplate::ReviewContract.validate_packet_identity!(review_packet, 2, primary_model, reviewer, issue, verify["baseSha"], head)
   expected_contract_reference = {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => contract_digest}
   reject("review packet issue contract does not match exact current bytes") unless review_packet["issueContract"] == expected_contract_reference

@@ -57,11 +57,12 @@ fake_bin="$workspace/bin"
 mkdir -p "$fake_bin" "$artifact_root"
 real_codex=$(command -v codex)
 [[ "$real_codex" == /* && $(/usr/bin/file -b "$real_codex") == Mach-O* ]] || { echo 'installed Codex must be a native Mach-O executable for sandbox probes' >&2; exit 1; }
-cp "$repo_root/tools/tests/fixtures/cross-model-review/claude" "$fake_bin/claude"
+  cp "$repo_root/tools/tests/fixtures/cross-model-review/claude" "$fake_bin/claude"
+  cp "$repo_root/tools/tests/fixtures/cross-model-review/cursor-agent" "$fake_bin/cursor-agent"
 cp "$repo_root/tools/tests/fixtures/cross-model-review/codex" "$fake_bin/codex-fixture"
 "${CC:-cc}" -Wall -Werror "$repo_root/tools/tests/fixtures/cross-model-review/codex-native.c" -o "$fake_bin/codex"
 cp "$repo_root/tools/tests/fixtures/gh" "$fake_bin/gh"
-chmod +x "$fake_bin/claude" "$fake_bin/codex" "$fake_bin/codex-fixture" "$fake_bin/gh"
+  chmod +x "$fake_bin/claude" "$fake_bin/cursor-agent" "$fake_bin/codex" "$fake_bin/codex-fixture" "$fake_bin/gh"
 export PATH="$fake_bin:$PATH"
 export FAKE_REVIEWER_LOG="$workspace/reviewer.log"
 export FAKE_REVIEWER_REQUIRE_CLOSED_STDIN=1
@@ -94,6 +95,7 @@ ruby -rjson -e '
   value = {"schemaVersion" => 1, "issue" => 424243, "repository" => "yuto1201/iOS-Template", "goal" => "Review automation", "specAnchors" => ["specs/acceptance.md#1"], "fetchedAt" => "2026-08-24T00:00:00Z", "dependencies" => [], "externalOperations" => ["github.read_issue", "github.update_issue"], "externalOperationDetailsDigest" => "sha256:6d9186ad00006772ce084a4e31fc52313470939dc1b4d978ed6fe10858a9be1f", "acceptanceCriteria" => [{"id" => "AC-1", "text" => "A result is tied to the reviewed Head"}]}
   File.binwrite(ARGV.fetch(0), JSON.generate(canonical(value)))
 ' "$artifact_issue/issue-contract.json"
+cp "$artifact_issue/issue-contract.json" "$workspace/default-contract.json"
 contract_digest=$(digest "$artifact_issue/issue-contract.json")
 printf 'diff\n' > "$artifact_root/review.diff"
 printf 'image\n' > "$artifact_root/iphone-en.png"
@@ -134,19 +136,40 @@ assert_fails 'custom reviewer profile denies absolute executable socket creation
 review_anchor='specs/acceptance.md#1'
 write_packet() {
   local primary=$1 reviewer=$2
-  PRIMARY="$primary" REVIEWER="$reviewer" PACKET="$artifact_root/review-packet.json" ISSUE="$issue" BASE="$base_sha" HEAD="$head_sha" DIGEST="$contract_digest" ANCHOR="$review_anchor" ruby -rjson -e '
-    File.write(ENV.fetch("PACKET"), JSON.generate({"schemaVersion" => 1, "issue" => ENV.fetch("ISSUE").to_i, "primaryModel" => ENV.fetch("PRIMARY"), "reviewerModel" => ENV.fetch("REVIEWER"), "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContract" => {"path" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "specAnchors" => [ENV.fetch("ANCHOR")], "acceptanceCriteria" => [{"id" => "AC-1", "text" => "A result is tied to the reviewed Head"}], "diffFile" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/#{ENV.fetch("HEAD")}/review.diff", "verifyFile" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/#{ENV.fetch("HEAD")}/verify.json", "imageFiles" => ["iphone-en.png"]}))
+  PRIMARY="$primary" REVIEWER="$reviewer" PACKET="$artifact_root/review-packet.json" CONTRACT="$artifact_issue/issue-contract.json" ISSUE="$issue" BASE="$base_sha" HEAD="$head_sha" DIGEST="$contract_digest" ruby -rjson -e '
+    contract = JSON.parse(File.binread(ENV.fetch("CONTRACT")))
+    File.write(ENV.fetch("PACKET"), JSON.generate({"schemaVersion" => 1, "issue" => ENV.fetch("ISSUE").to_i, "primaryModel" => ENV.fetch("PRIMARY"), "reviewerModel" => ENV.fetch("REVIEWER"), "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContract" => {"path" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "specAnchors" => contract.fetch("specAnchors"), "acceptanceCriteria" => contract.fetch("acceptanceCriteria"), "diffFile" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/#{ENV.fetch("HEAD")}/review.diff", "verifyFile" => ".artifacts/issues/#{ENV.fetch("ISSUE")}/#{ENV.fetch("HEAD")}/verify.json", "imageFiles" => ["iphone-en.png"]}))
   '
 }
 
-set_anchor() {
-  review_anchor=$1
-  ANCHOR="$review_anchor" CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -e 'path = ENV.fetch("CONTRACT"); value = JSON.parse(File.read(path)); value["specAnchors"] = [ENV.fetch("ANCHOR")]; File.write(path, JSON.generate(value))'
+refresh_contract_binding() {
   contract_digest=$(digest "$artifact_issue/issue-contract.json")
   DIGEST="$contract_digest" VERIFY="$artifact_root/verify.json" ruby -rjson -e 'path = ENV.fetch("VERIFY"); value = JSON.parse(File.read(path)); value.fetch("issueContract")["digest"] = ENV.fetch("DIGEST"); File.write(path, JSON.generate(value))'
   if [[ -f "$artifact_issue/state.json" ]]; then
     DIGEST="$contract_digest" STATE="$artifact_issue/state.json" ruby -rjson -e 'path = ENV.fetch("STATE"); value = JSON.parse(File.binread(path)); value.fetch("issueContract")["digest"] = ENV.fetch("DIGEST"); File.binwrite(path, JSON.generate(value))'
   fi
+}
+
+set_anchor() {
+  review_anchor=$1
+  ANCHOR="$review_anchor" CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -e 'path = ENV.fetch("CONTRACT"); value = JSON.parse(File.read(path)); value["specAnchors"] = [ENV.fetch("ANCHOR")]; File.write(path, JSON.generate(value))'
+  refresh_contract_binding
+}
+
+enable_grok_route() {
+  CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -e '
+    path = ENV.fetch("CONTRACT")
+    value = JSON.parse(File.binread(path))
+    value.fetch("acceptanceCriteria") << {"id" => "AC-2", "text" => "Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: Claude is unavailable and the user approved this exact Issue."}
+    File.binwrite(path, JSON.generate(value))
+  '
+  refresh_contract_binding
+}
+
+restore_default_contract() {
+  cp "$workspace/default-contract.json" "$artifact_issue/issue-contract.json"
+  review_anchor='specs/acceptance.md#1'
+  refresh_contract_binding
 }
 
 write_result() {
@@ -230,7 +253,7 @@ printf '{not json' > "$workspace/result.json"
 export FAKE_REVIEWER_RESULT="$workspace/result.json"
 assert_fails 'malformed reviewer JSON is rejected' run_review
 [[ ! -e "$artifact_root/review.json" ]]
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:review-requested"]'
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:review"]'
 
 reset_review_requested
 export FAKE_REVIEWER_MODE=mismatch
@@ -304,8 +327,23 @@ export FAKE_REVIEWER_WRITE_PATH="$artifact_root/reviewer-write.txt"
 write_result approved
 assert_fails 'reviewer write attempt is rejected' run_review
 [[ -f "$FAKE_REVIEWER_WRITE_PATH" && ! -e "$artifact_root/review.json" ]]
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:review-requested"]'
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:review"]'
 unset FAKE_REVIEWER_WRITE_PATH
+
+reset_review_requested
+enable_grok_route
+write_packet codex claude
+assert_fails 'a Grok-authorized contract rejects a forged default reviewer packet' run_review
+[[ ! -e "$artifact_root/review.json" ]]
+write_packet codex cursor-grok-4.6-xhigh
+fake_cursor_home="$workspace/fake-cursor-home"
+mkdir -p "$fake_cursor_home"
+HOME="$fake_cursor_home" run_review
+assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["reviewerModel"] == "cursor-grok-4.6-xhigh" && value["verdict"] == "approved"'
+assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["primaryModel"] == "codex" && value["reviewerModel"] == "cursor-grok-4.6-xhigh" && value["reviewerLauncher"] == "tools/request-grok-review.sh" && value.keys.none? { |key| key.downcase.include?("account") || key.downcase.include?("token") }'
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
+[[ "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"--mode ask"* && "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"--model cursor-grok-4.6-xhigh"* ]] || { echo 'Grok was not invoked through the exact read-only model route' >&2; exit 1; }
+restore_default_contract
 
 reset_review_requested
 set_anchor external-attempt
@@ -347,4 +385,4 @@ cat > "$artifact_root/review-receipt.json" <<JSON
 JSON
 assert_fails 'a forged receipt cannot authorize an existing review' run_review codex
 
-echo 'PASS: opposite-model execution receipts, approved, envelope, changes-requested, malformed, SHA mismatch, timeout, interrupt cleanup, write-attempt, native hardened Codex sandbox probes, and exact recovery cases'
+echo 'PASS: default and user-approved Grok opposite-model execution receipts, approved, envelope, changes-requested, malformed, SHA mismatch, timeout, interrupt cleanup, write-attempt, native hardened Codex sandbox probes, and exact recovery cases'

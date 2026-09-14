@@ -10,6 +10,8 @@
 
 UI-direction compatibility is determined only from the sealed Issue contract. A declaration candidate is any existing acceptance-criterion text that begins with the exact `UI-direction route:` prefix, immediately after its `AC-*:` ID. It is valid only in the exact form `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`, where `<route>` is exactly `comparison`, `explicit-skip`, `confirmed-direction reuse`, `bounded direction-neutral`, or `not-applicable`; route-specific facts may follow Reason. Incidental route words outside that prefix, including prose that lists every route, do not create a candidate. Compare `fetchedAt` as a UTC instant with `2026-09-06T00:31:41Z`: an earlier contract is pre-D-030 legacy only when it has zero candidates, so the packet/reviewer must not infer a route, demand retroactive HTML or a route declaration, or modify/reseal that contract; review its original sealed AC, spec anchors, Dependencies, and current-Head evidence. If an earlier contract has one or more candidates, validate it normally and reject unless exactly one candidate is fully valid; malformed, unknown-route, empty Scope/Reason, and multiple-candidate cases are not legacy. A contract at or after the cutoff has the same exactly-one and validity requirements, including rejection when no candidate exists. The packet preserves the Issue-contract path and digest needed for that classification and never substitutes Issue number, update time, file mtime, or live UI verification. For non-legacy contracts, formal reviewers identify the route only from the valid AC-text declaration and validate its Scope, Reason, and route-specific facts using the packet-bound Issue contract's Goal, Acceptance criteria, Spec anchors, Dependencies, linked confirmed spec/Decision, current-Head diff, and evidence. schema v1は通常レビューの既存成果物を読む場合に限る互換形式で、pre-merge gateは受理しません。
 
+Opposite-review routing is also derived only from the sealed Acceptance criteria. With no declaration, the compatible defaults remain Codex primary→`claude` and Claude primary→`codex`. The only exception is exactly one criterion whose text begins with exact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`. It selects `cursor-grok-4.6-xhigh` only for a Codex primary. Duplicate, malformed, incomplete, different-primary/model/approval declarations are rejected; an incidental mention does not select Grok. There is no runtime flag, silent fallback, Claude-primary Grok route, or self-approval. Existing sealed contracts without the declaration retain their default pair and bytes.
+
 ```json
 {
   "schemaVersion": 2,
@@ -243,8 +245,9 @@ IOSTemplate::ReviewContract.validate!(
 
 - Codex primary -> Claudeを非対話read-onlyで呼ぶ
 - Claude primary -> Codexをread-only sandboxで呼ぶ
+- exactなユーザー承認宣言を持つCodex primary -> `cursor-grok-4.6-xhigh`を固定Cursor `ask` launcherで非対話read-only呼び出しする
 - Timeout: 10分
 - Reviewerはファイル編集、外部操作、commit、pushを行わない
 - Reviewerが環境や認証状態を推測した場合、主エージェントは実環境で再確認する
 
-Reviewerが利用不能なら `blocked:review` です。別モデルへの無断置換や主開発モデル自身の承認は行いません。
+Grok launcherはstdinを閉じ、GitHub／製品provider credentialを継承せず、exact modelを指定します。raw provider envelopeそのものは証拠ではなく、内側が完全なResult schemaを満たす場合だけ正規化します。認証identityとprovider telemetryはartifactへ保存しません。Reviewerの起動失敗、nonzero exit、timeout、空／不正JSON、schema／evidence不一致、write検出はcanonical review／receiptを発行せず `blocked:review` です。別モデルへの無断置換や主開発モデル自身の承認は行いません。

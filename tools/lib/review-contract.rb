@@ -6,6 +6,7 @@ require "open3"
 require "time"
 require_relative "verification-scope"
 require_relative "repository-test-plan"
+require_relative "review-route"
 
 module IOSTemplate
   module ReviewContract
@@ -47,12 +48,12 @@ module IOSTemplate
                   diff_bytes: nil, image_bytes: nil, actual_diff_bytes: nil,
                   repository_tests_bytes: nil, repository_test_plan_bytes: nil, revision_context: nil)
       reject("primary model is invalid") unless %w[codex claude].include?(primary)
-      reviewer = primary == "codex" ? "claude" : "codex"
       packet = parse_object(packet_bytes, "packet")
       result = parse_object(result_bytes, "result")
       verify = parse_object(verify_bytes, "verify")
       contract = parse_object(contract_bytes, "issue contract")
       contract_digest = digest(contract_bytes)
+      reviewer = reviewer_for(contract, primary)
 
       schema = packet["schemaVersion"]
       reject("merge-ready review requires packet schemaVersion 2") if strict && schema != 2
@@ -172,6 +173,12 @@ module IOSTemplate
         packet["headSha"] == head_sha && packet["verifySha"] == head_sha
       sha!(base_sha, "base SHA")
       sha!(head_sha, "head SHA")
+    end
+
+    def reviewer_for(contract, primary)
+      ReviewRoute.reviewer_for(contract: contract, primary: primary)
+    rescue ReviewRoute::ValidationError => error
+      reject(error.message)
     end
 
     # Selection is contract-derived, never a CLI switch or an inferred prose

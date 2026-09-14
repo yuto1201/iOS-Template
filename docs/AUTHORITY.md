@@ -41,9 +41,11 @@
 | App Store Connect、TestFlight、提出 | 可。設定、監査、承認必須 | 可。設定、監査、承認必須 |
 | Keychainと専用秘密ディレクトリの利用 | 可。子process scope限定 | 可。子process scope限定 |
 | PRのSquash Mergeとremote Branch削除 | 可。Issue指定時 | 可。Issue指定時 |
-| 反対モデルレビュー | Codex実装時にread-only | Claude実装時にread-only |
+| 反対モデルレビュー | Codex primaryの既定reviewerとしてread-only | Claude primaryの既定reviewerとしてread-only。Codex primaryでは下記の明示承認Grok fallbackを起動可能 |
 
 公開Webページの閲覧は認証済み外部操作に含めません。ログイン、Token、Cookie、認証済みMCP／CLI／browser、変更を伴うAPIを使う時点で外部操作です。
+
+反対モデルreview transportは製品providerへの外部操作と分離し、[`review contract`](agent-contracts/review-packet.md)を正本とします。Codex primary→Claude、Claude primary→Codexが既定です。Claude利用不能時は、ユーザー承認をexact形式でsealed ACへ記録したCodex-primary Issueだけが固定`cursor-grok-4.6-xhigh`をCursor `ask` modeで利用できます。Grokはread-only evaluatorであり、IssueのExecutor、外部操作主体、merge主体にはなりません。launcherはGitHubや製品providerのcredentialを継承せず、Cursorの認証account／表示名／email／telemetryをartifact、Issue、PRへ保存しません。指定modelや認証sessionが利用不能なら別modelへ置換せず`blocked:review`です。
 
 ## 4. 共通の外部操作手順
 
