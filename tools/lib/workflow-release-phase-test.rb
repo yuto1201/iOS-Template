@@ -169,6 +169,19 @@ module ReleasePhaseSelfTest
     rejects("reuse route mismatch") do
       IOSTemplate::ReleasePhase.gate!(binding(reused, route: "existing-app"), reused)
     end
+    partially_reused = IOSTemplate::ReleasePhase.append(phase_two, reuse_event)
+    _, partially_reused_state = IOSTemplate::ReleasePhase.validate_record_bytes!(partially_reused, return_state: true)
+    assert("phase reuse overwrote a recorded Phase completion") do
+      partially_reused_state.fetch("completedPhases").fetch(1).fetch("event") == "phase-completed"
+    end
+    phase_four_after_reuse = completion(4, authority: "user", actor: "yuto1201", reference: "issue-4")
+    phase_four_after_reuse["recordedAt"] = "2026-09-14T00:14:00Z"
+    completed_after_reuse = IOSTemplate::ReleasePhase.append(partially_reused, phase_four_after_reuse)
+    later_gate = IOSTemplate::ReleasePhase.gate!(
+      binding(completed_after_reuse, phase: 5, route: "emergency", reason: "Continue after the reused foundations."),
+      completed_after_reuse
+    )
+    assert("reuse route could not continue through later normal phases") { later_gate["requiredPriorPhases"] == [1, 2, 3, 4] }
 
     legacy = IOSTemplate::ReleasePhase.gate!({"schemaVersion" => 1}, nil)
     assert("legacy Issue was implicitly migrated") { legacy == {"status" => "legacy-unbound"} }

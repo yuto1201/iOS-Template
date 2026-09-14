@@ -125,7 +125,7 @@ module IOSTemplate
       if REUSE_ROUTES.include?(route)
         matching_reuse = state.fetch("reuseEvents").reverse.find do |event|
           event["revision"] == state["currentRevision"] && event["route"] == route &&
-            event["throughPhase"] >= phase - 1 && (binding["scope"] - event["scope"]).empty?
+            (binding["scope"] - event["scope"]).empty?
         end
         reject("existing-app or emergency reuse is not authorized by the bound record") unless matching_reuse
       elsif route != "standard"
@@ -305,7 +305,7 @@ module IOSTemplate
           foundations = string_array!(event["foundations"], "phase reuse foundations", require_nonempty: true)
           reject("phase reuse foundation is unsupported") unless (foundations - FOUNDATIONS).empty?
           nonempty_string!(event["reason"], "phase reuse reason")
-          (1..through).each { |number| completed[number] = event }
+          (1..through).each { |number| completed[number] ||= event }
           reuse_events << event
           unclassified = false
         end
