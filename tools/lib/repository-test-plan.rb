@@ -101,6 +101,8 @@ module IOSTemplate
       reject("repository-test manifest schemaVersion is invalid") unless manifest["schemaVersion"] == 1
       head_all_paths = unique_paths!(manifest["headAllPaths"], "manifest.headAllPaths")
       head_all_prefixes = unique_prefixes!(manifest["headAllPrefixes"], "manifest.headAllPrefixes")
+      reject("repository-test manifest automatic head-all paths are no longer allowed") unless head_all_paths.empty?
+      reject("repository-test manifest automatic head-all prefixes are no longer allowed") unless head_all_prefixes.empty?
       rules = manifest["domainRules"]
       reject("repository-test manifest domainRules must be a nonempty array") unless rules.is_a?(Array) && !rules.empty?
       domains = []
@@ -131,9 +133,8 @@ module IOSTemplate
       reject("repository-test manifest inventory differs from tracked tests") unless test_paths == inventory
       referenced = tests.flat_map { |entry| entry.fetch("domains") }.uniq.sort
       reject("repository-test manifest contains a domain without tests") unless referenced == domains
-      reject("repository-test manifest head-all coverage overlaps") if head_all_paths.any? { |path| head_all_prefixes.any? { |prefix| path.start_with?(prefix) } }
       if tracked_paths
-        exact_coverage = head_all_paths + rules.flat_map { |rule| rule.fetch("paths") }
+        exact_coverage = rules.flat_map { |rule| rule.fetch("paths") }
         reject("repository-test manifest exact path is not tracked at Head") unless exact_coverage.all? { |path| tracked_paths.include?(path) }
       end
       manifest
@@ -145,25 +146,25 @@ module IOSTemplate
       return ["base-and-head", "Acceptance criterion explicitly requires Base and Head comparison.", all_tests] if requested_scope == "base-and-head"
       return ["head-all", "Issue contract explicitly requires all current-Head repository tests.", all_tests] if requested_scope == "head-all"
 
-      broad = changed.find do |path|
-        manifest.fetch("headAllPaths").include?(path) || manifest.fetch("headAllPrefixes").any? { |prefix| path.start_with?(prefix) }
-      end
-      return ["head-all", "Changed path requires full current-Head inventory: #{broad}", all_tests] if broad
-
       domains = []
       changed.each do |path|
         matches = manifest.fetch("domainRules").select do |rule|
           rule.fetch("paths").include?(path) || rule.fetch("prefixes").any? { |prefix| path.start_with?(prefix) }
         end.map { |rule| rule.fetch("domain") }
-        return ["head-all", "Changed path has no manifest coverage: #{path}", all_tests] if matches.empty?
+        if path.match?(TEST_PATH)
+          test = manifest.fetch("tests").find { |entry| entry.fetch("path") == path }
+          matches.concat(test.fetch("domains")) if test
+        end
+        reject("changed path has no manifest coverage: #{path}") if matches.empty?
         domains.concat(matches)
       end
       domains.uniq!
       domains.sort!
-      return ["head-all", "Changes span multiple repository-test domains: #{domains.join(',')}", all_tests] unless domains.length == 1
-      selected = manifest.fetch("tests").select { |entry| entry.fetch("domains").include?(domains.first) }.map { |entry| entry.fetch("path") }
+      selected = manifest.fetch("tests").select do |entry|
+        !(entry.fetch("domains") & domains).empty?
+      end.map { |entry| entry.fetch("path") }
       reject("targeted repository-test selection is empty") if selected.empty?
-      ["targeted", "All changed paths resolve to domain #{domains.first}.", selected]
+      ["targeted", "Changed paths resolve to repository-test domains: #{domains.join(',')}.", selected]
     end
 
     def validate_mappings!(mappings, criteria, selected_tests)

@@ -1,7 +1,7 @@
 # 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 3.0
+Version: 3.1
 Date: 2026-09-14
 
 ## 1. 原則
@@ -161,7 +161,9 @@ Verification scopeは端末・言語の範囲を表す。
 
 `shape`はUIを含むため`fast`へ偽装しない。逆に`strict`なshape/hardenでも、危険な対象の安全確認は維持しつつ、無関係なリリース全体検証は後段へ移せる。
 
-workflow-only `harden + strict`のRepository test範囲はapplicationのVerification scopeとは別に扱う。D-037 cutover後はClaim時に`targeted`、`head-all`、`base-and-head`の要求scopeと理由だけを封印し、exact test pathsは実装後のimmutable Base..Head差分とversioned manifestから決定する。未知・複数domain・test基盤変更を狭いscopeへ推測しない。
+workflow-only `harden + strict`のRepository test範囲はapplicationのVerification scopeとは別に扱う。D-037 cutover後はClaim時に`targeted`、`head-all`、`base-and-head`の要求scopeと理由だけを封印し、exact test pathsは実装後のimmutable Base..Head差分とversioned manifestから決定する。D-039以後の`targeted`は既知の単一または複数domainに属するtestの決定論的unionを選び、manifest、runner、tracked test変更を理由に`head-all`へ自動昇格しない。未知pathは全件を実行せずplan生成を拒否する。
+
+通常開発の対象testは1 command 300秒、Issue完了用`targeted` repository suiteはaggregate 900秒を上限とする。`head-all`／`base-and-head`はrelease、nightly相当の明示実行、またはユーザーがIssue contractで明示要求した場合だけ使う。`strict`なshape／hardenも対象安全testを維持するが、無関係な全repository testsや4条件matrixへ拡大しない。
 
 ## 4. 常に守る安全基準
 
@@ -199,7 +201,7 @@ Runtime、Device Type、case集合はバッチ内で固定する。古いHead、
 
 `xcodebuild`、Unit Test、UI Test、`simctl`、Swift検証は有限timeoutで起動する。timeout時は当該呼び出しのprocess groupだけへTERM、grace、必要時KILLを行い、現在attemptが所有するSimulatorとlockだけを回収する。別Issue、別repository、ユーザーが起動したXcodeやSimulatorへglobal shutdown／killを行わない。
 
-失敗記録には停止stage、経過時間、timeoutを含める。timeoutや失敗時に成功形式の`verify.json`を生成しない。同じ原因の実行は最大2回で止める。
+失敗記録には停止stage、経過時間、timeout、未実行testを含める。timeoutや失敗時に成功形式の`verify.json`を生成しない。同一Issue／Head／scopeの長時間実行は直接反復せず、選択済み対象testの診断成功後に1回だけ再試行できる。2回目も同じ原因で失敗した場合は停止する。
 
 再実行の順序は、対象Test、関連回帰Test、Delivery stage標準検証、`release`完全検証とする。Repository testも開発中は関連testだけを直接使い、canonical plan／evidenceは安定した最終候補Headで一度生成する。正式な一括証拠へ異なるattemptの部分結果を混ぜないが、診断済みの対象Test結果は修正判断に利用する。
 

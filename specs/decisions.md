@@ -317,3 +317,13 @@
 - Decision: 一つのMVPまたは公開目標をrelease unitとし、Phase 1 目的・リリース仕様、Phase 2 基盤・UI方向、Phase 3 日本語iPhone開発、Phase 4 英語・iPad対応、Phase 5 品質保証、Phase 6 リリースを適用する。依存する次Phase実装は前Phase完了まで開始しないが、read-only調査、草案、依存しない作業は先行できる。Phase 1〜3の軽微変更は委任範囲で継続し、目的、MVP、主要flow、採用system、data、重大riskの変更だけを影響する最も早いPhaseへ部分的に戻す。最終判断はユーザーとし、特にPhase 1、3、4、5の出口と公開範囲をrelease revisionへ束縛する。変更、証拠適用、不具合許容、テスト省略、未検証を追記型で区別し、重大な安全／認証／課金／privacy／法務違反は公開blockerとする。Phase 5〜6の同一候補では適用可能な証拠を重複実行しないが、#86の実装前にcanonical証拠の再利用・改訂を許可しない。AI検証用Simulatorは必要時作成・使用後削除、Mac全体でiPhone／iPad合計最大4台、sessionごと原則1台とし、枠取得、逐次matrix、証拠保全、所有確認、異常終了回収、容量停止を要求する。
 - Consequence: PhaseはDelivery stage／profile／verification scope／workflow stateを置き換えず、各Issueは従来どおり現在Headの必要検証とreviewを持つ。既存アプリと緊急修正は適用可能な確定基盤を再利用して影響Phaseから開始できる。SimulatorのMac共通lease、削除、孤児回収と既存固定UDID移行は#89、Phase記録／再gateは#85、証拠適用は#86、不具合判断は#87、skills／既存Issue移行は#88で実装し、この仕様だけを稼働証拠にしない。既存sealed contractと過去のDecisionは変更しない。
 - Related Issue: #83、#84、#85、#86、#87、#88、#89
+
+## D-039: 通常検証を5分／15分のtargeted実行へ制限する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: D-037の`targeted`を未知path、複数domain、manifest／runner／test変更から自動`head-all`へ昇格する部分。D-037のimmutable planとexact-byte evidence、D-038の6フェーズ、安全・Head・review・pre-merge境界は維持する。
+- Context: Issue #82では変更のたびに54件のrepository suiteへ自動昇格し、約103分の実行を4回、合計約6時間55分繰り返した。通常開発の目的は変更箇所を短時間で確認することであり、英語／iPadと全件回帰を毎回実行することではない。
+- Decision: 実装中の対象testは1 command 300秒、通常のIssue完了用`targeted` repository suiteはaggregate 900秒を上限とする。`targeted`は既知の単一または複数domainに属するtestの決定論的unionを選び、manifest、runner、tracked test変更を理由に自動`head-all`へ昇格しない。未知pathは全件実行せずplan生成を拒否する。`head-all`／`base-and-head`、英語／日本語×iPhone／iPadの4条件はrelease、nightly相当の明示実行、またはユーザーがIssue contractで明示要求した場合だけ使う。同一Issue／Head／scopeの失敗・timeout後は直接再実行を拒否し、選択済み対象testの診断成功後に1回だけ再試行できる。
+- Consequence: `shape`は日本語iPhone、`harden`はtargeted subsetを維持し、strict対象も認証・課金・privacy・migration等の関連安全testだけを追加して無関係な全件へ拡大しない。runnerは実行前にscope、ordered tests、件数、child／aggregate上限を表示し、上限到達時は未実行testを報告して成功証拠を発行しない。未検証条件は延期・未検証として残し、release-readyとは報告しない。
+- Related Issue: #79

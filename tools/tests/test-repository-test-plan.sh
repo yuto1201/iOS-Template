@@ -16,14 +16,15 @@ module Fixture
   def manifest(tests: %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh])
     {
       "schemaVersion" => 1,
-      "headAllPaths" => ["Config/repository-tests.json", "tools/lib/repository-test-plan.rb", "tools/lib/run-repository-tests.rb", "tools/run-repository-tests.sh"],
-      "headAllPrefixes" => ["tools/tests/"],
+      "headAllPaths" => [],
+      "headAllPrefixes" => [],
       "domainRules" => [
+        {"domain" => "repository", "paths" => ["Config/repository-tests.json", "tools/lib/repository-test-plan.rb", "tools/lib/run-repository-tests.rb", "tools/run-repository-tests.sh"], "prefixes" => []},
         {"domain" => "review", "paths" => ["tools/lib/review-contract.rb"], "prefixes" => ["docs/review/"]},
         {"domain" => "workflow", "paths" => ["tools/lib/workflow.rb"], "prefixes" => ["docs/workflow/"]}
       ],
       "tests" => tests.map do |path|
-        {"path" => path, "domains" => [path.end_with?("alpha.sh") ? "review" : "workflow"]}
+        {"path" => path, "domains" => path.end_with?("alpha.sh") ? %w[repository review] : ["workflow"]}
       end
     }
   end
@@ -79,10 +80,10 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   all_mapping = {"AC-1"=>%w[tools/tests/test-alpha.sh tools/tests/test-beta.sh], "AC-2"=>["tools/tests/test-beta.sh"]}
   multi_domain = runner.build(repo: repo, issue: 42, base_sha: base, head_sha: multi_domain_head,
     contract_bytes: contract, mappings: all_mapping)
-  abort "multiple domains did not expand to head-all" unless multi_domain["requestedScope"] == "targeted" &&
-    multi_domain["resolvedScope"] == "head-all" &&
+  abort "multiple domains did not remain targeted" unless multi_domain["requestedScope"] == "targeted" &&
+    multi_domain["resolvedScope"] == "targeted" &&
     multi_domain["testPaths"] == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh] &&
-    multi_domain["resolutionReason"].include?("multiple repository-test domains")
+    multi_domain["resolutionReason"].include?("review,workflow")
 
   altered = Marshal.load(Marshal.dump(plan))
   altered["headSha"] = base
@@ -96,15 +97,22 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   Fixture.git(repo, "add", ".")
   Fixture.git(repo, "commit", "-qm", "unmatched")
   unmatched_head = Fixture.git(repo, "rev-parse", "HEAD")
-  unmatched = runner.build(repo: repo, issue: 42, base_sha: multi_domain_head, head_sha: unmatched_head, contract_bytes: contract, mappings: all_mapping)
-  abort "unmatched path did not expand to head-all" unless unmatched["resolvedScope"] == "head-all" && unmatched["testPaths"].length == 2
+  begin
+    runner.build(repo: repo, issue: 42, base_sha: multi_domain_head, head_sha: unmatched_head,
+      contract_bytes: contract, mappings: all_mapping)
+    abort "unmatched path triggered repository tests"
+  rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+    abort "unmatched path failed for an unexpected reason" unless error.message.include?("no manifest coverage")
+  end
 
   File.write(File.join(repo, "tools/tests/test-alpha.sh"), "echo changed\n")
   Fixture.git(repo, "add", ".")
   Fixture.git(repo, "commit", "-qm", "inventory infrastructure")
   broad_head = Fixture.git(repo, "rev-parse", "HEAD")
-  broad = runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head, contract_bytes: contract, mappings: all_mapping)
-  abort "test inventory change did not expand to head-all" unless broad["resolvedScope"] == "head-all"
+  broad = runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head,
+    contract_bytes: contract, mappings: mappings)
+  abort "test change did not remain targeted" unless broad["resolvedScope"] == "targeted" &&
+    broad["testPaths"] == ["tools/tests/test-alpha.sh"]
 
   valid_manifest_change = Fixture.manifest
   valid_manifest_change.fetch("domainRules").first.fetch("prefixes") << "docs/review-notes/"
@@ -114,20 +122,26 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   Fixture.git(repo, "commit", "-qm", "valid manifest change")
   manifest_head = Fixture.git(repo, "rev-parse", "HEAD")
   manifest_broad = runner.build(repo: repo, issue: 42, base_sha: broad_head, head_sha: manifest_head,
-    contract_bytes: contract, mappings: all_mapping)
-  abort "manifest change did not expand to head-all" unless manifest_broad["resolvedScope"] == "head-all" &&
-    manifest_broad["testPaths"] == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh] &&
-    manifest_broad["resolutionReason"].include?("Config/repository-tests.json")
+    contract_bytes: contract, mappings: mappings)
+  abort "manifest change did not remain targeted" unless manifest_broad["resolvedScope"] == "targeted" &&
+    manifest_broad["testPaths"] == ["tools/tests/test-alpha.sh"] &&
+    manifest_broad["resolutionReason"].include?("repository")
 
   File.write(File.join(repo, "tools/lib/run-repository-tests.rb"), "RUNNER = :changed\n")
   Fixture.git(repo, "add", ".")
   Fixture.git(repo, "commit", "-qm", "runner change")
   runner_head = Fixture.git(repo, "rev-parse", "HEAD")
   runner_broad = runner.build(repo: repo, issue: 42, base_sha: manifest_head, head_sha: runner_head,
-    contract_bytes: contract, mappings: all_mapping)
-  abort "runner change did not expand to head-all" unless runner_broad["resolvedScope"] == "head-all" &&
-    runner_broad["testPaths"] == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh] &&
-    runner_broad["resolutionReason"].include?("tools/lib/run-repository-tests.rb")
+    contract_bytes: contract, mappings: mappings)
+  abort "runner change did not remain targeted" unless runner_broad["resolvedScope"] == "targeted" &&
+    runner_broad["testPaths"] == ["tools/tests/test-alpha.sh"] &&
+    runner_broad["resolutionReason"].include?("repository")
+
+  head_all_contract = Fixture.contract(issue: 42, scope: "head-all")
+  explicit_full = runner.build(repo: repo, issue: 42, base_sha: manifest_head, head_sha: runner_head,
+    contract_bytes: head_all_contract, mappings: all_mapping)
+  abort "explicit head-all did not select the inventory" unless explicit_full["resolvedScope"] == "head-all" &&
+    explicit_full["testPaths"] == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh]
 
   base_head_contract = Fixture.contract(issue: 42, scope: "base-and-head")
   comparison = runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head, contract_bytes: base_head_contract, mappings: all_mapping)
@@ -162,13 +176,13 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   end
 
   invalid_manifest = Fixture.manifest
-  invalid_manifest["headAllPaths"] += ["tools/missing.sh"]
-  invalid_manifest["headAllPaths"].sort!
+  invalid_manifest["headAllPaths"] = ["tools/lib/repository-test-plan.rb"]
   begin
     runner.validate_manifest!(invalid_manifest, %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh],
       tracked_paths: runner.tracked_paths(repo, invalid_head))
-    abort "manifest exact path missing at Head was accepted"
-  rescue IOSTemplate::RepositoryTestPlan::PlanError
+    abort "automatic head-all path was accepted"
+  rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+    abort "automatic head-all failed for an unexpected reason" unless error.message.include?("automatic head-all")
   end
 end
 
@@ -203,8 +217,8 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   File.write(File.join(repo, "tools/lib/review.rb"), "REVIEW = :base\n")
   manifest = {
     "schemaVersion"=>1,
-    "headAllPaths"=>%w[Config/repository-tests.json tools/lib/repository-test-plan.rb tools/lib/run-repository-tests.rb tools/run-repository-tests.sh],
-    "headAllPrefixes"=>["tools/tests/"],
+    "headAllPaths"=>[],
+    "headAllPrefixes"=>[],
     "domainRules"=>[
       {"domain"=>"review", "paths"=>["tools/lib/review.rb"], "prefixes"=>[]},
       {"domain"=>"workflow", "paths"=>["tools/lib/workflow.rb"], "prefixes"=>[]}
@@ -242,6 +256,11 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
     "--map", "AC-1=tools/tests/test-alpha.sh", "--map", "AC-2=tools/tests/test-alpha.sh"]
   output, error, status = Open3.capture3(*command, chdir: repo)
   abort "planned runner failed: #{error}" unless status.success?
+  abort "targeted execution limits were not reported" unless error.include?('"childTimeoutSeconds":300') &&
+    error.include?('"suiteTimeoutSeconds":900')
+  abort "targeted completion summary was not reported" unless error.include?("repository test execution completed:") &&
+    error.include?('"status":"passed"') && error.match?(/"elapsedSeconds":[0-9]/) &&
+    error.include?('"unexecutedTests":[]')
   receipt = JSON.parse(output)
   plan_path = File.join(head_root, "repository-test-plan.json")
   record_path = File.join(head_root, "repository-tests.json")
@@ -251,6 +270,7 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   abort "runner did not select one targeted test" unless plan.values_at("resolvedScope", "testPaths") == ["targeted", ["tools/tests/test-alpha.sh"]]
   abort "schema v3 record differs from plan" unless record.values_at("schemaVersion", "scope") == [3, "targeted"] &&
     record.fetch("tests").map { |entry| entry.fetch("path") } == plan.fetch("testPaths") && receipt.fetch("total") == 1
+  abort "targeted child timeout differs" unless record.fetch("tests").all? { |entry| entry.fetch("timeoutSeconds") == 300 }
 
   contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
   verify = {"schemaVersion"=>1, "status"=>"passed", "changeClassification"=>"workflow-only",

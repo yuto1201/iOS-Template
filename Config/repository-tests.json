@@ -1,14 +1,7 @@
 {
   "schemaVersion": 1,
-  "headAllPaths": [
-    "Config/repository-tests.json",
-    "tools/lib/repository-test-plan.rb",
-    "tools/lib/run-repository-tests.rb",
-    "tools/run-repository-tests.sh"
-  ],
-  "headAllPrefixes": [
-    "tools/tests/"
-  ],
+  "headAllPaths": [],
+  "headAllPrefixes": [],
   "domainRules": [
     {
       "domain": "appstore",
@@ -45,7 +38,6 @@
         "tools/verify-ios-issue.sh"
       ],
       "prefixes": [
-        ".agents/skills/ios-verify/",
         "tools/lib/ios-"
       ]
     },
@@ -64,9 +56,18 @@
       ]
     },
     {
+      "domain": "repository-testing",
+      "paths": [
+        "Config/repository-tests.json",
+        "tools/lib/repository-test-plan.rb",
+        "tools/lib/run-repository-tests.rb",
+        "tools/run-repository-tests.sh"
+      ],
+      "prefixes": []
+    },
+    {
       "domain": "review-contract",
       "paths": [
-        "docs/agent-contracts/review-packet.md",
         "tools/cross-model-review.sh",
         "tools/lib/premerge-gate.rb",
         "tools/lib/prepare-review-packet.rb",
@@ -82,10 +83,13 @@
     {
       "domain": "specification",
       "paths": [
+        "AGENTS.md",
+        "docs/agent-contracts/review-packet.md",
         "docs/verification.md",
         "docs/workflow.md"
       ],
       "prefixes": [
+        ".agents/skills/ios-verify/",
         ".agents/skills/plan-issue-batch/",
         ".agents/skills/ship-issue/",
         ".agents/skills/spec-workflow/",
@@ -151,8 +155,8 @@
     {"path": "tools/tests/test-provider-ownership.sh", "domains": ["provider-security"]},
     {"path": "tools/tests/test-provider-preflight.sh", "domains": ["provider-security"]},
     {"path": "tools/tests/test-render-pr-body.sh", "domains": ["review-contract"]},
-    {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["review-contract"]},
-    {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["repository-testing"]},
+    {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-review-sealing.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-review-shared-artifacts.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-secret-store.sh", "domains": ["provider-security"]},

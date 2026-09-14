@@ -274,7 +274,7 @@ CodexとClaudeは同じ手順で1、4、5、6とGitHub上の状態変更を実�
 5. 小さな意味単位でcommitする。
 6. Scope外の必要作業を発見したら、勝手に含めず追跡Issue候補へ記録する。
 
-開発中は対象Test、関連回帰Test、stage標準検証の順で広げます。shapeのTime budgetを超えそうならScope縮小、harden分離、環境停止、または`blocked:user`を選び、品質項目を積み増しません。release完全検証は候補Headが安定してから一度実行します。
+開発中は対象Test、関連回帰Test、stage標準検証の順で広げます。対象test 1 commandは300秒で停止し、通常完了用の`targeted` repository suiteはaggregate 900秒を超えて実行しません。shapeのTime budgetを超えそうならScope縮小、harden分離、環境停止、または`blocked:user`を選び、品質項目を積み増しません。release完全検証は候補Headが安定してから一度実行します。
 
 UI Direction Gateを通したshapeでは、確定仕様にある情報階層、主要task、navigation、代表state、accessibility意図をnative SwiftUIへ翻訳します。HTMLをWKWebViewで製品化したり、CSSのpixel一致を実装条件にしたりしません。
 
@@ -284,10 +284,10 @@ UI Direction Gateを通したshapeでは、確定仕様にある情報階層、�
 2. `shape`はBuild、重要Unit Test、`iphone-ja` 1条件のSmoke Testを実行し、Screenshot／visual reviewなしの`xcodebuild-stage`証拠を発行する。
 3. `harden`は対象Test、関連回帰、宣言した`targeted` caseだけを実行する。visual checkを明示した場合だけ対象画像を評価する。
 4. `release`は`full` 4条件、visual、accessibility、統合UI、同一Head evidenceを実行する。
-5. IssueがRepository toolやworkflowを変更する場合、canonical repository testsをclean detached worktree上で実行する。D-037 cutover後のworkflow-only contractは要求scopeを宣言し、実装後のimmutable Base..Head差分とHead manifestからexact planを生成する。単一domainだけを`targeted`、広域・未知・複数domain・test基盤変更を`head-all`、明示比較だけを`base-and-head`として実行する。cutover前contractの既存Head-only／Base-and-Head経路は変更しない。
+5. IssueがRepository toolやworkflowを変更する場合、canonical repository testsをclean detached worktree上で実行する。D-037 cutover後のworkflow-only contractは要求scopeを宣言し、実装後のimmutable Base..Head差分とHead manifestからexact planを生成する。`targeted`は既知の単一または複数domainに属する関連testのunion、未知pathは実行前停止、`head-all`／`base-and-head`はrelease／明示要求だけにする。manifest、runner、tracked test変更から全件へ自動昇格しない。cutover前contractの既存Head-only／Base-and-Head経路は変更しない。
 6. 同じHeadを明示して`in-progress -> verify-passed`へ遷移する。
 
-canonical検証が失敗した場合、原因へ直接対応する対象Testが成功するまで要求scopeの検証を再実行しません。別Headのcanonical evidenceを作り続けることを進捗として扱いません。
+canonical検証が失敗した場合、同一Issue／Head／scopeの直接再実行を拒否します。選択済みの対象Testが成功した記録を伴う場合だけ1回再試行し、再失敗後は停止します。別Headのcanonical evidenceを作り続けることを進捗として扱いません。
 
 HTML、HTML screenshot、revision IDまたはHTML digestはnative検証の代用にしません。gateを通したUIは、選択を記録した確定spec anchorとcurrent-HeadのSwiftUI、Build、Test、stage別Simulator evidenceの対応で確認します。
 
