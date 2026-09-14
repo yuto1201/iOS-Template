@@ -14,6 +14,15 @@ shift 3
 [[ "$timeout" =~ ^[0-9]+$ ]] || usage
 [[ "$#" -gt 0 ]] || usage
 
+simulator_session_id="${IOS_TEMPLATE_SIMULATOR_SESSION_ID:-${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}}"
+if [[ -z "$simulator_session_id" ]]; then
+  simulator_session_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
+fi
+[[ "$simulator_session_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$ ]] || {
+  echo "Simulator session identity is invalid" >&2
+  exit 1
+}
+
 repo_root="$(/usr/bin/git -c core.fsmonitor=false -c core.hooksPath=/dev/null rev-parse --show-toplevel 2>/dev/null)" || {
   echo "Simulator lock requires a Git worktree" >&2
   exit 1
@@ -51,4 +60,5 @@ if [[ -e "$lock_file" && ( -L "$lock_file" || ! -f "$lock_file" ) ]]; then
   exit 1
 fi
 
-exec /usr/bin/lockf -k -t "$timeout" "$lock_file" "$@"
+exec /usr/bin/env IOS_TEMPLATE_SIMULATOR_SESSION_ID="$simulator_session_id" \
+  /usr/bin/lockf -k -t "$timeout" "$lock_file" "$@"

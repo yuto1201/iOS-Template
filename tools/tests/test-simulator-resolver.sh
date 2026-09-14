@@ -18,17 +18,16 @@ run_resolver() {
   swift "$resolver" \
     --runtimes "$1" \
     --device-types "$2" \
-    --devices "$3" \
     --batch-id settings-2026-08-21 \
     --resolved-at 2026-08-21T12:00:00+09:00 \
-    "${@:4}" \
+    "${@:3}" \
     >"$output" 2>"$errors"
 }
 
 assert_matrix() {
   ruby -rjson - "$output" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
-abort "unexpected schema version" unless matrix["schemaVersion"] == 1
+abort "unexpected schema version" unless matrix["schemaVersion"] == 2
 abort "unexpected batch ID" unless matrix["batchId"] == "settings-2026-08-21"
 abort "unexpected resolution time" unless matrix["resolvedAt"] == "2026-08-21T12:00:00+09:00"
 runtime = matrix.fetch("runtime")
@@ -69,10 +68,10 @@ expect_failure() {
   }
 }
 
-run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json"
+run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes.json"
 assert_matrix
 
-run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes-m4-vs-5th.json" "$fixtures/devices.json"
+run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes-m4-vs-5th.json"
 ruby -rjson - "$output" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
 expected = [
@@ -98,7 +97,7 @@ document["runtimes"] << {
 }
 File.write(destination, JSON.generate(document))
 RUBY
-run_resolver "$tie_runtimes" "$fixtures/devicetypes.json" "$fixtures/devices.json"
+run_resolver "$tie_runtimes" "$fixtures/devicetypes.json"
 assert_matrix
 
 tie_device_types="$scratch/tie-device-types.json"
@@ -117,7 +116,7 @@ document["devicetypes"] << {
 }
 File.write(destination, JSON.generate(document))
 RUBY
-run_resolver "$fixtures/runtimes.json" "$tie_device_types" "$fixtures/devices.json"
+run_resolver "$fixtures/runtimes.json" "$tie_device_types"
 assert_matrix
 
 no_pro="$scratch/no-pro.json"
@@ -127,7 +126,7 @@ document = JSON.parse(File.read(source))
 document["devicetypes"].reject! { |entry| entry["name"].start_with?("iPhone") }
 File.write(destination, JSON.generate(document))
 RUBY
-expect_failure "no matching iPhone Pro Device Type" "$fixtures/runtimes.json" "$no_pro" "$fixtures/devices.json"
+expect_failure "no matching iPhone Pro Device Type" "$fixtures/runtimes.json" "$no_pro"
 
 no_air="$scratch/no-air.json"
 ruby -rjson - "$fixtures/devicetypes.json" "$no_air" <<'RUBY'
@@ -136,27 +135,28 @@ document = JSON.parse(File.read(source))
 document["devicetypes"].reject! { |entry| entry["name"].start_with?("iPad Air") }
 File.write(destination, JSON.generate(document))
 RUBY
-expect_failure "no matching iPad Air Device Type" "$fixtures/runtimes.json" "$no_air" "$fixtures/devices.json"
+expect_failure "no matching iPad Air Device Type" "$fixtures/runtimes.json" "$no_air"
 
 # Partial coverage must not even resolve an iPad, and is never an arbitrary subset.
-run_resolver "$fixtures/runtimes.json" "$no_air" "$fixtures/devices.json" --scope iphone-ja
+run_resolver "$fixtures/runtimes.json" "$no_air" --scope iphone-ja
 ruby -rjson - "$output" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
 abort "partial scope missing" unless matrix["scope"] == "iphone-ja"
 abort "partial resolver did not select exactly Japanese iPhone" unless matrix["cases"].map { |c| [c["id"], c["language"], c["locale"]] } == [["iphone-ja", "ja", "ja_JP"]]
 abort "partial resolver used an older runtime" unless matrix.dig("runtime", "version") == "10.3"
 RUBY
-run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope targeted --case-ids iphone-en,ipad-ja
+run_resolver "$fixtures/runtimes.json" "$fixtures/devicetypes.json" --scope targeted --case-ids iphone-en,ipad-ja
 ruby -rjson - "$output" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
 abort "targeted scope missing" unless matrix["scope"] == "targeted"
 abort "targeted resolver changed the ordered subset" unless matrix.fetch("cases").map { |entry| entry.fetch("id") } == ["iphone-en", "ipad-ja"]
 RUBY
-expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope targeted
-expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope targeted --case-ids ipad-ja,iphone-en
-expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope full --case-ids iphone-ja
-expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope other
-expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$fixtures/devices.json" --scope iphone-ja --scope full
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" --scope targeted
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" --scope targeted --case-ids ipad-ja,iphone-en
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" --scope full --case-ids iphone-ja
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" --scope other
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" --scope iphone-ja --scope full
+expect_failure "usage:" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" --devices "$fixtures/devices.json"
 
 malformed_versions=(
   '10..3'
@@ -172,15 +172,7 @@ document = JSON.parse(File.read(source))
 document["runtimes"].find { |entry| entry["identifier"] == "com.apple.CoreSimulator.SimRuntime.iOS-10-3" }["version"] = version
 File.write(destination, JSON.generate(document))
 RUBY
-  expect_failure "invalid available iOS Runtime version" "$malformed_runtimes" "$fixtures/devicetypes.json" "$fixtures/devices.json"
+  expect_failure "invalid available iOS Runtime version" "$malformed_runtimes" "$fixtures/devicetypes.json"
 done
-
-malformed_devices="$scratch/malformed-devices.json"
-printf '{not json}\n' >"$malformed_devices"
-expect_failure "unable to decode simctl JSON input" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$malformed_devices"
-
-empty_devices="$scratch/empty-devices.json"
-printf '{"devices":{}}\n' >"$empty_devices"
-expect_failure "devices.json has no provenance entry for selected Runtime" "$fixtures/runtimes.json" "$fixtures/devicetypes.json" "$empty_devices"
 
 echo "all simulator resolver tests passed"

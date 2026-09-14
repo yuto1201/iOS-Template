@@ -22,7 +22,9 @@ error = "blocked:environment: invalid #{phase} matrix"
 expected_keys = phase == "planned" ? %w[batchId cases resolvedAt runtime schemaVersion] : %w[batchId cases resolvedAt runtime schemaVersion xcode]
 expected_keys = (expected_keys + ["scope"]).sort if matrix.key?("scope")
 abort error unless matrix.is_a?(Hash) && matrix.keys.sort == expected_keys
-abort error unless matrix["schemaVersion"] == 1 && matrix["batchId"] == batch_id && matrix["resolvedAt"].is_a?(String) && !matrix["resolvedAt"].empty?
+schema_version = matrix["schemaVersion"]
+abort error unless [1, 2].include?(schema_version) && matrix["batchId"] == batch_id && matrix["resolvedAt"].is_a?(String) && !matrix["resolvedAt"].empty?
+abort error if schema_version == 1 && phase != "complete"
 runtime = matrix["runtime"]
 abort error unless runtime.is_a?(Hash) && runtime.keys.sort == %w[identifier version] && runtime.values.all? { |value| value.is_a?(String) && !value.empty? }
 if phase != "planned"
@@ -36,20 +38,20 @@ abort error unless cases.map { |entry| [entry["id"], entry["family"], entry["loc
 types = {}
 udids = []
 cases.each do |entry|
-  required = phase == "complete" ? %w[deviceType family id language locale udid] : %w[deviceType family id language locale]
+  required = phase == "complete" && schema_version == 1 ? %w[deviceType family id language locale udid] : %w[deviceType family id language locale]
   abort error unless entry.keys.sort == required
   type = entry["deviceType"]
   abort error unless type.is_a?(Hash) && type.keys.sort == %w[identifier name] && type.values.all? { |value| value.is_a?(String) && !value.empty? }
   family = entry["family"]
   types[family] ||= type
   abort error unless types[family] == type
-  if phase == "complete"
+  if phase == "complete" && schema_version == 1
     abort error unless entry["udid"].is_a?(String) && entry["udid"].match?(/\A[0-9A-Fa-f-]+\z/)
     udids << entry["udid"]
   end
 end
-abort error if phase == "complete" && udids.uniq.length != expected.length
-if phase == "complete" && devices_path
+abort error if phase == "complete" && schema_version == 1 && udids.uniq.length != expected.length
+if phase == "complete" && schema_version == 1 && devices_path
   buckets = JSON.parse(File.read(devices_path)).fetch("devices")
   all = buckets.values.flatten
   cases.each do |entry|
@@ -58,3 +60,4 @@ if phase == "complete" && devices_path
     abort "blocked:environment: recorded Simulator no longer matches its batch matrix" unless matches.length == 1 && all.count { |device| device["name"] == name } == 1
   end
 end
+abort error if phase == "complete" && schema_version == 2 && devices_path

@@ -45,6 +45,18 @@ run_locked_from_linked_worktree() {
 output="$(run_locked --timeout 0 -- /bin/sh -c 'printf success')"
 [[ "$output" == "success" ]] || { echo "lock wrapper lost command output" >&2; exit 1; }
 
+inherited="$(IOS_TEMPLATE_SIMULATOR_SESSION_ID=session-parent run_locked --timeout 0 -- \
+  /bin/sh -c '/bin/sh -c '\''printf %s "$IOS_TEMPLATE_SIMULATOR_SESSION_ID"'\''')"
+[[ "$inherited" == "session-parent" ]] || {
+  echo "Simulator session identity was not inherited by child workers" >&2
+  exit 1
+}
+generated="$(run_locked --timeout 0 -- /bin/sh -c 'printf %s "$IOS_TEMPLATE_SIMULATOR_SESSION_ID"')"
+[[ "$generated" =~ ^[a-z0-9-]{36}$ ]] || {
+  echo "Simulator lock did not generate a stable session identity" >&2
+  exit 1
+}
+
 set +e
 run_locked --timeout 0 -- /bin/sh -c 'exit 23'
 failure_status="$?"

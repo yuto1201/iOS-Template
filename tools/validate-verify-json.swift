@@ -1105,6 +1105,8 @@ struct DeviceTypeIdentity: Equatable {
 }
 
 struct MatrixInfo {
+    let schemaVersion: Int
+    let batchID: String
     let resolvedAt: Date
     let xcode: XcodeIdentity
     let runtime: RuntimeIdentity
@@ -1120,7 +1122,7 @@ struct MatrixCaseInfo {
     let deviceType: DeviceTypeIdentity
     let locale: String
     let language: String
-    let udid: String
+    let udid: String?
 }
 
 struct RuntimeIdentity: Equatable {
@@ -1148,8 +1150,9 @@ func validateMatrix(
         Set(["schemaVersion", "batchId", "resolvedAt", "xcode", "runtime", "cases"]).union(matrix["scope"] == nil ? [] : ["scope"]),
         at: "matrixFile"
     )
-    guard try requireInteger(matrix["schemaVersion"]!, at: "matrixFile.schemaVersion") == 1 else {
-        throw ValidationFailure("matrixFile.schemaVersion must be 1")
+    let schemaVersion = try requireInteger(matrix["schemaVersion"]!, at: "matrixFile.schemaVersion")
+    guard [1, 2].contains(schemaVersion) else {
+        throw ValidationFailure("matrixFile.schemaVersion must be 1 or 2")
     }
     guard try requireString(matrix["batchId"]!, at: "matrixFile.batchId") == batchID else {
         throw ValidationFailure("matrixFile.batchId does not match its canonical path")
@@ -1193,9 +1196,10 @@ func validateMatrix(
     for (index, rawCase) in cases.enumerated() {
         let path = "matrixFile.cases[\(index)]"
         let entry = try requireObject(rawCase, at: path)
-        try requireExactKeys(
-            entry, ["id", "family", "deviceType", "locale", "language", "udid"], at: path
-        )
+        let caseKeys = schemaVersion == 1
+            ? ["id", "family", "deviceType", "locale", "language", "udid"]
+            : ["id", "family", "deviceType", "locale", "language"]
+        try requireExactKeys(entry, Set(caseKeys), at: path)
         let id = try requireString(entry["id"]!, at: "\(path).id")
         let family = try requireString(entry["family"]!, at: "\(path).family")
         let locale = try requireString(entry["locale"]!, at: "\(path).locale")
@@ -1215,19 +1219,26 @@ func validateMatrix(
             throw ValidationFailure("matrixFile must use one Device Type per family")
         }
         familyTypes[family] = deviceType
-        let udid = try requireString(entry["udid"]!, at: "\(path).udid")
-        guard matches(udid, regex: udidPattern) else {
-            throw ValidationFailure("\(path).udid is invalid")
-        }
-        guard udids.insert(udid).inserted else {
-            throw ValidationFailure("matrixFile Simulator UDIDs must be unique")
+        var udid: String?
+        if schemaVersion == 1 {
+            let value = try requireString(entry["udid"]!, at: "\(path).udid")
+            guard matches(value, regex: udidPattern) else {
+                throw ValidationFailure("\(path).udid is invalid")
+            }
+            guard udids.insert(value).inserted else {
+                throw ValidationFailure("matrixFile Simulator UDIDs must be unique")
+            }
+            udid = value
         }
         normalizedCases.append(MatrixCaseInfo(
             id: id, family: family, deviceType: deviceType,
             locale: locale, language: language, udid: udid
         ))
     }
-    return MatrixInfo(resolvedAt: resolvedAt, xcode: xcode, runtime: runtimeIdentity, cases: normalizedCases, scope: scope)
+    return MatrixInfo(
+        schemaVersion: schemaVersion, batchID: batchID, resolvedAt: resolvedAt, xcode: xcode,
+        runtime: runtimeIdentity, cases: normalizedCases, scope: scope
+    )
 }
 
 func validateScopeMatch(contract: IssueContract, matrix: MatrixInfo) throws {
@@ -1238,6 +1249,207 @@ func validateScopeMatch(contract: IssueContract, matrix: MatrixInfo) throws {
     if let verification = contract.verification, verification.cases.map(\.id) != matrix.caseIDs {
         throw ValidationFailure("verification scope and cases do not match matrix")
     }
+}
+
+func validateSimulatorAllocationEvidence(
+    _ value: Any,
+    matrix: MatrixInfo,
+    issue: Int,
+    head: String,
+    repository: TrustedRepository,
+    expectedAttemptID: String? = nil
+) throws -> [[String: Any]] {
+    guard matrix.schemaVersion == 2 else {
+        throw ValidationFailure("simulatorAllocations are only valid with matrix schemaVersion 2")
+    }
+    let references = try requireArray(value, at: "simulatorAllocations")
+    guard references.count == matrix.cases.count else {
+        throw ValidationFailure("simulatorAllocations must contain every matrix case exactly once")
+    }
+    var normalized: [[String: Any]] = []
+    var allocationIDs = Set<String>()
+    var udids = Set<String>()
+    var sessions = Set<String>()
+    var attempts = Set<String>()
+    let gitCommonDirectory = canonicalPath(
+        try runGitString(
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            failure: "unable to resolve Git common directory for Simulator allocation evidence"
+        ),
+        relativeTo: repository.rootPath
+    )
+    let expectedRepositoryIdentity = "sha256:\(sha256(data: Data(gitCommonDirectory.utf8)))"
+    for (index, rawReference) in references.enumerated() {
+        let path = "simulatorAllocations[\(index)]"
+        let reference = try requireObject(rawReference, at: path)
+        try requireExactKeys(
+            reference, ["caseId", "path", "digest", "allocationId", "udid", "attemptId", "sessionId"], at: path
+        )
+        let matrixCase = matrix.cases[index]
+        let caseID = try requireString(reference["caseId"]!, at: "\(path).caseId")
+        guard caseID == matrixCase.id else {
+            throw ValidationFailure("simulatorAllocations must follow the frozen matrix case order")
+        }
+        let allocationID = try requireString(reference["allocationId"]!, at: "\(path).allocationId")
+        guard allocationID.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", options: .regularExpression) != nil,
+              allocationIDs.insert(allocationID).inserted else {
+            throw ValidationFailure("\(path).allocationId is invalid or duplicated")
+        }
+        let udid = try requireString(reference["udid"]!, at: "\(path).udid")
+        guard matches(udid, regex: udidPattern), udids.insert(udid).inserted else {
+            throw ValidationFailure("\(path).udid is invalid or duplicated")
+        }
+        let attemptID = try requireString(reference["attemptId"]!, at: "\(path).attemptId")
+        let sessionID = try requireString(reference["sessionId"]!, at: "\(path).sessionId")
+        guard attemptID.range(of: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$", options: .regularExpression) != nil,
+              sessionID.range(of: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$", options: .regularExpression) != nil else {
+            throw ValidationFailure("\(path) attempt or session identity is invalid")
+        }
+        if let expectedAttemptID, attemptID != expectedAttemptID {
+            throw ValidationFailure("\(path).attemptId does not match the sealed runner attempt")
+        }
+        attempts.insert(attemptID)
+        sessions.insert(sessionID)
+
+        let recordedPath = try requireString(reference["path"]!, at: "\(path).path")
+        let components = try relativeComponents(recordedPath, at: "\(path).path")
+        guard components.count == 4, components[0] == ".artifacts", components[1] == "batches",
+              components[2] == matrix.batchID,
+              components[3].range(
+                of: "^allocation-\(NSRegularExpression.escapedPattern(for: caseID))-[0-9A-Fa-f-]+\\.json$",
+                options: .regularExpression
+              ) != nil else {
+            throw ValidationFailure("\(path).path is not a canonical allocation artifact")
+        }
+        let receiptData = try readBoundRegularFile(
+            rootFileDescriptor: repository.rootFileDescriptor, components: components, at: "\(path).path"
+        )
+        try validateDigest(reference["digest"]!, data: receiptData, at: "\(path).digest")
+        let receipt = try readJSONObject(data: receiptData, at: "\(path) receipt")
+        try requireExactKeys(receipt, [
+            "schemaVersion", "allocationId", "status", "sessionId", "repositoryIdentity", "issue",
+            "headSha", "batchId", "attemptId", "caseId", "deviceSet", "deviceName", "udid",
+            "runtimeIdentifier", "deviceTypeIdentifier", "reservedAt", "createdAt", "releasedAt",
+            "freeSpace", "cleanup"
+        ], at: "\(path) receipt")
+        let shortID = allocationID.replacingOccurrences(of: "-", with: "").prefix(12)
+        guard try requireInteger(receipt["schemaVersion"]!, at: "\(path) receipt.schemaVersion") == 1,
+              try requireString(receipt["allocationId"]!, at: "\(path) receipt.allocationId") == allocationID,
+              try requireString(receipt["status"]!, at: "\(path) receipt.status") == "released",
+              try requireString(receipt["sessionId"]!, at: "\(path) receipt.sessionId") == sessionID,
+              try requireString(receipt["repositoryIdentity"]!, at: "\(path) receipt.repositoryIdentity") == expectedRepositoryIdentity,
+              try requireInteger(receipt["issue"]!, at: "\(path) receipt.issue", minimum: 1) == issue,
+              try requireString(receipt["headSha"]!, at: "\(path) receipt.headSha") == head,
+              try requireString(receipt["batchId"]!, at: "\(path) receipt.batchId") == matrix.batchID,
+              try requireString(receipt["attemptId"]!, at: "\(path) receipt.attemptId") == attemptID,
+              try requireString(receipt["caseId"]!, at: "\(path) receipt.caseId") == caseID,
+              try requireString(receipt["deviceSet"]!, at: "\(path) receipt.deviceSet") == "default",
+              try requireString(receipt["deviceName"]!, at: "\(path) receipt.deviceName") == "iOS-Template-\(matrix.batchID)-\(caseID)-\(shortID)",
+              try requireString(receipt["udid"]!, at: "\(path) receipt.udid") == udid,
+              try requireString(receipt["runtimeIdentifier"]!, at: "\(path) receipt.runtimeIdentifier") == matrix.runtime.identifier,
+              try requireString(receipt["deviceTypeIdentifier"]!, at: "\(path) receipt.deviceTypeIdentifier") == matrixCase.deviceType.identifier else {
+            throw ValidationFailure("\(path) receipt identity does not match the execution")
+        }
+        let reservedAt = try requireISO8601Date(receipt["reservedAt"]!, at: "\(path) receipt.reservedAt")
+        let createdAt = try requireISO8601Date(receipt["createdAt"]!, at: "\(path) receipt.createdAt")
+        let releasedAt = try requireISO8601Date(receipt["releasedAt"]!, at: "\(path) receipt.releasedAt")
+        guard reservedAt <= createdAt, createdAt <= releasedAt, releasedAt <= Date().addingTimeInterval(300) else {
+            throw ValidationFailure("\(path) receipt lifecycle timestamps are invalid")
+        }
+        let freeSpace = try requireObject(receipt["freeSpace"]!, at: "\(path) receipt.freeSpace")
+        try requireExactKeys(freeSpace, ["beforeCreateBytes", "afterDeleteBytes"], at: "\(path) receipt.freeSpace")
+        _ = try requireInteger(freeSpace["beforeCreateBytes"]!, at: "\(path) receipt.freeSpace.beforeCreateBytes", minimum: 0)
+        _ = try requireInteger(freeSpace["afterDeleteBytes"]!, at: "\(path) receipt.freeSpace.afterDeleteBytes", minimum: 0)
+        let cleanup = try requireObject(receipt["cleanup"]!, at: "\(path) receipt.cleanup")
+        try requireExactKeys(cleanup, ["status", "reason", "deviceAbsent", "dataPathAbsent", "observedAt"], at: "\(path) receipt.cleanup")
+        guard try requireString(cleanup["status"]!, at: "\(path) receipt.cleanup.status") == "passed",
+              try requireString(cleanup["reason"]!, at: "\(path) receipt.cleanup.reason") == "case-complete",
+              try requireBool(cleanup["deviceAbsent"]!, at: "\(path) receipt.cleanup.deviceAbsent"),
+              try requireBool(cleanup["dataPathAbsent"]!, at: "\(path) receipt.cleanup.dataPathAbsent") else {
+            throw ValidationFailure("\(path) receipt does not prove Simulator and data deletion")
+        }
+        let cleanupAt = try requireISO8601Date(cleanup["observedAt"]!, at: "\(path) receipt.cleanup.observedAt")
+        guard cleanupAt >= releasedAt, cleanupAt <= Date().addingTimeInterval(300) else {
+            throw ValidationFailure("\(path) receipt cleanup timestamp is invalid")
+        }
+        normalized.append([
+            "caseId": caseID, "path": recordedPath,
+            "digest": "sha256:\(sha256(data: receiptData))", "allocationId": allocationID,
+            "udid": udid, "attemptId": attemptID, "sessionId": sessionID
+        ])
+    }
+    guard sessions.count == 1, attempts.count == 1 else {
+        throw ValidationFailure("simulatorAllocations must belong to one runner session and attempt")
+    }
+    return normalized
+}
+
+func loadRunnerSimulatorAllocationEvidence(
+    config: JSONObject,
+    matrix: MatrixInfo,
+    issue: Int,
+    head: String,
+    repository: TrustedRepository
+) throws -> [[String: Any]] {
+    guard matrix.schemaVersion == 2 else { return [] }
+    let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
+    guard attemptRoot.hasPrefix("/tmp/") else {
+        throw ValidationFailure("runner allocation index is outside the trusted temporary root")
+    }
+    let attemptID = URL(fileURLWithPath: attemptRoot).lastPathComponent
+    let indexPath = attemptRoot + "/allocation-artifacts.tsv"
+    let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
+    let indexData: Data
+    do {
+        indexData = try readBoundRegularFile(
+            rootFileDescriptor: temporary,
+            components: try relativeComponents(String(indexPath.dropFirst("/tmp/".count)), at: "runner allocation index"),
+            at: "runner allocation index"
+        )
+        close(temporary)
+    } catch {
+        close(temporary)
+        throw error
+    }
+    guard let indexText = String(data: indexData, encoding: .utf8) else {
+        throw ValidationFailure("runner allocation index is not UTF-8")
+    }
+    let lines = indexText.split(separator: "\n", omittingEmptySubsequences: true)
+    guard lines.count == matrix.cases.count else {
+        throw ValidationFailure("runner allocation index does not contain every matrix case")
+    }
+    let references: [[String: Any]] = try lines.enumerated().map { index, rawLine in
+        let fields = rawLine.split(separator: "\t", omittingEmptySubsequences: false)
+        guard fields.count == 2 else { throw ValidationFailure("runner allocation index row is invalid") }
+        let caseID = String(fields[0])
+        let name = String(fields[1])
+        guard caseID == matrix.cases[index].id,
+              name.range(
+                of: "^allocation-\(NSRegularExpression.escapedPattern(for: caseID))-[0-9A-Fa-f-]+\\.json$",
+                options: .regularExpression
+              ) != nil else {
+            throw ValidationFailure("runner allocation index order or name is invalid")
+        }
+        let recordedPath = ".artifacts/batches/\(matrix.batchID)/\(name)"
+        let receiptData = try readBoundRegularFile(
+            rootFileDescriptor: repository.rootFileDescriptor,
+            components: try relativeComponents(recordedPath, at: "runner allocation receipt"),
+            at: "runner allocation receipt"
+        )
+        let receipt = try readJSONObject(data: receiptData, at: "runner allocation receipt")
+        return [
+            "caseId": caseID, "path": recordedPath, "digest": "sha256:\(sha256(data: receiptData))",
+            "allocationId": try requireString(receipt["allocationId"] ?? NSNull(), at: "runner allocation receipt allocationId"),
+            "udid": try requireString(receipt["udid"] ?? NSNull(), at: "runner allocation receipt udid"),
+            "attemptId": try requireString(receipt["attemptId"] ?? NSNull(), at: "runner allocation receipt attemptId"),
+            "sessionId": try requireString(receipt["sessionId"] ?? NSNull(), at: "runner allocation receipt sessionId")
+        ]
+    }
+    return try validateSimulatorAllocationEvidence(
+        references, matrix: matrix, issue: issue, head: head,
+        repository: repository, expectedAttemptID: attemptID
+    )
 }
 
 func validateScopeDiff(_ scope: VerificationScope, expectedBase: String, expectedHead: String) throws {
@@ -2144,12 +2356,10 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
     let batchID = try relativeComponents(options.matrix, at: "matrix")[2]
     let cases: [[String: Any]] = matrix.cases.enumerated().map { index, matrixCase in
         let action = verification.cases[index]
-        return [
+        var value: [String: Any] = [
             "id": matrixCase.id,
             "locale": matrixCase.locale,
             "language": matrixCase.language,
-            "udid": matrixCase.udid,
-            "name": "iOS-Template-\(batchID)-\(matrixCase.id)",
             "deviceType": [
                 "identifier": matrixCase.deviceType.identifier,
                 "name": matrixCase.deviceType.name
@@ -2157,6 +2367,11 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
             "action": action.action,
             "value": action.value
         ]
+        if let udid = matrixCase.udid {
+            value["udid"] = udid
+            value["name"] = "iOS-Template-\(batchID)-\(matrixCase.id)"
+        }
+        return value
     }
     let mappings: [[String: Any]] = contract.acceptanceIDs.enumerated().map { index, id in
         ["id": id, "checks": verification.acceptanceMappings[index]]
@@ -2173,6 +2388,7 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
         "deliveryStage": contract.deliveryStage.name,
         "visualRequired": contract.visualRequired ? "true" : "false",
         "verificationScope": contract.verificationScope.rawValue,
+        "matrixSchemaVersion": String(matrix.schemaVersion),
         "batchId": batchID,
         "matrixPath": options.matrix,
         "matrixDigest": "sha256:\(sha256(data: matrixData))",
@@ -3689,6 +3905,19 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
         matrixDigest: matrixDigest,
         projectDigest: projectDigest, sourceDigest: sourceDigest
     )
+    let matrixData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: try relativeComponents(matrixPath, at: "runner matrix"),
+        at: "runner matrix"
+    )
+    guard matrixDigest == "sha256:\(sha256(data: matrixData))" else {
+        throw ValidationFailure("runner matrix digest changed")
+    }
+    let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
+    let simulatorAllocations = try loadRunnerSimulatorAllocationEvidence(
+        config: config, matrix: matrix, issue: options.issue,
+        head: options.expectedHead, repository: repository
+    )
     let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
     guard options.configPath == attemptRoot + "/config.json",
           options.derivedData == attemptRoot + "/DerivedData",
@@ -3761,7 +3990,7 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
         return ["id": id, "evidence": checks]
     }
     let completedAt = ISO8601DateFormatter().string(from: Date())
-    let draft: [String: Any] = [
+    var draft: [String: Any] = [
         "schemaVersion": 1, "status": "awaiting-visual-review", "issue": options.issue,
         "baseSha": options.expectedBase, "headSha": options.expectedHead,
         "issueContract": ["path": contractPath, "digest": contractDigest],
@@ -3780,6 +4009,9 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
         ],
         "executionCompletedAt": completedAt
     ]
+    if matrix.schemaVersion == 2 {
+        draft["simulatorAllocations"] = simulatorAllocations
+    }
     let draftData = try JSONSerialization.data(withJSONObject: draft, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
     let currentHead = try runGitString(["rev-parse", "HEAD"], failure: "current Git Head unavailable before draft publication")
     guard currentHead == options.expectedHead else {
@@ -3816,6 +4048,13 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
             options: snapshotOptions, contractDigest: contractDigest, matrixDigest: matrixDigest,
             projectDigest: projectDigest, sourceDigest: sourceDigest
         )
+        if matrix.schemaVersion == 2 {
+            _ = try validateSimulatorAllocationEvidence(
+                simulatorAllocations, matrix: matrix, issue: options.issue,
+                head: options.expectedHead, repository: repository,
+                expectedAttemptID: URL(fileURLWithPath: attemptRoot).lastPathComponent
+            )
+        }
         for index in 0..<publishedScreenshotCount {
             let canonical = try readBoundRegularFile(
                 rootFileDescriptor: screenshotDirectories[index], components: ["screenshot.png"],
@@ -3924,6 +4163,19 @@ func publishRunnerStageEvidence(_ options: RunnerDraftOptions) throws -> String 
         contractDigest: contractDigest, matrixDigest: matrixDigest,
         projectDigest: projectDigest, sourceDigest: sourceDigest
     )
+    let matrixData = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor,
+        components: try relativeComponents(matrixPath, at: "runner matrix"),
+        at: "runner matrix"
+    )
+    guard matrixDigest == "sha256:\(sha256(data: matrixData))" else {
+        throw ValidationFailure("runner matrix digest changed")
+    }
+    let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
+    let simulatorAllocations = try loadRunnerSimulatorAllocationEvidence(
+        config: config, matrix: matrix, issue: options.issue,
+        head: options.expectedHead, repository: repository
+    )
     let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
     guard options.configPath == attemptRoot + "/config.json",
           options.derivedData == attemptRoot + "/DerivedData",
@@ -3980,7 +4232,7 @@ func publishRunnerStageEvidence(_ options: RunnerDraftOptions) throws -> String 
     }
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let document: [String: Any] = [
+    var document: [String: Any] = [
         "schemaVersion": 1, "status": "passed", "changeClassification": "application-code",
         "reason": "Delivery stage \(stageName) passed; not release-ready.",
         "issue": options.issue, "baseSha": options.expectedBase, "headSha": options.expectedHead,
@@ -3996,6 +4248,9 @@ func publishRunnerStageEvidence(_ options: RunnerDraftOptions) throws -> String 
         "acceptanceEvidence": acceptance,
         "completedAt": formatter.string(from: max(Date(), contract.fetchedAt))
     ]
+    if matrix.schemaVersion == 2 {
+        document["simulatorAllocations"] = simulatorAllocations
+    }
     let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
     let evidenceComponents = [".artifacts", "issues", String(options.issue), options.expectedHead]
     let evidenceDirectory = try ensureCanonicalEvidenceDirectory(
@@ -4037,6 +4292,7 @@ struct CanonicalDraftValidation {
     let matrixComponents: [String]
     let matrixData: Data
     let matrix: MatrixInfo
+    let simulatorAllocations: [[String: Any]]?
     let cases: [Any]
     let screenshotData: [Data]
     let executionCompletedAt: Date
@@ -4057,11 +4313,13 @@ func validateCanonicalRunnerDraft(
         rootFileDescriptor: repository.rootFileDescriptor, components: draftComponents, at: "draft"
     )
     let draft = try readJSONObject(data: draftData, at: "draft")
-    try requireExactKeys(draft, [
+    var draftKeys = Set([
         "schemaVersion", "status", "issue", "baseSha", "headSha", "issueContract", "matrixFile",
-        "matrixDigest", "executionRoute", "xcode", "build", "tests", "cases", "acceptanceEvidence",
-        "workspaceArtifacts", "executionCompletedAt"
-    ], at: "draft")
+                "matrixDigest", "executionRoute", "xcode", "build", "tests", "cases", "acceptanceEvidence",
+                "workspaceArtifacts", "executionCompletedAt"
+    ])
+    if draft["simulatorAllocations"] != nil { draftKeys.insert("simulatorAllocations") }
+    try requireExactKeys(draft, draftKeys, at: "draft")
     guard try requireInteger(draft["schemaVersion"]!, at: "draft schemaVersion") == 1,
           try requireString(draft["status"]!, at: "draft status") == "awaiting-visual-review",
           try requireInteger(draft["issue"]!, at: "draft issue") == issue,
@@ -4085,6 +4343,20 @@ func validateCanonicalRunnerDraft(
     let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
     try validateScopeMatch(contract: contract, matrix: matrix)
     try validateScopeDiff(contract.verificationScope, expectedBase: expectedBase, expectedHead: expectedHead)
+    let simulatorAllocations: [[String: Any]]?
+    if matrix.schemaVersion == 2 {
+        guard let allocationValue = draft["simulatorAllocations"] else {
+            throw ValidationFailure("matrix schemaVersion 2 draft must bind Simulator allocation receipts")
+        }
+        simulatorAllocations = try validateSimulatorAllocationEvidence(
+            allocationValue, matrix: matrix, issue: issue, head: expectedHead, repository: repository
+        )
+    } else {
+        guard draft["simulatorAllocations"] == nil else {
+            throw ValidationFailure("legacy matrix draft must not claim disposable Simulator allocations")
+        }
+        simulatorAllocations = nil
+    }
     guard try requireString(draft["executionRoute"]!, at: "draft executionRoute") == "xcodebuild-simctl",
           try validateXcodeIdentity(draft["xcode"]!, at: "draft xcode") == matrix.xcode else {
         throw ValidationFailure("draft execution identity is invalid")
@@ -4168,6 +4440,7 @@ func validateCanonicalRunnerDraft(
         data: draftData, object: draft, evidenceComponents: evidenceComponents,
         contractReference: contractReference, contract: contract, verification: verification,
         matrixPath: matrixPath, matrixComponents: matrixComponents, matrixData: matrixData, matrix: matrix,
+        simulatorAllocations: simulatorAllocations,
         cases: draftCases, screenshotData: screenshotData, executionCompletedAt: completed
     )
 }
@@ -4292,7 +4565,7 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     }
     let finalReason: Any = contract.deliveryStage.explicit && contract.deliveryStage.name != "release"
         ? "Delivery stage \(contract.deliveryStage.name) passed; not release-ready." : NSNull()
-    let final: [String: Any] = [
+    var final: [String: Any] = [
         "schemaVersion": 1, "status": "passed", "changeClassification": "application-code", "reason": finalReason,
         "issue": options.issue, "baseSha": options.expectedBase, "headSha": options.expectedHead,
         "issueContract": contractReference, "matrixFile": matrixPath, "matrixDigest": draft["matrixDigest"]!,
@@ -4315,6 +4588,9 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
         "acceptanceEvidence": finalAcceptance,
         "completedAt": try requireString(visual["reviewedAt"]!, at: "visual reviewedAt")
     ]
+    if let simulatorAllocations = validatedDraft.simulatorAllocations {
+        final["simulatorAllocations"] = simulatorAllocations
+    }
     let finalData = try JSONSerialization.data(withJSONObject: final, options: [.prettyPrinted, .sortedKeys]) + Data("\n".utf8)
     let evidenceDirectory = try openBoundDirectory(
         rootFileDescriptor: repository.rootFileDescriptor, components: evidenceComponents, at: "evidence directory"
@@ -5511,15 +5787,13 @@ func validate(options: Options) throws {
         }
     }
     let root = try readJSONObject(data: evidenceData, at: "verify.json")
-    try requireExactKeys(
-        root,
-        [
+    var rootKeys = Set([
             "schemaVersion", "status", "changeClassification", "reason", "issue", "baseSha", "headSha",
             "issueContract", "matrixFile", "matrixDigest", "executionRoute", "xcode", "build", "tests", "cases",
             "visualEvaluation", "acceptanceEvidence", "completedAt"
-        ],
-        at: "verify.json"
-    )
+    ])
+    if root["simulatorAllocations"] != nil { rootKeys.insert("simulatorAllocations") }
+    try requireExactKeys(root, rootKeys, at: "verify.json")
     guard try requireInteger(root["schemaVersion"]!, at: "schemaVersion") == 1 else {
         throw ValidationFailure("schemaVersion must be 1")
     }
@@ -5555,6 +5829,9 @@ func validate(options: Options) throws {
     }
 
     let classification = try requireString(root["changeClassification"]!, at: "changeClassification")
+    if classification != "application-code", root["simulatorAllocations"] != nil {
+        throw ValidationFailure("non-application evidence must not contain Simulator allocations")
+    }
     if contract.verificationScope == .iphoneJapanese && classification != "application-code" {
         throw ValidationFailure("iphone-ja requires application-code verification")
     }
@@ -5604,6 +5881,18 @@ func validate(options: Options) throws {
         try validateDigest(root["matrixDigest"]!, data: matrixData, at: "matrixDigest")
         let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
         try validateScopeMatch(contract: contract, matrix: matrix)
+        let simulatorAllocationValue = root["simulatorAllocations"]
+        if matrix.schemaVersion == 2 {
+            guard let simulatorAllocationValue else {
+                throw ValidationFailure("matrix schemaVersion 2 evidence must bind Simulator allocation receipts")
+            }
+            _ = try validateSimulatorAllocationEvidence(
+                simulatorAllocationValue, matrix: matrix, issue: issue,
+                head: headSha, repository: repository
+            )
+        } else if simulatorAllocationValue != nil {
+            throw ValidationFailure("legacy matrix evidence must not claim disposable Simulator allocations")
+        }
         guard completedAt >= matrix.resolvedAt else {
             throw ValidationFailure("completedAt must not precede the frozen Simulator matrix")
         }
@@ -5718,6 +6007,12 @@ func validate(options: Options) throws {
                 matrixDigest: matrixDigest,
                 projectDigest: projectDigest, sourceDigest: sourceDigest
             )
+            if matrix.schemaVersion == 2, let simulatorAllocationValue {
+                _ = try validateSimulatorAllocationEvidence(
+                    simulatorAllocationValue, matrix: matrix, issue: issue,
+                    head: headSha, repository: repository
+                )
+            }
             if contract.visualRequired {
                 try validateApplicationCases(
                     root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,

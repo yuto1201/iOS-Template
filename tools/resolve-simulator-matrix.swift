@@ -20,19 +20,6 @@ struct DeviceTypeList: Codable {
     let devicetypes: [DeviceType]
 }
 
-struct Device: Codable {
-    let udid: String?
-    let name: String?
-    let state: String?
-    let isAvailable: Bool?
-    let availability: String?
-    let deviceTypeIdentifier: String?
-}
-
-struct DeviceList: Codable {
-    let devices: [String: [Device]]
-}
-
 struct RuntimeReference: Codable, Equatable {
     let identifier: String
     let version: String
@@ -63,7 +50,6 @@ struct Matrix: Codable {
 struct Arguments {
     let runtimesPath: String
     let deviceTypesPath: String
-    let devicesPath: String
     let batchID: String
     let resolvedAt: String
     let scope: String
@@ -75,22 +61,19 @@ enum ResolverError: Error {
     case unreadableInput(String)
     case noAvailableIOSRuntime
     case invalidRuntimeVersion(String)
-    case missingRuntimeDevices(String)
     case noIPhonePro([String])
     case noIPadAir([String])
 
     var message: String {
         switch self {
         case .usage:
-            return "usage: resolve-simulator-matrix.swift --runtimes <path> --device-types <path> --devices <path> --batch-id <id> [--resolved-at <ISO-8601 timestamp>] [--scope iphone-ja|targeted|full] [--case-ids id,id]"
+            return "usage: resolve-simulator-matrix.swift --runtimes <path> --device-types <path> --batch-id <id> [--resolved-at <ISO-8601 timestamp>] [--scope iphone-ja|targeted|full] [--case-ids id,id]"
         case .unreadableInput(let path):
             return "blocked:environment: unable to decode simctl JSON input: \(path)"
         case .noAvailableIOSRuntime:
             return "blocked:environment: no available iOS Runtime"
         case .invalidRuntimeVersion(let version):
             return "blocked:environment: invalid available iOS Runtime version: \(version)"
-        case .missingRuntimeDevices(let runtimeID):
-            return "blocked:environment: devices.json has no provenance entry for selected Runtime: \(runtimeID)"
         case .noIPhonePro(let candidates):
             return "blocked:environment: no matching iPhone Pro Device Type; candidates: \(candidates.joined(separator: ", "))"
         case .noIPadAir(let candidates):
@@ -100,7 +83,7 @@ enum ResolverError: Error {
 }
 
 func parseArguments(_ arguments: [String]) throws -> Arguments {
-    guard arguments.count >= 8, arguments.count <= 14, arguments.count.isMultiple(of: 2) else {
+    guard arguments.count >= 6, arguments.count <= 12, arguments.count.isMultiple(of: 2) else {
         throw ResolverError.usage
     }
 
@@ -109,7 +92,7 @@ func parseArguments(_ arguments: [String]) throws -> Arguments {
     while index < arguments.count {
         let flag = arguments[index]
         let value = arguments[index + 1]
-        guard ["--runtimes", "--device-types", "--devices", "--batch-id", "--resolved-at", "--scope", "--case-ids"].contains(flag),
+        guard ["--runtimes", "--device-types", "--batch-id", "--resolved-at", "--scope", "--case-ids"].contains(flag),
               values[flag] == nil,
               !value.isEmpty else {
             throw ResolverError.usage
@@ -120,7 +103,6 @@ func parseArguments(_ arguments: [String]) throws -> Arguments {
 
     guard let runtimesPath = values["--runtimes"],
           let deviceTypesPath = values["--device-types"],
-          let devicesPath = values["--devices"],
           let batchID = values["--batch-id"] else {
         throw ResolverError.usage
     }
@@ -143,7 +125,6 @@ func parseArguments(_ arguments: [String]) throws -> Arguments {
     return Arguments(
         runtimesPath: runtimesPath,
         deviceTypesPath: deviceTypesPath,
-        devicesPath: devicesPath,
         batchID: batchID,
         resolvedAt: resolvedAt,
         scope: scope,
@@ -303,11 +284,7 @@ func reference(for deviceType: DeviceType) -> DeviceTypeReference {
 func resolve(_ arguments: Arguments) throws -> Matrix {
     let runtimes = try decode(RuntimeList.self, from: arguments.runtimesPath)
     let deviceTypes = try decode(DeviceTypeList.self, from: arguments.deviceTypesPath)
-    let devices = try decode(DeviceList.self, from: arguments.devicesPath)
     let runtime = try newestRuntime(from: runtimes.runtimes)
-    guard devices.devices[runtime.identifier] != nil else {
-        throw ResolverError.missingRuntimeDevices(runtime.identifier)
-    }
     let needsIPhone = arguments.caseIDs.contains { $0.hasPrefix("iphone-") }
     let needsIPad = arguments.caseIDs.contains { $0.hasPrefix("ipad-") }
     let iPhoneType = try needsIPhone ? reference(for: newestIPhonePro(from: deviceTypes.devicetypes)) : nil
@@ -320,7 +297,7 @@ func resolve(_ arguments: Arguments) throws -> Matrix {
     ].compactMap { $0 }
 
     return Matrix(
-        schemaVersion: 1,
+        schemaVersion: 2,
         scope: arguments.scope == "full" ? nil : arguments.scope,
         batchId: arguments.batchID,
         resolvedAt: arguments.resolvedAt,

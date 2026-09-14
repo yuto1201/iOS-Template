@@ -29,17 +29,99 @@
       ]
     },
     {
+      "domain": "ios-evidence-exhaustive",
+      "paths": [],
+      "prefixes": [
+        "tools/tests/fixtures/verify/"
+      ]
+    },
+    {
+      "domain": "ios-runner-cleanup",
+      "paths": ["tools/tests/test-ios-runner-cleanup.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-finalization",
+      "paths": ["tools/tests/test-ios-runner-finalization.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-finalization-integrity",
+      "paths": ["tools/tests/test-ios-runner-finalization-integrity.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-identity",
+      "paths": ["tools/tests/test-ios-runner-identity.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-inputs",
+      "paths": ["tools/tests/test-ios-runner-inputs.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-locking",
+      "paths": ["tools/tests/test-ios-runner-locking.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-publication",
+      "paths": ["tools/tests/test-ios-runner-publication.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-recovery",
+      "paths": [
+        "tools/tests/test-ios-runner-recovery-after-rename.sh",
+        "tools/tests/test-ios-runner-recovery-before-rename.sh",
+        "tools/tests/test-ios-runner-recovery-final.sh",
+        "tools/tests/test-ios-runner-recovery.sh"
+      ],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-resources",
+      "paths": ["tools/tests/test-ios-runner-resources.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-scoped",
+      "paths": ["tools/tests/test-ios-runner.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-startup",
+      "paths": ["tools/tests/test-ios-runner-startup.sh"],
+      "prefixes": []
+    },
+    {
+      "domain": "ios-runner-system-locale",
+      "paths": ["tools/tests/test-ios-runner-system-locale.sh"],
+      "prefixes": []
+    },
+    {
       "domain": "ios-verification",
       "paths": [
+        "tools/destroy-simulator-matrix.sh",
         "tools/lib/delivery-stage.rb",
         "tools/lib/verification-scope.rb",
         "tools/resolve-simulator-matrix.sh",
+        "tools/resolve-simulator-matrix.swift",
+        "tools/validate-simulator-matrix.rb",
         "tools/validate-verify-json.swift",
-        "tools/verify-ios-issue.sh"
+        "tools/verify-ios-issue.sh",
+        "tools/with-ios-simulator-lock.sh"
       ],
       "prefixes": [
-        "tools/lib/ios-"
+        "tools/lib/ios-",
+        "tools/tests/lib/ios-runner-"
       ]
+    },
+    {
+      "domain": "ios-visual-review",
+      "paths": ["tools/tests/test-visual-review-packet.sh"],
+      "prefixes": []
     },
     {
       "domain": "provider-security",
@@ -129,24 +211,26 @@
     {"path": "tools/tests/test-delivery-stages.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-foundation.sh", "domains": ["bootstrap-assets"]},
-    {"path": "tools/tests/test-ios-evidence.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-evidence.sh", "domains": ["ios-evidence-exhaustive"]},
+    {"path": "tools/tests/test-ios-runner-allocation.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-ios-runner-baseline.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-cleanup.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-finalization-integrity.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-finalization.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-identity.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-inputs.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-locking.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-publication.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-recovery-after-rename.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-recovery-before-rename.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-recovery-final.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-recovery.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-resources.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-startup.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner-system-locale.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-ios-runner.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-cleanup.sh", "domains": ["ios-runner-cleanup"]},
+    {"path": "tools/tests/test-ios-runner-finalization-integrity.sh", "domains": ["ios-runner-finalization-integrity"]},
+    {"path": "tools/tests/test-ios-runner-finalization.sh", "domains": ["ios-runner-finalization"]},
+    {"path": "tools/tests/test-ios-runner-identity.sh", "domains": ["ios-runner-identity"]},
+    {"path": "tools/tests/test-ios-runner-inputs.sh", "domains": ["ios-runner-inputs"]},
+    {"path": "tools/tests/test-ios-runner-locking.sh", "domains": ["ios-runner-locking"]},
+    {"path": "tools/tests/test-ios-runner-publication.sh", "domains": ["ios-runner-publication"]},
+    {"path": "tools/tests/test-ios-runner-recovery-after-rename.sh", "domains": ["ios-runner-recovery"]},
+    {"path": "tools/tests/test-ios-runner-recovery-before-rename.sh", "domains": ["ios-runner-recovery"]},
+    {"path": "tools/tests/test-ios-runner-recovery-final.sh", "domains": ["ios-runner-recovery"]},
+    {"path": "tools/tests/test-ios-runner-recovery.sh", "domains": ["ios-runner-recovery"]},
+    {"path": "tools/tests/test-ios-runner-resources.sh", "domains": ["ios-runner-resources"]},
+    {"path": "tools/tests/test-ios-runner-startup.sh", "domains": ["ios-runner-startup"]},
+    {"path": "tools/tests/test-ios-runner-system-locale.sh", "domains": ["ios-runner-system-locale"]},
+    {"path": "tools/tests/test-ios-runner.sh", "domains": ["ios-runner-scoped"]},
     {"path": "tools/tests/test-ios-simulator-lock.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-simulator-resource.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-issue-contract.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-media-skill.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-merge-issue.sh", "domains": ["workflow-state"]},
@@ -166,7 +250,7 @@
     {"path": "tools/tests/test-supabase-skill.sh", "domains": ["provider-security"]},
     {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["specification"]},
     {"path": "tools/tests/test-verification-contract.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-visual-review"]},
     {"path": "tools/tests/test-workflow-e2e.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-workflow-state.sh", "domains": ["workflow-state"]}

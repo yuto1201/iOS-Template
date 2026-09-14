@@ -129,7 +129,7 @@ release revisionを変える記録は追記型とし、少なくとも変更前�
 
 削除対象は作成記録、exact UDID、repository／worktree／session／run owner、lease、非活動状態を照合できるdeviceだけとする。手動device、他owner、使用中、不明なdeviceを削除せず、名前やShutdown状態だけで所有を推測しない。蓄積済みdeviceはinventoryとdry-runで候補を示し、所有と未使用を証明できる対象だけを回収する。Runtime、Xcode、共通cache、ユーザーのDerivedData、canonical evidenceを一括削除しない。検証前後の空き容量と残留数を記録し、削除失敗は未回収として報告する。
 
-この資源契約の実装は#89、skills／既存Issue移行は#88で行う。それまでは既存の固定UDID、repository単位lock、matrix証拠を維持し、本仕様の追加だけでMac共通上限、使用後削除、孤児回収が実装済みとは報告しない。旧sealed contractと既存証拠を変更せず、移行後もRuntime／Device Type／case順の固定と、実行ごとのUDID寿命を別々に管理する。
+#89以後の新規matrixはschema v2としてRuntime／Device Type／locale／case順だけを封印し、実行UDIDはcaseごとのversioned allocation記録へ分離する。runnerはrepository lockの内側でMac共通枠を取得し、一台ずつ作成・検証・証拠保全・削除する。旧schema v1の固定UDID matrix、sealed contract、既存証拠は書き換えずlegacy consumerとして維持する。skills全体と既存Issueの移行は#88で行い、未移行の旧証拠をschema v2の実行結果へ付け替えない。
 
 ## 2. Delivery stage
 
