@@ -27,6 +27,9 @@ cp -R "$repo_root/.agents" "$repo/"
 cp -R "$repo_root/specs" "$repo/"
 cp "$repo_root/Config/ownership.yml" "$repo/Config/"
 ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
+cat > "$repo/Config/repository-tests.json" <<'JSON'
+{"schemaVersion":1,"headAllPaths":["Config/repository-tests.json","tools/lib/repository-test-plan.rb","tools/lib/run-repository-tests.rb","tools/run-repository-tests.sh"],"headAllPrefixes":["tools/tests/"],"domainRules":[{"domain":"gate","paths":["README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]}]}
+JSON
 printf '.artifacts\n' > "$repo/.gitignore"
 printf 'fixture\n' > "$repo/README.md"
 git -C "$repo" add .gitignore README.md Config tools .agents specs
@@ -774,7 +777,7 @@ grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo 'fin
 # The actual new producer runs both small fixture inventories. This is not
 # evidence that either revision of the real repository's suite has passed.
 cp "$issue_body" "$scratch/pre-revision-issue.md"
-ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!("AC-2: Every", "AC-2: Repository-test scope: base-and-head; Every") or abort; File.write(path,text)' "$issue_body"
+ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!("AC-2: Every acceptance criterion has one evidence mapping.", "AC-2: Repository-test scope: base-and-head; Reason: Compare the complete fixture Base and Head inventories.") or abort; File.write(path,text)' "$issue_body"
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 write_verify
@@ -794,7 +797,9 @@ write_preflight
 write_supabase_preflight
 run_gate >/dev/null
 revision_record="$repo/.artifacts/issues/42/$head_sha/repository-tests.json"
+revision_plan="$repo/.artifacts/issues/42/$head_sha/repository-test-plan.json"
 cp "$revision_record" "$scratch/revision-record.saved"
+cp "$revision_plan" "$scratch/revision-plan.saved"
 mv "$revision_record" "$revision_record.absent"
 assert_fails 'new contract cannot merge without repository record' run_gate
 mv "$revision_record.absent" "$revision_record"
@@ -806,6 +811,12 @@ ln -s "$(basename "$revision_record.real")" "$revision_record"
 assert_fails 'repository record symlink is rejected at merge' run_gate
 rm "$revision_record"
 mv "$revision_record.real" "$revision_record"
+mv "$revision_plan" "$revision_plan.absent"
+assert_fails 'plan-required contract cannot merge without repository test plan' run_gate
+mv "$revision_plan.absent" "$revision_plan"
+printf '\n' >> "$revision_plan"
+assert_fails 'repository test plan exact bytes are checked at merge' run_gate
+cp "$scratch/revision-plan.saved" "$revision_plan"
 : > "$FAKE_GH_LOG"
 : > "$FAKE_MERGE_MUTATIONS"
 FINAL_GATE_SWAP_TARGET="$revision_record" assert_fails 'repository record swap after final PR refresh blocks actual merge' run_gate_merge
@@ -816,11 +827,11 @@ cp "$scratch/revision-record.saved" "$revision_record"
 run_gate_merge >/dev/null
 [[ $(cat "$FAKE_MERGE_MUTATIONS") == merged ]] || { echo 'valid Base/Head closure did not reach exact merge' >&2; exit 1; }
 cp "$scratch/pre-revision-issue.md" "$issue_body"
-rm "$revision_record"
+rm "$revision_record" "$revision_plan"
 
 # Workflow-only strict changes use their sealed AC-mapped repository subset;
 # pre-merge must require that record while leaving application checks N/A.
-ruby -e 'path=ARGV.fetch(0); text=File.binread(path); marker="## External operations\n"; replacement="## Delivery stage\n\n- Stage: harden\n- Time budget: 60 minutes\n- Reason: Bounded workflow-only gate fixture.\n\n## Delivery profile\n\n- Profile: strict\n- Reason: Canonical workflow evidence changes.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("AC-2: Every acceptance criterion has one evidence mapping.", "AC-2: Repository-test scope: targeted; Reason: The fixture changes one manifest domain.") or abort; marker="## External operations\n"; replacement="## Delivery stage\n\n- Stage: harden\n- Time budget: 60 minutes\n- Reason: Bounded workflow-only gate fixture.\n\n## Delivery profile\n\n- Profile: strict\n- Reason: Canonical workflow evidence changes.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 (cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
@@ -840,11 +851,12 @@ write_receipt
 write_preflight
 run_gate >/dev/null
 workflow_record="$repo/.artifacts/issues/42/$head_sha/repository-tests.json"
+workflow_plan="$repo/.artifacts/issues/42/$head_sha/repository-test-plan.json"
 mv "$workflow_record" "$workflow_record.absent"
 assert_fails 'workflow-only premerge requires repository evidence' run_gate
 mv "$workflow_record.absent" "$workflow_record"
 cp "$scratch/pre-revision-issue.md" "$issue_body"
-rm "$workflow_record"
+rm "$workflow_record" "$workflow_plan"
 
 # Explicit fast accepts the same current-Head and account gates without any
 # opposite-model artifact. Rebuild the exact live contract so stale strict

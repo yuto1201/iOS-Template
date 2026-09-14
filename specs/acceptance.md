@@ -93,13 +93,13 @@ profileを下げてstage要件を回避しない。`shape`はUIを含むので`f
 
 delivery tool、review schema、validator、evidence producerだけを変更する`harden + strict` Issueは、application `Verification`と`Verification scope`を持たないworkflow-only経路を選べる。Base..Headの全pathがworkflow allowlist内で、App Store／TestFlight pathとoperationを含まないことをcurrent Headから再判定する。canonical `verify.json`は`changeClassification: workflow-only`、`executionRoute: repository-tests`、`status: passed`を持ち、Xcode、Build、Unit、Simulator case、Screenshot、visual evaluationを`not-applicable`として固定する。
 
-workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、仕様anchor、contract digest、Base／Head、strict review、blocking finding、PR、pre-merge gateを省略しない。#78のimpact manifest導入前はworkflow-onlyに限り、全ACの`--map`が参照するtracked test pathのexact unionを対象集合として各1回実行し、recordのtest集合とAC mappingのunionが一致しなければ拒否する。workflow-only以外の従来Head-only contractは全tracked testを維持する。application path、Xcode project、asset、localization、Bundle設定、release operation、別Issue／Head／contract、改ざん済みrepository evidenceを拒否する。
+workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、仕様anchor、contract digest、Base／Head、strict review、blocking finding、PR、pre-merge gateを省略しない。D-037 cutover後はsealed要求scopeとimmutable Base..Head入力からexact test planを生成し、`targeted`、`head-all`、`base-and-head`の解決結果だけを実行する。cutover前のworkflow-onlyは全ACの`--map`が参照するtracked test pathのexact unionを各1回実行し、その他の従来Head-only contractは全tracked testを維持する。application path、Xcode project、asset、localization、Bundle設定、release operation、別Issue／Head／contract、改ざん済みplan／repository evidenceを拒否する。
 
 ### 3.4 Repository testsのBase／Head要件
 
-一つのAC本文先頭にexact `Repository-test scope: base-and-head; `と非空の条件を宣言したIssueは、現在HeadのproducerでBaseとHeadそれぞれの全tracked `tools/tests/test-*.sh`を実行する。宣言ACは両revisionの全suiteへ対応付け、各ACのHead実装証拠とBaseのbaseline／regression証拠を区別する。canonical schema v2 record、packetのexact-byte参照、同じpacketに束縛したreview／receipt、premergeの再検証まで完了条件に含める。片方の欠落、subset、別SHA／Issue／contract、失敗／timeout／未完了、差し替えは成功ではない。
+cutover前のexact `Repository-test scope: base-and-head; <nonempty>`またはcutover後のexact `Repository-test scope: base-and-head; Reason: <nonempty>`を一つのAC本文先頭に宣言したIssueは、現在HeadのproducerでBaseとHeadそれぞれの全tracked `tools/tests/test-*.sh`を実行する。宣言ACは両revisionの全suiteへ対応付け、各ACのHead実装証拠とBaseのbaseline／regression証拠を区別する。cutover前のcanonical schema v2またはcutover後のplan-bound schema v3 record、packetのexact-byte参照、同じpacketに束縛したreview／receipt、premergeの再検証まで完了条件に含める。片方の欠落、subset、別SHA／Issue／contract、失敗／timeout／未完了、差し替えは成功ではない。
 
-選択条件と互換境界は[D-034](decisions.md#d-034-baseとheadの全repository-test証拠を明示契約へ束縛する)、手順とschemaは[repository evidence](../docs/verification.md#baseとheadの全repository-tests)を正とする。宣言を持たない既存sealed contractと旧Head-only record／packet／receiptのbytesを変更せず、旧証拠からBase実行の証拠を作らない。
+選択条件と互換境界は[D-034](decisions.md#d-034-baseとheadの全repository-test証拠を明示契約へ束縛する)および[D-037](decisions.md#d-037-repository-testの要求scopeと実行計画を二段階で封印する)、手順とschemaは[repository evidence](../docs/verification.md#repository-test-planと対象実行)を正とする。宣言を持たない既存sealed contractと旧Head-only record／packet／receiptのbytesを変更せず、旧証拠から新planやBase実行の証拠を作らない。
 
 ## 4. Simulator scope
 

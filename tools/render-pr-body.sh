@@ -177,6 +177,28 @@ begin
     leaf = snapshots.leaf(components, "review image #{reference.fetch('path')}")
     [reference.fetch("path"), leaf.bytes]
   end
+  repository_tests_leaf = nil
+  repository_test_plan_leaf = nil
+  if review_references.key?("repositoryTestsFile")
+    repository_tests_leaf = snapshots.leaf(
+      relative_components(review_references.fetch("repositoryTestsFile").fetch("path"), "repository tests"),
+      "repository-tests.json"
+    )
+  end
+  if review_references.key?("repositoryTestPlanFile")
+    repository_test_plan_leaf = snapshots.leaf(
+      relative_components(review_references.fetch("repositoryTestPlanFile").fetch("path"), "repository test plan"),
+      "repository-test-plan.json"
+    )
+    IOSTemplate::RepositoryTestPlan.validate!(
+      parse_leaf(repository_test_plan_leaf, "repository-test-plan.json"),
+      repo: repo, issue: issue, base_sha: verify["baseSha"], head_sha: head,
+      contract_bytes: contract_bytes
+    )
+  end
+  repository_revision_context = if IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head" || repository_test_plan_leaf
+    IOSTemplate::ReviewContract.repository_revision_context(repo: repo, base_sha: verify["baseSha"], head_sha: head)
+  end
   primary_model = review_packet["primaryModel"]
   reject("review primary model is invalid") unless %w[codex claude].include?(primary_model)
   reviewer = primary_model == "codex" ? "claude" : "codex"
@@ -191,11 +213,23 @@ begin
     diff_bytes: review_diff_leaf.bytes, image_bytes: review_image_bytes,
     actual_diff_bytes: IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: verify["baseSha"], head_sha: head)
   )
+  IOSTemplate::ReviewContract.validate_repository_closure!(
+    packet: review_packet, contract: contract, contract_digest: contract_digest,
+    issue: issue, base_sha: verify["baseSha"], head_sha: head,
+    repository_tests_bytes: repository_tests_leaf&.bytes,
+    repository_test_plan_bytes: repository_test_plan_leaf&.bytes,
+    revision_context: repository_revision_context,
+    workflow_required: verify["changeClassification"] == "workflow-only"
+  )
   IOSTemplate::ReviewContract.validate_result!(
     review, 2, review_packet_leaf.bytes, reviewer, issue, verify["baseSha"], head,
     contract_digest, criteria, completed_at, Time.now.utc, true
   )
-rescue IOSTemplate::ReviewContract::ValidationError => error
+  if review_packet["repositoryTests"] &&
+     (IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head" || review_packet["repositoryTests"]["schemaVersion"] == 3)
+    IOSTemplate::ReviewContract.validate_repository_assessments!(review, review_packet.fetch("repositoryTests"))
+  end
+rescue IOSTemplate::ReviewContract::ValidationError, IOSTemplate::RepositoryTestPlan::PlanError => error
   reject("strict review closure is invalid: #{error.message}")
 end
 reject("review verdict is not approved") unless review["verdict"] == "approved"
@@ -312,6 +346,15 @@ puts "- Build: `#{build["status"]}` (scheme: `#{build["scheme"] || "not-applicab
 puts "- Tests: `#{tests["status"]}` (passed: `#{tests["passed"].nil? ? "not-applicable" : tests["passed"]}`, failed: `#{tests["failed"].nil? ? "not-applicable" : tests["failed"]}`, skipped: `#{tests["skipped"].nil? ? "not-applicable" : tests["skipped"]}`)"
 puts "- Matrix file: `#{verify["matrixFile"] || "not-applicable"}`"
 puts "- Matrix digest: `#{verify["matrixDigest"] || "not-applicable"}`"
+if review_packet.is_a?(Hash) && review_packet["repositoryTests"].is_a?(Hash)
+  repository_tests = review_packet.fetch("repositoryTests")
+  repository_test_count = if repository_tests["tests"].is_a?(Array)
+    repository_tests.fetch("tests").length
+  else
+    repository_tests.fetch("revisions", []).sum { |revision| revision.fetch("tests", []).length }
+  end
+  puts "- Repository-test scope: `#{repository_tests["scope"] || "head"}` (executions: `#{repository_test_count}`)"
+end
 case_labels = {"iphone-en" => "iPhone Pro / English", "iphone-ja" => "iPhone Pro / Japanese", "ipad-en" => "iPad Air / English", "ipad-ja" => "iPad Air / Japanese"}
 if cases.is_a?(Array) && !cases.empty?
   case_labels.each do |id, label|

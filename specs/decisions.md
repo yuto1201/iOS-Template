@@ -294,5 +294,16 @@
 - Supersedes: D-025のdelivery gateを一律strict完全検証へ結び付ける部分と、D-029のworkflow変更にapplication検証の例外がなかった部分。D-029の段階別品質、D-034の明示的Base／Head契約、account・Head・review・pre-merge境界は維持する。
 - Context: delivery tool、schema、validator、review、evidence producerだけの変更でもXcode Build、Simulator 4条件、visual確認を行うと、アプリ挙動を一切変えないIssueの検証が実装より長くなり、英語／iPad仕上げを最後へ寄せる方針も機械的に実現できない。
 - Decision: application source、Xcode project、asset、localization、Bundle設定、App Store／TestFlight経路へ触れない非UI workflow変更は`harden + strict`のworkflow-only経路で検証する。application `Verification`／`Verification scope`は持たず、Xcode、Build、Unit、Simulator、Screenshot、visual evaluationを正当な`not-applicable`とする。対象repository tests、仕様整合、contract、current-Head、strict review、blocking finding、pre-merge gateは維持する。`release`は`type:release`の実アプリrelease candidateだけに限定する。
-- Consequence: workflow gateの安全性を下げずに、無関係なiPhone／iPad・日本語／英語matrixを起動しない。allowlist外path、application／release path、App Store operation、Verification混入、repository evidence欠落またはidentity不一致はfail closedになる。impact manifest導入前のworkflow-onlyだけは全AC mappingのexact unionを対象testとして封印し、それ以外の従来Head-only contractは全tracked testを維持する。一般の変更影響による対象選定は後続Issue #78で独立して決定論化する。
+- Consequence: workflow gateの安全性を下げずに、無関係なiPhone／iPad・日本語／英語matrixを起動しない。allowlist外path、application／release path、App Store operation、Verification混入、repository evidence欠落またはidentity不一致はfail closedになる。#82のcutover前に封印されたworkflow-only contractは全AC mappingのexact unionを対象testとして維持し、それ以外の従来Head-only contractは全tracked testを維持する。cutover後の対象選定はD-037のimmutable planへ移行する。
 - Related Issue: #77
+
+## D-037: Repository testの要求scopeと実行計画を二段階で封印する
+
+- Date: 2026-09-13
+- Status: 確定
+- Cutover: `2026-09-13T13:03:38Z`。Issue #82の`createdAt`を採用し、それより前のsealed contractとschema v1／v2 evidenceを遡及変更しない。
+- Supersedes: D-036のimpact manifest未導入境界と、D-034の新規contract向け宣言形式。D-034の既存Base／Head証拠、旧contract、account・Head・review・pre-merge境界は維持する。
+- Context: workflow変更のたびに全repository testsを反復すると、実装と無関係な検証が所要時間の大半を占める。一方、Issue作成時には最終Head差分が存在しないため、exact test pathを先に固定すると過不足や恣意的な選択が生じる。
+- Decision: cutover以後のworkflow-only `harden + strict` contractは、一つのAC本文先頭にexact `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`を宣言する。contractは要求scopeと理由だけを封印し、実装後のimmutable Base、Head、contract bytes、Headの`Config/repository-tests.json`、Base..Head changed pathsからrunnerがresolved scopeとexact ordered test pathsを決定する。`targeted`は全changed pathが一つの既知domainへ解決した場合だけ許可し、unmatched path、複数domain、manifest／runner／test inventory変更は`head-all`へ昇格する。`head-all`はHead全件、`base-and-head`は両revision全件を実行する。
+- Consequence: exact test一覧、manifest／diff digest、要求／解決理由、全ACのordered mappingをimmutable `repository-test-plan.json`へno-replaceで保存し、schema v3 `repository-tests.json`、review packet/result/receipt、PR本文、pre-merge gateが同じplan bytesを再計算・照合する。開発中は関連testだけを使い、canonical全件は最終候補Headで必要な場合に一度実行する。旧schema v1／v2とcutover前contractは変換しない。
+- Related Issue: #82

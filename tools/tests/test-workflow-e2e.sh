@@ -310,7 +310,9 @@ export FAKE_OPERATION_LOG="$operation_log"
 export FAKE_DECLARED_ORIGIN="$declared_origin"
 export FAKE_LOCAL_REMOTE="$remote"
 export FAKE_DATE_COUNTER="$date_counter"
-export FAKE_DATE_BASE_EPOCH=$(( $(/bin/date +%s) + 30 ))
+# Keep this general shipping fixture before the repository-test-plan cutover.
+# The post-cutover strict path is exercised by test-repository-test-plan.sh.
+export FAKE_DATE_BASE_EPOCH=1789304100
 export FAKE_LABELS_FILE="$labels_file"
 export FAKE_COMMENTS_FILE="$comments_file"
 export FAKE_ISSUE_BODY="$issue_body_file"
@@ -328,6 +330,10 @@ branch=$(ruby -rjson -e 'print JSON.parse(File.binread(ARGV.fetch(0))).fetch("br
 base_sha=$(ruby -rjson -e 'print JSON.parse(File.binread(ARGV.fetch(0))).fetch("baseSha")' "$claim_result")
 export FAKE_ISSUE_WORKTREE="$issue_worktree"
 export FAKE_BRANCH="$branch"
+# Only the sealed contract belongs to the pre-plan cutover fixture. Subsequent
+# evidence and provider preflights must remain fresh relative to the real run.
+export FAKE_DATE_BASE_EPOCH=$(( $(/bin/date +%s) + 30 ))
+printf '%s' '0' >"$date_counter"
 
 [[ -L "$issue_worktree/.artifacts" && "$(readlink "$issue_worktree/.artifacts")" == '../../.artifacts' ]] || fail 'Claim did not install the canonical shared artifact link'
 [[ "$(ruby -e 'print File.realpath(ARGV.fetch(0))' "$issue_worktree/.artifacts")" == "$(ruby -e 'print File.realpath(ARGV.fetch(0))' "$primary/.artifacts")" ]] || fail 'Issue worktree does not share the primary artifact store'

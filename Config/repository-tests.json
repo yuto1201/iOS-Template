@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "headAllPaths": [
+    "Config/repository-tests.json",
+    "tools/lib/repository-test-plan.rb",
+    "tools/lib/run-repository-tests.rb",
+    "tools/run-repository-tests.sh"
+  ],
+  "headAllPrefixes": [
+    "tools/tests/"
+  ],
+  "domainRules": [
+    {
+      "domain": "appstore",
+      "paths": [
+        "tools/build-appstore-screenshot-set.sh",
+        "tools/capture-appstore-screenshots.sh",
+        "tools/validate-appstore-package.sh"
+      ],
+      "prefixes": [
+        "App Store/",
+        "tools/lib/appstore-"
+      ]
+    },
+    {
+      "domain": "bootstrap-assets",
+      "paths": [
+        "tools/bootstrap-app.sh",
+        "tools/install-app-icon.sh",
+        "tools/validate-app-icon.sh"
+      ],
+      "prefixes": [
+        ".agents/skills/app-bootstrap/",
+        ".agents/skills/app-icon/",
+        ".agents/skills/ios-media-assets/"
+      ]
+    },
+    {
+      "domain": "ios-verification",
+      "paths": [
+        "tools/lib/delivery-stage.rb",
+        "tools/lib/verification-scope.rb",
+        "tools/resolve-simulator-matrix.sh",
+        "tools/validate-verify-json.swift",
+        "tools/verify-ios-issue.sh"
+      ],
+      "prefixes": [
+        ".agents/skills/ios-verify/",
+        "tools/lib/ios-"
+      ]
+    },
+    {
+      "domain": "provider-security",
+      "paths": [
+        "Config/ownership.yml",
+        "docs/AUTHORITY.md",
+        "docs/security.md",
+        "tools/github-account-preflight.sh",
+        "tools/provider-preflight.sh"
+      ],
+      "prefixes": [
+        ".agents/skills/external-ops/",
+        "tools/lib/secret-"
+      ]
+    },
+    {
+      "domain": "review-contract",
+      "paths": [
+        "docs/agent-contracts/review-packet.md",
+        "tools/cross-model-review.sh",
+        "tools/lib/premerge-gate.rb",
+        "tools/lib/prepare-review-packet.rb",
+        "tools/lib/publish-review-result.rb",
+        "tools/lib/review-contract.rb",
+        "tools/lib/review-sealing.rb",
+        "tools/prepare-review-packet.sh",
+        "tools/render-pr-body.sh",
+        "tools/validate-review-result.sh"
+      ],
+      "prefixes": [".agents/skills/cross-model-review/"]
+    },
+    {
+      "domain": "specification",
+      "paths": [
+        "docs/verification.md",
+        "docs/workflow.md"
+      ],
+      "prefixes": [
+        ".agents/skills/plan-issue-batch/",
+        ".agents/skills/ship-issue/",
+        ".agents/skills/spec-workflow/",
+        ".github/ISSUE_TEMPLATE/",
+        "specs/"
+      ]
+    },
+    {
+      "domain": "workflow-state",
+      "paths": [
+        "tools/claim-issue.sh",
+        "tools/cleanup-issue.sh",
+        "tools/issue-state.sh",
+        "tools/lib/issue-contract.rb",
+        "tools/lib/workflow-json.rb",
+        "tools/lib/workflow.sh",
+        "tools/merge-issue.sh",
+        "tools/resume-issue.sh"
+      ],
+      "prefixes": [
+        "tools/lib/merge-",
+        "tools/lib/workflow-"
+      ]
+    }
+  ],
+  "tests": [
+    {"path": "tools/tests/test-app-bootstrap.sh", "domains": ["bootstrap-assets"]},
+    {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
+    {"path": "tools/tests/test-appstore-package.sh", "domains": ["appstore"]},
+    {"path": "tools/tests/test-appstore-screenshots.sh", "domains": ["appstore"]},
+    {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore"]},
+    {"path": "tools/tests/test-bounded-command.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-claim-recovery.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-claim-resume.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-cleanup-issue.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-cross-model-review.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-delivery-stages.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-foundation.sh", "domains": ["bootstrap-assets"]},
+    {"path": "tools/tests/test-ios-evidence.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-baseline.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-cleanup.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-finalization-integrity.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-finalization.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-identity.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-inputs.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-locking.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-publication.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-recovery-after-rename.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-recovery-before-rename.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-recovery-final.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-recovery.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-resources.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-startup.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner-system-locale.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-runner.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-simulator-lock.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-issue-contract.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-media-skill.sh", "domains": ["bootstrap-assets"]},
+    {"path": "tools/tests/test-merge-issue.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-premerge-gate.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-prerequisites.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-provider-ownership.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-provider-preflight.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-render-pr-body.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-review-sealing.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-review-shared-artifacts.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-secret-store.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-simulator-lifecycle.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-simulator-resolver.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-spec-state.sh", "domains": ["specification"]},
+    {"path": "tools/tests/test-supabase-skill.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["specification"]},
+    {"path": "tools/tests/test-verification-contract.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-workflow-e2e.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-workflow-state.sh", "domains": ["workflow-state"]}
+  ]
+}

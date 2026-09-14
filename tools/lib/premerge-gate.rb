@@ -171,6 +171,7 @@ begin
 
   diff_file = nil
   repository_tests_file = nil
+  repository_test_plan_file = nil
   revision_context = nil
   image_files = {}
   if review_required
@@ -183,7 +184,15 @@ begin
     if review_references.key?("repositoryTestsFile")
       repository_tests_file = artifact_snapshots.leaf(head_directory, "repository-tests.json", "repository-tests.json")
     end
-    if IOSTemplate::ReviewContract.repository_test_scope(contract.fetch("acceptanceCriteria")) == "base-and-head"
+    if review_references.key?("repositoryTestPlanFile")
+      repository_test_plan_file = artifact_snapshots.leaf(head_directory, "repository-test-plan.json", "repository-test-plan.json")
+      IOSTemplate::RepositoryTestPlan.validate!(
+        parse_object(repository_test_plan_file.bytes, "repository-test-plan.json"),
+        repo: root, issue: issue, base_sha: base_sha, head_sha: head_sha,
+        contract_bytes: contract_file.bytes
+      )
+    end
+    if IOSTemplate::ReviewContract.repository_test_scope(contract.fetch("acceptanceCriteria")) == "base-and-head" || repository_test_plan_file
       revision_context = IOSTemplate::ReviewContract.repository_revision_context(repo: root, base_sha: base_sha, head_sha: head_sha)
     end
     image_files = review_references.fetch("imageFiles").to_h do |reference|
@@ -292,7 +301,9 @@ begin
       require_temporal_order: true, strict: true,
       diff_bytes: diff_file.bytes,
       image_bytes: image_files.transform_values(&:bytes),
-      repository_tests_bytes: repository_tests_file&.bytes, revision_context: revision_context,
+      repository_tests_bytes: repository_tests_file&.bytes,
+      repository_test_plan_bytes: repository_test_plan_file&.bytes,
+      revision_context: revision_context,
       actual_diff_bytes: actual_diff_bytes
     )
     refuse("opposite-model review is not approved") unless review_values.fetch("result").fetch("verdict") == "approved"
@@ -369,6 +380,8 @@ rescue IOSTemplate::Ownership::ValidationError => error
   refuse("Config ownership is invalid: #{error.message}")
 rescue IOSTemplate::ReviewContract::ValidationError => error
   refuse("review contract is invalid: #{error.message}")
+rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+  refuse("repository test plan is invalid: #{error.message}")
 rescue IOSTemplate::ReviewReceipt::ValidationError => error
   refuse("review receipt is invalid: #{error.message}")
 rescue KeyError, JSON::ParserError, SystemCallError, IOError, ArgumentError => error

@@ -270,7 +270,7 @@ UI Direction Gateを通したshapeでは、確定仕様にある情報階層、�
 2. `shape`はBuild、重要Unit Test、`iphone-ja` 1条件のSmoke Testを実行し、Screenshot／visual reviewなしの`xcodebuild-stage`証拠を発行する。
 3. `harden`は対象Test、関連回帰、宣言した`targeted` caseだけを実行する。visual checkを明示した場合だけ対象画像を評価する。
 4. `release`は`full` 4条件、visual、accessibility、統合UI、同一Head evidenceを実行する。
-5. IssueがRepository toolやworkflowを変更する場合、canonical repository testsをclean detached worktree上で実行する。#77のworkflow-onlyは全AC mappingのexact unionを各1回、その他の対象選定contract未導入IssueはHead全件、導入済みIssueはmanifestから決定した範囲だけとし、Base／Head全件は明示宣言時だけ実行する。
+5. IssueがRepository toolやworkflowを変更する場合、canonical repository testsをclean detached worktree上で実行する。D-037 cutover後のworkflow-only contractは要求scopeを宣言し、実装後のimmutable Base..Head差分とHead manifestからexact planを生成する。単一domainだけを`targeted`、広域・未知・複数domain・test基盤変更を`head-all`、明示比較だけを`base-and-head`として実行する。cutover前contractの既存Head-only／Base-and-Head経路は変更しない。
 6. 同じHeadを明示して`in-progress -> verify-passed`へ遷移する。
 
 canonical検証が失敗した場合、原因へ直接対応する対象Testが成功するまで要求scopeの検証を再実行しません。別Headのcanonical evidenceを作り続けることを進捗として扱いません。

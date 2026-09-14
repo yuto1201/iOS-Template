@@ -13,7 +13,7 @@ trap '/bin/rm -rf "$scratch"' EXIT
 prepare_fixture() {
   local label="$1"
   repo="$scratch/$label/repository"
-  /bin/mkdir -p "$repo/tools/lib"
+  /bin/mkdir -p "$repo/Config" "$repo/tools/lib"
   /usr/bin/git -C "$repo" init -q
   /usr/bin/git -C "$repo" config user.name 'Workflow Publisher Test'
   /usr/bin/git -C "$repo" config user.email 'workflow-publisher@example.invalid'
@@ -22,13 +22,15 @@ prepare_fixture() {
   /usr/bin/git -C "$repo" add -- .gitignore README.md
   /usr/bin/git -C "$repo" commit -q -m base
   base_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+  printf '%s\n' '{}' >"$repo/Config/repository-tests.json"
   printf '%s\n' '# workflow helper' >"$repo/tools/lib/example.rb"
-  /usr/bin/git -C "$repo" add -- tools/lib/example.rb
+  /usr/bin/git -C "$repo" add -- Config/repository-tests.json tools/lib/example.rb
   /usr/bin/git -C "$repo" commit -q -m head
   head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
   issue_root="$repo/.artifacts/issues/42"
   /bin/mkdir -p "$issue_root/$head_sha"
   ISSUE_ROOT="$issue_root" BASE="$base_sha" HEAD="$head_sha" /usr/bin/ruby --disable-gems -rjson -rdigest -rtime <<'RUBY'
+# encoding: UTF-8
 root = ENV.fetch("ISSUE_ROOT")
 contract = {
   "schemaVersion"=>1, "issue"=>42, "repository"=>"yuto1201/iOS-Template",

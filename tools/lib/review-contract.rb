@@ -5,6 +5,7 @@ require "json"
 require "open3"
 require "time"
 require_relative "verification-scope"
+require_relative "repository-test-plan"
 
 module IOSTemplate
   module ReviewContract
@@ -22,6 +23,7 @@ module IOSTemplate
     ].freeze
     PACKET_V2_REPOSITORY_TEST_KEYS = (PACKET_V2_KEYS + %w[repositoryTests]).freeze
     PACKET_V2_REVISION_TEST_KEYS = (PACKET_V2_REPOSITORY_TEST_KEYS + %w[repositoryTestsFile]).freeze
+    PACKET_V2_PLANNED_TEST_KEYS = (PACKET_V2_REVISION_TEST_KEYS + %w[repositoryTestPlan repositoryTestPlanFile]).freeze
     RESULT_V1_KEYS = %w[
       schemaVersion issue reviewerModel baseSha headSha verifySha
       issueContractDigest verdict findings acceptanceAssessment reviewedAt
@@ -43,7 +45,7 @@ module IOSTemplate
     def validate!(packet_bytes:, result_bytes:, verify_bytes:, contract_bytes:, primary:, issue:, base_sha:, head_sha:,
                   now: Time.now.utc, require_temporal_order: false, strict: false,
                   diff_bytes: nil, image_bytes: nil, actual_diff_bytes: nil,
-                  repository_tests_bytes: nil, revision_context: nil)
+                  repository_tests_bytes: nil, repository_test_plan_bytes: nil, revision_context: nil)
       reject("primary model is invalid") unless %w[codex claude].include?(primary)
       reviewer = primary == "codex" ? "claude" : "codex"
       packet = parse_object(packet_bytes, "packet")
@@ -60,7 +62,8 @@ module IOSTemplate
       criteria = validate_scope!(packet, contract)
       validate_repository_closure!(packet: packet, contract: contract, contract_digest: contract_digest,
         issue: issue, base_sha: base_sha, head_sha: head_sha,
-        repository_tests_bytes: repository_tests_bytes, revision_context: revision_context,
+        repository_tests_bytes: repository_tests_bytes, repository_test_plan_bytes: repository_test_plan_bytes,
+        revision_context: revision_context,
         workflow_required: verify["changeClassification"] == "workflow-only")
       completed_at = validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, require_temporal_order)
 
@@ -79,7 +82,9 @@ module IOSTemplate
         result, schema, packet_bytes, reviewer, issue, base_sha, head_sha,
         contract_digest, criteria, completed_at, now, require_temporal_order
       )
-      validate_repository_assessments!(result, packet["repositoryTests"]) if repository_test_scope(criteria) == "base-and-head"
+      if packet["repositoryTests"] && (repository_test_scope(criteria) == "base-and-head" || packet["repositoryTests"]["schemaVersion"] == 3)
+        validate_repository_assessments!(result, packet["repositoryTests"])
+      end
       {"packet" => packet, "result" => result, "verify" => verify, "contract" => contract}
     end
 
@@ -108,6 +113,11 @@ module IOSTemplate
         reference = reference!(packet["repositoryTestsFile"], "packet.repositoryTestsFile")
         reject("packet.repositoryTestsFile.path is not canonical") unless reference["path"] == "#{prefix}repository-tests.json"
         references["repositoryTestsFile"] = reference
+      end
+      if packet.key?("repositoryTestPlanFile")
+        reference = reference!(packet["repositoryTestPlanFile"], "packet.repositoryTestPlanFile")
+        reject("packet.repositoryTestPlanFile.path is not canonical") unless reference["path"] == "#{prefix}repository-test-plan.json"
+        references["repositoryTestPlanFile"] = reference
       end
       references
     end
@@ -169,9 +179,12 @@ module IOSTemplate
     def repository_test_scope(criteria)
       declarations = criteria.select { |entry| entry.fetch("text").start_with?("Repository-test scope:") }
       return "head" if declarations.empty?
-      reject("repository-test scope declaration is malformed or duplicated") unless declarations.length == 1 &&
-        declarations.first.fetch("text").match?(/\ARepository-test scope: base-and-head; \S/)
-      "base-and-head"
+      reject("repository-test scope declaration is malformed or duplicated") unless declarations.length == 1
+      text = declarations.first.fetch("text")
+      modern = text.match(/\ARepository-test scope: (targeted|head-all|base-and-head); Reason: \S(?:.*\S)?\z/)
+      return modern[1] if modern
+      return "base-and-head" if text.match?(/\ARepository-test scope: base-and-head; \S/)
+      reject("repository-test scope declaration is malformed or duplicated")
     end
 
     # Immutable Git inputs are obtained independently by descriptor-owning
@@ -202,16 +215,35 @@ module IOSTemplate
       producer = %w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb].map do |path|
         {"path"=>path, "digest"=>digest(git.call("show", "#{head_sha}:#{path}"))}
       end
-      {"baseSha"=>base_sha, "headSha"=>head_sha, "inventories"=>inventories, "producerFiles"=>producer}
+      planned_producer = (producer.map(&:dup) + ["tools/lib/repository-test-plan.rb"].map do |path|
+        {"path"=>path, "digest"=>digest(git.call("show", "#{head_sha}:#{path}"))}
+      end)
+      {"baseSha"=>base_sha, "headSha"=>head_sha, "inventories"=>inventories,
+       "producerFiles"=>producer, "plannedProducerFiles"=>planned_producer}
     end
 
     def validate_repository_closure!(packet:, contract:, contract_digest:, issue:, base_sha:, head_sha:,
-                                     repository_tests_bytes: nil, revision_context: nil, workflow_required: false)
+                                     repository_tests_bytes: nil, repository_test_plan_bytes: nil,
+                                     revision_context: nil, workflow_required: false)
       criteria = contract.fetch("acceptanceCriteria")
+      policy = RepositoryTestPlan.policy(contract)
+      planned = policy&.fetch("planRequired")
       required = repository_test_scope(criteria) == "base-and-head"
       reject("Base and Head repository evidence is required") if required && !packet.key?("repositoryTests")
       reject("workflow-only verification requires repository evidence") if workflow_required && !packet.key?("repositoryTests")
-      if required
+      if planned
+        reject("planned repository evidence requires packet schemaVersion 2") unless packet["schemaVersion"] == 2
+        plan_reference = reference!(packet["repositoryTestPlanFile"], "packet.repositoryTestPlanFile")
+        reject("packet.repositoryTestPlanFile.path is not canonical") unless plan_reference["path"] == ".artifacts/issues/#{issue}/#{head_sha}/repository-test-plan.json"
+        reject("held repository-test plan bytes are required") unless repository_test_plan_bytes.is_a?(String)
+        reject("repository-test plan digest differs") unless digest(repository_test_plan_bytes) == plan_reference["digest"]
+        reject("packet repository-test plan differs from held record") unless parse_object(repository_test_plan_bytes, "repository-test plan") == packet["repositoryTestPlan"]
+        reference = reference!(packet["repositoryTestsFile"], "packet.repositoryTestsFile")
+        reject("packet.repositoryTestsFile.path is not canonical") unless reference["path"] == ".artifacts/issues/#{issue}/#{head_sha}/repository-tests.json"
+        reject("held repository test bytes are required") unless repository_tests_bytes.is_a?(String)
+        reject("repository record digest differs") unless digest(repository_tests_bytes) == reference["digest"]
+        reject("packet repository evidence differs from held record") unless parse_object(repository_tests_bytes, "repository record") == packet["repositoryTests"]
+      elsif required
         reject("Base and Head evidence requires packet schemaVersion 2") unless packet["schemaVersion"] == 2
         reference = reference!(packet["repositoryTestsFile"], "packet.repositoryTestsFile")
         reject("packet.repositoryTestsFile.path is not canonical") unless reference["path"] == ".artifacts/issues/#{issue}/#{head_sha}/repository-tests.json"
@@ -223,16 +255,19 @@ module IOSTemplate
       end
       if packet.key?("repositoryTests")
         validate_repository_tests!(packet["repositoryTests"], issue: issue, base_sha: base_sha, head_sha: head_sha,
-          contract_digest: contract_digest, criteria: criteria, revision_context: revision_context)
-        if workflow_required
+          contract_digest: contract_digest, criteria: criteria, revision_context: revision_context,
+          repository_test_plan_bytes: repository_test_plan_bytes)
+        if workflow_required && packet["repositoryTests"]["schemaVersion"] != 3
           recorded = packet.fetch("repositoryTests").fetch("tests").map { |entry| entry.fetch("path") }
           mapped = packet.fetch("repositoryTests").fetch("acceptanceEvidence").flat_map { |entry| entry.fetch("tests") }.uniq.sort
           reject("workflow-only repository test selection differs from its AC mappings") unless recorded == mapped
         end
-        if required
+        if required || planned
           reject("repository execution predates Issue contract") if iso8601!(packet["repositoryTests"]["startedAt"], "repository start") < iso8601!(contract["fetchedAt"], "contract fetchedAt")
         end
       end
+    rescue RepositoryTestPlan::PlanError => error
+      reject(error.message)
     end
 
     def validate_revision_repository_tests!(value, issue:, base_sha:, head_sha:, contract_digest:, criteria:, revision_context:)
@@ -299,7 +334,13 @@ module IOSTemplate
       reject("review predates repository suite completion") if iso8601!(result["reviewedAt"], "reviewedAt") < iso8601!(record["completedAt"], "repository completion")
     end
 
-    def validate_repository_tests!(value, issue:, base_sha:, head_sha:, contract_digest:, criteria:, revision_context: nil)
+    def validate_repository_tests!(value, issue:, base_sha:, head_sha:, contract_digest:, criteria:, revision_context: nil,
+                                   repository_test_plan_bytes: nil, repository_test_plan: nil)
+      if value.is_a?(Hash) && value["schemaVersion"] == 3
+        return validate_planned_repository_tests!(value, issue: issue, base_sha: base_sha, head_sha: head_sha,
+          contract_digest: contract_digest, criteria: criteria, revision_context: revision_context,
+          repository_test_plan_bytes: repository_test_plan_bytes, repository_test_plan: repository_test_plan)
+      end
       if repository_test_scope(criteria) == "base-and-head"
         return validate_revision_repository_tests!(value, issue: issue, base_sha: base_sha, head_sha: head_sha,
           contract_digest: contract_digest, criteria: criteria, revision_context: revision_context)
@@ -361,9 +402,66 @@ module IOSTemplate
       value
     end
 
+    def validate_planned_repository_tests!(value, issue:, base_sha:, head_sha:, contract_digest:, criteria:,
+                                           revision_context:, repository_test_plan_bytes:, repository_test_plan: nil)
+      plan = repository_test_plan || (repository_test_plan_bytes && parse_object(repository_test_plan_bytes, "repository-test plan"))
+      reject("independent repository revision context is required") unless revision_context.is_a?(Hash)
+      expected_plan_reference = value["repositoryTestPlan"]
+      reference!(expected_plan_reference, "repositoryTests.repositoryTestPlan")
+      reject("repositoryTests plan path is not canonical") unless expected_plan_reference["path"] == ".artifacts/issues/#{issue}/#{head_sha}/repository-test-plan.json"
+      if repository_test_plan_bytes
+        reject("repositoryTests plan digest differs") unless expected_plan_reference["digest"] == digest(repository_test_plan_bytes)
+      end
+      reject("repository-test plan bytes are required") unless plan.is_a?(Hash)
+      reject("repositoryTests identity differs") unless value.values_at("schemaVersion", "status", "issue", "baseSha", "headSha", "scope") ==
+        [3, "passed", issue, base_sha, head_sha, plan["resolvedScope"]]
+      reject("repositoryTests issue contract differs") unless value["issueContract"] == {"path"=>".artifacts/issues/#{issue}/issue-contract.json", "digest"=>contract_digest}
+      reject("repositoryTests producer differs from current Head") unless value["producer"] == {"headSha"=>head_sha, "files"=>revision_context.fetch("plannedProducerFiles")}
+
+      if value["scope"] == "base-and-head"
+        exact_keys!(value, %w[schemaVersion scope status issue baseSha headSha issueContract repositoryTestPlan producer revisions acceptanceEvidence startedAt completedAt], "repositoryTests")
+        legacy = Marshal.load(Marshal.dump(value))
+        legacy.delete("repositoryTestPlan")
+        legacy["schemaVersion"] = 2
+        legacy["producer"]["files"] = revision_context.fetch("producerFiles")
+        validate_revision_repository_tests!(legacy, issue: issue, base_sha: base_sha, head_sha: head_sha,
+          contract_digest: contract_digest, criteria: criteria, revision_context: revision_context)
+        expected_acceptance = plan.fetch("acceptanceMappings")
+        actual_head = value.fetch("acceptanceEvidence").map { |entry| {"id"=>entry.fetch("id"), "tests"=>entry.fetch("headTests")} }
+        reject("repositoryTests acceptance mappings differ from plan") unless actual_head == expected_acceptance
+        return value
+      end
+
+      exact_keys!(value, %w[schemaVersion scope status issue baseSha headSha issueContract repositoryTestPlan producer suite tests acceptanceEvidence startedAt completedAt], "repositoryTests")
+      reject("planned repository scope is invalid") unless %w[targeted head-all].include?(value["scope"])
+      tests = value["tests"]
+      expected_inventory = revision_context.fetch("inventories").fetch(1).select { |entry| plan.fetch("testPaths").include?(entry.fetch("path")) }
+      reject("repositoryTests inventory differs from plan") unless tests.is_a?(Array) && tests.map { |entry| entry.slice("path", "sourceDigest") } == expected_inventory
+      reject("repositoryTests suite totals differ") unless value["suite"] == {"path"=>"tools/tests", "pattern"=>"test-*.sh", "total"=>tests.length, "passed"=>tests.length, "failed"=>0}
+      start = iso8601!(value["startedAt"], "repositoryTests.startedAt")
+      finish = iso8601!(value["completedAt"], "repositoryTests.completedAt")
+      reject("repositoryTests interval is invalid") if finish < start || finish > Time.now.utc + 300
+      previous = start
+      tests.each do |test|
+        exact_keys!(test, %w[path sourceDigest arguments command status exitStatus outputDigest timeoutSeconds elapsedSeconds startedAt completedAt], "repositoryTests test")
+        arguments = test["path"] == "tools/tests/test-app-bootstrap.sh" ? ["all"] : []
+        reject("repositoryTests test argv differs") unless test["arguments"] == arguments && test["command"] == ["/bin/bash", "-p", test["path"], *arguments]
+        reject("repositoryTests contains a failed or incomplete test") unless test["status"] == "passed" && test["exitStatus"] == 0
+        reject("repositoryTests test bound is invalid") unless test["timeoutSeconds"].is_a?(Integer) && test["timeoutSeconds"].between?(1, 900) && test["elapsedSeconds"].is_a?(Numeric) && test["elapsedSeconds"].finite? && test["elapsedSeconds"].between?(0, test["timeoutSeconds"] + 5)
+        digest!(test["outputDigest"], "repositoryTests outputDigest")
+        test_start = iso8601!(test["startedAt"], "test startedAt")
+        test_finish = iso8601!(test["completedAt"], "test completedAt")
+        reject("repositoryTests test interval is invalid") if test_start < previous || test_finish < test_start || test_finish > finish
+        previous = test_finish
+      end
+      expected_acceptance = plan.fetch("acceptanceMappings").map { |entry| entry.merge("status"=>"passed") }
+      reject("repositoryTests acceptance mappings differ from plan") unless value["acceptanceEvidence"] == expected_acceptance
+      value
+    end
+
     def exact_packet_v2_keys!(packet)
       reject("packet must be an object") unless packet.is_a?(Hash)
-      allowed = [PACKET_V2_KEYS.sort, PACKET_V2_REPOSITORY_TEST_KEYS.sort, PACKET_V2_REVISION_TEST_KEYS.sort]
+      allowed = [PACKET_V2_KEYS.sort, PACKET_V2_REPOSITORY_TEST_KEYS.sort, PACKET_V2_REVISION_TEST_KEYS.sort, PACKET_V2_PLANNED_TEST_KEYS.sort]
       reject("packet: unexpected or missing keys") unless allowed.include?(packet.keys.sort)
     end
 
@@ -470,6 +568,7 @@ module IOSTemplate
       images = packet.fetch("imageFiles").map { |entry| entry.is_a?(Hash) ? entry.fetch("path").delete_prefix(prefix) : entry }
       aliases = %w[verify.json review.diff review-packet.json]
       aliases << "repository-tests.json" if packet.key?("repositoryTests")
+      aliases << "repository-test-plan.json" if packet.key?("repositoryTestPlan")
       return ["artifact", prefix + file] if (aliases + images).include?(file)
       ["source", file]
     end

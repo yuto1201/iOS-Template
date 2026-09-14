@@ -102,6 +102,8 @@ Verification scopeは端末・言語の範囲を表す。
 
 `shape`はUIを含むため`fast`へ偽装しない。逆に`strict`なshape/hardenでも、危険な対象の安全確認は維持しつつ、無関係なリリース全体検証は後段へ移せる。
 
+workflow-only `harden + strict`のRepository test範囲はapplicationのVerification scopeとは別に扱う。D-037 cutover後はClaim時に`targeted`、`head-all`、`base-and-head`の要求scopeと理由だけを封印し、exact test pathsは実装後のimmutable Base..Head差分とversioned manifestから決定する。未知・複数domain・test基盤変更を狭いscopeへ推測しない。
+
 ## 4. 常に守る安全基準
 
 Delivery stageにかかわらず、次を省略しない。
@@ -140,11 +142,13 @@ Runtime、Device Type、case集合はバッチ内で固定する。古いHead、
 
 失敗記録には停止stage、経過時間、timeoutを含める。timeoutや失敗時に成功形式の`verify.json`を生成しない。同じ原因の実行は最大2回で止める。
 
-再実行の順序は、対象Test、関連回帰Test、Delivery stage標準検証、`release`完全検証とする。正式な一括証拠へ異なるattemptの部分結果を混ぜないが、診断済みの対象Test結果は修正判断に利用する。
+再実行の順序は、対象Test、関連回帰Test、Delivery stage標準検証、`release`完全検証とする。Repository testも開発中は関連testだけを直接使い、canonical plan／evidenceは安定した最終候補Headで一度生成する。正式な一括証拠へ異なるattemptの部分結果を混ぜないが、診断済みの対象Test結果は修正判断に利用する。
 
 ## 7. Issue・レビュー・移行
 
 新規Issueの`Delivery stage`節は`Stage`、`Time budget`、`Reason`をこの順で持つ。`Verification scope`節は`Scope`と`Reason`を持ち、stageを重複記載しない。Feature formは`shape / 120 minutes / standard / iphone-ja`、Regression formは`harden / targeted`、Release formは`release / strict / full`を既定とする。
+
+D-037 cutover後のworkflow-only `harden + strict` Issueは、既存Acceptance criterionの一つをexact `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`で開始する。宣言は実行結果ではなく要求方針であり、Claim後にexact test一覧へ書き換えない。plan、evidence、review、PR、premergeが同じIssue／Base／Headへ束縛されなければ完了しない。
 
 `shape`と`harden`の`standard`はblockingな反対モデルレビューを要求しない。`strict`または`release`は現在Headの正式な反対モデルレビューを必須とする。shape/hardenのPRと完了報告は必ずnot release-readyを明記する。`release`は`type:release`の実際のアプリrelease candidateだけに使用し、Feature／Regression／workflow変更を完全検証へ迂回させない。
 

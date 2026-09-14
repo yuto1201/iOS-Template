@@ -9,6 +9,7 @@ require "tmpdir"
 require "time"
 require_relative "review-contract"
 require_relative "review-sealing"
+require_relative "repository-test-plan"
 
 module IOSTemplate
   module RepositoryTests
@@ -18,7 +19,7 @@ module IOSTemplate
 
     SHA = /\A[0-9a-f]{40}\z/
     TEST_PATH = %r{\Atools/tests/test-[a-z0-9-]+\.sh\z}
-    RUNNER_PATHS = %w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb].freeze
+    RUNNER_PATHS = %w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb tools/lib/repository-test-plan.rb].freeze
     DEFAULT_CHILD_TIMEOUT_SECONDS = 900
 
     def run(repo:, issue:, expected_base:, mappings:, base_mappings: {}, before_publish: nil)
@@ -49,17 +50,39 @@ module IOSTemplate
         reject("Issue contract identity differs") unless contract["schemaVersion"] == 1 && contract["issue"] == issue
         criteria = contract.fetch("acceptanceCriteria")
         validate_criteria!(criteria)
-        dual_revision = ReviewContract.repository_test_scope(criteria) == "base-and-head"
+        plan_policy = RepositoryTestPlan.policy(contract)
+        plan = plan_policy&.fetch("planRequired") ? RepositoryTestPlan.build(
+          repo: repo, issue: issue, base_sha: expected_base, head_sha: head_sha,
+          contract_bytes: contract_file.bytes, mappings: mappings
+        ) : nil
+        plan_bytes = plan && JSON.generate(plan).b
+        plan_file = nil
+        if plan
+          plan_file = existing_leaf(snapshots, head_directory, "repository-test-plan.json")
+          if plan_file
+            reject("existing repository-test-plan.json differs from immutable inputs") unless plan_file.bytes == plan_bytes
+          else
+            plan_file = snapshots.publish_exclusive(head_directory, "repository-test-plan.json", plan_bytes, at: "repository-test-plan.json")
+          end
+        end
+        dual_revision = plan ? plan.fetch("resolvedScope") == "base-and-head" : ReviewContract.repository_test_scope(criteria) == "base-and-head"
         reject("Base mappings require a Base and Head contract") if !dual_revision && !base_mappings.empty?
         context = dual_revision ? ReviewContract.repository_revision_context(repo: repo, base_sha: expected_base, head_sha: head_sha) : nil
+        plan_context = plan ? (context || ReviewContract.repository_revision_context(repo: repo, base_sha: expected_base, head_sha: head_sha)) : nil
 
         inventory = dual_revision ? context.fetch("inventories")[1].map { |entry| entry.fetch("path") } : tracked_tests(repo, head_sha)
         reject("no tracked repository tests were found") if inventory.empty?
-        acceptance = validate_mappings!(mappings, criteria, inventory)
+        acceptance = if plan
+          plan.fetch("acceptanceMappings").map { |entry| {"id"=>entry.fetch("id"), "status"=>"passed", "tests"=>entry.fetch("tests")} }
+        else
+          validate_mappings!(mappings, criteria, inventory)
+        end
         # Before the versioned impact manifest lands, only the sealed
         # workflow-only contract may use its AC map as the execution set.
         # Every other legacy Head-only contract keeps the full inventory.
-        tests = if dual_revision || !workflow_only_contract?(contract)
+        tests = if plan
+                  plan.fetch("testPaths")
+                elsif dual_revision || !workflow_only_contract?(contract)
                   inventory
                 else
                   mappings.values.flatten.uniq.sort
@@ -76,7 +99,8 @@ module IOSTemplate
           reject("repository test timeout cannot exceed 900 seconds") if repository_test_timeout_seconds > DEFAULT_CHILD_TIMEOUT_SECONDS
           acceptance = acceptance.map { |entry| {"id"=>entry["id"], "status"=>"passed", "baseTests"=>base_mappings.fetch(entry["id"], []), "headTests"=>entry["tests"]} }
         end
-        runner_files = RUNNER_PATHS.map do |path|
+        runner_paths = plan ? RUNNER_PATHS : RUNNER_PATHS.first(2)
+        runner_files = runner_paths.map do |path|
           bytes = git!(repo, "show", "#{head_sha}:#{path}").b
           {"path" => path, "digest" => ReviewContract.digest(bytes)}
         end
@@ -94,7 +118,8 @@ module IOSTemplate
           end
           results = revisions.flat_map { |revision| revision.fetch("tests") }
         else
-          results = execute_in_detached_worktree(repo, head_sha, tests)
+          selected_inventory = plan ? plan_context.fetch("inventories")[1].select { |entry| tests.include?(entry.fetch("path")) } : nil
+          results = execute_in_detached_worktree(repo, head_sha, tests, inventory: selected_inventory)
         end
         suite_completed = Time.now.utc
         failure = results.find { |entry| entry["status"] != "passed" }
@@ -130,21 +155,36 @@ module IOSTemplate
         if dual_revision
           %w[runnerFiles suite tests].each { |key| evidence.delete(key) }
           evidence.merge!("schemaVersion"=>2, "scope"=>"base-and-head", "producer"=>{"headSha"=>head_sha, "files"=>runner_files}, "revisions"=>revisions)
-          ReviewContract.validate_repository_tests!(evidence, issue: issue, base_sha: expected_base, head_sha: head_sha,
-            contract_digest: ReviewContract.digest(contract_file.bytes), criteria: criteria, revision_context: context)
+          unless plan
+            ReviewContract.validate_repository_tests!(evidence, issue: issue, base_sha: expected_base, head_sha: head_sha,
+              contract_digest: ReviewContract.digest(contract_file.bytes), criteria: criteria, revision_context: context)
+          end
           reject("repository execution predates Issue contract") if suite_started < Time.iso8601(contract.fetch("fetchedAt"))
+        end
+        if plan
+          evidence.delete("runnerFiles")
+          evidence["schemaVersion"] = 3
+          evidence["scope"] = plan.fetch("resolvedScope")
+          evidence["repositoryTestPlan"] = {
+            "path" => ".artifacts/issues/#{issue}/#{head_sha}/repository-test-plan.json",
+            "digest" => ReviewContract.digest(plan_file.bytes)
+          }
+          evidence["producer"] ||= {"headSha"=>head_sha, "files"=>runner_files}
+          ReviewContract.validate_repository_tests!(evidence, issue: issue, base_sha: expected_base, head_sha: head_sha,
+            contract_digest: ReviewContract.digest(contract_file.bytes), criteria: criteria,
+            revision_context: plan_context, repository_test_plan: plan)
         end
         bytes = JSON.generate(evidence).b
         before_publish&.call
         snapshots.verify!
         reject("current Head changed before evidence publication") unless git!(repo, "rev-parse", "HEAD").strip == head_sha
-        reject("Issue worktree changed before evidence publication") if dual_revision && !git!(repo, "status", "--porcelain").empty?
+        reject("Issue worktree changed before evidence publication") if (dual_revision || plan) && !git!(repo, "status", "--porcelain").empty?
         leaf = snapshots.publish_exclusive(head_directory, "repository-tests.json", bytes, at: "repository-tests.json")
         begin
           snapshots.verify!
-          reject("current Head changed during evidence publication") if dual_revision && git!(repo, "rev-parse", "HEAD").strip != head_sha
+          reject("current Head changed during evidence publication") if (dual_revision || plan) && git!(repo, "rev-parse", "HEAD").strip != head_sha
         rescue StandardError
-          snapshots.unlink_if_same(head_directory, leaf) if dual_revision
+          snapshots.unlink_if_same(head_directory, leaf) if dual_revision || plan
           raise
         end
 
@@ -158,7 +198,7 @@ module IOSTemplate
       ensure
         snapshots.close
       end
-    rescue ReviewContract::ValidationError, ReviewSealing::SealError, JSON::ParserError, KeyError,
+    rescue ReviewContract::ValidationError, RepositoryTestPlan::PlanError, ReviewSealing::SealError, JSON::ParserError, KeyError,
            SystemCallError, IOError => error
       raise RunnerError, error.message
     end
