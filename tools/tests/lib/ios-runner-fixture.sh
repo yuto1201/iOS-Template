@@ -797,6 +797,11 @@ done
 repo="" base_sha="" head_sha="" contract="" matrix="" draft="" visual="" final=""
 
 write_contract() {
+  # Accept a producer's exact bytes without parsing or repairing the contract.
+  if [[ "${2:-valid}" == external:* ]]; then
+    /bin/cp "${2#external:}" "$1"
+    return $?
+  fi
   /usr/bin/ruby -I"$source_repo/tools/lib" -rissue-contract -rjson -rtime - "$1" "${2:-valid}" "${3:-full}" <<'RUBY'
 path, mode, scope = ARGV
 cases = [

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" rg git jq ruby swift
+require_test_commands "$0" rg git jq ruby swift /usr/bin/ruby /usr/bin/swiftc
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-workflow-e2e.XXXXXX")
@@ -39,6 +39,7 @@ date_counter="$workspace/date-counter"
 tracked_archive="$workspace/tracked-files.tar"
 declared_origin="https://github.com/$repository.git"
 real_git=$(command -v git)
+host_path=$PATH
 
 fail() { echo "workflow E2E failed: $*" >&2; exit 1; }
 assert_json() { ruby -rjson -e "$2" "$1"; }
@@ -445,3 +446,153 @@ delete_line=$(line_number "push --force-with-lease=refs/heads/$branch:$head_two 
 [[ ! -e "$primary/.artifacts/issues/$issue/$head_two/iphone-en.png" ]] || fail 'docs-only E2E fabricated Simulator evidence'
 
 echo 'PASS: public-CLI Claim/Resume, exact-Head Verify/Review recovery, Gate, Squash Merge, cleanup, and done workflow'
+
+# Claim an application Issue in a separate primary/provider state so Issue 42's
+# completed documentation workflow and its unrelated worktree remain intact.
+application_primary="$workspace/application-primary"
+application_state="$workspace/application-provider-state"
+mkdir -p "$application_state"
+git clone -q "$remote" "$application_primary"
+git -C "$application_primary" config user.name 'Workflow E2E Fixture'
+git -C "$application_primary" config user.email 'workflow-e2e@example.invalid'
+git -C "$application_primary" remote set-url origin "$declared_origin"
+cat >"$application_state/issue-body.md" <<'BODY'
+## Goal
+
+Exercise Claim-produced application verification contracts without changing product UI.
+
+## In scope
+
+- Validate application verification tooling with fake Xcode and Simulator commands.
+
+## Out of scope
+
+- Product UI changes and real Simulator verification.
+
+## Acceptance criteria
+
+- AC-1: UI-direction route: not-applicable; Scope: application verification contract fixture; Reason: this synthetic tooling test changes no product UI; build and unit tests pass.
+- AC-2: Four localized cases and their visual checks are mapped.
+
+## Spec anchors
+
+- [Issue workflow](specs/acceptance.md#2-issue-definition-of-ready)
+
+## Dependencies
+
+None
+
+## UI verification
+
+Not applicable
+
+## Delivery stage
+
+- Stage: release
+- Time budget: 240 minutes
+- Reason: Exercise the complete application verification contract.
+
+## Delivery profile
+
+- Profile: strict
+- Reason: Exercise the verification gate contract.
+
+## Verification scope
+
+- Scope: full
+- Reason: Cover all four canonical cases.
+
+## Verification
+
+```json
+{
+  "bundleIdentifier": "com.example.TemplateApp",
+  "unitTestIdentifier": "TemplateAppTests/UnitSmokeTests/testUnit()",
+  "cases": [
+    {"id": "iphone-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+    {"id": "iphone-ja", "assertion": {"kind": "launch-succeeded"}},
+    {"id": "ipad-en", "testIdentifier": "TemplateAppUITests/SmokeTests/testLaunch"},
+    {"id": "ipad-ja", "assertion": {"kind": "launch-succeeded"}}
+  ],
+  "acceptanceMappings": [
+    {"id": "AC-1", "checks": ["stage:build", "stage:unit-tests"]},
+    {"id": "AC-2", "checks": ["case:iphone-en", "case:iphone-ja", "case:ipad-en", "case:ipad-ja", "visual:iphone-en", "visual:iphone-ja", "visual:ipad-en", "visual:ipad-ja"]}
+  ]
+}
+```
+
+BODY
+# Reuse only the fake Issue's six operation declarations and user approvals.
+sed -n '/^## External operations/,$p' "$issue_body_file" >>"$application_state/issue-body.md"
+printf '%s' '["state:approved","type:release"]' >"$application_state/labels.json"
+printf '%s' '[]' >"$application_state/comments.json"
+printf '%s' 'OPEN' >"$application_state/issue-status"
+printf '%s' 'NONE' >"$application_state/pr-state"
+(
+  export FAKE_LABELS_FILE="$application_state/labels.json"
+  export FAKE_COMMENTS_FILE="$application_state/comments.json"
+  export FAKE_ISSUE_BODY="$application_state/issue-body.md"
+  export FAKE_ISSUE_STATUS="$application_state/issue-status"
+  export FAKE_PR_STATE="$application_state/pr-state"
+  export FAKE_PR_HEAD="$application_state/pr-head"
+  unset FAKE_ISSUE_WORKTREE FAKE_BRANCH
+  cd "$application_primary"
+  tools/claim-issue.sh --repo "$repository" --issue "$issue" --agent codex
+) >"$workspace/application-claim.json"
+application_contract="$application_primary/.artifacts/issues/$issue/issue-contract.json"
+documentation_contract="$primary/.artifacts/issues/$issue/issue-contract.json"
+jq -e '.state == "claimed" and .primaryImplementer == "codex"' "$workspace/application-claim.json" >/dev/null
+jq -e 'has("verification")' "$application_contract" >/dev/null
+jq -e 'has("verification") | not' "$documentation_contract" >/dev/null
+
+# CI-capable contract coverage: the real runner executes on fake Xcode/simctl.
+# Drafts here are synthetic test outputs, never real Simulator or visual evidence.
+# Source the runner fixture once in a child process: both fixtures own EXIT traps
+# and scratch directories, and the Swift validator only needs one compilation.
+PATH="$host_path" /bin/bash -s -- "$source_root" "$application_contract" "$documentation_contract" <<'RUNNER'
+set -euo pipefail
+source "$1/tools/tests/lib/ios-runner-fixture.sh"
+
+assert_claimed_contract() {
+  local label=$1 input=$2 expected=$3 result=0
+  prepare_repo "$label" "external:$input" present full || return 1
+  cmp -s "$input" "$contract" || { echo "$label: Claim contract bytes changed before runner" >&2; return 1; }
+  run_execute >"$scratch/$label.stdout" 2>"$scratch/$label.stderr" || result=$?
+  cmp -s "$input" "$contract" || { echo "$label: runner changed Claim contract bytes" >&2; return 1; }
+  if [[ "$expected" == draft ]]; then
+    if [[ "$result" -ne 0 || ! -f "$draft" || -e "$final" ]]; then
+      cat "$scratch/$label.stderr" >&2
+      echo "$label: Claim-produced application contract did not publish only a draft (exit $result)" >&2
+      return 1
+    fi
+    /usr/bin/ruby -rjson -rdigest - "$draft" "$input" "$head_sha" <<'RUBY' || return 1
+draft_path, input, head = ARGV
+value = JSON.parse(File.binread(draft_path))
+abort "wrong draft identity/status" unless value.fetch("issue") == 42 && value.fetch("headSha") == head && value.fetch("status") == "awaiting-visual-review"
+abort "draft lost Claim contract identity" unless value.fetch("issueContract") == {
+  "path" => ".artifacts/issues/42/issue-contract.json",
+  "digest" => "sha256:#{Digest::SHA256.file(input).hexdigest}"
+}
+abort "draft omitted application cases" unless value.fetch("cases").map { |entry| entry.fetch("id") } == %w[iphone-en iphone-ja ipad-en ipad-ja]
+RUBY
+    grep -q '^xcodebuild' "$fake_log" || { echo "$label: runner never called fake Xcode" >&2; return 1; }
+  else
+    [[ "$result" -ne 0 && ! -e "$draft" && ! -e "$final" ]] || { echo "$label: absent verification was accepted" >&2; return 1; }
+    grep -Fq 'verification contract is absent or incomplete' "$scratch/$label.stderr" || {
+      cat "$scratch/$label.stderr" >&2
+      echo "$label: runner did not report absent verification" >&2
+      return 1
+    }
+    if grep -q '^xcodebuild' "$fake_log"; then
+      echo "$label: absent verification reached Xcode" >&2
+      return 1
+    fi
+  fi
+  echo "PASS: $label Claim contract through application runner ($expected)"
+}
+
+failures=0
+assert_claimed_contract AC-1 "$2" draft || failures=$((failures + 1))
+assert_claimed_contract AC-2 "$3" rejected || failures=$((failures + 1))
+[[ "$failures" == 0 ]]
+RUNNER
