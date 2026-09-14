@@ -175,6 +175,7 @@
         "tools/lib/review-route.rb",
         "tools/lib/validate-review-receipt.rb",
         "tools/prepare-review-packet.sh",
+        "tools/render-pr-body.sh",
         "tools/request-grok-review.sh",
         "tools/validate-review-result.sh"
       ],
@@ -187,8 +188,7 @@
       "domain": "review-evidence-sealing",
       "paths": [
         "tools/lib/premerge-gate.rb",
-        "tools/lib/review-sealing.rb",
-        "tools/render-pr-body.sh"
+        "tools/lib/review-sealing.rb"
       ],
       "prefixes": []
     },
@@ -277,7 +277,7 @@
     {"path": "tools/tests/test-prerequisites.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-provider-ownership.sh", "domains": ["authority-policy", "provider-security"]},
     {"path": "tools/tests/test-provider-preflight.sh", "domains": ["provider-security"]},
-    {"path": "tools/tests/test-render-pr-body.sh", "domains": ["review-evidence-sealing"]},
+    {"path": "tools/tests/test-render-pr-body.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-review-route.sh", "domains": ["review-contract"]},
