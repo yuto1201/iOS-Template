@@ -152,4 +152,28 @@ RUBY
 [[ ! -e "$draft" ]] || { echo "TERM-interrupted schema v2 run published a draft" >&2; exit 1; }
 assert_no_failed_attempts
 
+test_stubborn_probe 2 allocation-v2-timeout
+[[ ! -e "$draft" && ! -e "$final" ]] || { echo "timed-out schema v2 run published successful evidence" >&2; exit 1; }
+if /usr/bin/find "$adapter_state" -maxdepth 1 -type f -name 'allocated-*' -print -quit | /usr/bin/grep -q .; then
+  echo "timed-out schema v2 run retained its Simulator" >&2
+  exit 1
+fi
+/usr/bin/ruby -rjson - "$fake_log" "$(dirname "$matrix")" <<'RUBY'
+log_path, batch_directory = ARGV
+commands = File.readlines(log_path, chomp: true).map { |line| line.split("\t") }
+creates = commands.count { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl create] }
+deletes = commands.count { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl delete] }
+erases = commands.count { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl erase] }
+abort "timed-out schema v2 case did not delete its sole allocation" unless creates == 1 && deletes == 1
+abort "timed-out schema v2 case used legacy erase" unless erases.zero?
+receipts = Dir.glob(File.join(batch_directory, "allocation-*.json")).map { |path| JSON.parse(File.read(path)) }
+abort "timed-out schema v2 case did not publish one cleanup receipt" unless receipts.length == 1
+receipt = receipts.fetch(0)
+abort "timed-out schema v2 cleanup was not bound to the failed case" unless
+  receipt.fetch("caseId") == "iphone-en" && receipt.dig("cleanup", "reason") == "case-failed" &&
+    receipt.dig("cleanup", "status") == "passed" && receipt.dig("cleanup", "deviceAbsent") == true &&
+    receipt.dig("cleanup", "dataPathAbsent") == true
+RUBY
+assert_no_failed_attempts
+
 echo "schema v2 sequential Simulator allocation runner test passed"

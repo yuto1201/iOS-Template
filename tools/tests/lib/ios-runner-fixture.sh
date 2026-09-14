@@ -1160,7 +1160,8 @@ RUBY
 }
 
 test_stubborn_probe() {
-  prepare_repo stubborn-probe-timeout
+  local matrix_schema="${1:-1}" label="${2:-stubborn-probe-timeout}"
+  prepare_repo "$label" valid present full "$matrix_schema"
   FAKE_CASE_MODE=stubborn-probe run_execute >"$scratch/stubborn-probe.stdout" 2>"$scratch/stubborn-probe.stderr" &
   stubborn_runner_pid=$!
   stubborn_child_pid=""
