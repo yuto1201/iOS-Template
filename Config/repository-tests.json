@@ -29,6 +29,11 @@
       ]
     },
     {
+      "domain": "foundation",
+      "paths": ["tools/tests/test-foundation.sh"],
+      "prefixes": []
+    },
+    {
       "domain": "ios-evidence-exhaustive",
       "paths": [],
       "prefixes": [
@@ -124,6 +129,14 @@
       "prefixes": []
     },
     {
+      "domain": "merge-publication",
+      "paths": [
+        "tools/merge-issue.sh",
+        "tools/tests/test-merge-issue.sh"
+      ],
+      "prefixes": ["tools/lib/merge-"]
+    },
+    {
       "domain": "provider-security",
       "paths": [
         "Config/ownership.yml",
@@ -195,13 +208,9 @@
         "tools/lib/issue-contract.rb",
         "tools/lib/workflow-json.rb",
         "tools/lib/workflow.sh",
-        "tools/merge-issue.sh",
         "tools/resume-issue.sh"
       ],
-      "prefixes": [
-        "tools/lib/merge-",
-        "tools/lib/workflow-"
-      ]
+      "prefixes": ["tools/lib/workflow-"]
     }
   ],
   "tests": [
@@ -217,7 +226,7 @@
     {"path": "tools/tests/test-cross-model-review.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-delivery-stages.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-foundation.sh", "domains": ["bootstrap-assets"]},
+    {"path": "tools/tests/test-foundation.sh", "domains": ["foundation"]},
     {"path": "tools/tests/test-ios-evidence.sh", "domains": ["ios-evidence-exhaustive"]},
     {"path": "tools/tests/test-ios-runner-allocation.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-ios-runner-baseline.sh", "domains": ["ios-verification"]},
@@ -240,7 +249,7 @@
     {"path": "tools/tests/test-ios-simulator-resource.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-issue-contract.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-media-skill.sh", "domains": ["bootstrap-assets"]},
-    {"path": "tools/tests/test-merge-issue.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-merge-issue.sh", "domains": ["merge-publication"]},
     {"path": "tools/tests/test-premerge-gate.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-prerequisites.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-provider-ownership.sh", "domains": ["provider-security"]},

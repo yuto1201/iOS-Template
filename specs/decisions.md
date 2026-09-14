@@ -347,3 +347,13 @@
 - Decision: reviewerの既定pairはCodex primary→Claude、Claude primary→Codexのままとする。例外はAcceptance criterion本文先頭のexact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`がsealed contract全体でexactly one存在するIssueだけとし、Codex primaryからexact model `cursor-grok-4.6-xhigh`を固定launcherで呼ぶ。launcherはCursorの`ask` mode、非対話、read-only指示、閉じたstdin、600秒以下のtimeoutとprocess-group回収を強制し、ambient provider／repository credentialを子processへ継承しない。packet、result、receipt、PR renderer、premerge gateは同じroute、reviewer model、launcher bytes、Issue／contract／Base／Head／Verifyとdigestを照合する。
 - Consequence: silent／automatic fallback、Claude primary→Grok、任意Grok alias、primary自身の承認、旧contractへの遡及適用はできない。起動失敗、timeout、空／不正JSON、schema／evidence不一致、repository／artifact write検出はreview／receiptを公開せず`blocked:review`にする。provider envelopeはvalidな内側Resultだけを正規化し、認証identityやtelemetryをartifactへ保存しない。#89のcommitは#93へ移植してcurrent-Head evidenceを作り直し、#93完了後も#89を削除せずsuperseded履歴として保持する。
 - Related Issue: #93（#89を移植して完了）
+
+## D-042: 独立した長時間repository testを専用domainへ分離する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: None。D-039の1件300秒／targeted全体900秒と、D-037のimmutable plan／全changed-path coverageを維持する。
+- Context: #93の初回canonical planでは、変更したfoundation testが未変更のbootstrap asset群を、merge testが未変更のworkflow state群をそれぞれ広いdomain経由で選び、37件の決定論的unionが18件目の実行中に900秒へ到達した。active testの単体診断は成功しており、実装不良ではなくdomain粒度が時間上限と一致していなかった。
+- Decision: 独立したfoundation entrypointとmerge publication entrypoint／producerをそれぞれ専用domainへ分離する。変更されたtest自身は必ず選択し、merge producer変更も同じmerge domainへ解決する。bootstrap asset producer、workflow state producer、provider、review、Simulator、repository-test producer等の実変更は従来どおり各domainのunionへ解決し、未知pathや失敗testを除外しない。
+- Consequence: #93の新Headは初回timeout artifactを保持したままplanを再生成し、未変更のbootstrap／workflow全体だけを除いたtargeted集合を一度実行する。時間短縮のために受け入れ条件、変更path、失敗結果を隠さず、同じHeadの失敗を無条件再実行しない。旧Headのplan／failure artifactと既存sealed contractは書き換えない。
+- Related Issue: #93
