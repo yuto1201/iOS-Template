@@ -258,6 +258,9 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   abort "planned runner failed: #{error}" unless status.success?
   abort "targeted execution limits were not reported" unless error.include?('"childTimeoutSeconds":300') &&
     error.include?('"suiteTimeoutSeconds":900')
+  abort "targeted completion summary was not reported" unless error.include?("repository test execution completed:") &&
+    error.include?('"status":"passed"') && error.match?(/"elapsedSeconds":[0-9]/) &&
+    error.include?('"unexecutedTests":[]')
   receipt = JSON.parse(output)
   plan_path = File.join(head_root, "repository-test-plan.json")
   record_path = File.join(head_root, "repository-tests.json")
