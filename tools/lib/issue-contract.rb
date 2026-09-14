@@ -8,6 +8,7 @@ require "digest"
 require_relative "delivery-profile"
 require_relative "delivery-stage"
 require_relative "verification-scope"
+require_relative "workflow-release-phase"
 
 module IOSTemplate
   module IssueContract
@@ -171,6 +172,11 @@ module IOSTemplate
       failures << "Acceptance criteria must contain at least one '- AC-*:' item" if acceptance_items.empty?
       duplicate_acceptance = acceptance_items.map { |item| item.fetch("id") }.group_by(&:itself).select { |_, items| items.length > 1 }.keys
       failures << "duplicate acceptance criteria ID: #{duplicate_acceptance.join(', ')}" unless duplicate_acceptance.empty?
+      begin
+        ReleasePhase.binding_from_contract!({"acceptanceCriteria" => acceptance_items})
+      rescue ReleasePhase::ValidationError => error
+        failures << error.message
+      end
 
       spec_anchor_section = sections.fetch("Spec anchors", "")
       unless spec_anchor_section.match?(/\[[^\]]+\]\((?:<)?(?:\.\/)?specs\/[^)\s]+\.md#[^)\s]+(?:>)?\)/)
@@ -633,6 +639,11 @@ module IOSTemplate
       begin
         DeliveryStage.validate!(value["deliveryStage"]) if value.key?("deliveryStage")
       rescue ArgumentError => error
+        failures << error.message
+      end
+      begin
+        ReleasePhase.binding_from_contract!(value)
+      rescue ReleasePhase::ValidationError => error
         failures << error.message
       end
       failures << "Issue contract operation-details digest is invalid" unless value["externalOperationDetailsDigest"].is_a?(String) && value["externalOperationDetailsDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)

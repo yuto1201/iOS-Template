@@ -476,6 +476,30 @@ ruby -I"$repo_root/tools/lib" -rjson -rissue-contract -e '
   IOSTemplate::IssueContract.validate_snapshot!(value, issue:82, repository:"yuto1201/iOS-Template")
 ' "$workspace/repository-plan-contract.json"
 
+RELEASE_PHASE_DECLARATION='Release-phase binding: {"phase":4,"reason":"Phase 4 consumes the approved Phase 3 result.","recordDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","recordPath":"Config/releases/sample-v1/phase-records/record-0007.json","releaseIdentifier":"sample-v1","revision":2,"route":"standard","scope":["core","settings"],"workKind":"implementation"}'
+export RELEASE_PHASE_DECLARATION
+ruby -e '
+  path, output = ARGV
+  body = File.binread(path)
+  body.sub!("## Spec anchors\n", "- AC-3: #{ENV.fetch("RELEASE_PHASE_DECLARATION")}\n\n## Spec anchors\n") or abort "missing Spec anchors"
+  File.binwrite(output, body)
+' "$workspace/repository-plan-contract.md" "$workspace/release-phase-contract.md"
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/release-phase-contract.md" --type feature --format contract \
+  --issue 85 --repo yuto1201/iOS-Template --fetched-at 2026-09-14T00:00:00Z \
+  > "$workspace/release-phase-contract.json"
+assert_json "$workspace/release-phase-contract.json" '
+  value=JSON.parse(File.binread(ARGV.fetch(0)))
+  abort if value.key?("releasePhase")
+  abort unless value.fetch("acceptanceCriteria").fetch(2).fetch("text").start_with?("Release-phase binding: {")
+'
+sed 's#Config/releases/sample-v1/phase-records/record-0007.json#../outside.json#' \
+  "$workspace/release-phase-contract.md" > "$workspace/release-phase-escape.md"
+assert_fails 'release phase record path cannot escape the versioned release directory' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/release-phase-escape.md" --type feature --format contract \
+  --issue 85 --repo yuto1201/iOS-Template --fetched-at 2026-09-14T00:00:00Z
+rg -Fq 'releasePhase.recordPath is invalid' "$workspace/output"
+
 sed 's/Repository-test scope: targeted; Reason: Resolve the final exact test set from immutable Base\.\.Head inputs\./The repository test policy is missing./' \
   "$workspace/repository-plan-contract.md" > "$workspace/repository-plan-missing.md"
 assert_fails 'plan-era workflow-only contract requires repository-test scope' ruby "$repo_root/tools/lib/issue-contract.rb" \
