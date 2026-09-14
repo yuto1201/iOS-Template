@@ -348,12 +348,15 @@ assert_fails 'a Grok-authorized contract rejects a forged default reviewer packe
 write_packet codex cursor-grok-4.6-xhigh
 fake_cursor_home="$workspace/fake-cursor-home"
 mkdir -p "$fake_cursor_home"
+touch "$fake_cursor_home/low-finding"
 HOME="$fake_cursor_home" run_review
-assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["reviewerModel"] == "cursor-grok-4.6-xhigh" && value["verdict"] == "approved"'
+rm -f "$fake_cursor_home/low-finding"
+assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); expected = [{"severity" => "low", "category" => "maintainability", "file" => "README.md", "line" => 1, "title" => "Nonblocking Grok improvement", "evidence" => "fixture", "requiredChange" => "clarify later"}]; abort unless value["reviewerModel"] == "cursor-grok-4.6-xhigh" && value["verdict"] == "approved" && value["findings"] == expected'
 assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["primaryModel"] == "codex" && value["reviewerModel"] == "cursor-grok-4.6-xhigh" && value["reviewerLauncher"] == "tools/request-grok-review.sh" && value.keys.none? { |key| key.downcase.include?("account") || key.downcase.include?("token") }'
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
 [[ "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"--mode ask"* && "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"--model cursor-grok-4.6-xhigh"* ]] || { echo 'Grok was not invoked through the exact read-only model route' >&2; exit 1; }
 [[ "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"Complete one bounded review pass and return the final JSON within 480 seconds"* ]] || { echo 'Grok was not given the bounded review deadline' >&2; exit 1; }
+[[ "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"preserve every low finding exactly instead of omitting or reclassifying it"* ]] || { echo 'Grok was not told to preserve low findings in approved results' >&2; exit 1; }
 [[ "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"Exact result identity fields:"* && "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"Exact ordered acceptance IDs and evidence references:"* ]] || { echo 'Grok was not given the deterministic result scaffold' >&2; exit 1; }
 reset_review_requested
 : > "$fake_cursor_home/narrate"

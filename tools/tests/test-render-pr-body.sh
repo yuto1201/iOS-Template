@@ -392,4 +392,6 @@ fast_body=$(run_renderer)
 grep -Fq 'Not required by this non-release, non-strict contract.' <<<"$fast_body" || { echo 'fast PR body did not record the review waiver' >&2; exit 1; }
 
 echo 'PASS: PR body readiness is bound to canonical current visual evidence and documentation-only validation remains available'
-bash "$source_root/tools/tests/test-render-pr-body.sh" scoped
+if [[ "$scope" != scoped ]]; then
+  bash "$source_root/tools/tests/test-render-pr-body.sh" scoped
+fi
