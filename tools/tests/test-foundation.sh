@@ -48,7 +48,10 @@ required_files=(
   tools/tests/test-bounded-command.sh
   tools/tests/test-delivery-stages.sh
   tools/lib/review-receipt.rb
+  tools/lib/review-route.rb
   tools/lib/validate-review-receipt.rb
+  tools/request-grok-review.sh
+  tools/tests/test-review-route.sh
   tools/with-ios-simulator-lock.sh
   .github/ISSUE_TEMPLATE/feature.yml
   .github/ISSUE_TEMPLATE/regression.yml
@@ -184,9 +187,8 @@ if rg -n 'CodexOperationTransport|run-codex-transport|Codex result' tools/lib/wo
   exit 1
 fi
 
-unsupported_agent_name=$(printf '%s%s' 'Cur' 'sor')
-if git grep -in "$unsupported_agent_name" -- .; then
-  echo 'tracked repository content must not retain the removed third-party development path' >&2
+if git ls-files | rg '(^|/)\.cursor(/|$)'; then
+  echo 'tracked repository content must not restore the removed general-purpose third-party development path' >&2
   exit 1
 fi
 

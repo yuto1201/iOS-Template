@@ -327,3 +327,83 @@
 - Decision: 実装中の対象testは1 command 300秒、通常のIssue完了用`targeted` repository suiteはaggregate 900秒を上限とする。`targeted`は既知の単一または複数domainに属するtestの決定論的unionを選び、manifest、runner、tracked test変更を理由に自動`head-all`へ昇格しない。未知pathは全件実行せずplan生成を拒否する。`head-all`／`base-and-head`、英語／日本語×iPhone／iPadの4条件はrelease、nightly相当の明示実行、またはユーザーがIssue contractで明示要求した場合だけ使う。同一Issue／Head／scopeの失敗・timeout後は直接再実行を拒否し、選択済み対象testの診断成功後に1回だけ再試行できる。
 - Consequence: `shape`は日本語iPhone、`harden`はtargeted subsetを維持し、strict対象も認証・課金・privacy・migration等の関連安全testだけを追加して無関係な全件へ拡大しない。runnerは実行前にscope、ordered tests、件数、child／aggregate上限を表示し、上限到達時は未実行testを報告して成功証拠を発行しない。未検証条件は延期・未検証として残し、release-readyとは報告しない。
 - Related Issue: #79
+
+## D-040: Simulator条件と使い捨て実行UDIDを分離する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: D-016のbatch固定対象から実行UDIDを除外し、D-021のrepository単位直列化をMac共通capacityで補強する。D-016のRuntime／Device Type固定、D-038の最大4台・sessionごと1台・使用後削除は維持する。
+- Context: 旧schema v1 matrixは4条件のUDIDを事前作成して封印し、runnerはeraseして再利用していた。この方式では複数repositoryの並行実行をMac全体で制限できず、検証後のdevice dataが累積する一方、単にdeleteを追加すると再試行と削除後finalizationが旧UDIDへ依存して破綻する。
+- Decision: 新規matrix producerはschema v2としてbatch内のXcode、Runtime、Device Type、locale、language、case順だけをimmutableに固定する。runnerはstable session identityを子processへ継承し、repository lockの内側でMac共通の原子的leaseを取得する。iPhone／iPad合計4枠、sessionごと1枠、作成前の空き容量確認を強制し、caseごとに新規UDIDを作成、検証、sanitized allocation receipt保全、exact UDIDのshutdown/delete、一覧とdata path消失確認を終えてから枠を返す。owner processが消えた予約／deviceはPID start identityとlive device identityを照合して次回起動時に回収し、管理外・改ざん・symlink・identity不一致は保護する。
+- Consequence: 4条件も一台ずつ順次実行され、4台を常設するpoolは作らない。最終証拠はmatrix digestに加えてcase順のallocation ID、UDID、session／attempt、receipt path／digest、削除結果、作成前／削除後の空き容量を固定するため、device削除後もreviewとfinalizationが可能になる。旧schema v1 matrix／contract／verifyは書き換えずlegacy経路で受理し、新しいattemptは旧UDIDの証拠へ付け替えない。inventoryはdurable owner recordと管理外保護対象を区別し、`simctl delete unavailable`や全件削除を代替にしない。
+- Related Issue: #89
+
+## D-041: 明示承認したCodex-primary IssueだけGrok review fallbackを許可する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: D-007の固定Codex→Claude pairを、Claude利用不能かつIssue単位のユーザー明示承認がある場合だけ拡張する。D-007の独立review、D-025のcurrent-Head証拠、D-038〜D-040の段階・時間・Simulator境界は維持する。
+- Context: #89のSimulator lifecycle実装はtargeted testsを通過したが、Claude reviewerの認証不能により正式reviewを完了できなかった。Grokによる助言は不足していたtimeout cleanupを発見した一方、既存schemaではadvisory結果を正式approvalへ昇格できず、無断fallbackや手書きreviewを許すと独立性とprovenanceを失う。
+- Decision: reviewerの既定pairはCodex primary→Claude、Claude primary→Codexのままとする。例外はAcceptance criterion本文先頭のexact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`がsealed contract全体でexactly one存在するIssueだけとし、Codex primaryからexact model `cursor-grok-4.6-xhigh`を固定launcherで呼ぶ。launcherはCursorの`ask` mode、非対話、read-only指示、閉じたstdin、600秒以下のtimeoutとprocess-group回収を強制し、ambient provider／repository credentialを子processへ継承しない。packet、result、receipt、PR renderer、premerge gateは同じroute、reviewer model、launcher bytes、Issue／contract／Base／Head／Verifyとdigestを照合する。
+- Consequence: silent／automatic fallback、Claude primary→Grok、任意Grok alias、primary自身の承認、旧contractへの遡及適用はできない。起動失敗、timeout、空／不正JSON、schema／evidence不一致、repository／artifact write検出はreview／receiptを公開せず`blocked:review`にする。provider envelopeはvalidな内側Resultだけを正規化し、認証identityやtelemetryをartifactへ保存しない。#89のcommitは#93へ移植してcurrent-Head evidenceを作り直し、#93完了後も#89を削除せずsuperseded履歴として保持する。
+- Related Issue: #93（#89を移植して完了）
+
+## D-042: 独立した長時間repository testを専用domainへ分離する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: None。D-039の1件300秒／targeted全体900秒と、D-037のimmutable plan／全changed-path coverageを維持する。
+- Context: #93の初回canonical planでは、変更したfoundation testが未変更のbootstrap asset群を、merge testが未変更のworkflow state群をそれぞれ広いdomain経由で選び、37件の決定論的unionが18件目の実行中に900秒へ到達した。active testの単体診断は成功しており、実装不良ではなくdomain粒度が時間上限と一致していなかった。
+- Decision: 独立したfoundation entrypointとmerge publication entrypoint／producerをそれぞれ専用domainへ分離する。変更されたtest自身は必ず選択し、merge producer変更も同じmerge domainへ解決する。bootstrap asset producer、workflow state producer、provider、review、Simulator、repository-test producer等の実変更は従来どおり各domainのunionへ解決し、未知pathや失敗testを除外しない。
+- Consequence: #93の新Headは初回timeout artifactを保持したままplanを再生成し、未変更のbootstrap／workflow全体だけを除いたtargeted集合を一度実行する。時間短縮のために受け入れ条件、変更path、失敗結果を隠さず、同じHeadの失敗を無条件再実行しない。旧Headのplan／failure artifactと既存sealed contractは書き換えない。
+- Related Issue: #93
+
+## D-043: Workflow evidence publisherをreview contractから分離する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: None。D-042の専用domain原則をworkflow evidence publisherへ適用し、D-039の900秒上限とD-037のchanged-path coverageを維持する。
+- Context: #93の25件へ縮小したcanonical planは全対象を開始したものの、最後のworkflow evidence publisher test実行中に900秒へ到達した。このtestは単体で約41秒後に成功し、#93はpublisher本体を変更していないため、review contract変更から一律に選ぶ結合が時間超過の残因だった。
+- Decision: `tools/publish-workflow-verify.sh`とその専用testを`workflow-evidence` domainへ移し、review packet／result／receipt／renderer／premergeの変更だけでは選択しない。publisherまたはtest自身を変更した場合は両方を同じdomainから必ず選択する。
+- Consequence: #93の次HeadではGrok reviewとSimulator lifecycleに対応する24件を維持し、未変更publisher testだけを除く。旧Headのtimeoutと単体診断成功を保持し、失敗を成功へ読み替えたり同一Headで無条件再実行したりしない。
+- Related Issue: #93
+
+## D-044: Authority policyとUI directionの回帰domainを分離する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: None。D-042の専用domain原則を補足し、provider実装変更時のprovider-security testsとUI direction変更時の専用testは維持する。
+- Context: `docs/AUTHORITY.md`の反対モデルreview節だけを変更しても、secret-storeとSupabaseを含むprovider-security全体が選ばれていた。また一般的な仕様変更だけで未変更のUI Direction skill testが選ばれ、#93の受け入れ範囲と一致しない小さな実行が累積していた。
+- Decision: authority文書は`authority-policy`へ分離し、account／target所有規則を検査するprovider ownership testを対応付ける。`Config/ownership.yml`、provider preflight、security／secret実装は従来の`provider-security`へ残す。UI Direction skillと専用testは`ui-direction`へ分離し、一般仕様の`specification`変更だけでは選択しない。
+- Consequence: #93ではGrok review authorityの回帰を保持しつつ、変更していないprovider実装3件とUI Direction testを除く。将来それらのproducer／skill／testを変更した場合は各専用domainから再び選択され、未知pathを黙って省略しない。
+- Related Issue: #93
+
+## D-045: Grok正式reviewを外側timeoutより短いbounded passへ固定する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: None。D-041のexact model、read-only、600秒以下のwatchdog、完全Result検証、timeout時blockedを維持する。
+- Context: #93の約300KBのcanonical diffに対する初回Grok正式reviewは、transport自体が約9秒で応答可能な環境でも、探索が600秒まで完了せずtimeoutした。review／receiptは正しく未発行となったが、外側watchdogと同じ時間まで探索を許すだけではvalid Resultを返す余地がなかった。
+- Decision: 固定Grok launcherは、packetとsealed evidence、exact diffの変更production code／対応test、具体的不一致がある場合だけの追加source、という順で一回のbounded passを480秒以内に終えるよう指示する。launcherがpacket bytesからresult identityと全ACのexact evidence reference scaffoldを決定論的に提示するが、verdict、finding、supported／unsupportedはreviewerだけが決める。時間内に支持できないACは探索継続ではなくvalidなchanges-requestedと具体的findingで返す。
+- Consequence: 外側600秒watchdogには結果の返却・検証余地が残る。scaffoldの改ざん、誤った判断、schema不一致、timeout、writeは従来どおり承認にならず、ユーザー承認済みGrok以外へfallbackしない。#93は新Headでcanonical targeted evidenceを作り直してから一度だけ正式reviewを再実行する。
+- Related Issue: #93
+
+## D-046: Device消失後もdata path消失までSimulator枠を保持する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: D-040の`already-absent`を、device一覧だけでなく記録済みdata pathの消失確認まで明確化する。他の所有identity、最大4台、session 1台、逐次実行境界は維持する。
+- Context: #93のGrok正式reviewは、owned UDIDが`simctl list`から消えた一方で記録済みdata pathが残ると、`cleanup_record!`が`finish_release!`を呼び、`dataPathAbsent: false`のままcleanup passed／releasedとして枠を返せることを指摘した。通常のdelete直後だけはdata pathを確認していたため、二重releaseと孤児回収のalready-absent経路に欠落があった。
+- Decision: `finish_release!`自体がno-followのpath存在確認を行い、data pathが残る、symlink等が存在する、またはabsenceを確認できない場合は`cleanup-failed`として枠を保持する。device一覧から消えている場合も同じ確認を通し、path消失後だけ`already-absent`の冪等成功を許可する。
+- Consequence: releaseとorphan recoveryの両方へ「device不在かつdata残留」のproduction-entry testを追加し、失敗中のactive count保持、残留理由、path消失後の安全な再開を確認する。device名や一覧だけでdata削除を推測しない。
+- Related Issue: #93
+
+## D-047: Cursor進捗prefixから唯一の末尾Resultだけを正規化する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: D-041のprovider envelope正規化を、Cursorが`result`先頭へ進捗文を集約する実挙動に限定して補足する。完全schema、finding非改変、receipt、失敗時blockedは維持する。
+- Context: #93のbounded Grok reviewは時間内に具体的なchanges-requested Resultを返したが、その前へ日本語の進捗文が連結され、内側文字列全体のJSON parseに失敗した。手作業でsuffixをコピーするとreview provenanceを失う一方、完全な最終objectを機械的に一意抽出できる境界が必要だった。
+- Decision: provider envelopeの`result`全体がJSONでない場合、各`{`から末尾までをparseし、16 KiB以下のvalid UTF-8 prefixがbrace／NULを含まず、末尾に完全なJSON object候補がexactly oneだけ存在するときに限りそのobjectを正規化する。その後は既存のIssue／Base／Head／digest／reviewer／finding／全AC evidence validatorを一切省略しない。
+- Consequence: progress prefix、raw envelope、telemetryはartifactへ保存しない。複数object、途中object、trailing prose、不正UTF-8、過大prefix、schema不一致はcanonical review／receiptを発行せず`blocked:review`のままとし、主agentがverdictやfindingを修正しない。
+- Related Issue: #93

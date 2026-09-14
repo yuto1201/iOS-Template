@@ -27,6 +27,7 @@
 - D-030 cutoverは`2026-09-06T00:31:41Z`。封印済みcontractの`fetchedAt`がこれより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合だけpre-D-030 legacyとし、routeを推測せず、HTMLやroute宣言を遡及要求せず、contractを変更・再封印しない。cutover前でも候補が一つ以上あれば通常検証へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。cutoverと同時刻以降とcutover後のpre-Claim Issueにも同じexactly-one／完全性を必須とする。prefix外のroute語は候補に数えない。
 - 実行していない Build、Test、Simulator 操作を成功として報告しない。
 - `release`または`strict`は反対モデルの承認を必須とする。`shape`／`harden`の`standard`は、現在Headの段階別証拠でマージできる。
+- 反対モデルの既定pairはCodex primary→Claude、Claude primary→Codexとする。例外はsealed Acceptance criterionがexact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`で始まるexactly oneの宣言を持つIssueだけで、Codex primary→exact Grokを固定read-only launcherから使える。silent fallback、Claude primaryからのGrok利用、任意model、自己承認は許可しない。
 - マージはIssueで指定されたCodexまたはClaudeが `--squash` と Head SHA 照合を使って実行する。
 - ユーザーの既存変更、認証情報、生成物を上書きまたは削除しない。
 

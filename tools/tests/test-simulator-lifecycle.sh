@@ -122,7 +122,7 @@ end
 batch_index = arguments.index("--batch-id")
 abort "missing batch ID" unless batch_index
 matrix = {
-  "schemaVersion" => 1,
+  "schemaVersion" => 2,
   "batchId" => arguments.fetch(batch_index + 1),
   "resolvedAt" => "2026-08-21T12:00:00+09:00",
   "runtime" => {
@@ -222,45 +222,32 @@ assert_test_tmp_clean() {
 run bash tools/resolve-simulator-matrix.sh --batch-id "$batch_id" --output "$matrix"
 ruby -rjson - "$matrix" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
+abort "expected condition-only schema v2" unless matrix.fetch("schemaVersion") == 2
 abort "expected exactly four cases" unless matrix.fetch("cases").length == 4
 abort "Xcode metadata did not come from trusted commands" unless matrix.fetch("xcode") == {
   "path" => "/Applications/Fake Xcode.app/Contents/Developer",
   "version" => "26.5",
   "build" => "17F42"
 }
-expected = {
-  "iphone-en" => "00000000-0000-0000-0000-000000000001",
-  "iphone-ja" => "00000000-0000-0000-0000-000000000002",
-  "ipad-en" => "00000000-0000-0000-0000-000000000003",
-  "ipad-ja" => "00000000-0000-0000-0000-000000000004"
-}
-actual = matrix.fetch("cases").to_h { |entry| [entry.fetch("id"), entry.fetch("udid")] }
-abort "unexpected created UDIDs: #{actual.inspect}" unless actual == expected
+abort "condition matrix captured an execution UDID" if matrix.fetch("cases").any? { |entry| entry.key?("udid") }
 RUBY
 [[ ! -e "$malicious_log" ]] || { echo "legacy executable/data override was invoked" >&2; exit 1; }
 printf '%s\n' $'xcode-select\t-p' $'xcodebuild\t-version' >"$scratch/expected-xcode.log"
 cmp -s "$scratch/expected-xcode.log" "$xcode_log" || { diff -u "$scratch/expected-xcode.log" "$xcode_log"; exit 1; }
 assert_test_tmp_clean
 
-expected_create_log="$scratch/expected-create.log"
-cat >"$expected_create_log" <<EOF
+expected_resolve_log="$scratch/expected-resolve.log"
+cat >"$expected_resolve_log" <<EOF
 simctl	list	runtimes	-j
 simctl	list	devicetypes	-j
-simctl	list	devices	-j
-simctl	create	iOS-Template-$batch_id-iphone-en	com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro	com.apple.CoreSimulator.SimRuntime.iOS-10-3
-simctl	create	iOS-Template-$batch_id-iphone-ja	com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro	com.apple.CoreSimulator.SimRuntime.iOS-10-3
-simctl	create	iOS-Template-$batch_id-ipad-en	com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3	com.apple.CoreSimulator.SimRuntime.iOS-10-3
-simctl	create	iOS-Template-$batch_id-ipad-ja	com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3	com.apple.CoreSimulator.SimRuntime.iOS-10-3
-simctl	list	devices	-j
 EOF
-cmp -s "$expected_create_log" "$log" || { diff -u "$expected_create_log" "$log"; exit 1; }
+cmp -s "$expected_resolve_log" "$log" || { diff -u "$expected_resolve_log" "$log"; exit 1; }
 
 : >"$log"
 cp "$matrix" "$scratch/frozen-full.json"
 run bash tools/resolve-simulator-matrix.sh --batch-id "$batch_id" --output "$matrix"
 cmp "$matrix" "$scratch/frozen-full.json"
-printf 'simctl\tlist\tdevices\t-j\n' >"$scratch/expected-reuse.log"
-cmp -s "$scratch/expected-reuse.log" "$log" || { diff -u "$scratch/expected-reuse.log" "$log"; exit 1; }
+[[ ! -s "$log" ]] || { echo "frozen schema v2 reuse touched Simulator state" >&2; exit 1; }
 assert_test_tmp_clean
 
 mkdir -p "$(dirname "$partial_matrix")"
@@ -290,85 +277,8 @@ done
 
 : >"$log"
 run bash tools/destroy-simulator-matrix.sh --matrix "$matrix"
-expected_delete_log="$scratch/expected-delete.log"
-cat >"$expected_delete_log" <<EOF
-simctl	list	devices	-j
-simctl	delete	00000000-0000-0000-0000-000000000001
-simctl	delete	00000000-0000-0000-0000-000000000002
-simctl	delete	00000000-0000-0000-0000-000000000003
-simctl	delete	00000000-0000-0000-0000-000000000004
-EOF
-cmp -s "$expected_delete_log" "$log" || { diff -u "$expected_delete_log" "$log"; exit 1; }
+[[ ! -s "$log" ]] || { echo "condition-only matrix destroy touched Simulator state" >&2; exit 1; }
 assert_test_tmp_clean
-
-delete_failure_batch="delete-failure-$RANDOM-$RANDOM"
-delete_failure_matrix=".artifacts/batches/$delete_failure_batch/simulator-matrix.json"
-run bash tools/resolve-simulator-matrix.sh --batch-id "$delete_failure_batch" --output "$delete_failure_matrix"
-: >"$log"
-if run_with_delete_mode bash tools/destroy-simulator-matrix.sh --matrix "$delete_failure_matrix"; then
-  echo "destroy succeeded after configured delete failure" >&2
-  exit 1
-fi
-[[ "$(wc -l <"$log")" -eq 2 ]] || { echo "destroy did not stop on first delete failure" >&2; exit 1; }
-assert_test_tmp_clean
-rm -rf "$(dirname "$delete_failure_matrix")"
-
-mismatch_batch="mismatch-$RANDOM-$RANDOM"
-mismatch_matrix=".artifacts/batches/$mismatch_batch/simulator-matrix.json"
-run bash tools/resolve-simulator-matrix.sh --batch-id "$mismatch_batch" --output "$mismatch_matrix"
-ruby -rjson - "$state" <<'RUBY'
-path = ARGV.fetch(0)
-state = JSON.parse(File.read(path))
-state.fetch("devices").each_value do |devices|
-  device = devices.find { |entry| entry["name"].start_with?("iOS-Template-mismatch-") }
-  if device
-    device["name"] = "tampered"
-    break
-  end
-end
-File.write(path, JSON.generate(state))
-RUBY
-: >"$log"
-if run bash tools/destroy-simulator-matrix.sh --matrix "$mismatch_matrix"; then
-  echo "destroy accepted a mismatched live Simulator" >&2
-  exit 1
-fi
-[[ "$(wc -l <"$log")" -eq 1 ]] || { echo "destroy deleted before validating all targets" >&2; exit 1; }
-assert_test_tmp_clean
-rm -rf "$(dirname "$mismatch_matrix")"
-
-for create_mode in repeat-udid duplicate-name wrong-type wrong-runtime; do
-  mode_batch="mode-$create_mode-$RANDOM-$RANDOM"
-  mode_matrix=".artifacts/batches/$mode_batch/simulator-matrix.json"
-  : >"$log"
-  : >"$log"
-  if run_with_create_mode "$create_mode" bash tools/resolve-simulator-matrix.sh --batch-id "$mode_batch" --output "$mode_matrix"; then
-    echo "resolver accepted $create_mode" >&2
-    exit 1
-  fi
-  [[ ! -e "$mode_matrix" ]] || { echo "resolver published invalid $create_mode matrix" >&2; exit 1; }
-  if rg -q '^simctl\tdelete\t' "$log"; then
-    echo "resolver deleted an unvalidated UDID after $create_mode" >&2
-    exit 1
-  fi
-  assert_test_tmp_clean
-  rm -rf "$(dirname "$mode_matrix")"
-done
-
-failed_batch="failed-$RANDOM-$RANDOM"
-failed_matrix=".artifacts/batches/$failed_batch/simulator-matrix.json"
-: >"$log"
-if run_with_create_mode fail-third bash tools/resolve-simulator-matrix.sh --batch-id "$failed_batch" --output "$failed_matrix"; then
-  echo "resolver succeeded after configured create failure" >&2
-  exit 1
-fi
-[[ ! -e "$failed_matrix" ]] || { echo "resolver published an incomplete matrix" >&2; exit 1; }
-if rg -q $'\tsimctl\tdelete\t|\tsimctl\tdelete$|^simctl\tdelete\t' "$log"; then
-  echo "resolver deleted an unvalidated UDID after create failure" >&2
-  exit 1
-fi
-assert_test_tmp_clean
-rm -rf "$(dirname "$failed_matrix")"
 
 capture_failure_batch="capture-failure-$RANDOM-$RANDOM"
 capture_failure_matrix=".artifacts/batches/$capture_failure_batch/simulator-matrix.json"
@@ -603,7 +513,8 @@ matrix = JSON.parse(File.read(path))
 abort "one-case matrix missing scope" unless matrix["scope"] == "iphone-ja"
 abort "one-case matrix contains other devices" unless matrix["cases"].map { |entry| entry["id"] } == ["iphone-ja"]
 created = File.readlines(log).select { |line| line.start_with?("simctl\tcreate\tiOS-Template-#{batch}-") }
-abort "must create exactly one Japanese iPhone" unless created.length == 1 && created.first.include?("-iphone-ja\t")
+abort "condition resolver must not create a Japanese iPhone" unless created.empty?
+abort "scoped condition matrix captured an execution UDID" if matrix.fetch("cases").any? { |entry| entry.key?("udid") }
 RUBY
 cp "$log" "$scratch/before-scope-mismatch.log"
 cp "$scoped_matrix" "$scratch/frozen-ja.json"
@@ -613,11 +524,7 @@ fi
 cmp "$log" "$scratch/before-scope-mismatch.log"
 cmp "$scoped_matrix" "$scratch/frozen-ja.json"
 run bash tools/resolve-simulator-matrix.sh --batch-id "$scoped_batch" --output "$scoped_matrix" --scope iphone-ja
+: >"$log"
 run bash tools/destroy-simulator-matrix.sh --matrix "$scoped_matrix"
-ruby -rjson - "$scratch/frozen-ja.json" "$log" <<'RUBY'
-matrix = JSON.parse(File.read(ARGV.fetch(0)))
-udid = matrix.fetch("cases").first.fetch("udid")
-deletes = File.readlines(ARGV.fetch(1)).count { |line| line.chomp == "simctl\tdelete\t#{udid}" }
-abort "scoped cleanup must delete exactly its owned Simulator" unless deletes == 1
-RUBY
+[[ ! -s "$log" ]] || { echo "scoped condition-only destroy touched Simulator state" >&2; exit 1; }
 echo "all simulator lifecycle tests passed"

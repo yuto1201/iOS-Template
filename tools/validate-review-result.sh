@@ -156,9 +156,7 @@ else
 end
 issue = packet["issue"]
 reject("packet.issue must be a positive integer") unless issue.is_a?(Integer) && issue.positive?
-expected_reviewer = primary == "codex" ? "claude" : "codex"
 reject("packet.primaryModel does not match --primary") unless packet["primaryModel"] == primary
-reject("packet.reviewerModel must be the opposite model") unless packet["reviewerModel"] == expected_reviewer
 base_sha = sha!(packet["baseSha"], "packet.baseSha")
 head_sha = sha!(packet["headSha"], "packet.headSha")
 verify_sha = sha!(packet["verifySha"], "packet.verifySha")
@@ -177,6 +175,12 @@ actual_contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_file.fetch(
 reject("packet.issueContract.digest does not match exact file bytes") unless contract_digest == actual_contract_digest
 contract = json_file!(contract_file, "issue contract")
 reject("issue contract identity does not match packet") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue
+begin
+  expected_reviewer = IOSTemplate::ReviewContract.reviewer_for(contract, primary)
+rescue IOSTemplate::ReviewContract::ValidationError => error
+  reject(error.message)
+end
+reject("packet.reviewerModel does not match the sealed review route") unless packet["reviewerModel"] == expected_reviewer
 repository = string!(contract["repository"], "issue contract.repository")
 reject("issue contract.repository is invalid") unless repository.match?(/\A[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\z/)
 

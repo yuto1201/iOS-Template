@@ -80,7 +80,7 @@ Phase 5で問題を見つけた場合は、問題別のRegression／harden Issue
 
 既存アプリの緊急修正は、現在も適用可能な目的、Identity、UI方向、基盤を理由付きで再利用し、影響するPhaseから開始します。毎回App IconやHTML比較をやり直しませんが、Issue／Branch／PR、対象Test、安全確認、必要review、外部操作承認は省略しません。
 
-AI検証用Simulatorは必要時に作成し、使用後にdeviceとdataを削除します。同じMac全体でiPhone／iPad合計最大4台、sessionごと原則1台とし、一つのsessionのmatrixは作成、検証、証拠保存、削除確認、枠返却を逐次行います。共有枠、所有lease、異常終了回収、容量preflightの実装は#89、skillsへの統合は#88で行います。それまでは既存lock／固定UDID契約を維持し、手動deviceや不明なdeviceを削除せず、本仕様だけで新運用が稼働済みとは報告しません。
+AI検証用Simulatorは必要時に作成し、使用後にdeviceとdataを削除します。同じMac全体でiPhone／iPad合計最大4台、sessionごと原則1台とし、一つのsessionのmatrixは作成、検証、証拠保存、削除確認、枠返却を逐次行います。共有枠、所有lease、異常終了回収、容量preflightの実装は#93、skillsへの統合は#88で行います。#89は#93への移植元履歴として保持します。それまでは既存lock／固定UDID契約を維持し、手動deviceや不明なdeviceを削除せず、本仕様だけで新運用が稼働済みとは報告しません。
 
 ## 3. Issue contract snapshot
 
@@ -297,9 +297,11 @@ HTML、HTML screenshot、revision IDまたはHTML digestはnative検証の代用
 - Codex実装: Claudeへread-onlyレビューを依頼
 - Claude実装: Codexへread-onlyレビューを依頼
 
+上記が既定pairです。Claudeが利用不能で、sealed contract内の一つのAC本文先頭がexact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`の場合だけ、Codex実装をexact Grokへ固定launcherから依頼します。この宣言はIssue単位であり、別Issue、別primary、別model、旧contractへ継承しません。宣言なし／不完全／重複時の自動fallbackと自己承認は禁止です。
+
 `strict`または`release`のレビュー対象はIssue、仕様、Base SHA、Head SHA、Verify SHA、diff、テスト結果、要求画像です。レビュー結果が`changes-requested`なら対象確認からやり直します。
 
-レビューのタイムアウトは10分です。利用不能時は `blocked:review` とし、独立Issueを進めます。自己承認はしません。
+レビューのタイムアウトは10分です。Grok routeはCursor `ask` mode、非対話、read-only指示、閉じたstdin、sanitized環境を使います。reviewer利用不能、nonzero exit、timeout、空／不正JSON、schema／evidence不一致、repository／artifact write検出はcanonical review／receiptを発行せず`blocked:review`とし、独立Issueを進めます。自己承認はしません。
 
 固定launcherはchild完了後にcanonical `review.json` と `review-receipt.json` をdescriptor-boundで対として発行します。receiptはprimary/opposite model、fixed launcher bytes、exact packet/result/review digest、開始/完了時刻、exit statusを固定します。既存reviewだけ、偽造または不一致receipt、自己承認は再利用しません。review publication後のstate transitionだけが失敗した場合は、exact review/receipt pairを検証した再実行だけがreviewerを再起動せず遷移を再開できます。
 
@@ -370,11 +372,11 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 - Xcodeまたは必要Runtimeがなく全Issueを検証できない
 - ユーザーが明示的に停止した
 
-ソース編集Issueは、依存がなく編集ファイルが重ならない場合に最大2件まで並行化できます。AI Simulatorは一つのsessionにつき原則1台、同じMac全体でiPhone／iPad合計最大4台です。一つのsession内の複数caseは逐次実行します。#89／#88の移行前は既存のrepository排他lockを維持し、Mac共通上限や使用後削除を実装済みと推測しません。
+ソース編集Issueは、依存がなく編集ファイルが重ならない場合に最大2件まで並行化できます。AI Simulatorは一つのsessionにつき原則1台、同じMac全体でiPhone／iPad合計最大4台です。一つのsession内の複数caseは逐次実行します。#93／#88の移行前は既存のrepository排他lockを維持し、Mac共通上限や使用後削除を実装済みと推測しません。
 
 ## 9. Bootstrap
 
-Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むため選択された実行モデルが同じ手順を手動実行します。手動であってもIssue、Branch、PR、要求scopeのSimulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。#89／#88の移行後に4条件を実行する場合も、同一sessionでは一条件ずつ作成・検証・証拠保存・削除します。
+Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むため選択された実行モデルが同じ手順を手動実行します。手動であってもIssue、Branch、PR、要求scopeのSimulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。#93／#88の移行後に4条件を実行する場合も、同一sessionでは一条件ずつ作成・検証・証拠保存・削除します。
 
 Bootstrap IssueのPRには、各受け入れ条件IDと証拠、GitHub account preflightのsanitized要約、Verify対象SHA、Review対象SHAを記載します。Simulator verificationが入った後は`verify.json`を使用し、Security and workflowが入った後は全Issueを自動状態機械へ移行します。
 

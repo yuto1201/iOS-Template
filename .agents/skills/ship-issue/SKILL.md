@@ -11,7 +11,7 @@ Resume from durable GitHub/state artifacts; never infer completion from local fi
 
 - Codex and Claude have equal authority. The selected Issue executor runs Claim/state/merge/cleanup tools and authenticated provider operations after the same configured-account preflight.
 - Every authenticated operation uses `external-ops`; the live Issue operation block must name the executing model and match `Config/ownership.yml`.
-- When a `release` stage or `strict` profile requires opposite review, always use `cross-model-review`; never invoke a reviewer CLI directly or self-approve. Explicit non-release `shape`/`harden` work with `standard` and every explicit `fast` Issue omit the blocking review stage.
+- When a `release` stage or `strict` profile requires opposite review, always use `cross-model-review`; never invoke a reviewer CLI directly or self-approve. The canonical tool keeps the default Codex→Claude／Claude→Codex pair and selects exact `cursor-grok-4.6-xhigh` only from one complete user-explicit Grok fallback declaration sealed in a Codex-primary Issue. Explicit non-release `shape`/`harden` work with `standard` and every explicit `fast` Issue omit the blocking review stage.
 
 ## UI direction preflight
 
@@ -97,7 +97,7 @@ tools/cross-model-review.sh \
   --output ".artifacts/issues/${ISSUE}/${HEAD_SHA}/review.json"
 ```
 
-The tool moves an approved result to `approved-for-merge` and a rejected result to `changes-requested`. Fix only in scope; a new Head repeats verification and review.
+The tool moves an approved result to `approved-for-merge` and a rejected result to `changes-requested`. Launch, timeout, malformed-result, route, or write failures move to `blocked:review` without publishing approval. Fix only in scope; a new Head repeats verification and review.
 
 5. At `approved-for-merge`, let the selected executor run the sole publication orchestrator:
 

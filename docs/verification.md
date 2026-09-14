@@ -14,6 +14,8 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 非applicationのdelivery tool／schema／validator／review／evidence変更はworkflow-only経路です。`harden + strict`、application `Verification`／`Verification scope`なし、allowlist内の差分だけを受理します。先にcanonical repository-test evidenceを発行し、次に`.artifacts/issues/${ISSUE}/workflow-evidence-input.json`へschemaVersion 1と非空reasonを書き、`tools/publish-workflow-verify.sh`で`verify.json`を発行します。この経路はXcode、Build、Unit、Simulator matrix、Screenshot、visual evaluationを起動せず、repository evidenceのAC mappingをverifyへ固定します。
 
+正式reviewerはsealed contractから決めます。既定はCodex primary→Claude、Claude primary→Codexです。Codex-primary contractがexactly oneの完全な`Opposite-review route: grok-fallback`宣言とユーザー明示承認を持つ場合だけ、exact `cursor-grok-4.6-xhigh`を固定Cursor `ask` launcherで使います。packet、result、receipt、PR renderer、premerge gateはreviewer modelとlauncher bytesを同じIssue／contract／Base／Headへ束縛し、別model、手書き証拠、自己承認を拒否します。
+
 stage未指定のClaim済みcontractは旧release-level gateを維持します。未実行は`deferred / unverified`であり成功ではありません。shape／hardenをrelease readyと報告しません。
 
 [UI Direction Gate](../.agents/skills/ui-direction/SKILL.md)は、現在のユーザーが対象範囲のHTML比較を明示した場合に方向の有無を問わず最優先で適用します。現在の明示省略は、現行性、exact scope、権限、理由、比較指示との非矛盾が明確な場合だけ`explicit-skip` routeとして通常判定を上書きし、曖昧または矛盾する場合は依存UIを`blocked:user`にします。それ以外は、exact hierarchy／flowを覆う確定方向があれば`confirmed-direction reuse`、対象方向が未確定で最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかなら`comparison`、方向未確定かつ3 triggerのいずれもなくAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない場合だけ`bounded direction-neutral`とします。coverage、triggerまたはneutralityが曖昧ならGateを実行します。Identity bootstrapと純非UIは`not-applicable`で、Gateを評価するのは依存する後続native UIだけです。
@@ -50,6 +52,7 @@ Claim／Resume後のIssue worktreeから、[ios-verifyのlocked command](../.age
 | `python3` | app-icon、mediaのfixtureとbootstrap。foundationは`tomllib`を使うためPython 3.11以上が必要。foundationを子として実行するbootstrapも同じ条件を開始前に確認する |
 | `${CC:-cc}` | `test-cross-model-review.sh`と`test-review-shared-artifacts.sh`のnative reviewer fixtureコンパイル。`CC`は単一の実行ファイル名またはパスとし、flagsを混ぜない |
 | `codex` | `test-cross-model-review.sh`だけが実際のnative Mach-O Codex sandboxを使用。他のtestには一律要求しない。既存のMach-O／sandbox検査も維持する |
+| `cursor-agent` | sealed Grok fallbackを実際に実行するときだけ、認証済みCLIとexact `cursor-grok-4.6-xhigh`が必要。repository testはsanitized環境を検査するfixtureを使用し、実accountやnetworkを要求しない |
 
 `tools/tests/lib/prerequisites.sh`はfixture作成・assertion前に外部実行ファイルの有無を確認します。shell alias／関数だけでは満たしません。不足時は`test prerequisite unavailable`、test名、不足コマンドをstderrへ出し、exit 69で停止します。skipや成功ではなく環境不足であり、assertionが製品の不具合を検出した結果とも区別します。Pythonのversion／module不足も同じ扱いです。PATH全体や認証情報は出力しません。
 
@@ -61,7 +64,7 @@ Claim／Resume後のIssue worktreeから、[ios-verifyのlocked command](../.age
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "batchId": "2026-08-21-settings",
   "resolvedAt": "2026-08-21T12:00:00+09:00",
   "xcode": {
@@ -82,15 +85,30 @@ Claim／Resume後のIssue worktreeから、[ios-verifyのlocked command](../.age
 }
 ```
 
-この値は形式例です。実際のversionとDevice Typeはそのバッチで取得した値を使います。
+この値はschema v2の形式例です。実際のversionとDevice Typeはそのバッチで取得した値を使います。schema v2は条件だけを封印し、UDIDやdevice名を持ちません。resolverはmatrix作成時にSimulatorを作成せず、runnerが各caseの直前に使い捨てdeviceを割り当てます。既存のschema v1はcaseごとの`udid`を持つlegacy matrixとしてbytesを変更せず再検証でき、新規matrixへ変換しません。
 
 ### 3.1 Simulatorのシステム言語と地域
 
-matrixの`language` / `locale`は、アプリ起動引数とUI Testだけでなく、各caseの専用Simulatorのシステム設定にも適用します。runnerは封印済みmatrixの`en` / `en_US`から`AppleLanguages = [en-US]`と`AppleLocale = en_US`、`ja` / `ja_JP`から`[ja-JP]`と`ja_JP`を導出します。呼出し元の環境変数や追加引数でこの値を置き換えません。
+matrixの`language` / `locale`は、アプリ起動引数とUI Testだけでなく、各caseへ割り当てたowned Simulatorのシステム設定にも適用します。runnerは封印済みmatrixの`en` / `en_US`から`AppleLanguages = [en-US]`と`AppleLocale = en_US`、`ja` / `ja_JP`から`[ja-JP]`と`ja_JP`を導出します。呼出し元の環境変数や追加引数でこの値を置き換えません。
 
-アプリをインストールする前に、所有権を照合したBootedデバイスへ設定を書き込み、その専用デバイスだけをshutdown／bootしてSpringBoardへ反映します。この再起動では設定を消すeraseを行いません。再起動後と各caseの撮影直前（画像を作らないstageでは操作検査の終了時）にglobal preferencesを読み戻し、言語配列・地域が宣言と完全一致しなければcaseを失敗にします。書込み、再起動、読取りの失敗や不正なplistも成功へ読み替えません。個人用Simulator、別batchのデバイス、Macの言語設定は変更しません。
+アプリをインストールする前に、allocation ID・session・exact UDIDとlive identityを照合したBootedデバイスへ設定を書き込み、そのdeviceだけをshutdown／bootしてSpringBoardへ反映します。この再起動では設定を消すeraseを行いません。再起動後と各caseの撮影直前（画像を作らないstageでは操作検査の終了時）にglobal preferencesを読み戻し、言語配列・地域が宣言と完全一致しなければcaseを失敗にします。書込み、再起動、読取りの失敗や不正なplistも成功へ読み替えません。個人用Simulator、別batchのデバイス、Macの言語設定は変更しません。
 
-画像評価ではアプリ本文に加えてステータスバー等のsystem chromeを確認します。特にiPadの日付が英語caseでは英語、日本語caseでは日本語で表示されることを実際の画像から確認し、アプリ起動引数だけをシステム言語の証拠にしません。case終了時の既存の専用デバイス回収は維持します。
+画像評価ではアプリ本文に加えてステータスバー等のsystem chromeを確認します。特にiPadの日付が英語caseでは英語、日本語caseでは日本語で表示されることを実際の画像から確認し、アプリ起動引数だけをシステム言語の証拠にしません。caseの必要証拠をdevice外へ保存した後にそのdeviceを削除し、次caseは新しいallocationを使います。
+
+### 3.2 Mac共通のSimulator資源管理
+
+schema v2 runnerはrepository lockを先に取得し、その内側で`tools/lib/ios-simulator-resource.rb`の短時間Mac共通lockを使います。stable `IOS_TEMPLATE_SIMULATOR_SESSION_ID`はwrapperから子processへ継承し、repository、worktree、Issue、Headが変わっても同じsessionの2台目を作りません。予約中、作成済み、Shutdown、削除中、cleanup失敗をiPhone／iPad共通の4枠へ数えます。待機は既定60秒で取消可能です。既定では対象volumeに8 GiB以上の空きがない場合、新規作成を`blocked:environment`で止めます。
+
+通常終了、Test失敗、timeout、INT／TERMではexit cleanupがactive allocationだけを回収します。SIGKILLやMac再起動で残ったrecordは、次回runner開始時にowner PIDとprocess start identity、allocation ID、device名、Runtime、Device Type、exact UDIDを再照合して回収します。作成途中はallocator process identityも活動判定へ含め、別processが早まって予約を解放しません。削除は`simctl shutdown <udid>`と`simctl delete <udid>`だけを使い、一覧からの消失と記録済みdata pathの不在を確認してから枠を返します。
+
+read-only inventoryは次で確認できます。
+
+```bash
+ruby tools/lib/ios-simulator-resource.rb inventory
+ruby tools/lib/ios-simulator-resource.rb recover --dry-run
+```
+
+出力はdurable allocation、owner／allocatorの活動状態、空き容量、cleanup結果と、active durable recordを持たない`iOS-Template-` deviceを`protectedUnmanagedDevices`として分けます。data容量を測定していない場合は`dataBytes: null`と`dataMeasurement: not-measured`を明示します。引数なしの`recover`はこのmanagerが作成記録を持つ非活動orphanだけを回収し、管理外device、手動device、別owner、identity不一致を削除しません。全件削除、`delete unavailable`、名前やShutdown状態だけの手動削除は行いません。
 
 `tools/tests/test-ios-runner-system-locale.sh`は、4条件の値・再起動順序・環境変数の非採用と、言語／地域不一致、欠落・型違い・不正plist、書込み／読取り失敗、再起動後の設定消失、UI操作後の設定変化を検査します。fake Simulatorによる回帰テストは実Simulatorの表示確認とは別の証拠です。
 
@@ -151,11 +169,13 @@ Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evi
 - `head-all`: release、nightly相当の明示実行、またはユーザーがIssue contractで明示要求した場合だけHeadの全inventoryを選ぶ。manifest／runner／`tools/tests/`変更から自動選択しない。
 - `base-and-head`: baseline／regression比較をACが明示するときだけ、BaseとHeadそれぞれの全inventoryを実行する。
 
-planはIssue／Base／Head／contract digest、要求・解決scopeと理由、manifest digest、changed pathsとdiff digest、sorted exact test paths、全AC順のmappingを持ちます。mappingは各ACをexactly once含み、参照のunionがplanのtest集合と一致しなければ生成しません。schema v3 `repository-tests.json`はplan path/digest、resolved scope、current-Head producer、実行結果を持ち、review packet、result publication、PR本文、pre-merge gateは同じplan bytesをimmutable Git入力から再計算します。開発中の対象testは1件300秒、通常完了の`targeted` suiteはaggregate 900秒を上限とし、canonical runnerは安定した最終候補Headで一度だけ使います。runnerは開始前にscope、ordered tests、test count、child／aggregate上限を表示します。
+planはIssue／Base／Head／contract digest、要求・解決scopeと理由、manifest digest、changed pathsとdiff digest、sorted exact test paths、全AC順のmappingを持ちます。mappingは各ACをexactly once含み、参照のunionがplanのtest集合と一致しなければ生成しません。schema v3 `repository-tests.json`はplan path/digest、resolved scope、current-Head producer、実行結果を持ち、review packet、result publication、PR本文、pre-merge gateは同じplan bytesをimmutable Git入力から再計算します。開発中の対象testは1件300秒、通常完了の`targeted` suiteはaggregate 900秒を上限とし、canonical runnerは安定した最終候補Headで一度だけ使います。runnerは開始前にscope、ordered tests、test count、child／aggregate上限を表示します。独立した長時間entrypointは専用domainへ分離し、変更されていないbootstrap／workflow全体をtest自身の分類だけで巻き込まない一方、変更されたtest自身と対応producerは必ず同じdomainで選択します。
 
-iOS runner回帰は、共通の`tools/tests/lib/ios-runner-fixture.sh`と独立した16個のtracked entrypointへ分けています。引数なしの`bash tools/tests/test-ios-runner.sh`はshape／scope／timeout群だけを実行します。`scoped`も同じ群、`stubborn`は従来のTERM無視probe診断です。残る群はcleanup、startup、baseline、identity、inputs、publication、resources、recovery、recovery-before-rename、recovery-after-rename、recovery-final、locking、finalization、finalization-integrity、system-localeで、`tools/tests/test-ios-runner-<群名>.sh`を実行します。各群は自身のtemporary repository、fake Xcode／Simulator、adapter stateを作り、終了時に自身のscratchだけを回収します。
+iOS runner回帰は、共通の`tools/tests/lib/ios-runner-fixture.sh`と独立した17個のtracked entrypointへ分けています。引数なしの`bash tools/tests/test-ios-runner.sh`はshape／scope／timeout群だけを実行します。`scoped`も同じ群、`stubborn`は従来のTERM無視probe診断です。残る群はallocation、cleanup、startup、baseline、identity、inputs、publication、resources、recovery、recovery-before-rename、recovery-after-rename、recovery-final、locking、finalization、finalization-integrity、system-localeで、`tools/tests/test-ios-runner-<群名>.sh`を実行します。各群は自身のtemporary repository、fake Xcode／Simulator、adapter stateを作り、終了時に自身のscratchだけを回収します。
 
-全runner回帰だけをrelease／明示診断する場合は`bash tools/tests/test-ios-runner.sh all`を使います。このコマンドは各群を900秒上限で順番に実行し、一つでも失敗すれば失敗します。通常のcanonical repository runnerはplanが選んだ関連群だけを実行し、`head-all`／`base-and-head`を明示した場合だけ全16群を含めます。単一群の成功を全suiteの成功として扱わず、正式証拠には引き続き`tools/run-repository-tests.sh`を使います。productionの検証、case、assertion、timeout、証拠公開条件は変更しません。
+全runner回帰だけをrelease／明示診断する場合は`bash tools/tests/test-ios-runner.sh all`を使います。このコマンドは各群を900秒上限で順番に実行し、一つでも失敗すれば失敗します。通常のcanonical repository runnerは、共通runner／validator変更ではstage、legacy baseline、対象lifecycle統合を含む`ios-verification` coreだけを選び、cleanup、finalization、identity、input、locking、publication、recovery、resource、startup、locale、visualの各adversarial群は対応するtestを直接変更した場合、明示診断、または`head-all`／`base-and-head`だけで追加します。これにより一つの対象変更から全17群へ暗黙昇格せず、単一群の成功を全suiteの成功とも扱いません。正式証拠には引き続き`tools/run-repository-tests.sh`を使い、productionの検証、case、assertion、timeout、証拠公開条件は変更しません。
+
+`tools/tests/test-ios-evidence.sh`はapplication evidence validator全体の広い改ざん・path境界を繰り返すrelease／nightly向けのexhaustive testです。通常の`targeted`変更では、変更対象のrunner／publisher／matrix群と対応する統合testを選び、fixture自体またはこのtestを変更した場合だけexhaustive domainを追加します。`head-all`／`base-and-head`では従来どおり実行し、関連する新しい境界を狭い統合testで検証せず省略する理由には使いません。
 
 ```bash
 tools/run-repository-tests.sh \
@@ -249,11 +269,11 @@ production entrypointはprivileged modeのabsolute `/bin/bash -p` で起動し�
 
 Build productはlocked attempt内のDerivedData `Build/Products` 配下にあるregular app directoryだけを候補にし、Bundle IDとBundle executableを検証します。runnerはbundle tree全体をdescriptor-boundに再帰走査し、symlink、special file、別uid、複数hardlinkを拒否してprivate `StagedApp`へcopy、seal、fsyncします。tree digestはrecord type、path、content length/contentをlength-prefixして構造とbytesを一意に固定します。各install直前にstaged tree、Bundle ID、executableを再読してdigest一致を要求するため、Build productやstaged pathの置換をinstallへ持ち込めません。
 
-sealed configはbatch ID、Runtime identifier/version、要求scopeの1case／targeted部分集合／4caseのexact UDID、Device Type identifier/name、および`iOS-Template-${batchId}-${caseId}`形式の専用device名を固定します。runnerは最初のXcode Build前にfresh `simctl list devices --json`で要求された全caseのidentityとglobal name uniquenessを一括検証します。検証済みの専用deviceだけをshutdown-if-Bootedしてeraseし、ユーザー作成device、別batch、別IssueのUDIDを操作しません。`simctl shutdown all`は使用しません。runnerはUDIDをdelete/createせず、別deviceへ代替しません。
+sealed configはbatch ID、matrix schema、Runtime identifier/version、要求scopeの1case／targeted部分集合／4case、Device Type identifier/nameを固定します。schema v2ではUDIDとdevice名をconfigへ固定せず、最初のBuild直前に1件目を作成してBuildとUnit Testへ使い、そのまま1件目のUI caseへ渡します。以後は前caseの削除確認後にだけ次caseを作成します。device名は`iOS-Template-${batchId}-${caseId}-${allocationPrefix}`とし、Mac共通stateへrepository identity、Issue、Head、batch、attempt、session、owner／allocator process identity、Runtime、Device Type、exact UDID、data pathを記録します。schema v1はsealed matrixのexact UDIDを検証してeraseするlegacy経路を維持し、bytesや意味を変えません。
 
-各case直前にlive Git Head、tracked Head inventory/bytes/flags、sealed config、canonical contract/matrix、source/project digestを再検証します。その後matrixのexact UDIDをbootし、bootstatus、install、exact language/localeでlaunch、bounded liveness、contractの機械checkを直列実行します。visual-requiredのcaseだけScreenshotを取得します。`testIdentifier`はunique case xcresultを使うexact `-only-testing`です。shapeでは主要導線のSmoke Testを必須とし、`launch-succeeded`だけでは代用しません。
+各case直前にlive Git Head、tracked Head inventory/bytes/flags、sealed config、canonical contract/matrix、source/project digestとactive allocationのlive identityを再検証します。その後allocationのexact UDIDをbootし、bootstatus、install、exact language/localeでlaunch、bounded liveness、contractの機械checkを直列実行します。visual-requiredのcaseだけScreenshotを取得します。`testIdentifier`はunique case xcresultを使うexact `-only-testing`です。shapeでは主要導線のSmoke Testを必須とし、`launch-succeeded`だけでは代用しません。
 
-case成功はexact UI結果、locale relaunch、process identity/liveness、visual-requiredならdecodable PNGを確認し、対象Bundle IDだけをterminateして専用deviceを回収した後に確定します。通常failure／TERMは記録したactive caseだけを回収します。失敗時はsanitized failure recordを残し、成功形式の証拠を公開しません。正式証拠へpartial attemptをmergeしません。
+case成功はexact UI結果、locale relaunch、process identity/liveness、visual-requiredならdecodable PNGを確認し、対象Bundle IDだけをterminateします。その後、owned deviceのshutdown/delete、一覧不在、data path不在、終了時空き容量を記録し、sanitized allocation receiptをbatch artifactへno-replace保存してから成功を確定します。通常failure／TERMは記録したactive caseだけを回収します。cleanup失敗は元のTest結果と分けてfailureへ記録し、枠を保持したまま成功形式の証拠を公開しません。正式証拠へpartial attemptをmergeしません。
 
 visual-required成功時はScreenshotとcanonical `verify-draft.json`を一つのno-replace transactionで公開します。非visual shape／hardenはdraftを作らず、mechanical case、Build、Test、`not release-ready`理由を持つcanonical `verify.json`を検証後にatomic publishします。どちらもcontract順序とcurrent Headをpublication直前に再検証します。以下のdraft schema例はvisual-required release用です。
 
@@ -267,6 +287,12 @@ visual-required成功時はScreenshotとcanonical `verify-draft.json`を一つ�
   "issueContract": {"path": ".artifacts/issues/42/issue-contract.json", "digest": "sha256:83346f064f2e8c2df561bc36b3440384621145b2189a5c6dc38966a100da2f6e"},
   "matrixFile": ".artifacts/batches/settings-2026-08-21/simulator-matrix.json",
   "matrixDigest": "sha256:490d32bf9174b57fb9b05a00e0231d22082e4a9576b0377f0df2641d96349d0b",
+  "simulatorAllocations": [
+    {"caseId": "iphone-en", "path": ".artifacts/batches/settings-2026-08-21/allocation-iphone-en-11111111-1111-1111-1111-111111111111.json", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "allocationId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "udid": "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", "attemptId": "attempt-11111111-1111-1111-1111-111111111111", "sessionId": "session-example"},
+    {"caseId": "iphone-ja", "path": ".artifacts/batches/settings-2026-08-21/allocation-iphone-ja-22222222-2222-2222-2222-222222222222.json", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "allocationId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "udid": "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB", "attemptId": "attempt-11111111-1111-1111-1111-111111111111", "sessionId": "session-example"},
+    {"caseId": "ipad-en", "path": ".artifacts/batches/settings-2026-08-21/allocation-ipad-en-33333333-3333-3333-3333-333333333333.json", "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333", "allocationId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "udid": "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC", "attemptId": "attempt-11111111-1111-1111-1111-111111111111", "sessionId": "session-example"},
+    {"caseId": "ipad-ja", "path": ".artifacts/batches/settings-2026-08-21/allocation-ipad-ja-44444444-4444-4444-4444-444444444444.json", "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444", "allocationId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "udid": "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD", "attemptId": "attempt-11111111-1111-1111-1111-111111111111", "sessionId": "session-example"}
+  ],
   "executionRoute": "xcodebuild-simctl",
   "xcode": {"path": "/Applications/Xcode.app/Contents/Developer", "version": "26.5", "build": "17F42"},
   "build": {"status": "passed", "scheme": "ExampleApp", "warningsAdded": 0, "project": {"path": "ExampleApp.xcodeproj", "digest": "sha256:c508ebb4550e3fc36666de55b2f9750e95adcbaab20421810f48d7e39b69e15e"}, "sourceTree": {"headSha": "0123456789abcdef0123456789abcdef01234567", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "projectPath": "ExampleApp.xcodeproj"}},
@@ -355,6 +381,12 @@ Issue/current Head identityを確立した後のrange、tracked Head不一致、
   },
   "matrixFile": ".artifacts/batches/2026-08-21-settings/simulator-matrix.json",
   "matrixDigest": "sha256:490d32bf9174b57fb9b05a00e0231d22082e4a9576b0377f0df2641d96349d0b",
+  "simulatorAllocations": [
+    {"caseId": "iphone-en", "path": ".artifacts/batches/2026-08-21-settings/allocation-iphone-en-11111111-1111-1111-1111-111111111111.json", "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "allocationId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "udid": "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", "attemptId": "attempt-11111111-1111-1111-1111-111111111111", "sessionId": "session-example"},
+    {"caseId": "iphone-ja", "path": ".artifacts/batches/2026-08-21-settings/allocation-iphone-ja-22222222-2222-2222-2222-222222222222.json", "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "allocationId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "udid": "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB", "attemptId": "attempt-11111111-1111-1111-1111-111111111111", "sessionId": "session-example"},
+    {"caseId": "ipad-en", "path": ".artifacts/batches/2026-08-21-settings/allocation-ipad-en-33333333-3333-3333-3333-333333333333.json", "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333", "allocationId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "udid": "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC", "attemptId": "attempt-11111111-1111-1111-1111-111111111111", "sessionId": "session-example"},
+    {"caseId": "ipad-ja", "path": ".artifacts/batches/2026-08-21-settings/allocation-ipad-ja-44444444-4444-4444-4444-444444444444.json", "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444", "allocationId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "udid": "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD", "attemptId": "attempt-11111111-1111-1111-1111-111111111111", "sessionId": "session-example"}
+  ],
   "executionRoute": "xcodebuild-simctl",
   "xcode": {
     "path": "/Applications/Xcode.app/Contents/Developer",
@@ -396,9 +428,9 @@ Issue/current Head identityを確立した後のrange、tracked Head不一致、
 }
 ```
 
-`schemaVersion: 1` のapplication変更で必須となるfieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、Issue contract path/digest、matrix path/digest、execution route、Xcode、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。GitHubとproviderのpreflightは外部操作直前の証拠なのでverify.jsonへ含めず、pre-merge gateが別artifactとして検査します。
+`schemaVersion: 1` のapplication変更で必須となるfieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、Issue contract path/digest、matrix path/digest、execution route、Xcode、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。matrix schema v2では`simulatorAllocations`も必須で、matrixと同じcase順にallocation artifactのpath/digest、allocation ID、実行UDID、attempt、sessionを持ちます。validatorは各receiptのexact bytes、Issue／Head／batch、Runtime／Device Type、作成・削除時刻、削除後のdevice/data不在、作成前／削除後の空き容量を再検証します。matrix schema v1ではこのfieldを持たせません。GitHubとproviderのpreflightは外部操作直前の証拠なのでverify.jsonへ含めず、pre-merge gateが別artifactとして検査します。
 
-application変更のmatrixはbatch lifecycleが完成させたexact schemaです。top-levelは`schemaVersion`、`batchId`、`resolvedAt`、`xcode`、`runtime`、`cases`と任意の`scope`だけを持ちます。省略は`full`、`scope: iphone-ja`は1件で、nullや未知値は拒否します。caseは`id`、`family`、`deviceType`、`locale`、`language`、`udid`だけを持ち、contract・Evidenceとexact順序で一致させます。
+application変更のmatrixはbatch lifecycleが完成させたexact schemaです。top-levelは`schemaVersion`、`batchId`、`resolvedAt`、`xcode`、`runtime`、`cases`と任意の`scope`だけを持ちます。省略は`full`、`scope: iphone-ja`は1件で、nullや未知値は拒否します。schema v2 caseは`id`、`family`、`deviceType`、`locale`、`language`だけを持ち、contract・Evidenceとexact順序で一致させます。schema v1 caseだけがlegacyの`udid`を追加で持ちます。
 
 検証時はGit top-levelから、Issueの信頼済みBase/HeadをJSONとは別の引数で渡します。
 
@@ -461,11 +493,11 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 
 すべての`xcodebuild`／Unit／UI Testは既定1200秒、`xcrun`／`simctl`は180秒、Swift validatorは600秒の有限timeoutを持ちます。各値は正の秒数へ明示overrideできます。timeout wrapperはcommandごとに新しいprocess groupを作り、そのgroupだけへTERM、5秒grace、必要時KILLを送ります。`killall`、Xcode終了、`simctl shutdown all`は行いません。
 
-timeoutはexit 124と`stage`、`elapsedSeconds`、`timeoutSeconds`を返します。runnerはそのattemptのactive Simulator、private workspace、Issue／Head lockだけを回収し、成功形式の`verify.json`を発行しません。repository runnerは失敗／timeoutをIssue／Head／scope／attemptへ記録し、直接再実行を拒否します。`--retry-after-targeted <前回失敗test>`を指定した一度だけ、そのtestを先に診断実行し、成功時に同じcanonical suiteを再試行します。診断失敗または2回目のsuite失敗後は停止します。
+timeoutはexit 124と`stage`、`elapsedSeconds`、`timeoutSeconds`を返します。runnerはそのattemptのactive Simulatorをallocation identityで回収し、削除確認後にprivate workspaceとIssue／Head lockを回収します。cleanup失敗時は枠とdurable recordを残し、成功形式の`verify.json`を発行しません。repository runnerは失敗／timeoutをIssue／Head／scope／attemptへ記録し、直接再実行を拒否します。`--retry-after-targeted <前回失敗test>`を指定した一度だけ、そのtestを先に診断実行し、成功時に同じcanonical suiteを再試行します。診断失敗または2回目のsuite失敗後は停止します。
 
 ## 6. 排他制御
 
-ソース実装は独立Issueなら並行化できますが、Simulatorを使う検証段階は既定で1ジョブずつ実行します。これにより、Boot状態、Locale、アプリデータ、Screenshotの取り違えを防ぎます。
+ソース実装は独立Issueなら並行化できます。Simulator検証は各repository内では既存lockにより1ジョブずつ実行し、Mac全体では別repositoryを含めてiPhone／iPad合計最大4 allocation、同一session最大1 allocationをMac共通stateで原子的に強制します。一つのrunner内の複数caseは必ず直列です。lock順はrepository lock、Mac共通state lockで統一し、逆順に取得しません。これにより、Boot状態、Locale、アプリデータ、Screenshotの取り違えとdeadlockを防ぎます。
 
 各worktreeは専用DerivedDataを使います。検証中にHead SHAが変わった場合、結果を破棄して新しいSHAでやり直します。
 
@@ -495,7 +527,7 @@ gateはprimary checkoutのartifactをpathごとに読み直しません。Issue 
 - review-requiredの場合、現在のHead SHA = review.jsonのheadSha
 - verify status = passedまたは正当なnot-applicable
 - review-requiredの場合、review verdict = approved
-- review-requiredの場合、schema v2 packet／result／receiptのexact bytes、Base／Head／Verify SHA、model、Issue contract digestが一致
+- review-requiredの場合、schema v2 packet／result／receiptのexact bytes、Base／Head／Verify SHA、sealed routeから決まるprimary／reviewer model、固定launcher path／bytes、Issue contract digestが一致
 - review-requiredの場合、approved reviewのFinding = 0、全Acceptance criteria = supported、`reviewedAt`がverify完了後かつ未来でない
 - Acceptance criteriaの証拠欠落 = 0
 - `gh issue view`のfixed fieldsがcaller Issueと一致し、許可されたIssue typeがexact一つ存在

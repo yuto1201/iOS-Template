@@ -49,6 +49,16 @@ make_temp matrix_copy destroy-matrix
 make_temp devices_copy destroy-devices
 make_temp udids destroy-udids
 matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$matrix_copy"
+matrix_schema="$(ruby -rjson -e 'puts JSON.parse(File.binread(ARGV.fetch(0))).fetch("schemaVersion")' "$matrix_copy")"
+if [[ "$matrix_schema" == 2 ]]; then
+  ruby tools/validate-simulator-matrix.rb complete "$matrix_copy" "$batch_id"
+  echo "schema v2 matrix contains conditions only; release its versioned allocations through ios-simulator-resource.rb"
+  exit 0
+fi
+[[ "$matrix_schema" == 1 ]] || {
+  echo "blocked:environment: unsupported Simulator matrix schema" >&2
+  exit 1
+}
 bounded_run simulator-list-before-destroy "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" xcrun simctl list devices -j >"$devices_copy"
 matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$devices_copy" --name devices.json
 ruby tools/validate-simulator-matrix.rb complete "$matrix_copy" "$batch_id" "$devices_copy"

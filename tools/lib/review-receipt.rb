@@ -4,6 +4,7 @@
 require "digest"
 require "json"
 require "time"
+require_relative "review-route"
 
 module IOSTemplate
   module ReviewReceipt
@@ -22,13 +23,23 @@ module IOSTemplate
       "sha256:#{Digest::SHA256.hexdigest(bytes)}"
     end
 
-    def launcher_for(primary)
-      primary == "codex" ? "tools/cross-model-review.sh" : "tools/request-codex-review.sh"
+    def packet_identity(packet_bytes, primary)
+      # JSON.parse may retag its input as UTF-8. Parse a duplicate so callers
+      # holding descriptor-bound binary bytes can still compare them exactly.
+      packet = JSON.parse(packet_bytes.dup)
+      reject!("review packet must be an object") unless packet.is_a?(Hash)
+      reject!("review packet primary differs") unless packet["primaryModel"] == primary
+      reviewer = packet["reviewerModel"]
+      launcher = ReviewRoute.launcher_for(primary: primary, reviewer: reviewer)
+      [reviewer, launcher]
+    rescue JSON::ParserError => error
+      raise ValidationError, "review packet is not valid JSON: #{error.message}"
+    rescue ReviewRoute::ValidationError => error
+      raise ValidationError, error.message
     end
 
     def build(repo:, primary:, issue:, head_sha:, packet_bytes:, validated_result_bytes:, published_review_bytes:, started_at:, completed_at:)
-      reviewer = primary == "codex" ? "claude" : "codex"
-      reviewer_launcher = launcher_for(primary)
+      reviewer, reviewer_launcher = packet_identity(packet_bytes, primary)
       {
         "schemaVersion" => 1,
         "issue" => issue,
@@ -54,12 +65,11 @@ module IOSTemplate
       reject!("receipt has unexpected or missing fields") unless receipt.keys.sort == KEYS.sort
       reject!("receipt schemaVersion is unsupported") unless receipt["schemaVersion"] == 1
       reject!("receipt Issue or Head differs") unless receipt["issue"] == issue && receipt["headSha"] == head_sha
-      reviewer = primary == "codex" ? "claude" : "codex"
+      reviewer, expected_reviewer_launcher = packet_identity(packet_bytes, primary)
       reject!("receipt is not an opposite-model review") unless receipt["primaryModel"] == primary && receipt["reviewerModel"] == reviewer
       reject!("receipt exit status is not successful") unless receipt["exitStatus"] == 0
 
       expected_launcher = "tools/cross-model-review.sh"
-      expected_reviewer_launcher = launcher_for(primary)
       reject!("receipt launcher identity differs") unless receipt["launcher"] == expected_launcher && receipt["reviewerLauncher"] == expected_reviewer_launcher
       expected_launcher_digest = digest(File.binread(File.join(repo, expected_launcher)))
       expected_reviewer_launcher_digest = digest(File.binread(File.join(repo, expected_reviewer_launcher)))

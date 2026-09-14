@@ -245,9 +245,12 @@ config_check() {
 verification_scope="$(config_value verificationScope)"
 delivery_stage="$(config_value deliveryStage)"
 visual_required="$(config_value visualRequired)"
+matrix_schema_version="$(config_value matrixSchemaVersion)"
+simulator_developer_dir="$(config_value xcode.path)"
 case_count="$(config_value caseCount)"
 [[ "$delivery_stage" == shape || "$delivery_stage" == harden || "$delivery_stage" == release ]] || fail "Delivery stage is invalid"
 [[ "$visual_required" == true || "$visual_required" == false ]] || fail "visual verification policy is invalid"
+[[ "$matrix_schema_version" == 1 || "$matrix_schema_version" == 2 ]] || fail "Simulator matrix schema is invalid"
 [[ "$case_count" =~ ^[1-4]$ ]] || fail "verification case count is invalid"
 case_ids=()
 case_indexes=()
@@ -262,10 +265,81 @@ case "$verification_scope" in
   *) fail "verification scope is invalid" ;;
 esac
 active_case_id=""
+active_allocation_id=""
+active_allocation_udid=""
+active_allocation_receipt=""
 active_probe_pid=""
 lock_holder_pid=""
 simulator_snapshot_index=0
 run_state="$attempt_root"
+allocation_receipt_dir="$attempt_root/SimulatorAllocations"
+attempt_id="${attempt_root##*/}"
+simulator_session_id="${IOS_TEMPLATE_SIMULATOR_SESSION_ID:-${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}}"
+if [[ -z "$simulator_session_id" ]]; then
+  simulator_session_id="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
+fi
+[[ "$simulator_session_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$ ]] || fail "Simulator session identity is invalid"
+declare -a simulator_resource_test_flags=()
+if [[ "$TRUSTED_XCRUN" != "/usr/bin/xcrun" ]]; then
+  simulator_resource_test_flags=(
+    --test-mode --state-root "$attempt_root/SimulatorResourceState" --xcrun "$TRUSTED_XCRUN"
+    --minimum-free-bytes 0
+  )
+fi
+
+run_simulator_resource() {
+  run_scrubbed /usr/bin/ruby --disable-gems "$script_dir/lib/ios-simulator-resource.rb" \
+    "$@" --developer-dir "$simulator_developer_dir"
+}
+
+allocate_owned_simulator() {
+  local case_id="$1" index type_identifier output allocation_id udid receipt receipt_directory_physical
+  for index in "${case_indexes[@]}"; do
+    [[ "${case_ids[$index]}" == "$case_id" ]] || continue
+    type_identifier="$(config_value "cases.$index.deviceType.identifier")" || return 1
+    output="$(run_simulator_resource allocate "${simulator_resource_test_flags[@]}" \
+      --session "$simulator_session_id" --repository "$repository_root" --issue "$issue" --head "$head_sha" \
+      --batch "$(config_value batchId)" --attempt "$attempt_id" --case "$case_id" \
+      --runtime "$(config_value runtime.identifier)" --device-type "$type_identifier" \
+      --owner-pid "$$" --wait-seconds 60 --receipt-dir "$allocation_receipt_dir")" || return 1
+    IFS=$'\t' read -r allocation_id udid receipt <<<"$output"
+    receipt_directory_physical="$(cd "$allocation_receipt_dir" && /bin/pwd -P)" || return 1
+    [[ "$allocation_id" =~ ^[0-9a-f-]{36}$ && "$udid" =~ ^[0-9A-Fa-f-]+$ && \
+       "$receipt" == "$receipt_directory_physical/allocation-$allocation_id.json" && -f "$receipt" ]] || return 1
+    active_case_id="$case_id"
+    active_allocation_id="$allocation_id"
+    active_allocation_udid="$udid"
+    active_allocation_receipt="$receipt"
+    return 0
+  done
+  return 1
+}
+
+publish_allocation_receipt() {
+  local case_id="$1" name
+  [[ -f "$active_allocation_receipt" ]] || return 1
+  name="$(run_xcode_swift "$script_dir/simulator-matrix-io.swift" \
+    --operation write-unique --repo "$repository_root" --batch "$(config_value batchId)" \
+    --source "$active_allocation_receipt" --prefix "allocation-$case_id")" || return 1
+  [[ "$name" =~ ^allocation-${case_id}-[0-9A-Fa-f-]+\.json$ ]] || return 1
+  printf '%s\t%s\n' "$case_id" "$name" >>"$run_state/allocation-artifacts.tsv"
+}
+
+release_allocated_simulator() {
+  local case_id="$1" reason="$2" output allocation_id udid receipt
+  [[ "$matrix_schema_version" == 2 && "$active_case_id" == "$case_id" && -n "$active_allocation_id" ]] || return 1
+  output="$(run_simulator_resource release "${simulator_resource_test_flags[@]}" \
+    --session "$simulator_session_id" --allocation-id "$active_allocation_id" \
+    --reason "$reason" --receipt-dir "$allocation_receipt_dir")" || return 1
+  IFS=$'\t' read -r allocation_id udid receipt <<<"$output"
+  [[ "$allocation_id" == "$active_allocation_id" && "$udid" == "$active_allocation_udid" && \
+     "$receipt" == "$active_allocation_receipt" ]] || return 1
+  publish_allocation_receipt "$case_id" || return 1
+  active_case_id=""
+  active_allocation_id=""
+  active_allocation_udid=""
+  active_allocation_receipt=""
+}
 stop_probe_group() {
   local probe_pid="$1" iteration
   /bin/kill -TERM -- "-$probe_pid" >/dev/null 2>&1 || true
@@ -300,7 +374,14 @@ release_runner() {
     if [[ -n "$cleanup_udid" && -n "$cleanup_bundle" ]]; then
       run_xcrun simctl terminate "$cleanup_udid" "$cleanup_bundle" >/dev/null 2>&1 || true
     fi
-    if [[ -z "$cleanup_udid" || -z "$cleanup_bundle" ]] || ! reclaim_owned_simulator "$cleanup_case_id" "exit-cleanup"; then
+    if [[ "$matrix_schema_version" == 2 ]]; then
+      cleanup_succeeded=1
+      release_allocated_simulator "$cleanup_case_id" "exit-cleanup" || cleanup_succeeded=0
+    else
+      cleanup_succeeded=1
+      reclaim_owned_simulator "$cleanup_case_id" "exit-cleanup" || cleanup_succeeded=0
+    fi
+    if [[ -z "$cleanup_udid" || -z "$cleanup_bundle" || "$cleanup_succeeded" -ne 1 ]]; then
       run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-record-failure \
         --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
         --stage "$stage" --message "active Simulator resource reclamation failed" >/dev/null 2>&1 || true
@@ -353,6 +434,19 @@ run_xcrun_bounded() {
 capture_simulator_identities() {
   local label="$1" target_case="${2-}" expected_state="${3-}" snapshot output
   [[ "$label" =~ ^[A-Za-z0-9-]+$ ]] || return 1
+  if [[ "$matrix_schema_version" == 2 ]]; then
+    [[ -n "$target_case" && "$target_case" == "$active_case_id" && -n "$active_allocation_id" ]] || return 1
+    if [[ -n "$expected_state" ]]; then
+      output="$(run_simulator_resource validate "${simulator_resource_test_flags[@]}" \
+        --session "$simulator_session_id" --allocation-id "$active_allocation_id" \
+        --expected-state "$expected_state")" || return 1
+    else
+      output="$(run_simulator_resource validate "${simulator_resource_test_flags[@]}" \
+        --session "$simulator_session_id" --allocation-id "$active_allocation_id")" || return 1
+    fi
+    current_simulator_state="$output"
+    return 0
+  fi
   simulator_snapshot_index=$((simulator_snapshot_index + 1))
   snapshot="$run_state/simulator-devices-${simulator_snapshot_index}-${label}.json"
   [[ ! -e "$snapshot" ]] || return 1
@@ -375,6 +469,11 @@ capture_simulator_identities() {
 
 case_udid() {
   local index
+  if [[ "$matrix_schema_version" == 2 ]]; then
+    [[ "$active_case_id" == "$1" && -n "$active_allocation_udid" ]] || return 1
+    printf '%s\n' "$active_allocation_udid"
+    return 0
+  fi
   for index in "${case_indexes[@]}"; do
     if [[ "${case_ids[$index]}" == "$1" ]]; then config_value "cases.$index.udid"; return; fi
   done
@@ -515,11 +614,16 @@ if [[ "$visual_required" == true ]]; then
 fi
 
 stage="simulator-ownership"
-capture_simulator_identities "startup-full-set" || fail "dedicated Simulator ownership validation failed"
-for owned_case_id in "${case_ids[@]}"; do
-  reclaim_owned_simulator "$owned_case_id" "startup-$owned_case_id" \
-    || fail "dedicated Simulator startup reclamation failed"
-done
+if [[ "$matrix_schema_version" == 2 ]]; then
+  run_simulator_resource recover "${simulator_resource_test_flags[@]}" >"$run_state/simulator-resource-startup.json" \
+    || fail "owned Simulator orphan recovery failed"
+else
+  capture_simulator_identities "startup-full-set" || fail "dedicated Simulator ownership validation failed"
+  for owned_case_id in "${case_ids[@]}"; do
+    reclaim_owned_simulator "$owned_case_id" "startup-$owned_case_id" \
+      || fail "dedicated Simulator startup reclamation failed"
+  done
+fi
 
 stage="xcode-resolution"
 if ! probe_xcode_environment; then
@@ -534,10 +638,14 @@ derived_data="$attempt_root/DerivedData"
 build_result="$attempt_root/Build.xcresult"
 test_result="$attempt_root/Tests.xcresult"
 [[ ! -e "$derived_data" && ! -e "$build_result" && ! -e "$test_result" ]] || fail "verification workspace already contains results for this Head"
-first_udid="$(config_value cases.0.udid)"
+if [[ "$matrix_schema_version" == 2 ]]; then
+  stage="first-case-allocation"
+  allocate_owned_simulator "${case_ids[0]}" || fail "first Simulator allocation failed"
+fi
+first_udid="$(case_udid "${case_ids[0]}")" || fail "first Simulator identity is unavailable"
 
 stage="build"
-active_case_id="${case_ids[0]}"
+[[ "$matrix_schema_version" == 2 ]] || active_case_id="${case_ids[0]}"
 build_log="$run_state/build.log"
 if ! run_snapshot_xcodebuild -project "$project" -scheme "$scheme" -sdk iphonesimulator \
   -destination "platform=iOS Simulator,id=$first_udid" -derivedDataPath "$derived_data" \
@@ -577,8 +685,12 @@ json_tool test-tree "$unit_tree" "$unit_test_identifier" "$first_udid" 2>"$run_s
 
 stage="post-unit-simulator-reclamation"
 verify_live_inputs
-reclaim_owned_simulator "${case_ids[0]}" "post-unit-${case_ids[0]}" \
-  || fail "unit-test Simulator resource reclamation failed"
+if [[ "$matrix_schema_version" == 1 ]]; then
+  reclaim_owned_simulator "${case_ids[0]}" "post-unit-${case_ids[0]}" \
+    || fail "unit-test Simulator resource reclamation failed"
+else
+  active_case_id="${case_ids[0]}"
+fi
 
 bundle_identifier="$(config_value bundleIdentifier)"
 if ! app_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-find-app \
@@ -593,7 +705,11 @@ for index in "${case_indexes[@]}"; do
   stage="case-input-$index"
   verify_live_inputs
   case_id="$(config_value cases.$index.id)"
-  udid="$(config_value cases.$index.udid)"
+  if [[ "$matrix_schema_version" == 2 && "$index" -gt 0 ]]; then
+    stage="case-$case_id-allocation"
+    allocate_owned_simulator "$case_id" || fail "case $case_id Simulator allocation failed"
+  fi
+  udid="$(case_udid "$case_id")" || fail "case $case_id Simulator identity is unavailable"
   locale="$(config_value cases.$index.locale)"
   language="$(config_value cases.$index.language)"
   action="$(config_value cases.$index.action)"
@@ -728,7 +844,13 @@ for index in "${case_indexes[@]}"; do
   if ! run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1 && [[ -z "$case_failed" ]]; then
     case_failed="terminate"
   fi
-  if ! reclaim_owned_simulator "$case_id" "case-$case_id" && [[ -z "$case_failed" ]]; then
+  if [[ "$matrix_schema_version" == 2 ]]; then
+    release_reason="case-complete"
+    [[ -z "$case_failed" ]] || release_reason="case-failed"
+    if ! release_allocated_simulator "$case_id" "$release_reason" && [[ -z "$case_failed" ]]; then
+      case_failed="resource deletion"
+    fi
+  elif ! reclaim_owned_simulator "$case_id" "case-$case_id" && [[ -z "$case_failed" ]]; then
     case_failed="resource reclamation"
   fi
   [[ -z "$case_failed" ]] || fail "case $case_id failed: $case_failed"

@@ -39,6 +39,8 @@ mkdir -p "$adapter_bin" "$poison_bin" "$adapter_state" "$fake_developer/usr/bin"
 /bin/cp "$source_repo/tools/lib/xcode.sh" "$test_source/tools/lib/xcode.sh"
 /bin/cp "$source_repo/tools/lib/bounded-command.sh" "$test_source/tools/lib/bounded-command.sh"
 /bin/cp "$source_repo/tools/lib/bounded-command.rb" "$test_source/tools/lib/bounded-command.rb"
+/bin/cp "$source_repo/tools/lib/ios-simulator-resource.rb" "$test_source/tools/lib/ios-simulator-resource.rb"
+/bin/cp "$source_repo/tools/simulator-matrix-io.swift" "$test_source/tools/simulator-matrix-io.swift"
 /bin/cp "$source_repo/tools/validate-verify-json.swift" "$test_source/tools/validate-verify-json.swift"
 /usr/bin/ruby - "$test_source/tools/validate-verify-json.swift" "$adapter_state" <<'RUBY'
 path, state_dir = ARGV
@@ -510,6 +512,27 @@ fi
 [[ "${1-}" == simctl ]] || { echo 'expected simctl' >&2; exit 1; }
 command="${2-}"
 case "$command" in
+  create)
+    [[ "$(state matrix_schema)" == 2 ]] || { echo 'legacy runner must not create a Simulator' >&2; exit 1; }
+    name="${3-}" type="${4-}" runtime="${5-}"
+    [[ "$runtime" == com.apple.CoreSimulator.SimRuntime.iOS-26-5 ]] || { echo 'wrong create Runtime' >&2; exit 1; }
+    case "$name" in
+      *-iphone-en-*) udid=00000000-0000-0000-0000-000000000001 ;;
+      *-iphone-ja-*) udid=00000000-0000-0000-0000-000000000002 ;;
+      *-ipad-en-*) udid=00000000-0000-0000-0000-000000000003 ;;
+      *-ipad-ja-*) udid=00000000-0000-0000-0000-000000000004 ;;
+      *) echo 'wrong allocation device name' >&2; exit 1 ;;
+    esac
+    if /usr/bin/find "$state_dir" -maxdepth 1 -type f -name 'allocated-*' -print -quit | /usr/bin/grep -q .; then
+      echo 'session created a second Simulator before deleting the first' >&2; exit 1
+    fi
+    printf '%s\n' "$name" >"$state_dir/device-name-$udid"
+    printf '%s\n' "$type" >"$state_dir/device-type-$udid"
+    printf '%s\n' Shutdown >"$state_dir/device-state-$udid"
+    : >"$state_dir/allocated-$udid"
+    /bin/mkdir -p "$state_dir/data/$udid"
+    printf '%s\n' "$udid"
+    ;;
   boot)
     if [[ "$(state system_locale_mode)" == restart-lost ]]; then
       /bin/rm -f "$state_dir/system-language-${3-}"
@@ -529,9 +552,9 @@ case "$command" in
     printf '%s\n' Booted >"$state_dir/device-state-${3-}"
     ;;
   list)
-    [[ "${3-}" == devices && "${4-}" == --json ]] || { echo 'wrong simulator state query' >&2; exit 1; }
-    /usr/bin/ruby --disable-gems -rjson - "$state_dir" "$(state simulator_identity_mode)" <<'RUBY'
-state_dir, mode = ARGV
+    [[ "${3-}" == devices && ( "${4-}" == --json || "${4-}" == -j ) ]] || { echo 'wrong simulator state query' >&2; exit 1; }
+    /usr/bin/ruby --disable-gems -rjson - "$state_dir" "$(state simulator_identity_mode)" "$(state matrix_schema)" <<'RUBY'
+state_dir, mode, schema = ARGV
 runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 rows = [
   ["iphone-en", "00000000-0000-0000-0000-000000000001", "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"],
@@ -539,14 +562,20 @@ rows = [
   ["ipad-en", "00000000-0000-0000-0000-000000000003", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3"],
   ["ipad-ja", "00000000-0000-0000-0000-000000000004", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3"]
 ]
+rows.select! { |_id, udid, _type| File.file?(File.join(state_dir, "allocated-#{udid}")) } if schema == "2"
 devices = rows.map do |id, udid, type|
   state_path = File.join(state_dir, "device-state-#{udid}")
   {
     "udid" => udid,
-    "name" => "iOS-Template-runner-fixture-#{id}",
+    "name" => if schema == "2"
+      File.read(File.join(state_dir, "device-name-#{udid}")).strip
+    else
+      "iOS-Template-runner-fixture-#{id}"
+    end,
     "state" => File.exist?(state_path) ? File.read(state_path).strip : "Booted",
     "isAvailable" => true,
-    "deviceTypeIdentifier" => type
+    "deviceTypeIdentifier" => type,
+    "dataPath" => File.join(state_dir, "data", udid)
   }
 end
 devices.pop if mode == "missing"
@@ -744,7 +773,15 @@ iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAA
 PNG
     fi
     ;;
-  delete) echo 'runner must never delete a Simulator' >&2; exit 1 ;;
+  delete)
+    [[ "$(state matrix_schema)" == 2 ]] || { echo 'legacy runner must never delete a Simulator' >&2; exit 1; }
+    udid="${3-}"
+    [[ -f "$state_dir/allocated-$udid" ]] || { echo 'delete target is not allocated' >&2; exit 1; }
+    /bin/rm -rf "$state_dir/data/$udid"
+    /bin/rm -f "$state_dir/allocated-$udid" "$state_dir/device-name-$udid" "$state_dir/device-type-$udid" \
+      "$state_dir/device-state-$udid" "$state_dir/system-language-$udid" "$state_dir/system-locale-$udid" \
+      "$state_dir/active-system-language-$udid" "$state_dir/active-system-locale-$udid"
+    ;;
   *) echo "unexpected simctl command: $command" >&2; exit 1 ;;
 esac
 SH
@@ -859,8 +896,9 @@ RUBY
 }
 
 write_matrix() {
-  /usr/bin/ruby -rjson -rtime - "$1" "$fake_developer" "${2:-full}" <<'RUBY'
-path, developer, scope = ARGV
+  /usr/bin/ruby -rjson -rtime - "$1" "$fake_developer" "${2:-full}" "${3:-1}" <<'RUBY'
+path, developer, scope, schema_text = ARGV
+schema = Integer(schema_text, 10)
 rows = [
   ["iphone-en", "iPhone", "en_US", "en", "00000000-0000-0000-0000-000000000001"],
   ["iphone-ja", "iPhone", "ja_JP", "ja", "00000000-0000-0000-0000-000000000002"],
@@ -868,12 +906,14 @@ rows = [
   ["ipad-ja", "iPad", "ja_JP", "ja", "00000000-0000-0000-0000-000000000004"]
 ]
 document = {
-  "schemaVersion" => 1, "batchId" => "runner-fixture", "resolvedAt" => Time.now.iso8601,
+  "schemaVersion" => schema, "batchId" => "runner-fixture", "resolvedAt" => Time.now.iso8601,
   "xcode" => {"path" => developer, "version" => "26.5", "build" => "17F42"},
   "runtime" => {"identifier" => "com.apple.CoreSimulator.SimRuntime.iOS-26-5", "version" => "26.5"},
   "cases" => rows.map do |id, family, locale, language, udid|
     type = family == "iPhone" ? ["com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "iPhone 17 Pro"] : ["com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "iPad Air 13-inch (M3)"]
-    {"id" => id, "family" => family, "deviceType" => {"identifier" => type[0], "name" => type[1]}, "locale" => locale, "language" => language, "udid" => udid}
+    entry = {"id" => id, "family" => family, "deviceType" => {"identifier" => type[0], "name" => type[1]}, "locale" => locale, "language" => language}
+    entry["udid"] = udid if schema == 1
+    entry
   end
 }
 if %w[iphone-ja shape].include?(scope)
@@ -885,7 +925,7 @@ RUBY
 }
 
 prepare_repo() {
-  local label="$1" contract_mode="${2:-valid}" head_directory="${3:-present}" scope="${4:-full}"
+  local label="$1" contract_mode="${2:-valid}" head_directory="${3:-present}" scope="${4:-full}" matrix_schema="${5:-1}"
   repo="$scratch/$label/repository"
   mkdir -p "$repo/TemplateApp.xcodeproj" "$repo/docs" "$repo/Sources" "$repo/Config"
   repo="$(cd "$repo" && pwd -P)"
@@ -912,7 +952,8 @@ prepare_repo() {
   mkdir -p "$(dirname "$contract")" "$(dirname "$matrix")"
   [[ "$head_directory" != present ]] || mkdir -p "$(dirname "$draft")"
   write_contract "$contract" "$contract_mode" "$scope"
-  write_matrix "$matrix" "$scope"
+  write_matrix "$matrix" "$scope" "$matrix_schema"
+  set_state matrix_schema "$matrix_schema"
   if [[ "$scope" == iphone-ja || "$scope" == shape ]]; then
     set_state first_udid 00000000-0000-0000-0000-000000000002
   else
@@ -936,13 +977,15 @@ prepare_repo() {
   /bin/rm -f "$adapter_state"/stubborn-probe-*
   /bin/rm -f "$adapter_state"/term-blocked-probe-* "$adapter_state/term-blocked-runner-pid" "$adapter_state/term-cleanup-before-probe-stop"
   /bin/rm -f "$adapter_state"/device-state-* "$adapter_state"/erase-count-*
+  /bin/rm -f "$adapter_state"/allocated-* "$adapter_state"/device-name-* "$adapter_state"/device-type-*
+  /bin/rm -rf "$adapter_state/data"
   /bin/rm -f "$adapter_state"/system-language-* "$adapter_state"/system-locale-* "$adapter_state"/active-system-*
   for udid in \
     00000000-0000-0000-0000-000000000001 \
     00000000-0000-0000-0000-000000000002 \
     00000000-0000-0000-0000-000000000003 \
     00000000-0000-0000-0000-000000000004; do
-    printf '%s\n' Booted >"$adapter_state/device-state-$udid"
+    [[ "$matrix_schema" == 2 ]] || printf '%s\n' Booted >"$adapter_state/device-state-$udid"
   done
 }
 
@@ -1117,7 +1160,8 @@ RUBY
 }
 
 test_stubborn_probe() {
-  prepare_repo stubborn-probe-timeout
+  local matrix_schema="${1:-1}" label="${2:-stubborn-probe-timeout}"
+  prepare_repo "$label" valid present full "$matrix_schema"
   FAKE_CASE_MODE=stubborn-probe run_execute >"$scratch/stubborn-probe.stdout" 2>"$scratch/stubborn-probe.stderr" &
   stubborn_runner_pid=$!
   stubborn_child_pid=""
