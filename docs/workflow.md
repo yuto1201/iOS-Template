@@ -27,7 +27,7 @@ BranchはIssue作成後に作ります。Issue番号を推測して先にBranch�
 
 Issue数を増やすこと自体を目的にしません。セットアップとその成果物が独立して価値を持たない場合、同じIssueへ含めます。
 
-[段階的開発仕様](../specs/development-stages.md)に従い、最初の操作可能な成果を`shape`、承認後の問題別改善を`harden`、完全検証を`release`へ分けます。一つのharden Issueへ無関係な品質項目を束ねません。変更の危険度、成熟段階、端末・言語範囲を別々に記載します。
+[段階的開発仕様](../specs/development-stages.md)に従い、release unitはPhase 1〜6で進め、個々のIssueでは最初の操作可能な成果を`shape`、承認後の問題別改善を`harden`、完全検証を`release`へ分けます。一つのharden Issueへ無関係な品質項目を束ねません。Release Phase、変更の危険度、Issue成果物の成熟段階、端末・言語範囲を別々に記載します。
 
 ### 2.1 shape前のUI Direction Gate
 
@@ -67,6 +67,20 @@ installerは`Config/app-identity.json`からmodule pathを解決し、1024 x 102
 ClaudeとCodexは通常のIssueを同じworkflowで担当します。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更だけは[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteし、Codexのexact model `gpt-6-astra`がauthoringします。Claudeまたは別のCodex modelがIssueを担当している場合も、3D asset bytesのauthoring部分だけを同モデルへ依頼します。
 
 `gpt-6-astra`を利用できない場合は`blocked:environment`とし、Claudeや別modelへfallbackしません。要件整理、受領済みassetの統合、決定論的なformat validation、RealityKit実装、Build／Test、視覚確認、reviewはClaudeまたはCodexが継続できます。Issue／PR証拠へexact authoring modelを記録し、確認できない生成物を承認済み3D成果として扱いません。
+
+### 2.4 リリース単位の6Phase gate
+
+アプリ開発を始めるときは、一つのMVPまたは公開目標をrelease unitとして識別し、[6開発フェーズ](../specs/development-stages.md#15-リリース単位の6開発フェーズ)へ配置します。PhaseはIssue stateやDelivery stageではありません。同じPhaseで複数Issueを順次mergeでき、Issueごとのstage、profile、Verification scope、Head証拠を維持します。
+
+計画時はrelease identifier、revision、目的、scope、対象外、現在Phase、前Phaseの出口、依存Issue、ユーザー承認、証拠、既知不具合、テスト省略、未検証、繰越を追跡します。Phase 1のscope承認、Phase 3の日本語iPhone主要機能完了、Phase 4の英語／iPad対応完了、Phase 5の残件許容は、ユーザーが対象revisionを明示判断するまで完了にしません。
+
+前Phaseが未完了なら依存実装を開始しませんが、read-only調査、選択肢、Issue草案、依存しない作業は進められます。軽微変更は同じPhaseで継続し、目的、MVP、主要flow／hierarchy、採用system、data互換性、重大riskが変わる場合だけ、変更記録を追加して影響する最も早いPhaseへ戻します。影響しないIssueは止めません。
+
+Phase 5で問題を見つけた場合は、問題別のRegression／harden Issueへ戻して修正し、その変更で失効した証拠だけを再取得します。Phase 6では同じcandidate、Head、config、SDK／signing context、scopeへ適用可能なPhase 5証拠を参照し、重複実行を避けます。ただし#86が未実装の間は、旧証拠の再利用や改訂をcanonical結果として扱いません。既知不具合、意図的な省略、未検証を別々に記録し、重大blockerが残る候補は公開しません。
+
+既存アプリの緊急修正は、現在も適用可能な目的、Identity、UI方向、基盤を理由付きで再利用し、影響するPhaseから開始します。毎回App IconやHTML比較をやり直しませんが、Issue／Branch／PR、対象Test、安全確認、必要review、外部操作承認は省略しません。
+
+AI検証用Simulatorは必要時に作成し、使用後にdeviceとdataを削除します。同じMac全体でiPhone／iPad合計最大4台、sessionごと原則1台とし、一つのsessionのmatrixは作成、検証、証拠保存、削除確認、枠返却を逐次行います。共有枠、所有lease、異常終了回収、容量preflightの実装は#89、skillsへの統合は#88で行います。それまでは既存lock／固定UDID契約を維持し、手動deviceや不明なdeviceを削除せず、本仕様だけで新運用が稼働済みとは報告しません。
 
 ## 3. Issue contract snapshot
 
@@ -356,11 +370,11 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 - Xcodeまたは必要Runtimeがなく全Issueを検証できない
 - ユーザーが明示的に停止した
 
-ソース編集Issueは、依存がなく編集ファイルが重ならない場合に最大2件まで並行化できます。Simulator検証は排他的に1件ずつ実行します。
+ソース編集Issueは、依存がなく編集ファイルが重ならない場合に最大2件まで並行化できます。AI Simulatorは一つのsessionにつき原則1台、同じMac全体でiPhone／iPad合計最大4台です。一つのsession内の複数caseは逐次実行します。#89／#88の移行前は既存のrepository排他lockを維持し、Mac共通上限や使用後削除を実装済みと推測しません。
 
 ## 9. Bootstrap
 
-Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むため選択された実行モデルが同じ手順を手動実行します。手動であってもIssue、Branch、PR、4条件Simulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。
+Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むため選択された実行モデルが同じ手順を手動実行します。手動であってもIssue、Branch、PR、要求scopeのSimulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。#89／#88の移行後に4条件を実行する場合も、同一sessionでは一条件ずつ作成・検証・証拠保存・削除します。
 
 Bootstrap IssueのPRには、各受け入れ条件IDと証拠、GitHub account preflightのsanitized要約、Verify対象SHA、Review対象SHAを記載します。Simulator verificationが入った後は`verify.json`を使用し、Security and workflowが入った後は全Issueを自動状態機械へ移行します。
 

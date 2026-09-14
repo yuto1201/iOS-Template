@@ -1,8 +1,8 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 2.5
-Date: 2026-09-13
+Version: 2.6
+Date: 2026-09-14
 
 ## 1. テンプレート完成条件
 
@@ -20,6 +20,7 @@ Date: 2026-09-13
 - [ ] 秘密値が追跡ファイル、ログ、Issue／PR本文へ混入していない。
 - [ ] `App Store/`に提出情報の構造と検証scriptがある。
 - [ ] README、仕様、運用文書、skill、tool間のlink検証が通る。
+- [ ] 一つのリリース目標をPhase 1〜6で追跡し、Phase、Delivery stage、Delivery profile、Verification scopeを別軸として扱える。
 
 ## 2. Issue Definition of Ready
 
@@ -47,6 +48,8 @@ Date: 2026-09-13
 - App Icon Issueは`bounded direction-neutral` routeで、App Home Screen／Settings等のicon表示をlive UI verificationに記録し、選択が画面階層、navigation、primary-flow interactionを決めずUI Direction Gateを満たさないことをReasonと関連product anchorから復元可能にする。最初のユーザー向けUI `shape`は完了済みApp Icon Issueへ依存し、独立した非UI作業は依存しない。
 - 選択済みアプリアイコンは1024 x 1024の不透明PNGで、system masking前の正方形、単一の認識しやすい主題、単純な背景、少ない形と色を基本とする。`tools/validate-app-icon.sh`が`Config/app-identity.json`、default AppIcon entry、PNGの寸法・透明性、`Config/app-icon.json`のasset path／prompt summary／generator／exact SHA-256を一致検証する。
 - 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更を含むIssueは`ios-3d-assets`を使い、authoring modelをexact `gpt-6-astra`としてIssue／PR証拠へ記録する。Claudeまたは別のCodex modelは要件整理、既存asset統合、形式検証、RealityKit実装、Build／Test、レビューを担当できるが、3D asset bytesをauthoringしない。exact modelが利用不能なら`blocked:environment`とし、別modelの成果へ置換しない。
+- application releaseに属するIssueは、release identifier、revision、現在Phase、依存する前Phaseの完了記録へ到達できる。Phase 1のscope承認、Phase 3のユーザー完了判断、Phase 4の独立した対応範囲、Phase 5の残件承認、Phase 6の公開権限を別々に記録する。workflow-onlyのテンプレート改善Issueへ架空のapplication Phaseを付けない。
+- 前Phaseが未完了でもread-only調査、選択肢、Issue草案、依存しない作業は可能だが、その結果を次Phaseの実装開始または完了証拠にしない。依存する実装は前Phase完了と現行revisionの再照合まで開始しない。
 
 D-030 cutoverは`2026-09-06T00:31:41Z`である。封印済みIssue contractの`fetchedAt`がcutoverより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合はpre-D-030 legacyとして、routeを推測せず、遡及的なHTML比較やroute宣言を要求せず、contractを変更・再封印せずに元の封印済みAC、spec anchors、Dependencies、current-Head evidenceを検証する。cutoverより前でも候補が一つ以上あれば通常規則へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。`fetchedAt`がcutoverと同時刻または後のcontractにも同じexactly-one／完全性を必須とし、cutover後のpre-Claim Issueも完全な宣言なしではDefinition of Readyを満たさない。prefix外のroute語は候補として数えない。
 
@@ -68,6 +71,16 @@ stage未導入のClaim済みIssueはcanonical contractを変更せず、旧profi
 8. 指定ExecutorがSquash Mergeし、remote Branch、local Branch、worktreeを安全に片付け、Issueが完了状態である。
 
 `shape`と`harden`の完了はアプリ全体のrelease readyを意味しない。必ず`not release-ready`と報告し、未確認の英語、iPad、visual／accessibility範囲を成功と推測しない。ユーザーの実機確認はAIのDefinition of Done後に行い、発見した問題は狭いRegression／harden Issueへ分ける。
+
+### 3.0 リリースPhase gate
+
+リリース単位の各Phaseは[6開発フェーズ](development-stages.md#15-リリース単位の6開発フェーズ)の入口・成果物・出口を満たす。Phase完了記録にはrelease identifier、revision、scope、完了Phase、依存Issue、証拠、既知不具合、テスト省略、未検証、繰越、必要なユーザー承認を含める。Phase 3はAIの作業完了だけで閉じず、現在revisionについてのユーザー判断を必須とする。
+
+軽微変更は承認済みAcceptance criteria、目的、MVP、主要flow、採用system、data互換性、重大riskを変えない場合だけ同じPhaseで扱う。major changeは変更前後、理由、判断者／委任根拠、影響仕様／Issue／Phase、失効証拠、再利用候補と根拠を追記し、影響する最も早いPhaseだけをreopenする。影響のないIssueを停止せず、沈黙を承認にしない。
+
+既知不具合、テスト省略、未検証を別々に残す。非blocking残件の許容には対象release、影響、回避策、修正費用、承認者、追跡Issue、再評価時点が必要である。データ消失、秘密漏洩、誤課金、重大計算誤り、主要導線crash、認証／privacy／法務の必須条件違反が一つでもあればPhase 5の公開可判定を通さない。
+
+Phase 5と6で同じcandidate artifact、Head、config、SDK／signing context、scopeを扱う証拠は適用可能性を評価して重複実行を避ける。変更の影響が不明なら再検証し、旧Head証拠を現Headの実行結果へ付け替えない。#86の仕組みが実装されるまでは仕様上の再利用候補に留め、canonical evidenceの再利用や改訂を実装済みと扱わない。
 
 ### 3.1 Delivery stage gate
 
@@ -112,6 +125,12 @@ cutover前のexact `Repository-test scope: base-and-head; <nonempty>`またはcu
 
 `iphone-ja`は1行だけ、`targeted`は表の非空canonical部分集合、`full`は4行すべてを固定順で使う。「最新」はバッチ開始時にインストール済みXcodeから解決して固定し、条件に合うdeviceがなければ`blocked:environment`とする。Claim済みscopeを暗黙に縮小せず、別scope／別Headのmatrixや証拠を流用しない。
 
+AI検証用deviceは必要時作成・最終使用後削除とし、同じMac全体でiPhone／iPad合計最大4台、一つのsessionで原則1台とする。予約、作成済み、Shutdown、削除待ちを数え、作成前にMac共通枠とsession枠を原子的に取得する。満杯時は有限・取消可能に待機し、同一sessionの4条件は作成、検証、証拠保存、削除確認、枠返却を一件ずつ行う。
+
+成功、失敗、timeout、cancel、部分作成失敗、強制終了後の孤児をcleanup対象とする。証拠をdevice外へ保存し、exact UDIDとowner／lease／非活動状態を確認してからdeviceとdataを削除し、一覧とdata残留の確認後だけ枠を返す。停止／erase、名前一致、Shutdownだけを削除完了や所有根拠にしない。手動device、他repository／session、使用中、不明なdevice、Runtime、Xcode、共通cache、ユーザーDerivedData、canonical evidenceを保護する。
+
+容量／memoryが不足すれば4台未満でも新規作成と長時間反復を止める。既存固定UDID／repository lockからの実装移行、Mac共通lease、孤児回収、容量preflightは#89と#88の完了後に有効とし、それ以前の検証へ遡及適用したり本Issueだけで実装済みと報告したりしない。
+
 ## 5. 常設品質ゲート
 
 - Build warningを新規に増やさず、失敗Testを削除／Skipして成功扱いにしない。
@@ -120,6 +139,7 @@ cutover前のexact `Repository-test scope: base-and-head; <nonempty>`またはcu
 - 認証情報、個人情報、設定外account識別子を証拠へ含めない。
 - 外部操作の成功は実応答から確認し、推測で記録しない。
 - ユーザー所有fileを削除／上書きせず、Issue Scope外へ実装を広げない。
+- Release PhaseとIssueのDelivery stageを混同せず、Phase 5〜6の証拠を再利用するときも同一candidate／Head／configへの適用可能性を確認する。#86の実装前は再利用候補をcanonical成功へ昇格しない。
 
 ## 6. Timeout、失敗、再試行
 
