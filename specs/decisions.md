@@ -357,3 +357,13 @@
 - Decision: 独立したfoundation entrypointとmerge publication entrypoint／producerをそれぞれ専用domainへ分離する。変更されたtest自身は必ず選択し、merge producer変更も同じmerge domainへ解決する。bootstrap asset producer、workflow state producer、provider、review、Simulator、repository-test producer等の実変更は従来どおり各domainのunionへ解決し、未知pathや失敗testを除外しない。
 - Consequence: #93の新Headは初回timeout artifactを保持したままplanを再生成し、未変更のbootstrap／workflow全体だけを除いたtargeted集合を一度実行する。時間短縮のために受け入れ条件、変更path、失敗結果を隠さず、同じHeadの失敗を無条件再実行しない。旧Headのplan／failure artifactと既存sealed contractは書き換えない。
 - Related Issue: #93
+
+## D-043: Workflow evidence publisherをreview contractから分離する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: None。D-042の専用domain原則をworkflow evidence publisherへ適用し、D-039の900秒上限とD-037のchanged-path coverageを維持する。
+- Context: #93の25件へ縮小したcanonical planは全対象を開始したものの、最後のworkflow evidence publisher test実行中に900秒へ到達した。このtestは単体で約41秒後に成功し、#93はpublisher本体を変更していないため、review contract変更から一律に選ぶ結合が時間超過の残因だった。
+- Decision: `tools/publish-workflow-verify.sh`とその専用testを`workflow-evidence` domainへ移し、review packet／result／receipt／renderer／premergeの変更だけでは選択しない。publisherまたはtest自身を変更した場合は両方を同じdomainから必ず選択する。
+- Consequence: #93の次HeadではGrok reviewとSimulator lifecycleに対応する24件を維持し、未変更publisher testだけを除く。旧Headのtimeoutと単体診断成功を保持し、失敗を成功へ読み替えたり同一Headで無条件再実行したりしない。
+- Related Issue: #93

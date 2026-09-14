@@ -200,6 +200,14 @@
       ]
     },
     {
+      "domain": "workflow-evidence",
+      "paths": [
+        "tools/publish-workflow-verify.sh",
+        "tools/tests/test-workflow-evidence-publisher.sh"
+      ],
+      "prefixes": []
+    },
+    {
       "domain": "workflow-state",
       "paths": [
         "tools/claim-issue.sh",
@@ -269,7 +277,7 @@
     {"path": "tools/tests/test-verification-contract.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-visual-review"]},
     {"path": "tools/tests/test-workflow-e2e.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["workflow-evidence"]},
     {"path": "tools/tests/test-workflow-state.sh", "domains": ["workflow-state"]}
   ]
 }
