@@ -124,11 +124,14 @@ module IOSTemplate
         end
 
         suite_started = Time.now.utc
-        suite_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + suite_timeout_seconds
+        suite_started_monotonic = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        suite_deadline = suite_started_monotonic + suite_timeout_seconds
+        execution_stage = "suite"
         warn "repository test execution plan: #{JSON.generate({scope: execution_scope, testCount: tests.length,
           tests: tests, childTimeoutSeconds: child_timeout_seconds, suiteTimeoutSeconds: suite_timeout_seconds})}"
         begin
           if retry_after_targeted
+            execution_stage = "diagnostic"
             diagnostic_inventory = plan ? plan_context.fetch("inventories")[1].select { |entry| entry.fetch("path") == retry_after_targeted } : nil
             diagnostic_results = execute_in_detached_worktree(repo, head_sha, [retry_after_targeted], inventory: diagnostic_inventory,
               deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds)
@@ -137,6 +140,7 @@ module IOSTemplate
           end
           if dual_revision
             revisions = [["base", expected_base], ["head", head_sha]].each_with_index.map do |(role, sha), index|
+              execution_stage = role
               started = Time.now.utc
               inventory = context.fetch("inventories")[index]
               revision_results = execute_in_detached_worktree(repo, sha, inventory.map { |entry| entry["path"] }, inventory: inventory,
@@ -148,6 +152,7 @@ module IOSTemplate
             end
             results = revisions.flat_map { |revision| revision.fetch("tests") }
           else
+            execution_stage = "suite"
             selected_inventory = plan ? plan_context.fetch("inventories")[1].select { |entry| tests.include?(entry.fetch("path")) } : nil
             results = execute_in_detached_worktree(repo, head_sha, tests, inventory: selected_inventory,
               deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds)
@@ -155,12 +160,24 @@ module IOSTemplate
           failure = results.find { |entry| entry["status"] != "passed" }
           reject("repository test failed: #{failure.fetch('path')}") if failure
         rescue RunnerError => error
+          elapsed_seconds = Process.clock_gettime(Process::CLOCK_MONOTONIC) - suite_started_monotonic
+          failure_details = repository_test_failure_details(error.message, tests, execution_stage)
+          warn "repository test execution stopped: #{JSON.generate({scope: execution_scope, status: "failed",
+            stage: execution_stage, testCount: tests.length, tests: tests, childTimeoutSeconds: child_timeout_seconds,
+            suiteTimeoutSeconds: suite_timeout_seconds, elapsedSeconds: elapsed_seconds.round(6),
+            timedOut: failure_details.fetch("timedOut"), unexecutedTests: failure_details.fetch("unexecutedTestPaths")})}"
           publish_repository_test_failure!(snapshots, head_directory, issue: issue, head_sha: head_sha,
             scope: execution_scope, attempt: previous_failures.length + 1, tests: tests, started_at: suite_started,
-            suite_timeout_seconds: suite_timeout_seconds, error: error.message)
+            stage: execution_stage, child_timeout_seconds: child_timeout_seconds,
+            suite_timeout_seconds: suite_timeout_seconds, elapsed_seconds: elapsed_seconds,
+            failure_details: failure_details, error: error.message)
           raise
         end
         suite_completed = Time.now.utc
+        suite_elapsed_seconds = Process.clock_gettime(Process::CLOCK_MONOTONIC) - suite_started_monotonic
+        warn "repository test execution completed: #{JSON.generate({scope: execution_scope, status: "passed",
+          testCount: tests.length, tests: tests, childTimeoutSeconds: child_timeout_seconds,
+          suiteTimeoutSeconds: suite_timeout_seconds, elapsedSeconds: suite_elapsed_seconds.round(6), unexecutedTests: []})}"
 
         reject("current Head changed during repository tests") unless git!(repo, "rev-parse", "HEAD").strip == head_sha
         reject("Issue worktree changed during repository tests") unless git!(repo, "status", "--porcelain").empty?
@@ -257,7 +274,7 @@ module IOSTemplate
             remaining_seconds = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
             unfinished = tests.drop(index)
             remaining_whole_seconds = remaining_seconds.floor
-            reject("repository test suite reached its aggregate timeout; unexecuted tests: #{unfinished.join(',')}") unless remaining_whole_seconds.positive?
+            reject("repository test suite reached its aggregate timeout; unexecuted tests: #{JSON.generate(unfinished)}") unless remaining_whole_seconds.positive?
             if inventory
               reject("detached revision worktree is dirty") unless git!(worktree, "status", "--porcelain").empty?
               expected = inventory.find { |entry| entry["path"] == path }.fetch("sourceDigest")
@@ -291,9 +308,9 @@ module IOSTemplate
             end
             if timed_out
               if aggregate_limited
-                reject("repository test suite reached its aggregate timeout; unexecuted tests: #{unfinished.join(',')}")
+                reject("repository test suite reached its aggregate timeout; active test: #{path}; unexecuted tests: #{JSON.generate(tests.drop(index + 1))}")
               end
-              reject("repository test timed out: #{path}; elapsedSeconds=#{format('%.3f', elapsed)}; unexecuted tests: #{tests.drop(index + 1).join(',')}")
+              reject("repository test timed out: #{path}; elapsedSeconds=#{format('%.3f', elapsed)}; unexecuted tests: #{JSON.generate(tests.drop(index + 1))}")
             end
             break unless status.success?
           end
@@ -342,8 +359,18 @@ module IOSTemplate
         value = JSON.parse(leaf.bytes.dup)
         reject("repository test failure record is invalid") unless value.is_a?(Hash) &&
           value.values_at("schemaVersion", "issue", "headSha", "scope", "attempt") == [1, issue, head_sha, scope, attempt]
+        tests = value.fetch("testPaths")
         failed_test = value.fetch("failedTest")
-        reject("repository test failure record is invalid") unless failed_test.nil? || value.fetch("testPaths").include?(failed_test)
+        unexecuted = value.fetch("unexecutedTestPaths")
+        reject("repository test failure record is invalid") unless tests.is_a?(Array) && !tests.empty? && tests.uniq == tests &&
+          tests.all? { |path| path.is_a?(String) } &&
+          (failed_test.nil? || tests.include?(failed_test)) &&
+          unexecuted.is_a?(Array) && unexecuted.uniq == unexecuted && unexecuted.all? { |path| tests.include?(path) } &&
+          %w[suite diagnostic base head].include?(value.fetch("stage")) &&
+          value.fetch("childTimeoutSeconds").is_a?(Integer) && value.fetch("childTimeoutSeconds").positive? &&
+          value.fetch("suiteTimeoutSeconds").is_a?(Integer) && value.fetch("suiteTimeoutSeconds").positive? &&
+          value.fetch("elapsedSeconds").is_a?(Numeric) && value.fetch("elapsedSeconds") >= 0 &&
+          [true, false].include?(value.fetch("timedOut"))
         failures << value
       end
       reject("repository test failure attempt sequence is incomplete") if failures.map { |entry| entry.fetch("attempt") } != (1..failures.length).to_a
@@ -352,19 +379,50 @@ module IOSTemplate
       reject("repository test failure record is invalid")
     end
 
+    def repository_test_failure_details(error, tests, stage)
+      failed_test = tests.find do |path|
+        error.include?("failed: #{path}") || error.include?("timed out: #{path}") ||
+          error.include?("active test: #{path}")
+      end
+      unexecuted = if stage == "diagnostic"
+                     tests
+                   elsif (marker = error.split("unexecuted tests: ", 2)[1])
+                     parsed = JSON.parse(marker)
+                     reject("repository test failure unexecuted list is invalid") unless parsed.is_a?(Array) &&
+                       parsed.uniq == parsed && parsed.all? { |path| tests.include?(path) }
+                     parsed
+                   elsif failed_test
+                     tests.drop(tests.index(failed_test) + 1)
+                   else
+                     []
+                   end
+      {
+        "failedTest" => failed_test,
+        "timedOut" => error.include?("timed out") || error.include?("timeout"),
+        "unexecutedTestPaths" => unexecuted
+      }
+    rescue JSON::ParserError
+      reject("repository test failure unexecuted list is invalid")
+    end
+
     def publish_repository_test_failure!(snapshots, head_directory, issue:, head_sha:, scope:, attempt:, tests:, started_at:,
-                                         suite_timeout_seconds:, error:)
+                                         stage:, child_timeout_seconds:, suite_timeout_seconds:, elapsed_seconds:,
+                                         failure_details:, error:)
       reject("repository test failure attempt is invalid") unless (1..2).cover?(attempt)
-      failed_test = tests.find { |path| error.include?(path) }
       document = {
         "schemaVersion" => 1,
         "issue" => issue,
         "headSha" => head_sha,
         "scope" => scope,
         "attempt" => attempt,
+        "stage" => stage,
         "testPaths" => tests,
-        "failedTest" => failed_test,
+        "failedTest" => failure_details.fetch("failedTest"),
+        "childTimeoutSeconds" => child_timeout_seconds,
         "suiteTimeoutSeconds" => suite_timeout_seconds,
+        "elapsedSeconds" => elapsed_seconds.round(6),
+        "timedOut" => failure_details.fetch("timedOut"),
+        "unexecutedTestPaths" => failure_details.fetch("unexecutedTestPaths"),
         "error" => error,
         "startedAt" => started_at.iso8601(6),
         "completedAt" => Time.now.utc.iso8601(6)
