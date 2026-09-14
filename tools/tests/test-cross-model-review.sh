@@ -343,6 +343,8 @@ assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0]))
 assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["primaryModel"] == "codex" && value["reviewerModel"] == "cursor-grok-4.6-xhigh" && value["reviewerLauncher"] == "tools/request-grok-review.sh" && value.keys.none? { |key| key.downcase.include?("account") || key.downcase.include?("token") }'
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
 [[ "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"--mode ask"* && "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"--model cursor-grok-4.6-xhigh"* ]] || { echo 'Grok was not invoked through the exact read-only model route' >&2; exit 1; }
+[[ "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"Complete one bounded review pass and return the final JSON within 480 seconds"* ]] || { echo 'Grok was not given the bounded review deadline' >&2; exit 1; }
+[[ "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"Exact result identity fields:"* && "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"Exact ordered acceptance IDs and evidence references:"* ]] || { echo 'Grok was not given the deterministic result scaffold' >&2; exit 1; }
 restore_default_contract
 
 reset_review_requested

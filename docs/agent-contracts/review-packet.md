@@ -250,4 +250,4 @@ IOSTemplate::ReviewContract.validate!(
 - Reviewerはファイル編集、外部操作、commit、pushを行わない
 - Reviewerが環境や認証状態を推測した場合、主エージェントは実環境で再確認する
 
-Grok launcherはstdinを閉じ、GitHub／製品provider credentialを継承せず、exact modelを指定します。raw provider envelopeそのものは証拠ではなく、内側が完全なResult schemaを満たす場合だけ正規化します。認証identityとprovider telemetryはartifactへ保存しません。Reviewerの起動失敗、nonzero exit、timeout、空／不正JSON、schema／evidence不一致、write検出はcanonical review／receiptを発行せず `blocked:review` です。別モデルへの無断置換や主開発モデル自身の承認は行いません。
+Grok launcherはstdinを閉じ、GitHub／製品provider credentialを継承せず、exact modelを指定します。raw provider envelopeそのものは証拠ではなく、内側が完全なResult schemaを満たす場合だけ正規化します。認証identityとprovider telemetryはartifactへ保存しません。300KB級のdiffでも外側600秒timeoutより前に判断を完了できるよう、packet／sealed evidence、exact diffの変更production codeと対応test、必要時だけの追加sourceという順の480秒bounded passを指示し、deterministicなidentity／AC evidence scaffoldを渡します。scaffoldはverdict、finding、supported／unsupportedを決めず、判断不能なACはtimeoutまで探索せずvalidなchanges-requestedとして返させます。Reviewerの起動失敗、nonzero exit、timeout、空／不正JSON、schema／evidence不一致、write検出はcanonical review／receiptを発行せず `blocked:review` です。別モデルへの無断置換や主開発モデル自身の承認は行いません。

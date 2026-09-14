@@ -377,3 +377,13 @@
 - Decision: authority文書は`authority-policy`へ分離し、account／target所有規則を検査するprovider ownership testを対応付ける。`Config/ownership.yml`、provider preflight、security／secret実装は従来の`provider-security`へ残す。UI Direction skillと専用testは`ui-direction`へ分離し、一般仕様の`specification`変更だけでは選択しない。
 - Consequence: #93ではGrok review authorityの回帰を保持しつつ、変更していないprovider実装3件とUI Direction testを除く。将来それらのproducer／skill／testを変更した場合は各専用domainから再び選択され、未知pathを黙って省略しない。
 - Related Issue: #93
+
+## D-045: Grok正式reviewを外側timeoutより短いbounded passへ固定する
+
+- Date: 2026-09-14
+- Status: 確定
+- Supersedes: None。D-041のexact model、read-only、600秒以下のwatchdog、完全Result検証、timeout時blockedを維持する。
+- Context: #93の約300KBのcanonical diffに対する初回Grok正式reviewは、transport自体が約9秒で応答可能な環境でも、探索が600秒まで完了せずtimeoutした。review／receiptは正しく未発行となったが、外側watchdogと同じ時間まで探索を許すだけではvalid Resultを返す余地がなかった。
+- Decision: 固定Grok launcherは、packetとsealed evidence、exact diffの変更production code／対応test、具体的不一致がある場合だけの追加source、という順で一回のbounded passを480秒以内に終えるよう指示する。launcherがpacket bytesからresult identityと全ACのexact evidence reference scaffoldを決定論的に提示するが、verdict、finding、supported／unsupportedはreviewerだけが決める。時間内に支持できないACは探索継続ではなくvalidなchanges-requestedと具体的findingで返す。
+- Consequence: 外側600秒watchdogには結果の返却・検証余地が残る。scaffoldの改ざん、誤った判断、schema不一致、timeout、writeは従来どおり承認にならず、ユーザー承認済みGrok以外へfallbackしない。#93は新Headでcanonical targeted evidenceを作り直してから一度だけ正式reviewを再実行する。
+- Related Issue: #93
