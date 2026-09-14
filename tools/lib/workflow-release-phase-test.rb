@@ -126,6 +126,10 @@ module ReleasePhaseSelfTest
       change(classification: "major", to_revision: 2, reopen_from_phase: 2,
              authority: "user", actor: "yuto1201", reference: "issue-85")
     )
+    reordered_major_event = change(classification: "major", to_revision: 2, reopen_from_phase: 2,
+                                   authority: "user", actor: "yuto1201", reference: "issue-85")
+    reordered_major_event["invalidatedEvidence"].reverse!
+    IOSTemplate::ReleasePhase.append(phase_four, reordered_major_event)
     rejects("major change must invalidate dependent exits") do
       IOSTemplate::ReleasePhase.gate!(binding(major, revision: 2), major)
     end

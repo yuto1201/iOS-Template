@@ -285,8 +285,8 @@ module IOSTemplate
             reopen = phase!(event["reopenFromPhase"], "change reopenFromPhase")
             invalidated = completed.select { |number, _| number >= reopen }.values.flat_map { |entry| Array(entry["evidence"]) }.uniq
             retained = completed.select { |number, _| number < reopen }.values.flat_map { |entry| Array(entry["evidence"]) }.uniq
-            reject("major change invalidatedEvidence differs from affected Phase evidence") unless event["invalidatedEvidence"] == invalidated
-            reject("major change retainedEvidence differs from unaffected Phase evidence") unless event["retainedEvidence"] == retained
+            reject("major change invalidatedEvidence differs from affected Phase evidence") unless event["invalidatedEvidence"].sort == invalidated.sort
+            reject("major change retainedEvidence differs from unaffected Phase evidence") unless event["retainedEvidence"].sort == retained.sort
             completed.delete_if { |number, _| number >= reopen }
             current_revision = event["toRevision"]
             current_scope = to_scope

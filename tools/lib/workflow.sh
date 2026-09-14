@@ -88,9 +88,14 @@ workflow_release_phase_gate() {
   local repo_root=$1 base_sha=$2 contract=$3
   local record_path record_mode record_type record_oid record_file
   record_path=$(ruby -I"$repo_root/tools/lib" -rjson -rworkflow-release-phase -e '
-    contract=JSON.parse(File.binread(ARGV.fetch(0)))
-    binding=IOSTemplate::ReleasePhase.binding_from_contract!(contract)
-    puts binding.fetch("recordPath") if binding
+    begin
+      contract=JSON.parse(File.binread(ARGV.fetch(0)))
+      binding=IOSTemplate::ReleasePhase.binding_from_contract!(contract)
+      puts binding.fetch("recordPath") if binding
+    rescue IOSTemplate::ReleasePhase::ValidationError => error
+      warn "release phase operation failed: #{error.message}"
+      exit 1
+    end
   ' "$contract") || return 1
   if [[ -z "$record_path" ]]; then
     ruby "$repo_root/tools/lib/workflow-release-phase-cli.rb" gate --contract "$contract" >/dev/null
