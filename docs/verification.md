@@ -461,7 +461,7 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 
 すべての`xcodebuild`／Unit／UI Testは既定1200秒、`xcrun`／`simctl`は180秒、Swift validatorは600秒の有限timeoutを持ちます。各値は正の秒数へ明示overrideできます。timeout wrapperはcommandごとに新しいprocess groupを作り、そのgroupだけへTERM、5秒grace、必要時KILLを送ります。`killall`、Xcode終了、`simctl shutdown all`は行いません。
 
-timeoutはexit 124と`stage`、`elapsedSeconds`、`timeoutSeconds`を返します。runnerはそのattemptのactive Simulator、private workspace、Issue／Head lockだけを回収し、成功形式の`verify.json`を発行しません。repository runnerは失敗／timeoutをIssue／Head／scope／attemptへ記録し、直接再実行を拒否します。選択済み対象testを`--retry-after-targeted`で診断して成功した場合だけ1回再試行でき、2回目の失敗後は停止します。
+timeoutはexit 124と`stage`、`elapsedSeconds`、`timeoutSeconds`を返します。runnerはそのattemptのactive Simulator、private workspace、Issue／Head lockだけを回収し、成功形式の`verify.json`を発行しません。repository runnerは失敗／timeoutをIssue／Head／scope／attemptへ記録し、直接再実行を拒否します。`--retry-after-targeted <前回失敗test>`を指定した一度だけ、そのtestを先に診断実行し、成功時に同じcanonical suiteを再試行します。診断失敗または2回目のsuite失敗後は停止します。
 
 ## 6. 排他制御
 

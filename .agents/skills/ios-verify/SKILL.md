@@ -134,7 +134,7 @@ The publisher derives the exact identity, contract digest, not-applicable fields
 
 For either path, set the canonical evidence path before preparing the review handoff:
 
-For a D-037 plan-required contract, follow [the Repository test plan route](../../../docs/verification.md#repository-test-planと対象実行). Supply one Head `--map` for every AC; the runner resolves exact tests from immutable Base／Head／contract／manifest inputs and publishes `repository-test-plan.json` before execution. `targeted` may fail closed upward to `head-all`; never reduce or hand-edit the plan. For `base-and-head`, also supply `--base-map` only for baseline/regression claims and map the scope-declaring AC to both complete inventories. Cutover-before contracts retain their existing schema v1/v2 routes and bytes.
+For a D-037 plan-required contract, follow [the Repository test plan route](../../../docs/verification.md#repository-test-planと対象実行). Supply one Head `--map` for every AC; the runner resolves exact tests from immutable Base／Head／contract／manifest inputs and publishes `repository-test-plan.json` before execution. `targeted` keeps the deterministic union of all known changed-path domains and rejects an unknown path before execution; it never auto-escalates to `head-all`. Never reduce or hand-edit the plan. For `base-and-head`, also supply `--base-map` only for baseline/regression claims and map the scope-declaring AC to both complete inventories. Cutover-before contracts retain their existing schema v1/v2 routes and bytes.
 
 ```sh
 EVIDENCE=".artifacts/issues/${ISSUE}/${HEAD_SHA}/verify.json"
