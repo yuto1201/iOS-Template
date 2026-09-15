@@ -429,8 +429,8 @@ module IOSTemplate
         after_body_bytes, issue_type: record.fetch("issueType"), issue: issue, repository: repository,
         fetched_at: after.fetch("fetchedAt"), allow_legacy_delivery_stage: allow_legacy
       )
-      reject("before body does not reconstruct its contract snapshot") unless parsed_before_bytes == before_contract_bytes && parsed_before == before
-      reject("after body does not reconstruct its contract snapshot") unless parsed_after_bytes == after_contract_bytes && parsed_after == after
+      reject("before body does not reconstruct its contract snapshot") unless parsed_before_bytes.b == before_contract_bytes.b && parsed_before == before
+      reject("after body does not reconstruct its contract snapshot") unless parsed_after_bytes.b == after_contract_bytes.b && parsed_after == after
       allowed_body_delta!(before_body_bytes, after_body_bytes)
       changed, substantive = contract_delta!(before, after)
       reject("contract revision changedFields differs from exact contract delta") unless record["changedFields"] == changed
@@ -609,7 +609,7 @@ module IOSTemplate
           issue: issue, repository: repository, fetched_at: contract.fetch("fetchedAt"),
           allow_legacy_delivery_stage: !contract.key?("deliveryStage"))
         reject("live Issue body differs from the canonical contract") unless
-          reconstructed == contract && reconstructed_bytes == contract_bytes
+          reconstructed == contract && reconstructed_bytes.b == contract_bytes.b
         {"status" => "matched", "contractDigest" => digest(contract_bytes)}
       end
     end
@@ -841,7 +841,7 @@ module IOSTemplate
         reconstructed, reconstructed_bytes = parse_body_contract!(live_document.fetch("body"), issue_type: issue_type,
           issue: issue, repository: repository, fetched_at: before_contract.fetch("fetchedAt"),
           allow_legacy_delivery_stage: allow_legacy)
-        reject("live Issue body differs from the sealed current contract") unless reconstructed == before_contract && reconstructed_bytes == contract_bytes
+        reject("live Issue body differs from the sealed current contract") unless reconstructed == before_contract && reconstructed_bytes.b == contract_bytes.b
         allowed_body_delta!(live_document.fetch("body"), proposed_body)
 
         recorded_at = next_recorded_at(before_contract, requested_time)
