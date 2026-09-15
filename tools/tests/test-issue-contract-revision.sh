@@ -143,6 +143,18 @@ BODY_FILE="$body_v1" LIVE="$live" ISSUE="$issue" REPOSITORY="$repository" ruby -
 '
 
 tool="$worktree/tools/lib/issue-contract-revision.rb"
+mv "$artifact_issue/state.json" "$workspace/state.claim-recovery"
+assert_fails 'missing state outside Claim recovery' ruby "$tool" validate --repo-root "$worktree" \
+  --repo "$repository" --issue "$issue"
+ruby "$tool" validate --repo-root "$worktree" --repo "$repository" --issue "$issue" \
+  --operation github.read_issue --allow-missing-state >/dev/null
+ruby "$tool" validate-live --repo-root "$worktree" --repo "$repository" --issue "$issue" \
+  --live-json "$live" --allow-missing-state >/dev/null
+mkdir "$artifact_issue/issue-contract-revisions"
+assert_fails 'missing state cannot recover across revision history' ruby "$tool" validate \
+  --repo-root "$worktree" --repo "$repository" --issue "$issue" --allow-missing-state
+rmdir "$artifact_issue/issue-contract-revisions"
+mv "$workspace/state.claim-recovery" "$artifact_issue/state.json"
 ruby "$tool" validate --repo-root "$worktree" --repo "$repository" --issue "$issue" > "$workspace/original.json"
 [[ $(jq -er '.status' "$workspace/original.json") == original ]] || fail 'initial contract was not accepted as original revision 1'
 ruby "$tool" validate-live --repo-root "$worktree" --repo "$repository" --issue "$issue" --live-json "$live" >/dev/null

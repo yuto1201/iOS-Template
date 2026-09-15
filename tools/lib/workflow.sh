@@ -45,21 +45,23 @@ workflow_require_live_issue_operation() {
 }
 
 workflow_require_sealed_issue_operation() {
-  local repo_root=$1 repo=$2 issue=$3 operation=$4
-  ruby "$repo_root/tools/lib/issue-contract-revision.rb" validate \
-    --repo-root "$repo_root" --repo "$repo" --issue "$issue" --operation "$operation" >/dev/null
+  local repo_root=$1 repo=$2 issue=$3 operation=$4 allow_missing_state=${5:-0}
+  local arguments=(validate --repo-root "$repo_root" --repo "$repo" --issue "$issue" --operation "$operation")
+  [[ "$allow_missing_state" != 1 ]] || arguments+=(--allow-missing-state)
+  ruby "$repo_root/tools/lib/issue-contract-revision.rb" "${arguments[@]}" >/dev/null
 }
 
 workflow_require_live_body_matches_sealed() {
-  local repo_root=$1 repo=$2 issue=$3 issue_json=$4 document
+  local repo_root=$1 repo=$2 issue=$3 issue_json=$4 allow_missing_state=${5:-0} document
   document=$(mktemp "${TMPDIR:-/tmp}/ios-template-live-contract.XXXXXX") || return 1
   if ! printf '%s' "$issue_json" > "$document"; then
     rm -f "$document"
     return 1
   fi
   local status=0
-  ruby "$repo_root/tools/lib/issue-contract-revision.rb" validate-live \
-    --repo-root "$repo_root" --repo "$repo" --issue "$issue" --live-json "$document" >/dev/null || status=$?
+  local arguments=(validate-live --repo-root "$repo_root" --repo "$repo" --issue "$issue" --live-json "$document")
+  [[ "$allow_missing_state" != 1 ]] || arguments+=(--allow-missing-state)
+  ruby "$repo_root/tools/lib/issue-contract-revision.rb" "${arguments[@]}" >/dev/null || status=$?
   rm -f "$document"
   return "$status"
 }

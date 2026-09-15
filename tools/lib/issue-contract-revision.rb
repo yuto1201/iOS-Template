@@ -547,17 +547,29 @@ module IOSTemplate
       lock&.close unless lock&.closed?
     end
 
-    def validate_active!(repo_root:, issue:, repository:, allow_pending: false, operation: nil)
+    def validate_active!(repo_root:, issue:, repository:, allow_pending: false, operation: nil,
+                         allow_missing_state: false)
       with_issue_lock(repo_root, issue) do |topology, paths, _lock|
-        state_bytes = physical_file!(paths.fetch("state"), "durable Issue state").first
         contract_bytes = physical_file!(paths.fetch("contract"), "canonical Issue contract").first
-        loader = artifact_loader(topology.fetch("artifactsRoot"), issue)
-        result = validate_active_bytes!(
-          state_bytes: state_bytes, contract_bytes: contract_bytes, issue: issue,
-          repository: repository, loader: loader,
-          history_exists: revision_history_exists?(paths.fetch("issueRoot")),
-          pending_exists: pending_exists?(paths.fetch("issueRoot")), allow_pending: allow_pending
-        )
+        history_exists = revision_history_exists?(paths.fetch("issueRoot"))
+        pending_exists = pending_exists?(paths.fetch("issueRoot"))
+        state_exists = File.exist?(paths.fetch("state")) || File.symlink?(paths.fetch("state"))
+        result = if state_exists
+          state_bytes = physical_file!(paths.fetch("state"), "durable Issue state").first
+          loader = artifact_loader(topology.fetch("artifactsRoot"), issue)
+          validate_active_bytes!(
+            state_bytes: state_bytes, contract_bytes: contract_bytes, issue: issue,
+            repository: repository, loader: loader,
+            history_exists: history_exists, pending_exists: pending_exists,
+            allow_pending: allow_pending
+          )
+        else
+          reject("durable Issue state is missing") unless allow_missing_state
+          reject("missing-state recovery cannot cross a contract revision") if history_exists || pending_exists
+          canonical_contract!(contract_bytes, issue, repository, "canonical Issue contract")
+          {"status" => "original-missing-state", "revision" => 1,
+            "contractDigest" => digest(contract_bytes)}
+        end
         if operation
           nonempty_string!(operation, "operation")
           contract = canonical_contract!(contract_bytes, issue, repository, "canonical Issue contract")
@@ -568,15 +580,24 @@ module IOSTemplate
       end
     end
 
-    def validate_live_body!(repo_root:, issue:, repository:, live_document:)
+    def validate_live_body!(repo_root:, issue:, repository:, live_document:,
+                            allow_missing_state: false)
       with_issue_lock(repo_root, issue) do |topology, paths, _lock|
-        state_bytes = physical_file!(paths.fetch("state"), "durable Issue state").first
         contract_bytes = physical_file!(paths.fetch("contract"), "canonical Issue contract").first
-        loader = artifact_loader(topology.fetch("artifactsRoot"), issue)
-        validate_active_bytes!(state_bytes: state_bytes, contract_bytes: contract_bytes,
-          issue: issue, repository: repository, loader: loader,
-          history_exists: revision_history_exists?(paths.fetch("issueRoot")),
-          pending_exists: pending_exists?(paths.fetch("issueRoot")), allow_pending: false)
+        history_exists = revision_history_exists?(paths.fetch("issueRoot"))
+        pending_exists = pending_exists?(paths.fetch("issueRoot"))
+        state_exists = File.exist?(paths.fetch("state")) || File.symlink?(paths.fetch("state"))
+        if state_exists
+          state_bytes = physical_file!(paths.fetch("state"), "durable Issue state").first
+          loader = artifact_loader(topology.fetch("artifactsRoot"), issue)
+          validate_active_bytes!(state_bytes: state_bytes, contract_bytes: contract_bytes,
+            issue: issue, repository: repository, loader: loader,
+            history_exists: history_exists, pending_exists: pending_exists,
+            allow_pending: false)
+        else
+          reject("durable Issue state is missing") unless allow_missing_state
+          reject("missing-state recovery cannot cross a contract revision") if history_exists || pending_exists
+        end
         reject("live Issue must be an object") unless live_document.is_a?(Hash)
         reject("live Issue identity differs") unless
           live_document["number"] == issue && live_document["url"] == "https://github.com/#{repository}/issues/#{issue}"
@@ -1077,11 +1098,15 @@ if $PROGRAM_NAME == __FILE__
     cli.on("--reason VALUE") { |value| options["reason"] = value }
     cli.on("--delegate VALUE") { |value| options["delegate"] = value }
     cli.on("--operation VALUE") { |value| options["operation"] = value }
+    cli.on("--allow-missing-state") { options["allowMissingState"] = true }
   end
 
   begin
     parser.parse!(ARGV)
     raise OptionParser::InvalidArgument, "unexpected positional arguments" unless ARGV.empty?
+    if options["allowMissingState"] && !%w[validate validate-live].include?(command)
+      raise OptionParser::InvalidArgument, "--allow-missing-state is only valid for Claim recovery validation"
+    end
     required = %w[repoRoot repo issue]
     required << "liveJson" if command == "validate-live"
     required.concat(%w[body liveJson trigger reason]) unless %w[validate validate-live].include?(command)
@@ -1093,14 +1118,16 @@ if $PROGRAM_NAME == __FILE__
     repository = options.fetch("repo")
     if command == "validate"
       puts JSON.generate(IOSTemplate::IssueContractRevision.validate_active!(repo_root: repo_root,
-        issue: issue, repository: repository, operation: options["operation"]))
+        issue: issue, repository: repository, operation: options["operation"],
+        allow_missing_state: options.fetch("allowMissingState", false)))
       exit 0
     end
     if command == "validate-live"
       live_path = options.fetch("liveJson")
       raise OptionParser::InvalidArgument, "--live-json must be a regular nonsymlink file" unless File.file?(live_path) && !File.symlink?(live_path)
       puts JSON.generate(IOSTemplate::IssueContractRevision.validate_live_body!(repo_root: repo_root,
-        issue: issue, repository: repository, live_document: JSON.parse(File.binread(live_path))))
+        issue: issue, repository: repository, live_document: JSON.parse(File.binread(live_path)),
+        allow_missing_state: options.fetch("allowMissingState", false)))
       exit 0
     end
     body_path = options.fetch("body")
