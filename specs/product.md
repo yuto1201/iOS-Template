@@ -1,8 +1,8 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 1.9
-Date: 2026-09-09
+Version: 2.0
+Date: 2026-09-15
 
 ## 1. 目的
 
@@ -50,9 +50,10 @@ ClaudeとCodexは一般の仕様化、実装、検証、レビュー、設定済
 2. Identity Bootstrap Issue と専用 Branch/worktree を作成する。
 3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換する。
 4. Build、Test、標準Simulatorマトリクス、反対モデルレビュー、Squash Mergeを完了する。
-5. Identity Bootstrapに依存するApp Icon Issueを作成し、同じ確定briefから画像生成したシンプルな2案を提示する。ユーザーが明示選択した1案だけをAppIconへ組み込み、検証してマージする。
-6. 変換済みIdentityと選択済みアプリアイコンを基準にアプリ固有仕様を確定し、続くnative UIごとに[条件付きUI Direction Gate](development-stages.md#11-適用判定)の明示指示と通常triggerを評価する。Identity bootstrapとアプリアイコン選択自体は画面階層、navigationまたは主要flowを決めない。
-7. 最初のUI IssueはApp Icon Issueの完了後に進める。Gateに依存するUI Issueは選択結果を記録した仕様変更のマージ後に`approved`／Claim可能とし、依存しない非UI Issueは並行して進められる。
+5. Identity Bootstrapに依存するApp Icon IssueとSystem Experiences Planning Issueを作成する。両Issueはwrite-setが独立すれば並行できる。前者は同じ確定briefから画像生成したシンプルな2案を提示し、ユーザーが明示選択した1案だけをAppIconへ組み込む。
+6. System Experiences Planning IssueでWidget、Live Activities、Dynamic Island、Controls、Siri／App Intentsの5面を個別評価し、各面を`adopt-now`、`defer`、`not-applicable`、`blocked:user`へ分類する。主要Feature Issueの計画・Claim前に結果を確定し、採用面のfoundation／surface実装依存を作る。
+7. 変換済みIdentity、選択済みアプリアイコン、確定したsystem-experience計画を基準にアプリ固有仕様を確定し、続くnative UIごとに[条件付きUI Direction Gate](development-stages.md#11-適用判定)の明示指示と通常triggerを評価する。Identity bootstrap、アプリアイコン選択、system-experience計画自体は画面階層、navigationまたは主要flowを決めない。
+8. 最初のUI IssueはApp Icon Issueの完了後に進める。採用するsystem UIはSystem Experiences Planning Issueへ、UI Direction Gateに依存するUI Issueは選択結果を記録した仕様変更へ依存する。依存しない非UI Issueは並行して進められる。
 
 アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、選択された実行モデルはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
 
@@ -67,6 +68,14 @@ cutover後にClaimするIdentity bootstrapと純粋な非UI作業はnot-applicab
 route宣言の導入cutoverは`2026-09-06T00:31:41Z`である。封印済みcontractの`fetchedAt`がこれより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合だけpre-D-030 legacyとし、routeやHTMLを遡及要求せず元の封印済みAC／spec／evidenceを検証する。cutover前でも候補が一つ以上あれば通常検証へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。cutoverと同時刻以降のcontractとcutover後のpre-Claim Issueにも同じexactly-one／完全性を必須とする。legacy contractは変更・再封印せず、prefix外のroute語は候補や非legacy判定に使わない。
 
 テンプレートリポジトリ自身には将来の実アプリ名を固定しません。GitHub上のリポジトリ名はテンプレートからリポジトリを作成するときに決め、bootstrapツールは認証済みリモート名変更を行いません。
+
+### 3.1.1 System Experiences Planning Gate
+
+新しいアプリはIdentity bootstrap完了後かつ主要Feature Issueの計画・Claim前に、[`ios-system-experiences`](../.agents/skills/ios-system-experiences/SKILL.md)を使う専用の非UI planning Issueを完了する。mandatory evaluationとoptional adoptionを分け、Widget、Live Activities、Dynamic Island、Controls、Siri／App Intentsの5面すべてに明示decisionを持たせる。空欄、暗黙の非対応、共有frameworkを理由とした自動採用は許可しない。
+
+採否はPhase 1のrelease scope判断、採用面のtarget／extension／共有domain action／data／privacy／更新／検証設計はPhase 2へ属する。`adopt-now`だけを実装Issueへ分割し、`defer`は現在releaseへの影響と再評価trigger、`not-applicable`は製品根拠と代替導線、`blocked:user`は判断に依存して停止するIssueを記録する。最終判断はユーザーがrelease revisionへ束縛して行い、未決面と無関係な非UI作業は継続できる。
+
+App Icon Issueとは独立なら並行できる。採用するsystem UIのIssueはplanning Issueへ依存し、別途UI Direction Gateとnative検証を通す。既存生成済みアプリへ遡及適用せず、ユーザーが再評価を求めた場合または記録済みtriggerが成立した場合だけ再実行する。TemplateAppへWidgetKit、ActivityKit、App Intents、extension、entitlement、App Group、APNs設定を先行追加しない。
 
 ### 3.2 アプリアイコン
 

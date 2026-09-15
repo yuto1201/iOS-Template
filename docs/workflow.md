@@ -62,6 +62,14 @@ gateは次の順で進めます。
 
 installerは`Config/app-identity.json`からmodule pathを解決し、1024 x 1024、不透明、system mask前の正方形PNGとdefault AppIcon entryを検証します。現在のApple公式ガイダンスを生成直前に再確認し、選択済みasset、`Contents.json`、`Config/app-icon.json`だけをcommitします。候補、provider response、previewは`.artifacts/app-icon/`へ置き、canonical iOS evidenceや製品assetとして扱いません。
 
+### 2.2.1 System Experiences Planning Gate
+
+Identity bootstrap後、主要Feature Issueの計画またはClaimより前に、[`ios-system-experiences`](../.agents/skills/ios-system-experiences/SKILL.md)で専用のSystem Experiences Planning Issueを完了します。`widget`、`live-activities`、`dynamic-island`、`controls`、`siri-app-intents`の5面を最新のApple公式sourceで確認し、テンプレートにある[計画record](../.agents/skills/ios-system-experiences/templates/system-experiences-plan.md)へ`adopt-now`、`defer`、`not-applicable`、`blocked:user`のいずれかを記録します。
+
+全5面の評価は必須ですが、採用は任意で、最終判断はユーザーが行います。計画Issueではframework、Extension target、entitlementを追加しません。`adopt-now`面だけを共有domain action／data、extension process、capability、privacy、日英localization、accessibility、fallback、検証、release依存が分かる専用Issueへ分解します。App Icon IssueはIdentity bootstrap後に並行でき、system UIの方向選択はこの計画で代替せず、必要なdependent IssueをUI Direction Gateへ接続します。
+
+一面の判断待ちは、その面へ依存するIssueだけを`blocked:user`または`blocked:dependency`にする部分blockingです。確定済み面、App Icon、独立したdomain／data／非UI作業は継続できます。主要FeatureのIssue graphを変更する採否変更はPhase 1またはPhase 2の影響箇所だけを再gateし、過去のrecordを上書きせず追記します。
+
 ### 2.3 3D authoring route
 
 ClaudeとCodexは通常のIssueを同じworkflowで担当します。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更だけは[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteし、Codexのexact model `gpt-6-astra`がauthoringします。Claudeまたは別のCodex modelがIssueを担当している場合も、3D asset bytesのauthoring部分だけを同モデルへ依頼します。

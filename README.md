@@ -167,7 +167,7 @@ REPO='OWNER/REPO'
 tools/sync-github-labels.sh --repo "$REPO" --executor codex # または claude
 ```
 
-その後、アプリ固有の目的・方向性と最小仕様を`specs/`で確定し、Foundation、Identity bootstrap、Simulator verificationの3つのBootstrap Issueを依存順に起票します。Issue作成後にだけ各Branch/worktreeを作り、Identity bootstrapが完了するまでFeature実装を開始しません。Identity bootstrap後はApp Icon Issueを作り、最初のユーザー向けUIより先に選択済みアイコンを組み込みます。
+その後、アプリ固有の目的・方向性と最小仕様を`specs/`で確定し、Foundation、Identity bootstrap、Simulator verificationの3つのBootstrap Issueを依存順に起票します。Issue作成後にだけ各Branch/worktreeを作り、Identity bootstrapが完了するまでFeature実装を開始しません。Identity bootstrap後はApp Icon IssueとSystem Experiences Planning Issueを作成でき、前者は最初のユーザー向けUIより先に、後者は主要Feature Issueの計画・Claim前に完了します。両者は独立なら並行できます。
 
 ### Identity bootstrap
 
@@ -221,9 +221,15 @@ tools/validate-app-icon.sh --root "$PWD"
 
 installerは`Config/app-identity.json`から対象moduleを解決し、1024 x 1024、実透明pixelなし、system mask前の正方形PNGだけをdefault AppIconへ設定します。選択済みPNG、Asset Catalogの`Contents.json`、sanitizedな`Config/app-icon.json`だけを同じcommitへ含め、候補やpreviewは`.artifacts/app-icon/`へ残してGit管理しません。アプリアイコン選択は画面階層、navigation、主要flowの承認ではなく、UI Direction Gateを満たしたことにもなりません。選択待ちでも独立した非UI作業は続行できます。
 
+### System Experiences Planning Gate
+
+Identity bootstrap後、主要Feature Issueを計画・Claimする前に[System Experiences Planning skill](./.agents/skills/ios-system-experiences/SKILL.md)を使います。Widget、Live Activities、Dynamic Island、Controls、Siri／App Intentsの5面をそれぞれ`adopt-now`、`defer`、`not-applicable`、`blocked:user`へ分類し、空欄や暗黙の非対応を残しません。評価は必須ですが採用は任意で、最終判断はユーザーが行います。
+
+実行時にApple公式資料を再取得し、確認日時、URL、availability、constraintsをplanning recordへ記録します。採用する面だけを共有foundation／surface別実装／harden／release Issueへ分け、Xcode project、extension、entitlement、App Group、signingの重複write-setを直列化します。App Icon Issueとは並行できますが、採用するsystem UIはplanning Issueへ依存し、別途UI Direction Gateとnative検証を通します。`blocked:user`は判断に依存するIssueだけを止め、独立した非UI作業を止めません。テンプレートAppへsystem framework、target、entitlementを先行追加しません。
+
 ### Feature開発開始ゲート
 
-Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに`Status: 確定`で、そのIssueの受け入れ条件と一致していることを確認します。未作成、確定前、または不一致なら、実行モデルがIssueを`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しません。最初のユーザー向けUI `shape`は完了済みApp Icon Issueにも依存しますが、独立した非UI Featureはアイコン選択を待たずに進められます。
+Feature IssueのBranch/worktreeを作る前に、アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに`Status: 確定`で、そのIssueの受け入れ条件と一致していることを確認します。Identity bootstrap後の主要Featureでは、完了済みSystem Experiences Planning Issueと確定した5面のdecision matrixも確認します。未作成、確定前、または不一致なら、実行モデルがIssueを`blocked:user`へ遷移させ、Branch/worktree作成と実装を開始しません。最初のユーザー向けUI `shape`は完了済みApp Icon Issueにも依存し、採用するsystem UIはplanning Issueにも依存しますが、独立した非UI Featureはこれらの選択を待たずに進められます。
 
 現在のユーザーが対象範囲のHTML比較を明示した場合は、確定済み方向の有無にかかわらず[UI Direction skill](./.agents/skills/ui-direction/SKILL.md)を最優先で使用します。明示省略は現行性、scope、権限、理由が明確で比較指示と矛盾しないときだけ通常判定を上書きします。それ以外は、exact hierarchy／flowを覆う確定方向があればconfirmed-direction reuse、覆う方向がなく対象方向が未確定かつ最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかならGate、方向未確定かつ構造triggerなしならAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない範囲だけbounded direction-neutralとします。coverage／trigger／neutralityが曖昧ならGateを実行します。
 
