@@ -227,6 +227,7 @@ write_packet codex claude
 export FAKE_REVIEWER_MODE=approved
 write_result approved
 LOW_FINDING='[{"severity":"low","category":"correctness","file":"README.md","line":1,"title":"Nonblocking improvement","evidence":"fixture","requiredChange":"clarify later"}]' RESULT="$workspace/result.json" ruby -rjson -e 'path = ENV.fetch("RESULT"); value = JSON.parse(File.read(path)); value["findings"] = JSON.parse(ENV.fetch("LOW_FINDING")); File.write(path, JSON.generate(value))'
+reset_review_requested
 run_review
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["verdict"] == "approved" && value["headSha"] =~ /\A[0-9a-f]{40}\z/ && value["findings"] == [{"severity" => "low", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "Nonblocking improvement", "evidence" => "fixture", "requiredChange" => "clarify later"}]'
 ISSUE="$issue" HEAD="$head_sha" PACKET_DIGEST="$(digest "$artifact_root/review-packet.json")" REVIEW_DIGEST="$(digest "$artifact_root/review.json")" assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["schemaVersion"] == 1 && value["issue"] == Integer(ENV.fetch("ISSUE")) && value["headSha"] == ENV.fetch("HEAD") && value["primaryModel"] == "codex" && value["reviewerModel"] == "claude" && value["exitStatus"] == 0 && value["reviewPacketDigest"] == ENV.fetch("PACKET_DIGEST") && value["publishedReviewDigest"] == ENV.fetch("REVIEW_DIGEST") && value["validatedResultDigest"] == ENV.fetch("REVIEW_DIGEST")'
