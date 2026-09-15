@@ -250,7 +250,7 @@ module IOSTemplate
       reject("#{at} state is invalid") unless value["state"].is_a?(String) && !value["state"].empty?
       canonical_bytes = canonical_json(value)
       if require_canonical
-        reject("#{at} does not use canonical bytes") unless bytes == canonical_bytes || bytes == "#{canonical_bytes}\n"
+        reject("#{at} does not use canonical bytes") unless bytes.b == canonical_bytes.b || bytes.b == "#{canonical_bytes}\n".b
       end
       value
     end
@@ -295,6 +295,8 @@ module IOSTemplate
     end
 
     def h2_parts(body)
+      body = body.dup.force_encoding(Encoding::UTF_8)
+      reject("Issue body is not valid UTF-8") unless body.valid_encoding?
       lines = body.lines
       offsets = []
       cursor = 0
@@ -395,7 +397,7 @@ module IOSTemplate
     def validate_record!(bytes, expected_reference:, loader:, issue:, repository:)
       record = parse_object(bytes, "contract revision record")
       exact_keys!(record, RECORD_KEYS, "contract revision record")
-      reject("contract revision record is not canonical") unless bytes == canonical_json(record)
+      reject("contract revision record is not canonical") unless bytes.b == canonical_json(record).b
       revision = positive_integer!(record["revision"], "contract revision record.revision")
       reject("contract revision record revision must be at least 2") if revision < 2
       reference!(expected_reference, "contract revision reference", revision: revision, expected_path: record_path(issue, revision))
@@ -485,8 +487,8 @@ module IOSTemplate
           reject("revision chain contract snapshots do not join") unless
             previous_validated.dig("record", "after") == record.dig("before")
           reject("revision chain body snapshots do not join") unless
-            previous_validated.fetch("afterContractBytes") == validated.fetch("beforeContractBytes") &&
-            previous_validated.fetch("afterBodyBytes") == validated.fetch("beforeBodyBytes")
+            previous_validated.fetch("afterContractBytes").b == validated.fetch("beforeContractBytes").b &&
+            previous_validated.fetch("afterBodyBytes").b == validated.fetch("beforeBodyBytes").b
           reject("revision chain changed retained Issue identity") unless
             previous_validated.dig("record", "retainedIdentity").values_at("baseSha", "branch", "worktree") ==
             record.fetch("retainedIdentity").values_at("baseSha", "branch", "worktree")
@@ -494,7 +496,7 @@ module IOSTemplate
         end
         expected_revision -= 1
       end
-      reject("current contract differs from the latest revision snapshot") unless latest.fetch("afterContractBytes") == contract_bytes
+      reject("current contract differs from the latest revision snapshot") unless latest.fetch("afterContractBytes").b == contract_bytes.b
       latest
     end
 
@@ -712,7 +714,7 @@ module IOSTemplate
         reject("authority comment must contain exactly one revision marker") unless matches.length == 1
         marker_bytes = matches.first
         marker = parse_object(marker_bytes, "user revision marker")
-        reject("user revision marker is not canonical") unless marker_bytes == canonical_json(marker)
+        reject("user revision marker is not canonical") unless marker_bytes.b == canonical_json(marker).b
         validate_marker!(marker, scope: substantive, delegate: delegate, trigger: trigger)
         expected = {
           "afterBodyDigest" => proposed_body_digest,
@@ -798,7 +800,7 @@ module IOSTemplate
       ensure_directory!(File.dirname(path))
       if File.exist?(path) || File.symlink?(path)
         existing, = physical_file!(path, at)
-        reject("existing #{at} differs from this exact revision") unless existing == bytes
+        reject("existing #{at} differs from this exact revision") unless existing.b == bytes.b
         return path
       end
       flags = File::WRONLY | File::CREAT | File::EXCL
@@ -937,7 +939,7 @@ module IOSTemplate
                           trigger:, authority_reference:, reason:, delegate:, review_validator: nil)
       pending = parse_object(pending_bytes, "contract revision pending record")
       exact_keys!(pending, PENDING_KEYS, "contract revision pending record")
-      reject("contract revision pending record is not canonical") unless pending_bytes == canonical_json(pending)
+      reject("contract revision pending record is not canonical") unless pending_bytes.b == canonical_json(pending).b
       issue = positive_integer!(pending["issue"], "pending issue")
       repository = repository!(pending["repository"], "pending repository")
       revision = positive_integer!(pending["revision"], "pending revision")
@@ -980,8 +982,10 @@ module IOSTemplate
       end
       state_bytes = physical_file!(paths.fetch("state"), "durable Issue state").first
       contract_bytes = physical_file!(paths.fetch("contract"), "canonical Issue contract").first
-      reject("canonical contract is outside the pending revision") unless [validated.fetch("beforeContractBytes"), validated.fetch("afterContractBytes")].include?(contract_bytes)
-      reject("durable state is outside the pending revision") unless [validated.fetch("beforeStateBytes"), after_state_bytes].include?(state_bytes)
+      reject("canonical contract is outside the pending revision") unless
+        [validated.fetch("beforeContractBytes"), validated.fetch("afterContractBytes")].any? { |bytes| bytes.b == contract_bytes.b }
+      reject("durable state is outside the pending revision") unless
+        [validated.fetch("beforeStateBytes"), after_state_bytes].any? { |bytes| bytes.b == state_bytes.b }
       state_for_authority = canonical_state!(validated.fetch("beforeStateBytes"), issue, repository, "before revision state")
       source_head = validated.dig("record", "retainedIdentity", "sourceHead")
       _branch, current_head = current_git_identity!(repo_root, topology, state_for_authority)
@@ -1038,7 +1042,7 @@ module IOSTemplate
       io, stat = DescriptorFiles.open_regular_at(issue_directory, File.basename(path))
       bytes = DescriptorFiles.read_opened(io, stat)
       io.close
-      reject("pending revision changed before cleanup") unless bytes == expected_bytes
+      reject("pending revision changed before cleanup") unless bytes.b == expected_bytes.b
       current, current_stat = DescriptorFiles.open_regular_at(issue_directory, File.basename(path))
       current.close
       reject("pending revision identity changed before cleanup") unless
