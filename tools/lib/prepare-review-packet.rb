@@ -6,6 +6,7 @@ require "json"
 require "open3"
 require_relative "review-contract"
 require_relative "review-sealing"
+require_relative "issue-contract-revision"
 
 module IOSTemplate
   module PrepareReviewPacket
@@ -33,12 +34,32 @@ module IOSTemplate
         issue_directory.io.flock(File::LOCK_EX)
         head_directory = snapshots.directory(issue_directory, head_sha, at: "Head artifact directory")
         contract_file = snapshots.leaf(issue_directory, "issue-contract.json", at: "issue contract")
+        state_file = snapshots.leaf(issue_directory, "state.json", at: "Issue state")
         verify_file = snapshots.leaf(head_directory, "verify.json", at: "verify.json")
         repository_tests_file = existing_leaf(snapshots, head_directory, "repository-tests.json", "repository-tests.json")
         repository_test_plan_file = existing_leaf(snapshots, head_directory, "repository-test-plan.json", "repository-test-plan.json")
         contract = parse_object(contract_file.bytes, "issue contract")
         verify = parse_object(verify_file.bytes, "verify.json")
         contract_digest = ReviewContract.digest(contract_file.bytes)
+        issue_path = File.join(artifacts, "issues", issue.to_s)
+        pending_path = File.join(issue_path, IssueContractRevision::PENDING_NAME)
+        revision_root = File.join(issue_path, IssueContractRevision::REVISION_ROOT)
+        pending_exists = File.exist?(pending_path) || File.symlink?(pending_path)
+        history_exists = File.exist?(revision_root) || File.symlink?(revision_root)
+        snapshots.leaf(issue_directory, IssueContractRevision::PENDING_NAME,
+          at: "Issue contract revision pending") if pending_exists
+        snapshots.directory(issue_directory, IssueContractRevision::REVISION_ROOT,
+          at: "Issue contract revisions") if history_exists
+        revision_loader = lambda do |path|
+          prefix = ".artifacts/"
+          reject("contract revision reference is outside .artifacts") unless path.start_with?(prefix)
+          snapshots.relative_leaf(path.delete_prefix(prefix), at: "Issue contract revision #{path}").bytes
+        end
+        IssueContractRevision.validate_active_bytes!(
+          state_bytes: state_file.bytes, contract_bytes: contract_file.bytes,
+          issue: issue, repository: contract.fetch("repository"), loader: revision_loader,
+          history_exists: history_exists, pending_exists: pending_exists
+        )
         validate_inputs!(contract, verify, issue, base_sha, head_sha, contract_digest)
         repository_tests = repository_tests_file && parse_object(repository_tests_file.bytes, "repository-tests.json")
         plan_policy = RepositoryTestPlan.policy(contract)
@@ -142,7 +163,8 @@ module IOSTemplate
       ensure
         snapshots.close
       end
-    rescue ReviewContract::ValidationError, RepositoryTestPlan::PlanError, ReviewSealing::SealError, KeyError, JSON::ParserError,
+    rescue ReviewContract::ValidationError, RepositoryTestPlan::PlanError, ReviewSealing::SealError,
+           IssueContractRevision::ValidationError, KeyError, JSON::ParserError,
            SystemCallError, IOError, Errno::ENOENT, Errno::EACCES => error
       raise PreparationError, error.message
     end

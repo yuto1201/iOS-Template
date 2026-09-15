@@ -88,6 +88,14 @@ reviewerはordered `revisions`のBase／Head各SHAと全inventory、producerの�
 
 cutover後のworkflow-only contractは`targeted`、`head-all`、`base-and-head`の要求scopeとReasonをsealed ACに持つ。reviewerは`repositoryTestPlan`が示すmanifest／diff digest、changed paths、resolved scope、exact test paths、ordered AC mappingsとschema v3 `repositoryTests`の実行集合が一致することを確認する。descriptor-owning callerは`strict_references!`が返す`repositoryTestsFile`と`repositoryTestPlanFile`の両方を保持し、planをimmutable Base／Head／contract／Head manifestから再計算したうえで`validate!`へ`repository_tests_bytes:`、`repository_test_plan_bytes:`、`revision_context:`を渡す。D-039以後の`targeted`は既知の単一または複数domainに属するtestのunionを維持し、manifest、runner、tracked test変更から自動`head-all`へ昇格しない。未知pathはplan生成を拒否し、`head-all`／`base-and-head`はsealed contractの明示要求だけを認める。縮小や手書きのtest選択は認めない。
 
+### Contract revision-aware review
+
+Claim後に正式revisionされたIssueでは、packet producerがdurable stateの`issueContractRevision`参照からrevision 2までのrecord、旧／新body・contract、before stateをdigest連鎖で検証します。pending、recordなしのcontract／state変更、broken chain、latest recordと異なるcanonical contractがあればpacketを生成しません。packet schemaは2のままとし、最新canonical contractのdigest、Acceptance criteria、spec anchorsと、改訂後のcurrent Headに対するverify／repository evidenceだけを封印します。以前のHeadに残るverify、review、packet、receiptは履歴であり、現行ACをsupportする証拠にしません。
+
+改訂後はdurable stateから旧`headSha`が外れていることを確認し、新Headでverify、packet、opposite-model result／receiptを新しく作ります。`review-finding`を次revisionのauthorityに使う場合は、同一Issue、改訂前contract digest、改訂時source Headのcanonical `changes-requested` result／receiptにあるblocking findingを`.artifacts/issues/ISSUE/HEAD/review.json#findings/INDEX`で参照し、revision reasonを`requiredChange`とexact一致させます。reviewer自身のfindingがGoal、MVP、stage、profile、scope、外部authorityの置換を必要とする場合は、同一Issue revisionを要求せず別Issueと現在ユーザー判断へ戻します。
+
+application Verificationは単一`unitTestIdentifier`だけを許可します。複数のUnit確認は一つの統合XCTestに集約するか、許可された同一ID・同一順序のAcceptance criteria本文／mapping revisionとして表現します。packet reviewerは非正規な複数identifier、CLI差し替え、旧contractのtest mappingを支持しません。
+
 レビューでは次の順に確認します。
 
 1. 各受け入れ条件に実装と証拠があるか。

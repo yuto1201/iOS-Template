@@ -223,7 +223,7 @@ module IOSTemplate
       reject("#{at} is invalid: #{error.failures.join('; ')}")
     end
 
-    def canonical_state!(bytes, issue, repository, at)
+    def canonical_state!(bytes, issue, repository, at, require_canonical: true)
       value = parse_object(bytes, at)
       required = %w[
         baseSha branch executor issue issueContract previousState primaryImplementer
@@ -248,7 +248,10 @@ module IOSTemplate
       digest!(value.dig("issueContract", "digest"), "#{at}.issueContract.digest")
       sha!(value["headSha"], "#{at}.headSha") if value.key?("headSha")
       reject("#{at} state is invalid") unless value["state"].is_a?(String) && !value["state"].empty?
-      reject("#{at} does not use canonical bytes") unless bytes == "#{canonical_json(value)}\n"
+      canonical_bytes = canonical_json(value)
+      if require_canonical
+        reject("#{at} does not use canonical bytes") unless bytes == canonical_bytes || bytes == "#{canonical_bytes}\n"
+      end
       value
     end
 
@@ -508,7 +511,10 @@ module IOSTemplate
       repository!(repository)
       positive_integer!(issue, "issue")
       reject("a contract revision is pending") if pending_exists && !allow_pending
-      state = canonical_state!(state_bytes, issue, repository, "durable Issue state")
+      untrusted_state = parse_object(state_bytes, "durable Issue state")
+      revision_bound = untrusted_state.key?("issueContractRevision") || history_exists || pending_exists
+      state = canonical_state!(state_bytes, issue, repository, "durable Issue state",
+        require_canonical: revision_bound)
       contract = canonical_contract!(contract_bytes, issue, repository, "canonical Issue contract")
       expected_contract = {"path" => ".artifacts/issues/#{issue}/issue-contract.json", "digest" => digest(contract_bytes)}
       reject("durable state does not bind the exact canonical contract") unless state["issueContract"] == expected_contract
@@ -541,17 +547,49 @@ module IOSTemplate
       lock&.close unless lock&.closed?
     end
 
-    def validate_active!(repo_root:, issue:, repository:, allow_pending: false)
+    def validate_active!(repo_root:, issue:, repository:, allow_pending: false, operation: nil)
       with_issue_lock(repo_root, issue) do |topology, paths, _lock|
         state_bytes = physical_file!(paths.fetch("state"), "durable Issue state").first
         contract_bytes = physical_file!(paths.fetch("contract"), "canonical Issue contract").first
         loader = artifact_loader(topology.fetch("artifactsRoot"), issue)
-        validate_active_bytes!(
+        result = validate_active_bytes!(
           state_bytes: state_bytes, contract_bytes: contract_bytes, issue: issue,
           repository: repository, loader: loader,
           history_exists: revision_history_exists?(paths.fetch("issueRoot")),
           pending_exists: pending_exists?(paths.fetch("issueRoot")), allow_pending: allow_pending
         )
+        if operation
+          nonempty_string!(operation, "operation")
+          contract = canonical_contract!(contract_bytes, issue, repository, "canonical Issue contract")
+          reject("required external operation is not declared: #{operation}") unless IssueContract.operation_declared?(contract, operation)
+          result = result.merge("operation" => operation)
+        end
+        result
+      end
+    end
+
+    def validate_live_body!(repo_root:, issue:, repository:, live_document:)
+      with_issue_lock(repo_root, issue) do |topology, paths, _lock|
+        state_bytes = physical_file!(paths.fetch("state"), "durable Issue state").first
+        contract_bytes = physical_file!(paths.fetch("contract"), "canonical Issue contract").first
+        loader = artifact_loader(topology.fetch("artifactsRoot"), issue)
+        validate_active_bytes!(state_bytes: state_bytes, contract_bytes: contract_bytes,
+          issue: issue, repository: repository, loader: loader,
+          history_exists: revision_history_exists?(paths.fetch("issueRoot")),
+          pending_exists: pending_exists?(paths.fetch("issueRoot")), allow_pending: false)
+        reject("live Issue must be an object") unless live_document.is_a?(Hash)
+        reject("live Issue identity differs") unless
+          live_document["number"] == issue && live_document["url"] == "https://github.com/#{repository}/issues/#{issue}"
+        body = live_document["body"]
+        reject("live Issue body is invalid") unless body.is_a?(String)
+        issue_type = issue_type!(live_document)
+        contract = canonical_contract!(contract_bytes, issue, repository, "canonical Issue contract")
+        reconstructed, reconstructed_bytes = parse_body_contract!(body, issue_type: issue_type,
+          issue: issue, repository: repository, fetched_at: contract.fetch("fetchedAt"),
+          allow_legacy_delivery_stage: !contract.key?("deliveryStage"))
+        reject("live Issue body differs from the canonical contract") unless
+          reconstructed == contract && reconstructed_bytes == contract_bytes
+        {"status" => "matched", "contractDigest" => digest(contract_bytes)}
       end
     end
 
@@ -1028,7 +1066,7 @@ if $PROGRAM_NAME == __FILE__
   command = ARGV.shift
   options = {}
   parser = OptionParser.new do |cli|
-    cli.banner = "usage: issue-contract-revision.rb validate|marker|prepare|resume|activate [options]"
+    cli.banner = "usage: issue-contract-revision.rb validate|validate-live|marker|prepare|resume|activate [options]"
     cli.on("--repo-root PATH") { |value| options["repoRoot"] = value }
     cli.on("--repo OWNER/REPO") { |value| options["repo"] = value }
     cli.on("--issue NUMBER", Integer) { |value| options["issue"] = value }
@@ -1038,13 +1076,15 @@ if $PROGRAM_NAME == __FILE__
     cli.on("--authority-reference VALUE") { |value| options["authorityReference"] = value }
     cli.on("--reason VALUE") { |value| options["reason"] = value }
     cli.on("--delegate VALUE") { |value| options["delegate"] = value }
+    cli.on("--operation VALUE") { |value| options["operation"] = value }
   end
 
   begin
     parser.parse!(ARGV)
     raise OptionParser::InvalidArgument, "unexpected positional arguments" unless ARGV.empty?
     required = %w[repoRoot repo issue]
-    required.concat(%w[body liveJson trigger reason]) unless command == "validate"
+    required << "liveJson" if command == "validate-live"
+    required.concat(%w[body liveJson trigger reason]) unless %w[validate validate-live].include?(command)
     required << "authorityReference" if %w[prepare resume activate].include?(command)
     missing = required.reject { |key| options.key?(key) }
     raise OptionParser::MissingArgument, missing.join(", ") unless missing.empty?
@@ -1053,7 +1093,14 @@ if $PROGRAM_NAME == __FILE__
     repository = options.fetch("repo")
     if command == "validate"
       puts JSON.generate(IOSTemplate::IssueContractRevision.validate_active!(repo_root: repo_root,
-        issue: issue, repository: repository))
+        issue: issue, repository: repository, operation: options["operation"]))
+      exit 0
+    end
+    if command == "validate-live"
+      live_path = options.fetch("liveJson")
+      raise OptionParser::InvalidArgument, "--live-json must be a regular nonsymlink file" unless File.file?(live_path) && !File.symlink?(live_path)
+      puts JSON.generate(IOSTemplate::IssueContractRevision.validate_live_body!(repo_root: repo_root,
+        issue: issue, repository: repository, live_document: JSON.parse(File.binread(live_path))))
       exit 0
     end
     body_path = options.fetch("body")
@@ -1082,7 +1129,7 @@ if $PROGRAM_NAME == __FILE__
         fail_after_contract: ENV["IOS_TEMPLATE_REVISION_FAIL_AFTER"] == "contract",
         fail_after_state: ENV["IOS_TEMPLATE_REVISION_FAIL_AFTER"] == "state")
     else
-      raise OptionParser::InvalidArgument, "command must be validate, marker, prepare, resume, or activate"
+      raise OptionParser::InvalidArgument, "command must be validate, validate-live, marker, prepare, resume, or activate"
     end
     puts JSON.generate(output)
   rescue OptionParser::ParseError, JSON::ParserError, Errno::ENOENT, Errno::EACCES,

@@ -27,7 +27,9 @@ cp "$source_root/tools/lib/review-sealing.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/delivery-profile.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/delivery-stage.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/verification-scope.rb" "$primary/tools/lib/"
-cp "$source_root/tools/lib/prepare-review-packet.rb" "$source_root/tools/lib/review-artifacts.rb" "$primary/tools/lib/"
+cp "$source_root/tools/lib/prepare-review-packet.rb" "$source_root/tools/lib/review-artifacts.rb" \
+  "$source_root/tools/lib/issue-contract.rb" "$source_root/tools/lib/issue-contract-revision.rb" \
+  "$source_root/tools/lib/ownership.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/run-repository-tests.rb" "$primary/tools/lib/"
 mkdir -p "$primary/tools/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$primary/tools/tests/test-renderer-probe.sh"

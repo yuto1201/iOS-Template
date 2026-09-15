@@ -24,8 +24,9 @@ canonical_title_slug() {
   ' "$1"
 }
 workflow_github_preflight "$repo_root" "$repo" "$issue" github.read_issue || { echo 'GitHub account preflight failed before Issue read' >&2; exit 1; }
-issue_json=$(gh issue view "$issue" --repo "$repo" --json title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
+issue_json=$(gh issue view "$issue" --repo "$repo" --json number,url,title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
 workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" github.read_issue || blocked 'sealed Issue contract does not authorize Issue reads'
+workflow_require_live_body_matches_sealed "$repo_root" "$repo" "$issue" "$issue_json" || blocked 'live Issue body differs from the audited contract revision chain'
 state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || blocked 'Issue has no unambiguous current state'
 workflow_is_state "$state" || blocked 'Issue has an unknown current state label'
 expected_owner=$(ruby -ne 'puts $1 if /^\s*login:\s*([A-Za-z0-9-]+)\s*$/' "$repo_root/Config/ownership.yml")

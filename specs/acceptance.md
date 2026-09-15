@@ -1,8 +1,8 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 2.8
-Date: 2026-09-14
+Version: 2.9
+Date: 2026-09-15
 
 ## 1. テンプレート完成条件
 
@@ -22,6 +22,7 @@ Date: 2026-09-14
 - [ ] `App Store/`に提出情報の構造と検証scriptがある。
 - [ ] README、仕様、運用文書、skill、tool間のlink検証が通る。
 - [ ] 一つのリリース目標をPhase 1〜6で追跡し、Phase、Delivery stage、Delivery profile、Verification scopeを別軸として扱える。
+- [ ] Claim後の同一Issue contractで許可されたVerification／Acceptance criteria改訂を、明示authority、immutable revision chain、証拠失効を伴う専用経路として監査できる。
 
 ## 2. Issue Definition of Ready
 
@@ -117,6 +118,16 @@ workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、�
 cutover前のexact `Repository-test scope: base-and-head; <nonempty>`またはcutover後のexact `Repository-test scope: base-and-head; Reason: <nonempty>`を一つのAC本文先頭に宣言したIssueは、現在HeadのproducerでBaseとHeadそれぞれの全tracked `tools/tests/test-*.sh`を実行する。宣言ACは両revisionの全suiteへ対応付け、各ACのHead実装証拠とBaseのbaseline／regression証拠を区別する。cutover前のcanonical schema v2またはcutover後のplan-bound schema v3 record、packetのexact-byte参照、同じpacketに束縛したreview／receipt、premergeの再検証まで完了条件に含める。片方の欠落、subset、別SHA／Issue／contract、失敗／timeout／未完了、差し替えは成功ではない。
 
 選択条件と互換境界は[D-034](decisions.md#d-034-baseとheadの全repository-test証拠を明示契約へ束縛する)および[D-037](decisions.md#d-037-repository-testの要求scopeと実行計画を二段階で封印する)、手順とschemaは[repository evidence](../docs/verification.md#repository-test-planと対象実行)を正とする。宣言を持たない既存sealed contractと旧Head-only record／packet／receiptのbytesを変更せず、旧証拠から新planやBase実行の証拠を作らない。
+
+### 3.5 Claim後のIssue contract revision
+
+Claim後に同じIssueの検証方法またはAcceptance criteriaの説明を修正する必要がある場合は、Issueがexact `in-progress`である間だけ専用revision経路を使う。変更可能なのは`verification`、既存と同一ID・同一順序の`acceptanceCriteria[].text`、再取得時刻`fetchedAt`だけである。Goal、MVP、Spec anchors、Dependencies、Delivery stage／profile／scope、Issue type、外部操作と承認を変更してはならない。許可field内でも目的またはMVPを別物へ置換する意味変更は、別Issueと現在ユーザーの判断へ戻す。
+
+authorityは次の三つだけを許可する。`review-finding`は同じIssue、現行contract digest、source Headに束縛されたcanonical `changes-requested` review／receiptのblocking findingを参照し、reasonをその`requiredChange`とexact一致させる。`user-explicit`は設定済みGitHub ownerが、変更前contract digest、変更後body digest、source Head、scope、reasonを含むcanonical markerを同じIssueへ投稿する。`user-delegated`は同じmarkerで現在executorをdelegateとして明示する。別Issue、古いcontract／Head、owner以外、silent approval、推測delegateをauthorityにしない。
+
+各改訂はrevision 2から単調増加し、変更前後のIssue body／contract、変更前後のdurable state、変更field、reason、authority、前record digest、Base／Branch／worktree／source Head、失効対象をsingle-link・no-replace artifactとして追記する。durable stateは最新recordのpath／digest／revisionと新contract digestを指し、以前の`headSha`を外す。`verification`、`review`、Head bindingは失効するが旧artifactを削除せず、Base、Branch、worktree、source Headは履歴として保持する。pending中は通常state transition、resume、外部操作、review packet生成、pre-mergeを拒否し、同じrequestだけを冪等に再開する。recordなしのcontract／state変更、broken chain、別revisionの再開を成功扱いにしない。
+
+改訂完了後は現行contractと新Headで対象検証、review packet、反対モデルreview、pre-mergeを作り直す。application `Verification`のrunnerは一つの`unitTestIdentifier`だけを受け付けるため、複数確認が必要なら一つの統合XCTestへ集約するか、同一ID・同一順序を保ったAcceptance criteria／mappingの正式revisionで表現し、複数identifierを非正規に注入しない。
 
 ## 4. Simulator scope
 

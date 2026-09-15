@@ -218,9 +218,38 @@ documentation-only Issueでは節を省略するか、`Not applicable`／GitHub�
 ```
 ````
 
-各ACのchecksは実際にそのACを確認するものだけを明示し、未指定のACへ全checkを自動割当しません。例のidentifierやmappingをそのまま根拠として使わず、実在TestとACへ置き換えます。Repository toolのACはapplication smokeだけでは証明できないため、§5.3のcanonical repository testとAC別mappingも必須です。live IssueのVerification／deliveryProfile改変検出は既存[Issue #29](https://github.com/yuto1201/iOS-Template/issues/29)で修正します。
+各ACのchecksは実際にそのACを確認するものだけを明示し、未指定のACへ全checkを自動割当しません。例のidentifierやmappingをそのまま根拠として使わず、実在TestとACへ置き換えます。Repository toolのACはapplication smokeだけでは証明できないため、§5.3のcanonical repository testとAC別mappingも必須です。application runnerが受け付けるUnit Testは単一の`unitTestIdentifier`だけです。複数の確認は一つの統合XCTestへ集約するか、下記の正式revisionでAcceptance criteria本文／mappingを直し、CLIや環境変数から複数identifierを差し込みません。
 
 このobjectはIssue contractのdigestへ含まれます。runnerは開始時にbytesをdescriptor-boundなsealed snapshotへ固定し、各caseとScreenshot/draftのno-replace publication境界でGit Head、tracked Head inventory/bytes/flags、canonical contract/matrixのexact bytes/digestを再照合します。trusted Git `ls-tree`/`cat-file blob`からcontained relative symlinkを含むprivate raw-Head source snapshotを構築してXcodeへ渡し、project pathをlength-prefixしたfull source digestを`build.sourceTree`、project subtree digestを`build.project`としてdraft/finalへ固定し、両者のproject path exact一致を要求します。Build productはprivate attemptへ再帰copyしてlength-prefixしたtree digestを固定し、各install直前に再検証します。Task 5はcanonical draftからdescriptor-bound `visual-packet.json`をno-replace生成し、primaryと追加stateを含む全PNGを順序、path、SHA-256、dimensionへ固定します。`visual-result.json`とfinal `visualEvaluation`はpacket exact bytesと全reviewed imageをattestし、finalizeとstandalone validatorはcurrent bytesまで再照合します。Screenshot/draft publicationはIssue/Head lock下のdurable journalからSIGKILL後のpartial transactionをrollbackし、complete transactionをidempotent successとして回収します。finalもexact既存bytesだけをidempotent successとします。CLI引数や環境変数でBundle ID、test identifier、assertionを差し替えません。
+
+### 3.1 Claim後の監査付きcontract revision
+
+Claim済みIssueの本文を直接編集してcanonical contractとの差を放置しません。Issueがexact `in-progress`で、同じIssueの`github.read_issue`と`github.update_issue`がsealed contractに宣言されている場合だけ、`tools/revise-issue-verification.sh`を使います。許可fieldは`Verification`、既存と同一ID・同一順序のAcceptance criteria本文、更新時の`fetchedAt`だけです。Goal、MVP、Spec anchors、Dependencies、stage、profile、scope、type、external operation／approvalを変える提案は拒否し、意味的に別の目的・MVPとなる場合は別Issueと現在ユーザー判断へ戻します。
+
+現在ユーザーが自分で改訂を明示する場合、まず候補本文からexact markerを生成します。
+
+```bash
+tools/revise-issue-verification.sh marker \
+  --repo OWNER/REPO --issue ISSUE --body revised-body.md \
+  --trigger user-explicit --reason 'exact reason'
+```
+
+設定済みGitHub ownerが、出力されたmarkerを変更せず同じIssueのcommentへ投稿します。AIへ委任する場合は`--trigger user-delegated --delegate codex|claude`で生成し、owner commentのmarkerへ現在executor、変更前contract digest、変更後body digest、source Head、変更scope、reasonを束縛します。owner以外、別Issue、古いcontract／Head、曖昧な文面、marker外の沈黙はauthorityになりません。
+
+comment URLを得た後、同じ候補本文と引数で適用します。
+
+```bash
+tools/revise-issue-verification.sh apply \
+  --repo OWNER/REPO --issue ISSUE --body revised-body.md \
+  --trigger user-explicit --reason 'exact reason' \
+  --authority-reference 'https://github.com/OWNER/REPO/issues/ISSUE#issuecomment-ID'
+```
+
+反対モデルのblocking findingに従う場合は、`changes-requested -> in-progress`を正規state transitionで記録した後、`--trigger review-finding`、exact `.artifacts/issues/ISSUE/HEAD/review.json#findings/INDEX`、そのfindingの`requiredChange`と完全一致する`--reason`を使います。このrouteは同一Issue／contract／source Headのcanonical resultとlauncher receiptだけを受理し、user markerやdelegateを使いません。
+
+`apply`は改訂前後のbody／contract、改訂前後state、authority、reason、changed fields、前record digest、失効対象、維持identityを`.artifacts/issues/ISSUE/issue-contract-revisions/`へno-replaceで保存し、pendingを作成してからGitHub本文、canonical contract、durable stateを順に切り替えます。途中で停止した場合は、別requestを開始せずexact同一commandを再実行します。pendingは同じrevisionのbefore／after bytesにだけ復旧でき、通常のstate transition、resume、外部操作、review packet、pre-mergeはpending／broken chain／recordなし改変を拒否します。
+
+改訂は古いverify／review artifactを削除しませんが、それらの現行性を失わせ、durable stateの`headSha`を外します。Base、Branch、worktree、改訂時source Headは維持・記録します。改訂後は新contract digestと新Headで対象検証、review packet、反対モデルreview、pre-mergeをやり直します。`tools/revise-issue-verification.sh validate --repo OWNER/REPO --issue ISSUE`でactive chainを確認できます。
 
 ## 4. 状態機械
 

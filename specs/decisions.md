@@ -407,3 +407,13 @@
 - Decision: provider envelopeの`result`全体がJSONでない場合、各`{`から末尾までをparseし、16 KiB以下のvalid UTF-8 prefixがbrace／NULを含まず、末尾に完全なJSON object候補がexactly oneだけ存在するときに限りそのobjectを正規化する。その後は既存のIssue／Base／Head／digest／reviewer／finding／全AC evidence validatorを一切省略しない。
 - Consequence: progress prefix、raw envelope、telemetryはartifactへ保存しない。複数object、途中object、trailing prose、不正UTF-8、過大prefix、schema不一致はcanonical review／receiptを発行せず`blocked:review`のままとし、主agentがverdictやfindingを修正しない。
 - Related Issue: #93
+
+## D-048: Claim後のIssue contract改訂を追記型authority chainへ限定する
+
+- Date: 2026-09-15
+- Status: 確定
+- Supersedes: `fetchedAt`を含むsealed contract全体がClaim後immutableである従来境界を、目的と権限を維持した検証調整だけに限定して拡張する。既存contract bytes、D-025のcurrent-Head evidence、D-037のtest plan、D-038のrelease revision／Phase authorityは維持する。
+- Context: 実装後の反対モデルfindingやユーザー判断によりVerificationまたはAcceptance criteriaの説明を狭く直す場合、既存Issueを捨てて履歴を分断するか、live本文とsealed snapshotを非正規にずらすしかなかった。一方、任意の再封印を許すとGoal、MVP、外部権限、古い証拠を同じIssueの承認として置換できる。
+- Decision: exact `in-progress`の同一Issueだけに専用revision経路を設け、変更fieldを`verification`、同一ID・同一順序のAcceptance criteria本文、単調増加する`fetchedAt`へ限定する。authorityは、同じcontract／source Headのcanonical blocking `review-finding`、設定済みGitHub ownerのexact markerによる`user-explicit`、同markerで現在executorを指定する`user-delegated`の三つだけとする。各revisionは旧／新body・contract、旧／新state、changed fields、reason、authority、前record digest、失効対象、Base／Branch／worktree／source Headをimmutable no-replace chainへ保存する。Goal、MVP、spec／dependency、Phase、stage、profile、scope、type、external operation／approvalの変更と、許可field内でも目的を別物へする意味変更は別Issueと現在ユーザー判断へ戻す。
+- Consequence: activationは以前のHead bindingを外し、旧verification／reviewを削除せず履歴へ残す。pending中またはchain／state／contract不一致ではstate transition、resume、external authorization、review packet、pre-mergeをfail closedにし、exact同一requestだけを再開する。改訂後は最新contract digestと新Headで対象検証・反対モデルreview・pre-mergeを再取得する。application runnerの単一`unitTestIdentifier`制約を維持し、複数確認を非正規なidentifier注入で回避しない。
+- Related Issue: #38

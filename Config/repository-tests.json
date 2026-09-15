@@ -134,6 +134,14 @@
       "prefixes": []
     },
     {
+      "domain": "issue-contract-revision",
+      "paths": [
+        "tools/lib/issue-contract-revision.rb",
+        "tools/revise-issue-verification.sh"
+      ],
+      "prefixes": []
+    },
+    {
       "domain": "merge-publication",
       "paths": [
         "tools/merge-issue.sh",
@@ -271,6 +279,7 @@
     {"path": "tools/tests/test-ios-simulator-lock.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-ios-simulator-resource.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-issue-contract.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-issue-contract-revision.sh", "domains": ["issue-contract-revision"]},
     {"path": "tools/tests/test-media-skill.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-merge-issue.sh", "domains": ["merge-publication"]},
     {"path": "tools/tests/test-premerge-gate.sh", "domains": ["review-evidence-sealing"]},

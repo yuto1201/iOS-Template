@@ -7,6 +7,7 @@ require "open3"
 require "time"
 require_relative "descriptor-files"
 require_relative "issue-contract"
+require_relative "issue-contract-revision"
 require_relative "delivery-profile"
 require_relative "ownership"
 require_relative "review-contract"
@@ -218,10 +219,31 @@ begin
     state["branch"] == identity["branch"] && state["worktree"] == identity["worktree"] &&
     state["primaryImplementer"] == identity["primaryImplementer"] &&
     state["baseSha"] == identity["baseSha"] && state["headSha"] == head_sha &&
-    state.dig("issueContract", "digest") == identity["contractDigest"]
+    state.dig("issueContract", "digest") == identity["contractDigest"] &&
+    state["issueContractRevision"] == identity["contractRevision"]
   transitioned_at = iso8601!(state["transitionedAt"], "state.transitionedAt")
   contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_file.bytes)}"
   refuse("contract bytes differ from validated identity") unless contract_digest == identity["contractDigest"]
+  issue_path = File.join(primary, ".artifacts", "issues", issue.to_s)
+  pending_path = File.join(issue_path, IOSTemplate::IssueContractRevision::PENDING_NAME)
+  revision_root_path = File.join(issue_path, IOSTemplate::IssueContractRevision::REVISION_ROOT)
+  pending_exists = File.exist?(pending_path) || File.symlink?(pending_path)
+  revision_history_exists = File.exist?(revision_root_path) || File.symlink?(revision_root_path)
+  artifact_snapshots.leaf(issue_directory, IOSTemplate::IssueContractRevision::PENDING_NAME,
+    "Issue contract revision pending") if pending_exists
+  artifact_snapshots.directory(issue_directory, IOSTemplate::IssueContractRevision::REVISION_ROOT,
+    "Issue contract revisions") if revision_history_exists
+  revision_prefix = ".artifacts/issues/#{issue}/"
+  revision_loader = lambda do |path|
+    refuse("contract revision reference is outside the current Issue") unless path.start_with?(revision_prefix)
+    artifact_snapshots.relative_leaf(issue_directory, path.delete_prefix(revision_prefix),
+      "Issue contract revision #{path}").bytes
+  end
+  IOSTemplate::IssueContractRevision.validate_active_bytes!(
+    state_bytes: state_file.bytes, contract_bytes: contract_file.bytes,
+    issue: issue, repository: repository, loader: revision_loader,
+    history_exists: revision_history_exists, pending_exists: pending_exists
+  )
 
   operation_details = contract.fetch("externalOperations", []).map { |operation| [operation, nil] }.to_h
   refuse("Issue contract does not declare github.merge_pr") unless operation_details.key?("github.merge_pr")
@@ -376,6 +398,8 @@ begin
   end
 rescue IOSTemplate::IssueContract::ValidationError => error
   refuse("live Issue is invalid: #{error.failures.join('; ')}")
+rescue IOSTemplate::IssueContractRevision::ValidationError => error
+  refuse("Issue contract revision is invalid: #{error.message}")
 rescue IOSTemplate::Ownership::ValidationError => error
   refuse("Config ownership is invalid: #{error.message}")
 rescue IOSTemplate::ReviewContract::ValidationError => error

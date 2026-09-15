@@ -145,6 +145,13 @@ BODY_FILE="$body_v1" LIVE="$live" ISSUE="$issue" REPOSITORY="$repository" ruby -
 tool="$worktree/tools/lib/issue-contract-revision.rb"
 ruby "$tool" validate --repo-root "$worktree" --repo "$repository" --issue "$issue" > "$workspace/original.json"
 [[ $(jq -er '.status' "$workspace/original.json") == original ]] || fail 'initial contract was not accepted as original revision 1'
+ruby "$tool" validate-live --repo-root "$worktree" --repo "$repository" --issue "$issue" --live-json "$live" >/dev/null
+LIVE="$live" BODY="$body_forbidden" ruby -rjson -e '
+  value=JSON.parse(File.binread(ENV.fetch("LIVE"))); value["body"]=File.binread(ENV.fetch("BODY"));
+  File.binwrite("#{ENV.fetch("LIVE")}.mismatch",JSON.generate(value))
+'
+assert_fails 'recordless live body change' ruby "$tool" validate-live --repo-root "$worktree" \
+  --repo "$repository" --issue "$issue" --live-json "$live.mismatch"
 
 marker=$(ruby "$tool" marker --repo-root "$worktree" --repo "$repository" --issue "$issue" \
   --body "$body_v2" --live-json "$live" --trigger user-explicit --reason 'User approved exact AC correction' | jq -er '.marker')
@@ -268,15 +275,15 @@ REPO_ROOT="$worktree" ISSUE="$issue" REPOSITORY="$repository" BODY="$body_v4" LI
 ' > "$workspace/activated-v4.json"
 [[ $(jq -er '.issueContractRevision.revision' "$artifact_issue/state.json") == 4 ]] || fail 'review-finding revision was not accepted'
 
-# A later current-Head verification binding is valid and retains the revision
-# chain. Removing the chain reference or changing any immutable record is not.
+# A later current-Head transition through the production state-record helper is
+# valid and preserves the revision reference. Removing that reference or
+# changing any immutable record is not.
+ruby "$worktree/tools/lib/workflow-json.rb" transition-state-record \
+  "$artifact_issue/state.json" "$issue" "$repository" verify-passed in-progress verify-passed null \
+  '2026-09-15T00:04:00Z' "$head_sha" > "$workspace/verify-passed-state.json"
+mv "$workspace/verify-passed-state.json" "$artifact_issue/state.json"
 cp "$artifact_issue/state.json" "$workspace/state.good"
-STATE="$artifact_issue/state.json" HEAD_SHA="$head_sha" ruby -rjson -e '
-  path=ENV.fetch("STATE"); value=JSON.parse(File.binread(path)); value["state"]="verify-passed"; value["previousState"]="in-progress";
-  value["from"]="in-progress"; value["to"]="verify-passed"; value["headSha"]=ENV.fetch("HEAD_SHA");
-  def canonical(entry); entry.is_a?(Hash) ? entry.keys.sort.to_h{|key|[key,canonical(entry[key])]} : entry.is_a?(Array) ? entry.map{|v|canonical(v)} : entry end
-  File.binwrite(path,JSON.generate(canonical(value))+"\n")
-'
+[[ $(jq -er '.issueContractRevision.revision' "$artifact_issue/state.json") == 4 ]] || fail 'state transition dropped the active revision reference'
 ruby "$tool" validate --repo-root "$worktree" --repo "$repository" --issue "$issue" >/dev/null
 STATE="$artifact_issue/state.json" ruby -rjson -e '
   path=ENV.fetch("STATE"); value=JSON.parse(File.binread(path)); value.delete("issueContractRevision")

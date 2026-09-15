@@ -84,6 +84,18 @@ cat > "$issue_body" <<'EOF'
 
 ## External operations
 
+- Operation: github.read_issue
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+- Operation: github.update_issue
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
 - Operation: github.merge_pr
 - Service: GitHub
 - Environment: production
@@ -293,6 +305,108 @@ run_gate > "$scratch/gate.json"
 jq -e --arg head "$head_sha" '.status == "passed" and .headSha == $head' "$scratch/gate.json" >/dev/null
 expected_gh="issue view 42 --repo yuto1201/iOS-Template --json number,url,body,labels"
 [[ "$(tail -n 1 "$FAKE_GH_LOG")" == "$expected_gh" ]] || { echo 'gate used an unexpected gh command' >&2; exit 1; }
+
+# A formally revised contract must create a fresh current-Head packet, review,
+# and receipt. Packet preparation and the final gate both consume the revision
+# chain; pending or tampered history remains fail-closed.
+cp "$issue_body" "$scratch/issue.original.md"
+cp "$repo/.artifacts/issues/42/issue-contract.json" "$scratch/contract.original.json"
+cp "$repo/.artifacts/issues/42/state.json" "$scratch/state.original.json"
+original_contract_at=$contract_at
+original_verify_at=$verify_at
+original_review_at=$review_at
+original_transition_at=$transition_at
+original_preflight_at=$preflight_at
+revised_issue_body="$scratch/issue.revised.md"
+sed 's/Every acceptance criterion has one evidence mapping\./Every acceptance criterion has one current-revision evidence mapping./' \
+  "$issue_body" > "$revised_issue_body"
+ruby -rjson -e '
+  path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="in-progress";
+  value["previousState"]="changes-requested"; value["from"]="changes-requested"; value["to"]="in-progress";
+  value["resumeState"]=nil; value.delete("headSha"); value.delete("pullRequest");
+  def canonical(v); v.is_a?(Hash) ? v.keys.sort.to_h{|key|[key,canonical(v[key])]} : v.is_a?(Array) ? v.map{|entry|canonical(entry)} : v end
+  File.binwrite(path,JSON.generate(canonical(value)))
+' "$repo/.artifacts/issues/42/state.json"
+revision_live="$scratch/revision-live.json"
+BODY="$issue_body" LIVE="$revision_live" ruby -rjson -e '
+  File.binwrite(ENV.fetch("LIVE"),JSON.generate({"number"=>42,
+    "url"=>"https://github.com/yuto1201/iOS-Template/issues/42","title"=>"Gate fixture",
+    "body"=>File.binread(ENV.fetch("BODY")).force_encoding("UTF-8"),
+    "labels"=>[{"name"=>"state:in-progress"},{"name"=>"type:feature"}],"comments"=>[]}))
+'
+revision_tool="$issue_worktree/tools/lib/issue-contract-revision.rb"
+revision_reason='User approved exact evidence wording'
+revision_marker=$(ruby "$revision_tool" marker --repo-root "$issue_worktree" --repo yuto1201/iOS-Template \
+  --issue 42 --body "$revised_issue_body" --live-json "$revision_live" --trigger user-explicit \
+  --reason "$revision_reason" | jq -er '.marker')
+revision_comment='https://github.com/yuto1201/iOS-Template/issues/42#issuecomment-4242'
+MARKER="$revision_marker" LIVE="$revision_live" URL="$revision_comment" COMMENT_AT="$(timestamp 0)" ruby -rjson -e '
+  path=ENV.fetch("LIVE"); value=JSON.parse(File.binread(path));
+  value["comments"]=[{"author"=>{"login"=>"yuto1201"},"createdAt"=>ENV.fetch("COMMENT_AT"),
+    "url"=>ENV.fetch("URL"),"body"=>ENV.fetch("MARKER")}]; File.binwrite(path,JSON.generate(value))
+'
+ruby "$revision_tool" prepare --repo-root "$issue_worktree" --repo yuto1201/iOS-Template --issue 42 \
+  --body "$revised_issue_body" --live-json "$revision_live" --trigger user-explicit \
+  --reason "$revision_reason" --authority-reference "$revision_comment" >/dev/null
+cp "$revised_issue_body" "$issue_body"
+BODY="$issue_body" LIVE="$revision_live" ruby -rjson -e '
+  path=ENV.fetch("LIVE"); value=JSON.parse(File.binread(path));
+  value["body"]=File.binread(ENV.fetch("BODY")).force_encoding("UTF-8");
+  File.binwrite(path,JSON.generate(value))
+'
+ruby "$revision_tool" activate --repo-root "$issue_worktree" --repo yuto1201/iOS-Template --issue 42 \
+  --body "$revised_issue_body" --live-json "$revision_live" --trigger user-explicit \
+  --reason "$revision_reason" --authority-reference "$revision_comment" >/dev/null
+contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+contract_at=$(jq -er '.fetchedAt' "$repo/.artifacts/issues/42/issue-contract.json")
+verify_at=$(timestamp 1)
+review_at=$(timestamp 2)
+transition_at=$(timestamp 3)
+preflight_at=$(timestamp 4)
+HEAD="$head_sha" TRANSITIONED_AT="$transition_at" ruby -rjson -e '
+  path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="approved-for-merge";
+  value["previousState"]="review-requested"; value["from"]="review-requested"; value["to"]="approved-for-merge";
+  value["resumeState"]=nil; value["headSha"]=ENV.fetch("HEAD"); value["pullRequest"]=57;
+  value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT");
+  def canonical(v); v.is_a?(Hash) ? v.keys.sort.to_h{|key|[key,canonical(v[key])]} : v.is_a?(Array) ? v.map{|entry|canonical(entry)} : v end
+  File.binwrite(path,JSON.generate(canonical(value)))
+' "$repo/.artifacts/issues/42/state.json"
+rm -f "$repo/.artifacts/issues/42/$head_sha/verify.json" "$repo/.artifacts/issues/42/$head_sha/review-packet.json" \
+  "$repo/.artifacts/issues/42/$head_sha/review.diff" "$repo/.artifacts/issues/42/$head_sha/review.json" \
+  "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
+write_verify
+printf '{}\n' > "$repo/.artifacts/issues/42/issue-contract-revision.pending.json"
+assert_fails 'review packet rejects a pending contract revision' write_review_packet
+rm "$repo/.artifacts/issues/42/issue-contract-revision.pending.json"
+write_review_packet
+write_review
+write_preflight
+run_gate > "$scratch/revision-gate.json"
+jq -e --arg head "$head_sha" '.status == "passed" and .headSha == $head' "$scratch/revision-gate.json" >/dev/null
+revision_record_relative=$(jq -er '.issueContractRevision.path' "$repo/.artifacts/issues/42/state.json")
+revision_record="$repo/$revision_record_relative"
+cp "$revision_record" "$scratch/revision-record.valid.json"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["reason"]="tampered"; File.binwrite(path,JSON.generate(value))' "$revision_record"
+assert_fails 'premerge rejects a tampered contract revision chain' run_gate
+cp "$scratch/revision-record.valid.json" "$revision_record"
+
+cp "$scratch/issue.original.md" "$issue_body"
+cp "$scratch/contract.original.json" "$repo/.artifacts/issues/42/issue-contract.json"
+cp "$scratch/state.original.json" "$repo/.artifacts/issues/42/state.json"
+rm -rf "$repo/.artifacts/issues/42/issue-contract-revisions"
+contract_at=$original_contract_at
+verify_at=$original_verify_at
+review_at=$original_review_at
+transition_at=$original_transition_at
+preflight_at=$original_preflight_at
+contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
+rm -f "$repo/.artifacts/issues/42/$head_sha/verify.json" "$repo/.artifacts/issues/42/$head_sha/review-packet.json" \
+  "$repo/.artifacts/issues/42/$head_sha/review.diff" "$repo/.artifacts/issues/42/$head_sha/review.json" \
+  "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
+write_verify
+write_review_packet
+write_review
+write_preflight
 CTIME_ONLY_HELD_TARGET="$repo/.artifacts/issues/42/github-preflight.json" run_gate >/dev/null
 
 # The same Gate and renderer must accept only the exact reviewer selected by a

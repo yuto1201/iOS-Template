@@ -102,7 +102,7 @@ claim_fail_after() {
 }
 
 workflow_github_preflight "$repo_root" "$repo" "$issue" github.read_issue || { echo 'GitHub account preflight failed before Issue read' >&2; exit 1; }
-issue_json=$(gh issue view "$issue" --repo "$repo" --json title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
+issue_json=$(gh issue view "$issue" --repo "$repo" --json number,url,title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
 current_state=$(printf '%s' "$issue_json" | issue_state_from_json)
 workflow_is_state "$current_state" || conflict 'Issue has an unknown current state label'
 if [[ "$current_state" == approved ]]; then
