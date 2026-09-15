@@ -313,6 +313,7 @@ begin
     revision_context: revision_context)
   IOSTemplate::ReviewContract.validate_evidence_applicability!(
     packet: packet, contract: contract, verify: verify, issue: issue, base_sha: base_sha, head_sha: head_sha,
+    target_contract_bytes: contract_file.fetch(:bytes),
     applicability_bytes: applicability_file&.fetch(:bytes),
     source_verify_bytes: applicability_source_verify_file&.fetch(:bytes),
     source_contract_bytes: applicability_source_contract_file&.fetch(:bytes), repo: repo

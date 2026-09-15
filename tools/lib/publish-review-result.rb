@@ -151,6 +151,7 @@ if packet
       IOSTemplate::ReviewContract.validate_evidence_applicability!(
         packet: packet_value, contract: contract_value, verify: JSON.parse(held_verify.bytes.dup),
         issue: Integer(issue_text), base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
+        target_contract_bytes: held_contract.bytes,
         applicability_bytes: applicability.bytes, source_verify_bytes: source_verify.bytes,
         source_contract_bytes: source_contract.bytes, repo: repo
       )

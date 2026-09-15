@@ -146,6 +146,7 @@ module IOSTemplate
           workflow_required: verify["changeClassification"] == "workflow-only")
         ReviewContract.validate_evidence_applicability!(
           packet: packet, contract: contract, verify: verify, issue: issue, base_sha: base_sha, head_sha: head_sha,
+          target_contract_bytes: contract_file.bytes,
           applicability_bytes: applicability_file&.bytes,
           source_verify_bytes: applicability_source_verify_file&.bytes,
           source_contract_bytes: applicability_source_contract_file&.bytes,

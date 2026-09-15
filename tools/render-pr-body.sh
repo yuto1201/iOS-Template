@@ -241,6 +241,7 @@ begin
   applicability_at = IOSTemplate::ReviewContract.validate_evidence_applicability!(
     packet: review_packet, contract: contract, verify: verify, issue: issue,
     base_sha: verify["baseSha"], head_sha: head,
+    target_contract_bytes: contract_bytes,
     applicability_bytes: applicability_leaf&.bytes,
     source_verify_bytes: applicability_source_verify_leaf&.bytes,
     source_contract_bytes: applicability_source_contract_leaf&.bytes,

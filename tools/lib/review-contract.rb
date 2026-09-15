@@ -73,6 +73,7 @@ module IOSTemplate
       completed_at = validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, require_temporal_order)
       applicability_at = validate_evidence_applicability!(
         packet: packet, contract: contract, verify: verify, issue: issue, base_sha: base_sha, head_sha: head_sha,
+        target_contract_bytes: contract_bytes,
         applicability_bytes: evidence_applicability_bytes, source_verify_bytes: evidence_source_verify_bytes,
         source_contract_bytes: evidence_source_contract_bytes, repo: evidence_repo
       )
@@ -497,6 +498,7 @@ module IOSTemplate
     end
 
     def validate_evidence_applicability!(packet:, contract:, verify:, issue:, base_sha:, head_sha:,
+                                         target_contract_bytes: nil,
                                          applicability_bytes: nil, source_verify_bytes: nil,
                                          source_contract_bytes: nil, repo: nil)
       present = packet.key?("evidenceApplicability") || packet.key?("evidenceApplicabilityFile")
@@ -510,6 +512,7 @@ module IOSTemplate
       reject("evidence applicability packet fields must appear together") unless
         packet.key?("evidenceApplicability") && packet.key?("evidenceApplicabilityFile")
       reject("held evidence applicability bytes are required") unless applicability_bytes.is_a?(String)
+      reject("held target Issue contract bytes are required") unless target_contract_bytes.is_a?(String)
       reject("held Phase 5 source verification bytes are required") unless source_verify_bytes.is_a?(String)
       reject("held Phase 5 source contract bytes are required") unless source_contract_bytes.is_a?(String)
       reject("evidence applicability validation requires the physical repository") unless repo.is_a?(String)
@@ -523,9 +526,11 @@ module IOSTemplate
       reject("evidence applicability target differs from review identity") unless
         record.dig("target", "issue") == issue && record.dig("target", "baseSha") == base_sha &&
         record.dig("target", "headSha") == head_sha
+      reject("held target Issue contract bytes differ from parsed contract") unless
+        parse_object(target_contract_bytes, "held target issue contract") == contract
 
       validated = EvidenceApplicability.validate!(
-        record_bytes: applicability_bytes, repo: repo, target_contract_bytes: JSON.generate(contract).b,
+        record_bytes: applicability_bytes, repo: repo, target_contract_bytes: target_contract_bytes,
         source_verify_bytes: source_verify_bytes, source_contract_bytes: source_contract_bytes
       )
       if validated.dig("decision", "action") != "reuse"

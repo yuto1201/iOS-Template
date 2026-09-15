@@ -81,9 +81,11 @@ module IOSTemplate
           if applicability.dig("decision", "action") == "reuse"
             proof_file = source_verify_file
             proof_contract_file = source_contract_file
+            expected_proof_base = applicability.dig("source", "baseSha")
           else
             proof_file = snapshots.relative_leaf("issues/#{issue}/#{head}/verify.json", at: "release re-verification proof")
             proof_contract_file = contract_file
+            expected_proof_base = applicability.dig("target", "baseSha")
             target_verify = JSON.parse(proof_file.bytes.dup)
             unless Time.iso8601(target_verify.fetch("completedAt")) > Time.iso8601(applicability.fetch("evaluatedAt"))
               raise InvalidProof, "release re-verification predates the applicability decision"
@@ -92,6 +94,7 @@ module IOSTemplate
         else
           proof_file = snapshots.relative_leaf("issues/#{issue}/#{head}/verify.json", at: "release verification proof")
           proof_contract_file = contract_file
+          expected_proof_base = base
           reference = {"issue"=>issue, "baseSha"=>base, "path"=>".artifacts/issues/#{issue}/#{head}/verify.json",
                        "digest"=>"sha256:#{Digest::SHA256.hexdigest(proof_file.bytes)}"}
         end
@@ -108,6 +111,9 @@ module IOSTemplate
         unless proof_file == source_verify_file || proof_path == ".artifacts/issues/#{issue}/#{head}/verify.json"
           raise InvalidProof, "release proof path is inconsistent"
         end
+        unless proof_base == expected_proof_base
+          raise InvalidProof, "release proof Base SHA differs from the caller or applicability decision"
+        end
         scope = VerificationScope.validate_contract!(proof_contract)
         unless scope == "full" && verify["changeClassification"] == "application-code" && verify["status"] == "passed" &&
                verify["cases"].is_a?(Array) && verify["cases"].map { |entry| entry["id"] } == VerificationScope::FULL_IDS
@@ -121,7 +127,7 @@ module IOSTemplate
         end
         output, status = Open3.capture2e(GIT_ENV, "/usr/bin/swift", File.expand_path("../validate-verify-json.swift", __dir__),
           "--file", proof_path, "--expected-file-digest", proof_digest,
-          "--expected-issue", proof_issue.to_s, "--expected-base", proof_base, "--expected-head", proof_head, chdir: repo)
+          "--expected-issue", proof_issue.to_s, "--expected-base", expected_proof_base, "--expected-head", proof_head, chdir: repo)
         raise InvalidProof, "canonical release verification failed: #{output.strip}" unless status.success?
         value = yield reference
         snapshots.verify!

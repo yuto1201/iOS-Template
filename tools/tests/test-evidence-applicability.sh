@@ -175,6 +175,31 @@ target_verify = {
 }
 target_head_root = File.join(repo, ".artifacts/issues/502", source_head)
 File.binwrite(File.join(target_head_root, "verify.json"), JSON.generate(target_verify))
+
+# Review validation must use the exact held contract bytes, not a JSON
+# reserialization. A semantically identical pretty-printed contract therefore
+# remains valid only when those same bytes are threaded into the validator.
+pretty_target_contract = JSON.pretty_generate(JSON.parse(target_contract)) + "\n"
+pretty_record = IOSTemplate::EvidenceApplicability.build(
+  repo: repo, target_issue: 502, target_base_sha: ENV.fetch("BASE"), target_head_sha: source_head,
+  target_contract_bytes: pretty_target_contract, source_verify_path: source_path,
+  source_verify_bytes: source_verify, source_contract_bytes: source_contract,
+  source_context: record.fetch("sourceContext"), target_context: record.fetch("targetContext"),
+  impact_entries: [], reason: "Preserve exact held target contract bytes.", evaluated_at: Time.now.utc.iso8601
+)
+pretty_record_bytes = IOSTemplate::EvidenceApplicability.canonical_bytes(pretty_record)
+pretty_packet = {
+  "evidenceApplicability" => pretty_record,
+  "evidenceApplicabilityFile" => IOSTemplate::EvidenceApplicability.references!(
+    record_bytes: pretty_record_bytes, target_issue: 502, target_head_sha: source_head
+  ).fetch("record")
+}
+IOSTemplate::ReviewContract.validate_evidence_applicability!(
+  packet: pretty_packet, contract: JSON.parse(pretty_target_contract), verify: target_verify,
+  issue: 502, base_sha: ENV.fetch("BASE"), head_sha: source_head,
+  target_contract_bytes: pretty_target_contract, applicability_bytes: pretty_record_bytes,
+  source_verify_bytes: source_verify, source_contract_bytes: source_contract, repo: repo
+)
 state = {
   "schemaVersion" => 1, "issue" => 502, "repository" => "yuto1201/iOS-Template",
   "branch" => "codex/502-applicability", "worktree" => ".worktrees/502-applicability",
@@ -257,6 +282,7 @@ begin
   IOSTemplate::ReviewContract.validate_evidence_applicability!(
     packet: narrow_packet, contract: JSON.parse(target_contract), verify: target_verify,
     issue: 502, base_sha: ENV.fetch("BASE"), head_sha: source_head,
+    target_contract_bytes: target_contract,
     applicability_bytes: narrow_record_bytes, source_verify_bytes: narrow_verify_bytes,
     source_contract_bytes: narrow_contract_bytes, repo: repo
   )
@@ -334,6 +360,7 @@ expect_temporal_refusal = lambda do |verify, label|
     IOSTemplate::ReviewContract.validate_evidence_applicability!(
       packet: targeted_packet, contract: JSON.parse(target_contract), verify: verify,
       issue: 502, base_sha: ENV.fetch("BASE"), head_sha: target_head,
+      target_contract_bytes: target_contract,
       applicability_bytes: targeted_bytes, source_verify_bytes: source_verify,
       source_contract_bytes: source_contract, repo: repo
     )
@@ -353,6 +380,7 @@ IOSTemplate::ReviewContract.validate_evidence_applicability!(
   packet: targeted_packet, contract: JSON.parse(target_contract),
   verify: {"status" => "passed", "completedAt" => (evaluated + 1).utc.iso8601},
   issue: 502, base_sha: ENV.fetch("BASE"), head_sha: target_head,
+  target_contract_bytes: target_contract,
   applicability_bytes: targeted_bytes, source_verify_bytes: source_verify,
   source_contract_bytes: source_contract, repo: repo
 )
@@ -461,6 +489,16 @@ begin
   abort "release without the applicability artifact digest was accepted"
 rescue IOSTemplate::ReleaseVerification::InvalidProof
 end
+begin
+  IOSTemplate::ReleaseVerification.with_full_proof(
+    repo: repo, issue: source_issue, base: "0" * 40, head: head,
+    bundle: "com.example.TemplateApp",
+    publish: ->(_) { abort "direct release proof with a mismatched caller Base published" }
+  ) { |value| value }
+  abort "direct release proof ignored the caller Base"
+rescue IOSTemplate::ReleaseVerification::InvalidProof => error
+  abort "direct Base mismatch produced an unrelated refusal" unless error.message.include?("Base SHA differs")
+end
 
 package_dir = File.join(repo, "App Store/submission")
 FileUtils.mkdir_p(package_dir)
@@ -561,6 +599,21 @@ stale = not_passed.merge(
 )
 File.binwrite(target_verify_path, JSON.generate(stale))
 expect_release_refusal.call("stale")
+mismatched_base = stale.merge(
+  "baseSha" => base,
+  "completedAt" => (Time.parse(nonreuse.fetch("evaluatedAt")) + 1).utc.iso8601
+)
+File.binwrite(target_verify_path, JSON.generate(mismatched_base))
+begin
+  IOSTemplate::ReleaseVerification.with_full_proof(
+    repo: repo, issue: nonreuse_issue, base: head, head: target_head,
+    bundle: "com.example.TemplateApp", artifact_digest: artifact_digest,
+    publish: ->(_) { abort "non-reuse proof with a mismatched Base published" }
+  ) { |value| value }
+  abort "non-reuse release proof ignored the applicability Base"
+rescue IOSTemplate::ReleaseVerification::InvalidProof => error
+  abort "non-reuse Base mismatch produced an unrelated refusal" unless error.message.include?("Base SHA differs")
+end
 RUBY
 
 echo 'PASS: Phase 5 evidence is reused only for the same Phase 6 candidate and conditions; source, context, unknown impact, missing dependency, and scope changes invalidate reuse'
