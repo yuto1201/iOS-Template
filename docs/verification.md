@@ -24,6 +24,34 @@ stage未指定のClaim済みcontractは旧release-level gateを維持します�
 
 宣言候補はAcceptance criterion本文がexact `UI-direction route:` prefixで始まる場合だけです。完全なroute宣言は、候補がexactly oneで、その本文先頭（`AC-*:`の直後）がexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`を満たす場合だけです。`<route>`は`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`のいずれかとし、route固有の適用事実はReasonの後へ続けます。prefix外のroute語は候補として数えません。D-030 cutover `2026-09-06T00:31:41Z`より封印済みIssue contractの`fetchedAt`が前で候補がゼロの場合だけpre-D-030 legacyです。routeを推測せず、HTMLやroute宣言を遡及要求せず、contractを変更・再封印せず、元の封印済みAC／spec／Dependencies／current-Head evidenceを検証します。cutover前でも候補が一つ以上あれば通常のroute検証へ進み、malformed、unknown、multipleをrejectします。cutoverと同時刻以降にも同じexactly-one／完全性を要求し、候補ゼロもrejectします。
 
+### 1.2 Phase 5から6への証拠適用
+
+Phase 6 `implementation`は`.artifacts/issues/${ISSUE}/${HEAD_SHA}/evidence-applicability.json`を必須とします。producerはPhase 5のcanonical passed full application `verify.json`、source／target Issue contract、targetと非legacy sourceの`Release-phase binding:`、bindingに封印されたphase-record path／digest参照、現在のGit graphとsource..target diffを検証し、次の入口からschema v1 recordをexclusive publishします。phase-record blob自体はRelease-phase Claim gateで検証済みであり、適用recordはそのsealed参照を保持します。
+
+```bash
+tools/evaluate-evidence-applicability.sh \
+  --issue "${ISSUE}" \
+  --base-sha "${BASE_SHA}" \
+  --head-sha "${HEAD_SHA}" \
+  --input "${INPUT_JSON}"
+```
+
+入力のexact top-level fieldは`schemaVersion`、`sourceVerify`、`sourceContext`、`targetContext`、`impact`、`reason`、`evaluatedAt`です。contextは`artifactDigest`、`configurationDigest`、`sdkDigest`、`signingDigest`、sorted nonempty `scope`を持ちます。impactはsource..target diffの全changed pathをsorted順でexactに覆い、各entryに`path`、`classification`、`scopes`、`dependencies`、`reason`を持たせます。classificationは`unaffected`、`affected`、`unknown`です。dependencyは現在Headのregular Git blobへ`present`とexact digestを記録するか、存在しないpathへ`missing`とnull digestを記録します。
+
+recordはrelease／revision／Phase 5→6／scope、source／target phase-record参照、Phase 5証拠とcontract、Phase 6 Issue／Base／Head／contract、両context、actual diff digest／changed paths、全impact、判定と時刻をcanonical bytesで固定します。判定は次の三つだけです。
+
+- `reuse`: source Headとtarget Head、全contextがexact一致し、差分、unknown、missing dependency、scope拡張がない。
+- `targeted-reverify`: Headまたはcontextが変わった、もしくは`affected` pathがある。recordの`impactScope`を判定後に再検証する。
+- `expanded-verification`: `unknown`、missing dependency、またはtarget scope拡張がある。現在のtarget scopeまで検証を広げる。
+
+sourceとtargetのcommit objectはどちらもrepositoryで参照可能で、source Base→source Head、target Base→target Headがそれぞれ祖先関係を満たす必要があります。squash merge後のようにsource Headとtarget Headが分岐していても、両objectからactual source..target diffを固定して判定できます。ただしHeadが異なる時点で`reuse`にはならず、少なくとも`targeted-reverify`です。source commit objectが取得できなければ判定せずfail closedにします。
+
+`targeted-reverify`と`expanded-verification`では、Phase 6 targetのpassed `verify.json`がrecordの`evaluatedAt`より後でなければreview／releaseへ進めません。`reuse`では元のPhase 5 full proofをそのまま検証し、Phase 6で再実行したと表現しません。review packet schema v2は`evidenceApplicability`と`evidenceApplicabilityFile`を対で封印し、元証拠と元contractもexact digestで保持します。PR renderer、pre-merge、release/package preflightは同じrecordを再検証し、別candidate、古いreview時刻、atomic replacement、artifact digest不一致を拒否します。
+
+D-049のrelease-phase binding互換cutoff `2026-09-14T00:00:00Z`より前に封印され、`Release-phase binding:`を持たないPhase 5 source contractだけは元bytesのままlegacy sourceとして使用できます。Phase 6 target bindingがrelease、revision、scopeを固定し、recordは`sourceLegacy: true`、`sourceRecord: null`として架空のPhase 5 recordを作りません。sourceのpassed full proofとGit identityは引き続き必須です。cutoff以後のsourceにはPhase 5 `implementation` bindingを要求します。Phase 6 bindingを持たない既存Issueは従来の直接full `verify.json`経路を維持し、適用recordを推測生成しません。
+
+証拠適用は提出操作そのものの証明ではありません。package integrity、bundle identity、current build artifact digest、privacy／legal、公開権限、認証account／target、provider保存後readbackなど提出固有のpreflightは、Phase 6の実行ごとに従来どおり確認します。
+
 ## 2. 環境の解決
 
 `tools/resolve-simulator-matrix.sh` はIssueバッチ開始時に一度だけ実行します。

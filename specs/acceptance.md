@@ -83,7 +83,9 @@ stage未導入のClaim済みIssueはcanonical contractを変更せず、旧profi
 
 既知不具合、テスト省略、未検証を別々に残す。非blocking残件の許容には対象release、影響、回避策、修正費用、承認者、追跡Issue、再評価時点が必要である。データ消失、秘密漏洩、誤課金、重大計算誤り、主要導線crash、認証／privacy／法務の必須条件違反が一つでもあればPhase 5の公開可判定を通さない。
 
-Phase 5と6で同じcandidate artifact、Head、config、SDK／signing context、scopeを扱う証拠は適用可能性を評価して重複実行を避ける。変更の影響が不明なら再検証し、旧Head証拠を現Headの実行結果へ付け替えない。#86の仕組みが実装されるまでは仕様上の再利用候補に留め、canonical evidenceの再利用や改訂を実装済みと扱わない。
+Phase 5から6へ進む`implementation`は、Phase 5のpassed full verificationとPhase 6候補の適用可能性を、Phase 6のIssue／Base／Headごとのimmutable `evidence-applicability.json`へ記録する。release identifier、revision、scope、source／target phase record、元証拠とcontractのpath／digest、artifact／configuration／SDK／signing context、source..target Git diff、全changed pathの影響分類・依存関係・理由、判定時刻を固定し、review packet、PR本文、pre-merge、提出前preflightが同じrecordを検証する。
+
+`reuse`はcandidate Headと全contextがexact一致し、差分、unknown／missing dependency、scope拡張がない場合だけ許可する。Head、contextまたは影響pathが変われば`targeted-reverify`、影響不明、dependency欠落またはscope拡張なら`expanded-verification`とし、判定後に必要範囲のpassed検証を取得する。設定、signing、SDKだけを一律に影響なしとせず、旧Head証拠を現Headの実行結果へ付け替えない。提出時固有のpackage、privacy、legal、権限、provider readbackは再利用対象外とし毎回確認する。
 
 ### 3.1 Delivery stage gate
 

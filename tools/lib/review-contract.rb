@@ -7,6 +7,7 @@ require "time"
 require_relative "verification-scope"
 require_relative "repository-test-plan"
 require_relative "review-route"
+require_relative "evidence-applicability"
 
 module IOSTemplate
   module ReviewContract
@@ -25,6 +26,7 @@ module IOSTemplate
     PACKET_V2_REPOSITORY_TEST_KEYS = (PACKET_V2_KEYS + %w[repositoryTests]).freeze
     PACKET_V2_REVISION_TEST_KEYS = (PACKET_V2_REPOSITORY_TEST_KEYS + %w[repositoryTestsFile]).freeze
     PACKET_V2_PLANNED_TEST_KEYS = (PACKET_V2_REVISION_TEST_KEYS + %w[repositoryTestPlan repositoryTestPlanFile]).freeze
+    PACKET_V2_APPLICABILITY_KEYS = %w[evidenceApplicability evidenceApplicabilityFile].freeze
     RESULT_V1_KEYS = %w[
       schemaVersion issue reviewerModel baseSha headSha verifySha
       issueContractDigest verdict findings acceptanceAssessment reviewedAt
@@ -46,7 +48,9 @@ module IOSTemplate
     def validate!(packet_bytes:, result_bytes:, verify_bytes:, contract_bytes:, primary:, issue:, base_sha:, head_sha:,
                   now: Time.now.utc, require_temporal_order: false, strict: false,
                   diff_bytes: nil, image_bytes: nil, actual_diff_bytes: nil,
-                  repository_tests_bytes: nil, repository_test_plan_bytes: nil, revision_context: nil)
+                  repository_tests_bytes: nil, repository_test_plan_bytes: nil, revision_context: nil,
+                  evidence_applicability_bytes: nil, evidence_source_verify_bytes: nil,
+                  evidence_source_contract_bytes: nil, evidence_repo: nil)
       reject("primary model is invalid") unless %w[codex claude].include?(primary)
       packet = parse_object(packet_bytes, "packet")
       result = parse_object(result_bytes, "result")
@@ -67,6 +71,13 @@ module IOSTemplate
         revision_context: revision_context,
         workflow_required: verify["changeClassification"] == "workflow-only")
       completed_at = validate_verify_identity!(packet, schema, verify, issue, base_sha, head_sha, contract_digest, require_temporal_order)
+      applicability_at = validate_evidence_applicability!(
+        packet: packet, contract: contract, verify: verify, issue: issue, base_sha: base_sha, head_sha: head_sha,
+        target_contract_bytes: contract_bytes,
+        applicability_bytes: evidence_applicability_bytes, source_verify_bytes: evidence_source_verify_bytes,
+        source_contract_bytes: evidence_source_contract_bytes, repo: evidence_repo
+      )
+      completed_at = [completed_at, applicability_at].compact.max if require_temporal_order
 
       if schema == 2
         validate_evidence_scope!(contract, verify)
@@ -120,7 +131,20 @@ module IOSTemplate
         reject("packet.repositoryTestPlanFile.path is not canonical") unless reference["path"] == "#{prefix}repository-test-plan.json"
         references["repositoryTestPlanFile"] = reference
       end
+      if packet.key?("evidenceApplicability")
+        record_bytes = EvidenceApplicability.canonical_bytes(packet.fetch("evidenceApplicability"))
+        applicability = EvidenceApplicability.references!(
+          record_bytes: record_bytes, target_issue: issue, target_head_sha: head_sha
+        )
+        reference = reference!(packet["evidenceApplicabilityFile"], "packet.evidenceApplicabilityFile")
+        reject("packet.evidenceApplicabilityFile is not the canonical record reference") unless reference == applicability.fetch("record")
+        references["evidenceApplicabilityFile"] = reference
+        references["evidenceSourceVerify"] = applicability.fetch("sourceVerify")
+        references["evidenceSourceContract"] = applicability.fetch("sourceContract")
+      end
       references
+    rescue EvidenceApplicability::ValidationError => error
+      reject(error.message)
     end
 
     def actual_diff(repo:, base_sha:, head_sha:)
@@ -468,8 +492,56 @@ module IOSTemplate
 
     def exact_packet_v2_keys!(packet)
       reject("packet must be an object") unless packet.is_a?(Hash)
-      allowed = [PACKET_V2_KEYS.sort, PACKET_V2_REPOSITORY_TEST_KEYS.sort, PACKET_V2_REVISION_TEST_KEYS.sort, PACKET_V2_PLANNED_TEST_KEYS.sort]
+      base = [PACKET_V2_KEYS, PACKET_V2_REPOSITORY_TEST_KEYS, PACKET_V2_REVISION_TEST_KEYS, PACKET_V2_PLANNED_TEST_KEYS]
+      allowed = (base + base.map { |keys| keys + PACKET_V2_APPLICABILITY_KEYS }).map(&:sort)
       reject("packet: unexpected or missing keys") unless allowed.include?(packet.keys.sort)
+    end
+
+    def validate_evidence_applicability!(packet:, contract:, verify:, issue:, base_sha:, head_sha:,
+                                         target_contract_bytes: nil,
+                                         applicability_bytes: nil, source_verify_bytes: nil,
+                                         source_contract_bytes: nil, repo: nil)
+      present = packet.key?("evidenceApplicability") || packet.key?("evidenceApplicabilityFile")
+      declared = Array(contract["acceptanceCriteria"]).any? do |criterion|
+        criterion.is_a?(Hash) && criterion["text"].is_a?(String) && criterion["text"].start_with?("Release-phase binding: ")
+      end
+      return nil unless present || declared
+      required = EvidenceApplicability.required?(contract)
+      reject("Phase 6 implementation requires a canonical evidence applicability decision") if required && !present
+      return nil unless present
+      reject("evidence applicability packet fields must appear together") unless
+        packet.key?("evidenceApplicability") && packet.key?("evidenceApplicabilityFile")
+      reject("held evidence applicability bytes are required") unless applicability_bytes.is_a?(String)
+      reject("held target Issue contract bytes are required") unless target_contract_bytes.is_a?(String)
+      reject("held Phase 5 source verification bytes are required") unless source_verify_bytes.is_a?(String)
+      reject("held Phase 5 source contract bytes are required") unless source_contract_bytes.is_a?(String)
+      reject("evidence applicability validation requires the physical repository") unless repo.is_a?(String)
+
+      reference = reference!(packet["evidenceApplicabilityFile"], "packet.evidenceApplicabilityFile")
+      expected_path = ".artifacts/issues/#{issue}/#{head_sha}/evidence-applicability.json"
+      reject("evidence applicability path is not canonical") unless reference["path"] == expected_path
+      reject("evidence applicability digest differs from held bytes") unless reference["digest"] == digest(applicability_bytes)
+      record = parse_object(applicability_bytes, "evidence applicability")
+      reject("packet evidence applicability differs from held bytes") unless packet["evidenceApplicability"] == record
+      reject("evidence applicability target differs from review identity") unless
+        record.dig("target", "issue") == issue && record.dig("target", "baseSha") == base_sha &&
+        record.dig("target", "headSha") == head_sha
+      reject("held target Issue contract bytes differ from parsed contract") unless
+        parse_object(target_contract_bytes, "held target issue contract") == contract
+
+      validated = EvidenceApplicability.validate!(
+        record_bytes: applicability_bytes, repo: repo, target_contract_bytes: target_contract_bytes,
+        source_verify_bytes: source_verify_bytes, source_contract_bytes: source_contract_bytes
+      )
+      if validated.dig("decision", "action") != "reuse"
+        verify_completed = iso8601!(verify["completedAt"], "verify.completedAt")
+        evaluated = iso8601!(validated["evaluatedAt"], "evidence applicability evaluatedAt")
+        reject("required re-verification is absent or predates the applicability decision") unless
+          verify["status"] == "passed" && verify_completed > evaluated
+      end
+      iso8601!(validated["evaluatedAt"], "evidence applicability evaluatedAt")
+    rescue EvidenceApplicability::ValidationError => error
+      reject(error.message)
     end
 
     def validate_contract!(packet, contract, contract_digest, issue, schema: packet["schemaVersion"])
@@ -574,6 +646,7 @@ module IOSTemplate
       end
       images = packet.fetch("imageFiles").map { |entry| entry.is_a?(Hash) ? entry.fetch("path").delete_prefix(prefix) : entry }
       aliases = %w[verify.json review.diff review-packet.json]
+      aliases << "evidence-applicability.json" if packet.key?("evidenceApplicability")
       aliases << "repository-tests.json" if packet.key?("repositoryTests")
       aliases << "repository-test-plan.json" if packet.key?("repositoryTestPlan")
       return ["artifact", prefix + file] if (aliases + images).include?(file)

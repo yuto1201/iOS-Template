@@ -39,6 +39,16 @@
       "prefixes": []
     },
     {
+      "domain": "evidence-applicability",
+      "paths": [
+        "tools/evaluate-evidence-applicability.sh",
+        "tools/lib/evidence-applicability-cli.rb",
+        "tools/lib/evidence-applicability.rb",
+        "tools/lib/release-verification.rb"
+      ],
+      "prefixes": []
+    },
+    {
       "domain": "foundation",
       "paths": ["tools/tests/test-foundation.sh"],
       "prefixes": []
@@ -255,7 +265,7 @@
     {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-appstore-package.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-screenshots.sh", "domains": ["appstore"]},
-    {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore"]},
+    {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore", "evidence-applicability"]},
     {"path": "tools/tests/test-bounded-command.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-recovery.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-resume.sh", "domains": ["workflow-state"]},
@@ -263,6 +273,7 @@
     {"path": "tools/tests/test-cross-model-review.sh", "domains": ["descriptor-files", "review-contract"]},
     {"path": "tools/tests/test-delivery-stages.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-evidence-applicability.sh", "domains": ["evidence-applicability"]},
     {"path": "tools/tests/test-foundation.sh", "domains": ["foundation"]},
     {"path": "tools/tests/test-ios-evidence.sh", "domains": ["ios-evidence-exhaustive"]},
     {"path": "tools/tests/test-ios-runner-allocation.sh", "domains": ["ios-verification"]},

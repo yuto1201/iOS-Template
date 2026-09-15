@@ -103,31 +103,59 @@ end
 repository_snapshots = nil
 if packet
   packet_value = JSON.parse(packet.bytes.dup)
-  if packet_value.key?("repositoryTestsFile") || IOSTemplate::ReviewContract.repository_test_scope(packet_value.fetch("acceptanceCriteria")) == "base-and-head"
+  repository_record_required = packet_value.key?("repositoryTestsFile") ||
+    IOSTemplate::ReviewContract.repository_test_scope(packet_value.fetch("acceptanceCriteria")) == "base-and-head"
+  if repository_record_required || packet_value.key?("evidenceApplicability")
     repository_snapshots = IOSTemplate::ReviewSealing::SnapshotSet.new(artifacts, at: "artifact root", expected_identity: expected_root)
     held_packet = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/review-packet.json", at: "review packet")
     held_contract = repository_snapshots.relative_leaf("issues/#{issue_text}/issue-contract.json", at: "issue contract")
-    held_tests = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/repository-tests.json", at: "repository tests")
     reject("publication packet differs from canonical bytes") unless held_packet.bytes == packet.bytes
     contract_value = JSON.parse(held_contract.bytes.dup)
     contract_digest = IOSTemplate::ReviewContract.digest(held_contract.bytes)
     IOSTemplate::ReviewContract.validate_contract!(packet_value, contract_value, contract_digest, Integer(issue_text))
     IOSTemplate::ReviewContract.validate_scope!(packet_value, contract_value)
-    context = IOSTemplate::ReviewContract.repository_revision_context(repo: repo, base_sha: packet_value.fetch("baseSha"), head_sha: head_sha)
-    held_plan = nil
-    if packet_value.key?("repositoryTestPlanFile")
-      held_plan = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/repository-test-plan.json", at: "repository test plan")
-      IOSTemplate::RepositoryTestPlan.validate!(
-        JSON.parse(held_plan.bytes.dup), repo: repo, issue: Integer(issue_text),
-        base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
-        contract_bytes: held_contract.bytes
+    if repository_record_required
+      held_tests = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/repository-tests.json", at: "repository tests")
+      context = IOSTemplate::ReviewContract.repository_revision_context(repo: repo, base_sha: packet_value.fetch("baseSha"), head_sha: head_sha)
+      held_plan = nil
+      if packet_value.key?("repositoryTestPlanFile")
+        held_plan = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/repository-test-plan.json", at: "repository test plan")
+        IOSTemplate::RepositoryTestPlan.validate!(
+          JSON.parse(held_plan.bytes.dup), repo: repo, issue: Integer(issue_text),
+          base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
+          contract_bytes: held_contract.bytes
+        )
+      end
+      IOSTemplate::ReviewContract.validate_repository_closure!(packet: packet_value, contract: contract_value, contract_digest: contract_digest,
+        issue: Integer(issue_text), base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
+        repository_tests_bytes: held_tests.bytes, repository_test_plan_bytes: held_plan&.bytes,
+        revision_context: context)
+      IOSTemplate::ReviewContract.validate_repository_assessments!(source_value, packet_value.fetch("repositoryTests"))
+    end
+    if packet_value.key?("evidenceApplicability")
+      applicability = repository_snapshots.relative_leaf(
+        "issues/#{issue_text}/#{head_sha}/evidence-applicability.json", at: "evidence applicability"
+      )
+      applicability_references = IOSTemplate::EvidenceApplicability.references!(
+        record_bytes: applicability.bytes, target_issue: Integer(issue_text), target_head_sha: head_sha
+      )
+      source_verify = repository_snapshots.relative_leaf(
+        applicability_references.fetch("sourceVerify").fetch("path").delete_prefix(".artifacts/"),
+        at: "Phase 5 source verification"
+      )
+      source_contract = repository_snapshots.relative_leaf(
+        applicability_references.fetch("sourceContract").fetch("path").delete_prefix(".artifacts/"),
+        at: "Phase 5 source contract"
+      )
+      held_verify = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/verify.json", at: "current verification")
+      IOSTemplate::ReviewContract.validate_evidence_applicability!(
+        packet: packet_value, contract: contract_value, verify: JSON.parse(held_verify.bytes.dup),
+        issue: Integer(issue_text), base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
+        target_contract_bytes: held_contract.bytes,
+        applicability_bytes: applicability.bytes, source_verify_bytes: source_verify.bytes,
+        source_contract_bytes: source_contract.bytes, repo: repo
       )
     end
-    IOSTemplate::ReviewContract.validate_repository_closure!(packet: packet_value, contract: contract_value, contract_digest: contract_digest,
-      issue: Integer(issue_text), base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
-      repository_tests_bytes: held_tests.bytes, repository_test_plan_bytes: held_plan&.bytes,
-      revision_context: context)
-    IOSTemplate::ReviewContract.validate_repository_assessments!(source_value, packet_value.fetch("repositoryTests"))
     repository_snapshots.verify!
   end
 end
@@ -210,6 +238,7 @@ created = false
 receipt_created = false
 puts JSON.generate({"path" => target, "sha256" => "sha256:#{Digest::SHA256.hexdigest(written)}", "size" => written.bytesize, "receiptPath" => receipt_target})
 rescue PublishError, IOSTemplate::ReviewReceipt::ValidationError, IOSTemplate::ReviewContract::ValidationError,
+       IOSTemplate::EvidenceApplicability::ValidationError,
        IOSTemplate::RepositoryTestPlan::PlanError, IOSTemplate::ReviewSealing::SealError,
        SystemCallError, JSON::ParserError, KeyError, Errno::ENOENT, Errno::EACCES => error
   warn "review publication failed: #{error.message}"

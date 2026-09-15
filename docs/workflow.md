@@ -76,7 +76,7 @@ ClaudeとCodexは通常のIssueを同じworkflowで担当します。3Dモデル
 
 前Phaseが未完了なら依存実装を開始しませんが、read-only調査、選択肢、Issue草案、依存しない作業は進められます。軽微変更は同じPhaseで継続し、目的、MVP、主要flow／hierarchy、採用system、data互換性、重大riskが変わる場合だけ、変更記録を追加して影響する最も早いPhaseへ戻します。影響しないIssueは止めません。
 
-Phase 5で問題を見つけた場合は、問題別のRegression／harden Issueへ戻して修正し、その変更で失効した証拠だけを再取得します。Phase 6では同じcandidate、Head、config、SDK／signing context、scopeへ適用可能なPhase 5証拠を参照し、重複実行を避けます。ただし#86が未実装の間は、旧証拠の再利用や改訂をcanonical結果として扱いません。既知不具合、意図的な省略、未検証を別々に記録し、重大blockerが残る候補は公開しません。
+Phase 5で問題を見つけた場合は、問題別のRegression／harden Issueへ戻して修正し、その変更で失効した証拠だけを再取得します。Phase 6では同じcandidate、Head、config、SDK／signing context、scopeへ適用可能なPhase 5証拠を参照し、重複実行を避けます。適用判断は[`evidence-applicability.json`](verification.md#12-phase-5から6への証拠適用)へno-replaceで固定し、同じrecordをreview、PR、pre-merge、提出前preflightまで引き継ぎます。既知不具合、意図的な省略、未検証を別々に記録し、重大blockerが残る候補は公開しません。
 
 既存アプリの緊急修正は、現在も適用可能な目的、Identity、UI方向、基盤を理由付きで再利用し、影響するPhaseから開始します。毎回App IconやHTML比較をやり直しませんが、Issue／Branch／PR、対象Test、安全確認、必要review、外部操作承認は省略しません。
 
@@ -121,6 +121,26 @@ ruby tools/lib/workflow-release-phase-cli.rb validate \
 ```
 
 `Release-phase binding:`宣言を持たない既存Issueは`legacy-unbound`として従来のIssue state／stage／profile gateを維持し、phase recordを合成・補完・再封印しません。新規Issue formとskillsへの標準入力追加は#88で行います。#86の証拠適用resolverと#87の不具合許容判断もこのrecordだけから推測しません。
+
+#### Phase 5から6への証拠適用
+
+Phase 6 `implementation`では、安定した候補Headに対して次の順で一度だけ適用判断を発行します。入力JSONはscratch fileであり、canonical成果物は`.artifacts/issues/<phase6-issue>/<phase6-head>/evidence-applicability.json`です。
+
+```sh
+tools/evaluate-evidence-applicability.sh \
+  --issue "${PHASE6_ISSUE}" \
+  --base-sha "${PHASE6_BASE_SHA}" \
+  --head-sha "${PHASE6_HEAD_SHA}" \
+  --input "${INPUT_JSON}"
+```
+
+入力はschema v1で、`sourceVerify`、`sourceContext`、`targetContext`、`impact`、`reason`、`evaluatedAt`だけを持ちます。各contextはcandidate artifact、configuration、SDK、signingのSHA-256とcanonical scopeを持ち、`impact`はPhase 5 source HeadからPhase 6 target Headまでのsorted changed pathをexactに一件ずつ覆います。各pathへ`unaffected`、`affected`、`unknown`、影響scope、現在Headでのdependency path／presence／digest、nonempty reasonを記録します。
+
+同一Head、同一context、空diffなら`reuse`、Head／context／影響pathの変更なら`targeted-reverify`、unknown、missing dependency、scope拡張なら`expanded-verification`です。後二つは判定時刻より後のPhase 6 passed verificationが必要です。Phase 6 review packet、PR renderer、pre-merge gate、release/package preflightはrecordとPhase 5元証拠をdescriptor-boundで再検証し、別候補、古い承認、改ざん、未検証を拒否します。提出固有のpackage、privacy、legal、外部操作権限、provider readbackは毎回実行します。
+
+source Headとtarget Headは同じGit系譜である必要はありません。source Base→source Headとtarget Base→target Headをそれぞれ検証し、squash merge等で分岐した両commit objectが参照可能ならactual source..target diffを封印します。Headが異なる候補はdiffが空でも`reuse`せず`targeted-reverify`とし、source objectを取得できない場合は停止します。release phase recordのblob検証はRelease-phase Claim gateが担当し、適用recordはcontract bindingに封印済みのpath／digest参照を引き継ぎます。
+
+D-049のrelease-phase binding互換cutoff `2026-09-14T00:00:00Z`より前に封印されたPhase 5 source contractは、元bytesを変更せずlegacy sourceとして参照できます。この場合もPhase 6 target bindingがrelease／revision／scopeを固定し、recordは`sourceLegacy: true`と`sourceRecord: null`を明示して架空のPhase 5 recordを合成せず、元のpassed full verification、contract、Git identityを検証します。cutoff以後のPhase 5 sourceにはPhase 5 `implementation` bindingが必須です。Phase 6 bindingのない既存／legacy Issueは従来の直接`verify.json`経路を維持し、新recordを合成しません。
 
 ## 3. Issue contract snapshot
 
