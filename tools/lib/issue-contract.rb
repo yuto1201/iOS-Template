@@ -83,6 +83,11 @@ module IOSTemplate
       externalOperations externalOperationDetailsDigest fetchedAt
     ].freeze
     SNAPSHOT_OPTIONAL_KEYS = %w[verification deliveryProfile verificationScope deliveryStage].freeze
+    # Post-Claim revisions may only change these snapshot fields.  The
+    # revision workflow additionally requires acceptance-criterion IDs and
+    # order to remain stable and treats fetchedAt as bookkeeping rather than
+    # delegated product scope.
+    REVISION_MUTABLE_FIELDS = %w[acceptanceCriteria fetchedAt verification].freeze
     VERIFICATION_CASE_IDS = %w[iphone-en iphone-ja ipad-en ipad-ja].freeze
     VERIFICATION_CHECKS = (
       %w[stage:build stage:unit-tests] +
