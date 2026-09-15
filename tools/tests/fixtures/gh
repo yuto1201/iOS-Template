@@ -48,6 +48,9 @@ if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
     fi
   fi
   labels=$(cat "$labels_file")
+  if [[ -n "${FAKE_GH_TYPE_LABEL:-}" ]]; then
+    labels=$(LABELS="$labels" ruby -rjson -e 'labels=JSON.parse(ENV.fetch("LABELS")); label=ARGV.fetch(0); labels << label unless labels.include?(label); print JSON.generate(labels)' "$FAKE_GH_TYPE_LABEL")
+  fi
   comments=$(cat "$comments_file")
   body=''
   [[ -z "${FAKE_GH_ISSUE_BODY:-}" ]] || body=$(cat "$FAKE_GH_ISSUE_BODY")
