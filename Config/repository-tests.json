@@ -34,6 +34,11 @@
       ]
     },
     {
+      "domain": "descriptor-files",
+      "paths": ["tools/lib/descriptor-files.rb"],
+      "prefixes": []
+    },
+    {
       "domain": "foundation",
       "paths": ["tools/tests/test-foundation.sh"],
       "prefixes": []
@@ -254,8 +259,8 @@
     {"path": "tools/tests/test-bounded-command.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-recovery.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-resume.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-cleanup-issue.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-cross-model-review.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-cleanup-issue.sh", "domains": ["descriptor-files", "workflow-state"]},
+    {"path": "tools/tests/test-cross-model-review.sh", "domains": ["descriptor-files", "review-contract"]},
     {"path": "tools/tests/test-delivery-stages.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-foundation.sh", "domains": ["foundation"]},
@@ -279,15 +284,15 @@
     {"path": "tools/tests/test-ios-runner.sh", "domains": ["ios-runner-scoped"]},
     {"path": "tools/tests/test-ios-simulator-lock.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-ios-simulator-resource.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-issue-contract-revision.sh", "domains": ["issue-contract-revision"]},
+    {"path": "tools/tests/test-issue-contract-revision.sh", "domains": ["descriptor-files", "issue-contract-revision"]},
     {"path": "tools/tests/test-issue-contract.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-media-skill.sh", "domains": ["bootstrap-assets"]},
-    {"path": "tools/tests/test-merge-issue.sh", "domains": ["merge-publication"]},
-    {"path": "tools/tests/test-premerge-gate.sh", "domains": ["review-evidence-sealing"]},
+    {"path": "tools/tests/test-merge-issue.sh", "domains": ["descriptor-files", "merge-publication"]},
+    {"path": "tools/tests/test-premerge-gate.sh", "domains": ["descriptor-files", "review-evidence-sealing"]},
     {"path": "tools/tests/test-prerequisites.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-provider-ownership.sh", "domains": ["authority-policy", "provider-security"]},
     {"path": "tools/tests/test-provider-preflight.sh", "domains": ["provider-security"]},
-    {"path": "tools/tests/test-render-pr-body.sh", "domains": ["review-contract"]},
+    {"path": "tools/tests/test-render-pr-body.sh", "domains": ["descriptor-files", "review-contract"]},
     {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-review-route.sh", "domains": ["review-contract"]},
