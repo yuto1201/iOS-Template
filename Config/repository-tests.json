@@ -236,6 +236,7 @@
       "domain": "specification",
       "paths": [
         "AGENTS.md",
+        "README.md",
         "docs/agent-contracts/review-packet.md",
         "docs/verification.md",
         "docs/workflow.md"
@@ -243,6 +244,7 @@
       "prefixes": [
         ".agents/skills/ios-verify/",
         ".agents/skills/plan-issue-batch/",
+        ".agents/skills/ship-issue-batch/",
         ".agents/skills/ship-issue/",
         ".agents/skills/spec-workflow/",
         ".github/ISSUE_TEMPLATE/",
