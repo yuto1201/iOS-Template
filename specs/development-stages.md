@@ -1,7 +1,7 @@
 # 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 3.4
+Version: 3.5
 Date: 2026-09-15
 
 ## 1. 原則
@@ -113,7 +113,11 @@ release revisionを変える記録は追記型とし、少なくとも変更前�
 
 品質証拠は同一candidate artifact、source Head、config、SDK／signing context、scopeに対してだけ適用可能性を評価する。Head変更時に旧証拠を現Headの実行結果として付け替えない。changed pathsと依存関係から影響がないことを説明できる証拠だけを再利用候補とし、不明なら検証範囲を拡大する。設定や署名変更を一律に無害としない。squash後などsource／target Headが分岐しても両commit object間のactual diffを評価できるが、異なるHeadは再利用せず対象再検証へ進める。Phase 5と6で同じ候補を扱う場合は、[Phase 5から6への証拠適用](../docs/verification.md#12-phase-5から6への証拠適用)のimmutable判定をreview、PR、pre-merge、提出前preflightまで共有し、適用可能な元証拠を参照して重複実行を避ける。
 
-既知不具合、意図的なテスト省略、未検証は別の状態として記録し、成功へ読み替えない。許容候補には対象release、影響、回避策、修正費用、承認者、追跡Issue、再評価時点を記録する。データ消失、秘密漏洩、誤課金、重大な金額／日時計算誤り、主要導線crash、認証／privacy／法務の必須条件違反は公開blockerであり、軽微な残件として許容しない。
+既知不具合の許容、既知不具合の延期、意図的なテスト省略、未検証は別の状態として記録し、成功へ読み替えない。D-050 cutover以後のPhase 5／6 `implementation`は、Issue contractが封印したrelease identifier／revision／phase／scope／Baseのphase recordと、現在Issue／Base／Head／contractへ束縛したcanonical `.artifacts/issues/<issue>/<head>/release-disposition.json`を必須とする。cutover前のcontractには記録を推測生成せず、従来gateを維持する。
+
+軽微不具合の許容にはclassification、low severity、影響、回避策、修正費用、同じIssue／Base／Headへのユーザー承認者・GitHub Issue comment参照・承認時刻、有効期限、追跡Issue、再評価条件を要求する。期限切れや別candidateの承認、approved reviewのlow finding、evidence applicabilityを不具合承認へ転用しない。延期した不具合も許容済みとは呼ばず、critical／high／unknownまたはデータ消失、秘密漏洩、誤課金、重大な金額／日時計算誤り、主要導線crash、認証／privacy／法務分類ならpre-merge／releaseをblockする。
+
+D-050対象candidateはDelivery profileによる通常のreview省略経路を使わず、current-Headの正式な反対モデルreviewを必須とする。Phase番号から他の検証範囲を拡大せず、disposition、対象検証、必要なevidence applicabilityだけを同じpacketへ固定する。
 
 品質確認は有限のTime budgetで行う。時間超過時は同じ長時間検証を自動反復せず、対象縮小、Issue分割、延期、未検証の明示、またはユーザー判断へ移る。安全条件を失敗した状態で時間節約を理由に公開へ進まない。
 
@@ -205,6 +209,8 @@ Runtime、Device Type、case集合はバッチ内で固定する。古いHead、
 
 失敗記録には停止stage、経過時間、timeout、未実行testを含める。timeoutや失敗時に成功形式の`verify.json`を生成しない。同一Issue／Head／scopeの長時間実行は直接反復せず、選択済み対象testの診断成功後に1回だけ再試行できる。2回目も同じ原因で失敗した場合は停止する。
 
+D-050対象では、同じHead directoryに存在する`repository-test-failure-attempt-1.json`／`-2.json`を一件ずつexact path／digestでrelease dispositionの停止後判断へ対応付ける。producerだけでなくpacket、result publication、PR renderer、pre-merge、release preflightの各consumerも、record内の参照集合から推測せずHead directoryの2候補をdescriptor-boundで独立取得し、欠落状態も処理終了まで再照合する。許可するactionは`shrink`、`split`、`defer`、`wait`だけとし、reason、actor、authority、再開条件、判断時刻を必須にする。`split`／`defer`はユーザーauthorityとfollow-up Issueを要求し、`shrink`／`wait`はfollow-up Issueをnullにする。`wait`はrelease readinessをblockする。失敗記録があるのに判断がない、判断の参照先がない／改ざんされた、検証中に新しいfailureが出現した、`rerun`等の無制限反復action、別Issue／Headへの流用を拒否する。判断待ち時間はrunnerの実行budgetを延長した時間として扱わない。
+
 再実行の順序は、対象Test、関連回帰Test、Delivery stage標準検証、`release`完全検証とする。Repository testも開発中は関連testだけを直接使い、canonical plan／evidenceは安定した最終候補Headで一度生成する。正式な一括証拠へ異なるattemptの部分結果を混ぜないが、診断済みの対象Test結果は修正判断に利用する。
 
 ## 7. Issue・レビュー・移行
@@ -223,4 +229,4 @@ Claim済みで`deliveryStage`を持たない既存contractはcanonical bytesを�
 
 ## 8. 依存関係
 
-Issue #44がDelivery stage、Issue forms、skills、validator、runner、repository tests、bootstrap後repositoryを同じ契約へ揃えた。D-038のPhase記録／部分再gateは#85、証拠適用は#86、不具合判断は#87、Simulator資源契約と明示承認Grok review fallbackは#93、skills／既存Issue移行は#88で実装する。#89は#93の移植元履歴として保持する。それまでは本仕様を実装済みの自動gateまたは証拠再利用として扱わない。
+Issue #44がDelivery stage、Issue forms、skills、validator、runner、repository tests、bootstrap後repositoryを同じ契約へ揃えた。D-038のPhase記録／部分再gateは#85、証拠適用は#86、D-050の不具合許容／停止後判断は#87、Simulator資源契約と明示承認Grok review fallbackは#93が実装する。skills／既存Issue移行は#88で行い、未移行範囲を新contractとして推測しない。#89は#93の移植元履歴として保持する。

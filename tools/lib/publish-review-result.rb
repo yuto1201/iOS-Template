@@ -105,7 +105,7 @@ if packet
   packet_value = JSON.parse(packet.bytes.dup)
   repository_record_required = packet_value.key?("repositoryTestsFile") ||
     IOSTemplate::ReviewContract.repository_test_scope(packet_value.fetch("acceptanceCriteria")) == "base-and-head"
-  if repository_record_required || packet_value.key?("evidenceApplicability")
+  if source_value["schemaVersion"] == 2
     repository_snapshots = IOSTemplate::ReviewSealing::SnapshotSet.new(artifacts, at: "artifact root", expected_identity: expected_root)
     held_packet = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/review-packet.json", at: "review packet")
     held_contract = repository_snapshots.relative_leaf("issues/#{issue_text}/issue-contract.json", at: "issue contract")
@@ -132,6 +132,7 @@ if packet
         revision_context: context)
       IOSTemplate::ReviewContract.validate_repository_assessments!(source_value, packet_value.fetch("repositoryTests"))
     end
+    applicability_at = nil
     if packet_value.key?("evidenceApplicability")
       applicability = repository_snapshots.relative_leaf(
         "issues/#{issue_text}/#{head_sha}/evidence-applicability.json", at: "evidence applicability"
@@ -148,7 +149,7 @@ if packet
         at: "Phase 5 source contract"
       )
       held_verify = repository_snapshots.relative_leaf("issues/#{issue_text}/#{head_sha}/verify.json", at: "current verification")
-      IOSTemplate::ReviewContract.validate_evidence_applicability!(
+      applicability_at = IOSTemplate::ReviewContract.validate_evidence_applicability!(
         packet: packet_value, contract: contract_value, verify: JSON.parse(held_verify.bytes.dup),
         issue: Integer(issue_text), base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
         target_contract_bytes: held_contract.bytes,
@@ -156,6 +157,34 @@ if packet
         source_contract_bytes: source_contract.bytes, repo: repo
       )
     end
+    disposition = nil
+    disposition_failures = {}
+    if packet_value.key?("releaseDisposition")
+      disposition = repository_snapshots.relative_leaf(
+        "issues/#{issue_text}/#{head_sha}/release-disposition.json", at: "release disposition"
+      )
+      IOSTemplate::ReviewContract.release_disposition_failure_paths(
+        issue: Integer(issue_text), head_sha: head_sha
+      ).each do |path|
+        failure = repository_snapshots.optional_relative_leaf(
+          path.delete_prefix(".artifacts/"), at: "release disposition failure #{path}"
+        )
+        disposition_failures[path] = failure.bytes if failure
+      end
+    end
+    held_verify ||= repository_snapshots.relative_leaf(
+      "issues/#{issue_text}/#{head_sha}/verify.json", at: "current verification"
+    )
+    validated_disposition = IOSTemplate::ReviewContract.validate_release_disposition!(
+      packet: packet_value, contract: contract_value, issue: Integer(issue_text),
+      base_sha: packet_value.fetch("baseSha"), head_sha: head_sha,
+      contract_bytes: held_contract.bytes, disposition_bytes: disposition&.bytes,
+      failure_record_bytes: disposition_failures, repo: repo
+    )
+    IOSTemplate::ReviewContract.validate_release_disposition_sequence!(
+      validated_disposition, verify: JSON.parse(held_verify.bytes.dup),
+      repository_tests: packet_value["repositoryTests"], applicability_at: applicability_at
+    ) if validated_disposition
     repository_snapshots.verify!
   end
 end

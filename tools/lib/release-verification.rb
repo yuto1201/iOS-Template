@@ -6,6 +6,7 @@ require "open3"
 require_relative "review-sealing"
 require_relative "verification-scope"
 require_relative "evidence-applicability"
+require_relative "release-disposition"
 
 module IOSTemplate
   module ReleaseVerification
@@ -39,6 +40,29 @@ module IOSTemplate
       begin
         contract_file = snapshots.relative_leaf("issues/#{issue}/issue-contract.json", at: "release verification contract")
         contract = JSON.parse(contract_file.bytes.dup)
+        disposition_file = optional_leaf(
+          snapshots, "issues/#{issue}/#{head}/release-disposition.json", "release disposition"
+        )
+        if ReleaseDisposition.required?(contract) && !disposition_file
+          raise InvalidProof, "Phase 5 or 6 release requires a canonical release disposition"
+        end
+        if disposition_file
+          failure_bytes = ReleaseDisposition.failure_paths(issue: issue, head_sha: head).each_with_object({}) do |path, values|
+            failure_file = snapshots.optional_relative_leaf(
+              path.delete_prefix(".artifacts/"), at: "release disposition failure #{path}"
+            )
+            values[path] = failure_file.bytes if failure_file
+          end
+          phase_record_bytes = ReleaseDisposition.phase_record_bytes!(
+            repo: repo, base_sha: base, contract: contract
+          )
+          disposition = ReleaseDisposition.validate!(
+            record_bytes: disposition_file.bytes, contract_bytes: contract_file.bytes,
+            phase_record_bytes: phase_record_bytes, issue: issue, base_sha: base, head_sha: head,
+            failure_record_bytes: failure_bytes
+          )
+          ReleaseDisposition.release_ready!(disposition)
+        end
         applicability_file = optional_leaf(
           snapshots, "issues/#{issue}/#{head}/evidence-applicability.json", "release evidence applicability"
         )
@@ -46,6 +70,7 @@ module IOSTemplate
           raise InvalidProof, "Phase 6 release requires a canonical evidence applicability decision"
         end
 
+        applicability = nil
         if applicability_file
           applicability_references = EvidenceApplicability.references!(
             record_bytes: applicability_file.bytes, target_issue: issue, target_head_sha: head
@@ -103,6 +128,13 @@ module IOSTemplate
         end
         proof_contract = JSON.parse(proof_contract_file.bytes.dup)
         verify = JSON.parse(proof_file.bytes.dup)
+        if disposition
+          ReleaseDisposition.after_evidence!(
+            disposition,
+            "verify.completedAt" => verify.fetch("completedAt"),
+            "evidenceApplicability.evaluatedAt" => applicability&.fetch("evaluatedAt")
+          )
+        end
         proof_issue = verify.fetch("issue")
         proof_base = verify.fetch("baseSha")
         proof_head = verify.fetch("headSha")
@@ -138,7 +170,7 @@ module IOSTemplate
       ensure
         snapshots.close
       end
-    rescue ReviewSealing::SealError, EvidenceApplicability::ValidationError, JSON::ParserError,
+    rescue ReviewSealing::SealError, EvidenceApplicability::ValidationError, ReleaseDisposition::ValidationError, JSON::ParserError,
            KeyError, ArgumentError, TypeError, SystemCallError => error
       raise InvalidProof, "release verification is unavailable or invalid: #{error.message}"
     end

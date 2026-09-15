@@ -52,6 +52,22 @@ D-049のrelease-phase binding互換cutoff `2026-09-14T00:00:00Z`より前に封�
 
 証拠適用は提出操作そのものの証明ではありません。package integrity、bundle identity、current build artifact digest、privacy／legal、公開権限、認証account／target、provider保存後readbackなど提出固有のpreflightは、Phase 6の実行ごとに従来どおり確認します。
 
+### 1.3 Release disposition
+
+D-050 cutover `2026-09-15T11:00:00Z`以後に封印されたPhase 5／6 `implementation` contractは、`.artifacts/issues/${ISSUE}/${HEAD_SHA}/release-disposition.json`を必須とします。`tools/record-release-disposition.sh`はIssue／Base／Head、Issue contract digest、release identifier／revision／phase／scope、Base commitにあるphase-record path／digestを固定し、入力のentriesと停止後判断をcanonical no-replace recordへ発行します。cutover前のcontractはrecord欠落を理由に拒否せず、既存bytesを再封印しません。
+
+recordは次を別々に保持します。
+
+- userが期限付きで明示承認したsafe／lowの`accepted-defect`
+- 修正を追跡するがacceptとは扱わない`deferred-defect`
+- 意図的に実行しなかった`omitted-test`
+- 事実が確認できていない`unverified`
+- repository failure／timeout recordへexact path／digestで束縛した`shrink`／`split`／`defer`／`wait`
+
+未実行、省略、未検証、failure、timeoutを`verify.json`や`repository-tests.json`のpassedへ加えません。accepted defectのapprovalが別Issue／Base／Head、期限切れ、またはreview low finding由来なら拒否します。data loss、secret leak、billing、重大なmoney／date-time calculation、primary-flow crash、authentication、privacy、legal、unknownをaccepted defectにできません。deferred defectがcritical／high／unknownまたは同じblocker分類の場合と、execution decisionが`wait`の場合は、review approval、pre-merge、release preflightを通しません。
+
+review packet schema v2は`releaseDisposition`と`releaseDispositionFile`を一緒に持ちます。各descriptor ownerはrecordの自己申告だけでfailure集合を作らず、同じIssue／Headのattempt 1／2を独立して開き、存在するfailure bytesと存在しない候補の両方を処理終了まで保持・再照合します。disposition時刻はcurrent verify、repository tests、evidence applicabilityより前にできず、review時刻はそれらとrelease dispositionの最も遅い時刻より後でなければなりません。PR rendererはapproved low findingsをproduct defect承認と別に数え、accepted／deferred／omitted／unverified／failed-timeoutを各件数とfollow-upで示します。release/package preflightはevidence applicabilityを検証した後も独立してdispositionを再検証します。
+
 ## 2. 環境の解決
 
 `tools/resolve-simulator-matrix.sh` はIssueバッチ開始時に一度だけ実行します。

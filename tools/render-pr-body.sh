@@ -49,6 +49,18 @@ class HeldEvidence
     reject("#{at} descriptor is unavailable or invalid: #{error.message}")
   end
 
+  def optional_leaf(components, at)
+    components = safe_components(components, at)
+    return @leaves.fetch(components) if @leaves.key?(components)
+    parent = directory(components[0...-1], at)
+    value = @snapshots.optional_leaf(parent, components.last, at: at)
+    return nil unless value
+    value.io.flock(File::LOCK_SH)
+    @leaves[components] = value
+  rescue IOSTemplate::ReviewSealing::SealError, SystemCallError, IOError, ArgumentError => error
+    reject("#{at} descriptor is unavailable or invalid: #{error.message}")
+  end
+
   def watch_directory(components, at)
     value = directory(safe_components(components, at), at)
     @watched_directories << [value, value.io.stat, at]
@@ -182,6 +194,8 @@ begin
   applicability_leaf = nil
   applicability_source_verify_leaf = nil
   applicability_source_contract_leaf = nil
+  disposition_leaf = nil
+  disposition_failure_leaves = {}
   if review_references.key?("repositoryTestsFile")
     repository_tests_leaf = snapshots.leaf(
       relative_components(review_references.fetch("repositoryTestsFile").fetch("path"), "repository tests"),
@@ -212,6 +226,21 @@ begin
       relative_components(review_references.fetch("evidenceSourceContract").fetch("path"), "Phase 5 source contract"),
       "Phase 5 source contract"
     )
+  end
+  if review_references.key?("releaseDispositionFile")
+    disposition_leaf = snapshots.leaf(
+      relative_components(review_references.fetch("releaseDispositionFile").fetch("path"), "release disposition"),
+      "release-disposition.json"
+    )
+    disposition_failure_leaves = IOSTemplate::ReviewContract.release_disposition_failure_paths(
+      issue: issue, head_sha: head
+    ).each_with_object({}) do |path, values|
+      leaf = snapshots.optional_leaf(
+        relative_components(path, "release disposition failure"),
+        "release disposition failure #{path}"
+      )
+      values[path] = leaf if leaf
+    end
   end
   repository_revision_context = if IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head" || repository_test_plan_leaf
     IOSTemplate::ReviewContract.repository_revision_context(repo: repo, base_sha: verify["baseSha"], head_sha: head)
@@ -248,6 +277,19 @@ begin
     repo: repo
   )
   completed_at = [completed_at, applicability_at].compact.max
+  release_disposition = IOSTemplate::ReviewContract.validate_release_disposition!(
+    packet: review_packet, contract: contract, issue: issue,
+    base_sha: verify["baseSha"], head_sha: head, contract_bytes: contract_bytes,
+    disposition_bytes: disposition_leaf&.bytes,
+    failure_record_bytes: disposition_failure_leaves.transform_values(&:bytes), repo: repo
+  )
+  if release_disposition
+    disposition_at = IOSTemplate::ReviewContract.validate_release_disposition_sequence!(
+      release_disposition, verify: verify, repository_tests: review_packet["repositoryTests"],
+      applicability_at: applicability_at
+    )
+    completed_at = [completed_at, disposition_at].compact.max
+  end
   IOSTemplate::ReviewContract.validate_result!(
     review, 2, review_packet_leaf.bytes, reviewer, issue, verify["baseSha"], head,
     contract_digest, criteria, completed_at, Time.now.utc, true
@@ -256,6 +298,7 @@ begin
      (IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head" || review_packet["repositoryTests"]["schemaVersion"] == 3)
     IOSTemplate::ReviewContract.validate_repository_assessments!(review, review_packet.fetch("repositoryTests"))
   end
+  IOSTemplate::ReviewContract.validate_release_readiness!(release_disposition) if release_disposition && review["verdict"] == "approved"
 rescue IOSTemplate::ReviewContract::ValidationError, IOSTemplate::RepositoryTestPlan::PlanError => error
   reject("strict review closure is invalid: #{error.message}")
 end
@@ -389,6 +432,21 @@ if review_packet.is_a?(Hash) && review_packet["evidenceApplicability"].is_a?(Has
   puts "- Impact scope: `#{applicability.dig("decision", "impactScope").join(",")}`"
   puts "- Applicability reason: #{applicability.dig("decision", "reason")}"
 end
+if review_packet.is_a?(Hash) && review_packet["releaseDisposition"].is_a?(Hash)
+  disposition = review_packet.fetch("releaseDisposition")
+  disposition_counts = %w[accepted-defect deferred-defect omitted-test unverified].to_h do |type|
+    [type, disposition.fetch("entries").count { |entry| entry["type"] == type }]
+  end
+  decisions = disposition.fetch("executionDecisions")
+  puts "- Release disposition: `#{review_packet.fetch("releaseDispositionFile").fetch("path")}`"
+  puts "  - Accepted minor defects: `#{disposition_counts.fetch("accepted-defect")}`"
+  puts "  - Deferred defects: `#{disposition_counts.fetch("deferred-defect")}`"
+  puts "  - Intentionally omitted tests: `#{disposition_counts.fetch("omitted-test")}` (not passed)"
+  puts "  - Unverified scopes: `#{disposition_counts.fetch("unverified")}` (not passed)"
+  decision_actions = decisions.map { |entry| entry.fetch("action") }.join(",")
+  decision_actions = "none" if decision_actions.empty?
+  puts "  - Failed/timeout executions: `#{decisions.length}` (not passed; decisions: `#{decision_actions}`)"
+end
 case_labels = {"iphone-en" => "iPhone Pro / English", "iphone-ja" => "iPhone Pro / Japanese", "ipad-en" => "iPad Air / English", "ipad-ja" => "iPad Air / Japanese"}
 if cases.is_a?(Array) && !cases.empty?
   case_labels.each do |id, label|
@@ -428,6 +486,18 @@ end
 puts
 puts "## Remaining work"
 puts
-puts "- None for this Issue."
+remaining = if review_packet.is_a?(Hash) && review_packet["releaseDisposition"].is_a?(Hash)
+  disposition = review_packet.fetch("releaseDisposition")
+  entry_issues = disposition.fetch("entries").map { |entry| entry["followUpIssue"] }.compact
+  decision_issues = disposition.fetch("executionDecisions").map { |entry| entry["followUpIssue"] }.compact
+  (entry_issues + decision_issues).uniq.sort
+else
+  []
+end
+if remaining.empty?
+  puts "- None for this Issue."
+else
+  puts "- Release disposition follow-ups: #{remaining.map { |number| "##{number}" }.join(", ")}"
+end
 snapshots.close
 RUBY

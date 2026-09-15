@@ -198,4 +198,21 @@ PACKET="$artifact_head/review-packet.json" ruby -rjson -e 'path=ENV.fetch("PACKE
 assert_fails 'publication with packet/result mismatch' "$repo/tools/lib/publish-review-result.rb" "$repo" "$issue" "$head_sha" "$workspace/result.json" "$artifact_head/review-packet.json" codex 2026-08-24T00:01:00Z 2026-08-24T00:02:00Z
 [[ ! -e "$artifact_head/review.json" ]] || fail 'mismatched packet published a review result'
 
+ABSENT_ROOT="$artifact_head" ruby -I "$repo/tools/lib" -rreview-sealing -e '
+  root=ENV.fetch("ABSENT_ROOT")
+  snapshots=IOSTemplate::ReviewSealing::SnapshotSet.new(root,at:"absence witness")
+  begin
+    abort "optional leaf unexpectedly existed" if snapshots.optional_leaf(snapshots.root,"late-failure.json",at:"late failure")
+    File.binwrite(File.join(root,"late-failure.json"),"appeared\n")
+    begin
+      snapshots.verify!
+      abort "absence witness accepted a late file"
+    rescue IOSTemplate::ReviewSealing::SealError => error
+      abort "absence witness produced an unrelated refusal" unless error.message.include?("appeared after absence")
+    end
+  ensure
+    snapshots.close
+  end
+'
+
 echo 'PASS: strict review closure rejects bogus diff, same-Head evidence swaps, packet/result mismatch, wrong actual diff, and publication swaps'

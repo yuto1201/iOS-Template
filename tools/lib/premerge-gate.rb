@@ -56,10 +56,12 @@ end
 class HeldSnapshots
   Directory = Struct.new(:io, :parent, :name, :stat, :at, keyword_init: true)
   Leaf = Struct.new(:io, :parent, :name, :stat, :bytes, :at, keyword_init: true)
+  AbsentLeaf = Struct.new(:parent, :name, :at, keyword_init: true)
 
   def initialize(root, at)
     @directories = []
     @leaves = []
+    @absent_leaves = []
     root_io = DescriptorFiles.open_directory(root)
     @root = Directory.new(io: root_io, parent: nil, name: nil, stat: root_io.stat, at: at)
     @directories << @root
@@ -97,6 +99,23 @@ class HeldSnapshots
     refuse("#{at} is not a descriptor-bound regular single-link file: #{error.message}")
   end
 
+  def optional_leaf(parent, name, at)
+    io, stat = DescriptorFiles.open_regular_at(parent.io, name)
+    io.binmode
+    bytes = io.read
+    value = Leaf.new(io: io, parent: parent, name: name, stat: stat, bytes: bytes, at: at)
+    @leaves << value
+    value
+  rescue SystemCallError => error
+    if error.errno == Errno::ENOENT::Errno
+      @absent_leaves << AbsentLeaf.new(parent: parent, name: name, at: at)
+      return nil
+    end
+    refuse("#{at} is not a descriptor-bound regular single-link file: #{error.message}")
+  rescue IOError => error
+    refuse("#{at} is not a descriptor-bound regular single-link file: #{error.message}")
+  end
+
   def relative_leaf(parent, relative, at)
     components = relative.split("/")
     refuse("#{at} path is unsafe") if components.empty? || components.any? { |part| part.empty? || part == "." || part == ".." }
@@ -130,6 +149,15 @@ class HeldSnapshots
       refuse("#{leaf.at} path bytes changed") unless current_bytes.b == leaf.bytes.b
     rescue SystemCallError, IOError => error
       refuse("#{leaf.at} path identity changed: #{error.message}")
+    end
+    @absent_leaves.each do |leaf|
+      current, = DescriptorFiles.open_regular_at(leaf.parent.io, leaf.name)
+      current.close
+      refuse("#{leaf.at} appeared after absence was recorded")
+    rescue SystemCallError => error
+      refuse("#{leaf.at} absence changed: #{error.message}") unless error.errno == Errno::ENOENT::Errno
+    rescue IOError => error
+      refuse("#{leaf.at} absence changed: #{error.message}")
     end
   end
 
@@ -176,6 +204,8 @@ begin
   applicability_file = nil
   applicability_source_verify_file = nil
   applicability_source_contract_file = nil
+  disposition_file = nil
+  disposition_failure_files = {}
   revision_context = nil
   image_files = {}
   if review_required
@@ -212,6 +242,21 @@ begin
         review_references.fetch("evidenceSourceContract").fetch("path").delete_prefix(".artifacts/"),
         "Phase 5 source contract"
       )
+    end
+    if review_references.key?("releaseDispositionFile")
+      disposition_file = artifact_snapshots.relative_leaf(
+        artifacts,
+        review_references.fetch("releaseDispositionFile").fetch("path").delete_prefix(".artifacts/"),
+        "release-disposition.json"
+      )
+      IOSTemplate::ReviewContract.release_disposition_failure_paths(
+        issue: issue, head_sha: head_sha
+      ).each do |path|
+        failure_file = artifact_snapshots.optional_leaf(
+          head_directory, File.basename(path), "release disposition failure #{path}"
+        )
+        disposition_failure_files[path] = failure_file if failure_file
+      end
     end
     if IOSTemplate::ReviewContract.repository_test_scope(contract.fetch("acceptanceCriteria")) == "base-and-head" || repository_test_plan_file
       revision_context = IOSTemplate::ReviewContract.repository_revision_context(repo: root, base_sha: base_sha, head_sha: head_sha)
@@ -350,7 +395,10 @@ begin
       evidence_applicability_bytes: applicability_file&.bytes,
       evidence_source_verify_bytes: applicability_source_verify_file&.bytes,
       evidence_source_contract_bytes: applicability_source_contract_file&.bytes,
-      evidence_repo: root
+      evidence_repo: root,
+      release_disposition_bytes: disposition_file&.bytes,
+      release_disposition_failure_bytes: disposition_failure_files.transform_values(&:bytes),
+      release_disposition_repo: root
     )
     refuse("opposite-model review is not approved") unless review_values.fetch("result").fetch("verdict") == "approved"
     IOSTemplate::ReviewReceipt.validate!(

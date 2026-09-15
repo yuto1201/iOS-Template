@@ -142,6 +142,33 @@ source Headとtarget Headは同じGit系譜である必要はありません。s
 
 D-049のrelease-phase binding互換cutoff `2026-09-14T00:00:00Z`より前に封印されたPhase 5 source contractは、元bytesを変更せずlegacy sourceとして参照できます。この場合もPhase 6 target bindingがrelease／revision／scopeを固定し、recordは`sourceLegacy: true`と`sourceRecord: null`を明示して架空のPhase 5 recordを合成せず、元のpassed full verification、contract、Git identityを検証します。cutoff以後のPhase 5 sourceにはPhase 5 `implementation` bindingが必須です。Phase 6 bindingのない既存／legacy Issueは従来の直接`verify.json`経路を維持し、新recordを合成しません。
 
+#### Release dispositionと停止後判断
+
+D-050 cutover `2026-09-15T11:00:00Z`以後のPhase 5／6 `implementation`は、stable Headでrepository testsと必要な証拠適用判断を終えた後、review packetより前に一度だけrelease dispositionを発行します。
+
+```sh
+tools/record-release-disposition.sh \
+  --issue "${ISSUE}" \
+  --base-sha "${BASE_SHA}" \
+  --head-sha "${HEAD_SHA}" \
+  --input "${INPUT_JSON}"
+```
+
+inputのexact top-level fieldは`schemaVersion: 1`、`entries`、`executionDecisions`、`recordedAt`です。canonical成果物は`.artifacts/issues/${ISSUE}/${HEAD_SHA}/release-disposition.json`へno-replaceで発行されます。producerはcurrent Head／Base祖先関係、sealed contract、Base commitのphase record、同じHead directoryに存在するfailure attempt 1〜2を独立に読み、inputが参照しなかったfailure、存在しないfailure、digest差異を拒否します。cutover前のcontractへ成果物を合成しませんが、明示的に作られた正しいrecordは同じvalidatorで検証できます。
+
+`entries`はID順かつ一意とし、次のtypeを混ぜずに使います。
+
+- `accepted-defect`: `classification`、exact `low` severity、title／impact／workaround／fixCost、`approval`、`expiresAt`、`followUpIssue`、`reevaluationCondition`。approvalは`authority: user`、actor、同じrepositoryのGitHub Issue comment URL、同一Issue／Base／Head、`approvedAt`を持ちます。
+- `deferred-defect`: classification／severity／title／impact／reason、follow-up Issue、resume condition。これはproduct defectのacceptではありません。critical／high／unknownまたは公開blocker分類はmerge／releaseを止めます。
+- `omitted-test`: 実行しないtest path、reason、risk、follow-up Issue。passed testへ数えません。
+- `unverified`: 未確認scope、reason、risk、follow-up Issue。verifiedへ数えません。
+
+`executionDecisions`は同一Issue／Headの`repository-test-failure-attempt-N.json`をexact path／digestで一件ずつ参照し、ID、action、reason、actor／authority、follow-up Issueまたはnull、resume condition、failure後の`decidedAt`を持ちます。`shrink`は診断後に対象を狭める判断、`split`はuser authorityで別Issueへ分割する判断、`defer`はuser authorityで追跡Issueへ延期する判断、`wait`は追加ユーザー判断まで停止する状態です。`wait`はrelease readinessを通しません。failure／timeout／未実行testは、後で別のbounded実行が成功しても履歴上のpassedへ書き換えません。
+
+review packetは`releaseDisposition`と`releaseDispositionFile`を対で封印し、各failure recordもdescriptor-bound closureへ含めます。packet producer、result validator／publisher、PR renderer、pre-merge、release preflightはrecordが列挙した参照だけを信用せず、同じIssue／Headのattempt 1／2を独立取得してexact coverageを再検証します。取得時に存在しなかった候補もabsence witnessとして保持し、処理中の追加を拒否します。approved reviewのlow findingだけから`accepted-defect`を作らず、`evidenceApplicability`だけから残件なしを推測しません。PR本文はaccepted／deferred／omitted／unverified／failed-timeoutとfollow-upを別々に表示し、pre-mergeとrelease preflightは期限、candidate identity、critical blocker、`wait`を再検証します。
+
+D-050対象ではDelivery profileが通常ならreview省略可能な値でも`verify-passed -> approved-for-merge`の直接経路を使わず、正式な反対モデルreviewを経由します。これによってdispositionを持たないreview packetやpacket自体の省略をstate、PR renderer、pre-mergeの共通判定で拒否します。
+
 ## 3. Issue contract snapshot
 
 cutover後にClaimする新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。UI変更の3 field `UI verification`はClaim前のlive guidanceに限ります。既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持たせ、AC本文先頭を`UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、適用事実をReasonの後へ、確定anchorを`Spec anchors`、選択前提をDependenciesへ記載します。Identity bootstrapと純非UIの`UI verification`はexact `Not applicable`だけとし、scope／非UI理由をGoal／In scope等と`not-applicable`宣言へ、関連product／spec anchorを`Spec anchors`へ分けます。新しいmutable contract fieldは追加しません。選択の正本は、Issue contractへ封印される`Spec anchors`が参照する確定仕様と追記型Decisionです。pre-D-030 legacy contractにはこの新規要件を補完しません。

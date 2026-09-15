@@ -17,11 +17,13 @@ git -C "$repo" config user.email 'gate-fixture@example.invalid'
 mkdir -p "$repo/tools" "$repo/.artifacts/issues/42" "$repo/Config"
 cp "$repo_root/tools/validate-issue-body.sh" "$repo/tools/"
 cp "$repo_root/tools/validate-verify-json.swift" "$repo/tools/"
+cp "$repo_root/tools/validate-review-result.sh" "$repo/tools/"
 cp "$repo_root/tools/premerge-gate.sh" "$repo/tools/"
 cp "$repo_root/tools/cross-model-review.sh" "$repo/tools/"
 cp "$repo_root/tools/request-grok-review.sh" "$repo/tools/"
 cp "$repo_root/tools/prepare-review-packet.sh" "$repo/tools/"
 cp "$repo_root/tools/run-repository-tests.sh" "$repo/tools/"
+cp "$repo_root/tools/record-release-disposition.sh" "$repo/tools/"
 mkdir -p "$repo/tools/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/tools/tests/test-gate-probe.sh"
 cp "$repo_root/tools/render-pr-body.sh" "$repo/tools/"
@@ -30,6 +32,16 @@ cp -R "$repo_root/.agents" "$repo/"
 cp -R "$repo_root/specs" "$repo/"
 cp "$repo_root/Config/ownership.yml" "$repo/Config/"
 ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
+mkdir -p "$repo/Config/releases/premerge-v1/phase-records"
+PHASE_RECORD="$repo/Config/releases/premerge-v1/phase-records/phase6.json" ruby -I "$repo/tools/lib" -rworkflow-release-phase -e '
+  bytes=IOSTemplate::ReleasePhase.create(release_identifier:"premerge-v1",revision:1,scope:["workflow"],goal:"Validate release workflow gates.",actor:"yuto1201",reason:"Start the fixture release.",recorded_at:"2026-09-15T08:00:00Z")
+  (1..5).each do |phase|
+    user=[1,3,4,5].include?(phase)
+    event={"event"=>"phase-completed","revision"=>1,"phase"=>phase,"scope"=>["workflow"],"authority"=>user ? "user" : "delegated","actor"=>user ? "yuto1201" : "codex","approvalReference"=>user ? "issue-42-phase-#{phase}" : "D-038","reason"=>"Phase #{phase} fixture exit.","evidence"=>["fixture:phase-#{phase}"],"knownDefects"=>[],"omittedTests"=>[],"unverified"=>[],"carryovers"=>[],"recordedAt"=>format("2026-09-15T08:%02d:00Z",phase)}
+    bytes=IOSTemplate::ReleasePhase.append(bytes,event)
+  end
+  File.binwrite(ENV.fetch("PHASE_RECORD"),bytes)
+'
 cat > "$repo/Config/repository-tests.json" <<'JSON'
 {"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"gate","paths":["README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]}]}
 JSON
@@ -42,6 +54,7 @@ printf 'documentation change\n' >> "$repo/README.md"
 git -C "$repo" add README.md
 git -C "$repo" commit -m 'documentation change' >/dev/null
 head_sha=$(git -C "$repo" rev-parse HEAD)
+phase6_record_digest="sha256:$(shasum -a 256 "$repo/Config/releases/premerge-v1/phase-records/phase6.json" | awk '{print $1}')"
 
 mkdir -p "$repo/.artifacts/issues/42/$head_sha"
 
@@ -151,6 +164,26 @@ write_review_packet() {
   (cd "$issue_worktree" && "$issue_worktree/tools/prepare-review-packet.sh" --primary codex --issue 42 --base-sha "$base_sha" --head-sha "$head_sha") >/dev/null
 }
 
+publish_review_through_entrypoints() {
+  local canonical_review="$repo/.artifacts/issues/42/$head_sha/review.json"
+  local canonical_receipt="$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
+  local physical_scratch
+  physical_scratch=$(cd "$scratch" && pwd -P)
+  local physical_repo physical_worktree
+  physical_repo=$(cd "$repo" && pwd -P)
+  physical_worktree=$(cd "$issue_worktree" && pwd -P)
+  local provider_result="$physical_scratch/review-provider-result.json"
+  local validated_result="$physical_scratch/review-validated-result.json"
+  write_review
+  ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["acceptanceAssessment"].each_with_index{|entry,index|entry["evidence"]=["repository-tests.json#acceptanceEvidence/#{index}"]}; File.binwrite(path,JSON.generate(value))' "$canonical_review"
+  cp "$canonical_review" "$provider_result"
+  rm "$canonical_review" "$canonical_receipt"
+  (cd "$issue_worktree" && tools/validate-review-result.sh --primary codex \
+    --packet ".artifacts/issues/42/$head_sha/review-packet.json" --result "$provider_result") > "$validated_result"
+  ruby "$physical_worktree/tools/lib/publish-review-result.rb" "$physical_worktree" 42 "$head_sha" \
+    "$validated_result" "$physical_repo/.artifacts/issues/42/$head_sha/review-packet.json" codex "$review_at" "$review_at" >/dev/null
+}
+
 write_preflight() {
   local checked_at=${1:-$preflight_at}
   HEAD="$head_sha" CHECKED_AT="$checked_at" ruby -rjson -rdigest -e '
@@ -192,6 +225,9 @@ if [[ "$1 $2" == 'repo view' ]]; then
   exit 0
 fi
 if [[ "$1 $2" == 'issue view' ]]; then
+  if [[ -n "${CREATE_ABSENT_TARGET:-}" ]]; then
+    printf '%s\n' '{"appeared":true}' > "$CREATE_ABSENT_TARGET"
+  fi
   if [[ -n "${CTIME_ONLY_HELD_TARGET:-}" ]]; then
     TARGET="${CTIME_ONLY_HELD_TARGET:?}" "${REAL_RUBY:?}" -e 'path=ENV.fetch("TARGET"); before=File.stat(path); File.chmod(before.mode & 0o7777,path); after=File.stat(path); abort unless before.mode==after.mode && before.mtime==after.mtime && before.ctime!=after.ctime'
   fi
@@ -295,6 +331,16 @@ run_gate() {
 
 run_gate_merge() {
   (cd "$issue_worktree" && "$issue_worktree/tools/premerge-gate.sh" --repo yuto1201/iOS-Template --issue 42 --head-sha "$head_sha" --merge-pr 57)
+}
+
+run_result_validation() {
+  (cd "$issue_worktree" && tools/validate-review-result.sh --primary codex \
+    --packet ".artifacts/issues/42/$head_sha/review-packet.json" \
+    --result ".artifacts/issues/42/$head_sha/review.json")
+}
+
+run_renderer() {
+  (cd "$issue_worktree" && tools/render-pr-body.sh --issue 42 --head-sha "$head_sha")
 }
 
 write_verify
@@ -949,17 +995,6 @@ review_at=$(timestamp 1)
 transition_at=$(timestamp 2)
 preflight_at=$(timestamp 3)
 DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
-target_verify="$repo/.artifacts/issues/42/$head_sha/verify.json"
-cp "$target_verify" "$scratch/nonreuse-target-verify.saved"
-mv "$target_verify" "$target_verify.absent"
-assert_fails 'non-reuse review/premerge preparation rejects missing target verification' write_review_packet
-mv "$target_verify.absent" "$target_verify"
-ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["status"]="not-applicable"; File.binwrite(path,JSON.generate(value))' "$target_verify"
-assert_fails 'non-reuse review/premerge preparation rejects non-passed target verification' write_review_packet
-cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
-EVALUATED_AT="$applicability_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["completedAt"]=ENV.fetch("EVALUATED_AT"); File.binwrite(path,JSON.generate(value))' "$target_verify"
-assert_fails 'non-reuse review/premerge preparation rejects stale target verification' write_review_packet
-cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
 write_review_packet
 write_review
 review_record="$repo/.artifacts/issues/42/$head_sha/review.json"
@@ -1004,8 +1039,10 @@ rm "$revision_record" "$revision_plan"
 fi
 
 # Workflow-only strict changes use their sealed AC-mapped repository subset;
-# pre-merge must require that record while leaving application checks N/A.
-ruby -rjson -e 'path=ARGV.fetch(0); text=File.binread(path); criterion="AC-2: Repository-test scope: targeted; Reason: The fixture changes one manifest domain."; text.sub!("AC-2: Every acceptance criterion has one evidence mapping.",criterion) or abort; binding={"releaseIdentifier"=>"premerge-v1","revision"=>1,"phase"=>6,"scope"=>["workflow"],"workKind"=>"implementation","route"=>"standard","recordPath"=>"Config/releases/premerge-v1/phase-records/phase6.json","recordDigest"=>"sha256:#{"6"*64}","reason"=>"Validate Phase 6 premerge applicability."}; canonical=lambda{|value|value.is_a?(Hash) ? value.keys.sort.to_h{|key|[key,canonical.call(value.fetch(key))]} : value}; text.sub!(criterion,"#{criterion}\n- AC-3: Release-phase binding: #{JSON.generate(canonical.call(binding))}") or abort; marker="## External operations\n"; replacement="## Delivery stage\n\n- Stage: harden\n- Time budget: 60 minutes\n- Reason: Bounded workflow-only gate fixture.\n\n## Delivery profile\n\n- Profile: strict\n- Reason: Canonical workflow evidence changes.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
+# this post-D-050 fixture also drives disposition packet, validation,
+# publication, rendering, and pre-merge consumers with one item per category.
+PHASE_RECORD_DIGEST="$phase6_record_digest" ruby -rjson -e 'path=ARGV.fetch(0); text=File.binread(path); criterion="AC-2: Repository-test scope: targeted; Reason: The fixture changes one manifest domain."; text.sub!("AC-2: Every acceptance criterion has one evidence mapping.",criterion) or abort; binding={"releaseIdentifier"=>"premerge-v1","revision"=>1,"phase"=>6,"scope"=>["workflow"],"workKind"=>"implementation","route"=>"standard","recordPath"=>"Config/releases/premerge-v1/phase-records/phase6.json","recordDigest"=>ENV.fetch("PHASE_RECORD_DIGEST"),"reason"=>"Validate Phase 6 premerge applicability."}; canonical=lambda{|value|value.is_a?(Hash) ? value.keys.sort.to_h{|key|[key,canonical.call(value.fetch(key))]} : value}; text.sub!(criterion,"#{criterion}\n- AC-3: Release-phase binding: #{JSON.generate(canonical.call(binding))}") or abort; marker="## External operations\n"; replacement="## Delivery stage\n\n- Stage: harden\n- Time budget: 60 minutes\n- Reason: Bounded workflow-only gate fixture.\n\n## Delivery profile\n\n- Profile: strict\n- Reason: Canonical workflow evidence changes.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
+contract_at=$(timestamp -240)
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 (cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
@@ -1078,15 +1115,88 @@ File.binwrite(File.join(primary, ".artifacts/issues/42", head, "evidence-applica
 RUBY
 TARGET_VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" COMPLETED_AT="$(timestamp 2)" ruby -rjson -e '
   path=ENV.fetch("TARGET_VERIFY"); value=JSON.parse(File.binread(path)); value["completedAt"]=ENV.fetch("COMPLETED_AT"); File.binwrite(path,JSON.generate(value))'
-review_at=$(timestamp 3)
-transition_at=$(timestamp 4)
-preflight_at=$(timestamp 5)
+failure_path="$repo/.artifacts/issues/42/$head_sha/repository-test-failure-attempt-1.json"
+failure_completed_at=$(timestamp -5)
+FAILURE="$failure_path" HEAD="$head_sha" STARTED_AT="$(timestamp -10)" COMPLETED_AT="$failure_completed_at" ruby -rjson -e '
+  value={"schemaVersion"=>1,"issue"=>42,"headSha"=>ENV.fetch("HEAD"),"scope"=>"targeted","attempt"=>1,"stage"=>"suite","testPaths"=>["tools/tests/test-gate-probe.sh"],"failedTest"=>"tools/tests/test-gate-probe.sh","childTimeoutSeconds"=>300,"suiteTimeoutSeconds"=>900,"elapsedSeconds"=>5.0,"timedOut"=>false,"unexecutedTestPaths"=>[],"error"=>"fixture repository test failure","startedAt"=>ENV.fetch("STARTED_AT"),"completedAt"=>ENV.fetch("COMPLETED_AT")}; File.binwrite(ENV.fetch("FAILURE"),JSON.generate(value))'
+failure_digest="sha256:$(shasum -a 256 "$failure_path" | awk '{print $1}')"
+disposition_at=$(timestamp 3)
+disposition_input="$scratch/release-disposition-input.json"
+FAILURE_DIGEST="$failure_digest" BASE="$base_sha" HEAD="$head_sha" APPROVED_AT="$(timestamp -4)" EXPIRES_AT="$(timestamp 86400)" DECIDED_AT="$(timestamp 1)" RECORDED_AT="$disposition_at" OUTPUT="$disposition_input" ruby -rjson -e '
+  failure={"path"=>".artifacts/issues/42/#{ENV.fetch("HEAD")}/repository-test-failure-attempt-1.json","digest"=>ENV.fetch("FAILURE_DIGEST")}
+  entries=[
+    {"id"=>"accepted-001","type"=>"accepted-defect","classification"=>"cosmetic","severity"=>"low","title"=>"Minor spacing drift","impact"=>"A secondary label is offset by one point.","workaround"=>"Content remains readable.","fixCost"=>"Rebaseline one screenshot.","approval"=>{"authority"=>"user","actor"=>"yuto1201","reference"=>"https://github.com/yuto1201/iOS-Template/issues/42#issuecomment-4242","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"approvedAt"=>ENV.fetch("APPROVED_AT")},"expiresAt"=>ENV.fetch("EXPIRES_AT"),"followUpIssue"=>91,"reevaluationCondition"=>"Reevaluate before the next candidate."},
+    {"id"=>"deferred-001","type"=>"deferred-defect","classification"=>"minor-performance","severity"=>"medium","title"=>"Optional animation delay","impact"=>"Only a secondary animation starts late.","reason"=>"The primary flow is unaffected.","followUpIssue"=>92,"resumeCondition"=>"Profile in the bounded follow-up."},
+    {"id"=>"omitted-001","type"=>"omitted-test","testPath"=>"manual:legacy-device","reason"=>"The device is unavailable.","risk"=>"Legacy rendering remains unknown.","followUpIssue"=>93},
+    {"id"=>"unverified-001","type"=>"unverified","scope"=>"external accessory","reason"=>"The accessory is unavailable.","risk"=>"Accessory playback remains unknown.","followUpIssue"=>94}
+  ]
+  decisions=[{"id"=>"execution-001","action"=>"shrink","failure"=>failure,"reason"=>"Continue only with the diagnosed bounded subset.","actor"=>"codex","authority"=>"workflow","followUpIssue"=>nil,"resumeCondition"=>"Resume from the targeted plan only.","decidedAt"=>ENV.fetch("DECIDED_AT")}]
+  File.binwrite(ENV.fetch("OUTPUT"),JSON.generate("schemaVersion"=>1,"entries"=>entries,"executionDecisions"=>decisions,"recordedAt"=>ENV.fetch("RECORDED_AT")))'
+(cd "$issue_worktree" && tools/record-release-disposition.sh --issue 42 --base-sha "$base_sha" \
+  --head-sha "$head_sha" --input "$disposition_input") >/dev/null
+review_at=$(timestamp 4)
+transition_at=$(timestamp 5)
+preflight_at=$(timestamp 6)
 DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+target_verify="$repo/.artifacts/issues/42/$head_sha/verify.json"
+cp "$target_verify" "$scratch/nonreuse-target-verify.saved"
+mv "$target_verify" "$target_verify.absent"
+assert_fails 'non-reuse review/premerge preparation rejects missing target verification' write_review_packet
+mv "$target_verify.absent" "$target_verify"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["status"]="not-applicable"; File.binwrite(path,JSON.generate(value))' "$target_verify"
+assert_fails 'non-reuse review/premerge preparation rejects non-passed target verification' write_review_packet
+cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
+EVALUATED_AT="$applicability_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["completedAt"]=ENV.fetch("EVALUATED_AT"); File.binwrite(path,JSON.generate(value))' "$target_verify"
+assert_fails 'non-reuse review/premerge preparation rejects stale target verification' write_review_packet
+cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
 write_review_packet
-write_review
+publish_review_through_entrypoints
 review_record="$repo/.artifacts/issues/42/$head_sha/review.json"
-ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["acceptanceAssessment"].each_with_index{|entry,index|entry["evidence"]=["repository-tests.json#acceptanceEvidence/#{index}"]}; File.write(path,JSON.generate(value))' "$review_record"
-write_receipt
+write_preflight
+pr_body="$scratch/post-cutover-pr-body.md"
+(cd "$issue_worktree" && tools/render-pr-body.sh --issue 42 --head-sha "$head_sha") > "$pr_body"
+grep -Fq 'Accepted minor defects: `1`' "$pr_body"
+grep -Fq 'Deferred defects: `1`' "$pr_body"
+grep -Fq 'Intentionally omitted tests: `1` (not passed)' "$pr_body"
+grep -Fq 'Unverified scopes: `1` (not passed)' "$pr_body"
+grep -Fq 'Failed/timeout executions: `1` (not passed; decisions: `shrink`)' "$pr_body"
+grep -Fq 'Release disposition follow-ups: #91, #92, #93, #94' "$pr_body"
+run_gate >/dev/null
+second_failure="$repo/.artifacts/issues/42/$head_sha/repository-test-failure-attempt-2.json"
+SECOND_FAILURE="$second_failure" HEAD="$head_sha" STARTED_AT="$(timestamp -3)" COMPLETED_AT="$(timestamp -2)" ruby -rjson -e '
+  value={"schemaVersion"=>1,"issue"=>42,"headSha"=>ENV.fetch("HEAD"),"scope"=>"targeted","attempt"=>2,"stage"=>"suite","testPaths"=>["tools/tests/test-gate-probe.sh"],"failedTest"=>"tools/tests/test-gate-probe.sh","childTimeoutSeconds"=>300,"suiteTimeoutSeconds"=>900,"elapsedSeconds"=>1.0,"timedOut"=>false,"unexecutedTestPaths"=>[],"error"=>"late fixture failure","startedAt"=>ENV.fetch("STARTED_AT"),"completedAt"=>ENV.fetch("COMPLETED_AT")}; File.binwrite(ENV.fetch("SECOND_FAILURE"),JSON.generate(value))'
+assert_fails 'result validator rejects a failure omitted by packet disposition' run_result_validation
+assert_fails 'PR renderer rejects a failure omitted by packet disposition' run_renderer
+assert_fails 'premerge rejects a failure omitted by packet disposition' run_gate
+physical_repo=$(cd "$repo" && pwd -P)
+physical_worktree=$(cd "$issue_worktree" && pwd -P)
+physical_scratch=$(cd "$scratch" && pwd -P)
+canonical_review="$repo/.artifacts/issues/42/$head_sha/review.json"
+canonical_receipt="$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
+cp "$canonical_review" "$physical_scratch/late-failure-provider-result.json"
+cp "$canonical_review" "$physical_scratch/late-failure-review.saved"
+cp "$canonical_receipt" "$physical_scratch/late-failure-receipt.saved"
+rm "$canonical_review" "$canonical_receipt"
+assert_fails 'result publisher rejects a failure omitted by packet disposition' \
+  ruby "$physical_worktree/tools/lib/publish-review-result.rb" "$physical_worktree" 42 "$head_sha" \
+    "$physical_scratch/late-failure-provider-result.json" \
+    "$physical_repo/.artifacts/issues/42/$head_sha/review-packet.json" codex "$review_at" "$review_at"
+[[ ! -e "$canonical_review" && ! -e "$canonical_receipt" ]] || { echo 'invalid disposition published review evidence' >&2; exit 1; }
+cp "$physical_scratch/late-failure-review.saved" "$canonical_review"
+cp "$physical_scratch/late-failure-receipt.saved" "$canonical_receipt"
+rm "$second_failure"
+run_gate >/dev/null
+late_failure="$repo/.artifacts/issues/42/$head_sha/repository-test-failure-attempt-2.json"
+CREATE_ABSENT_TARGET="$late_failure" assert_fails 'failure record appearing after enumeration is rejected' run_gate
+rm "$late_failure"
+disposition_record="$repo/.artifacts/issues/42/$head_sha/release-disposition.json"
+cp "$disposition_record" "$scratch/release-disposition.saved"
+DISPOSITION="$disposition_record" ruby -rjson -e 'path=ENV.fetch("DISPOSITION"); value=JSON.parse(File.binread(path)); value["executionDecisions"]=[]; canonical=lambda{|item|item.is_a?(Hash) ? item.keys.sort.to_h{|key|[key,canonical.call(item.fetch(key))]} : item.is_a?(Array) ? item.map{|entry|canonical.call(entry)} : item}; File.binwrite(path,JSON.generate(canonical.call(value)))'
+rm -f "$repo/.artifacts/issues/42/$head_sha/review-packet.json" "$repo/.artifacts/issues/42/$head_sha/review.diff"
+assert_fails 'packet rejects an existing failure omitted by disposition' write_review_packet
+cp "$scratch/release-disposition.saved" "$disposition_record"
+write_review_packet
+publish_review_through_entrypoints
 write_preflight
 run_gate >/dev/null
 applicability_record="$repo/.artifacts/issues/42/$head_sha/evidence-applicability.json"
@@ -1109,7 +1219,7 @@ rm "$workflow_record" "$workflow_plan" "$applicability_record"
 rm -rf "$repo/.artifacts/issues/41"
 
 if [[ "$scope" == scoped ]]; then
-  echo 'PASS: scoped premerge validates audited revision history and the sealed Phase 5 to 6 applicability lease'
+  echo 'PASS: scoped premerge validates Phase 5 to 6 applicability and every post-cutover disposition consumer'
   exit 0
 fi
 
