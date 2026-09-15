@@ -90,7 +90,7 @@ cutover後のworkflow-only contractは`targeted`、`head-all`、`base-and-head`�
 
 ### Contract revision-aware review
 
-Claim後に正式revisionされたIssueでは、packet producerがdurable stateの`issueContractRevision`参照からrevision 2までのrecord、旧／新body・contract、before stateをdigest連鎖で検証します。pending、recordなしのcontract／state変更、broken chain、latest recordと異なるcanonical contractがあればpacketを生成しません。packet schemaは2のままとし、最新canonical contractのdigest、Acceptance criteria、spec anchorsと、改訂後のcurrent Headに対するverify／repository evidenceだけを封印します。以前のHeadに残るverify、review、packet、receiptは履歴であり、現行ACをsupportする証拠にしません。
+Claim後に正式revisionされたIssueでは、packet producerがdurable stateの`issueContractRevision`参照からrevision 2までのrecord、旧／新body・contract、before stateをdigest連鎖で検証します。各recordではAC ID／順序に加え、`UI-direction route:`の位置・route・Scope、`Repository-test scope:`の位置・scope、`Opposite-review route:`の位置・route／primary／reviewer／approval、`Release-phase binding:`の位置・宣言全文が改訂前後で一致しなければrejectします。pending、recordなしのcontract／state変更、broken chain、latest recordと異なるcanonical contractがあればpacketを生成しません。packet schemaは2のままとし、最新canonical contractのdigest、Acceptance criteria、spec anchorsと、改訂後のcurrent Headに対するverify／repository evidenceだけを封印します。以前のHeadに残るverify、review、packet、receiptは履歴であり、現行ACをsupportする証拠にしません。
 
 改訂後はdurable stateから旧`headSha`が外れていることを確認し、新Headでverify、packet、opposite-model result／receiptを新しく作ります。`review-finding`を次revisionのauthorityに使う場合は、同一Issue、改訂前contract digest、改訂時source Headのcanonical `changes-requested` result／receiptにあるblocking findingを`.artifacts/issues/ISSUE/HEAD/review.json#findings/INDEX`で参照し、revision reasonを`requiredChange`とexact一致させます。reviewer自身のfindingがGoal、MVP、stage、profile、scope、外部authorityの置換を必要とする場合は、同一Issue revisionを要求せず別Issueと現在ユーザー判断へ戻します。
 

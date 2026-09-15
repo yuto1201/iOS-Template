@@ -121,7 +121,7 @@ cutover前のexact `Repository-test scope: base-and-head; <nonempty>`またはcu
 
 ### 3.5 Claim後のIssue contract revision
 
-Claim後に同じIssueの検証方法またはAcceptance criteriaの説明を修正する必要がある場合は、Issueがexact `in-progress`である間だけ専用revision経路を使う。変更可能なのは`verification`、既存と同一ID・同一順序の`acceptanceCriteria[].text`、再取得時刻`fetchedAt`だけである。Goal、MVP、Spec anchors、Dependencies、Delivery stage／profile／scope、Issue type、外部操作と承認を変更してはならない。許可field内でも目的またはMVPを別物へ置換する意味変更は、別Issueと現在ユーザーの判断へ戻す。
+Claim後に同じIssueの検証方法またはAcceptance criteriaの説明を修正する必要がある場合は、Issueがexact `in-progress`である間だけ専用revision経路を使う。変更可能なのは`verification`、既存と同一ID・同一順序の`acceptanceCriteria[].text`、再取得時刻`fetchedAt`だけである。ただしAC本文先頭の`UI-direction route:`はcriterion位置・route・Scope、`Repository-test scope:`はcriterion位置・scope、`Opposite-review route:`はcriterion位置・route／primary／reviewer／approval、`Release-phase binding:`はcriterion位置・宣言全文を保護し、追加、削除、移動、保護値の変更を許可しない。Goal、MVP、Spec anchors、Dependencies、Delivery stage／profile／scope、Issue type、外部操作と承認を変更してはならない。許可field内でも目的またはMVPを別物へ置換する意味変更は、別Issueと現在ユーザーの判断へ戻す。
 
 authorityは次の三つだけを許可する。`review-finding`は同じIssue、現行contract digest、source Headに束縛されたcanonical `changes-requested` review／receiptのblocking findingを参照し、reasonをその`requiredChange`とexact一致させる。`user-explicit`は設定済みGitHub ownerが、変更前contract digest、変更後body digest、source Head、scope、reasonを含むcanonical markerを同じIssueへ投稿する。`user-delegated`は同じmarkerで現在executorをdelegateとして明示する。別Issue、古いcontract／Head、owner以外、silent approval、推測delegateをauthorityにしない。
 

@@ -224,7 +224,7 @@ documentation-only Issueでは節を省略するか、`Not applicable`／GitHub�
 
 ### 3.1 Claim後の監査付きcontract revision
 
-Claim済みIssueの本文を直接編集してcanonical contractとの差を放置しません。Issueがexact `in-progress`で、同じIssueの`github.read_issue`と`github.update_issue`がsealed contractに宣言されている場合だけ、`tools/revise-issue-verification.sh`を使います。許可fieldは`Verification`、既存と同一ID・同一順序のAcceptance criteria本文、更新時の`fetchedAt`だけです。Goal、MVP、Spec anchors、Dependencies、stage、profile、scope、type、external operation／approvalを変える提案は拒否し、意味的に別の目的・MVPとなる場合は別Issueと現在ユーザー判断へ戻します。
+Claim済みIssueの本文を直接編集してcanonical contractとの差を放置しません。Issueがexact `in-progress`で、同じIssueの`github.read_issue`と`github.update_issue`がsealed contractに宣言されている場合だけ、`tools/revise-issue-verification.sh`を使います。許可fieldは`Verification`、既存と同一ID・同一順序のAcceptance criteria本文、更新時の`fetchedAt`だけです。ただしAC本文先頭の`UI-direction route:`はcriterion位置・route・Scope、`Repository-test scope:`はcriterion位置・scope、`Opposite-review route:`はcriterion位置・route／primary／reviewer／approval、`Release-phase binding:`はcriterion位置・宣言全文を固定し、追加・削除・移動・保護値変更を拒否します。Goal、MVP、Spec anchors、Dependencies、stage、profile、scope、type、external operation／approvalを変える提案は拒否し、意味的に別の目的・MVPとなる場合は別Issueと現在ユーザー判断へ戻します。
 
 現在ユーザーが自分で改訂を明示する場合、まず候補本文からexact markerを生成します。
 

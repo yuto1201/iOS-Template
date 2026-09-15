@@ -46,6 +46,10 @@ body_v2="$workspace/body-v2.md"
 body_v3="$workspace/body-v3.md"
 body_v4="$workspace/body-v4.md"
 body_forbidden="$workspace/body-forbidden.md"
+body_scope_change="$workspace/body-scope-change.md"
+body_ui_change="$workspace/body-ui-change.md"
+body_opposite_add="$workspace/body-opposite-add.md"
+body_release_add="$workspace/body-release-add.md"
 cat > "$body_v1" <<'BODY'
 ## Goal
 
@@ -63,6 +67,7 @@ Keep one stable workflow goal.
 
 - AC-1: UI-direction route: not-applicable; Scope: workflow contract revision; Reason: this fixture changes no application UI. Revision text version one.
 - AC-2: Repository-test scope: targeted; Reason: the fixture runs only its deterministic workflow tests.
+- AC-3: Default opposite-model route remains unchanged.
 
 ## Spec anchors
 
@@ -110,6 +115,10 @@ sed 's/Revision text version two\./Revision text version three./' "$body_v2" > "
 sed 's/Revision text version three\./Revision text version four./' "$body_v3" > "$body_v4"
 sed -e 's/Keep one stable workflow goal\./Replace the workflow goal./' \
     -e 's/Revision text version one\./Revision text forbidden./' "$body_v1" > "$body_forbidden"
+sed 's/Repository-test scope: targeted/Repository-test scope: head-all/' "$body_v1" > "$body_scope_change"
+sed 's/UI-direction route: not-applicable; Scope: workflow contract revision/UI-direction route: comparison; Scope: changed workflow contract revision/' "$body_v1" > "$body_ui_change"
+sed 's/Default opposite-model route remains unchanged\./Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: exact fixture approval./' "$body_v1" > "$body_opposite_add"
+sed 's/Default opposite-model route remains unchanged\./Release-phase binding: {"phase":1,"reason":"Start the fixture release.","recordDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","recordPath":"Config\/releases\/fixture-v1\/phase-records\/record-0001.json","releaseIdentifier":"fixture-v1","revision":1,"route":"standard","scope":["workflow"],"workKind":"implementation"}/' "$body_v1" > "$body_release_add"
 
 artifact_issue="$primary/.artifacts/issues/$issue"
 mkdir -p "$artifact_issue"
@@ -184,6 +193,25 @@ assert_fails 'non-owner user authority' env LIVE="$live" ruby -rjson -I "$worktr
 ' "$worktree" "$issue" "$repository" "$body_v2" "$comment_url"
 assert_fails 'forbidden Goal change' ruby "$tool" marker --repo-root "$worktree" --repo "$repository" --issue "$issue" \
   --body "$body_forbidden" --live-json "$live" --trigger user-explicit --reason 'Forbidden scope'
+assert_fails 'protected repository-test scope change' ruby "$tool" marker --repo-root "$worktree" --repo "$repository" --issue "$issue" \
+  --body "$body_scope_change" --live-json "$live" --trigger user-explicit --reason 'Forbidden repository scope'
+assert_fails 'protected UI-direction route or scope change' ruby "$tool" marker --repo-root "$worktree" --repo "$repository" --issue "$issue" \
+  --body "$body_ui_change" --live-json "$live" --trigger user-explicit --reason 'Forbidden UI authority change'
+assert_fails 'protected opposite-review route addition' ruby "$tool" marker --repo-root "$worktree" --repo "$repository" --issue "$issue" \
+  --body "$body_opposite_add" --live-json "$live" --trigger user-explicit --reason 'Forbidden reviewer authority change'
+assert_fails 'protected release-phase binding addition' ruby "$tool" marker --repo-root "$worktree" --repo "$repository" --issue "$issue" \
+  --body "$body_release_add" --live-json "$live" --trigger user-explicit --reason 'Forbidden release phase change'
+
+opposite_before="$workspace/opposite-before.json"
+opposite_removed="$workspace/opposite-removed.json"
+ruby "$worktree/tools/lib/issue-contract.rb" --body "$body_opposite_add" --type feature --format contract \
+  --issue "$issue" --repo "$repository" --fetched-at 2026-09-15T00:00:00Z > "$opposite_before"
+ruby "$worktree/tools/lib/issue-contract.rb" --body "$body_v1" --type feature --format contract \
+  --issue "$issue" --repo "$repository" --fetched-at 2026-09-15T00:00:01Z > "$opposite_removed"
+assert_fails 'protected opposite-review route removal' ruby -I "$worktree/tools/lib" -rjson -rissue-contract-revision -e '
+  before=JSON.parse(File.binread(ARGV.fetch(0))); after=JSON.parse(File.binread(ARGV.fetch(1)))
+  IOSTemplate::IssueContractRevision.contract_delta!(before,after)
+' "$opposite_before" "$opposite_removed"
 
 mkdir -p "$artifact_issue/$head_sha"
 printf 'old verification evidence\n' > "$artifact_issue/$head_sha/verify.json"
@@ -210,6 +238,10 @@ assert_fails 'injected activation interruption' env IOS_TEMPLATE_REVISION_FAIL_A
   --repo-root "$worktree" --repo "$repository" --issue "$issue" --body "$body_v2" --live-json "$live" \
   --trigger user-explicit --reason 'User approved exact AC correction' --authority-reference "$comment_url"
 [[ -f "$pending" ]] || fail 'interrupted activation removed pending recovery state'
+ruby "$tool" resume --repo-root "$worktree" --repo "$repository" --issue "$issue" --body "$body_v2" \
+  --live-json "$live" --trigger user-explicit --reason 'User approved exact AC correction' \
+  --authority-reference "$comment_url" > "$workspace/resumed-v2.json"
+[[ $(jq -er '.status' "$workspace/resumed-v2.json") == pending ]] || fail 'untampered pending revision did not resume'
 ruby "$tool" activate --repo-root "$worktree" --repo "$repository" --issue "$issue" --body "$body_v2" \
   --live-json "$live" --trigger user-explicit --reason 'User approved exact AC correction' \
   --authority-reference "$comment_url" > "$workspace/activated-v2.json"

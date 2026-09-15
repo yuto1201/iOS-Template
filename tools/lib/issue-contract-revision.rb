@@ -20,6 +20,12 @@ module IOSTemplate
     TRIGGERS = (USER_TRIGGERS + %w[review-finding]).freeze
     SUBSTANTIVE_FIELDS = %w[acceptanceCriteria verification].freeze
     CHANGED_FIELDS = IssueContract::REVISION_MUTABLE_FIELDS.freeze
+    PROTECTED_ACCEPTANCE_PREFIXES = {
+      "ui-direction" => "UI-direction route:",
+      "repository-test" => "Repository-test scope:",
+      "opposite-review" => "Opposite-review route:",
+      "release-phase" => "Release-phase binding:"
+    }.freeze
     INVALIDATED_EVIDENCE = %w[head-binding review verification].freeze
     REVISION_REFERENCE_KEYS = %w[digest path revision].freeze
     FILE_REFERENCE_KEYS = %w[digest path].freeze
@@ -336,6 +342,40 @@ module IOSTemplate
       true
     end
 
+    def protected_acceptance_declarations!(contract)
+      criteria = contract.fetch("acceptanceCriteria")
+      reject("Acceptance criteria must be a nonempty array") unless criteria.is_a?(Array) && !criteria.empty?
+      criteria.each_with_index.each_with_object([]) do |(entry, index), declarations|
+        reject("Acceptance criterion is invalid") unless entry.is_a?(Hash)
+        id = entry.fetch("id")
+        text = entry.fetch("text")
+        reject("Acceptance criterion identity is invalid") unless id.is_a?(String) && text.is_a?(String)
+
+        if text.start_with?(PROTECTED_ACCEPTANCE_PREFIXES.fetch("ui-direction"))
+          match = text.match(/\AUI-direction route: (?<route>[^;\r\n]+); Scope: (?<scope>[^;\r\n]+); Reason: /)
+          reject("protected UI-direction declaration is malformed") unless match
+          declarations << {"kind" => "ui-direction", "criterionId" => id, "position" => index,
+                           "route" => match[:route], "scope" => match[:scope]}
+        elsif text.start_with?(PROTECTED_ACCEPTANCE_PREFIXES.fetch("repository-test"))
+          match = text.match(/\ARepository-test scope: (?<scope>[^;\r\n]+);/)
+          reject("protected repository-test declaration is malformed") unless match
+          declarations << {"kind" => "repository-test", "criterionId" => id, "position" => index,
+                           "scope" => match[:scope]}
+        elsif text.start_with?(PROTECTED_ACCEPTANCE_PREFIXES.fetch("opposite-review"))
+          match = text.match(/\AOpposite-review route: (?<route>[^;\r\n]+); Primary: (?<primary>[^;\r\n]+); Reviewer: (?<reviewer>[^;\r\n]+); Approval: (?<approval>[^;\r\n]+); Reason: /)
+          reject("protected opposite-review declaration is malformed") unless match
+          declarations << {"kind" => "opposite-review", "criterionId" => id, "position" => index,
+                           "route" => match[:route], "primary" => match[:primary],
+                           "reviewer" => match[:reviewer], "approval" => match[:approval]}
+        elsif text.start_with?(PROTECTED_ACCEPTANCE_PREFIXES.fetch("release-phase"))
+          declarations << {"kind" => "release-phase", "criterionId" => id, "position" => index,
+                           "declaration" => text}
+        end
+      end
+    rescue KeyError
+      reject("Acceptance criteria are incomplete")
+    end
+
     def contract_delta!(before, after)
       changed = (before.keys | after.keys).select { |key| before.key?(key) != after.key?(key) || before[key] != after[key] }.sort
       forbidden = changed - CHANGED_FIELDS
@@ -346,6 +386,9 @@ module IOSTemplate
       before_ids = before.fetch("acceptanceCriteria").map { |entry| entry.fetch("id") }
       after_ids = after.fetch("acceptanceCriteria").map { |entry| entry.fetch("id") }
       reject("Acceptance criteria IDs or order changed") unless before_ids == after_ids
+      before_declarations = protected_acceptance_declarations!(before)
+      after_declarations = protected_acceptance_declarations!(after)
+      reject("contract revision changes protected Acceptance criteria declarations") unless before_declarations == after_declarations
       before_time = timestamp!(before.fetch("fetchedAt"), "before contract fetchedAt")
       after_time = timestamp!(after.fetch("fetchedAt"), "after contract fetchedAt")
       reject("revised fetchedAt must be later than the prior contract") unless after_time > before_time
