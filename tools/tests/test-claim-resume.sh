@@ -68,7 +68,7 @@ case "${1:-} ${2:-}" in
     printf '%s\n' "{\"nameWithOwner\":\"${FAKE_GH_REPOSITORY:-yuto1201/iOS-Template}\",\"defaultBranchRef\":{\"name\":\"main\"},\"url\":\"https://github.com/${FAKE_GH_REPOSITORY:-yuto1201/iOS-Template}\"}"
     ;;
   'issue view')
-    ruby -rjson -e 'comments = JSON.parse(File.read(ENV.fetch("FAKE_GH_COMMENTS_FILE"))).map { |comment| value=comment.dup; value["author"] ||= {"login"=>"yuto1201"}; value["createdAt"] ||= value.fetch("body", "")[/"timestamp":"([^"]+)"/, 1] || "2026-08-24T00:00:00Z"; value }; puts JSON.generate({"title" => ENV.fetch("FAKE_GH_ISSUE_TITLE", "Settings screen"), "body" => File.read(ENV.fetch("FAKE_GH_ISSUE_BODY")), "labels" => JSON.parse(File.read(ENV.fetch("FAKE_GH_LABELS_FILE"))).map { |name| {"name" => name} }, "comments" => comments})'
+    ISSUE_NUMBER=${3:?} REPOSITORY=${5:?} ruby -rjson -e 'comments = JSON.parse(File.read(ENV.fetch("FAKE_GH_COMMENTS_FILE"))).map { |comment| value=comment.dup; value["author"] ||= {"login"=>"yuto1201"}; value["createdAt"] ||= value.fetch("body", "")[/"timestamp":"([^"]+)"/, 1] || "2026-08-24T00:00:00Z"; value }; issue=Integer(ENV.fetch("ISSUE_NUMBER")); repository=ENV.fetch("REPOSITORY"); puts JSON.generate({"number"=>issue,"url"=>"https://github.com/#{repository}/issues/#{issue}","title" => ENV.fetch("FAKE_GH_ISSUE_TITLE", "Settings screen"), "body" => File.read(ENV.fetch("FAKE_GH_ISSUE_BODY")), "labels" => JSON.parse(File.read(ENV.fetch("FAKE_GH_LABELS_FILE"))).map { |name| {"name" => name} }, "comments" => comments})'
     ;;
   'issue edit')
     remove='' add=''

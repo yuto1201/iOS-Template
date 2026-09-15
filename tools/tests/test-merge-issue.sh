@@ -126,7 +126,7 @@ case "$1 $2" in
     if [[ "$*" == "issue view $issue --repo $repo --json number,state,url,body,labels,comments" ]]; then
       jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" --rawfile body "$state/body.md" --arg label "$(cat "$state/issue-label")" --slurpfile comments "$state/comments.json" '{number:$number,state:$state,url:$url,body:$body,labels:[{name:$label}],comments:$comments[0]}'
     elif [[ "$*" == *'--json number,state,url' ]]; then printf 'gh issue view identity\n' >>"$log"; jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" '{number:$number,state:$state,url:$url}'
-    elif [[ "$*" == *'labels,comments'* ]]; then printf 'gh issue view labels-comments\n' >>"$log"; jq -cn --arg label "$(cat "$state/issue-label")" '{title:"Merge exact verified work",body:"fixture",labels:[{name:$label}],comments:[]}'
+    elif [[ "$*" == *'labels,comments'* ]]; then printf 'gh issue view labels-comments\n' >>"$log"; jq -cn --argjson number "$issue" --arg url "https://github.com/$repo/issues/$issue" --rawfile body "$state/body.md" --arg label "$(cat "$state/issue-label")" '{number:$number,url:$url,title:"Merge exact verified work",body:$body,labels:[{name:$label}],comments:[]}'
     else printf 'gh issue view labels\n' >>"$log"; jq -cn --arg label "$(cat "$state/issue-label")" '{labels:[{name:$label}]}' ; fi ;;
   'issue edit') printf 'gh issue edit approved-to-merged\n' >>"$log"; printf 'issue-edit\n' >>"$mutations"; printf 'state:merged\n' >"$state/issue-label" ;;
   'issue comment') printf 'gh issue comment transition\n' >>"$log"; printf 'issue-comment\n' >>"$mutations" ;;
