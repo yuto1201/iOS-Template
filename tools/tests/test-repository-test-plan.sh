@@ -49,8 +49,11 @@ abort "targeted premerge did not use its bounded scenario" unless
   runner.test_arguments("tools/tests/test-premerge-gate.sh", "targeted") == ["scoped"]
 abort "targeted renderer did not use its bounded scenario" unless
   runner.test_arguments("tools/tests/test-render-pr-body.sh", "targeted") == ["scoped"]
+abort "targeted workflow state did not use its bounded scenario" unless
+  runner.test_arguments("tools/tests/test-workflow-state.sh", "targeted") == ["scoped"]
 abort "head-all unexpectedly narrowed a test" unless
-  runner.test_arguments("tools/tests/test-premerge-gate.sh", "head-all") == []
+  runner.test_arguments("tools/tests/test-premerge-gate.sh", "head-all") == [] &&
+    runner.test_arguments("tools/tests/test-workflow-state.sh", "head-all") == []
 abort "bootstrap full entrypoint changed" unless
   runner.test_arguments("tools/tests/test-app-bootstrap.sh", "targeted") == ["all"]
 Dir.mktmpdir("repository-test-plan-") do |scratch|

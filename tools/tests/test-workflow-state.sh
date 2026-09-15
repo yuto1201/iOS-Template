@@ -4,6 +4,8 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" rg git jq ruby
 
+[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+scope="${1:-full}"
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-workflow-state.XXXXXX")
 workspace=$(cd "$workspace" && pwd -P)
@@ -354,6 +356,11 @@ ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --typ
   > ".artifacts/issues/$test_issue/issue-contract.json"
 assert_fails 'blocked resume without history fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:ops"]'
+
+if [[ "$scope" == scoped ]]; then
+  echo 'PASS: scoped GitHub preflight and revised-contract state boundaries'
+  exit 0
+fi
 
 # Once Claim has created the full Task 4 identity record, every Task 2
 # transition must retain it exactly while changing only transition metadata.
