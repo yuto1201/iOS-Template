@@ -283,6 +283,8 @@ module IOSTemplate
     end
 
     def parse_body_contract!(body, issue_type:, issue:, repository:, fetched_at:, allow_legacy_delivery_stage:)
+      body = body.dup.force_encoding(Encoding::UTF_8)
+      reject("Issue body is not valid UTF-8") unless body.valid_encoding?
       result = IssueContract.parse(
         body, issue_type: issue_type, issue: issue, repository: repository,
         fetched_at: fetched_at, allow_legacy_delivery_stage: allow_legacy_delivery_stage
