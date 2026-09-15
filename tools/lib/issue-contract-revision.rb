@@ -971,9 +971,9 @@ module IOSTemplate
         loader: loader, history_exists: true, pending_exists: true, allow_pending: true)
       live_issue!(live_document, issue, repository)
       live_body = live_document.fetch("body")
-      status = if digest(live_body) == pending.dig("beforeBody", "digest") && live_body == validated.fetch("beforeBodyBytes")
+      status = if digest(live_body) == pending.dig("beforeBody", "digest") && live_body.b == validated.fetch("beforeBodyBytes").b
         "before"
-      elsif digest(live_body) == pending.dig("afterBody", "digest") && live_body == validated.fetch("afterBodyBytes")
+      elsif digest(live_body) == pending.dig("afterBody", "digest") && live_body.b == validated.fetch("afterBodyBytes").b
         "after"
       else
         reject("live Issue body matches neither side of the pending revision")
