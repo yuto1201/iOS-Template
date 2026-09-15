@@ -201,6 +201,9 @@ FileUtils.mkdir_p(source_head_root)
 target_contract_bytes = File.binread(ENV.fetch("TARGET_CONTRACT"))
 source_contract = JSON.parse(target_contract_bytes)
 source_contract["issue"] = source_issue
+source_contract["verificationScope"] = {
+  "name"=>"full", "stage"=>"release", "reason"=>"Provide all four Phase 5 application cases."
+}
 binding = {
   "releaseIdentifier"=>"renderer-v1", "revision"=>1, "phase"=>5, "scope"=>["application"],
   "workKind"=>"implementation", "route"=>"standard",
@@ -212,8 +215,10 @@ source_contract.fetch("acceptanceCriteria").last["text"] = "Release-phase bindin
 source_contract_bytes = IOSTemplate::IssueContract.canonical_json(source_contract)
 File.binwrite(File.join(source_root, "issue-contract.json"), source_contract_bytes)
 source_verify = {
-  "schemaVersion"=>1, "status"=>"passed", "issue"=>source_issue, "baseSha"=>base, "headSha"=>head,
+  "schemaVersion"=>1, "status"=>"passed", "changeClassification"=>"application-code",
+  "issue"=>source_issue, "baseSha"=>base, "headSha"=>head,
   "issueContract"=>{"path"=>".artifacts/issues/#{source_issue}/issue-contract.json", "digest"=>IOSTemplate::EvidenceApplicability.digest(source_contract_bytes)},
+  "cases"=>IOSTemplate::VerificationScope::FULL_IDS.map { |id| {"id"=>id} },
   "completedAt"=>"2026-08-21T12:30:00+09:00"
 }
 source_verify_bytes = JSON.generate(source_verify)

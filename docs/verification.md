@@ -26,7 +26,7 @@ stage未指定のClaim済みcontractは旧release-level gateを維持します�
 
 ### 1.2 Phase 5から6への証拠適用
 
-Phase 6 `implementation`は`.artifacts/issues/${ISSUE}/${HEAD_SHA}/evidence-applicability.json`を必須とします。producerはPhase 5のcanonical passed full `verify.json`、source／target Issue contract、両方の`Release-phase binding:`、release phase record、現在のGit graphとsource..target diffを検証し、次の入口からschema v1 recordをexclusive publishします。
+Phase 6 `implementation`は`.artifacts/issues/${ISSUE}/${HEAD_SHA}/evidence-applicability.json`を必須とします。producerはPhase 5のcanonical passed full application `verify.json`、source／target Issue contract、targetと非legacy sourceの`Release-phase binding:`、bindingに封印されたphase-record path／digest参照、現在のGit graphとsource..target diffを検証し、次の入口からschema v1 recordをexclusive publishします。phase-record blob自体はRelease-phase Claim gateで検証済みであり、適用recordはそのsealed参照を保持します。
 
 ```bash
 tools/evaluate-evidence-applicability.sh \
@@ -38,11 +38,13 @@ tools/evaluate-evidence-applicability.sh \
 
 入力のexact top-level fieldは`schemaVersion`、`sourceVerify`、`sourceContext`、`targetContext`、`impact`、`reason`、`evaluatedAt`です。contextは`artifactDigest`、`configurationDigest`、`sdkDigest`、`signingDigest`、sorted nonempty `scope`を持ちます。impactはsource..target diffの全changed pathをsorted順でexactに覆い、各entryに`path`、`classification`、`scopes`、`dependencies`、`reason`を持たせます。classificationは`unaffected`、`affected`、`unknown`です。dependencyは現在Headのregular Git blobへ`present`とexact digestを記録するか、存在しないpathへ`missing`とnull digestを記録します。
 
-recordはrelease／revision／Phase 5→6／scope、source／target phase record、Phase 5証拠とcontract、Phase 6 Issue／Base／Head／contract、両context、actual diff digest／changed paths、全impact、判定と時刻をcanonical bytesで固定します。判定は次の三つだけです。
+recordはrelease／revision／Phase 5→6／scope、source／target phase-record参照、Phase 5証拠とcontract、Phase 6 Issue／Base／Head／contract、両context、actual diff digest／changed paths、全impact、判定と時刻をcanonical bytesで固定します。判定は次の三つだけです。
 
 - `reuse`: source Headとtarget Head、全contextがexact一致し、差分、unknown、missing dependency、scope拡張がない。
 - `targeted-reverify`: Headまたはcontextが変わった、もしくは`affected` pathがある。recordの`impactScope`を判定後に再検証する。
 - `expanded-verification`: `unknown`、missing dependency、またはtarget scope拡張がある。現在のtarget scopeまで検証を広げる。
+
+sourceとtargetのcommit objectはどちらもrepositoryで参照可能で、source Base→source Head、target Base→target Headがそれぞれ祖先関係を満たす必要があります。squash merge後のようにsource Headとtarget Headが分岐していても、両objectからactual source..target diffを固定して判定できます。ただしHeadが異なる時点で`reuse`にはならず、少なくとも`targeted-reverify`です。source commit objectが取得できなければ判定せずfail closedにします。
 
 `targeted-reverify`と`expanded-verification`では、Phase 6 targetのpassed `verify.json`がrecordの`evaluatedAt`より後でなければreview／releaseへ進めません。`reuse`では元のPhase 5 full proofをそのまま検証し、Phase 6で再実行したと表現しません。review packet schema v2は`evidenceApplicability`と`evidenceApplicabilityFile`を対で封印し、元証拠と元contractもexact digestで保持します。PR renderer、pre-merge、release/package preflightは同じrecordを再検証し、別candidate、古いreview時刻、atomic replacement、artifact digest不一致を拒否します。
 

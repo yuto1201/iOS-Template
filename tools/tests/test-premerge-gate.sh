@@ -949,6 +949,17 @@ review_at=$(timestamp 1)
 transition_at=$(timestamp 2)
 preflight_at=$(timestamp 3)
 DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+target_verify="$repo/.artifacts/issues/42/$head_sha/verify.json"
+cp "$target_verify" "$scratch/nonreuse-target-verify.saved"
+mv "$target_verify" "$target_verify.absent"
+assert_fails 'non-reuse review/premerge preparation rejects missing target verification' write_review_packet
+mv "$target_verify.absent" "$target_verify"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["status"]="not-applicable"; File.binwrite(path,JSON.generate(value))' "$target_verify"
+assert_fails 'non-reuse review/premerge preparation rejects non-passed target verification' write_review_packet
+cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
+EVALUATED_AT="$applicability_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["completedAt"]=ENV.fetch("EVALUATED_AT"); File.binwrite(path,JSON.generate(value))' "$target_verify"
+assert_fails 'non-reuse review/premerge preparation rejects stale target verification' write_review_packet
+cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
 write_review_packet
 write_review
 review_record="$repo/.artifacts/issues/42/$head_sha/review.json"
@@ -1014,6 +1025,17 @@ target_contract_path = File.join(primary, ".artifacts/issues/42/issue-contract.j
 target_contract_bytes = File.binread(target_contract_path)
 source_contract = JSON.parse(target_contract_bytes)
 source_contract["issue"] = 41
+source_contract["deliveryStage"] = {
+  "name"=>"release", "timeBudgetMinutes"=>60,
+  "reason"=>"Provide a full Phase 5 application source proof."
+}
+source_contract["deliveryProfile"] = {
+  "name"=>"strict", "reason"=>"Phase 5 source proof is release-grade."
+}
+source_contract["verificationScope"] = {
+  "name"=>"full", "reason"=>"Exercise all four canonical application cases."
+}
+source_contract["verification"] = {}
 source_binding = {
   "releaseIdentifier"=>"premerge-v1", "revision"=>1, "phase"=>5, "scope"=>["workflow"],
   "workKind"=>"implementation", "route"=>"standard",
@@ -1028,30 +1050,37 @@ source_head_root = File.join(source_root, head)
 FileUtils.mkdir_p(source_head_root)
 File.binwrite(File.join(source_root, "issue-contract.json"), source_contract_bytes)
 source_verify = {
-  "schemaVersion"=>1, "status"=>"passed", "issue"=>41, "baseSha"=>base, "headSha"=>head,
+  "schemaVersion"=>1, "status"=>"passed", "changeClassification"=>"application-code",
+  "issue"=>41, "baseSha"=>base, "headSha"=>head,
   "issueContract"=>{"path"=>".artifacts/issues/41/issue-contract.json", "digest"=>IOSTemplate::EvidenceApplicability.digest(source_contract_bytes)},
+  "cases"=>IOSTemplate::VerificationScope::FULL_IDS.map { |id| {"id"=>id} },
   "completedAt"=>JSON.parse(File.binread(File.join(primary, ".artifacts/issues/42", head, "verify.json"))).fetch("completedAt")
 }
 source_verify_bytes = JSON.generate(source_verify)
 File.binwrite(File.join(source_head_root, "verify.json"), source_verify_bytes)
-context = {
+source_context = {
   "artifactDigest"=>"sha256:#{"a"*64}", "configurationDigest"=>"sha256:#{"b"*64}",
   "sdkDigest"=>"sha256:#{"c"*64}", "signingDigest"=>"sha256:#{"d"*64}", "scope"=>["workflow"]
 }
+target_context = Marshal.load(Marshal.dump(source_context))
+target_context["configurationDigest"] = "sha256:#{"e"*64}"
 record = IOSTemplate::EvidenceApplicability.build(
   repo: repo, target_issue: 42, target_base_sha: base, target_head_sha: head,
   target_contract_bytes: target_contract_bytes,
   source_verify_path: ".artifacts/issues/41/#{head}/verify.json", source_verify_bytes: source_verify_bytes,
-  source_contract_bytes: source_contract_bytes, source_context: context, target_context: context,
-  impact_entries: [], reason: "The Phase 5 and Phase 6 workflow candidate is unchanged.",
+  source_contract_bytes: source_contract_bytes, source_context: source_context, target_context: target_context,
+  impact_entries: [], reason: "The Phase 6 configuration requires targeted workflow re-verification.",
   evaluated_at: ENV.fetch("EVALUATED_AT")
 )
+abort "premerge fixture must exercise non-reuse" unless record.dig("decision", "action") == "targeted-reverify"
 File.binwrite(File.join(primary, ".artifacts/issues/42", head, "evidence-applicability.json"),
   IOSTemplate::EvidenceApplicability.canonical_bytes(record))
 RUBY
-review_at=$(timestamp 2)
-transition_at=$(timestamp 3)
-preflight_at=$(timestamp 4)
+TARGET_VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" COMPLETED_AT="$(timestamp 2)" ruby -rjson -e '
+  path=ENV.fetch("TARGET_VERIFY"); value=JSON.parse(File.binread(path)); value["completedAt"]=ENV.fetch("COMPLETED_AT"); File.binwrite(path,JSON.generate(value))'
+review_at=$(timestamp 3)
+transition_at=$(timestamp 4)
+preflight_at=$(timestamp 5)
 DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
 write_review_packet
 write_review

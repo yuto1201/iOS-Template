@@ -53,9 +53,21 @@ contract = lambda do |issue, phase, path, byte, scope|
     "externalOperationDetailsDigest" => "sha256:#{"0" * 64}", "fetchedAt" => (Time.now.utc - 120).iso8601
   }
 end
-source_contract = JSON.generate(IOSTemplate::EvidenceApplicability.canonical(
-  contract.call(501, 5, "Config/releases/sample-v1/phase-records/phase5.json", "5", %w[core settings])
-))
+source_contract_value = contract.call(
+  501, 5, "Config/releases/sample-v1/phase-records/phase5.json", "5", %w[core settings]
+)
+source_contract_value["deliveryStage"] = {
+  "name" => "release", "timeBudgetMinutes" => 60,
+  "reason" => "Seal a full Phase 5 application proof for the fixture."
+}
+source_contract_value["deliveryProfile"] = {
+  "name" => "strict", "reason" => "Phase 5 source proof is release-grade."
+}
+source_contract_value["verificationScope"] = {
+  "name" => "full", "reason" => "Exercise all four canonical application cases."
+}
+source_contract_value["verification"] = {}
+source_contract = JSON.generate(IOSTemplate::EvidenceApplicability.canonical(source_contract_value))
 target_contract = JSON.generate(IOSTemplate::EvidenceApplicability.canonical(
   contract.call(502, 6, "Config/releases/sample-v1/phase-records/phase6.json", "6", ["core"])
 ))
@@ -69,12 +81,13 @@ FileUtils.mkdir_p(source_head_root)
 FileUtils.mkdir_p(target_head_root)
 completed = (Time.now.utc - 60).iso8601
 source_verify = {
-  "schemaVersion" => 1, "status" => "passed", "issue" => 501,
+  "schemaVersion" => 1, "status" => "passed", "changeClassification" => "application-code", "issue" => 501,
   "baseSha" => base, "headSha" => head,
   "issueContract" => {
     "path" => ".artifacts/issues/501/issue-contract.json",
     "digest" => IOSTemplate::EvidenceApplicability.digest(source_contract)
   },
+  "cases" => IOSTemplate::VerificationScope::FULL_IDS.map { |id| {"id" => id} },
   "completedAt" => completed
 }
 File.binwrite(File.join(source_head_root, "verify.json"), JSON.generate(source_verify))
@@ -119,6 +132,33 @@ record = IOSTemplate::EvidenceApplicability.validate!(
   source_verify_bytes: source_verify, source_contract_bytes: source_contract
 )
 abort "reuse record validation failed" unless record.dig("decision", "action") == "reuse"
+
+# A passed result is not a reusable Phase 5 source unless the source contract
+# itself resolves to full application verification and all four cases exist.
+narrow_contract = JSON.parse(source_contract)
+narrow_contract["deliveryStage"] = {
+  "name" => "shape", "timeBudgetMinutes" => 60,
+  "reason" => "Deliberately narrow source fixture."
+}
+narrow_contract["verificationScope"] = {
+  "name" => "iphone-ja", "reason" => "Deliberately cover only Japanese iPhone."
+}
+narrow_contract_bytes = IOSTemplate::IssueContract.canonical_json(narrow_contract)
+narrow_verify = JSON.parse(source_verify)
+narrow_verify.fetch("issueContract")["digest"] = IOSTemplate::EvidenceApplicability.digest(narrow_contract_bytes)
+narrow_verify["cases"] = [{"id" => "iphone-ja"}]
+narrow_verify_bytes = JSON.generate(IOSTemplate::EvidenceApplicability.canonical(narrow_verify))
+begin
+  IOSTemplate::EvidenceApplicability.build(
+    repo: repo, target_issue: 502, target_base_sha: ENV.fetch("BASE"), target_head_sha: source_head,
+    target_contract_bytes: target_contract, source_verify_path: source_path,
+    source_verify_bytes: narrow_verify_bytes, source_contract_bytes: narrow_contract_bytes,
+    source_context: record.fetch("sourceContext"), target_context: record.fetch("targetContext"),
+    impact_entries: [], reason: "This narrow source must be refused.", evaluated_at: Time.now.utc.iso8601
+  )
+  abort "non-full Phase 5 source was accepted at applicability build"
+rescue IOSTemplate::EvidenceApplicability::ValidationError
+end
 
 # The strict review packet embeds the same immutable decision and its source
 # references; approval time is ordered after both the current Issue evidence
@@ -202,6 +242,28 @@ begin
 rescue IOSTemplate::ReviewContract::ValidationError
 end
 
+narrow_record = JSON.parse(record_bytes)
+narrow_record.fetch("source")["digest"] = IOSTemplate::EvidenceApplicability.digest(narrow_verify_bytes)
+narrow_record.dig("source", "issueContract")["digest"] = IOSTemplate::EvidenceApplicability.digest(narrow_contract_bytes)
+narrow_record_bytes = JSON.generate(IOSTemplate::EvidenceApplicability.canonical(narrow_record))
+narrow_packet = {
+  "evidenceApplicability" => narrow_record,
+  "evidenceApplicabilityFile" => {
+    "path" => ".artifacts/issues/502/#{source_head}/evidence-applicability.json",
+    "digest" => IOSTemplate::EvidenceApplicability.digest(narrow_record_bytes)
+  }
+}
+begin
+  IOSTemplate::ReviewContract.validate_evidence_applicability!(
+    packet: narrow_packet, contract: JSON.parse(target_contract), verify: target_verify,
+    issue: 502, base_sha: ENV.fetch("BASE"), head_sha: source_head,
+    applicability_bytes: narrow_record_bytes, source_verify_bytes: narrow_verify_bytes,
+    source_contract_bytes: narrow_contract_bytes, repo: repo
+  )
+  abort "review/premerge validation accepted a non-full Phase 5 source"
+rescue IOSTemplate::ReviewContract::ValidationError
+end
+
 tampered = JSON.parse(record_bytes)
 tampered.fetch("decision")["action"] = "targeted-reverify"
 begin
@@ -212,6 +274,31 @@ begin
   abort "tampered decision was accepted"
 rescue IOSTemplate::EvidenceApplicability::ValidationError
 end
+
+# A squash-equivalent Phase 6 Head can be on a divergent branch. Its immutable
+# source..target diff is still assessable, but the different Head forbids reuse.
+tree = `git -C #{repo.shellescape} rev-parse #{source_head}^{tree}`.strip
+divergent, error, status = Open3.capture3(
+  "git", "-C", repo, "commit-tree", tree, "-p", ENV.fetch("BASE"),
+  stdin_data: "squash-equivalent candidate\n"
+)
+abort "failed to create divergent candidate: #{error}" unless status.success?
+divergent = divergent.strip
+abort "fixture accidentally made source Head an ancestor" if
+  system("git", "-C", repo, "merge-base", "--is-ancestor", source_head, divergent,
+         out: File::NULL, err: File::NULL)
+run_command = ->(*command) { abort "command failed: #{command.join(' ')}" unless system(*command, out: File::NULL) }
+run_command.call("git", "-C", repo, "checkout", "-q", "--detach", divergent)
+divergent_record = IOSTemplate::EvidenceApplicability.build(
+  repo: repo, target_issue: 502, target_base_sha: ENV.fetch("BASE"), target_head_sha: divergent,
+  target_contract_bytes: target_contract, source_verify_path: source_path, source_verify_bytes: source_verify,
+  source_contract_bytes: source_contract, source_context: record.fetch("sourceContext"),
+  target_context: record.fetch("targetContext"), impact_entries: [],
+  reason: "Assess the squash-equivalent but different Phase 6 Head.", evaluated_at: Time.now.utc.iso8601
+)
+abort "divergent squash-equivalent Head was not targeted for re-verification" unless
+  divergent_record.dig("decision", "action") == "targeted-reverify" &&
+  divergent_record.dig("diff", "changedPaths") == []
 
 FileUtils.mkdir_p(File.join(repo, "Sources"))
 File.binwrite(File.join(repo, "Sources/Changed.swift"), "struct Changed {}\n")
@@ -234,6 +321,41 @@ targeted = IOSTemplate::EvidenceApplicability.build(
   impact_entries: affected, reason: "Reverify the affected core scope.", evaluated_at: Time.now.utc.iso8601
 )
 abort "source/config change did not require targeted reverify" unless targeted.dig("decision", "action") == "targeted-reverify"
+
+targeted_bytes = IOSTemplate::EvidenceApplicability.canonical_bytes(targeted)
+targeted_packet = {
+  "evidenceApplicability" => targeted,
+  "evidenceApplicabilityFile" => IOSTemplate::EvidenceApplicability.references!(
+    record_bytes: targeted_bytes, target_issue: 502, target_head_sha: target_head
+  ).fetch("record")
+}
+expect_temporal_refusal = lambda do |verify, label|
+  begin
+    IOSTemplate::ReviewContract.validate_evidence_applicability!(
+      packet: targeted_packet, contract: JSON.parse(target_contract), verify: verify,
+      issue: 502, base_sha: ENV.fetch("BASE"), head_sha: target_head,
+      applicability_bytes: targeted_bytes, source_verify_bytes: source_verify,
+      source_contract_bytes: source_contract, repo: repo
+    )
+    abort "#{label} target re-verification was accepted"
+  rescue IOSTemplate::ReviewContract::ValidationError
+  end
+end
+evaluated = Time.parse(targeted.fetch("evaluatedAt"))
+expect_temporal_refusal.call({}, "absent")
+expect_temporal_refusal.call(
+  {"status" => "not-applicable", "completedAt" => (evaluated + 1).utc.iso8601}, "not-passed"
+)
+expect_temporal_refusal.call(
+  {"status" => "passed", "completedAt" => evaluated.utc.iso8601}, "stale"
+)
+IOSTemplate::ReviewContract.validate_evidence_applicability!(
+  packet: targeted_packet, contract: JSON.parse(target_contract),
+  verify: {"status" => "passed", "completedAt" => (evaluated + 1).utc.iso8601},
+  issue: 502, base_sha: ENV.fetch("BASE"), head_sha: target_head,
+  applicability_bytes: targeted_bytes, source_verify_bytes: source_verify,
+  source_contract_bytes: source_contract, repo: repo
+)
 
 unknown = Marshal.load(Marshal.dump(affected))
 unknown.first["classification"] = "unknown"
@@ -314,6 +436,8 @@ record = IOSTemplate::EvidenceApplicability.build(
   impact_entries: [], reason: "The release candidate and all sealed contexts are identical.",
   evaluated_at: Time.now.utc.iso8601
 )
+abort "pre-cutover source was not preserved as explicit legacy evidence" unless
+  record.dig("release", "sourceLegacy") == true && record.dig("release", "sourceRecord").nil?
 record_bytes = IOSTemplate::EvidenceApplicability.canonical_bytes(record)
 record_path = File.join(target_head_root, "evidence-applicability.json")
 File.binwrite(record_path, record_bytes)
@@ -373,6 +497,70 @@ begin
   abort "tampered release applicability was accepted"
 rescue IOSTemplate::ReleaseVerification::InvalidProof
 end
+
+# A non-reuse release cannot proceed without target evidence created after the
+# applicability decision. Missing, non-passed, and stale target proofs all fail.
+FileUtils.mkdir_p(File.join(repo, "docs"))
+File.binwrite(File.join(repo, "docs/phase6-change.md"), "Phase 6 candidate change.\n")
+abort "git add failed" unless system("git", "-C", repo, "add", "docs/phase6-change.md", out: File::NULL)
+abort "git commit failed" unless system("git", "-C", repo, "commit", "-qm", "phase6 candidate", out: File::NULL)
+target_head = `git -C #{repo} rev-parse HEAD`.strip
+nonreuse_issue = 44
+nonreuse_contract = Marshal.load(Marshal.dump(target_contract))
+nonreuse_contract["issue"] = nonreuse_issue
+nonreuse_contract_bytes = IOSTemplate::IssueContract.canonical_json(nonreuse_contract)
+nonreuse_root = File.join(repo, ".artifacts/issues", nonreuse_issue.to_s)
+nonreuse_head_root = File.join(nonreuse_root, target_head)
+FileUtils.mkdir_p(nonreuse_head_root)
+File.binwrite(File.join(nonreuse_root, "issue-contract.json"), nonreuse_contract_bytes)
+target_context = Marshal.load(Marshal.dump(context))
+target_context["configurationDigest"] = "sha256:#{"e" * 64}"
+changed_bytes = `git -C #{repo} show #{target_head}:docs/phase6-change.md`
+impact = [{
+  "path" => "docs/phase6-change.md", "classification" => "affected", "scopes" => ["application"],
+  "dependencies" => [{"path" => "docs/phase6-change.md", "status" => "present",
+                       "digest" => IOSTemplate::EvidenceApplicability.digest(changed_bytes)}],
+  "reason" => "The Phase 6 candidate changed after the Phase 5 proof."
+}]
+nonreuse = IOSTemplate::EvidenceApplicability.build(
+  repo: repo, target_issue: nonreuse_issue, target_base_sha: head, target_head_sha: target_head,
+  target_contract_bytes: nonreuse_contract_bytes,
+  source_verify_path: ".artifacts/issues/42/#{head}/verify.json", source_verify_bytes: source_verify_bytes,
+  source_contract_bytes: source_contract_bytes, source_context: context, target_context: target_context,
+  impact_entries: impact, reason: "Reverify the changed application scope before release.",
+  evaluated_at: Time.now.utc.iso8601
+)
+abort "release fixture did not create a non-reuse decision" unless
+  nonreuse.dig("decision", "action") == "targeted-reverify"
+File.binwrite(File.join(nonreuse_head_root, "evidence-applicability.json"),
+  IOSTemplate::EvidenceApplicability.canonical_bytes(nonreuse))
+expect_release_refusal = lambda do |label|
+  begin
+    IOSTemplate::ReleaseVerification.with_full_proof(
+      repo: repo, issue: nonreuse_issue, base: head, head: target_head,
+      bundle: "com.example.TemplateApp", artifact_digest: artifact_digest,
+      publish: ->(_) { abort "#{label} target proof published" }
+    ) { |value| value }
+    abort "#{label} target proof was accepted for release"
+  rescue IOSTemplate::ReleaseVerification::InvalidProof
+  end
+end
+target_verify_path = File.join(nonreuse_head_root, "verify.json")
+expect_release_refusal.call("missing")
+not_passed = {
+  "status" => "not-applicable", "changeClassification" => "documentation-only",
+  "issue" => nonreuse_issue, "baseSha" => head, "headSha" => target_head, "cases" => [],
+  "completedAt" => (Time.parse(nonreuse.fetch("evaluatedAt")) + 1).utc.iso8601
+}
+File.binwrite(target_verify_path, JSON.generate(not_passed))
+expect_release_refusal.call("not-passed")
+stale = not_passed.merge(
+  "status" => "passed", "changeClassification" => "application-code",
+  "cases" => IOSTemplate::VerificationScope::FULL_IDS.map { |id| {"id" => id} },
+  "completedAt" => nonreuse.fetch("evaluatedAt")
+)
+File.binwrite(target_verify_path, JSON.generate(stale))
+expect_release_refusal.call("stale")
 RUBY
 
 echo 'PASS: Phase 5 evidence is reused only for the same Phase 6 candidate and conditions; source, context, unknown impact, missing dependency, and scope changes invalidate reuse'

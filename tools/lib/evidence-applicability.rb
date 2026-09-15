@@ -4,6 +4,7 @@ require "digest"
 require "json"
 require "open3"
 require "time"
+require_relative "verification-scope"
 
 module IOSTemplate
   module EvidenceApplicability
@@ -88,6 +89,7 @@ module IOSTemplate
         source_contract_reference == {"path" => expected_source_contract_path, "digest" => source_contract_digest}
       reject("source issue contract identity differs") unless
         source_contract["schemaVersion"] == 1 && source_contract["issue"] == source_issue
+      source_full_proof!(source_contract, source_verify)
 
       source_completed_at = time!(source_verify["completedAt"], "source verification completedAt")
       reject("applicability evaluation predates source verification") if evaluated < source_completed_at
@@ -113,7 +115,6 @@ module IOSTemplate
       commit!(repo, source_head, "source Head")
       ancestor!(repo, target_base_sha, target_head_sha, "target Base")
       ancestor!(repo, source_base, source_head, "source Base")
-      ancestor!(repo, source_head, target_head_sha, "source Head") unless source_head == target_head_sha
 
       diff_bytes = actual_diff(repo: repo, base_sha: source_head, head_sha: target_head_sha)
       changed_paths = changed_paths(repo: repo, base_sha: source_head, head_sha: target_head_sha)
@@ -272,6 +273,18 @@ module IOSTemplate
       else
         ["reuse", impact_scope]
       end
+    end
+
+    def source_full_proof!(contract, verify)
+      scope = VerificationScope.validate_contract!(contract)
+      case_ids = Array(verify["cases"]).map { |entry| entry.is_a?(Hash) ? entry["id"] : nil }
+      reject("Phase 5 source contract must require full application verification") unless
+        contract["verification"].is_a?(Hash) && scope == "full"
+      reject("Phase 5 source must be passed full application verification") unless
+        verify["status"] == "passed" && verify["changeClassification"] == "application-code" &&
+        verify["cases"].is_a?(Array) && case_ids == VerificationScope::FULL_IDS
+    rescue ArgumentError, KeyError, TypeError => error
+      reject("Phase 5 source verification scope is invalid: #{error.message}")
     end
 
     def context!(value, at)

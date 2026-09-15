@@ -138,6 +138,8 @@ tools/evaluate-evidence-applicability.sh \
 
 同一Head、同一context、空diffなら`reuse`、Head／context／影響pathの変更なら`targeted-reverify`、unknown、missing dependency、scope拡張なら`expanded-verification`です。後二つは判定時刻より後のPhase 6 passed verificationが必要です。Phase 6 review packet、PR renderer、pre-merge gate、release/package preflightはrecordとPhase 5元証拠をdescriptor-boundで再検証し、別候補、古い承認、改ざん、未検証を拒否します。提出固有のpackage、privacy、legal、外部操作権限、provider readbackは毎回実行します。
 
+source Headとtarget Headは同じGit系譜である必要はありません。source Base→source Headとtarget Base→target Headをそれぞれ検証し、squash merge等で分岐した両commit objectが参照可能ならactual source..target diffを封印します。Headが異なる候補はdiffが空でも`reuse`せず`targeted-reverify`とし、source objectを取得できない場合は停止します。release phase recordのblob検証はRelease-phase Claim gateが担当し、適用recordはcontract bindingに封印済みのpath／digest参照を引き継ぎます。
+
 D-049のrelease-phase binding互換cutoff `2026-09-14T00:00:00Z`より前に封印されたPhase 5 source contractは、元bytesを変更せずlegacy sourceとして参照できます。この場合もPhase 6 target bindingがrelease／revision／scopeを固定し、recordは`sourceLegacy: true`と`sourceRecord: null`を明示して架空のPhase 5 recordを合成せず、元のpassed full verification、contract、Git identityを検証します。cutoff以後のPhase 5 sourceにはPhase 5 `implementation` bindingが必須です。Phase 6 bindingのない既存／legacy Issueは従来の直接`verify.json`経路を維持し、新recordを合成しません。
 
 ## 3. Issue contract snapshot
