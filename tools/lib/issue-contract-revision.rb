@@ -708,7 +708,10 @@ module IOSTemplate
 
     def next_recorded_at(before_contract, requested_time)
       prior = timestamp!(before_contract.fetch("fetchedAt"), "before contract fetchedAt")
-      now = requested_time.utc
+      # Contract timestamps are sealed at whole-second precision. Compare at
+      # that same precision so two revisions in one second cannot collapse to
+      # an unchanged fetchedAt after iso8601 formatting.
+      now = Time.at(requested_time.to_i).utc
       now = prior + 1 if now <= prior
       now.iso8601
     end
