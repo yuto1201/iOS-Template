@@ -23,6 +23,7 @@ done
 [[ -f "$claude_skill/SKILL.md" ]] || { echo 'Claude system-experiences route is broken' >&2; exit 1; }
 
 ruby -rjson <<'RUBY'
+# encoding: UTF-8
 def require_all(label, text, values)
   missing = values.reject { |value| text.include?(value) }
   abort "#{label} lacks #{missing.inspect}" unless missing.empty?
