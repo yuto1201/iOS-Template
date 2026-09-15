@@ -14,6 +14,8 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 非applicationのdelivery tool／schema／validator／review／evidence変更はworkflow-only経路です。`harden + strict`、application `Verification`／`Verification scope`なし、allowlist内の差分だけを受理します。先にcanonical repository-test evidenceを発行し、次に`.artifacts/issues/${ISSUE}/workflow-evidence-input.json`へschemaVersion 1と非空reasonを書き、`tools/publish-workflow-verify.sh`で`verify.json`を発行します。この経路はXcode、Build、Unit、Simulator matrix、Screenshot、visual evaluationを起動せず、repository evidenceのAC mappingをverifyへ固定します。
 
+workflow-onlyのGit modeはregular fileの追加・削除・同一mode変更だけを原則とします。共有skill追加時だけ、`.claude/skills/<skill-name>`の新規symlinkがexact `../../.agents/skills/<skill-name>`を指し、同じHeadにregular `.agents/skills/<skill-name>/SKILL.md`が存在する場合を許可します。既存symlinkの変更・削除、absolute／escaping target、別名target、target不在は拒否し、worktree上の解決結果だけで承認しません。
+
 正式reviewerはsealed contractから決めます。既定はCodex primary→Claude、Claude primary→Codexです。Codex-primary contractがexactly oneの完全な`Opposite-review route: grok-fallback`宣言とユーザー明示承認を持つ場合だけ、exact `cursor-grok-4.6-xhigh`を固定Cursor `ask` launcherで使います。packet、result、receipt、PR renderer、premerge gateはreviewer modelとlauncher bytesを同じIssue／contract／Base／Headへ束縛し、別model、手書き証拠、自己承認を拒否します。
 
 stage未指定のClaim済みcontractは旧release-level gateを維持します。未実行は`deferred / unverified`であり成功ではありません。shape／hardenをrelease readyと報告しません。

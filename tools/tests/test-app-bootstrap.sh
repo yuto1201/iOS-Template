@@ -849,12 +849,19 @@ if [[ "$mode" == "transform" ]]; then
   cp "$root/.agents/skills/app-icon/SKILL.md" "$fixture/.agents/skills/app-icon/SKILL.md"
   rm -f "$fixture/.claude/skills/app-icon"
   ln -s ../../.agents/skills/app-icon "$fixture/.claude/skills/app-icon"
+  mkdir -p "$fixture/.agents/skills/ios-system-experiences/templates"
+  cp "$root/.agents/skills/ios-system-experiences/SKILL.md" "$fixture/.agents/skills/ios-system-experiences/SKILL.md"
+  cp "$root/.agents/skills/ios-system-experiences/templates/system-experiences-plan.md" "$fixture/.agents/skills/ios-system-experiences/templates/system-experiences-plan.md"
+  rm -f "$fixture/.claude/skills/ios-system-experiences"
+  ln -s ../../.agents/skills/ios-system-experiences "$fixture/.claude/skills/ios-system-experiences"
   mkdir -p "$fixture/.agents/skills/ios-3d-assets"
   cp "$root/.agents/skills/ios-3d-assets/SKILL.md" "$fixture/.agents/skills/ios-3d-assets/SKILL.md"
   rm -f "$fixture/.claude/skills/ios-3d-assets"
   ln -s ../../.agents/skills/ios-3d-assets "$fixture/.claude/skills/ios-3d-assets"
   ui_direction_skill_hash_before="$(shasum "$fixture/.agents/skills/ui-direction/SKILL.md" | awk '{print $1}')"
   app_icon_skill_hash_before="$(shasum "$fixture/.agents/skills/app-icon/SKILL.md" | awk '{print $1}')"
+  ios_system_experiences_skill_hash_before="$(shasum "$fixture/.agents/skills/ios-system-experiences/SKILL.md" | awk '{print $1}')"
+  ios_system_experiences_template_hash_before="$(shasum "$fixture/.agents/skills/ios-system-experiences/templates/system-experiences-plan.md" | awk '{print $1}')"
   ios_3d_skill_hash_before="$(shasum "$fixture/.agents/skills/ios-3d-assets/SKILL.md" | awk '{print $1}')"
   app_bootstrap_test_hash_before="$(shasum "$fixture/tools/tests/test-app-bootstrap.sh" | awk '{print $1}')"
   foundation_test_hash_before="$(shasum "$fixture/tools/tests/test-foundation.sh" | awk '{print $1}')"
@@ -863,6 +870,7 @@ if [[ "$mode" == "transform" ]]; then
   ui_direction_test_hash_before="$(shasum "$fixture/tools/tests/test-ui-direction-skill.sh" | awk '{print $1}')"
   ui_direction_symlink_before="$(readlink "$fixture/.claude/skills/ui-direction")"
   app_icon_symlink_before="$(readlink "$fixture/.claude/skills/app-icon")"
+  ios_system_experiences_symlink_before="$(readlink "$fixture/.claude/skills/ios-system-experiences")"
   ios_3d_symlink_before="$(readlink "$fixture/.claude/skills/ios-3d-assets")"
   historical_plan="$fixture/docs/superpowers/plans/2026-08-22-app-bootstrap.md"
   historical_plan_hash_before="$(shasum "$historical_plan" | awk '{print $1}')"
@@ -961,6 +969,18 @@ PY
     echo 'portable Claude App icon skill link changed during transform' >&2
     exit 1
   }
+  [[ "$ios_system_experiences_skill_hash_before" == "$(shasum "$fixture/.agents/skills/ios-system-experiences/SKILL.md" | awk '{print $1}')" ]] || {
+    echo 'iOS system experiences skill changed during transform' >&2
+    exit 1
+  }
+  [[ "$ios_system_experiences_template_hash_before" == "$(shasum "$fixture/.agents/skills/ios-system-experiences/templates/system-experiences-plan.md" | awk '{print $1}')" ]] || {
+    echo 'iOS system experiences template changed during transform' >&2
+    exit 1
+  }
+  [[ -L "$fixture/.claude/skills/ios-system-experiences" && "$ios_system_experiences_symlink_before" == "$(readlink "$fixture/.claude/skills/ios-system-experiences")" && -f "$fixture/.claude/skills/ios-system-experiences/SKILL.md" ]] || {
+    echo 'portable Claude iOS system experiences skill link changed during transform' >&2
+    exit 1
+  }
   [[ "$ios_3d_skill_hash_before" == "$(shasum "$fixture/.agents/skills/ios-3d-assets/SKILL.md" | awk '{print $1}')" ]] || {
     echo 'iOS 3D assets skill changed during transform' >&2
     exit 1
@@ -981,6 +1001,7 @@ root = Path(sys.argv[1])
 contracts = {
     "AGENTS.md": (
         ".agents/skills/app-icon/SKILL.md",
+        ".agents/skills/ios-system-experiences/SKILL.md",
         ".agents/skills/ios-3d-assets/SKILL.md",
         "`gpt-6-astra`",
         ".agents/skills/ui-direction/SKILL.md",
@@ -991,6 +1012,7 @@ contracts = {
     ),
     "README.md": (
         "### App icon",
+        "System Experiences Planning Gate",
         ".agents/skills/app-icon/SKILL.md",
         ".agents/skills/ios-3d-assets/SKILL.md",
         "tools/install-app-icon.sh",
@@ -1000,6 +1022,7 @@ contracts = {
     ),
     "specs/product.md": (
         "### 3.2 アプリアイコン",
+        "System Experiences Planning Gate",
         "### 5.1 3Dモデル制作方針",
         "`gpt-6-astra`",
         "exactly 2案",
@@ -1009,6 +1032,7 @@ contracts = {
     ),
     "specs/development-stages.md": (
         "### 1.1 適用判定",
+        "System Experiences Planning Issue",
         ".artifacts/ui-direction/<flow-slug>/<revision>/comparison.html",
         "exact SHA-256",
         "専用Issue、Branch、PRでマージ",
@@ -1017,6 +1041,7 @@ contracts = {
     ),
     "specs/acceptance.md": (
         "tools/validate-app-icon.sh",
+        "System Experiences Planning Gate",
         "3D asset authoring",
         "`gpt-6-astra`",
         "stable concept ID",
@@ -1027,6 +1052,7 @@ contracts = {
     ),
     "specs/architecture.md": (
         "### 2.2 App Icon境界",
+        "System Experiences設計境界",
         "`ios-3d-assets`",
         "Config/app-icon.json",
         "### 4.1 UI Direction成果物の境界",
@@ -1036,6 +1062,7 @@ contracts = {
     ),
     "specs/decisions.md": (
         "## D-031: Identity確定後にシンプルな画像生成アプリアイコンを必須化する",
+        "## D-051: 全アプリでSystem Experiencesの評価を必須化する",
         "Related Issue: #49",
         "## D-032: 3D asset authoringをCodex GPT-6 Astraへ固定する",
         "Related Issue: #51",
@@ -1045,6 +1072,7 @@ contracts = {
     ),
     "docs/workflow.md": (
         "### 2.2 App Icon Gate",
+        "System Experiences Planning Gate",
         "### 2.3 3D authoring route",
         "`gpt-6-astra`",
         "../.agents/skills/app-icon/SKILL.md",
@@ -1070,6 +1098,7 @@ contracts = {
     ),
     ".agents/skills/app-bootstrap/SKILL.md": (
         "../app-icon/SKILL.md",
+        "../ios-system-experiences/SKILL.md",
         "dependent App Icon Issue",
         "../ui-direction/SKILL.md",
         "treat Identity bootstrap itself as non-UI work",
@@ -1084,16 +1113,19 @@ contracts = {
     ),
     ".agents/skills/plan-issue-batch/SKILL.md": (
         "../ui-direction/SKILL.md",
+        "../ios-system-experiences/SKILL.md",
         "separate specification/Decision Issue",
         "may continue independently",
     ),
     ".agents/skills/ship-issue/SKILL.md": (
         "../ui-direction/SKILL.md",
+        "System Experiences Planning Issue",
         "packet-sealed AC-text prefix",
         "never ship the comparison HTML",
     ),
     ".agents/skills/ship-issue-batch/SKILL.md": (
         "../ui-direction/SKILL.md",
+        "../ios-system-experiences/SKILL.md",
         "dependency is `done`",
         "bounded direction-neutral UI",
         "Ambiguity gates",

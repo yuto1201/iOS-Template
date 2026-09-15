@@ -1846,6 +1846,34 @@ func validateWorkflowPath(_ path: String) throws {
     }
 }
 
+func validateWorkflowSharedSkillSymlink(expectedHead: String, path: String) throws {
+    let components = try relativeComponents(path, at: "workflow-only shared skill symlink")
+    let skillNamePattern = try! NSRegularExpression(pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    guard components.count == 3,
+          components[0] == ".claude",
+          components[1] == "skills",
+          matches(components[2], regex: skillNamePattern) else {
+        throw ValidationFailure("workflow-only shared skill symlink is invalid")
+    }
+
+    let skillName = components[2]
+    let expectedTarget = "../../.agents/skills/\(skillName)"
+    let link = try runGitProcess(["cat-file", "blob", "\(expectedHead):\(path)"])
+    guard link.status == 0,
+          String(data: link.stdout, encoding: .utf8) == expectedTarget else {
+        throw ValidationFailure("workflow-only shared skill symlink is invalid")
+    }
+
+    let targetSkill = ".agents/skills/\(skillName)/SKILL.md"
+    let target = try runGitProcess(["ls-tree", "-z", expectedHead, "--", targetSkill])
+    guard target.status == 0,
+          let entry = String(data: target.stdout, encoding: .utf8),
+          entry.hasPrefix("100644 blob "),
+          entry.hasSuffix("\t\(targetSkill)\0") else {
+        throw ValidationFailure("workflow-only shared skill symlink target is invalid")
+    }
+}
+
 func validateWorkflowDiff(expectedBase: String, expectedHead: String) throws {
     let result = try runGitProcess(["diff", "--raw", "-z", "--no-renames", expectedBase, expectedHead, "--"])
     guard result.status == 0 else { throw ValidationFailure("unable to inspect trusted workflow-only range") }
@@ -1864,11 +1892,15 @@ func validateWorkflowDiff(expectedBase: String, expectedHead: String) throws {
         let metadata = header.dropFirst().split(separator: " ").map(String.init)
         guard metadata.count == 5 else { throw ValidationFailure("Git raw diff contains malformed metadata") }
         let oldMode = metadata[0], newMode = metadata[1], status = metadata[4]
-        let allowedMode = (status == "A" && oldMode == "000000" && ["100644", "100755"].contains(newMode)) ||
+        try validateWorkflowPath(path)
+        let regularMode = (status == "A" && oldMode == "000000" && ["100644", "100755"].contains(newMode)) ||
             (status == "D" && ["100644", "100755"].contains(oldMode) && newMode == "000000") ||
             (status == "M" && oldMode == newMode && ["100644", "100755"].contains(oldMode))
-        guard allowedMode else { throw ValidationFailure("workflow-only diff contains a type or mode change") }
-        try validateWorkflowPath(path)
+        if status == "A" && oldMode == "000000" && newMode == "120000" {
+            try validateWorkflowSharedSkillSymlink(expectedHead: expectedHead, path: path)
+        } else {
+            guard regularMode else { throw ValidationFailure("workflow-only diff contains a type or mode change") }
+        }
         index += 2
     }
 }

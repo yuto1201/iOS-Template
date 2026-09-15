@@ -99,6 +99,7 @@ required_files=(
 
 workflow_skills=(
   ui-direction
+  ios-system-experiences
   plan-issue-batch
   ship-issue
   ship-issue-batch

@@ -1,7 +1,7 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 3.0
+Version: 3.1
 Date: 2026-09-15
 
 ## 1. テンプレート完成条件
@@ -9,6 +9,7 @@ Date: 2026-09-15
 - [ ] 最小のSwiftUIアプリがiPhoneとiPadで起動する。
 - [ ] Identity bootstrapがXcode project、Target、Scheme、Module、Test、Bundle ID、設定を一貫して変換できる。
 - [ ] アプリの目的・方向性とIdentity確定後、シンプルな画像生成候補2案からユーザーが選んだアプリアイコンを検証済みAsset Catalogへ組み込める。
+- [ ] Identity bootstrap後、主要Feature Issueより前にSystem Experiences Planning Gateで5面を評価し、採用面だけを依存Issueへ分けられる。
 - [ ] Unit TestとUI Testのサンプルが実行できる。
 - [ ] 日本語と英語を切り替えて主要画面を検証できる。
 - [ ] CodexとClaudeが同じ外部操作権限を持ち、設定済みアカウント／targetを照合する。
@@ -28,6 +29,12 @@ Date: 2026-09-15
 
 次が揃うまでIssueを`in-progress`にしない。
 
+### 2.1 System Experiences Planning Gate
+
+新しいアプリまたはSystem Experiencesの新規採用を含むreleaseでは、Identity bootstrap後かつ主要Feature Issueの計画・Claimより前に、専用のSystem Experiences Planning Issueを完了する。`widget`、`live-activities`、`dynamic-island`、`controls`、`siri-app-intents`の5面すべてについて、最新のApple公式sourceを確認し、`adopt-now`、`defer`、`not-applicable`、`blocked:user`のいずれか、理由、提供価値、data／action境界、privacy、accessibility、日英localization、fallback、検証、release依存、再評価条件を記録する。
+
+評価は必須だが採用は任意であり、ユーザーが最終判断する。`adopt-now`だけを実装Issueへ分け、計画だけでframework、Extension target、entitlementを追加しない。一面が`blocked:user`でも、その判断に依存するIssueだけを部分blockingとし、確定済み面や独立した非UI作業は進める。App IconはIdentity bootstrap後に並行でき、採用するsystem UIの方向選択は別途UI Direction Gateへ依存する。
+
 - Goal、In scope、Out of scope、検証可能な`AC-1..n`、仕様anchor、依存／blockerがある。
 - UI変更は対象画面・状態、今回確認する言語／端末、延期する範囲を記載する。
 - Delivery stageが`shape`、`harden`、`release`のいずれかで、正のTime budgetと理由がある。
@@ -39,6 +46,7 @@ Date: 2026-09-15
 - `release` Delivery stageは`type:release`の実際のアプリrelease candidateだけに使う。Feature、Regression、workflow-only変更は`release/full`へ分類しない。
 - 外部サービスはservice、environment、Executorを指定し、法務、課金、本番破壊操作は必要なユーザー承認を明示する。
 - Feature Issueではアプリ固有の`specs/product.md`と`specs/acceptance.md`が確定し、Issueと矛盾しない。受け入れ条件を変える未決事項は`blocked:user`。
+- Identity bootstrap後の主要Feature Issueは、完了済みSystem Experiences Planning Issueと5面の採否matrixを参照する。`adopt-now`の面へ依存するIssueはその設計・基盤IssueをDependenciesへ置き、`defer`または`not-applicable`を実装scopeへ黙って含めない。
 - UIを変更するIssueは、[UI Direction Gateの適用判定](development-stages.md#11-適用判定)をClaim前に行う。現在のユーザーが対象範囲のHTML比較を明示した場合は方向の有無にかかわらずGateが必須であり、明示省略は現行性、scope、権限、理由が明確で比較指示と矛盾しない場合だけ通常判定を上書きする。
 - 明示指示がない通常判定は、exact hierarchy／flowを覆う確定方向があればconfirmed-direction reuse、覆う方向がなく対象方向が未確定かつ最初のユーザー向けUI、最上位navigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかならGate、方向未確定かつ構造triggerなしならAcceptance criteriaがhierarchy、navigation、primary-flow interactionを決めない範囲だけbounded direction-neutralとする。coverage、triggerまたはneutralityが曖昧ならGateを実行する。
 - cutover後にClaimするcontractは、既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持つ。一つのAcceptance criterion本文の先頭（`AC-*:`の直後）をexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、`<route>`は`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`のいずれかだけとする。route固有の適用事実はReasonの後へ続けてよく、prefix外のroute語は宣言として数えない。`confirmed-direction reuse`は再利用するUI方向anchor、`bounded direction-neutral`は関連product／behavior anchor、`explicit-skip`は関連product／spec／Decision anchorを`Spec anchors`へ置き、`comparison`は選択spec／Decisionを`Spec anchors`、完了済み専用IssueをDependenciesへ置く。

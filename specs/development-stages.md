@@ -1,7 +1,7 @@
 # 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 3.5
+Version: 3.6
 Date: 2026-09-15
 
 ## 1. 原則
@@ -82,8 +82,8 @@ Phaseはリリース目標の進捗を表す。個々のIssueに付けるDeliver
 
 | Phase | 入口 | 作業と成果物 | 出口 |
 | --- | --- | --- | --- |
-| 1 目的・リリース仕様 | リリース候補となる課題または到達目標がある | 対象利用者、課題、MVP／成功条件、対象／対象外、主要導線、データ方針、収益化・外部連携の採否、安全・法務上の制約、未決事項、依存／候補Issueを一つのrelease briefへ記録する | 受け入れ条件を変える未決事項がなく、ユーザーが対象scopeと目標revisionを明示承認する |
-| 2 基盤・UI方向 | Phase 1が完了し、承認済みrelease briefを参照できる | Identity bootstrap、データ／構成設計、依存Issueを整える。新規アプリはIdentity確定後にApp Iconの2案から1案を明示選択する。UI Direction Gate対象は同一briefのHTML 2〜3案から方向を確定し、仕様とDecisionを先にmergeする | 必要な基盤と依存が完了し、対象UIのroute、確定anchor、未実装範囲が明示される。HTML選択だけをnative検証済みとは扱わない |
+| 1 目的・リリース仕様 | リリース候補となる課題または到達目標がある | 対象利用者、課題、MVP／成功条件、対象／対象外、主要導線、データ方針、収益化・外部連携の採否、安全・法務上の制約、未決事項、依存／候補Issueを一つのrelease briefへ記録する。5つのsystem experience候補を`adopt-now`、`defer`、`not-applicable`、`blocked:user`へ仮分類する | 受け入れ条件を変える未決事項がなく、ユーザーが対象scope、目標revision、system experienceの評価方針を明示承認する |
+| 2 基盤・UI方向 | Phase 1が完了し、承認済みrelease briefを参照できる | Identity bootstrap後、専用System Experiences Planning Issueで5面の採否と共有action／data／process／capability境界を確定する。App Iconは同時に進められる。`adopt-now`面の設計・依存Issueを整え、対象system UIを含むUI Direction Gate対象は同一briefのHTML 2〜3案から方向を確定し、仕様とDecisionを先にmergeする | 必要な基盤と依存が完了し、5面の判断、対象UIのroute、確定anchor、未実装範囲が明示される。計画だけでframeworkやentitlementを導入せず、HTML選択だけをnative検証済みとは扱わない |
 | 3 日本語iPhone開発 | Phase 2が完了し、日本語iPhoneで実装するIssueがDefinition of Readyを満たす | 小さなIssue単位で主要機能を実装し、Build、重要Unit Test、日本語iPhoneの主要導線Smokeを行う。安定した文字列key、可変layout、iPad target、既存英語resourceを壊さず、英語／iPadの完成作業はPhase 4へ残せる | AIが主要タスク、現在Headの実行証拠、既知不具合、未検証、繰越を提示し、ユーザーが対象release revisionのPhase 3完了を明示判断する |
 | 4 英語・iPad対応 | Phase 3についてユーザーの完了判断が記録されている | 英訳、locale／日付／数値、iPadのlayout／navigation、対象範囲のaccessibility適応を独立したIssueで仕上げる。Phase 3の機能追加と混ぜず、必要な対象Testとcaseだけを実行する | 承認済みscopeの英語・iPad対応と残件が揃い、ユーザーが品質確認へ進むrevisionを明示判断する |
 | 5 品質保証 | Phase 4が完了し、評価する候補artifact、source Head、config、対象scopeを同定できる | 日本語／英語×iPhone／iPad、回帰、Light／Dark、Dynamic Type、VoiceOver、44pt、目視、主要性能、保存復旧、個人情報、反対モデルreviewを適用可能な範囲で実行する。時間を区切り、既知不具合、テスト省略、未検証を別々に分類する | 必須公開blockerがなく、失敗・省略・未検証が可視化され、非blocking残件と回避策をユーザーが対象releaseについて承認する |

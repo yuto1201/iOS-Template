@@ -78,6 +78,17 @@ File.binwrite(record_path, JSON.generate(record))
 RUBY
 }
 
+rebind_head_artifacts() {
+  local previous_head="$1"
+  /bin/mv "$issue_root/$previous_head" "$issue_root/$head_sha"
+  RECORD="$issue_root/$head_sha/repository-tests.json" HEAD="$head_sha" /usr/bin/ruby --disable-gems -rjson <<'RUBY'
+path = ENV.fetch("RECORD")
+value = JSON.parse(File.binread(path))
+value["headSha"] = ENV.fetch("HEAD")
+File.binwrite(path, JSON.generate(value))
+RUBY
+}
+
 expect_rejection() {
   local label="$1" message="$2"
   if run_publisher >"$scratch/$label.stdout" 2>"$scratch/$label.stderr"; then
@@ -104,6 +115,28 @@ abort unless value.fetch("acceptanceEvidence").map { |item| item.fetch("evidence
   ["repository-tests.json#acceptanceEvidence/0"], ["repository-tests.json#acceptanceEvidence/1"]
 ]
 RUBY
+
+prepare_fixture shared-skill-link
+/bin/mkdir -p "$repo/.agents/skills/example" "$repo/.claude/skills"
+printf '%s\n' '---' 'name: example' 'description: Use when testing a shared skill.' '---' >"$repo/.agents/skills/example/SKILL.md"
+/bin/ln -s ../../.agents/skills/example "$repo/.claude/skills/example"
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- .agents/skills/example/SKILL.md .claude/skills/example
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
+
+prepare_fixture escaping-skill-link
+/bin/mkdir -p "$repo/.claude/skills"
+/bin/ln -s ../../../outside "$repo/.claude/skills/example"
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- .claude/skills/example
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+expect_rejection escaping-skill-link 'workflow-only shared skill symlink is invalid'
 
 prepare_fixture application-path
 /bin/mkdir -p "$repo/TemplateApp"

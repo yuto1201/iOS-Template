@@ -236,6 +236,7 @@
       "domain": "specification",
       "paths": [
         "AGENTS.md",
+        "README.md",
         "docs/agent-contracts/review-packet.md",
         "docs/verification.md",
         "docs/workflow.md"
@@ -243,11 +244,20 @@
       "prefixes": [
         ".agents/skills/ios-verify/",
         ".agents/skills/plan-issue-batch/",
+        ".agents/skills/ship-issue-batch/",
         ".agents/skills/ship-issue/",
         ".agents/skills/spec-workflow/",
         ".github/ISSUE_TEMPLATE/",
         "specs/"
       ]
+    },
+    {
+      "domain": "system-experiences",
+      "paths": [
+        ".claude/skills/ios-system-experiences",
+        "tools/tests/test-ios-system-experiences-skill.sh"
+      ],
+      "prefixes": [".agents/skills/ios-system-experiences/"]
     },
     {
       "domain": "ui-direction",
@@ -312,6 +322,7 @@
     {"path": "tools/tests/test-ios-runner.sh", "domains": ["ios-runner-scoped"]},
     {"path": "tools/tests/test-ios-simulator-lock.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-ios-simulator-resource.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-ios-system-experiences-skill.sh", "domains": ["system-experiences"]},
     {"path": "tools/tests/test-issue-contract-revision.sh", "domains": ["descriptor-files", "issue-contract-revision"]},
     {"path": "tools/tests/test-issue-contract.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-media-skill.sh", "domains": ["bootstrap-assets"]},

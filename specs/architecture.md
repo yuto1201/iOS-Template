@@ -1,8 +1,8 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.7
-Date: 2026-09-09
+Version: 1.8
+Date: 2026-09-15
 
 ## 1. 設計原則
 
@@ -97,6 +97,25 @@ View から Supabase SDK、SwiftData の複雑な問い合わせ、外部生成A
 
 UI Direction Gateで選択したHTML conceptをアプリへ同梱せず、`WKWebView`を製品UIの代替にしません。SwiftUIは選択済みspecのinformation hierarchy、flow、state intentをnative componentへ翻訳し、Safe Area、可変layout、Dynamic Type、VoiceOver、keyboard、navigationとsheetのplatform semanticsを実装側で満たします。HTMLのCSS pixel値はsource architectureではありません。
 
+### 3.1 System Experiences設計境界
+
+Identity bootstrap後、主要Feature Issueの計画またはClaimより前に、`widget`、`live-activities`、`dynamic-island`、`controls`、`siri-app-intents`の5面をSystem Experiences Planning Gateで評価する。評価は全アプリで必須だが、framework、Extension target、entitlementをテンプレートへ先行導入しない。各面を`adopt-now`、`defer`、`not-applicable`、`blocked:user`へ分類し、採用範囲はユーザーが最終決定する。
+
+`adopt-now`の面だけを専用Issueへ分け、必要になった責務だけを追加する。
+
+```text
+Shared/
+├── Domain/                  # appとsystem surfaceが共有するdomain action／value
+└── Data/                    # 必要な場合だけ共有するsnapshot／repository境界
+Extensions/
+└── ${SurfaceName}/          # WidgetKit等のextension process固有UIとtimeline
+AppIntents/                  # App Intent、entity、query、shortcut定義
+```
+
+system surfaceはアプリ本体とは別のextension processまたはsystem hostで実行され得るため、Viewやscene stateを共有せず、共有domain action、source of truth、staleness、offline／error／recoveryを計画時に固定する。App Group、deep link、background update、push、Siri、associated domainなどのcapability／entitlementは、採用面が要求する最小範囲だけを専用Issueで追加し、Bundle ID、signing、privacy、lock-state redaction、日英localization、accessibility、fallback、release依存を同じ設計記録へ含める。
+
+Dynamic IslandはLive Activityと実装依存を共有しても、表示面として独立に価値と適用範囲を評価する。複数面が同じactionやdataを使う場合は共有domain contractを先行依存にし、Extension間の直接結合や重複したbusiness ruleを作らない。System Experiences PlanningはUI Direction Gateの代わりではなく、採用したsystem UIのhierarchy／interactionが未確定ならdependent Issueで別途UI Direction Gateを通す。
+
 ## 4. 仕様と運用の責務
 
 | 場所 | 正本となる内容 |
@@ -137,6 +156,7 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | `external-ops` | CodexとClaudeに共通のアカウント／target照合後、認証済み外部操作を実行する |
 | `app-bootstrap` | 新規リポジトリのXcode・Swift・設定Identityを機能開発前に安全に初期化する |
 | `app-icon` | Identity確定後にシンプルな画像生成候補から1案を選び、検証済みAppIconへ組み込む |
+| `ios-system-experiences` | Identity確定後に5つのsystem surfaceをApple公式情報で評価し、採用面だけを依存Issueへ設計する |
 
 ### 条件付き
 
