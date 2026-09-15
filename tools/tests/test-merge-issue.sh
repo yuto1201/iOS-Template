@@ -19,6 +19,28 @@ fail_test() { echo "FAIL: $*" >&2; exit 1; }
 assert_fails() { local label=$1; shift; if "$@" >"$CASE_ROOT/out" 2>"$CASE_ROOT/err"; then fail_test "expected failure: $label"; fi; }
 assert_no_mutation() { [[ ! -s "$CASE_MUTATIONS" ]] || { cat "$CASE_MUTATIONS" >&2; fail_test "$1 performed an external mutation"; }; }
 
+write_issue_body() {
+  local requested_operations=$1 executor=${2:-Codex}
+  OPERATIONS_JSON="$requested_operations" EXECUTOR="$executor" BODY="$CASE_GH/body.md" ruby -rjson -e '
+    operations = (["github.read_issue", "github.update_issue"] + JSON.parse(ENV.fetch("OPERATIONS_JSON"))).uniq
+    external = operations.map { |operation| "- Operation: #{operation}\n- Service: GitHub\n- Environment: production\n- Executor: #{ENV.fetch("EXECUTOR")}\n- Approval required: no" }.join("\n\n")
+    sections = {
+      "Goal" => "Merge exact verified work.",
+      "In scope" => "Merge the exact verified Head.",
+      "Out of scope" => "Application behavior.",
+      "Acceptance criteria" => "- AC-1: Merge exact Head.",
+      "Spec anchors" => "- [Acceptance](specs/acceptance.md#3-issue-definition-of-done)",
+      "Dependencies" => "None.",
+      "UI verification" => "Not applicable.",
+      "Delivery stage" => "- Stage: harden\n- Time budget: 60 minutes\n- Reason: Exercise one narrow merge workflow concern.",
+      "Delivery profile" => "- Profile: strict\n- Reason: Exercise the formal merge review path.",
+      "External operations" => external,
+      "User approvals" => "No additional approval."
+    }
+    File.binwrite(ENV.fetch("BODY"), sections.map { |heading, body| "## #{heading}\n\n#{body}\n" }.join("\n"))
+  '
+}
+
 make_case() {
   local name=$1 state_name=${2:-approved-for-merge} persisted_pr=${3:-none} fixture_mode=${4:-normal}
   CASE_ROOT="$scratch/$name"; CASE_PRIMARY="$CASE_ROOT/repo"; CASE_REMOTE="$CASE_ROOT/remote.git"
@@ -93,15 +115,16 @@ EOF
     details=operations.map{|operation|{"operation"=>operation,"service"=>"GitHub","environment"=>"production","executor"=>"Codex","approvalRequired"=>false,"approvalReference"=>nil}}
     def canonical(value); value.is_a?(Hash) ? value.keys.sort.to_h{|key|[key,canonical(value[key])]} : value.is_a?(Array) ? value.map{|entry|canonical(entry)} : value; end
     detail_digest="sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(details)))}"
-    contract={"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","goal"=>"Merge exact verified work.","specAnchors"=>["docs/workflow.md#6-pr-body"],"acceptanceCriteria"=>[{"id"=>"AC-1","text"=>"Merge exact Head."}],"dependencies"=>[],"externalOperations"=>operations,"externalOperationDetailsDigest"=>detail_digest,"fetchedAt"=>"2026-08-24T00:00:00Z"}
+    contract={"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","goal"=>"Merge exact verified work.","specAnchors"=>["specs/acceptance.md#3-issue-definition-of-done"],"acceptanceCriteria"=>[{"id"=>"AC-1","text"=>"Merge exact Head."}],"deliveryStage"=>{"name"=>"harden","timeBudgetMinutes"=>60,"reason"=>"Exercise one narrow merge workflow concern."},"deliveryProfile"=>{"name"=>"strict","reason"=>"Exercise the formal merge review path."},"dependencies"=>[],"externalOperations"=>operations,"externalOperationDetailsDigest"=>detail_digest,"fetchedAt"=>"2026-08-24T00:00:00Z"}
     File.binwrite(ENV.fetch("CONTRACT"), JSON.generate(canonical(contract)))'
+  write_issue_body '["github.push_branch","github.create_pr","github.merge_pr"]'
   CASE_DIGEST="sha256:$(shasum -a 256 "$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" | awk '{print $1}')"
   VERIFY="$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD/verify.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" ruby -rjson -e '
     value={"schemaVersion"=>1,"status"=>"not-applicable","changeClassification"=>"documentation-only","reason"=>"Only allowlisted Markdown documentation changed","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"matrixFile"=>nil,"matrixDigest"=>nil,"executionRoute"=>"none","xcode"=>nil,"build"=>{"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil},"tests"=>{"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil},"cases"=>[],"visualEvaluation"=>{"status"=>"not-applicable","findings"=>[]},"acceptanceEvidence"=>[{"id"=>"AC-1","status"=>"passed","evidence"=>["documents:workflow"]}],"completedAt"=>"2026-08-24T00:01:00Z"}; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(value))'
   STATE="$CASE_PRIMARY/.artifacts/issues/$issue/state.json" HEAD="$CASE_HEAD" BASE="$CASE_BASE" DIGEST="$CASE_DIGEST" NAME="$state_name" PR="$persisted_pr" ruby -rjson -e '
     name=ENV.fetch("NAME"); value={"schemaVersion"=>1,"issue"=>42,"repository"=>"yuto1201/iOS-Template","branch"=>"codex/42-merge-e2e","worktree"=>".worktrees/42-merge-e2e","baseSha"=>ENV.fetch("BASE"),"primaryImplementer"=>"codex","issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"state"=>name,"previousState"=>name=="merged" ? "approved-for-merge" : "review-requested","resumeState"=>nil,"executor"=>"codex","headSha"=>ENV.fetch("HEAD"),"from"=>name=="merged" ? "approved-for-merge" : "review-requested","to"=>name,"transitionedAt"=>"2026-08-24T00:03:00Z"}; value["pullRequest"]=Integer(ENV.fetch("PR")) unless ENV.fetch("PR")=="none"; File.binwrite(ENV.fetch("STATE"),JSON.generate(value))'
   write_review_closure
-  printf '[]\n' >"$CASE_GH/prs.json"; printf 'OPEN\n' >"$CASE_GH/issue-state"; printf 'state:approved-for-merge\n' >"$CASE_GH/issue-label"
+  printf '[]\n' >"$CASE_GH/prs.json"; printf '[]\n' >"$CASE_GH/comments.json"; printf 'OPEN\n' >"$CASE_GH/issue-state"; printf 'state:approved-for-merge\n' >"$CASE_GH/issue-label"
   : >"$CASE_LOG"; : >"$CASE_MUTATIONS"
 
   cat >"$CASE_BIN/gh" <<'EOF'
@@ -124,10 +147,10 @@ case "$1 $2" in
   'pr merge') [[ "$*" == "pr merge $pr --repo $repo --squash --match-head-commit $head" ]] || { echo 'invalid pr merge argv' >&2; exit 2; }; printf 'gh pr merge %s exact-squash\n' "$pr" >>"$log"; printf 'pr-merge\n' >>"$mutations"; pr_json MERGED | jq -s . >"$state/prs.json"; printf 'CLOSED\n' >"$state/issue-state" ;;
   'issue view')
     if [[ "$*" == "issue view $issue --repo $repo --json number,state,url,body,labels,comments" ]]; then
-      jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" --rawfile body "$state/body.md" --arg label "$(cat "$state/issue-label")" --slurpfile comments "$state/comments.json" '{number:$number,state:$state,url:$url,body:$body,labels:[{name:$label}],comments:$comments[0]}'
+      jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" --rawfile body "$state/body.md" --arg label "$(cat "$state/issue-label")" --slurpfile comments "$state/comments.json" '{number:$number,state:$state,url:$url,body:$body,labels:[{name:"type:feature"},{name:$label}],comments:$comments[0]}'
     elif [[ "$*" == *'--json number,state,url' ]]; then printf 'gh issue view identity\n' >>"$log"; jq -cn --argjson number "$issue" --arg state "$(cat "$state/issue-state")" --arg url "https://github.com/$repo/issues/$issue" '{number:$number,state:$state,url:$url}'
-    elif [[ "$*" == *'labels,comments'* ]]; then printf 'gh issue view labels-comments\n' >>"$log"; jq -cn --argjson number "$issue" --arg url "https://github.com/$repo/issues/$issue" --rawfile body "$state/body.md" --arg label "$(cat "$state/issue-label")" '{number:$number,url:$url,title:"Merge exact verified work",body:$body,labels:[{name:$label}],comments:[]}'
-    else printf 'gh issue view labels\n' >>"$log"; jq -cn --arg label "$(cat "$state/issue-label")" '{labels:[{name:$label}]}' ; fi ;;
+    elif [[ "$*" == *'labels,comments'* ]]; then printf 'gh issue view labels-comments\n' >>"$log"; jq -cn --argjson number "$issue" --arg url "https://github.com/$repo/issues/$issue" --rawfile body "$state/body.md" --arg label "$(cat "$state/issue-label")" '{number:$number,url:$url,title:"Merge exact verified work",body:$body,labels:[{name:"type:feature"},{name:$label}],comments:[]}'
+    else printf 'gh issue view labels\n' >>"$log"; jq -cn --arg label "$(cat "$state/issue-label")" '{labels:[{name:"type:feature"},{name:$label}]}' ; fi ;;
   'issue edit') printf 'gh issue edit approved-to-merged\n' >>"$log"; printf 'issue-edit\n' >>"$mutations"; printf 'state:merged\n' >"$state/issue-label" ;;
   'issue comment') printf 'gh issue comment transition\n' >>"$log"; printf 'issue-comment\n' >>"$mutations" ;;
   *) echo "unexpected gh: $*" >&2; exit 2 ;;
@@ -182,6 +205,7 @@ write_pr() {
 }
 
 set_contract_operations() {
+  write_issue_body "$1"
   OPERATIONS_JSON="$1" CONTRACT="$CASE_PRIMARY/.artifacts/issues/42/issue-contract.json" STATE="$CASE_PRIMARY/.artifacts/issues/42/state.json" VERIFY="$CASE_PRIMARY/.artifacts/issues/42/$CASE_HEAD/verify.json" ruby -rjson -rdigest -e '
     operations=(["github.read_issue","github.update_issue"]+JSON.parse(ENV.fetch("OPERATIONS_JSON"))).uniq; contract_path=ENV.fetch("CONTRACT")
     contract=JSON.parse(File.binread(contract_path)); contract["externalOperations"]=operations
@@ -245,7 +269,7 @@ printf 'CLOSED\n' >"$CASE_GH/issue-state"
 printf 'state:merged\n' >"$CASE_GH/issue-label"
 ruby -rjson -e '
   contract=JSON.parse(File.binread(ARGV.fetch(0)))
-  sections={"Goal"=>contract.fetch("goal"),"In scope"=>"Record an already merged PR.","Out of scope"=>"New merges and gate changes.","Acceptance criteria"=>"- AC-1: Merge exact Head.","Spec anchors"=>"- [Acceptance](specs/acceptance.md#3-issue-definition-of-done)","Dependencies"=>"None","UI verification"=>"Not applicable","External operations"=>contract.fetch("externalOperations").map{|operation|"- Operation: #{operation}\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no"}.join("\n\n"),"User approvals"=>"None"}
+  sections={"Goal"=>contract.fetch("goal"),"In scope"=>"Record an already merged PR.","Out of scope"=>"New merges and gate changes.","Acceptance criteria"=>"- AC-1: Merge exact Head.","Spec anchors"=>"- [Acceptance](specs/acceptance.md#3-issue-definition-of-done)","Dependencies"=>"None.","UI verification"=>"Not applicable.","Delivery stage"=>"- Stage: harden\n- Time budget: 60 minutes\n- Reason: Exercise one narrow merge workflow concern.","Delivery profile"=>"- Profile: strict\n- Reason: Exercise the formal merge review path.","External operations"=>contract.fetch("externalOperations").map{|operation|"- Operation: #{operation}\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no"}.join("\n\n"),"User approvals"=>"No additional approval."}
   File.write(ARGV.fetch(1),sections.map{|heading,body|"## #{heading}\n\n#{body}\n"}.join("\n"))
   marker={"executor"=>"codex","from"=>"approved-for-merge","to"=>"merged","resumeState"=>nil,"timestamp"=>"2026-08-24T00:03:00Z"}
   File.write(ARGV.fetch(2),JSON.generate([{"author"=>{"login"=>"yuto1201"},"createdAt"=>"2026-08-24T00:03:01Z","body"=>"<!-- ios-template-state #{JSON.generate(marker)} -->"}]))
@@ -445,7 +469,7 @@ body=$("$CASE_WORKTREE/tools/render-pr-body.sh" --issue 42 --head-sha "$CASE_HEA
 grep -Fq 'Verify digest: `sha256:' <<<"$body" || fail_test 'PR body omits verify digest'
 grep -Fq 'Reviewer model: `claude`' <<<"$body" || fail_test 'PR body omits reviewer model'
 grep -Fq 'iPhone Pro / English: `not-applicable`' <<<"$body" || fail_test 'PR body omits iPhone English matrix result'
-grep -Fq '`docs/workflow.md#6-pr-body`' <<<"$body" || fail_test 'PR body omits spec anchors'
+grep -Fq '`specs/acceptance.md#3-issue-definition-of-done`' <<<"$body" || fail_test 'PR body omits spec anchors'
 run_merge >"$CASE_ROOT/result.json"
 jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/result.json" >/dev/null
 jq -e '.state=="merged" and .pullRequest==57' "$CASE_PRIMARY/.artifacts/issues/42/state.json" >/dev/null
