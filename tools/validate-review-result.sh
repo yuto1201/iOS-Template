@@ -256,12 +256,6 @@ else
       artifacts, references.fetch("releaseDispositionFile").fetch("path"), head_root,
       "packet.releaseDispositionFile", artifacts_identity
     )
-    disposition_failure_files = references.fetch("releaseDispositionFailures").to_h do |reference|
-      [reference.fetch("path"), artifact_file!(
-        artifacts, reference.fetch("path"), head_root,
-        "release disposition failure", artifacts_identity
-      )]
-    end
   end
 end
 verify = json_file!(verify_file, "verify file")
@@ -323,10 +317,13 @@ begin
       )
       reject("release disposition changed before validation") unless held_disposition.bytes == disposition_file.fetch(:bytes)
       disposition_file = {path: disposition_file.fetch(:path), bytes: held_disposition.bytes}
-      disposition_failure_files = disposition_failure_files.to_h do |path, file|
-        held_failure = repository_snapshot.relative_leaf(path.delete_prefix(".artifacts/"), at: "release disposition failure")
-        reject("release disposition failure changed before validation") unless held_failure.bytes == file.fetch(:bytes)
-        [path, held_failure.bytes]
+      disposition_failure_files = IOSTemplate::ReviewContract.release_disposition_failure_paths(
+        issue: issue, head_sha: head_sha
+      ).each_with_object({}) do |path, values|
+        held_failure = repository_snapshot.optional_relative_leaf(
+          path.delete_prefix(".artifacts/"), at: "release disposition failure #{path}"
+        )
+        values[path] = held_failure.bytes if held_failure
       end
     end
     at_exit { repository_snapshot.close }

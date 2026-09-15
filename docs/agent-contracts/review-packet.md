@@ -102,7 +102,7 @@ application Verificationは単一`unitTestIdentifier`だけを許可します。
 
 ### Release disposition-aware review
 
-`strict_references!`はpacketのcanonical `releaseDispositionFile`と全`releaseDispositionFailures`を返します。packet-only validation、review result publication、PR rendering、pre-mergeの各descriptor ownerは、recordとfailure bytesを保持したままBase commitのphase-record blobとsealed contractへ再照合します。review result schemaとreceipt schemaは変更せず、dispositionを含むexact packet digestへ束縛します。`release-disposition.json`と参照failure filenameはfindingのcanonical artifact aliasとして使えますが、low findingをaccepted defect approvalにしたりfailureをpassed evidenceにしたりしません。
+`strict_references!`はpacketのcanonical `releaseDispositionFile`とrecordが宣言した`releaseDispositionFailures`を返します。ただし、それを実在failure集合の正本にはしません。packet producer、packet-only validation、review result publication、PR rendering、pre-merge、release preflightの各descriptor ownerは、同じIssue／Headの`repository-test-failure-attempt-1.json`／`-2.json`を独立して開き、実在集合とrecordの参照集合がexact一致することを確認します。存在しなかった候補もabsence witnessとして最終lease確認まで保持します。そのうえでrecordとfailure bytesをBase commitのphase-record blobとsealed contractへ再照合します。review result schemaとreceipt schemaは変更せず、dispositionを含むexact packet digestへ束縛します。`release-disposition.json`と参照failure filenameはfindingのcanonical artifact aliasとして使えますが、low findingをaccepted defect approvalにしたりfailureをpassed evidenceにしたりしません。
 
 レビューでは次の順に確認します。
 

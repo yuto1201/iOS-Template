@@ -16,6 +16,7 @@ module IOSTemplate
 
     Directory = Struct.new(:io, :parent, :name, :stat, :at, keyword_init: true)
     Leaf = Struct.new(:io, :parent, :name, :stat, :bytes, :at, keyword_init: true)
+    AbsentLeaf = Struct.new(:parent, :name, :at, keyword_init: true)
 
     class SnapshotSet
       def initialize(root, at:, expected_identity: nil)
@@ -29,6 +30,7 @@ module IOSTemplate
         @root = Directory.new(io: root_io, parent: nil, name: nil, stat: root_stat, at: at)
         @directories = [@root]
         @leaves = []
+        @absent_leaves = []
       rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP => error
         raise SealError, "#{at} is unavailable: #{error.message}"
       end
@@ -69,6 +71,16 @@ module IOSTemplate
         raise
       end
 
+      def optional_leaf(parent, name, at:)
+        leaf(parent, name, at: at)
+      rescue SystemCallError => error
+        if error.errno == Errno::ENOENT::Errno
+          @absent_leaves << AbsentLeaf.new(parent: parent, name: name, at: at)
+          return nil
+        end
+        raise
+      end
+
       def relative_leaf(relative, at:)
         components = relative.split("/")
         raise SealError, "#{at} path is unsafe" if components.empty? || components.any? { |part| part.empty? || part == "." || part == ".." }
@@ -77,6 +89,16 @@ module IOSTemplate
           current = directory(current, component, at: "#{at} component #{index + 1}")
         end
         leaf(current, components.last, at: at)
+      end
+
+      def optional_relative_leaf(relative, at:)
+        components = relative.split("/")
+        raise SealError, "#{at} path is unsafe" if components.empty? || components.any? { |part| part.empty? || part == "." || part == ".." }
+        current = @root
+        components[0...-1].each_with_index do |component, index|
+          current = directory(current, component, at: "#{at} component #{index + 1}")
+        end
+        optional_leaf(current, components.last, at: at)
       end
 
       def verify!
@@ -99,6 +121,13 @@ module IOSTemplate
           current.close
           raise SealError, "#{leaf.at} path identity changed" unless metadata_equal?(leaf.stat, current_stat)
           raise SealError, "#{leaf.at} path bytes changed" unless current_bytes.b == leaf.bytes.b
+        end
+        @absent_leaves.each do |leaf|
+          current = open_at(leaf.parent, leaf.name, leaf.at)
+          current.close
+          raise SealError, "#{leaf.at} appeared after absence was recorded"
+        rescue SystemCallError => error
+          raise unless error.errno == Errno::ENOENT::Errno
         end
         true
       end

@@ -209,7 +209,7 @@ Runtime、Device Type、case集合はバッチ内で固定する。古いHead、
 
 失敗記録には停止stage、経過時間、timeout、未実行testを含める。timeoutや失敗時に成功形式の`verify.json`を生成しない。同一Issue／Head／scopeの長時間実行は直接反復せず、選択済み対象testの診断成功後に1回だけ再試行できる。2回目も同じ原因で失敗した場合は停止する。
 
-D-050対象では、同じHead directoryに存在する`repository-test-failure-attempt-1.json`／`-2.json`を一件ずつexact path／digestでrelease dispositionの停止後判断へ対応付ける。許可するactionは`shrink`、`split`、`defer`、`wait`だけとし、reason、actor、authority、再開条件、判断時刻を必須にする。`split`／`defer`はユーザーauthorityとfollow-up Issueを要求し、`shrink`／`wait`はfollow-up Issueをnullにする。`wait`はrelease readinessをblockする。失敗記録があるのに判断がない、判断の参照先がない／改ざんされた、`rerun`等の無制限反復action、別Issue／Headへの流用を拒否する。判断待ち時間はrunnerの実行budgetを延長した時間として扱わない。
+D-050対象では、同じHead directoryに存在する`repository-test-failure-attempt-1.json`／`-2.json`を一件ずつexact path／digestでrelease dispositionの停止後判断へ対応付ける。producerだけでなくpacket、result publication、PR renderer、pre-merge、release preflightの各consumerも、record内の参照集合から推測せずHead directoryの2候補をdescriptor-boundで独立取得し、欠落状態も処理終了まで再照合する。許可するactionは`shrink`、`split`、`defer`、`wait`だけとし、reason、actor、authority、再開条件、判断時刻を必須にする。`split`／`defer`はユーザーauthorityとfollow-up Issueを要求し、`shrink`／`wait`はfollow-up Issueをnullにする。`wait`はrelease readinessをblockする。失敗記録があるのに判断がない、判断の参照先がない／改ざんされた、検証中に新しいfailureが出現した、`rerun`等の無制限反復action、別Issue／Headへの流用を拒否する。判断待ち時間はrunnerの実行budgetを延長した時間として扱わない。
 
 再実行の順序は、対象Test、関連回帰Test、Delivery stage標準検証、`release`完全検証とする。Repository testも開発中は関連testだけを直接使い、canonical plan／evidenceは安定した最終候補Headで一度生成する。正式な一括証拠へ異なるattemptの部分結果を混ぜないが、診断済みの対象Test結果は修正判断に利用する。
 

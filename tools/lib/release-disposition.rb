@@ -44,6 +44,7 @@ module IOSTemplate
     DEFECT_CLASSIFICATIONS = (SAFE_DEFECT_CLASSIFICATIONS + BLOCKING_DEFECT_CLASSIFICATIONS + ["unknown"]).freeze
     DEFECT_SEVERITIES = %w[critical high medium low unknown].freeze
     EXECUTION_ACTIONS = %w[shrink split defer wait].freeze
+    FAILURE_ATTEMPTS = [1, 2].freeze
     FAILURE_SCOPES = %w[targeted head-all base-and-head].freeze
     FAILURE_STAGES = %w[suite diagnostic base head].freeze
     SHA = /\A[0-9a-f]{40}\z/
@@ -58,6 +59,14 @@ module IOSTemplate
     }.freeze
 
     module_function
+
+    def failure_paths(issue:, head_sha:)
+      issue!(issue, "failure record Issue")
+      sha!(head_sha, "failure record Head SHA")
+      FAILURE_ATTEMPTS.map do |attempt|
+        ".artifacts/issues/#{issue}/#{head_sha}/repository-test-failure-attempt-#{attempt}.json"
+      end
+    end
 
     def required?(contract)
       return false unless DeliveryProfile.release_disposition_required?(contract)
@@ -272,7 +281,7 @@ module IOSTemplate
           approved = time!(entry.dig("approval", "approvedAt"), "entries[#{index}].approval.approvedAt")
           expires = time!(entry["expiresAt"], "entries[#{index}].expiresAt")
           reject("accepted defect approval expires before it was granted") unless expires > approved
-          reject("accepted defect approval predates or equals its expiry") unless now <= expires
+          reject("accepted defect approval has expired at validation time") unless now <= expires
           reject("accepted defect approval is later than the disposition") if approved > recorded_at
         when "deferred-defect"
           defect!(entry, "entries[#{index}]")

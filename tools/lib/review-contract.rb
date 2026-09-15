@@ -578,6 +578,13 @@ module IOSTemplate
       reject(error.message)
     end
 
+    def release_disposition_failure_paths(issue:, head_sha:)
+      require_relative "release-disposition"
+      ReleaseDisposition.failure_paths(issue: issue, head_sha: head_sha)
+    rescue ReleaseDisposition::ValidationError => error
+      reject(error.message)
+    end
+
     def release_disposition_canonical_bytes(record)
       require_relative "release-disposition"
       ReleaseDisposition.canonical_bytes(record)

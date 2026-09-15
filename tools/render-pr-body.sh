@@ -49,6 +49,18 @@ class HeldEvidence
     reject("#{at} descriptor is unavailable or invalid: #{error.message}")
   end
 
+  def optional_leaf(components, at)
+    components = safe_components(components, at)
+    return @leaves.fetch(components) if @leaves.key?(components)
+    parent = directory(components[0...-1], at)
+    value = @snapshots.optional_leaf(parent, components.last, at: at)
+    return nil unless value
+    value.io.flock(File::LOCK_SH)
+    @leaves[components] = value
+  rescue IOSTemplate::ReviewSealing::SealError, SystemCallError, IOError, ArgumentError => error
+    reject("#{at} descriptor is unavailable or invalid: #{error.message}")
+  end
+
   def watch_directory(components, at)
     value = directory(safe_components(components, at), at)
     @watched_directories << [value, value.io.stat, at]
@@ -220,11 +232,14 @@ begin
       relative_components(review_references.fetch("releaseDispositionFile").fetch("path"), "release disposition"),
       "release-disposition.json"
     )
-    disposition_failure_leaves = review_references.fetch("releaseDispositionFailures").to_h do |reference|
-      [reference.fetch("path"), snapshots.leaf(
-        relative_components(reference.fetch("path"), "release disposition failure"),
-        "release disposition failure #{reference.fetch('path')}"
-      )]
+    disposition_failure_leaves = IOSTemplate::ReviewContract.release_disposition_failure_paths(
+      issue: issue, head_sha: head
+    ).each_with_object({}) do |path, values|
+      leaf = snapshots.optional_leaf(
+        relative_components(path, "release disposition failure"),
+        "release disposition failure #{path}"
+      )
+      values[path] = leaf if leaf
     end
   end
   repository_revision_context = if IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head" || repository_test_plan_leaf

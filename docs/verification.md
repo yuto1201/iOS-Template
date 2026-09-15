@@ -66,7 +66,7 @@ recordは次を別々に保持します。
 
 未実行、省略、未検証、failure、timeoutを`verify.json`や`repository-tests.json`のpassedへ加えません。accepted defectのapprovalが別Issue／Base／Head、期限切れ、またはreview low finding由来なら拒否します。data loss、secret leak、billing、重大なmoney／date-time calculation、primary-flow crash、authentication、privacy、legal、unknownをaccepted defectにできません。deferred defectがcritical／high／unknownまたは同じblocker分類の場合と、execution decisionが`wait`の場合は、review approval、pre-merge、release preflightを通しません。
 
-review packet schema v2は`releaseDisposition`と`releaseDispositionFile`を一緒に持ち、参照したfailure bytesを同じdescriptor lifetimeで保持します。disposition時刻はcurrent verify、repository tests、evidence applicabilityより前にできず、review時刻はそれらとrelease dispositionの最も遅い時刻より後でなければなりません。PR rendererはapproved low findingsをproduct defect承認と別に数え、accepted／deferred／omitted／unverified／failed-timeoutを各件数とfollow-upで示します。release/package preflightはevidence applicabilityを検証した後も独立してdispositionを再検証します。
+review packet schema v2は`releaseDisposition`と`releaseDispositionFile`を一緒に持ちます。各descriptor ownerはrecordの自己申告だけでfailure集合を作らず、同じIssue／Headのattempt 1／2を独立して開き、存在するfailure bytesと存在しない候補の両方を処理終了まで保持・再照合します。disposition時刻はcurrent verify、repository tests、evidence applicabilityより前にできず、review時刻はそれらとrelease dispositionの最も遅い時刻より後でなければなりません。PR rendererはapproved low findingsをproduct defect承認と別に数え、accepted／deferred／omitted／unverified／failed-timeoutを各件数とfollow-upで示します。release/package preflightはevidence applicabilityを検証した後も独立してdispositionを再検証します。
 
 ## 2. 環境の解決
 

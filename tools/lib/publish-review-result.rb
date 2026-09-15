@@ -163,13 +163,13 @@ if packet
       disposition = repository_snapshots.relative_leaf(
         "issues/#{issue_text}/#{head_sha}/release-disposition.json", at: "release disposition"
       )
-      disposition_references = IOSTemplate::ReviewContract.release_disposition_references!(
-        record_bytes: disposition.bytes, issue: Integer(issue_text), head_sha: head_sha
-      )
-      disposition_references.fetch("failures").each do |reference|
-        disposition_failures[reference.fetch("path")] = repository_snapshots.relative_leaf(
-          reference.fetch("path").delete_prefix(".artifacts/"), at: "release disposition failure"
-        ).bytes
+      IOSTemplate::ReviewContract.release_disposition_failure_paths(
+        issue: Integer(issue_text), head_sha: head_sha
+      ).each do |path|
+        failure = repository_snapshots.optional_relative_leaf(
+          path.delete_prefix(".artifacts/"), at: "release disposition failure #{path}"
+        )
+        disposition_failures[path] = failure.bytes if failure
       end
     end
     held_verify ||= repository_snapshots.relative_leaf(

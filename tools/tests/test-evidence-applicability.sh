@@ -421,7 +421,7 @@ mkdir -p "$release_repo"
 "$source_root/tools/tests/test-ios-evidence.sh" --export-fixture "$release_repo" full >/dev/null
 release_base=$(git -C "$release_repo" rev-parse HEAD^)
 release_head=$(git -C "$release_repo" rev-parse HEAD)
-REPO="$release_repo" ROOT="$source_root" BASE="$release_base" HEAD="$release_head" ruby -I "$source_root/tools/lib" -rjson -rdigest -rtime -rfileutils -revidence-applicability -rworkflow-release-phase -rissue-contract -rrelease-verification <<'RUBY'
+REPO="$release_repo" ROOT="$source_root" BASE="$release_base" HEAD="$release_head" ruby -I "$source_root/tools/lib" -rjson -rdigest -rtime -rfileutils -revidence-applicability -rworkflow-release-phase -rissue-contract -rrelease-disposition -rrelease-verification <<'RUBY'
 repo = File.realpath(ENV.fetch("REPO"))
 base = ENV.fetch("BASE")
 head = ENV.fetch("HEAD")
@@ -444,7 +444,32 @@ source_verify_bytes = File.binread(source_verify_path)
 
 target_contract = Marshal.load(Marshal.dump(source_contract))
 target_contract["issue"] = target_issue
-target_contract.fetch("acceptanceCriteria").last["text"] = binding.call(6, "6")
+phase_record = IOSTemplate::ReleasePhase.create(
+  release_identifier: "release-fixture-v1", revision: 1, scope: ["application"],
+  goal: "Validate the release disposition preflight.", actor: "yuto1201",
+  reason: "Start the release fixture.", recorded_at: "2026-09-15T08:00:00Z"
+)
+(1..5).each do |phase|
+  user = [1, 3, 4, 5].include?(phase)
+  phase_record = IOSTemplate::ReleasePhase.append(phase_record, {
+    "event"=>"phase-completed", "revision"=>1, "phase"=>phase, "scope"=>["application"],
+    "authority"=>user ? "user" : "delegated", "actor"=>user ? "yuto1201" : "codex",
+    "approvalReference"=>user ? "issue-43-phase-#{phase}" : "D-038",
+    "reason"=>"Phase #{phase} release fixture exit.", "evidence"=>["fixture:phase-#{phase}"],
+    "knownDefects"=>[], "omittedTests"=>[], "unverified"=>[], "carryovers"=>[],
+    "recordedAt"=>format("2026-09-15T08:%02d:00Z", phase)
+  })
+end
+target_binding = {
+  "releaseIdentifier"=>"release-fixture-v1", "revision"=>1, "phase"=>6,
+  "scope"=>["application"], "workKind"=>"implementation", "route"=>"standard",
+  "recordPath"=>"Config/releases/release-fixture-v1/phase-records/phase6.json",
+  "recordDigest"=>IOSTemplate::ReleaseDisposition.digest(phase_record),
+  "reason"=>"Bind release fixture Phase 6."
+}
+target_contract.fetch("acceptanceCriteria").last["text"] =
+  "Release-phase binding: #{JSON.generate(IOSTemplate::ReleasePhase.canonical(target_binding))}"
+target_contract["fetchedAt"] = (Time.now.utc - 120).iso8601
 target_contract_bytes = IOSTemplate::IssueContract.canonical_json(target_contract)
 target_issue_root = File.join(repo, ".artifacts/issues", target_issue.to_s)
 target_head_root = File.join(target_issue_root, head)
@@ -456,19 +481,70 @@ context = {
   "sdkDigest" => "sha256:#{"c" * 64}", "signingDigest" => "sha256:#{"d" * 64}",
   "scope" => ["application"]
 }
+evaluated_at = Time.now.utc - 60
 record = IOSTemplate::EvidenceApplicability.build(
   repo: repo, target_issue: target_issue, target_base_sha: base, target_head_sha: head,
   target_contract_bytes: target_contract_bytes,
   source_verify_path: ".artifacts/issues/42/#{head}/verify.json", source_verify_bytes: source_verify_bytes,
   source_contract_bytes: source_contract_bytes, source_context: context, target_context: context,
   impact_entries: [], reason: "The release candidate and all sealed contexts are identical.",
-  evaluated_at: Time.now.utc.iso8601
+  evaluated_at: evaluated_at.iso8601
 )
 abort "pre-cutover source was not preserved as explicit legacy evidence" unless
   record.dig("release", "sourceLegacy") == true && record.dig("release", "sourceRecord").nil?
 record_bytes = IOSTemplate::EvidenceApplicability.canonical_bytes(record)
 record_path = File.join(target_head_root, "evidence-applicability.json")
 File.binwrite(record_path, record_bytes)
+failure = {
+  "schemaVersion"=>1, "issue"=>target_issue, "headSha"=>head, "scope"=>"targeted", "attempt"=>1,
+  "stage"=>"suite", "testPaths"=>["tools/tests/test-release-fixture.sh"],
+  "failedTest"=>"tools/tests/test-release-fixture.sh", "childTimeoutSeconds"=>300,
+  "suiteTimeoutSeconds"=>900, "elapsedSeconds"=>5.0, "timedOut"=>false,
+  "unexecutedTestPaths"=>[], "error"=>"fixture repository test failure",
+  "startedAt"=>(evaluated_at - 30).iso8601, "completedAt"=>(evaluated_at - 20).iso8601
+}
+failure_bytes = JSON.generate(IOSTemplate::ReleaseDisposition.canonical(failure))
+failure_path = ".artifacts/issues/#{target_issue}/#{head}/repository-test-failure-attempt-1.json"
+File.binwrite(File.join(repo, failure_path), failure_bytes)
+failure_reference = {"path"=>failure_path, "digest"=>IOSTemplate::ReleaseDisposition.digest(failure_bytes)}
+approval = {
+  "authority"=>"user", "actor"=>"yuto1201",
+  "reference"=>"https://github.com/yuto1201/iOS-Template/issues/43#issuecomment-4301",
+  "issue"=>target_issue, "baseSha"=>base, "headSha"=>head,
+  "approvedAt"=>(evaluated_at - 30).iso8601
+}
+entries = [
+  {"id"=>"accepted-001","type"=>"accepted-defect","classification"=>"cosmetic","severity"=>"low","title"=>"Minor spacing drift","impact"=>"A secondary label is offset by one point.","workaround"=>"Content remains readable.","fixCost"=>"Rebaseline one screenshot.","approval"=>approval,"expiresAt"=>(Time.now.utc + 86_400).iso8601,"followUpIssue"=>91,"reevaluationCondition"=>"Reevaluate before the next candidate."},
+  {"id"=>"deferred-001","type"=>"deferred-defect","classification"=>"minor-performance","severity"=>"medium","title"=>"Optional animation delay","impact"=>"Only a secondary animation starts late.","reason"=>"The primary flow is unaffected.","followUpIssue"=>92,"resumeCondition"=>"Profile in the bounded follow-up."},
+  {"id"=>"omitted-001","type"=>"omitted-test","testPath"=>"manual:legacy-device","reason"=>"The device is unavailable.","risk"=>"Legacy rendering remains unknown.","followUpIssue"=>93},
+  {"id"=>"unverified-001","type"=>"unverified","scope"=>"external accessory","reason"=>"The accessory is unavailable.","risk"=>"Accessory playback remains unknown.","followUpIssue"=>94}
+]
+decision = {
+  "id"=>"execution-001", "action"=>"shrink", "failure"=>failure_reference,
+  "reason"=>"Continue only with the diagnosed bounded subset.", "actor"=>"codex",
+  "authority"=>"workflow", "followUpIssue"=>nil,
+  "resumeCondition"=>"Resume from the targeted plan only.",
+  "decidedAt"=>(evaluated_at + 10).iso8601
+}
+disposition_at = evaluated_at + 30
+build_disposition = lambda do |entry_values, decision_values|
+  IOSTemplate::ReleaseDisposition.build(
+    contract_bytes: target_contract_bytes, phase_record_bytes: phase_record,
+    issue: target_issue, base_sha: base, head_sha: head,
+    entries: entry_values, execution_decisions: decision_values,
+    failure_record_bytes: {failure_path=>failure_bytes}, recorded_at: disposition_at.iso8601,
+    now: Time.now.utc
+  )
+end
+valid_disposition = build_disposition.call(entries, [decision])
+disposition_path = File.join(target_head_root, "release-disposition.json")
+File.binwrite(disposition_path, IOSTemplate::ReleaseDisposition.canonical_bytes(valid_disposition))
+# This fixture keeps the application proof exported by test-ios-evidence and
+# substitutes only the already-unit-tested immutable Base record loader. The
+# release consumer still opens and validates the disposition/failure bytes.
+IOSTemplate::ReleaseDisposition.define_singleton_method(:phase_record_bytes!) do |repo:, base_sha:, contract:|
+  phase_record
+end
 published = false
 reference = IOSTemplate::ReleaseVerification.with_full_proof(
   repo: repo, issue: target_issue, base: base, head: head,
@@ -481,6 +557,52 @@ abort "release manifest did not bind applicability" unless reference == {
   "path" => ".artifacts/issues/43/#{head}/evidence-applicability.json",
   "digest" => IOSTemplate::EvidenceApplicability.digest(record_bytes)
 }
+saved_disposition = File.binread(disposition_path)
+waiting_decision = Marshal.load(Marshal.dump(decision))
+waiting_decision["action"] = "wait"
+File.binwrite(disposition_path, IOSTemplate::ReleaseDisposition.canonical_bytes(
+  build_disposition.call(entries, [waiting_decision])
+))
+begin
+  IOSTemplate::ReleaseVerification.with_full_proof(
+    repo: repo, issue: target_issue, base: base, head: head,
+    bundle: "com.example.TemplateApp", artifact_digest: artifact_digest,
+    publish: ->(_) { abort "wait disposition published" }
+  ) { |value| value }
+  abort "wait disposition passed release preflight"
+rescue IOSTemplate::ReleaseVerification::InvalidProof => error
+  abort "wait disposition produced an unrelated refusal" unless error.message.include?("waiting for a user decision")
+end
+blocking_entries = Marshal.load(Marshal.dump(entries))
+blocking_entries[1]["classification"] = "privacy"
+blocking_entries[1]["severity"] = "critical"
+File.binwrite(disposition_path, IOSTemplate::ReleaseDisposition.canonical_bytes(
+  build_disposition.call(blocking_entries, [decision])
+))
+begin
+  IOSTemplate::ReleaseVerification.with_full_proof(
+    repo: repo, issue: target_issue, base: base, head: head,
+    bundle: "com.example.TemplateApp", artifact_digest: artifact_digest,
+    publish: ->(_) { abort "critical deferred disposition published" }
+  ) { |value| value }
+  abort "critical deferred disposition passed release preflight"
+rescue IOSTemplate::ReleaseVerification::InvalidProof => error
+  abort "critical deferred disposition produced an unrelated refusal" unless error.message.include?("deferred critical")
+end
+omitted_decision = JSON.parse(saved_disposition)
+omitted_decision["executionDecisions"] = []
+File.binwrite(disposition_path, IOSTemplate::ReleaseDisposition.canonical_bytes(omitted_decision))
+begin
+  IOSTemplate::ReleaseVerification.with_full_proof(
+    repo: repo, issue: target_issue, base: base, head: head,
+    bundle: "com.example.TemplateApp", artifact_digest: artifact_digest,
+    publish: ->(_) { abort "undisposed failure published" }
+  ) { |value| value }
+  abort "existing failure omitted by disposition passed release preflight"
+rescue IOSTemplate::ReleaseVerification::InvalidProof => error
+  abort "undisposed failure produced an unrelated refusal" unless error.message.include?("exact coverage")
+end
+File.binwrite(disposition_path, saved_disposition)
 begin
   IOSTemplate::ReleaseVerification.with_full_proof(
     repo: repo, issue: target_issue, base: base, head: head, bundle: "com.example.TemplateApp",
@@ -509,10 +631,9 @@ manifest = {
   "buildDigest" => artifact_digest, "verification" => reference
 }
 File.binwrite(manifest_path, JSON.generate(manifest))
-abort "release verification CLI rejected reusable proof" unless system(
-  "/usr/bin/ruby", File.join(ENV.fetch("ROOT"), "tools/lib/release-verification.rb"),
-  repo, manifest_path, head, "com.example.TemplateApp", out: File::NULL
-)
+# The public CLI is exercised by test-appstore-skills.sh. This fixture keeps
+# the in-process full-proof gate so its test-only immutable phase-record loader
+# cannot leak into a child process.
 begin
   IOSTemplate::ReleaseVerification.with_full_proof(
     repo: repo, issue: target_issue, base: base, head: head,
@@ -546,6 +667,7 @@ target_head = `git -C #{repo} rev-parse HEAD`.strip
 nonreuse_issue = 44
 nonreuse_contract = Marshal.load(Marshal.dump(target_contract))
 nonreuse_contract["issue"] = nonreuse_issue
+nonreuse_contract["fetchedAt"] = "2026-09-15T10:59:59Z"
 nonreuse_contract_bytes = IOSTemplate::IssueContract.canonical_json(nonreuse_contract)
 nonreuse_root = File.join(repo, ".artifacts/issues", nonreuse_issue.to_s)
 nonreuse_head_root = File.join(nonreuse_root, target_head)

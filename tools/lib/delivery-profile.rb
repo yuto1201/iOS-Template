@@ -52,11 +52,14 @@ module IOSTemplate
           criterion["text"].start_with?(RELEASE_PHASE_PREFIX)
       end
       return false if declarations.empty?
-      raise ArgumentError, "exactly one Release-phase binding declaration is allowed" unless declarations.length == 1
-      binding = JSON.parse(declarations.first.fetch("text").delete_prefix(RELEASE_PHASE_PREFIX).strip)
-      return false unless binding.is_a?(Hash) && binding["workKind"] == "implementation" && [5, 6].include?(binding["phase"])
+      # Keep legacy contracts dependency-light, but use the canonical binding
+      # parser whenever a declaration exists so policy and phase gates cannot
+      # disagree about malformed or noncanonical bytes.
+      require_relative "workflow-release-phase"
+      binding = ReleasePhase.binding_from_contract!(contract)
+      return false unless binding["workKind"] == "implementation" && [5, 6].include?(binding["phase"])
       Time.iso8601(contract.fetch("fetchedAt")) >= RELEASE_DISPOSITION_CUTOVER
-    rescue JSON::ParserError, KeyError, ArgumentError => error
+    rescue ReleasePhase::ValidationError, KeyError, ArgumentError => error
       raise ArgumentError, "release disposition policy is invalid: #{error.message}"
     end
 

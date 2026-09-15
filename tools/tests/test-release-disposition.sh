@@ -202,6 +202,14 @@ module ReleaseDispositionTest
     assert("pre-cutover standard harden candidate keeps the direct route") do
       !IOSTemplate::DeliveryProfile.review_required?(standard_candidate)
     end
+    malformed_binding = JSON.parse(contract_bytes)
+    malformed_binding.fetch("acceptanceCriteria").first["text"].sub!(/\}\z/, " }")
+    begin
+      IOSTemplate::DeliveryProfile.release_disposition_required?(malformed_binding)
+      raise "malformed Release-phase binding was accepted by delivery policy"
+    rescue ArgumentError => error
+      raise unless error.message.include?("Release-phase binding JSON must be canonical")
+    end
 
     packet = {
       "schemaVersion" => 2, "issue" => ISSUE, "primaryModel" => "codex", "reviewerModel" => "claude",

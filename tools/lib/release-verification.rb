@@ -47,15 +47,11 @@ module IOSTemplate
           raise InvalidProof, "Phase 5 or 6 release requires a canonical release disposition"
         end
         if disposition_file
-          disposition_references = ReleaseDisposition.references!(
-            record_bytes: disposition_file.bytes, issue: issue, head_sha: head
-          )
-          failure_bytes = disposition_references.fetch("failures").to_h do |failure_reference|
-            failure_file = snapshots.relative_leaf(
-              failure_reference.fetch("path").delete_prefix(".artifacts/"),
-              at: "release disposition failure"
+          failure_bytes = ReleaseDisposition.failure_paths(issue: issue, head_sha: head).each_with_object({}) do |path, values|
+            failure_file = snapshots.optional_relative_leaf(
+              path.delete_prefix(".artifacts/"), at: "release disposition failure #{path}"
             )
-            [failure_reference.fetch("path"), failure_file.bytes]
+            values[path] = failure_file.bytes if failure_file
           end
           phase_record_bytes = ReleaseDisposition.phase_record_bytes!(
             repo: repo, base_sha: base, contract: contract

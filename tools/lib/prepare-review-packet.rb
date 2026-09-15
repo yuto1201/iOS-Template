@@ -104,14 +104,11 @@ module IOSTemplate
         disposition_failure_files = {}
         if disposition_file
           disposition = parse_object(disposition_file.bytes, "release-disposition.json")
-          disposition_references = ReviewContract.release_disposition_references!(
-            record_bytes: disposition_file.bytes, issue: issue, head_sha: head_sha
-          )
-          disposition_references.fetch("failures").each do |reference|
-            disposition_failure_files[reference.fetch("path")] = snapshots.relative_leaf(
-              reference.fetch("path").delete_prefix(".artifacts/"),
-              at: "release disposition failure #{reference.fetch('path')}"
+          ReviewContract.release_disposition_failure_paths(issue: issue, head_sha: head_sha).each do |path|
+            leaf = snapshots.optional_leaf(
+              head_directory, File.basename(path), at: "release disposition failure #{path}"
             )
+            disposition_failure_files[path] = leaf if leaf
           end
         elsif ReviewContract.release_disposition_required?(contract)
           reject("Phase 5 or 6 implementation requires release-disposition.json before review")

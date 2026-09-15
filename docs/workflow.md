@@ -165,7 +165,7 @@ inputのexact top-level fieldは`schemaVersion: 1`、`entries`、`executionDecis
 
 `executionDecisions`は同一Issue／Headの`repository-test-failure-attempt-N.json`をexact path／digestで一件ずつ参照し、ID、action、reason、actor／authority、follow-up Issueまたはnull、resume condition、failure後の`decidedAt`を持ちます。`shrink`は診断後に対象を狭める判断、`split`はuser authorityで別Issueへ分割する判断、`defer`はuser authorityで追跡Issueへ延期する判断、`wait`は追加ユーザー判断まで停止する状態です。`wait`はrelease readinessを通しません。failure／timeout／未実行testは、後で別のbounded実行が成功しても履歴上のpassedへ書き換えません。
 
-review packetは`releaseDisposition`と`releaseDispositionFile`を対で封印し、各failure recordもdescriptor-bound closureへ含めます。approved reviewのlow findingだけから`accepted-defect`を作らず、`evidenceApplicability`だけから残件なしを推測しません。PR本文はaccepted／deferred／omitted／unverified／failed-timeoutとfollow-upを別々に表示し、pre-mergeとrelease preflightは期限、candidate identity、critical blocker、`wait`を再検証します。
+review packetは`releaseDisposition`と`releaseDispositionFile`を対で封印し、各failure recordもdescriptor-bound closureへ含めます。packet producer、result validator／publisher、PR renderer、pre-merge、release preflightはrecordが列挙した参照だけを信用せず、同じIssue／Headのattempt 1／2を独立取得してexact coverageを再検証します。取得時に存在しなかった候補もabsence witnessとして保持し、処理中の追加を拒否します。approved reviewのlow findingだけから`accepted-defect`を作らず、`evidenceApplicability`だけから残件なしを推測しません。PR本文はaccepted／deferred／omitted／unverified／failed-timeoutとfollow-upを別々に表示し、pre-mergeとrelease preflightは期限、candidate identity、critical blocker、`wait`を再検証します。
 
 D-050対象ではDelivery profileが通常ならreview省略可能な値でも`verify-passed -> approved-for-merge`の直接経路を使わず、正式な反対モデルreviewを経由します。これによってdispositionを持たないreview packetやpacket自体の省略をstate、PR renderer、pre-mergeの共通判定で拒否します。
 

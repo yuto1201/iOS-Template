@@ -37,10 +37,11 @@ module IOSTemplate
         reject("release disposition requires a Release-phase binding") unless binding
         head_directory = snapshots.directory(issue_directory, head_sha, at: "Head artifact directory")
         failure_files = {}
-        (1..2).each do |attempt|
-          name = "repository-test-failure-attempt-#{attempt}.json"
-          leaf = optional_leaf(snapshots, head_directory, name, "repository test failure attempt #{attempt}")
-          failure_files[".artifacts/issues/#{issue}/#{head_sha}/#{name}"] = leaf.bytes if leaf
+        ReleaseDisposition.failure_paths(issue: issue, head_sha: head_sha).each do |path|
+          leaf = optional_leaf(
+            snapshots, head_directory, File.basename(path), "repository test failure #{path}"
+          )
+          failure_files[path] = leaf.bytes if leaf
         end
         phase_record_bytes = ReleaseDisposition.phase_record_bytes!(
           repo: repo, base_sha: base_sha, contract: contract
