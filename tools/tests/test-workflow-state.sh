@@ -57,6 +57,7 @@ export FAKE_GH_COMMENTS_FILE="$workspace/comments.json"
 export FAKE_GH_VIEW_COUNT_FILE="$workspace/issue-view-count"
 export REAL_GIT="$real_git"
 export FAKE_GH_ISSUE_BODY="$workspace/issue-body.md"
+export FAKE_GH_TYPE_LABEL=type:feature
 cat > "$FAKE_GH_ISSUE_BODY" <<'EOF'
 ## Goal
 
@@ -237,9 +238,15 @@ ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --typ
 
 printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
 rm -f "$artifact_issue/state.json"
-"$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
+assert_fails 'sealed get rejects a missing full state outside Claim recovery' \
+  "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
 [[ ! -e "$artifact_issue/state.json" ]] || { echo 'sealed get downgraded missing full state to a minimal record' >&2; exit 1; }
 printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$artifact_issue/issue-contract.json")"
+cat > "$artifact_issue/state.json" <<EOF
+{"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$(git -C "$repo_root" rev-parse HEAD)","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"$contract_digest"},"state":"approved","previousState":null,"resumeState":null,"executor":"codex"}
+EOF
+cp "$artifact_issue/state.json" "$workspace/full-approved-state.json"
 
 # A wrong account must prevent the preflight artifact from being written.
 export FAKE_GH_LOGIN=company-account
@@ -269,15 +276,14 @@ ruby -e '
 
 cp "$FAKE_GH_ISSUE_BODY" "$workspace/issue-body-valid.md"
 ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.read_issue\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n/, ""); File.write(path,text)' "$FAKE_GH_ISSUE_BODY"
-rm -f ".artifacts/issues/$test_issue/state.json"
 : > "$FAKE_GH_LOG"
-assert_fails 'approved to claimed requires github.read_issue in the live contract' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
+assert_fails 'approved to claimed rejects a recordless live read-operation removal' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
 ! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
 cp "$workspace/issue-body-valid.md" "$FAKE_GH_ISSUE_BODY"
 
 ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.update_issue\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n?/, ""); File.write(path,text)' "$FAKE_GH_ISSUE_BODY"
 : > "$FAKE_GH_LOG"
-assert_fails 'Issue mutation without github.update_issue declaration is rejected' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
+assert_fails 'approved to claimed rejects a recordless live update-operation removal' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
 ! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
 cp "$workspace/issue-body-valid.md" "$FAKE_GH_ISSUE_BODY"
 
@@ -316,7 +322,8 @@ printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 printf '[]' > "$FAKE_GH_LOG"
 printf '0' > "$FAKE_GH_VIEW_COUNT_FILE"
 printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
-rm -f ".artifacts/issues/$test_issue/state.json" ".artifacts/issues/$test_issue/state-transition.pending.json"
+cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
+rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 export FAKE_GH_RACE_BEFORE_EDIT_VIEW=2
 export FAKE_GH_RACE_BEFORE_EDIT_LABELS='["state:in-progress"]'
 assert_fails 'transition recheck rejects a changed current state' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
@@ -329,7 +336,8 @@ rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 printf '0' > "$FAKE_GH_VIEW_COUNT_FILE"
 printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
-rm -f ".artifacts/issues/$test_issue/state.json" ".artifacts/issues/$test_issue/state-transition.pending.json"
+cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
+rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 export FAKE_GH_RACE_AFTER_EDIT_LABELS='["state:in-progress"]'
 assert_fails 'transition post-read rejects a changed result state' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
@@ -345,7 +353,7 @@ ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --typ
   --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
   > ".artifacts/issues/$test_issue/issue-contract.json"
 assert_fails 'blocked resume without history fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:ops"]'
 
 # Once Claim has created the full Task 4 identity record, every Task 2
 # transition must retain it exactly while changing only transition metadata.
