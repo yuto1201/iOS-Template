@@ -63,6 +63,8 @@ $review_scaffold
 Validated review packet: $packet_absolute
 Physical issue contract: $artifact_contract
 Physical current-Head evidence root: $artifact_head_root"
+instruction="$instruction
+If evidenceApplicability is present, assess its exact record/source references, Phase 5 to 6 release identity, target Head and contexts, immutable diff and impact classifications, decision, and temporal order without rerunning the source evidence. Cite evidence-applicability.json for that assessment."
 
 # Cursor needs the user's HOME for its existing authenticated session. All other
 # ambient variables, including provider keys and repository credentials, are

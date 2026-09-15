@@ -38,6 +38,7 @@ module IOSTemplate
         verify_file = snapshots.leaf(head_directory, "verify.json", at: "verify.json")
         repository_tests_file = existing_leaf(snapshots, head_directory, "repository-tests.json", "repository-tests.json")
         repository_test_plan_file = existing_leaf(snapshots, head_directory, "repository-test-plan.json", "repository-test-plan.json")
+        applicability_file = existing_leaf(snapshots, head_directory, "evidence-applicability.json", "evidence-applicability.json")
         contract = parse_object(contract_file.bytes, "issue contract")
         verify = parse_object(verify_file.bytes, "verify.json")
         contract_digest = ReviewContract.digest(contract_file.bytes)
@@ -76,6 +77,28 @@ module IOSTemplate
           repository_test_plan_bytes: repository_test_plan_file&.bytes
         ) if repository_tests
 
+        applicability = nil
+        applicability_source_verify_file = nil
+        applicability_source_contract_file = nil
+        if applicability_file
+          applicability = parse_object(applicability_file.bytes, "evidence-applicability.json")
+          applicability_references = EvidenceApplicability.references!(
+            record_bytes: applicability_file.bytes, target_issue: issue, target_head_sha: head_sha
+          )
+          applicability_source_verify_file = snapshots.relative_leaf(
+            applicability_references.fetch("sourceVerify").fetch("path").delete_prefix(".artifacts/"),
+            at: "Phase 5 source verification"
+          )
+          applicability_source_contract_file = snapshots.relative_leaf(
+            applicability_references.fetch("sourceContract").fetch("path").delete_prefix(".artifacts/"),
+            at: "Phase 5 source contract"
+          )
+        elsif Array(contract["acceptanceCriteria"]).any? { |criterion|
+          criterion.is_a?(Hash) && criterion["text"].is_a?(String) && criterion["text"].start_with?("Release-phase binding: ")
+        } && EvidenceApplicability.required?(contract)
+          reject("Phase 6 implementation requires evidence-applicability.json before review")
+        end
+
         image_references = ReviewContract.verified_image_references!(verify, issue: issue, head_sha: head_sha)
         image_files = image_references.map do |reference|
           relative = reference.fetch("path").delete_prefix(".artifacts/")
@@ -109,11 +132,25 @@ module IOSTemplate
           packet["repositoryTestPlan"] = repository_test_plan
           packet["repositoryTestPlanFile"] = {"path"=>"#{prefix}repository-test-plan.json", "digest"=>ReviewContract.digest(repository_test_plan_file.bytes)}
         end
+        if applicability_file
+          packet["evidenceApplicability"] = applicability
+          packet["evidenceApplicabilityFile"] = {
+            "path" => "#{prefix}evidence-applicability.json",
+            "digest" => ReviewContract.digest(applicability_file.bytes)
+          }
+        end
         ReviewContract.validate_repository_closure!(packet: packet, contract: contract, contract_digest: contract_digest,
           issue: issue, base_sha: base_sha, head_sha: head_sha,
           repository_tests_bytes: repository_tests_file&.bytes, repository_test_plan_bytes: repository_test_plan_file&.bytes,
           revision_context: revision_context,
           workflow_required: verify["changeClassification"] == "workflow-only")
+        ReviewContract.validate_evidence_applicability!(
+          packet: packet, contract: contract, verify: verify, issue: issue, base_sha: base_sha, head_sha: head_sha,
+          applicability_bytes: applicability_file&.bytes,
+          source_verify_bytes: applicability_source_verify_file&.bytes,
+          source_contract_bytes: applicability_source_contract_file&.bytes,
+          repo: repo
+        )
         packet_bytes = JSON.generate(packet).b
 
         validate_git_identity!(repo, base_sha, head_sha)
@@ -145,13 +182,21 @@ module IOSTemplate
         # Touch every held image descriptor after publication before returning.
         image_files.each { |reference, leaf| reject("verified image changed after packet publication") unless ReviewContract.digest(leaf.bytes) == reference.fetch("digest") }
 
-        {
+        result = {
           "path" => "#{prefix}review-packet.json",
           "digest" => ReviewContract.digest(packet_bytes),
           "diffDigest" => ReviewContract.digest(actual_diff),
           "verifyDigest" => ReviewContract.digest(verify_file.bytes),
           "imageFiles" => image_references
         }
+        if applicability_file
+          result["evidenceApplicability"] = {
+            "path" => "#{prefix}evidence-applicability.json",
+            "digest" => ReviewContract.digest(applicability_file.bytes),
+            "decision" => applicability.dig("decision", "action")
+          }
+        end
+        result
       rescue StandardError
         if published_packet
           snapshots.unlink_if_same(head_directory, packet_leaf) rescue nil
@@ -164,6 +209,7 @@ module IOSTemplate
         snapshots.close
       end
     rescue ReviewContract::ValidationError, RepositoryTestPlan::PlanError, ReviewSealing::SealError,
+           EvidenceApplicability::ValidationError,
            IssueContractRevision::ValidationError, KeyError, JSON::ParserError,
            SystemCallError, IOError, Errno::ENOENT, Errno::EACCES => error
       raise PreparationError, error.message

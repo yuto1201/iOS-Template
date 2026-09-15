@@ -179,6 +179,9 @@ begin
   end
   repository_tests_leaf = nil
   repository_test_plan_leaf = nil
+  applicability_leaf = nil
+  applicability_source_verify_leaf = nil
+  applicability_source_contract_leaf = nil
   if review_references.key?("repositoryTestsFile")
     repository_tests_leaf = snapshots.leaf(
       relative_components(review_references.fetch("repositoryTestsFile").fetch("path"), "repository tests"),
@@ -194,6 +197,20 @@ begin
       parse_leaf(repository_test_plan_leaf, "repository-test-plan.json"),
       repo: repo, issue: issue, base_sha: verify["baseSha"], head_sha: head,
       contract_bytes: contract_bytes
+    )
+  end
+  if review_references.key?("evidenceApplicabilityFile")
+    applicability_leaf = snapshots.leaf(
+      relative_components(review_references.fetch("evidenceApplicabilityFile").fetch("path"), "evidence applicability"),
+      "evidence-applicability.json"
+    )
+    applicability_source_verify_leaf = snapshots.leaf(
+      relative_components(review_references.fetch("evidenceSourceVerify").fetch("path"), "Phase 5 source verification"),
+      "Phase 5 source verification"
+    )
+    applicability_source_contract_leaf = snapshots.leaf(
+      relative_components(review_references.fetch("evidenceSourceContract").fetch("path"), "Phase 5 source contract"),
+      "Phase 5 source contract"
     )
   end
   repository_revision_context = if IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head" || repository_test_plan_leaf
@@ -221,6 +238,15 @@ begin
     revision_context: repository_revision_context,
     workflow_required: verify["changeClassification"] == "workflow-only"
   )
+  applicability_at = IOSTemplate::ReviewContract.validate_evidence_applicability!(
+    packet: review_packet, contract: contract, verify: verify, issue: issue,
+    base_sha: verify["baseSha"], head_sha: head,
+    applicability_bytes: applicability_leaf&.bytes,
+    source_verify_bytes: applicability_source_verify_leaf&.bytes,
+    source_contract_bytes: applicability_source_contract_leaf&.bytes,
+    repo: repo
+  )
+  completed_at = [completed_at, applicability_at].compact.max
   IOSTemplate::ReviewContract.validate_result!(
     review, 2, review_packet_leaf.bytes, reviewer, issue, verify["baseSha"], head,
     contract_digest, criteria, completed_at, Time.now.utc, true
@@ -354,6 +380,13 @@ if review_packet.is_a?(Hash) && review_packet["repositoryTests"].is_a?(Hash)
     repository_tests.fetch("revisions", []).sum { |revision| revision.fetch("tests", []).length }
   end
   puts "- Repository-test scope: `#{repository_tests["scope"] || "head"}` (executions: `#{repository_test_count}`)"
+end
+if review_packet.is_a?(Hash) && review_packet["evidenceApplicability"].is_a?(Hash)
+  applicability = review_packet.fetch("evidenceApplicability")
+  puts "- Evidence applicability: `#{applicability.dig("decision", "action")}`"
+  puts "- Phase 5 source: `#{applicability.dig("source", "path")}` (`#{applicability.dig("source", "digest")}`)"
+  puts "- Impact scope: `#{applicability.dig("decision", "impactScope").join(",")}`"
+  puts "- Applicability reason: #{applicability.dig("decision", "reason")}"
 end
 case_labels = {"iphone-en" => "iPhone Pro / English", "iphone-ja" => "iPhone Pro / Japanese", "ipad-en" => "iPad Air / English", "ipad-ja" => "iPad Air / Japanese"}
 if cases.is_a?(Array) && !cases.empty?

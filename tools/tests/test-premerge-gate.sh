@@ -126,9 +126,10 @@ write_verify() {
 write_review() {
   verdict=${1:-approved}
   packet_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/$head_sha/review-packet.json" | awk '{print $1}')"
-  VERDICT="$verdict" REVIEWER="$reviewer_model" REVIEW_PACKET_DIGEST="$packet_digest" ISSUE_CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" REVIEWED_AT="$review_at" ruby -rjson -e '
+  VERDICT="$verdict" REVIEWER="$reviewer_model" REVIEW_PACKET_DIGEST="$packet_digest" ISSUE_CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" REVIEWED_AT="$review_at" CONTRACT="$repo/.artifacts/issues/42/issue-contract.json" ruby -rjson -e '
     findings = ENV.fetch("VERDICT") == "approved" ? [] : [{"severity" => "high", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "blocking", "evidence" => "fixture", "requiredChange" => "fix"}]
-    assessments = ["AC-1", "AC-2"].map { |id| {"id" => id, "status" => ENV.fetch("VERDICT") == "approved" ? "supported" : "unsupported", "evidence" => ["verify.json#acceptanceEvidence"]} }
+    ids=JSON.parse(File.binread(ENV.fetch("CONTRACT"))).fetch("acceptanceCriteria").map{|entry|entry.fetch("id")}
+    assessments = ids.map { |id| {"id" => id, "status" => ENV.fetch("VERDICT") == "approved" ? "supported" : "unsupported", "evidence" => ["verify.json#acceptanceEvidence"]} }
     puts JSON.generate({"schemaVersion" => 2, "issue" => 42, "reviewerModel" => ENV.fetch("REVIEWER"), "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContractDigest" => ENV.fetch("ISSUE_CONTRACT_DIGEST"), "reviewPacketDigest" => ENV.fetch("REVIEW_PACKET_DIGEST"), "verdict" => ENV.fetch("VERDICT"), "findings" => findings, "acceptanceAssessment" => assessments, "reviewedAt" => ENV.fetch("REVIEWED_AT")})
   ' > "$repo/.artifacts/issues/42/$head_sha/review.json"
   write_receipt
@@ -392,11 +393,6 @@ ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value[
 assert_fails 'premerge rejects a tampered contract revision chain' run_gate
 cp "$scratch/revision-record.valid.json" "$revision_record"
 
-if [[ "$scope" == scoped ]]; then
-  echo 'PASS: scoped premerge accepts one audited revision and rejects pending or tampered history'
-  exit 0
-fi
-
 cp "$scratch/issue.original.md" "$issue_body"
 cp "$scratch/contract.original.json" "$repo/.artifacts/issues/42/issue-contract.json"
 cp "$scratch/state.original.json" "$repo/.artifacts/issues/42/state.json"
@@ -415,6 +411,8 @@ write_review_packet
 write_review
 write_preflight
 CTIME_ONLY_HELD_TARGET="$repo/.artifacts/issues/42/github-preflight.json" run_gate >/dev/null
+
+if [[ "$scope" != scoped ]]; then
 
 # The same Gate and renderer must accept only the exact reviewer selected by a
 # sealed, user-explicit Codex-primary Grok declaration.
@@ -989,22 +987,71 @@ cp "$scratch/revision-record.saved" "$revision_record"
 : > "$FAKE_MERGE_MUTATIONS"
 run_gate_merge >/dev/null
 [[ $(cat "$FAKE_MERGE_MUTATIONS") == merged ]] || { echo 'valid Base/Head closure did not reach exact merge' >&2; exit 1; }
-cp "$scratch/pre-revision-issue.md" "$issue_body"
+cp "$scratch/issue.original.md" "$issue_body"
 rm "$revision_record" "$revision_plan"
+
+fi
 
 # Workflow-only strict changes use their sealed AC-mapped repository subset;
 # pre-merge must require that record while leaving application checks N/A.
-ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("AC-2: Every acceptance criterion has one evidence mapping.", "AC-2: Repository-test scope: targeted; Reason: The fixture changes one manifest domain.") or abort; marker="## External operations\n"; replacement="## Delivery stage\n\n- Stage: harden\n- Time budget: 60 minutes\n- Reason: Bounded workflow-only gate fixture.\n\n## Delivery profile\n\n- Profile: strict\n- Reason: Canonical workflow evidence changes.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
+ruby -rjson -e 'path=ARGV.fetch(0); text=File.binread(path); criterion="AC-2: Repository-test scope: targeted; Reason: The fixture changes one manifest domain."; text.sub!("AC-2: Every acceptance criterion has one evidence mapping.",criterion) or abort; binding={"releaseIdentifier"=>"premerge-v1","revision"=>1,"phase"=>6,"scope"=>["workflow"],"workKind"=>"implementation","route"=>"standard","recordPath"=>"Config/releases/premerge-v1/phase-records/phase6.json","recordDigest"=>"sha256:#{"6"*64}","reason"=>"Validate Phase 6 premerge applicability."}; canonical=lambda{|value|value.is_a?(Hash) ? value.keys.sort.to_h{|key|[key,canonical.call(value.fetch(key))]} : value}; text.sub!(criterion,"#{criterion}\n- AC-3: Release-phase binding: #{JSON.generate(canonical.call(binding))}") or abort; marker="## External operations\n"; replacement="## Delivery stage\n\n- Stage: harden\n- Time budget: 60 minutes\n- Reason: Bounded workflow-only gate fixture.\n\n## Delivery profile\n\n- Profile: strict\n- Reason: Canonical workflow evidence changes.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 (cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
-  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh) >/dev/null
+  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh \
+  --map AC-3=tools/tests/test-gate-probe.sh) >/dev/null
 VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" COMPLETED_AT="$(timestamp 0)" ruby -rjson -e '
-  evidence=["AC-1","AC-2"].each_with_index.map{|id,index|{"id"=>id,"status"=>"passed","evidence"=>["repository-tests.json#acceptanceEvidence/#{index}"]}}
+  evidence=["AC-1","AC-2","AC-3"].each_with_index.map{|id,index|{"id"=>id,"status"=>"passed","evidence"=>["repository-tests.json#acceptanceEvidence/#{index}"]}}
   value={"schemaVersion"=>1,"status"=>"passed","changeClassification"=>"workflow-only","reason"=>"Workflow repository checks passed; application readiness was not evaluated.","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("CONTRACT_DIGEST")},"matrixFile"=>nil,"matrixDigest"=>nil,"executionRoute"=>"repository-tests","xcode"=>nil,"build"=>{"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil},"tests"=>{"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil},"cases"=>[],"visualEvaluation"=>{"status"=>"not-applicable","findings"=>[]},"acceptanceEvidence"=>evidence,"completedAt"=>ENV.fetch("COMPLETED_AT")}; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(value))'
-review_at=$(timestamp 1)
-transition_at=$(timestamp 2)
-preflight_at=$(timestamp 3)
+applicability_at=$(timestamp 1)
+REPOSITORY="$issue_worktree" PRIMARY="$repo" BASE="$base_sha" HEAD="$head_sha" EVALUATED_AT="$applicability_at" \
+  ruby -I "$repo/tools/lib" -rjson -rfileutils -revidence-applicability -rissue-contract <<'RUBY'
+repo = File.realpath(ENV.fetch("REPOSITORY"))
+primary = File.realpath(ENV.fetch("PRIMARY"))
+base = ENV.fetch("BASE")
+head = ENV.fetch("HEAD")
+target_contract_path = File.join(primary, ".artifacts/issues/42/issue-contract.json")
+target_contract_bytes = File.binread(target_contract_path)
+source_contract = JSON.parse(target_contract_bytes)
+source_contract["issue"] = 41
+source_binding = {
+  "releaseIdentifier"=>"premerge-v1", "revision"=>1, "phase"=>5, "scope"=>["workflow"],
+  "workKind"=>"implementation", "route"=>"standard",
+  "recordPath"=>"Config/releases/premerge-v1/phase-records/phase5.json",
+  "recordDigest"=>"sha256:#{"5"*64}", "reason"=>"Provide the Phase 5 premerge source."
+}
+canonical = ->(value) { value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical.call(value.fetch(key))] } : value }
+source_contract.fetch("acceptanceCriteria").last["text"] = "Release-phase binding: #{JSON.generate(canonical.call(source_binding))}"
+source_contract_bytes = IOSTemplate::IssueContract.canonical_json(source_contract)
+source_root = File.join(primary, ".artifacts/issues/41")
+source_head_root = File.join(source_root, head)
+FileUtils.mkdir_p(source_head_root)
+File.binwrite(File.join(source_root, "issue-contract.json"), source_contract_bytes)
+source_verify = {
+  "schemaVersion"=>1, "status"=>"passed", "issue"=>41, "baseSha"=>base, "headSha"=>head,
+  "issueContract"=>{"path"=>".artifacts/issues/41/issue-contract.json", "digest"=>IOSTemplate::EvidenceApplicability.digest(source_contract_bytes)},
+  "completedAt"=>JSON.parse(File.binread(File.join(primary, ".artifacts/issues/42", head, "verify.json"))).fetch("completedAt")
+}
+source_verify_bytes = JSON.generate(source_verify)
+File.binwrite(File.join(source_head_root, "verify.json"), source_verify_bytes)
+context = {
+  "artifactDigest"=>"sha256:#{"a"*64}", "configurationDigest"=>"sha256:#{"b"*64}",
+  "sdkDigest"=>"sha256:#{"c"*64}", "signingDigest"=>"sha256:#{"d"*64}", "scope"=>["workflow"]
+}
+record = IOSTemplate::EvidenceApplicability.build(
+  repo: repo, target_issue: 42, target_base_sha: base, target_head_sha: head,
+  target_contract_bytes: target_contract_bytes,
+  source_verify_path: ".artifacts/issues/41/#{head}/verify.json", source_verify_bytes: source_verify_bytes,
+  source_contract_bytes: source_contract_bytes, source_context: context, target_context: context,
+  impact_entries: [], reason: "The Phase 5 and Phase 6 workflow candidate is unchanged.",
+  evaluated_at: ENV.fetch("EVALUATED_AT")
+)
+File.binwrite(File.join(primary, ".artifacts/issues/42", head, "evidence-applicability.json"),
+  IOSTemplate::EvidenceApplicability.canonical_bytes(record))
+RUBY
+review_at=$(timestamp 2)
+transition_at=$(timestamp 3)
+preflight_at=$(timestamp 4)
 DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
 write_review_packet
 write_review
@@ -1013,13 +1060,29 @@ ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["ac
 write_receipt
 write_preflight
 run_gate >/dev/null
+applicability_record="$repo/.artifacts/issues/42/$head_sha/evidence-applicability.json"
+cp "$applicability_record" "$scratch/applicability-record.saved"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value.fetch("decision")["reason"]="tampered"; File.binwrite(path,JSON.generate(value))' "$applicability_record"
+assert_fails 'premerge rejects a changed applicability decision' run_gate
+cp "$scratch/applicability-record.saved" "$applicability_record"
+: > "$FAKE_GH_LOG"
+: > "$FAKE_MERGE_MUTATIONS"
+FINAL_GATE_SWAP_TARGET="$applicability_record" assert_fails 'applicability swap after final PR refresh blocks merge' run_gate_merge
+grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo 'applicability lease fixture did not reach PR refresh' >&2; exit 1; }
+[[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'applicability swap reached merge command' >&2; exit 1; }
 workflow_record="$repo/.artifacts/issues/42/$head_sha/repository-tests.json"
 workflow_plan="$repo/.artifacts/issues/42/$head_sha/repository-test-plan.json"
 mv "$workflow_record" "$workflow_record.absent"
 assert_fails 'workflow-only premerge requires repository evidence' run_gate
 mv "$workflow_record.absent" "$workflow_record"
-cp "$scratch/pre-revision-issue.md" "$issue_body"
-rm "$workflow_record" "$workflow_plan"
+cp "$scratch/issue.original.md" "$issue_body"
+rm "$workflow_record" "$workflow_plan" "$applicability_record"
+rm -rf "$repo/.artifacts/issues/41"
+
+if [[ "$scope" == scoped ]]; then
+  echo 'PASS: scoped premerge validates audited revision history and the sealed Phase 5 to 6 applicability lease'
+  exit 0
+fi
 
 # Explicit fast accepts the same current-Head and account gates without any
 # opposite-model artifact. Rebuild the exact live contract so stale strict

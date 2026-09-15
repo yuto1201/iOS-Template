@@ -22,7 +22,9 @@ cp "$source_root/tools/render-pr-body.sh" "$primary/tools/"
 cp "$source_root/tools/validate-verify-json.swift" "$primary/tools/"
 cp "$source_root/tools/run-repository-tests.sh" "$primary/tools/"
 cp "$source_root/tools/lib/descriptor-files.rb" "$primary/tools/lib/"
-cp "$source_root/tools/lib/review-contract.rb" "$source_root/tools/lib/review-route.rb" "$source_root/tools/lib/repository-test-plan.rb" "$primary/tools/lib/"
+cp "$source_root/tools/lib/review-contract.rb" "$source_root/tools/lib/review-route.rb" \
+  "$source_root/tools/lib/repository-test-plan.rb" "$source_root/tools/lib/evidence-applicability.rb" \
+  "$source_root/tools/lib/workflow-release-phase.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-sealing.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/delivery-profile.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/delivery-stage.rb" "$primary/tools/lib/"
@@ -98,6 +100,19 @@ matrix["scope"] = "iphone-ja"; matrix["cases"].select! { |entry| entry["id"] == 
 File.write(contract_path, JSON.generate(contract)); File.write(matrix_path, JSON.generate(matrix))
 RUBY
 fi
+ruby -rjson - "$contract" <<'RUBY'
+path = ARGV.fetch(0)
+contract = JSON.parse(File.binread(path))
+binding = {
+  "releaseIdentifier"=>"renderer-v1", "revision"=>1, "phase"=>6, "scope"=>["application"],
+  "workKind"=>"implementation", "route"=>"standard",
+  "recordPath"=>"Config/releases/renderer-v1/phase-records/phase6.json",
+  "recordDigest"=>"sha256:#{"6"*64}", "reason"=>"Render the Phase 6 applicability decision."
+}
+canonical = ->(value) { value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical.call(value.fetch(key))] } : value }
+contract.fetch("acceptanceCriteria").last["text"] = "Release-phase binding: #{JSON.generate(canonical.call(binding))}"
+File.binwrite(path, JSON.generate(contract))
+RUBY
 ruby -I "$primary/tools/lib" -rjson -rissue-contract - "$contract" <<'RUBY'
 path = ARGV.fetch(0)
 File.binwrite(path, IOSTemplate::IssueContract.canonical_json(JSON.parse(File.binread(path))))
@@ -173,6 +188,52 @@ EVIDENCE="$verify" PACKET="$packet" ruby -rjson -rdigest -e '
 path=ENV.fetch("EVIDENCE");value=JSON.parse(File.read(path));packet=JSON.parse(File.read(ENV.fetch("PACKET")));
 value["visualEvaluation"]={"status"=>"passed","packet"=>{"path"=>".artifacts/issues/42/#{value.fetch("headSha")}/visual-packet.json","digest"=>"sha256:#{Digest::SHA256.file(ENV.fetch("PACKET")).hexdigest}"},"cases"=>packet.fetch("cases").map{|entry|{"id"=>entry.fetch("id"),"images"=>entry.fetch("images").map{|image|{"state"=>image.fetch("state"),"path"=>image.fetch("path"),"digest"=>image.fetch("digest"),"status"=>"passed","findings"=>[]}}}},"findings"=>[]};File.write(path,JSON.pretty_generate(value)+"\n")'
 
+REPOSITORY="$worktree" PRIMARY="$primary" TARGET_CONTRACT="$contract" BASE="$base" HEAD="$head" \
+  ruby -I "$primary/tools/lib" -rjson -rfileutils -revidence-applicability -rissue-contract <<'RUBY'
+repo = File.realpath(ENV.fetch("REPOSITORY"))
+primary = File.realpath(ENV.fetch("PRIMARY"))
+base = ENV.fetch("BASE")
+head = ENV.fetch("HEAD")
+source_issue = 41
+source_root = File.join(primary, ".artifacts/issues", source_issue.to_s)
+source_head_root = File.join(source_root, head)
+FileUtils.mkdir_p(source_head_root)
+target_contract_bytes = File.binread(ENV.fetch("TARGET_CONTRACT"))
+source_contract = JSON.parse(target_contract_bytes)
+source_contract["issue"] = source_issue
+binding = {
+  "releaseIdentifier"=>"renderer-v1", "revision"=>1, "phase"=>5, "scope"=>["application"],
+  "workKind"=>"implementation", "route"=>"standard",
+  "recordPath"=>"Config/releases/renderer-v1/phase-records/phase5.json",
+  "recordDigest"=>"sha256:#{"5"*64}", "reason"=>"Provide the Phase 5 source proof."
+}
+canonical = ->(value) { value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical.call(value.fetch(key))] } : value }
+source_contract.fetch("acceptanceCriteria").last["text"] = "Release-phase binding: #{JSON.generate(canonical.call(binding))}"
+source_contract_bytes = IOSTemplate::IssueContract.canonical_json(source_contract)
+File.binwrite(File.join(source_root, "issue-contract.json"), source_contract_bytes)
+source_verify = {
+  "schemaVersion"=>1, "status"=>"passed", "issue"=>source_issue, "baseSha"=>base, "headSha"=>head,
+  "issueContract"=>{"path"=>".artifacts/issues/#{source_issue}/issue-contract.json", "digest"=>IOSTemplate::EvidenceApplicability.digest(source_contract_bytes)},
+  "completedAt"=>"2026-08-21T12:30:00+09:00"
+}
+source_verify_bytes = JSON.generate(source_verify)
+File.binwrite(File.join(source_head_root, "verify.json"), source_verify_bytes)
+context = {
+  "artifactDigest"=>"sha256:#{"a"*64}", "configurationDigest"=>"sha256:#{"b"*64}",
+  "sdkDigest"=>"sha256:#{"c"*64}", "signingDigest"=>"sha256:#{"d"*64}", "scope"=>["application"]
+}
+record = IOSTemplate::EvidenceApplicability.build(
+  repo: repo, target_issue: 42, target_base_sha: base, target_head_sha: head,
+  target_contract_bytes: target_contract_bytes,
+  source_verify_path: ".artifacts/issues/#{source_issue}/#{head}/verify.json", source_verify_bytes: source_verify_bytes,
+  source_contract_bytes: source_contract_bytes, source_context: context, target_context: context,
+  impact_entries: [], reason: "Phase 5 and Phase 6 use the same candidate and context.",
+  evaluated_at: "2026-08-21T12:31:00+09:00"
+)
+File.binwrite(File.join(primary, ".artifacts/issues/42", head, "evidence-applicability.json"),
+  IOSTemplate::EvidenceApplicability.canonical_bytes(record))
+RUBY
+
 seal_review() {
   REPOSITORY="$worktree" CONTRACT="$contract" VERIFY="$verify" REVIEW_PACKET="$review_packet" REVIEW_DIFF="$review_diff" REVIEW="$review" HEAD="$head" BASE="$base" \
     ruby -I "$primary/tools/lib" -rjson -rdigest -rreview-contract -rprepare-review-packet <<'RUBY'
@@ -206,12 +267,12 @@ RUBY
 }
 seal_review
 
-cp "$contract" "$scratch/contract.good"; cp "$verify" "$scratch/verify.good"; cp "$review" "$scratch/review.good"; cp "$review_packet" "$scratch/review-packet.good"; cp "$review_diff" "$scratch/review-diff.good"; cp "$matrix" "$scratch/matrix.good"; cp "$packet" "$scratch/packet.good"
+cp "$contract" "$scratch/contract.good"; cp "$verify" "$scratch/verify.good"; cp "$review" "$scratch/review.good"; cp "$review_packet" "$scratch/review-packet.good"; cp "$review_diff" "$scratch/review-diff.good"; cp "$matrix" "$scratch/matrix.good"; cp "$packet" "$scratch/packet.good"; cp "$head_dir/evidence-applicability.json" "$scratch/evidence-applicability.good"
 for id in "${case_ids[@]}"; do cp "$head_dir/$id/screenshot.png" "$scratch/$id-screenshot.good"; cp "$head_dir/$id/settings.png" "$scratch/$id-settings.good"; done
 
 run_renderer() { "$worktree/tools/render-pr-body.sh" --issue "$issue" --head-sha "$head"; }
 restore_application() {
-  cp "$scratch/contract.good" "$contract"; cp "$scratch/verify.good" "$verify"; cp "$scratch/review.good" "$review"; cp "$scratch/review-packet.good" "$review_packet"; cp "$scratch/review-diff.good" "$review_diff"; cp "$scratch/matrix.good" "$matrix"; rm -f "$packet"; cp "$scratch/packet.good" "$packet"
+  cp "$scratch/contract.good" "$contract"; cp "$scratch/verify.good" "$verify"; cp "$scratch/review.good" "$review"; cp "$scratch/review-packet.good" "$review_packet"; cp "$scratch/review-diff.good" "$review_diff"; cp "$scratch/matrix.good" "$matrix"; cp "$scratch/evidence-applicability.good" "$head_dir/evidence-applicability.json"; rm -f "$packet"; cp "$scratch/packet.good" "$packet"
   for id in "${case_ids[@]}"; do cp "$scratch/$id-screenshot.good" "$head_dir/$id/screenshot.png"; cp "$scratch/$id-settings.good" "$head_dir/$id/settings.png"; done
 }
 expect_refusal() {
@@ -257,6 +318,8 @@ for expected in \
   'iPhone Pro / Japanese (`iphone-ja`): `passed`' \
   'iPad Air / English (`ipad-en`): `passed`' \
   'iPad Air / Japanese (`ipad-ja`): `passed`' \
+  'Evidence applicability: `reuse`' \
+  'Phase 5 source: `.artifacts/issues/41/' \
   'Reviewer model: `claude`' \
   'Remaining work' \
   'None for this Issue.'
@@ -375,8 +438,9 @@ cp "$issue_dir/state.json" "$scratch/pre-workflow-state.json"
 # Workflow-only rendering accepts the sealed AC-mapped repository subset and
 # keeps every application/Simulator field explicitly not applicable.
 restore_application
+rm -f "$head_dir/evidence-applicability.json"
 CONTRACT="$contract" VERIFY="$verify" STATE="$issue_dir/state.json" RECORD="$head_dir/repository-tests.json" REPOSITORY="$worktree" HEAD="$head" BASE="$base" COMPLETED_AT="2026-08-21T12:30:00+09:00" ruby -I "$primary/tools/lib" -rjson -rdigest -rtime -rissue-contract -e '
-contract_path=ENV.fetch("CONTRACT"); contract=JSON.parse(File.binread(contract_path)); contract.delete("verification"); contract.delete("verificationScope"); contract["deliveryStage"]={"name"=>"harden","timeBudgetMinutes"=>60,"reason"=>"Workflow-only renderer fixture."}; contract["deliveryProfile"]={"name"=>"strict","reason"=>"Canonical workflow evidence."}; File.binwrite(contract_path,IOSTemplate::IssueContract.canonical_json(contract)); digest="sha256:#{Digest::SHA256.file(contract_path).hexdigest}";
+contract_path=ENV.fetch("CONTRACT"); contract=JSON.parse(File.binread(contract_path)); contract.delete("verification"); contract.delete("verificationScope"); contract.fetch("acceptanceCriteria").last["text"]="Workflow-only repository evidence is sealed."; contract["deliveryStage"]={"name"=>"harden","timeBudgetMinutes"=>60,"reason"=>"Workflow-only renderer fixture."}; contract["deliveryProfile"]={"name"=>"strict","reason"=>"Canonical workflow evidence."}; File.binwrite(contract_path,IOSTemplate::IssueContract.canonical_json(contract)); digest="sha256:#{Digest::SHA256.file(contract_path).hexdigest}";
 record={"schemaVersion"=>1,"status"=>"passed","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>digest},"runnerFiles"=>%w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb].map{|path|{"path"=>path,"digest"=>"sha256:#{Digest::SHA256.hexdigest(IO.popen(["git","-C",ENV.fetch("REPOSITORY"),"show","#{ENV.fetch("HEAD")}:#{path}"],"rb", &:read))}"}},"suite"=>{"path"=>"tools/tests","pattern"=>"test-*.sh","total"=>1,"passed"=>1,"failed"=>0},"tests"=>[{"path"=>"tools/tests/test-renderer-probe.sh","arguments"=>[],"status"=>"passed","exitStatus"=>0,"outputDigest"=>"sha256:#{"0"*64}","startedAt"=>Time.now.utc.iso8601,"completedAt"=>Time.now.utc.iso8601}],"acceptanceEvidence"=>[{"id"=>"AC-1","status"=>"passed","tests"=>["tools/tests/test-renderer-probe.sh"]},{"id"=>"AC-2","status"=>"passed","tests"=>["tools/tests/test-renderer-probe.sh"]}],"startedAt"=>Time.now.utc.iso8601,"completedAt"=>Time.now.utc.iso8601}; File.binwrite(ENV.fetch("RECORD"),JSON.generate(record));
 verify={"schemaVersion"=>1,"status"=>"passed","changeClassification"=>"workflow-only","reason"=>"Workflow repository checks passed; application release readiness was not evaluated.","issue"=>42,"baseSha"=>ENV.fetch("BASE"),"headSha"=>ENV.fetch("HEAD"),"issueContract"=>record.fetch("issueContract"),"matrixFile"=>nil,"matrixDigest"=>nil,"executionRoute"=>"repository-tests","xcode"=>nil,"build"=>{"status"=>"not-applicable","scheme"=>nil,"warningsAdded"=>nil,"project"=>nil,"sourceTree"=>nil},"tests"=>{"status"=>"not-applicable","passed"=>nil,"failed"=>nil,"skipped"=>nil},"cases"=>[],"visualEvaluation"=>{"status"=>"not-applicable","findings"=>[]},"acceptanceEvidence"=>record.fetch("acceptanceEvidence").each_with_index.map{|entry,index|{"id"=>entry.fetch("id"),"status"=>"passed","evidence"=>["repository-tests.json#acceptanceEvidence/#{index}"]}},"completedAt"=>ENV.fetch("COMPLETED_AT")}; File.binwrite(ENV.fetch("VERIFY"),JSON.generate(verify)); state=JSON.parse(File.binread(ENV.fetch("STATE"))); state.fetch("issueContract")["digest"]=digest; File.binwrite(ENV.fetch("STATE"),JSON.generate(state))'
 seal_review

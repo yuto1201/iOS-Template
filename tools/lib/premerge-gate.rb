@@ -173,6 +173,9 @@ begin
   diff_file = nil
   repository_tests_file = nil
   repository_test_plan_file = nil
+  applicability_file = nil
+  applicability_source_verify_file = nil
+  applicability_source_contract_file = nil
   revision_context = nil
   image_files = {}
   if review_required
@@ -191,6 +194,23 @@ begin
         parse_object(repository_test_plan_file.bytes, "repository-test-plan.json"),
         repo: root, issue: issue, base_sha: base_sha, head_sha: head_sha,
         contract_bytes: contract_file.bytes
+      )
+    end
+    if review_references.key?("evidenceApplicabilityFile")
+      applicability_file = artifact_snapshots.relative_leaf(
+        artifacts,
+        review_references.fetch("evidenceApplicabilityFile").fetch("path").delete_prefix(".artifacts/"),
+        "evidence-applicability.json"
+      )
+      applicability_source_verify_file = artifact_snapshots.relative_leaf(
+        artifacts,
+        review_references.fetch("evidenceSourceVerify").fetch("path").delete_prefix(".artifacts/"),
+        "Phase 5 source verification"
+      )
+      applicability_source_contract_file = artifact_snapshots.relative_leaf(
+        artifacts,
+        review_references.fetch("evidenceSourceContract").fetch("path").delete_prefix(".artifacts/"),
+        "Phase 5 source contract"
       )
     end
     if IOSTemplate::ReviewContract.repository_test_scope(contract.fetch("acceptanceCriteria")) == "base-and-head" || repository_test_plan_file
@@ -326,7 +346,11 @@ begin
       repository_tests_bytes: repository_tests_file&.bytes,
       repository_test_plan_bytes: repository_test_plan_file&.bytes,
       revision_context: revision_context,
-      actual_diff_bytes: actual_diff_bytes
+      actual_diff_bytes: actual_diff_bytes,
+      evidence_applicability_bytes: applicability_file&.bytes,
+      evidence_source_verify_bytes: applicability_source_verify_file&.bytes,
+      evidence_source_contract_bytes: applicability_source_contract_file&.bytes,
+      evidence_repo: root
     )
     refuse("opposite-model review is not approved") unless review_values.fetch("result").fetch("verdict") == "approved"
     IOSTemplate::ReviewReceipt.validate!(
