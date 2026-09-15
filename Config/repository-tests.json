@@ -239,7 +239,8 @@
         "tools/lib/issue-contract.rb",
         "tools/lib/workflow-json.rb",
         "tools/lib/workflow.sh",
-        "tools/resume-issue.sh"
+        "tools/resume-issue.sh",
+        "tools/tests/fixtures/gh"
       ],
       "prefixes": ["tools/lib/workflow-"]
     }
