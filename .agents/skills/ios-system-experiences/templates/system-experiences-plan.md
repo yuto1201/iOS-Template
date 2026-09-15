@@ -77,6 +77,7 @@ Complete these fields for each of the five surface IDs. Use `Not applicable — 
 - Start/update/end/dismiss/stale: [lifecycle]
 - App-restart recovery: [plan]
 - Local update or ActivityKit push: [choice and reason]
+- Payload/update-frequency constraints: [current observation from the checkedAt source refresh]
 - APNs/server dependency: [dependency or None]
 - Authorization: [behavior]
 - Deep link and interactive action: [routes/actions]

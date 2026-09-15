@@ -80,6 +80,26 @@ require_all('template common fields', template, [
   'release依存',
   '再評価条件'
 ])
+require_all('template surface details', template, [
+  '## Widget detail',
+  'Timeline, reload, and relevance',
+  '## Live Activities detail',
+  'Payload/update-frequency constraints',
+  '## Dynamic Island detail',
+  'Minimal presentation',
+  'Compact presentation',
+  'Expanded presentation',
+  '## Controls detail',
+  'App Intent idempotency/concurrency/error',
+  '## Siri and App Intents detail',
+  'App Intents Testing',
+  '## Cross-surface architecture',
+  'Serialized write-sets'
+])
+require_all('skill Issue splitting', skill, [
+  'Serialize overlapping Xcode project',
+  'write-sets'
+])
 
 contracts = {
   'AGENTS.md' => ['ios-system-experiences', '主要Feature Issue'],
@@ -88,7 +108,7 @@ contracts = {
   'specs/architecture.md' => ['System Experiences設計境界', '共有domain action', 'extension process'],
   'specs/acceptance.md' => ['System Experiences Planning Gate', '5面', '部分blocking'],
   'specs/development-stages.md' => ['system experience', 'Phase 1', 'Phase 2'],
-  'specs/decisions.md' => ['全アプリでSystem Experiencesの評価を必須化する', 'Related Issue: #73'],
+  'specs/decisions.md' => ['全アプリでSystem Experiencesの評価を必須化する', 'Delivery stage', 'Related Issue: #73'],
   'docs/workflow.md' => ['System Experiences Planning Gate', 'ios-system-experiences'],
   '.agents/skills/app-bootstrap/SKILL.md' => ['ios-system-experiences', 'Identity bootstrap'],
   '.agents/skills/plan-issue-batch/SKILL.md' => ['ios-system-experiences', 'System Experiences Planning Issue'],

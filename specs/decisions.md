@@ -442,8 +442,8 @@
 
 - Date: 2026-09-15
 - Status: 確定
-- Supersedes: None。D-038のPhase gate、D-031のApp Icon Gate、D-030のUI Direction Gateを補足し、それぞれの独立した判断と依存関係を維持する。
+- Supersedes: None。D-038のPhase gate、D-031のApp Icon Gate、D-030のUI Direction Gate、D-029のDelivery stage契約を補足し、それぞれの独立した判断と依存関係を維持する。
 - Context: Widget、Live Activities、Dynamic Island、Controls、Siri／App Intentsは、アプリの主要機能を実装した後で検討すると、共有data、domain action、extension process、capability、privacy、localization、release構成の手戻りが大きくなる。一方、全アプリへframeworkやentitlementを先行導入すると、不要な複雑性と検証負担を増やす。
 - Decision: Identity bootstrap後、主要Feature Issueの計画またはClaimより前に、専用System Experiences Planning Issueで`widget`、`live-activities`、`dynamic-island`、`controls`、`siri-app-intents`の5面を最新のApple公式sourceに基づいて評価する。各面を`adopt-now`、`defer`、`not-applicable`、`blocked:user`へ分類し、提供価値、対象task／system space、開始点と成功結果、source of truthとstaleness、offline／error／recovery、lock-state redaction、accessibility、日英localization、fallback、telemetry privacy境界、検証、release依存、再評価条件を記録する。評価はmandatory、採用はoptionalとし、最終判断はユーザーへ留保する。計画だけでframework、Extension target、entitlementを導入せず、`adopt-now`だけを依存Issueへ分ける。一面の未決は依存scopeだけを部分blockingとする。App IconはIdentity bootstrap後に並行でき、採用するsystem UIは別途UI Direction Gateを通す。既存アプリへ現在の依頼または機能上のtriggerなしに遡及適用しない。
-- Consequence: Phase 1でsystem experienceの価値と採否方針をrelease scopeへ含め、Phase 2で採用面のaction／data／process／capability設計とIssue graphを確定する。主要Featureは完了済み計画matrixを参照し、採用面の前提をDependenciesへ置く。後から採否を変える場合は理由、影響、失効する判断、再評価条件を追記し、影響する最も早いPhaseだけを再gateする。共有Claude参照は既存contractどおり相対symlinkとし、workflow-only evidenceは同一Headのregular shared `SKILL.md`へ名前一致で向く新規linkだけを受理する。
+- Consequence: Phase 1でsystem experienceの価値と採否方針をrelease scopeへ含め、Phase 2で採用面のaction／data／process／capability設計とIssue graphを確定する。主要Featureは完了済み計画matrixを参照し、採用面の前提をDependenciesへ置く。D-029の既存Delivery stage契約は置き換えず、planning IssueとそのIssue graphの各Issueは従来どおり`shape`／`harden`／`release`、正のTime budget、stage別検証を持つ。後から採否を変える場合は理由、影響、失効する判断、再評価条件を追記し、影響する最も早いPhaseだけを再gateする。共有Claude参照は既存contractどおり相対symlinkとし、workflow-only evidenceは同一Headのregular shared `SKILL.md`へ名前一致で向く新規linkだけを受理する。
 - Related Issue: #73
