@@ -302,7 +302,7 @@ module IOSTemplate
         test_previous = revision_start
         tests.each do |test|
           exact_keys!(test, %w[path sourceDigest arguments command status exitStatus outputDigest timeoutSeconds elapsedSeconds startedAt completedAt], "repositoryTests test")
-          arguments = test["path"] == "tools/tests/test-app-bootstrap.sh" ? ["all"] : []
+          arguments = RepositoryTestPlan.test_arguments(test["path"], value["scope"])
           reject("repositoryTests test argv differs") unless test["arguments"] == arguments && test["command"] == ["/bin/bash", "-p", test["path"], *arguments]
           reject("repositoryTests contains a failed or incomplete test") unless test["status"] == "passed" && test["exitStatus"] == 0
           bound = test["timeoutSeconds"]
@@ -377,7 +377,7 @@ module IOSTemplate
         exact_keys!(test, %w[path arguments status exitStatus outputDigest startedAt completedAt], "repositoryTests.tests[#{index}]")
         path = string!(test["path"], "repositoryTests.tests[#{index}].path")
         reject("repositoryTests test path is invalid") unless path.match?(%r{\Atools/tests/test-[a-z0-9-]+\.sh\z})
-        expected_arguments = path == "tools/tests/test-app-bootstrap.sh" ? ["all"] : []
+        expected_arguments = RepositoryTestPlan.test_arguments(path, "legacy-head")
         reject("repositoryTests test arguments differ") unless test["arguments"] == expected_arguments
         reject("repositoryTests contains a failed test") unless test["status"] == "passed" && test["exitStatus"] == 0
         digest!(test["outputDigest"], "repositoryTests.tests[#{index}].outputDigest")
@@ -451,7 +451,7 @@ module IOSTemplate
       previous = start
       tests.each do |test|
         exact_keys!(test, %w[path sourceDigest arguments command status exitStatus outputDigest timeoutSeconds elapsedSeconds startedAt completedAt], "repositoryTests test")
-        arguments = test["path"] == "tools/tests/test-app-bootstrap.sh" ? ["all"] : []
+        arguments = RepositoryTestPlan.test_arguments(test["path"], value["scope"])
         reject("repositoryTests test argv differs") unless test["arguments"] == arguments && test["command"] == ["/bin/bash", "-p", test["path"], *arguments]
         reject("repositoryTests contains a failed or incomplete test") unless test["status"] == "passed" && test["exitStatus"] == 0
         reject("repositoryTests test bound is invalid") unless test["timeoutSeconds"].is_a?(Integer) && test["timeoutSeconds"].between?(1, 900) && test["elapsedSeconds"].is_a?(Numeric) && test["elapsedSeconds"].finite? && test["elapsedSeconds"].between?(0, test["timeoutSeconds"] + 5)

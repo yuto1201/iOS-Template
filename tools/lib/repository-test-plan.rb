@@ -16,6 +16,11 @@ module IOSTemplate
     CUTOFF = Time.iso8601("2026-09-13T13:03:38Z").freeze
     MANIFEST_PATH = "Config/repository-tests.json"
     SCOPES = %w[targeted head-all base-and-head].freeze
+    TARGETED_SCOPED_TESTS = %w[
+      tools/tests/test-merge-issue.sh
+      tools/tests/test-premerge-gate.sh
+      tools/tests/test-render-pr-body.sh
+    ].freeze
     TEST_PATH = %r{\Atools/tests/test-[a-z0-9-]+\.sh\z}
     SAFE_PATH = %r{\A(?!/)(?!.*(?:\A|/)\.\.(?:/|\z))[A-Za-z0-9._+@ /-]+\z}
 
@@ -94,6 +99,13 @@ module IOSTemplate
       plan
     rescue KeyError
       reject("repository-test plan is incomplete")
+    end
+
+    def test_arguments(path, scope)
+      return ["all"] if path == "tools/tests/test-app-bootstrap.sh"
+      return ["scoped"] if scope == "targeted" && TARGETED_SCOPED_TESTS.include?(path)
+
+      []
     end
 
     def validate_manifest!(manifest, inventory, tracked_paths: nil)

@@ -43,6 +43,16 @@ module Fixture
 end
 
 runner = IOSTemplate::RepositoryTestPlan
+abort "targeted merge did not use its bounded scenario" unless
+  runner.test_arguments("tools/tests/test-merge-issue.sh", "targeted") == ["scoped"]
+abort "targeted premerge did not use its bounded scenario" unless
+  runner.test_arguments("tools/tests/test-premerge-gate.sh", "targeted") == ["scoped"]
+abort "targeted renderer did not use its bounded scenario" unless
+  runner.test_arguments("tools/tests/test-render-pr-body.sh", "targeted") == ["scoped"]
+abort "head-all unexpectedly narrowed a test" unless
+  runner.test_arguments("tools/tests/test-premerge-gate.sh", "head-all") == []
+abort "bootstrap full entrypoint changed" unless
+  runner.test_arguments("tools/tests/test-app-bootstrap.sh", "targeted") == ["all"]
 Dir.mktmpdir("repository-test-plan-") do |scratch|
   repo = File.join(scratch, "repo")
   FileUtils.mkdir_p(File.join(repo, "Config"))
@@ -189,7 +199,7 @@ end
 puts "PASS: repository-test plans are diff-derived, scope-bounded, AC-mapped, and tamper-evident"
 RUBY
 
-SOURCE_REPO="$source_repo" ruby -I"$source_repo/tools/lib" -rfileutils -rtmpdir -rjson -ropen3 -rtime -rdigest <<'RUBY'
+SOURCE_REPO="$source_repo" ruby -I"$source_repo/tools/lib" -rfileutils -rtmpdir -rjson -ropen3 -rtime -rdigest -rissue-contract <<'RUBY'
 source = ENV.fetch("SOURCE_REPO")
 Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   scratch = File.realpath(scratch)
@@ -250,7 +260,7 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   issue_root = File.join(repo, ".artifacts/issues/82")
   head_root = File.join(issue_root, head)
   FileUtils.mkdir_p(head_root)
-  contract_bytes = JSON.generate(contract)
+  contract_bytes = IOSTemplate::IssueContract.canonical_json(contract)
   File.binwrite(File.join(issue_root, "issue-contract.json"), contract_bytes)
   command = [File.join(repo, "tools/run-repository-tests.sh"), "--issue", "82", "--expected-base", base,
     "--map", "AC-1=tools/tests/test-alpha.sh", "--map", "AC-2=tools/tests/test-alpha.sh"]
@@ -273,6 +283,13 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   abort "targeted child timeout differs" unless record.fetch("tests").all? { |entry| entry.fetch("timeoutSeconds") == 300 }
 
   contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
+  state = {"schemaVersion"=>1, "issue"=>82, "repository"=>"example/repo",
+    "branch"=>"codex/82-plan", "worktree"=>".worktrees/82-plan", "baseSha"=>base,
+    "primaryImplementer"=>"codex", "issueContract"=>{"path"=>".artifacts/issues/82/issue-contract.json", "digest"=>contract_digest},
+    "state"=>"verify-passed", "previousState"=>"in-progress", "resumeState"=>nil,
+    "executor"=>"codex", "headSha"=>head, "from"=>"in-progress", "to"=>"verify-passed",
+    "transitionedAt"=>Time.now.utc.iso8601(6)}
+  File.binwrite(File.join(issue_root, "state.json"), JSON.generate(IOSTemplate::IssueContract.canonical(state)))
   verify = {"schemaVersion"=>1, "status"=>"passed", "changeClassification"=>"workflow-only",
     "reason"=>"Repository tests passed.", "issue"=>82, "baseSha"=>base, "headSha"=>head,
     "issueContract"=>{"path"=>".artifacts/issues/82/issue-contract.json", "digest"=>contract_digest},

@@ -134,7 +134,7 @@ module IOSTemplate
             execution_stage = "diagnostic"
             diagnostic_inventory = plan ? plan_context.fetch("inventories")[1].select { |entry| entry.fetch("path") == retry_after_targeted } : nil
             diagnostic_results = execute_in_detached_worktree(repo, head_sha, [retry_after_targeted], inventory: diagnostic_inventory,
-              deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds)
+              deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds, execution_scope: execution_scope)
             diagnostic_failure = diagnostic_results.find { |entry| entry["status"] != "passed" }
             reject("retry diagnostic failed: #{diagnostic_failure.fetch('path')}") if diagnostic_failure
           end
@@ -144,7 +144,7 @@ module IOSTemplate
               started = Time.now.utc
               inventory = context.fetch("inventories")[index]
               revision_results = execute_in_detached_worktree(repo, sha, inventory.map { |entry| entry["path"] }, inventory: inventory,
-                deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds)
+                deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds, execution_scope: execution_scope)
               failure = revision_results.find { |entry| entry["status"] != "passed" }
               reject("#{role} repository test failed: #{failure.fetch('path')}") if failure
               {"role"=>role, "testedSha"=>sha, "suite"=>suite_summary(revision_results), "tests"=>revision_results,
@@ -155,7 +155,7 @@ module IOSTemplate
             execution_stage = "suite"
             selected_inventory = plan ? plan_context.fetch("inventories")[1].select { |entry| tests.include?(entry.fetch("path")) } : nil
             results = execute_in_detached_worktree(repo, head_sha, tests, inventory: selected_inventory,
-              deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds)
+              deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds, execution_scope: execution_scope)
           end
           failure = results.find { |entry| entry["status"] != "passed" }
           reject("repository test failed: #{failure.fetch('path')}") if failure
@@ -263,7 +263,7 @@ module IOSTemplate
        "failed"=>results.count { |entry| entry["status"] != "passed" }}
     end
 
-    def execute_in_detached_worktree(repo, head_sha, tests, inventory: nil, deadline:, child_timeout_seconds:)
+    def execute_in_detached_worktree(repo, head_sha, tests, inventory: nil, deadline:, child_timeout_seconds:, execution_scope:)
       results = []
       Dir.mktmpdir("ios-template-repository-tests-") do |temporary|
         worktree = File.join(temporary, "worktree")
@@ -281,7 +281,7 @@ module IOSTemplate
               source = File.join(worktree, path)
               reject("detached test source differs from revision") unless File.lstat(source).file? && ReviewContract.digest(File.binread(source)) == expected
             end
-            arguments = test_arguments(path)
+            arguments = RepositoryTestPlan.test_arguments(path, execution_scope)
             started = Time.now.utc
             timeout_seconds = [child_timeout_seconds, remaining_whole_seconds].min
             aggregate_limited = timeout_seconds < child_timeout_seconds
@@ -466,10 +466,6 @@ module IOSTemplate
       Process.kill("TERM", -pid)
     rescue Errno::ESRCH
       nil
-    end
-
-    def test_arguments(path)
-      path == "tools/tests/test-app-bootstrap.sh" ? ["all"] : []
     end
 
     def tracked_tests(repo, head_sha)

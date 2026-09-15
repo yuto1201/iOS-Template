@@ -5,6 +5,8 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git jq ruby swift /usr/bin/swiftc
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
+[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+scope="${1:-full}"
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-premerge-gate.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 
@@ -389,6 +391,11 @@ cp "$revision_record" "$scratch/revision-record.valid.json"
 ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["reason"]="tampered"; File.binwrite(path,JSON.generate(value))' "$revision_record"
 assert_fails 'premerge rejects a tampered contract revision chain' run_gate
 cp "$scratch/revision-record.valid.json" "$revision_record"
+
+if [[ "$scope" == scoped ]]; then
+  echo 'PASS: scoped premerge accepts one audited revision and rejects pending or tampered history'
+  exit 0
+fi
 
 cp "$scratch/issue.original.md" "$issue_body"
 cp "$scratch/contract.original.json" "$repo/.artifacts/issues/42/issue-contract.json"

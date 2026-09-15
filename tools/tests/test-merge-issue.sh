@@ -5,6 +5,8 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git jq ruby swift
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
+[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+scope="${1:-full}"
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-merge.XXXXXX")
 scratch=$(cd "$scratch" && pwd -P)
 trap 'rm -rf "$scratch"' EXIT
@@ -261,6 +263,18 @@ run_recovery() {
   run_recovery_command "$CASE_WORKTREE/tools/record-merged-pr.sh" --repo "$repo_name" --issue "$issue" \
     --pull-request "${RECOVERY_PR:-$pr}" --expected-head "${RECOVERY_HEAD:-$CASE_HEAD}"
 }
+
+if [[ "$scope" == scoped ]]; then
+  make_case scoped-new
+  body=$("$CASE_WORKTREE/tools/render-pr-body.sh" --issue 42 --head-sha "$CASE_HEAD")
+  grep -Fq 'Verify digest: `sha256:' <<<"$body" || fail_test 'scoped PR body omits verify digest'
+  grep -Fq 'Reviewer model: `claude`' <<<"$body" || fail_test 'scoped PR body omits reviewer model'
+  run_merge >"$CASE_ROOT/result.json"
+  jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/result.json" >/dev/null
+  jq -e '.state=="merged" and .pullRequest==57' "$CASE_PRIMARY/.artifacts/issues/42/state.json" >/dev/null
+  echo 'PASS: scoped merge validates and publishes one exact reviewed Head'
+  exit 0
+fi
 
 make_case manual-merged-missing-pr merged none recovery
 set_contract_operations '["github.push_branch","github.create_pr","github.merge_pr","github.delete_branch"]'
