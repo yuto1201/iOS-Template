@@ -20,6 +20,7 @@ module IOSTemplate
       tools/tests/test-merge-issue.sh
       tools/tests/test-premerge-gate.sh
       tools/tests/test-render-pr-body.sh
+      tools/tests/test-workflow-e2e.sh
       tools/tests/test-workflow-state.sh
     ].freeze
     TEST_PATH = %r{\Atools/tests/test-[a-z0-9-]+\.sh\z}
