@@ -102,13 +102,13 @@ claim_fail_after() {
 }
 
 workflow_github_preflight "$repo_root" "$repo" "$issue" github.read_issue || { echo 'GitHub account preflight failed before Issue read' >&2; exit 1; }
-issue_json=$(gh issue view "$issue" --repo "$repo" --json title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
+issue_json=$(gh issue view "$issue" --repo "$repo" --json number,url,title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
 current_state=$(printf '%s' "$issue_json" | issue_state_from_json)
 workflow_is_state "$current_state" || conflict 'Issue has an unknown current state label'
 if [[ "$current_state" == approved ]]; then
   workflow_require_live_issue_operation "$repo_root" "$repo" "$issue" "$issue_json" github.read_issue || conflict 'live Issue contract does not authorize Issue reads'
 elif [[ "$current_state" == claimed ]]; then
-  workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" github.read_issue || conflict 'sealed Issue contract does not authorize Issue reads'
+  workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" github.read_issue 1 || conflict 'sealed Issue contract does not authorize Issue reads'
 else
   conflict "Issue state is $current_state, not approved or claimed"
 fi
@@ -163,7 +163,7 @@ for required_operation in github.read_issue github.update_issue github.push_bran
   if [[ "$current_state" == approved ]]; then
     workflow_require_live_issue_operation "$repo_root" "$repo" "$issue" "$issue_json" "$required_operation" || conflict "normal shipping operation is undeclared: $required_operation"
   else
-    workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$required_operation" || conflict "sealed shipping operation is undeclared: $required_operation"
+    workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$required_operation" 1 || conflict "sealed shipping operation is undeclared: $required_operation"
   fi
 done
 

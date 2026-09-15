@@ -43,15 +43,69 @@ artifact_head="$artifact_issue/$head_sha"
 mkdir -p "$artifact_head"
 
 digest() { shasum -a 256 "$1" | awk '{print "sha256:" $1}'; }
-ISSUE="$issue" CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -rdigest -e '
-  def canonical(value)
-    value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value.is_a?(Array) ? value.map { |entry| canonical(entry) } : value
-  end
-  operations = ["github.read_issue", "github.update_issue"]
-  details = operations.map { |operation| {"operation" => operation, "service" => "GitHub", "environment" => "production", "executor" => "Codex", "approvalRequired" => false, "approvalReference" => nil} }
-  value = {"schemaVersion" => 1, "issue" => ENV.fetch("ISSUE").to_i, "repository" => "yuto1201/iOS-Template", "goal" => "Shared review artifacts", "specAnchors" => ["specs/acceptance.md#1"], "fetchedAt" => "2026-08-24T00:00:00Z", "dependencies" => [], "externalOperations" => operations, "externalOperationDetailsDigest" => "sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(details)))}", "acceptanceCriteria" => [{"id" => "AC-1", "text" => "Review reads the canonical shared evidence"}]}
-  File.binwrite(ENV.fetch("CONTRACT"), JSON.generate(canonical(value)))
-'
+export FAKE_GH_ISSUE_BODY="$workspace/issue-body.md"
+export FAKE_GH_TYPE_LABEL=type:feature
+cat > "$FAKE_GH_ISSUE_BODY" <<'EOF'
+## Goal
+
+Shared review artifacts
+
+## In scope
+
+- Validate shared review evidence.
+
+## Out of scope
+
+- Application behavior.
+
+## Acceptance criteria
+
+- AC-1: Review reads the canonical shared evidence
+
+## Spec anchors
+
+- [Issue Definition of Ready](specs/acceptance.md#2-issue-definition-of-ready)
+
+## Dependencies
+
+- None.
+
+## UI verification
+
+- Not applicable.
+
+## Delivery stage
+
+- Stage: harden
+- Time budget: 60 minutes
+- Reason: Exercise the shared review artifact boundary.
+
+## Delivery profile
+
+- Profile: strict
+- Reason: Exercise formal opposite-model review publication.
+
+## External operations
+
+- Operation: github.read_issue
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+- Operation: github.update_issue
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+## User approvals
+
+- No additional approval.
+EOF
+ruby "$primary/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+  --issue "$issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > "$artifact_issue/issue-contract.json"
 contract_digest=$(digest "$artifact_issue/issue-contract.json")
 printf 'diff\n' > "$artifact_head/review.diff"
 printf 'image\n' > "$artifact_head/iphone-en.png"
@@ -62,7 +116,7 @@ JSON
 write_packet() {
   local primary_model=$1 reviewer_model=$2
   cat > "$artifact_head/review-packet.json" <<JSON
-{"schemaVersion":1,"issue":$issue,"primaryModel":"$primary_model","reviewerModel":"$reviewer_model","baseSha":"$base_sha","headSha":"$head_sha","verifySha":"$head_sha","issueContract":{"path":".artifacts/issues/$issue/issue-contract.json","digest":"$contract_digest"},"specAnchors":["specs/acceptance.md#1"],"acceptanceCriteria":[{"id":"AC-1","text":"Review reads the canonical shared evidence"}],"diffFile":".artifacts/issues/$issue/$head_sha/review.diff","verifyFile":".artifacts/issues/$issue/$head_sha/verify.json","imageFiles":["iphone-en.png"]}
+{"schemaVersion":1,"issue":$issue,"primaryModel":"$primary_model","reviewerModel":"$reviewer_model","baseSha":"$base_sha","headSha":"$head_sha","verifySha":"$head_sha","issueContract":{"path":".artifacts/issues/$issue/issue-contract.json","digest":"$contract_digest"},"specAnchors":["specs/acceptance.md#2-issue-definition-of-ready"],"acceptanceCriteria":[{"id":"AC-1","text":"Review reads the canonical shared evidence"}],"diffFile":".artifacts/issues/$issue/$head_sha/review.diff","verifyFile":".artifacts/issues/$issue/$head_sha/verify.json","imageFiles":["iphone-en.png"]}
 JSON
 }
 

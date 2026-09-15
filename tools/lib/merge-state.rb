@@ -7,6 +7,7 @@ require "time"
 require "open3"
 require_relative "descriptor-files"
 require_relative "issue-contract"
+require_relative "issue-contract-revision"
 require_relative "delivery-profile"
 
 def refuse(message)
@@ -81,7 +82,7 @@ def validate_state(root, repository, issue, mode, recover_missing_pr: false)
   state_bytes = DescriptorFiles.read_opened(state_io, state_stat)
   state = JSON.parse(state_bytes)
   required = %w[schemaVersion issue repository branch worktree baseSha primaryImplementer issueContract state previousState resumeState executor]
-  optional = %w[headSha pullRequest from to transitionedAt]
+  optional = %w[headSha issueContractRevision pullRequest from to transitionedAt]
   exact_keys!(state, required, optional, "durable Issue state")
   refuse("state.schemaVersion must be 1") unless state["schemaVersion"] == 1
   refuse("state Issue or repository differs from the request") unless state["issue"] == issue && state["repository"] == repository
@@ -108,6 +109,13 @@ def validate_state(root, repository, issue, mode, recover_missing_pr: false)
   refuse("state issue-contract digest differs from exact bytes") unless contract_digest == "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"
   contract = JSON.parse(contract_bytes)
   IOSTemplate::IssueContract.validate_snapshot!(contract, issue: issue, repository: repository)
+  revision_loader = IOSTemplate::IssueContractRevision.artifact_loader(File.join(primary, ".artifacts"), issue)
+  IOSTemplate::IssueContractRevision.validate_active_bytes!(
+    state_bytes: state_bytes, contract_bytes: contract_bytes, issue: issue,
+    repository: repository, loader: revision_loader,
+    history_exists: IOSTemplate::IssueContractRevision.revision_history_exists?(issue_dir),
+    pending_exists: IOSTemplate::IssueContractRevision.pending_exists?(issue_dir)
+  )
 
   state_name = state["state"]
   case state_name
@@ -163,6 +171,7 @@ def validate_state(root, repository, issue, mode, recover_missing_pr: false)
     "headSha" => head,
     "pullRequest" => state["pullRequest"],
     "contractDigest" => contract_digest,
+    "contractRevision" => state["issueContractRevision"],
     "externalOperations" => contract.fetch("externalOperations"),
     "title" => "Issue ##{issue}: #{title_goal}"
   }
@@ -175,6 +184,8 @@ def validate_state(root, repository, issue, mode, recover_missing_pr: false)
   result
 rescue IOSTemplate::IssueContract::ValidationError => error
   refuse("Issue contract is invalid: #{error.failures.join('; ')}")
+rescue IOSTemplate::IssueContractRevision::ValidationError => error
+  refuse("Issue contract revision is invalid: #{error.message}")
 rescue JSON::ParserError => error
   refuse("Issue contract is not valid JSON: #{error.message}")
 rescue IOError, SystemCallError, ArgumentError => error

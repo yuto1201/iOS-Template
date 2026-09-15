@@ -1,8 +1,8 @@
 # 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 3.2
-Date: 2026-09-14
+Version: 3.3
+Date: 2026-09-15
 
 ## 1. 原則
 
@@ -107,7 +107,9 @@ Phase 1〜3の軽微な修正は、目的、MVP境界、主要hierarchy／flow�
 
 ### 1.5.4 Revision、証拠、不具合
 
-release revisionを変える記録は追記型とし、少なくとも変更前、変更後、理由、判断者または委任根拠、影響する仕様／Issue／Phase、失効する証拠、再利用する証拠と根拠、繰越、記録時刻を持つ。過去のDecisionとsealed Issue contractを上書きしない。同一Issue contractの正式revision経路が実装されるまでは、既存contractを改訂・再封印したと報告しない。
+release revisionを変える記録は追記型とし、少なくとも変更前、変更後、理由、判断者または委任根拠、影響する仕様／Issue／Phase、失効する証拠、再利用する証拠と根拠、繰越、記録時刻を持つ。過去のDecisionとsealed Issue contractを上書きしない。同一Issue contractの改訂は[受け入れ条件 §3.5](acceptance.md#35-claim後のissue-contract-revision)の専用経路に限定し、release revisionやPhase承認の代替にしない。
+
+同一Issue contract revisionは`verification`、同一ID・同一順序のAcceptance criteria本文、`fetchedAt`だけを変更でき、現行contract／source Headに束縛した`review-finding`、設定済みownerの`user-explicit`、同ownerが現在executorを指定する`user-delegated`のいずれかを必要とする。旧／新body、旧／新contract、state、authority、前record digestをimmutable chainへ残し、以前のverification／review／Head bindingを失効させる。Goal、MVP、Phase、stage、profile、scope、外部authorityの変更はこの経路で吸収せず、影響する最も早いPhaseと別Issueへ戻す。
 
 品質証拠は同一candidate artifact、source Head、config、SDK／signing context、scopeに対してだけ適用可能性を評価する。Head変更時に旧証拠を現Headの実行結果として付け替えない。changed pathsと依存関係から影響がないことを説明できる証拠だけを再利用候補とし、不明なら検証範囲を拡大する。設定や署名変更を一律に無害としない。Phase 5と6で同じ候補を扱う場合は、適用可能な証拠を参照して重複実行を避けるが、#86の検証・再利用機構が実装されるまでは、この仕様だけを根拠にcanonical証拠を再利用・改訂しない。
 

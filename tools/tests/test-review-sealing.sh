@@ -65,7 +65,14 @@ ruby -rjson -e '
   }
   File.binwrite(path,JSON.generate(value))
 ' "$artifact_issue/issue-contract.json"
+ruby -I "$repo/tools/lib" -rjson -rissue-contract - "$artifact_issue/issue-contract.json" <<'RUBY'
+path = ARGV.fetch(0)
+File.binwrite(path, IOSTemplate::IssueContract.canonical_json(JSON.parse(File.binread(path))))
+RUBY
 contract_digest=$(digest "$artifact_issue/issue-contract.json")
+ISSUE="$issue" BASE="$base_sha" HEAD="$head_sha" DIGEST="$contract_digest" STATE="$artifact_issue/state.json" ruby -I "$repo/tools/lib" -rjson -rissue-contract -rtime -e '
+  issue=Integer(ENV.fetch("ISSUE")); value={"schemaVersion"=>1,"issue"=>issue,"repository"=>"yuto1201/iOS-Template","branch"=>"codex/#{issue}-review-sealing","worktree"=>".worktrees/#{issue}-review-sealing","baseSha"=>ENV.fetch("BASE"),"primaryImplementer"=>"codex","issueContract"=>{"path"=>".artifacts/issues/#{issue}/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"state"=>"verify-passed","previousState"=>"in-progress","resumeState"=>nil,"executor"=>"codex","headSha"=>ENV.fetch("HEAD"),"from"=>"in-progress","to"=>"verify-passed","transitionedAt"=>Time.now.utc.iso8601(6)}
+  File.binwrite(ENV.fetch("STATE"),JSON.generate(IOSTemplate::IssueContract.canonical(value)))'
 write_verify() {
   local marker=$1
   cat > "$artifact_head/verify.json" <<JSON

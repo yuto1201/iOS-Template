@@ -45,23 +45,25 @@ workflow_require_live_issue_operation() {
 }
 
 workflow_require_sealed_issue_operation() {
-  local repo_root=$1 repo=$2 issue=$3 operation=$4 contract="$repo_root/.artifacts/issues/$issue/issue-contract.json"
-  [[ -f "$contract" && ! -L "$contract" ]] || { echo 'sealed Issue contract is missing or unsafe' >&2; return 1; }
-  ruby -I"$repo_root/tools/lib" -rissue-contract -rjson -rdigest -e '
-    path, issue, repo, operation = ARGV
-    bytes = File.binread(path)
-    value = JSON.parse(bytes)
-    IOSTemplate::IssueContract.validate_snapshot!(value, issue: Integer(issue), repository: repo)
-    abort "sealed Issue contract is not canonical" unless bytes == IOSTemplate::IssueContract.canonical_json(value)
-    abort "required external operation is not declared: #{operation}" unless IOSTemplate::IssueContract.operation_declared?(value, operation)
-  ' "$contract" "$issue" "$repo" "$operation" || return 1
-  local state_file="$repo_root/.artifacts/issues/$issue/state.json"
-  if [[ -f "$state_file" && ! -L "$state_file" ]]; then
-    local expected_digest actual_digest
-    expected_digest=$(jq -er '.issueContract.digest | strings' "$state_file") || return 1
-    actual_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$contract")"
-    [[ "$expected_digest" == "$actual_digest" ]] || { echo 'sealed Issue contract digest differs from durable state' >&2; return 1; }
+  local repo_root=$1 repo=$2 issue=$3 operation=$4 allow_missing_state=${5:-0}
+  local arguments=(validate --repo-root "$repo_root" --repo "$repo" --issue "$issue" --operation "$operation")
+  [[ "$allow_missing_state" != 1 ]] || arguments+=(--allow-missing-state)
+  ruby "$repo_root/tools/lib/issue-contract-revision.rb" "${arguments[@]}" >/dev/null
+}
+
+workflow_require_live_body_matches_sealed() {
+  local repo_root=$1 repo=$2 issue=$3 issue_json=$4 allow_missing_state=${5:-0} document
+  document=$(mktemp "${TMPDIR:-/tmp}/ios-template-live-contract.XXXXXX") || return 1
+  if ! printf '%s' "$issue_json" > "$document"; then
+    rm -f "$document"
+    return 1
   fi
+  local status=0
+  local arguments=(validate-live --repo-root "$repo_root" --repo "$repo" --issue "$issue" --live-json "$document")
+  [[ "$allow_missing_state" != 1 ]] || arguments+=(--allow-missing-state)
+  ruby "$repo_root/tools/lib/issue-contract-revision.rb" "${arguments[@]}" >/dev/null || status=$?
+  rm -f "$document"
+  return "$status"
 }
 
 workflow_issue_has_sealed_identity() {
@@ -125,11 +127,13 @@ workflow_require_issue_operation() {
   local expected_from=${7:-} expected_to=${8:-} state
   case "$authorization" in
     sealed)
-      workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation"
+      workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation" || return 1
+      workflow_require_live_body_matches_sealed "$repo_root" "$repo" "$issue" "$issue_json"
       ;;
     pre-claim-read)
       if workflow_issue_has_sealed_identity "$repo_root" "$issue"; then
         workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation" || return 1
+        workflow_require_live_body_matches_sealed "$repo_root" "$repo" "$issue" "$issue_json"
         return
       fi
       state=$(printf '%s' "$issue_json" | ruby "$repo_root/tools/lib/workflow-json.rb" state-from-issue) || return 1
@@ -146,6 +150,7 @@ workflow_require_issue_operation() {
       [[ -n "$expected_from" && -n "$expected_to" ]] || return 1
       if workflow_issue_has_sealed_identity "$repo_root" "$issue"; then
         workflow_require_sealed_issue_operation "$repo_root" "$repo" "$issue" "$operation" || return 1
+        workflow_require_live_body_matches_sealed "$repo_root" "$repo" "$issue" "$issue_json" || return 1
         # Claim publishes the first remote state only after both the sealed
         # snapshot and the freshly fetched live Issue still authorize it.
         if [[ "$expected_from" == approved && "$expected_to" == claimed ]]; then

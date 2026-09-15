@@ -41,7 +41,7 @@ fi
 read_issue() {
   local document
   workflow_github_preflight "$repo_root" "$repo" "$issue" github.read_issue || { echo 'GitHub account preflight failed before Issue read' >&2; exit 1; }
-  document=$(gh issue view "$issue" --repo "$repo" --json title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
+  document=$(gh issue view "$issue" --repo "$repo" --json number,url,title,body,labels,comments) || { echo 'Issue could not be read' >&2; exit 1; }
   require_issue_operation "$document" github.read_issue || { echo 'Issue contract does not authorize Issue reads' >&2; exit 1; }
   printf '%s\n' "$document"
 }

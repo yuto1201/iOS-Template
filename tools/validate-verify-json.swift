@@ -493,7 +493,7 @@ func validateSharedArtifactState(
         "schemaVersion", "issue", "repository", "branch", "worktree", "baseSha", "primaryImplementer",
         "issueContract", "state", "previousState", "resumeState", "executor"
     ]
-    let optional: Set<String> = ["headSha", "pullRequest", "from", "to", "transitionedAt"]
+    let optional: Set<String> = ["headSha", "issueContractRevision", "pullRequest", "from", "to", "transitionedAt"]
     guard required.isSubset(of: Set(state.keys)), Set(state.keys).subtracting(required.union(optional)).isEmpty else {
         throw ValidationFailure("shared artifact state does not match schema v1")
     }
@@ -552,6 +552,20 @@ func validateSharedArtifactState(
     guard try requireString(reference["path"]!, at: "shared artifact state.issueContract.path") == ".artifacts/issues/\(issue)/issue-contract.json",
           try requireString(reference["digest"]!, at: "shared artifact state.issueContract.digest") == "sha256:\(sha256(data: contractData))" else {
         throw ValidationFailure("shared artifact state contract does not match durable artifact")
+    }
+    if let rawRevision = state["issueContractRevision"] {
+        let revision = try requireObject(rawRevision, at: "shared artifact state.issueContractRevision")
+        try requireExactKeys(revision, ["path", "digest", "revision"], at: "shared artifact state.issueContractRevision")
+        let number = try requireInteger(
+            revision["revision"]!, at: "shared artifact state.issueContractRevision.revision", minimum: 2
+        )
+        let expectedPath = String(
+            format: ".artifacts/issues/%d/issue-contract-revisions/records/revision-%04d.json", issue, number
+        )
+        guard try requireString(revision["path"]!, at: "shared artifact state.issueContractRevision.path") == expectedPath,
+              matches(try requireString(revision["digest"]!, at: "shared artifact state.issueContractRevision.digest"), regex: digestPattern) else {
+            throw ValidationFailure("shared artifact state contract revision reference is invalid")
+        }
     }
     if let head = state["headSha"] {
         guard try requireString(head, at: "shared artifact state.headSha") == currentHead else {

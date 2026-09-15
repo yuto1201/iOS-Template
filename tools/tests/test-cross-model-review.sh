@@ -69,6 +69,8 @@ export FAKE_REVIEWER_REQUIRE_CLOSED_STDIN=1
 export FAKE_GH_LOG="$workspace/gh.log"
 export FAKE_GH_LABELS_FILE="$workspace/labels.json"
 export FAKE_GH_COMMENTS_FILE="$workspace/comments.json"
+export FAKE_GH_TYPE_LABEL=type:feature
+export FAKE_GH_ISSUE_BODY="$workspace/issue-body.md"
 printf '["state:review-requested"]' > "$FAKE_GH_LABELS_FILE"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 fake_codex_home="$workspace/fake-codex-home"
@@ -88,14 +90,69 @@ assert_fails() {
   fi
 }
 
-ruby -rjson -e '
-  def canonical(value)
-    value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical(value.fetch(key))] } : value.is_a?(Array) ? value.map { |entry| canonical(entry) } : value
-  end
-  value = {"schemaVersion" => 1, "issue" => 424243, "repository" => "yuto1201/iOS-Template", "goal" => "Review automation", "specAnchors" => ["specs/acceptance.md#1"], "fetchedAt" => "2026-08-24T00:00:00Z", "dependencies" => [], "externalOperations" => ["github.read_issue", "github.update_issue"], "externalOperationDetailsDigest" => "sha256:6d9186ad00006772ce084a4e31fc52313470939dc1b4d978ed6fe10858a9be1f", "acceptanceCriteria" => [{"id" => "AC-1", "text" => "A result is tied to the reviewed Head"}]}
-  File.binwrite(ARGV.fetch(0), JSON.generate(canonical(value)))
-' "$artifact_issue/issue-contract.json"
+cat > "$FAKE_GH_ISSUE_BODY" <<'EOF'
+## Goal
+
+Review automation
+
+## In scope
+
+- Opposite-model review workflow.
+
+## Out of scope
+
+- Application behavior.
+
+## Acceptance criteria
+
+- AC-1: A result is tied to the reviewed Head
+
+## Spec anchors
+
+- [Acceptance](specs/acceptance.md#1)
+
+## Dependencies
+
+- None.
+
+## UI verification
+
+- Not applicable.
+
+## Delivery stage
+
+- Stage: harden
+- Time budget: 60 minutes
+- Reason: Exercise one narrow review automation concern.
+
+## Delivery profile
+
+- Profile: strict
+- Reason: Exercise the formal opposite-model review path.
+
+## External operations
+
+- Operation: github.read_issue
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+- Operation: github.update_issue
+- Service: GitHub
+- Environment: production
+- Executor: Codex
+- Approval required: no
+
+## User approvals
+
+- No additional approval.
+EOF
+ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+  --issue "$issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > "$artifact_issue/issue-contract.json"
 cp "$artifact_issue/issue-contract.json" "$workspace/default-contract.json"
+cp "$FAKE_GH_ISSUE_BODY" "$workspace/default-issue-body.md"
 contract_digest=$(digest "$artifact_issue/issue-contract.json")
 printf 'diff\n' > "$artifact_root/review.diff"
 printf 'image\n' > "$artifact_root/iphone-en.png"
@@ -152,22 +209,25 @@ refresh_contract_binding() {
 
 set_anchor() {
   review_anchor=$1
-  ANCHOR="$review_anchor" CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -e 'path = ENV.fetch("CONTRACT"); value = JSON.parse(File.read(path)); value["specAnchors"] = [ENV.fetch("ANCHOR")]; File.write(path, JSON.generate(value))'
+  [[ "$review_anchor" == specs/* ]] || review_anchor="specs/acceptance.md#$review_anchor"
+  ANCHOR="$review_anchor" BODY="$FAKE_GH_ISSUE_BODY" ruby -e 'path=ENV.fetch("BODY"); text=File.binread(path); text.sub!(/\]\(specs\/acceptance\.md#[^)]+\)/,"](#{ENV.fetch("ANCHOR")})") or abort; File.binwrite(path,text)'
+  ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+    --issue "$issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+    > "$artifact_issue/issue-contract.json"
   refresh_contract_binding
 }
 
 enable_grok_route() {
-  CONTRACT="$artifact_issue/issue-contract.json" ruby -rjson -e '
-    path = ENV.fetch("CONTRACT")
-    value = JSON.parse(File.binread(path))
-    value.fetch("acceptanceCriteria") << {"id" => "AC-2", "text" => "Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: Claude is unavailable and the user approved this exact Issue."}
-    File.binwrite(path, JSON.generate(value))
-  '
+  BODY="$FAKE_GH_ISSUE_BODY" ruby -e 'path=ENV.fetch("BODY"); text=File.binread(path); anchor="\n## Spec anchors\n"; addition="\n- AC-2: Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: Claude is unavailable and the user approved this exact Issue.\n"; text.sub!(anchor,addition+anchor) or abort; File.binwrite(path,text)'
+  ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+    --issue "$issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+    > "$artifact_issue/issue-contract.json"
   refresh_contract_binding
 }
 
 restore_default_contract() {
   cp "$workspace/default-contract.json" "$artifact_issue/issue-contract.json"
+  cp "$workspace/default-issue-body.md" "$FAKE_GH_ISSUE_BODY"
   review_anchor='specs/acceptance.md#1'
   refresh_contract_binding
 }
@@ -227,6 +287,7 @@ write_packet codex claude
 export FAKE_REVIEWER_MODE=approved
 write_result approved
 LOW_FINDING='[{"severity":"low","category":"correctness","file":"README.md","line":1,"title":"Nonblocking improvement","evidence":"fixture","requiredChange":"clarify later"}]' RESULT="$workspace/result.json" ruby -rjson -e 'path = ENV.fetch("RESULT"); value = JSON.parse(File.read(path)); value["findings"] = JSON.parse(ENV.fetch("LOW_FINDING")); File.write(path, JSON.generate(value))'
+reset_review_requested
 run_review
 assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["verdict"] == "approved" && value["headSha"] =~ /\A[0-9a-f]{40}\z/ && value["findings"] == [{"severity" => "low", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "Nonblocking improvement", "evidence" => "fixture", "requiredChange" => "clarify later"}]'
 ISSUE="$issue" HEAD="$head_sha" PACKET_DIGEST="$(digest "$artifact_root/review-packet.json")" REVIEW_DIGEST="$(digest "$artifact_root/review.json")" assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["schemaVersion"] == 1 && value["issue"] == Integer(ENV.fetch("ISSUE")) && value["headSha"] == ENV.fetch("HEAD") && value["primaryModel"] == "codex" && value["reviewerModel"] == "claude" && value["exitStatus"] == 0 && value["reviewPacketDigest"] == ENV.fetch("PACKET_DIGEST") && value["publishedReviewDigest"] == ENV.fetch("REVIEW_DIGEST") && value["validatedResultDigest"] == ENV.fetch("REVIEW_DIGEST")'

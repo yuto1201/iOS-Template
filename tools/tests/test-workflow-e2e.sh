@@ -4,6 +4,8 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" rg git jq ruby swift /usr/bin/ruby /usr/bin/swiftc
 
+[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+scope="${1:-full}"
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-workflow-e2e.XXXXXX")
 cleanup_fixture() {
@@ -400,6 +402,11 @@ publish_and_review "$head_one"
 (cd "$issue_worktree" && tools/premerge-gate.sh --repo "$repository" --issue "$issue" --head-sha "$head_one") >/dev/null
 (cd "$issue_worktree" && tools/render-pr-body.sh --issue "$issue" --head-sha "$head_one") >"$workspace/head-one-pr.md"
 rg -Fq 'Closes #42' "$workspace/head-one-pr.md" || fail 'renderer omitted the exact closing Issue'
+
+if [[ "$scope" == scoped ]]; then
+  echo 'PASS: scoped public-CLI Claim/Resume, exact-Head Verify/Review, and premerge workflow'
+  exit 0
+fi
 
 # A new commit is legal only after returning to in-progress. That transition
 # drops the old durable Head, so neither the old approved closure nor a new

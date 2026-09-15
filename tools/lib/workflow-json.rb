@@ -8,6 +8,7 @@ require 'open3'
 require 'uri'
 require_relative 'descriptor-files'
 require_relative 'issue-contract'
+require_relative 'issue-contract-revision'
 require_relative 'ownership'
 require_relative 'review-sealing'
 
@@ -159,7 +160,7 @@ end
 
 def full_state_record(value, issue, repository)
   required = %w[baseSha branch executor issue issueContract previousState primaryImplementer repository resumeState schemaVersion state worktree]
-  optional = %w[from headSha pullRequest to transitionedAt]
+  optional = %w[from headSha issueContractRevision pullRequest to transitionedAt]
   object(value, 'state record')
   fail_closed('state record has unknown or missing fields') unless (value.keys - required - optional).empty? && required.all? { |key| value.key?(key) }
   fail_closed('state record schemaVersion is invalid') unless value['schemaVersion'] == 1
@@ -173,6 +174,13 @@ def full_state_record(value, issue, repository)
   exact_keys(value['issueContract'], %w[digest path], 'state record issueContract')
   fail_closed('state record issue contract path is invalid') unless value.dig('issueContract', 'path') == ".artifacts/issues/#{issue}/issue-contract.json"
   fail_closed('state record issue contract digest is invalid') unless value.dig('issueContract', 'digest').is_a?(String) && value.dig('issueContract', 'digest').match?(/\Asha256:[0-9a-f]{64}\z/)
+  if value.key?('issueContractRevision')
+    begin
+      IOSTemplate::IssueContractRevision.validate_revision_reference!(value['issueContractRevision'], issue)
+    rescue IOSTemplate::IssueContractRevision::ValidationError => error
+      fail_closed("state record issue contract revision is invalid: #{error.message}")
+    end
+  end
   workflow_state(value['state'], 'state record state')
   workflow_state(value['previousState'], 'state record previousState', nullable: true)
   workflow_state(value['resumeState'], 'state record resumeState', nullable: true)
@@ -562,6 +570,8 @@ class ExternalOperationTransport
     canonical_json(sanitized)
   rescue IOSTemplate::IssueContract::ValidationError => error
     fail_closed("live Issue is invalid: #{error.failures.join('; ')}")
+  rescue IOSTemplate::IssueContractRevision::ValidationError => error
+    fail_closed("Issue contract revision is invalid: #{error.message}")
   rescue IOSTemplate::Ownership::ValidationError, IOSTemplate::ReviewSealing::SealError,
          SystemCallError, IOError, JSON::ParserError, KeyError => error
     fail_closed("external operation transport refused: #{error.message}")
@@ -691,6 +701,30 @@ class ExternalOperationTransport
     fail_closed('Issue state does not bind the exact contract bytes') unless
       state.dig('issueContract', 'path') == ".artifacts/issues/#{issue_number}/issue-contract.json" &&
       state.dig('issueContract', 'digest') == contract_digest
+    pending = begin
+      @artifact_snapshots.leaf(issue_dir, IOSTemplate::IssueContractRevision::PENDING_NAME, at: 'Issue contract revision pending')
+      true
+    rescue SystemCallError => error
+      raise unless error.errno == Errno::ENOENT::Errno
+      false
+    end
+    history = begin
+      @artifact_snapshots.directory(issue_dir, IOSTemplate::IssueContractRevision::REVISION_ROOT, at: 'Issue contract revisions')
+      true
+    rescue SystemCallError => error
+      raise unless error.errno == Errno::ENOENT::Errno
+      false
+    end
+    revision_loader = lambda do |path|
+      prefix = ".artifacts/"
+      fail_closed('revision reference is outside .artifacts') unless path.start_with?(prefix)
+      @artifact_snapshots.relative_leaf(path.delete_prefix(prefix), at: "Issue contract revision #{path}").bytes
+    end
+    IOSTemplate::IssueContractRevision.validate_active_bytes!(
+      state_bytes: state_leaf.bytes, contract_bytes: contract_leaf.bytes,
+      issue: issue_number, repository: repository, loader: revision_loader,
+      history_exists: history, pending_exists: pending
+    )
 
     issue_output, issue_status = Open3.capture2e(
       'gh', 'issue', 'view', issue_number.to_s, '--repo', repository,
@@ -707,7 +741,8 @@ class ExternalOperationTransport
     fail_closed('live Issue must have exactly one type label') unless types.length == 1
     parsed = IOSTemplate::IssueContract.parse(
       live.fetch('body'), issue_type: types.first.delete_prefix('type:'),
-      issue: issue_number, repository: repository, fetched_at: contract.fetch('fetchedAt')
+      issue: issue_number, repository: repository, fetched_at: contract.fetch('fetchedAt'),
+      allow_legacy_delivery_stage: !contract.key?('deliveryStage')
     )
     reconstructed = parsed.contract
     fail_closed('live Issue reconstruction differs from sealed contract bytes') unless

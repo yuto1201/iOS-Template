@@ -23,6 +23,10 @@ cp "$source_repo/tools/lib/run-repository-tests.rb" \
   "$source_repo/tools/lib/verification-scope.rb" \
   "$source_repo/tools/lib/delivery-stage.rb" \
   "$source_repo/tools/lib/review-sealing.rb" \
+  "$source_repo/tools/lib/descriptor-files.rb" \
+  "$source_repo/tools/lib/issue-contract.rb" \
+  "$source_repo/tools/lib/issue-contract-revision.rb" \
+  "$source_repo/tools/lib/ownership.rb" \
   "$source_repo/tools/lib/prepare-review-packet.rb" \
   "$repo/tools/lib/"
 cp "$source_repo/tools/prepare-review-packet.sh" "$repo/tools/"
@@ -67,6 +71,10 @@ mkdir -p "$head_dir"
 cat > "$contract" <<JSON
 {"schemaVersion":1,"issue":42,"repository":"example/repo","goal":"Evidence","specAnchors":["specs/test.md#evidence"],"acceptanceCriteria":[{"id":"AC-1","text":"Alpha passes"},{"id":"AC-2","text":"Beta passes"}],"dependencies":[],"externalOperations":[],"externalOperationDetailsDigest":"sha256:$(printf '0%.0s' {1..64})","fetchedAt":"2026-08-25T00:00:00Z","deliveryStage":{"name":"harden","timeBudgetMinutes":60,"reason":"Workflow-only fixture."},"deliveryProfile":{"name":"strict","reason":"Canonical workflow evidence."}}
 JSON
+ruby -I "$repo/tools/lib" -rjson -rissue-contract - "$contract" <<'RUBY'
+path = ARGV.fetch(0)
+File.binwrite(path, IOSTemplate::IssueContract.canonical_json(JSON.parse(File.binread(path))))
+RUBY
 
 output=$(cd "$repo" && tools/run-repository-tests.sh \
   --issue 42 --expected-base "$base_sha" \
@@ -97,6 +105,9 @@ EVIDENCE="$evidence" BASE="$base_sha" HEAD="$head_sha" OUTPUT="$output" ruby -rj
 '
 
 contract_digest="sha256:$(shasum -a 256 "$contract" | awk '{print $1}')"
+BASE="$base_sha" HEAD="$head_sha" DIGEST="$contract_digest" STATE="$repo/.artifacts/issues/42/state.json" ruby -I "$repo/tools/lib" -rjson -rissue-contract -rtime -e '
+  value={"schemaVersion"=>1,"issue"=>42,"repository"=>"example/repo","branch"=>"codex/42-evidence","worktree"=>".worktrees/42-evidence","baseSha"=>ENV.fetch("BASE"),"primaryImplementer"=>"codex","issueContract"=>{"path"=>".artifacts/issues/42/issue-contract.json","digest"=>ENV.fetch("DIGEST")},"state"=>"verify-passed","previousState"=>"in-progress","resumeState"=>nil,"executor"=>"codex","headSha"=>ENV.fetch("HEAD"),"from"=>"in-progress","to"=>"verify-passed","transitionedAt"=>Time.now.utc.iso8601(6)}
+  File.binwrite(ENV.fetch("STATE"),JSON.generate(IOSTemplate::IssueContract.canonical(value)))'
 cat > "$head_dir/verify.json" <<JSON
 {"schemaVersion":1,"status":"not-applicable","issue":42,"baseSha":"$base_sha","headSha":"$head_sha","issueContract":{"path":".artifacts/issues/42/issue-contract.json","digest":"$contract_digest"},"visualEvaluation":{"status":"not-applicable","findings":[]},"acceptanceEvidence":[{"id":"AC-1","status":"passed","evidence":["documents:alpha"]},{"id":"AC-2","status":"passed","evidence":["documents:beta"]}],"completedAt":"2026-08-25T00:02:00Z"}
 JSON
@@ -323,7 +334,7 @@ Dir.mktmpdir("repository-two-revisions-") do |scratch|
               "specAnchors"=>["specs/test.md#evidence"], "acceptanceCriteria"=>criteria,
               "dependencies"=>[], "externalOperations"=>[], "externalOperationDetailsDigest"=>"sha256:#{'0' * 64}",
               "fetchedAt"=>"2026-08-25T00:00:00Z"}
-  contract_bytes = JSON.generate(contract)
+  contract_bytes = IOSTemplate::IssueContract.canonical_json(contract)
   File.write(File.join(repo, ".artifacts/issues/42/issue-contract.json"), contract_bytes)
   mappings = {"AC-1"=>["tools/tests/test-beta.sh"], "AC-2"=>["tools/tests/test-alpha.sh", "tools/tests/test-beta.sh"]}
   base_mappings = {"AC-2"=>["tools/tests/test-alpha.sh", "tools/tests/test-baseline.sh"]}
@@ -391,6 +402,12 @@ Dir.mktmpdir("repository-two-revisions-") do |scratch|
     "issueContract"=>record.fetch("issueContract"), "visualEvaluation"=>{"status"=>"not-applicable", "findings"=>[]},
     "completedAt"=>Time.now.utc.iso8601(6)}
   File.write(File.join(directory, "verify.json"), JSON.generate(verify))
+  state = {"schemaVersion"=>1, "issue"=>42, "repository"=>"example/repo", "branch"=>"codex/42-evidence",
+    "worktree"=>".worktrees/42-evidence", "baseSha"=>base, "primaryImplementer"=>"codex",
+    "issueContract"=>record.fetch("issueContract"), "state"=>"verify-passed", "previousState"=>"in-progress",
+    "resumeState"=>nil, "executor"=>"codex", "headSha"=>head, "from"=>"in-progress", "to"=>"verify-passed",
+    "transitionedAt"=>Time.now.utc.iso8601(6)}
+  File.write(File.join(repo, ".artifacts/issues/42/state.json"), JSON.generate(IOSTemplate::IssueContract.canonical(state)))
   prepare = -> { IOSTemplate::PrepareReviewPacket.prepare(repo: repo, primary: "codex", issue: 42, base_sha: base, head_sha: head) }
   prepare.call
   packet_path = File.join(directory, "review-packet.json")
