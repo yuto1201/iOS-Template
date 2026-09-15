@@ -27,6 +27,7 @@ module IOSTemplate
     PACKET_V2_REVISION_TEST_KEYS = (PACKET_V2_REPOSITORY_TEST_KEYS + %w[repositoryTestsFile]).freeze
     PACKET_V2_PLANNED_TEST_KEYS = (PACKET_V2_REVISION_TEST_KEYS + %w[repositoryTestPlan repositoryTestPlanFile]).freeze
     PACKET_V2_APPLICABILITY_KEYS = %w[evidenceApplicability evidenceApplicabilityFile].freeze
+    PACKET_V2_DISPOSITION_KEYS = %w[releaseDisposition releaseDispositionFile].freeze
     RESULT_V1_KEYS = %w[
       schemaVersion issue reviewerModel baseSha headSha verifySha
       issueContractDigest verdict findings acceptanceAssessment reviewedAt
@@ -50,7 +51,9 @@ module IOSTemplate
                   diff_bytes: nil, image_bytes: nil, actual_diff_bytes: nil,
                   repository_tests_bytes: nil, repository_test_plan_bytes: nil, revision_context: nil,
                   evidence_applicability_bytes: nil, evidence_source_verify_bytes: nil,
-                  evidence_source_contract_bytes: nil, evidence_repo: nil)
+                  evidence_source_contract_bytes: nil, evidence_repo: nil,
+                  release_disposition_bytes: nil, release_disposition_failure_bytes: nil,
+                  release_disposition_repo: nil)
       reject("primary model is invalid") unless %w[codex claude].include?(primary)
       packet = parse_object(packet_bytes, "packet")
       result = parse_object(result_bytes, "result")
@@ -78,6 +81,19 @@ module IOSTemplate
         source_contract_bytes: evidence_source_contract_bytes, repo: evidence_repo
       )
       completed_at = [completed_at, applicability_at].compact.max if require_temporal_order
+      disposition = validate_release_disposition!(
+        packet: packet, contract: contract, issue: issue, base_sha: base_sha, head_sha: head_sha,
+        contract_bytes: contract_bytes, disposition_bytes: release_disposition_bytes,
+        failure_record_bytes: release_disposition_failure_bytes,
+        repo: release_disposition_repo || evidence_repo
+      )
+      if disposition
+        disposition_at = validate_release_disposition_sequence!(
+          disposition, verify: verify, repository_tests: packet["repositoryTests"],
+          applicability_at: applicability_at
+        )
+        completed_at = [completed_at, disposition_at].compact.max if require_temporal_order
+      end
 
       if schema == 2
         validate_evidence_scope!(contract, verify)
@@ -94,6 +110,9 @@ module IOSTemplate
         result, schema, packet_bytes, reviewer, issue, base_sha, head_sha,
         contract_digest, criteria, completed_at, now, require_temporal_order
       )
+      if disposition && result["verdict"] == "approved"
+        validate_release_readiness!(disposition)
+      end
       if packet["repositoryTests"] && (repository_test_scope(criteria) == "base-and-head" || packet["repositoryTests"]["schemaVersion"] == 3)
         validate_repository_assessments!(result, packet["repositoryTests"])
       end
@@ -141,6 +160,14 @@ module IOSTemplate
         references["evidenceApplicabilityFile"] = reference
         references["evidenceSourceVerify"] = applicability.fetch("sourceVerify")
         references["evidenceSourceContract"] = applicability.fetch("sourceContract")
+      end
+      if packet.key?("releaseDisposition")
+        record_bytes = release_disposition_canonical_bytes(packet.fetch("releaseDisposition"))
+        disposition = release_disposition_references!(record_bytes: record_bytes, issue: issue, head_sha: head_sha)
+        reference = reference!(packet["releaseDispositionFile"], "packet.releaseDispositionFile")
+        reject("packet.releaseDispositionFile is not the canonical record reference") unless reference == disposition.fetch("record")
+        references["releaseDispositionFile"] = reference
+        references["releaseDispositionFailures"] = disposition.fetch("failures")
       end
       references
     rescue EvidenceApplicability::ValidationError => error
@@ -493,8 +520,74 @@ module IOSTemplate
     def exact_packet_v2_keys!(packet)
       reject("packet must be an object") unless packet.is_a?(Hash)
       base = [PACKET_V2_KEYS, PACKET_V2_REPOSITORY_TEST_KEYS, PACKET_V2_REVISION_TEST_KEYS, PACKET_V2_PLANNED_TEST_KEYS]
-      allowed = (base + base.map { |keys| keys + PACKET_V2_APPLICABILITY_KEYS }).map(&:sort)
+      extras = [[], PACKET_V2_APPLICABILITY_KEYS, PACKET_V2_DISPOSITION_KEYS,
+                PACKET_V2_APPLICABILITY_KEYS + PACKET_V2_DISPOSITION_KEYS]
+      allowed = base.flat_map { |keys| extras.map { |extra| (keys + extra).sort } }
       reject("packet: unexpected or missing keys") unless allowed.include?(packet.keys.sort)
+    end
+
+    def validate_release_disposition!(packet:, contract:, issue:, base_sha:, head_sha:, contract_bytes:,
+                                      disposition_bytes: nil, failure_record_bytes: nil, repo: nil)
+      present = packet.key?("releaseDisposition") || packet.key?("releaseDispositionFile")
+      required = release_disposition_required?(contract)
+      reject("Phase 5 or 6 implementation requires a canonical release disposition") if required && !present
+      return nil unless present
+      require_relative "release-disposition"
+      reject("release disposition packet fields must appear together") unless
+        packet.key?("releaseDisposition") && packet.key?("releaseDispositionFile")
+      reject("held release disposition bytes are required") unless disposition_bytes.is_a?(String)
+      reject("held release disposition failure records are required") unless failure_record_bytes.is_a?(Hash)
+      reject("release disposition validation requires the physical repository") unless repo.is_a?(String)
+
+      reference = reference!(packet["releaseDispositionFile"], "packet.releaseDispositionFile")
+      expected_path = ".artifacts/issues/#{issue}/#{head_sha}/release-disposition.json"
+      reject("release disposition path is not canonical") unless reference["path"] == expected_path
+      reject("release disposition digest differs from held bytes") unless reference["digest"] == digest(disposition_bytes)
+      record = parse_object(disposition_bytes, "release disposition")
+      reject("packet release disposition differs from held bytes") unless packet["releaseDisposition"] == record
+      phase_record_bytes = ReleaseDisposition.phase_record_bytes!(repo: repo, base_sha: base_sha, contract: contract)
+      ReleaseDisposition.validate!(
+        record_bytes: disposition_bytes, contract_bytes: contract_bytes,
+        phase_record_bytes: phase_record_bytes, issue: issue, base_sha: base_sha, head_sha: head_sha,
+        failure_record_bytes: failure_record_bytes
+      )
+    rescue ReleaseDisposition::ValidationError => error
+      reject(error.message)
+    end
+
+    def validate_release_disposition_sequence!(disposition, verify:, repository_tests: nil, applicability_at: nil)
+      require_relative "release-disposition"
+      times = {"verify.completedAt" => verify.fetch("completedAt")}
+      times["repositoryTests.completedAt"] = repository_tests.fetch("completedAt") if repository_tests
+      times["evidenceApplicability.evaluatedAt"] = applicability_at.iso8601 if applicability_at
+      ReleaseDisposition.after_evidence!(disposition, times)
+    rescue ReleaseDisposition::ValidationError => error
+      reject(error.message)
+    end
+
+    def release_disposition_required?(contract)
+      DeliveryProfile.release_disposition_required?(contract)
+    rescue ArgumentError => error
+      reject(error.message)
+    end
+
+    def release_disposition_references!(record_bytes:, issue:, head_sha:)
+      require_relative "release-disposition"
+      ReleaseDisposition.references!(record_bytes: record_bytes, issue: issue, head_sha: head_sha)
+    rescue ReleaseDisposition::ValidationError => error
+      reject(error.message)
+    end
+
+    def release_disposition_canonical_bytes(record)
+      require_relative "release-disposition"
+      ReleaseDisposition.canonical_bytes(record)
+    end
+
+    def validate_release_readiness!(record)
+      require_relative "release-disposition"
+      ReleaseDisposition.release_ready!(record)
+    rescue ReleaseDisposition::ValidationError => error
+      reject(error.message)
     end
 
     def validate_evidence_applicability!(packet:, contract:, verify:, issue:, base_sha:, head_sha:,
@@ -647,6 +740,12 @@ module IOSTemplate
       images = packet.fetch("imageFiles").map { |entry| entry.is_a?(Hash) ? entry.fetch("path").delete_prefix(prefix) : entry }
       aliases = %w[verify.json review.diff review-packet.json]
       aliases << "evidence-applicability.json" if packet.key?("evidenceApplicability")
+      aliases << "release-disposition.json" if packet.key?("releaseDisposition")
+      if packet.key?("releaseDisposition")
+        aliases.concat(packet.fetch("releaseDisposition").fetch("executionDecisions", []).map do |decision|
+          File.basename(decision.fetch("failure").fetch("path"))
+        end)
+      end
       aliases << "repository-tests.json" if packet.key?("repositoryTests")
       aliases << "repository-test-plan.json" if packet.key?("repositoryTestPlan")
       return ["artifact", prefix + file] if (aliases + images).include?(file)
@@ -686,7 +785,7 @@ module IOSTemplate
         evidence.each { |reference| safe_reference!(reference, "result.acceptanceAssessment[#{index}].evidence") }
       end
       reviewed_at = iso8601!(result["reviewedAt"], "result.reviewedAt")
-      reject("result.reviewedAt must be after verify.completedAt") if require_temporal_order && reviewed_at <= completed_at
+      reject("result.reviewedAt must be after all review prerequisites") if require_temporal_order && reviewed_at <= completed_at
       reject("result.reviewedAt is implausibly in the future") if reviewed_at > now + 300
       if verdict == "approved"
         reject("approved result may contain only low-severity findings") unless findings.all? { |finding| finding["severity"] == "low" }

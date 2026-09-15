@@ -24,7 +24,7 @@ cp "$source_root/tools/run-repository-tests.sh" "$primary/tools/"
 cp "$source_root/tools/lib/descriptor-files.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-contract.rb" "$source_root/tools/lib/review-route.rb" \
   "$source_root/tools/lib/repository-test-plan.rb" "$source_root/tools/lib/evidence-applicability.rb" \
-  "$source_root/tools/lib/workflow-release-phase.rb" "$primary/tools/lib/"
+  "$source_root/tools/lib/release-disposition.rb" "$source_root/tools/lib/workflow-release-phase.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/review-sealing.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/delivery-profile.rb" "$primary/tools/lib/"
 cp "$source_root/tools/lib/delivery-stage.rb" "$primary/tools/lib/"

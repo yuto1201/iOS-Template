@@ -949,17 +949,6 @@ review_at=$(timestamp 1)
 transition_at=$(timestamp 2)
 preflight_at=$(timestamp 3)
 DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
-target_verify="$repo/.artifacts/issues/42/$head_sha/verify.json"
-cp "$target_verify" "$scratch/nonreuse-target-verify.saved"
-mv "$target_verify" "$target_verify.absent"
-assert_fails 'non-reuse review/premerge preparation rejects missing target verification' write_review_packet
-mv "$target_verify.absent" "$target_verify"
-ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["status"]="not-applicable"; File.binwrite(path,JSON.generate(value))' "$target_verify"
-assert_fails 'non-reuse review/premerge preparation rejects non-passed target verification' write_review_packet
-cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
-EVALUATED_AT="$applicability_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["completedAt"]=ENV.fetch("EVALUATED_AT"); File.binwrite(path,JSON.generate(value))' "$target_verify"
-assert_fails 'non-reuse review/premerge preparation rejects stale target verification' write_review_packet
-cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
 write_review_packet
 write_review
 review_record="$repo/.artifacts/issues/42/$head_sha/review.json"
@@ -1006,6 +995,10 @@ fi
 # Workflow-only strict changes use their sealed AC-mapped repository subset;
 # pre-merge must require that record while leaving application checks N/A.
 ruby -rjson -e 'path=ARGV.fetch(0); text=File.binread(path); criterion="AC-2: Repository-test scope: targeted; Reason: The fixture changes one manifest domain."; text.sub!("AC-2: Every acceptance criterion has one evidence mapping.",criterion) or abort; binding={"releaseIdentifier"=>"premerge-v1","revision"=>1,"phase"=>6,"scope"=>["workflow"],"workKind"=>"implementation","route"=>"standard","recordPath"=>"Config/releases/premerge-v1/phase-records/phase6.json","recordDigest"=>"sha256:#{"6"*64}","reason"=>"Validate Phase 6 premerge applicability."}; canonical=lambda{|value|value.is_a?(Hash) ? value.keys.sort.to_h{|key|[key,canonical.call(value.fetch(key))]} : value}; text.sub!(criterion,"#{criterion}\n- AC-3: Release-phase binding: #{JSON.generate(canonical.call(binding))}") or abort; marker="## External operations\n"; replacement="## Delivery stage\n\n- Stage: harden\n- Time budget: 60 minutes\n- Reason: Bounded workflow-only gate fixture.\n\n## Delivery profile\n\n- Profile: strict\n- Reason: Canonical workflow evidence changes.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
+# This fixture predates D-050 and remains focused on the independent D-049
+# applicability closure. Post-cutover disposition coverage lives in
+# test-release-disposition.sh.
+contract_at='2026-09-15T10:59:59Z'
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 (cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
@@ -1082,6 +1075,17 @@ review_at=$(timestamp 3)
 transition_at=$(timestamp 4)
 preflight_at=$(timestamp 5)
 DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["issueContract"]["digest"]=ENV.fetch("DIGEST"); value["transitionedAt"]=ENV.fetch("TRANSITIONED_AT"); File.write(path,JSON.generate(value))' "$repo/.artifacts/issues/42/state.json"
+target_verify="$repo/.artifacts/issues/42/$head_sha/verify.json"
+cp "$target_verify" "$scratch/nonreuse-target-verify.saved"
+mv "$target_verify" "$target_verify.absent"
+assert_fails 'non-reuse review/premerge preparation rejects missing target verification' write_review_packet
+mv "$target_verify.absent" "$target_verify"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["status"]="not-applicable"; File.binwrite(path,JSON.generate(value))' "$target_verify"
+assert_fails 'non-reuse review/premerge preparation rejects non-passed target verification' write_review_packet
+cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
+EVALUATED_AT="$applicability_at" ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["completedAt"]=ENV.fetch("EVALUATED_AT"); File.binwrite(path,JSON.generate(value))' "$target_verify"
+assert_fails 'non-reuse review/premerge preparation rejects stale target verification' write_review_packet
+cp "$scratch/nonreuse-target-verify.saved" "$target_verify"
 write_review_packet
 write_review
 review_record="$repo/.artifacts/issues/42/$head_sha/review.json"

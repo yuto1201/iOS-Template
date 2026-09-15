@@ -217,6 +217,8 @@ if schema == 1
   applicability_file = nil
   applicability_source_verify_file = nil
   applicability_source_contract_file = nil
+  disposition_file = nil
+  disposition_failure_files = {}
 else
   references = IOSTemplate::ReviewContract.strict_references!(packet_bytes: packet_file.fetch(:bytes), issue: issue, head_sha: head_sha)
   diff_file = artifact_file!(artifacts, references.fetch("diff").fetch("path"), head_root, "packet.diff.path", artifacts_identity)
@@ -227,6 +229,8 @@ else
   applicability_file = nil
   applicability_source_verify_file = nil
   applicability_source_contract_file = nil
+  disposition_file = nil
+  disposition_failure_files = {}
   if references.key?("evidenceApplicabilityFile")
     applicability_file = artifact_file!(
       artifacts, references.fetch("evidenceApplicabilityFile").fetch("path"), head_root,
@@ -247,6 +251,18 @@ else
       "evidence applicability source contract", artifacts_identity
     )
   end
+  if references.key?("releaseDispositionFile")
+    disposition_file = artifact_file!(
+      artifacts, references.fetch("releaseDispositionFile").fetch("path"), head_root,
+      "packet.releaseDispositionFile", artifacts_identity
+    )
+    disposition_failure_files = references.fetch("releaseDispositionFailures").to_h do |reference|
+      [reference.fetch("path"), artifact_file!(
+        artifacts, reference.fetch("path"), head_root,
+        "release disposition failure", artifacts_identity
+      )]
+    end
+  end
 end
 verify = json_file!(verify_file, "verify file")
 reject("verify file must be an object") unless verify.is_a?(Hash)
@@ -262,7 +278,7 @@ begin
   plan_policy = IOSTemplate::RepositoryTestPlan.policy(contract)
   planned_repository_tests = plan_policy&.fetch("planRequired")
   repository_closure_required = IOSTemplate::ReviewContract.repository_test_scope(criteria) == "base-and-head" || planned_repository_tests
-  if repository_closure_required || applicability_file
+  if repository_closure_required || applicability_file || disposition_file || IOSTemplate::ReviewContract.release_disposition_required?(contract)
     repository_snapshot = IOSTemplate::ReviewSealing::SnapshotSet.new(artifacts, at: "artifact root", expected_identity: artifacts_identity)
     # Keep the contract/packet and record together until this invocation exits.
     held_packet = repository_snapshot.relative_leaf("issues/#{issue}/#{head_sha}/review-packet.json", at: "review packet")
@@ -301,6 +317,18 @@ begin
       applicability_source_verify_file = {path: applicability_source_verify_file.fetch(:path), bytes: held_source_verify.bytes}
       applicability_source_contract_file = {path: applicability_source_contract_file.fetch(:path), bytes: held_source_contract.bytes}
     end
+    if disposition_file
+      held_disposition = repository_snapshot.relative_leaf(
+        "issues/#{issue}/#{head_sha}/release-disposition.json", at: "release disposition"
+      )
+      reject("release disposition changed before validation") unless held_disposition.bytes == disposition_file.fetch(:bytes)
+      disposition_file = {path: disposition_file.fetch(:path), bytes: held_disposition.bytes}
+      disposition_failure_files = disposition_failure_files.to_h do |path, file|
+        held_failure = repository_snapshot.relative_leaf(path.delete_prefix(".artifacts/"), at: "release disposition failure")
+        reject("release disposition failure changed before validation") unless held_failure.bytes == file.fetch(:bytes)
+        [path, held_failure.bytes]
+      end
+    end
     at_exit { repository_snapshot.close }
   end
   IOSTemplate::ReviewContract.validate_contract!(packet, contract, contract_digest, issue)
@@ -317,6 +345,11 @@ begin
     applicability_bytes: applicability_file&.fetch(:bytes),
     source_verify_bytes: applicability_source_verify_file&.fetch(:bytes),
     source_contract_bytes: applicability_source_contract_file&.fetch(:bytes), repo: repo
+  )
+  IOSTemplate::ReviewContract.validate_release_disposition!(
+    packet: packet, contract: contract, issue: issue, base_sha: base_sha, head_sha: head_sha,
+    contract_bytes: contract_file.fetch(:bytes), disposition_bytes: disposition_file&.fetch(:bytes),
+    failure_record_bytes: disposition_failure_files, repo: repo
   )
   if schema == 2
     IOSTemplate::ReviewContract.validate_strict_closure!(
@@ -431,7 +464,10 @@ begin
     evidence_applicability_bytes: applicability_file&.fetch(:bytes),
     evidence_source_verify_bytes: applicability_source_verify_file&.fetch(:bytes),
     evidence_source_contract_bytes: applicability_source_contract_file&.fetch(:bytes),
-    evidence_repo: repo
+    evidence_repo: repo,
+    release_disposition_bytes: disposition_file&.fetch(:bytes),
+    release_disposition_failure_bytes: disposition_failure_files,
+    release_disposition_repo: repo
   )
 rescue IOSTemplate::ReviewContract::ValidationError, IOSTemplate::RepositoryTestPlan::PlanError => error
   reject(error.message)

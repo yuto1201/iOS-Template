@@ -6,13 +6,15 @@
 
 ## 2. Review packet
 
-`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。`repository-tests.json` が同じIssue/Headに存在する場合は、runner bytes、実行時刻、AC別対応を検証し、`repositoryTests` としてpacket内へ値ごと封印します。D-037 plan-required contractではcanonical `repository-test-plan.json`をimmutable Git入力から再計算し、その値／path／digestとschema v3 repository evidenceを同時に封印します。Phase 6 `implementation`ではcanonical `evidence-applicability.json`を検証し、値とpath／digestを`evidenceApplicability`／`evidenceApplicabilityFile`として対で封印し、Phase 5元証拠／contractの参照もreview closureへ含めます。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。liveな`UI verification`本文はIssue contractにもreview packetにも含めません。
+`tools/prepare-review-packet.sh` は、信頼済みBaseと現在のHeadから決定論的なactual Git diffを生成し、canonical verify.jsonとそのvisual evidenceをdescriptor-boundで読み、一つのschema v2 packetへ封印します。`repository-tests.json` が同じIssue/Headに存在する場合は、runner bytes、実行時刻、AC別対応を検証し、`repositoryTests` としてpacket内へ値ごと封印します。D-037 plan-required contractではcanonical `repository-test-plan.json`をimmutable Git入力から再計算し、その値／path／digestとschema v3 repository evidenceを同時に封印します。Phase 6 `implementation`ではcanonical `evidence-applicability.json`を検証し、値とpath／digestを`evidenceApplicability`／`evidenceApplicabilityFile`として対で封印し、Phase 5元証拠／contractの参照もreview closureへ含めます。D-050 cutover以後のPhase 5／6 `implementation`ではcanonical `release-disposition.json`の値とpath／digestを`releaseDisposition`／`releaseDispositionFile`として対で封印し、参照するfailure recordもreview closureへ含めます。Acceptance criteriaとspec anchorsはIssue contractから読み、すべてexact bytesのdigestで固定します。liveな`UI verification`本文はIssue contractにもreview packetにも含めません。
 
 UI-direction compatibility is determined only from the sealed Issue contract. A declaration candidate is any existing acceptance-criterion text that begins with the exact `UI-direction route:` prefix, immediately after its `AC-*:` ID. It is valid only in the exact form `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`, where `<route>` is exactly `comparison`, `explicit-skip`, `confirmed-direction reuse`, `bounded direction-neutral`, or `not-applicable`; route-specific facts may follow Reason. Incidental route words outside that prefix, including prose that lists every route, do not create a candidate. Compare `fetchedAt` as a UTC instant with `2026-09-06T00:31:41Z`: an earlier contract is pre-D-030 legacy only when it has zero candidates, so the packet/reviewer must not infer a route, demand retroactive HTML or a route declaration, or modify/reseal that contract; review its original sealed AC, spec anchors, Dependencies, and current-Head evidence. If an earlier contract has one or more candidates, validate it normally and reject unless exactly one candidate is fully valid; malformed, unknown-route, empty Scope/Reason, and multiple-candidate cases are not legacy. A contract at or after the cutoff has the same exactly-one and validity requirements, including rejection when no candidate exists. The packet preserves the Issue-contract path and digest needed for that classification and never substitutes Issue number, update time, file mtime, or live UI verification. For non-legacy contracts, formal reviewers identify the route only from the valid AC-text declaration and validate its Scope, Reason, and route-specific facts using the packet-bound Issue contract's Goal, Acceptance criteria, Spec anchors, Dependencies, linked confirmed spec/Decision, current-Head diff, and evidence. schema v1は通常レビューの既存成果物を読む場合に限る互換形式で、pre-merge gateは受理しません。
 
 Phase-aware Issueでは、sealed Acceptance criterionのexact `Release-phase binding: <canonical JSON>`宣言がrelease identifier、revision、phase、scope、work kind、route、versioned record pathとdigest、reasonを固定します。reviewerはBase SHAのそのrecord blobとcontract bindingを照合し、依存implementationについて前Phase出口が満たされていること、Phase 3から4への移行にuser authorityがあること、major change後は`reopenFromPhase`以降だけが無効化されていることを確認します。`research`／`draft`／理由付き`independent`は実装完了の証拠へ昇格させません。`existing-app`／`emergency`は同一revision/scopeのreuse eventと適用可能なfoundation理由を必要とします。宣言を持たないlegacy contractへrecordを推測・追加しません。
 
 Phase 6 evidence applicabilityを持つpacketでは、reviewerはPhase 5 full application source proof、source／target contract、release／revision／scope、Release-phase Claim gateで検証済みのbindingが封印するphase-record path／digest参照、source..target Git diff、candidate artifact／configuration／SDK／signing context、全changed pathのimpact／dependency、decision、評価時刻を同じrecordから確認します。適用validatorがphase-record blobを再読したとは扱いません。`reuse`はexact同一条件だけを支持し、`targeted-reverify`／`expanded-verification`は評価後のtarget passed evidenceがなければunsupportedとします。review approvalはcurrent verifyとapplicability評価の遅い方より後でなければなりません。`evidence-applicability.json`はfinding／assessmentのcanonical aliasとして使えますが、Phase 5での実行をPhase 6再実行と記述しません。
+
+release dispositionを持つpacketでは、reviewerはcandidate Issue／Base／Head／contract、release identifier／revision／phase／scope、Base phase-record参照、entry typeごとの必須field、accepted defectのsame-candidate user approvalと期限、全failure recordのpath／digestと停止後判断を確認します。accepted、deferred、omitted、unverified、failed／timeout、review low findingを同一statusへ畳みません。data loss、secret leak、billing、重大なmoney／date-time calculation、primary-flow crash、authentication、privacy、legal、unknownのaccept、critical／high／unknown blockerのdefer、`wait`中のapproved verdictを支持しません。review approvalはcurrent verify、applicability評価、disposition記録の最も遅い時刻より後でなければなりません。
 
 Opposite-review routing is also derived only from the sealed Acceptance criteria. With no declaration, the compatible defaults remain Codex primary→`claude` and Claude primary→`codex`. The only exception is exactly one criterion whose text begins with exact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`. It selects `cursor-grok-4.6-xhigh` only for a Codex primary. Duplicate, malformed, incomplete, different-primary/model/approval declarations are rejected; an incidental mention does not select Grok. There is no runtime flag, silent fallback, Claude-primary Grok route, or self-approval. Existing sealed contracts without the declaration retain their default pair and bytes.
 
@@ -74,7 +76,7 @@ Opposite-review routing is also derived only from the sealed Acceptance criteria
 }
 ```
 
-例のパスと値は旧schema v1形式を示します。実際のIssue、仕様、SHA、画像を使用します。`repositoryTests` は同じHeadのcanonical `repository-tests.json` がある場合だけ存在します。plan-required packetは追加で`repositoryTestsFile`、`repositoryTestPlan`、`repositoryTestPlanFile`を持ち、reviewerはrequested／resolved scope、changed paths、exact test list、AC別mappingを確認します。
+例のパスと値は旧schema v1形式を示します。実際のIssue、仕様、SHA、画像を使用します。`repositoryTests` は同じHeadのcanonical `repository-tests.json` がある場合だけ存在します。plan-required packetは追加で`repositoryTestsFile`、`repositoryTestPlan`、`repositoryTestPlanFile`を持ち、reviewerはrequested／resolved scope、changed paths、exact test list、AC別mappingを確認します。D-050対象packetは追加で`releaseDisposition`と`releaseDispositionFile`を必ず対で持ち、片方だけ、別Head path、embedded値とheld bytesの不一致、参照failureの欠落を拒否します。D-049の`evidenceApplicability` pairとは独立です。
 
 ## 3. Reviewer questions
 
@@ -97,6 +99,10 @@ Claim後に正式revisionされたIssueでは、packet producerがdurable state�
 改訂後はdurable stateから旧`headSha`が外れていることを確認し、新Headでverify、packet、opposite-model result／receiptを新しく作ります。`review-finding`を次revisionのauthorityに使う場合は、同一Issue、改訂前contract digest、改訂時source Headのcanonical `changes-requested` result／receiptにあるblocking findingを`.artifacts/issues/ISSUE/HEAD/review.json#findings/INDEX`で参照し、revision reasonを`requiredChange`とexact一致させます。reviewer自身のfindingがGoal、MVP、stage、profile、scope、外部authorityの置換を必要とする場合は、同一Issue revisionを要求せず別Issueと現在ユーザー判断へ戻します。
 
 application Verificationは単一`unitTestIdentifier`だけを許可します。複数のUnit確認は一つの統合XCTestに集約するか、許可された同一ID・同一順序のAcceptance criteria本文／mapping revisionとして表現します。packet reviewerは非正規な複数identifier、CLI差し替え、旧contractのtest mappingを支持しません。
+
+### Release disposition-aware review
+
+`strict_references!`はpacketのcanonical `releaseDispositionFile`と全`releaseDispositionFailures`を返します。packet-only validation、review result publication、PR rendering、pre-mergeの各descriptor ownerは、recordとfailure bytesを保持したままBase commitのphase-record blobとsealed contractへ再照合します。review result schemaとreceipt schemaは変更せず、dispositionを含むexact packet digestへ束縛します。`release-disposition.json`と参照failure filenameはfindingのcanonical artifact aliasとして使えますが、low findingをaccepted defect approvalにしたりfailureをpassed evidenceにしたりしません。
 
 レビューでは次の順に確認します。
 
@@ -164,7 +170,8 @@ primary physical store; no other symlink is followed. Absolute paths, traversal,
 other Issues/Heads, nested symlinks, leaf symlinks and hardlinks are rejected.
 
 The unprefixed names `verify.json`, `review.diff`, `review-packet.json`,
-`repository-tests.json`, `repository-test-plan.json` (when included in the packet), and the packet's image
+`repository-tests.json`, `repository-test-plan.json`, `release-disposition.json`, and its referenced
+`repository-test-failure-attempt-N.json` records (when included in the packet), and the packet's image
 paths are relative to the current packet's Issue/Head directory. These explicit
 artifact aliases take precedence over same-named source files. All other paths
 are source-relative; a missing source does not trigger a search in another root.

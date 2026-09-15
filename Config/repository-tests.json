@@ -178,6 +178,23 @@
       ]
     },
     {
+      "domain": "release-disposition",
+      "paths": [
+        "tools/lib/delivery-profile.rb",
+        "tools/lib/premerge-gate.rb",
+        "tools/lib/prepare-review-packet.rb",
+        "tools/lib/publish-review-result.rb",
+        "tools/lib/release-disposition-cli.rb",
+        "tools/lib/release-disposition.rb",
+        "tools/lib/release-verification.rb",
+        "tools/lib/review-contract.rb",
+        "tools/record-release-disposition.sh",
+        "tools/render-pr-body.sh",
+        "tools/validate-review-result.sh"
+      ],
+      "prefixes": []
+    },
+    {
       "domain": "repository-testing",
       "paths": [
         "Config/repository-tests.json",
@@ -265,7 +282,7 @@
     {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-appstore-package.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-screenshots.sh", "domains": ["appstore"]},
-    {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore", "evidence-applicability"]},
+    {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore", "evidence-applicability", "release-disposition"]},
     {"path": "tools/tests/test-bounded-command.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-recovery.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-resume.sh", "domains": ["workflow-state"]},
@@ -273,7 +290,7 @@
     {"path": "tools/tests/test-cross-model-review.sh", "domains": ["descriptor-files", "review-contract"]},
     {"path": "tools/tests/test-delivery-stages.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-evidence-applicability.sh", "domains": ["evidence-applicability"]},
+    {"path": "tools/tests/test-evidence-applicability.sh", "domains": ["evidence-applicability", "release-disposition"]},
     {"path": "tools/tests/test-foundation.sh", "domains": ["foundation"]},
     {"path": "tools/tests/test-ios-evidence.sh", "domains": ["ios-evidence-exhaustive"]},
     {"path": "tools/tests/test-ios-runner-allocation.sh", "domains": ["ios-verification"]},
@@ -303,6 +320,7 @@
     {"path": "tools/tests/test-prerequisites.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-provider-ownership.sh", "domains": ["authority-policy", "provider-security"]},
     {"path": "tools/tests/test-provider-preflight.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-release-disposition.sh", "domains": ["release-disposition"]},
     {"path": "tools/tests/test-render-pr-body.sh", "domains": ["descriptor-files", "review-contract"]},
     {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["repository-testing"]},

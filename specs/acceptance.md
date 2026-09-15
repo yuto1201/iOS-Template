@@ -1,7 +1,7 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 2.9
+Version: 3.0
 Date: 2026-09-15
 
 ## 1. テンプレート完成条件
@@ -83,6 +83,12 @@ stage未導入のClaim済みIssueはcanonical contractを変更せず、旧profi
 
 既知不具合、テスト省略、未検証を別々に残す。非blocking残件の許容には対象release、影響、回避策、修正費用、承認者、追跡Issue、再評価時点が必要である。データ消失、秘密漏洩、誤課金、重大計算誤り、主要導線crash、認証／privacy／法務の必須条件違反が一つでもあればPhase 5の公開可判定を通さない。
 
+D-050 cutover `2026-09-15T11:00:00Z`以後に封印されたPhase 5／6 `implementation` contractは、current candidateの`release-disposition.json`をreview packet、PR本文、pre-merge、release preflightのすべてで要求する。recordはrelease identifier／revision／phase／scope／Base phase recordとIssue／Base／Head／Issue contractを固定し、`accepted-defect`、`deferred-defect`、`omitted-test`、`unverified`を別entryとして保持する。空配列は残件なしの明示であり、record欠落から残件なしを推測しない。cutover前のcontractは元bytesのまま従来gateを使い、recordを遡及要求しない。
+
+`accepted-defect`はsafe classificationかつ`low`だけを許し、影響・回避策・修正費用、同じcandidateに束縛した期限内のuser approval、follow-up Issue、再評価条件がすべて必要である。`deferred-defect`は承認の代替ではない。critical／high／unknownまたは公開blocker分類を延期したrecord、`wait`中の停止後判断はreview承認、pre-merge、release preflightを通さない。reviewerのlow findingとproduct defect disposition、Phase 5→6 evidence applicabilityとrelease dispositionを相互に合成しない。
+
+D-050対象candidateはDelivery profileの通常経路にかかわらずcurrent-Headの正式な反対モデルreviewを要求し、review packetを持たない直接承認を許可しない。
+
 Phase 5から6へ進む`implementation`は、Phase 5のpassed full verificationとPhase 6候補の適用可能性を、Phase 6のIssue／Base／Headごとのimmutable `evidence-applicability.json`へ記録する。release identifier、revision、scope、source／target phase record、元証拠とcontractのpath／digest、artifact／configuration／SDK／signing context、source..target Git diff、全changed pathの影響分類・依存関係・理由、判定時刻を固定し、review packet、PR本文、pre-merge、提出前preflightが同じrecordを検証する。
 
 `reuse`はcandidate Headと全contextがexact一致し、差分、unknown／missing dependency、scope拡張がない場合だけ許可する。Head、contextまたは影響pathが変われば`targeted-reverify`、影響不明、dependency欠落またはscope拡張なら`expanded-verification`とし、判定後に必要範囲のpassed検証を取得する。設定、signing、SDKだけを一律に影響なしとせず、旧Head証拠を現Headの実行結果へ付け替えない。提出時固有のpackage、privacy、legal、権限、provider readbackは再利用対象外とし毎回確認する。
@@ -156,13 +162,14 @@ AI検証用deviceは必要時作成・最終使用後削除とし、同じMac全
 - 認証情報、個人情報、設定外account識別子を証拠へ含めない。
 - 外部操作の成功は実応答から確認し、推測で記録しない。
 - ユーザー所有fileを削除／上書きせず、Issue Scope外へ実装を広げない。
-- Release PhaseとIssueのDelivery stageを混同せず、Phase 5〜6の証拠を再利用するときも同一candidate／Head／configへの適用可能性を確認する。#86の実装前は再利用候補をcanonical成功へ昇格しない。
+- Release PhaseとIssueのDelivery stageを混同せず、Phase 5〜6の証拠を再利用するときも同一candidate／Head／configへの適用可能性を確認する。D-049の適用recordだけからD-050の残件判断を合成しない。
 
 ## 6. Timeout、失敗、再試行
 
 - `xcodebuild`、Unit Test、UI Test、Simulator／Swift操作は有限timeoutで実行する。
 - timeout時は当該呼び出しのprocess groupだけを停止し、現在attemptが所有するSimulatorとlockだけを回収する。別Issue、別repository、ユーザーのXcode／Simulatorへglobal kill／shutdownを行わない。
 - failure recordへ停止stage、elapsed、timeoutを残し、成功形式の`verify.json`を生成しない。
+- D-050対象のfailure recordは同一Issue／Headのrelease dispositionからexact path／digestで一度だけ参照し、`shrink`、`split`、`defer`、`wait`のいずれか、理由、actor／authority、follow-upまたは再開条件、判断時刻を記録する。failure、timeout、未実行testはその後もpassed testとして数えない。
 - 同一Issue／Head／scopeの失敗・timeout後は直接再実行を拒否する。選択済み対象testの診断成功後に限り1回だけ再試行し、2回目も同じ原因で失敗したら停止する。
 - 再実行は対象Test、関連回帰Test、stage標準検証、release完全検証の順に広げる。
 - 正式証拠へ別attemptの部分結果を混ぜないが、診断用の成功結果は修正判断に利用する。

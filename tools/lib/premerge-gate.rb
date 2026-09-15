@@ -176,6 +176,8 @@ begin
   applicability_file = nil
   applicability_source_verify_file = nil
   applicability_source_contract_file = nil
+  disposition_file = nil
+  disposition_failure_files = {}
   revision_context = nil
   image_files = {}
   if review_required
@@ -212,6 +214,19 @@ begin
         review_references.fetch("evidenceSourceContract").fetch("path").delete_prefix(".artifacts/"),
         "Phase 5 source contract"
       )
+    end
+    if review_references.key?("releaseDispositionFile")
+      disposition_file = artifact_snapshots.relative_leaf(
+        artifacts,
+        review_references.fetch("releaseDispositionFile").fetch("path").delete_prefix(".artifacts/"),
+        "release-disposition.json"
+      )
+      review_references.fetch("releaseDispositionFailures").each do |reference|
+        disposition_failure_files[reference.fetch("path")] = artifact_snapshots.relative_leaf(
+          artifacts, reference.fetch("path").delete_prefix(".artifacts/"),
+          "release disposition failure #{reference.fetch('path')}"
+        )
+      end
     end
     if IOSTemplate::ReviewContract.repository_test_scope(contract.fetch("acceptanceCriteria")) == "base-and-head" || repository_test_plan_file
       revision_context = IOSTemplate::ReviewContract.repository_revision_context(repo: root, base_sha: base_sha, head_sha: head_sha)
@@ -350,7 +365,10 @@ begin
       evidence_applicability_bytes: applicability_file&.bytes,
       evidence_source_verify_bytes: applicability_source_verify_file&.bytes,
       evidence_source_contract_bytes: applicability_source_contract_file&.bytes,
-      evidence_repo: root
+      evidence_repo: root,
+      release_disposition_bytes: disposition_file&.bytes,
+      release_disposition_failure_bytes: disposition_failure_files.transform_values(&:bytes),
+      release_disposition_repo: root
     )
     refuse("opposite-model review is not approved") unless review_values.fetch("result").fetch("verdict") == "approved"
     IOSTemplate::ReviewReceipt.validate!(

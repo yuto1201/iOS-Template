@@ -50,7 +50,7 @@ contract = lambda do |issue, phase, path, byte, scope|
       {"id" => "AC-2", "text" => phase_binding.call(phase, path, byte, scope)}
     ],
     "dependencies" => [], "externalOperations" => [],
-    "externalOperationDetailsDigest" => "sha256:#{"0" * 64}", "fetchedAt" => (Time.now.utc - 120).iso8601
+    "externalOperationDetailsDigest" => "sha256:#{"0" * 64}", "fetchedAt" => "2026-09-15T10:59:59Z"
   }
 end
 source_contract_value = contract.call(

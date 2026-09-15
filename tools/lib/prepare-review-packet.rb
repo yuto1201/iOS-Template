@@ -39,6 +39,7 @@ module IOSTemplate
         repository_tests_file = existing_leaf(snapshots, head_directory, "repository-tests.json", "repository-tests.json")
         repository_test_plan_file = existing_leaf(snapshots, head_directory, "repository-test-plan.json", "repository-test-plan.json")
         applicability_file = existing_leaf(snapshots, head_directory, "evidence-applicability.json", "evidence-applicability.json")
+        disposition_file = existing_leaf(snapshots, head_directory, "release-disposition.json", "release-disposition.json")
         contract = parse_object(contract_file.bytes, "issue contract")
         verify = parse_object(verify_file.bytes, "verify.json")
         contract_digest = ReviewContract.digest(contract_file.bytes)
@@ -99,6 +100,23 @@ module IOSTemplate
           reject("Phase 6 implementation requires evidence-applicability.json before review")
         end
 
+        disposition = nil
+        disposition_failure_files = {}
+        if disposition_file
+          disposition = parse_object(disposition_file.bytes, "release-disposition.json")
+          disposition_references = ReviewContract.release_disposition_references!(
+            record_bytes: disposition_file.bytes, issue: issue, head_sha: head_sha
+          )
+          disposition_references.fetch("failures").each do |reference|
+            disposition_failure_files[reference.fetch("path")] = snapshots.relative_leaf(
+              reference.fetch("path").delete_prefix(".artifacts/"),
+              at: "release disposition failure #{reference.fetch('path')}"
+            )
+          end
+        elsif ReviewContract.release_disposition_required?(contract)
+          reject("Phase 5 or 6 implementation requires release-disposition.json before review")
+        end
+
         image_references = ReviewContract.verified_image_references!(verify, issue: issue, head_sha: head_sha)
         image_files = image_references.map do |reference|
           relative = reference.fetch("path").delete_prefix(".artifacts/")
@@ -139,12 +157,19 @@ module IOSTemplate
             "digest" => ReviewContract.digest(applicability_file.bytes)
           }
         end
+        if disposition_file
+          packet["releaseDisposition"] = disposition
+          packet["releaseDispositionFile"] = {
+            "path" => "#{prefix}release-disposition.json",
+            "digest" => ReviewContract.digest(disposition_file.bytes)
+          }
+        end
         ReviewContract.validate_repository_closure!(packet: packet, contract: contract, contract_digest: contract_digest,
           issue: issue, base_sha: base_sha, head_sha: head_sha,
           repository_tests_bytes: repository_tests_file&.bytes, repository_test_plan_bytes: repository_test_plan_file&.bytes,
           revision_context: revision_context,
           workflow_required: verify["changeClassification"] == "workflow-only")
-        ReviewContract.validate_evidence_applicability!(
+        applicability_at = ReviewContract.validate_evidence_applicability!(
           packet: packet, contract: contract, verify: verify, issue: issue, base_sha: base_sha, head_sha: head_sha,
           target_contract_bytes: contract_file.bytes,
           applicability_bytes: applicability_file&.bytes,
@@ -152,6 +177,15 @@ module IOSTemplate
           source_contract_bytes: applicability_source_contract_file&.bytes,
           repo: repo
         )
+        validated_disposition = ReviewContract.validate_release_disposition!(
+          packet: packet, contract: contract, issue: issue, base_sha: base_sha, head_sha: head_sha,
+          contract_bytes: contract_file.bytes, disposition_bytes: disposition_file&.bytes,
+          failure_record_bytes: disposition_failure_files.transform_values(&:bytes), repo: repo
+        )
+        ReviewContract.validate_release_disposition_sequence!(
+          validated_disposition, verify: verify, repository_tests: repository_tests,
+          applicability_at: applicability_at
+        ) if validated_disposition
         packet_bytes = JSON.generate(packet).b
 
         validate_git_identity!(repo, base_sha, head_sha)
@@ -195,6 +229,14 @@ module IOSTemplate
             "path" => "#{prefix}evidence-applicability.json",
             "digest" => ReviewContract.digest(applicability_file.bytes),
             "decision" => applicability.dig("decision", "action")
+          }
+        end
+        if disposition_file
+          result["releaseDisposition"] = {
+            "path" => "#{prefix}release-disposition.json",
+            "digest" => ReviewContract.digest(disposition_file.bytes),
+            "entries" => disposition.fetch("entries").length,
+            "executionDecisions" => disposition.fetch("executionDecisions").length
           }
         end
         result
