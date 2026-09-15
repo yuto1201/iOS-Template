@@ -49,6 +49,7 @@ module DescriptorFiles
     fd = OPENAT.call(parent.fileno, name, File::RDONLY | File::NOFOLLOW, 0)
     system_error!("openat regular file") if fd.negative?
     io = File.for_fd(fd, autoclose: true)
+    io.binmode
     stat = io.stat
     raise IOError, "descriptor file is not an owned single-link regular file" unless stat.file? && stat.nlink == 1
     [io, stat]
@@ -99,7 +100,7 @@ module DescriptorFiles
     result = RENAMEATX.call(directory.fileno, temporary, directory.fileno, destination, RENAME_SWAP)
     system_error!("renameatx_np exchange") unless result.zero?
     swapped_bytes, swapped_stat = read_regular_at(directory, temporary)
-    return if swapped_bytes == expected_bytes && stable_identity_equal?(expected_stat, swapped_stat)
+    return if swapped_bytes.b == expected_bytes.b && stable_identity_equal?(expected_stat, swapped_stat)
 
     rollback = RENAMEATX.call(directory.fileno, temporary, directory.fileno, destination, RENAME_SWAP)
     system_error!("renameatx_np rollback") unless rollback.zero?
@@ -111,12 +112,13 @@ module DescriptorFiles
     destination = component!(destination)
     current, current_stat = open_regular_at(directory, destination)
     current_bytes = read_opened(current, current_stat)
-    raise IOError, "destination changed before publication" unless current_bytes == expected_bytes && metadata_equal?(expected_stat, current_stat)
+    raise IOError, "destination changed before publication" unless current_bytes.b == expected_bytes.b && metadata_equal?(expected_stat, current_stat)
     current.close
     temporary = ".#{destination}.tmp.#{Process.pid}.#{SecureRandom.hex(8)}"
     fd = OPENAT.call(directory.fileno, temporary, File::WRONLY | File::CREAT | File::EXCL | File::NOFOLLOW, 0o600)
     system_error!("openat temporary file") if fd.negative?
     output = File.for_fd(fd, autoclose: true)
+    output.binmode
     system_error!("fchmod") unless FCHMOD.call(output.fileno, 0o600).zero?
     output.write(bytes)
     output.flush
@@ -125,7 +127,7 @@ module DescriptorFiles
     output.close
     current, current_stat = open_regular_at(directory, destination)
     current_bytes = read_opened(current, current_stat)
-    raise IOError, "destination changed during publication" unless current_bytes == expected_bytes && metadata_equal?(expected_stat, current_stat)
+    raise IOError, "destination changed during publication" unless current_bytes.b == expected_bytes.b && metadata_equal?(expected_stat, current_stat)
     current.close
     exchange_replace_at(directory, temporary, destination, expected_bytes, expected_stat)
     result = UNLINKAT.call(directory.fileno, temporary, 0)

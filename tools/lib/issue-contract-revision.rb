@@ -1024,8 +1024,8 @@ module IOSTemplate
       current_io, current_stat = DescriptorFiles.open_regular_at(directory, name)
       current_bytes = DescriptorFiles.read_opened(current_io, current_stat)
       current_io.close
-      return "after" if current_bytes == after_bytes
-      reject("#{at} matches neither side of the pending revision") unless current_bytes == before_bytes
+      return "after" if current_bytes.b == after_bytes.b
+      reject("#{at} matches neither side of the pending revision") unless current_bytes.b == before_bytes.b
       DescriptorFiles.atomic_replace_at(directory, name, after_bytes, before_bytes, current_stat)
       "replaced"
     rescue SystemCallError, IOError => error
