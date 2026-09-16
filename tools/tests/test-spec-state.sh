@@ -352,6 +352,16 @@ abort "workflow migration does not preserve a sealed binding" unless
   workflow.include?("\u4fdd\u8b77\u5bfe\u8c61") &&
   workflow.include?("legacy-unbound") &&
   workflow.include?("successor")
+[
+  ".agents/skills/ios-verify/SKILL.md",
+  "docs/workflow.md",
+  "specs/development-stages.md"
+].each do |path|
+  text = File.binread(path).force_encoding(Encoding::UTF_8)
+  abort "workflow-only App Store boundary is stale: #{path}" unless
+    text.include?("local") && text.include?("allowlist") &&
+    text.include?("metadata") && text.include?("operation")
+end
 verify = File.binread(".agents/skills/ios-verify/SKILL.md")
 %w[Phase\ 3 Phase\ 4 Phase\ 5 Phase\ 6 evidence-applicability.json].each do |required|
   abort "verification skill lacks #{required}" unless verify.include?(required.gsub("\\ ", " "))
