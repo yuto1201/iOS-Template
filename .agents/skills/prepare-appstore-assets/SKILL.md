@@ -1,15 +1,25 @@
 ---
 name: prepare-appstore-assets
-description: Prepare, validate, review, and immutably seal localized App Store metadata, privacy and legal text, review notes, release notes, and release screenshots. Use when an iOS release candidate needs App Store Connect assets, when an existing submission package changed, or before the submit-appstore-release workflow.
+description: Check App Store source readiness and registration prerequisites without mutation, or prepare and seal complete release assets when a verified candidate and screenshot scope exist. Use for store drafts, changed submission assets, or before submit-appstore-release.
 ---
 
 # Prepare App Store Assets
 
-Build the package from the confirmed product specification and exact release candidate. This skill proves readiness; it does not open or mutate App Store Connect.
+Prepare from confirmed product facts. Source preparation and full release-package readiness are distinct modes; neither opens or mutates App Store Connect.
 
 ## Source preparation before a release candidate
 
 For inventory, draft promotion or a new App record's prerequisites, first follow the [source inventory and registration preparation](../../../docs/agent-contracts/appstore-submission.md#source-inventory-and-registration-preparation), including its field-level readiness report. Keep draft/confirmed/remote-saved distinct; report missing Team, naming/SKU choices, production IAP, age-rating answers, public URLs and SDK/privacy re-audit needs. The current package validator is not proof that every new preparation requirement is automated. Do not add unsupported schema keys, invoke registration operations or mark the release checklist complete from a partial draft.
+
+Read the [preparation format](<../../../App Store/metadata/preparation-format.md>) for versioned sources, reviewed-draft migration and required evidence. Preserve old ledger wording and user files; migration never converts a `confirmed` label into approval. Run the read-only checker from the app checkout:
+
+```sh
+tools/prepare-appstore-sources.sh --project-root "$PWD"
+```
+
+Exit 0 means the modeled source inventory is `prepared`, not release-ready or authorized to save; exit 1 retains per-field blocked/deferred progress, and exit 2 rejects unsafe or changing input. Report supplied or synthetic observations honestly: this command does not inspect Apple or public pages live. Obtain new external observations only through separately authorized operations; never invent proof files, user approvals, complete questionnaires or a matching account.
+
+Use `dispositions` only for explicit user decisions; do not infer optionality from missing values. Localized URLs and names require their exact locale's confirmation. Non-English primary-language support remains blocked by the existing package-validator limitation. For supplied records involving private coupled fields, the format's explicit transient-pipe interface compares preserved values without file or hash persistence; absent authorized transient input blocks that row. It is not a credential reader or a private-field update route.
 
 Independent text preparation can continue before complete release inputs exist. If screenshots are explicitly deferred or their scope remains for the user to decide, stop before capture; do not execute the screenshot steps below or seal a complete package. Continue the complete preparation sequence only when its prerequisites and screenshot scope are established. This does not waive any release gate or authorize partial remote saves.
 
@@ -20,6 +30,8 @@ When confirmed support, privacy, or terms sources need public AppLibrary pages, 
 Before URL fields or release readiness may consume the result, require a live `publication-verification.json` whose exact source/route digests, Web Issue, user actions, HTTP 200 responses, approved text, locale, and interlinks were verified. A `fixture-validated` result is not App Store evidence and is not App Store eligible.
 
 ## Preconditions
+
+The following preconditions apply only when continuing from source preparation into a complete release package. They are not prerequisites for the read-only source-readiness command above.
 
 1. Read the release Issue, confirmed `specs/` documents, `App Store/README.md`, `docs/AUTHORITY.md`, and `docs/agent-contracts/release-auditor.md`.
 2. For a phase-aware publication Issue, require an exact Phase 6 `Release-phase binding:` and its committed record. Validate `.artifacts/issues/<issue>/<head>/evidence-applicability.json`: reuse only the exact Phase 5 candidate/context, and require the recorded target re-verification for `targeted-reverify` or `expanded-verification`. A sealed Issue without a binding remains `legacy-unbound`; do not synthesize or retrofit a record.

@@ -1831,13 +1831,28 @@ func validateWorkflowPath(_ path: String) throws {
         ".agents/skills/prepare-appstore-assets/SKILL.md",
         ".agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md",
         ".agents/skills/submit-appstore-release/SKILL.md",
+        "App Store/README.md",
         "App Store/legal/README.md",
+        "App Store/metadata/preparation-format.md",
         "App Store/screenshots/README.md",
         "docs/agent-contracts/appstore-submission.md",
         "tools/capture-appstore-screenshots.sh",
+        "tools/lib/appstore-account-evidence.rb",
+        "tools/lib/appstore-asset-evidence.rb",
+        "tools/lib/appstore-code-inventory.rb",
+        "tools/lib/appstore-confirmation.rb",
         "tools/lib/appstore-legal-handoff.rb",
+        "tools/lib/appstore-preparation.rb",
+        "tools/lib/appstore-public-evidence.rb",
+        "tools/lib/appstore-readback-evidence.rb",
+        "tools/lib/appstore-registration-preparation.rb",
+        "tools/lib/appstore-source-schema.rb",
+        "tools/lib/appstore-xcode-facts.rb",
         "tools/prepare-appstore-legal-handoff.sh",
+        "tools/prepare-appstore-sources.sh",
         "tools/tests/test-appstore-legal-handoff.sh",
+        "tools/tests/test-appstore-preparation-migration.sh",
+        "tools/tests/test-appstore-preparation.sh",
         "tools/tests/test-appstore-screenshots.sh",
         "tools/tests/test-appstore-skills.sh"
     ]
@@ -1845,8 +1860,13 @@ func validateWorkflowPath(_ path: String) throws {
         "App Store/", ".agents/skills/prepare-appstore-assets/",
         ".agents/skills/submit-appstore-release/"
     ]
+    let normalizedServicePath = path.lowercased()
+        .replacingOccurrences(of: "-", with: "")
+        .replacingOccurrences(of: "_", with: "")
+        .replacingOccurrences(of: " ", with: "")
+        .replacingOccurrences(of: "/", with: "")
     let releaseOrStorePath = deniedPrefixes.contains(where: { path.hasPrefix($0) }) ||
-        path.lowercased().contains("appstore") || path.lowercased().contains("testflight")
+        normalizedServicePath.contains("appstore") || normalizedServicePath.contains("testflight")
     guard !releaseOrStorePath || localDeliveryToolPaths.contains(path) else {
         throw ValidationFailure("workflow-only diff contains a release or App Store path: \(path)")
     }

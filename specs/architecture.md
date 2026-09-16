@@ -167,7 +167,7 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | `supabase-ops` | アプリ仕様でSupabase使用を確定したとき |
 | `ios-media-assets` | 音声、文字起こし、効果音、音声分離、音楽、画像または動画が受け入れ条件になったとき |
 | `ios-3d-assets` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。authoringはCodexのexact model `gpt-6-astra`だけが行う |
-| `prepare-appstore-assets` | App Store 提出準備を開始するとき |
+| `prepare-appstore-assets` | App Store原稿のread-only準備、登録前提の照合、または完全な提出packageを準備するとき |
 | `submit-appstore-release` | CodexまたはClaudeが原稿準備／先行保存と正式提出を振り分け、監査済みpackageを明示許可の下で提出・再開するとき。先行save実装は§9.2の後続Issue |
 
 ## 6. エージェント構成
@@ -227,19 +227,23 @@ App Store準備は、原稿の確認、remote保存、release readiness、提出
 
 - アプリ固有の表示名・module・slug・Bundle IDは`Config/app-identity.json`と確定仕様、実際のXcode設定から照合する。localized store nameは内部display nameと別の判断であり、名前衝突を理由にどちらも自動変更しない。
 - `Config/template-identity.json`の現行変換対象に`App Store/metadata/`は含まれない。Bootstrap完了を原稿変換・remote Bundle登録・App作成・privacy監査完了と解釈しない。変換可能なidentity値は原稿への導出元とし、SKU、Team、公開URL、法務・価格・SDK申告は別確認する。
-- 一時文案は出所と実装根拠を確認してから`App Store/`のreviewed draftへ昇格する。既存schemaで表現できる原稿は既存ファイルへ、表現できない登録field・確認記録は`App Store/metadata/reviewed-draft.md`へ置く。これは必要なアプリで作る人間可読の原稿台帳であり、現行validatorへ未知のYAML keyや新しいcanonical schemaを渡さない。
+- 一時文案は出所と実装根拠を確認してから`App Store/`のreviewed draftへ昇格する。既存schemaで表現できる原稿は既存ファイルへ置き、追加の登録field・質問票は[versioned preparation format](<../App Store/metadata/preparation-format.md>)の`App Store/metadata/preparation.json`で表現する。人間可読の`reviewed-draft.md`は保全し、レビューした値だけを明示転記する。台帳の状態ラベルを承認へ変換せず、既存YAMLへ未知のkeyを追加しない。
 - 各fieldを`draft`／`confirmed`／`remote-saved`として、source path/anchor、revision/digest、確認根拠、未決理由、対象locale/sectionへ結び付ける。`remote-saved`には同一Team/App/Bundleとsource digestに一致するreadbackが必要であり、ローカルの確認だけから昇格しない。原稿、SDK、機能、権限、公開本文が変われば影響fieldを再監査し、古い確認を流用しない。
 - 未決fieldの送信だけを止め、独立fieldの下書き・確認は続ける。ただし部分準備を完全packageや提出許可とせず、現行のpackage seal、全画像、full iOS、反対モデルreview、初回法務承認を省略しない。スクリーンショット延期の指示がある場合、準備仕様を理由に生成を開始しない。
 - Team ID未設定時はユーザーが個人membershipの実値を確認して設定を承認する。表示名、メール、Xcodeの自動選択から推測して設定しない。設定後の実操作はactive Teamの完全一致preflightを改めて通す。
 - 新規Bundle/App作成は既存Appの更新と別のoperationである。対応するallowlist・契約・承認・再開検証を実装した後続Issueが完了するまでは実行不可。準備仕様は既存の権限を拡張しない。
 
-この節は確定した設計要件であり、field台帳、登録preflight、包括的なSDK不整合検出の実装済み証拠ではない。既存checklistのschema、keys、booleanと封印済みpackage/resultは変更しない。原稿検証・read-only登録準備は#53に依存する[#62](https://github.com/yuto1201/iOS-Template/issues/62)で、[受け入れ条件 §8](acceptance.md#8-app-store原稿と登録準備)のfixtureを満たす。実登録mutationはそのIssueにも含めず、別の明示契約と必要な承認を要する。AppLibraryの具体的な配置・公開URLは[未決の境界](product.md#61-applibraryでの法務ページ公開方針)のまま保持する。
+読取専用入口は`tools/prepare-appstore-sources.sh --project-root /absolute/physical/app/root`とする。実際のsource bytes、Xcode設定、コード／依存inventoryと提供された確認証拠からfield状態を算出し、源泉が変化・不明・未対応なら該当欄を未確認に保つ。exit 0の`prepared`はsource準備の判定であり、包括的なSDK監査、live Apple照会、署名済みbuild、release-readyの証明ではない。exit 1は未完了／延期を含むreport、exit 2は安全に読めない入力とする。
+
+確認証拠は`.artifacts/appstore-preparation/`へ分離する。canonical worktreeだけ共有artifact storeを使い、任意symlinkや秘密実値の保存を認めない。`remote-saved`はsource分類から推測せず、対応する実resourceとsource／identity／ユーザー承認へ束縛した既存保存記録を検証する。ローカル専用field、未対応のresource、未知・不完全なformは保存済みにしない。private coupled fieldの保全比較は明示された一時pipeだけを使い、値や値hashを保存しない。
+
+既存checklistのschema、keys、booleanと封印済みpackage/resultは変更しない。原稿検証・read-only登録準備は#53に依存する[#110](https://github.com/yuto1201/iOS-Template/issues/110)で、[受け入れ条件 §8](acceptance.md#8-app-store原稿と登録準備)のfixture、immutable targeted repository evidence、workflow-only verification、current-Head strict reviewを満たして完了する。#62は移植元履歴として保持する。実登録mutationは含めず、別の明示契約と必要な承認を要する。AppLibraryの具体的な配置・公開URLは[未決の境界](product.md#61-applibraryでの法務ページ公開方針)のまま保持する。
 
 ### 9.2 原稿保存と正式提出の分離
 
 §9.1のfield inventoryを再利用し、[4モードの入出力と保存・再開契約](../docs/agent-contracts/appstore-submission.md#operation-modes-and-selective-metadata-save)を適用する。原稿正本と確認根拠は`App Store/`、部分保存の実行記録はpackage外の`.artifacts/appstore-metadata/<issue>/<attempt>/`、正式releaseのpackage/resultは既存の`App Store/submission/`へ分離する。別形式の部分記録を既存recorderへ入力せず、package tree digestの除外規則も変えない。
 
-#52で実装するのは文書と既存`submit-appstore-release`の薄いmode routingだけである。実行可能なsave modeを追加する後続Issueは、#52とread-only準備の#62に依存し、次のwrite-setとTestをClaim前に確定する。
+#52で実装するのは文書と既存`submit-appstore-release`の薄いmode routingだけである。実行可能なsave modeを追加する後続Issueは、#52とread-only準備の#110に依存し、次のwrite-setとTestをClaim前に確定する。
 
 - 専用の共有`.agents/skills/save-appstore-metadata/`、対応する`.claude/skills/`相対symlink、§5のrouting。これは予定名であり、現在使えるskillや既存scriptの新flagではない。
 - そのskillのpublic entrypointと、field/locale差分・source固定・account/target照合・保存・readback・履歴公開を行うhelper。既存provider adapterで表現できない観察項目や権限は、その変更ファイルと安全確認もIssueに明示し、広い操作へ代用しない。

@@ -487,3 +487,13 @@
 - Decision: confirmedな英語／日本語support・privacy・terms正本、digest／approval、source Issue／Head、app facts、ユーザー承認済みhost／route、返却契約から、exact `yuto1201/Web-AppLibrary`向けcopy-ready Markdownを決定的に生成する。作成はsource contractのoperation／executor、open／closed重複検索、account／target preflight、一度だけのdispatch、exact readbackに従う。ユーザーがprompt転送と法務・公開承認を保持する。返却後はrequest／prompt／Web Issue／deployment／user actions／source digests／URLを結び、HTTPS exact route、redirectなし、unauthenticated HTTP 200、本文・locale、同一locale相互linkをlive検証する。fixtureは`appStoreEligible: false`とし、live `verified`だけをApp Store準備・提出へ渡す。
 - Consequence: Web実装や公開をこのrepositoryから暗黙実行せず、Issue作成完了、ユーザー承認、ページ公開、App Store利用可否を別々に追跡できる。source／route／approval／pageが変われば再生成または再検証が必要になる。workflow-onlyではこの非認証producer、guidance、README、直接testだけをexact allowlistし、法務本文、metadata、採用asset、provider実装、外部公開操作は拒否し続ける。
 - Related Issue: #101
+
+## D-056: App Storeのsource準備を読取専用のversioned表現で検証する
+
+- Date: 2026-09-17
+- Status: 確定
+- Supersedes: D-054のworkflow-only exact allowlist境界を、認証を行わないsource-preparation用途について限定的に拡張する。D-033のsource／confirmation要件、D-035のsave／release分離、D-055のAppLibrary境界は維持する。
+- Context: 既存のexact-key YAMLだけではSKU、質問票、確認根拠を表現できない。台帳のラベルやsource分類を承認またはApple保存欄と解釈すると、未回答やローカル専用値まで保存済みとして扱う危険がある。一方、旧#62の準備実装は現行workflow-only policyより前に作られ、App Store pathを用途別に限定許可する現在のrepository evidenceへ統合されていなかった。
+- Decision: [構成 §9.1](architecture.md#91-原稿の正本と登録準備)と[preparation format](<../App Store/metadata/preparation-format.md>)に従い、追加sourceをversioned JSON、確認または提供された観察証拠をpackage外artifactへ分離する。読取専用入口で実sourceとXcode／コードinventoryを照合し、derive／user／public／accountの根拠からfield状態を計算する。旧台帳は保全して明示転記し、未知値・状態ラベルを承認へ変換しない。保存済み判定は対応resourceのID、locale、source、ユーザー承認と完全なbaseline／readbackへ束縛する。workflow-onlyではこの入口、format、enumerated helpers、直接testsだけをexact allowlistし、directory名やprefixから未知pathを許可しない。
+- Consequence: `prepared`でもnetwork、live Apple照会、登録、save、画像生成、署名、upload、submit、release-ready判定は未実行のままとする。アプリ固有metadata、採用画像、signing、provider実装、TestFlight、`appstore.*` operation、秘密実値の永続化は引き続き拒否する。private fieldの保全比較は明示された一時pipeだけに限定し、値や値hashを保存しない。既存YAML／checklist／package／result、完全release gate、法務・外部操作の承認境界は変更しない。#110の完了にはimmutable targeted repository evidence、workflow-only verify、current-Head strict review、pre-merge gateを要求し、native／Simulator／live Apple検証を実行済みとは主張しない。
+- Related Issue: #110（#62は移植元履歴として保持）
