@@ -1831,13 +1831,28 @@ func validateWorkflowPath(_ path: String) throws {
         ".agents/skills/prepare-appstore-assets/SKILL.md",
         ".agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md",
         ".agents/skills/submit-appstore-release/SKILL.md",
+        "App Store/README.md",
         "App Store/legal/README.md",
+        "App Store/metadata/preparation-format.md",
         "App Store/screenshots/README.md",
         "docs/agent-contracts/appstore-submission.md",
         "tools/capture-appstore-screenshots.sh",
+        "tools/lib/appstore-account-evidence.rb",
+        "tools/lib/appstore-asset-evidence.rb",
+        "tools/lib/appstore-code-inventory.rb",
+        "tools/lib/appstore-confirmation.rb",
         "tools/lib/appstore-legal-handoff.rb",
+        "tools/lib/appstore-preparation.rb",
+        "tools/lib/appstore-public-evidence.rb",
+        "tools/lib/appstore-readback-evidence.rb",
+        "tools/lib/appstore-registration-preparation.rb",
+        "tools/lib/appstore-source-schema.rb",
+        "tools/lib/appstore-xcode-facts.rb",
         "tools/prepare-appstore-legal-handoff.sh",
+        "tools/prepare-appstore-sources.sh",
         "tools/tests/test-appstore-legal-handoff.sh",
+        "tools/tests/test-appstore-preparation-migration.sh",
+        "tools/tests/test-appstore-preparation.sh",
         "tools/tests/test-appstore-screenshots.sh",
         "tools/tests/test-appstore-skills.sh"
     ]
@@ -1845,8 +1860,35 @@ func validateWorkflowPath(_ path: String) throws {
         "App Store/", ".agents/skills/prepare-appstore-assets/",
         ".agents/skills/submit-appstore-release/"
     ]
+    let camelBoundaryPath = path
+        .replacingOccurrences(of: "([A-Z]+)([A-Z][a-z])", with: "$1-$2", options: .regularExpression)
+        .replacingOccurrences(of: "([a-z0-9])([A-Z])", with: "$1-$2", options: .regularExpression)
+    let normalizedServicePath = path.lowercased()
+        .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+    let semanticTokens = Set(camelBoundaryPath.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init))
+    let serviceTokens: Set<String> = ["appstore", "asc", "apple", "appleconnect", "connect", "itunes", "itunesconnect", "testflight", "tf"]
+    let operationTokens: Set<String> = ["api", "client", "create", "delete", "deliver", "deploy", "distribute", "mutation", "patch", "post", "provider", "publish", "push", "put", "register", "release", "save", "sign", "signing", "submit", "submission", "sync", "transporter", "update", "upload", "uploader", "write"]
+    let compactServiceAliases = ["appstore", "asc", "appleconnect", "itunes", "itunesconnect", "testflight", "tf"]
+    let explicitServiceAlias = components.contains { component in
+        let stem = (component as NSString).deletingPathExtension.lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+        return compactServiceAliases.contains(stem)
+    }
+    let normalizedBasename = components.last!.lowercased()
+        .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+    let compactReleaseOperation = compactServiceAliases.contains { service in
+        operationTokens.contains { operation in
+            normalizedBasename.hasPrefix(service + operation) || normalizedBasename.hasPrefix(operation + service)
+        }
+    }
+    let semanticReleaseOperation = !semanticTokens.isDisjoint(with: serviceTokens) &&
+        !semanticTokens.isDisjoint(with: operationTokens)
+    let genericRemoteOperation = semanticTokens.contains("upload") || semanticTokens.contains("uploader") ||
+        semanticTokens.contains("transporter") || semanticTokens.contains("remote") && semanticTokens.contains("provider") ||
+        semanticTokens.contains("release") && (semanticTokens.contains("sign") || semanticTokens.contains("signing"))
     let releaseOrStorePath = deniedPrefixes.contains(where: { path.hasPrefix($0) }) ||
-        path.lowercased().contains("appstore") || path.lowercased().contains("testflight")
+        normalizedServicePath.contains("appstore") || normalizedServicePath.contains("testflight") ||
+        explicitServiceAlias || semanticReleaseOperation || compactReleaseOperation || genericRemoteOperation
     guard !releaseOrStorePath || localDeliveryToolPaths.contains(path) else {
         throw ValidationFailure("workflow-only diff contains a release or App Store path: \(path)")
     }

@@ -125,9 +125,9 @@ profileを下げてstage要件を回避しない。`shape`はUIを含むので`f
 
 ### 3.3 Workflow-only検証
 
-delivery tool、review schema、validator、evidence producerだけを変更する`harden + strict` Issueは、application `Verification`と`Verification scope`を持たないworkflow-only経路を選べる。Base..Headの全pathがworkflow allowlist内であることをcurrent Headから再判定する。App Store／TestFlightはexternal operation、metadata、画像asset、signing、provider実装を拒否し、exact allowlistにあるlocal guidance、非認証producer、対応regression testだけを許可する。canonical `verify.json`は`changeClassification: workflow-only`、`executionRoute: repository-tests`、`status: passed`を持ち、Xcode、Build、Unit、Simulator case、Screenshot、visual evaluationを`not-applicable`として固定する。
+delivery tool、review schema、validator、evidence producerだけを変更する`harden + strict` Issueは、application `Verification`と`Verification scope`を持たないworkflow-only経路を選べる。Base..Headの全pathがworkflow allowlist内であることをcurrent Headから再判定する。App Store／TestFlightはexternal operation、実アプリmetadata内容、採用画像asset、signing、provider実装を拒否し、exact allowlistにあるlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producer、そのexactなversioned-format guidance／enumerated helpers／直接regression testだけを許可する。canonical `verify.json`は`changeClassification: workflow-only`、`executionRoute: repository-tests`、`status: passed`を持ち、Xcode、Build、Unit、Simulator case、Screenshot、visual evaluationを`not-applicable`として固定する。
 
-workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、仕様anchor、contract digest、Base／Head、strict review、blocking finding、PR、pre-merge gateを省略しない。D-037 cutover後はsealed要求scopeとimmutable Base..Head入力からexact test planを生成し、`targeted`、`head-all`、`base-and-head`の解決結果だけを実行する。cutover前のworkflow-onlyは全ACの`--map`が参照するtracked test pathのexact unionを各1回実行し、その他の従来Head-only contractは全tracked testを維持する。application path、Xcode project、App Store metadata／画像asset、localization、Bundle設定、release operation、別Issue／Head／contract、改ざん済みplan／repository evidenceを拒否する。
+workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、仕様anchor、contract digest、Base／Head、strict review、blocking finding、PR、pre-merge gateを省略しない。D-037 cutover後はsealed要求scopeとimmutable Base..Head入力からexact test planを生成し、`targeted`、`head-all`、`base-and-head`の解決結果だけを実行する。cutover前のworkflow-onlyは全ACの`--map`が参照するtracked test pathのexact unionを各1回実行し、その他の従来Head-only contractは全tracked testを維持する。application path、Xcode project、exact allowlistのformat guidanceではない実アプリApp Store metadata／画像asset、localization、Bundle設定、release operation、別Issue／Head／contract、改ざん済みplan／repository evidenceを拒否する。
 
 ### 3.4 Repository testsのBase／Head要件
 
@@ -189,10 +189,11 @@ Foundation、Identity bootstrap、Simulator verificationなどテンプレート
 
 ## 8. App Store原稿と登録準備
 
-[正本と登録準備](architecture.md#91-原稿の正本と登録準備)の実装は、次を満たす。#53は設計・文書の完了であり、以下の自動検出・登録経路を実装済みとは報告しない。
+[正本と登録準備](architecture.md#91-原稿の正本と登録準備)のread-only入口`tools/prepare-appstore-sources.sh`は、次を満たす。#53の設計、#110のsource検証、将来の実登録・保存を区別し、合成fixtureの成功をlive外部検証へ読み替えない。
 
 - field inventoryがidentity、localized原稿、version、locale、SKU、category、copyright、公開URL、review contact、privacy、age rating、IAP、Team/App/accessを覆い、各値のsource・確認分類・ASC欄を追跡できる。
 - Bootstrapで導出できる値と個別確認値を区別し、原稿台帳の`draft`、`confirmed`、`remote-saved`を取り違えない。source変更で影響fieldの確認を失効させ、未決理由を列挙する。
+- versioned preparation JSONと確認証拠は既存YAML／封印済みpackage／resultと分離する。台帳からの明示転記は元のbytesと未知の回答を保全し、ラベルだけで承認しない。ローカル専用fieldを架空のASC formとして保存済みにせず、対応resourceのID・locale・source・承認と完全なbaseline/readbackを照合する。private実値の保全比較は一時pipeだけで行い、実値や値hashを公開・永続化しない。
 - 新規登録前に正しい個人Team、同一Bundleの既存App、platform/name/primary language/Bundle/SKU/accessを確認する。成功不明時はreadbackしてから再開し、名前だけの一致で再利用したり、重複作成したりしない。
 - Team未設定・別Team、Bundle未登録、App未作成、名前重複、権限不足、契約更新を区別する。契約同意、初回法務本文、価格、アクセス変更はユーザーへ引き継ぎ、秘密・連絡先実値は保存しない。
 - [必須fixtureとreadiness例](../docs/agent-contracts/appstore-submission.md#readiness-report-and-required-fixtures)で、テンプレートBundle/文面、invalid・未公開URL、広告SDKとprivacyの乖離、age rating未回答、IAP本番未設定、確認済みsourceの変更、曖昧なremote応答を検出する。正常な合成アプリでは根拠付きfieldだけを確認済みとし、独立欄の準備を継続できる。
@@ -203,7 +204,7 @@ Foundation、Identity bootstrap、Simulator verificationなどテンプレート
 - `draft`／`save`／`ready`／`submit`の入力、出力、禁止操作を区別する。画像・build・法務が未完でも、独立した確認済み一般原稿の保存だけを正しいTeam/App/Bundle/version/localeと操作権限の下で進められる。公開影響や必須form fieldが不明・未許可ならその保存を止める。
 - package外の別形式にsource相対path・anchor・revision/digest、locale/section、remote identity、差分・保存結果・readback digest、blocked/deferred理由を記録する。片言語だけの成功を全件成功とせず、source/remote driftと認証を再確認してから再開する。
 - [手動検証表](../docs/agent-contracts/appstore-submission.md#selective-save-verification-plan)の全caseを確認し、後続実装では実入口の合成fixtureへ落とす。英語／日本語、Unicode、byteと文字数、Apple公式要件の再取得を含み、未知値の空文字上書き、権限外のform同時保存、曖昧応答の盲目的再試行を拒否する。
-- 部分保存記録では全素材・申告・法務・release audit・明示提出許可を満たせず、既存release journalに流用できない。実装Issueのwrite-setとTest計画は§9.2で定め、#62のread-only準備と実保存を混同しない。
+- 部分保存記録では全素材・申告・法務・release audit・明示提出許可を満たせず、既存release journalに流用できない。実装Issueのwrite-setとTest計画は§9.2で定め、#110のread-only準備と実保存を混同しない。
 
 AppLibrary法務ページへの引き継ぎは、次を満たす。
 

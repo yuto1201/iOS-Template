@@ -161,6 +161,36 @@ rebind_head_artifacts "$previous_head"
 published="$(run_publisher)"
 [[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
 
+prepare_fixture appstore-readonly-preparation
+/bin/mkdir -p "$repo/App Store/metadata" "$repo/tools/lib" "$repo/tools/tests"
+printf '%s\n' '# source preparation guidance' >"$repo/App Store/README.md"
+printf '%s\n' '# versioned source preparation format' >"$repo/App Store/metadata/preparation-format.md"
+for helper in \
+  account-evidence asset-evidence code-inventory confirmation preparation public-evidence \
+  readback-evidence registration-preparation source-schema xcode-facts; do
+  printf '%s\n' '# local read-only preparation helper' >"$repo/tools/lib/appstore-$helper.rb"
+done
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/prepare-appstore-sources.sh"
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/tests/test-appstore-preparation-migration.sh"
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/tests/test-appstore-preparation.sh"
+/bin/chmod +x "$repo/tools/prepare-appstore-sources.sh" \
+  "$repo/tools/tests/test-appstore-preparation-migration.sh" \
+  "$repo/tools/tests/test-appstore-preparation.sh"
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- 'App Store/README.md' 'App Store/metadata/preparation-format.md' \
+  tools/lib/appstore-account-evidence.rb tools/lib/appstore-asset-evidence.rb \
+  tools/lib/appstore-code-inventory.rb tools/lib/appstore-confirmation.rb \
+  tools/lib/appstore-preparation.rb tools/lib/appstore-public-evidence.rb \
+  tools/lib/appstore-readback-evidence.rb tools/lib/appstore-registration-preparation.rb \
+  tools/lib/appstore-source-schema.rb tools/lib/appstore-xcode-facts.rb \
+  tools/prepare-appstore-sources.sh tools/tests/test-appstore-preparation-migration.sh \
+  tools/tests/test-appstore-preparation.sh
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
+
 prepare_fixture escaping-skill-link
 /bin/mkdir -p "$repo/.claude/skills"
 /bin/ln -s ../../../outside "$repo/.claude/skills/example"
@@ -246,6 +276,76 @@ printf '%s\n' '# Privacy Policy' 'Status: Confirmed' >"$repo/App Store/legal/pri
 /usr/bin/git -C "$repo" commit -q --amend --no-edit
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 expect_rejection legal-source-path 'workflow-only diff contains a release or App Store path: App Store/legal/privacy-policy.md'
+
+prepare_fixture adopted-appstore-asset
+/bin/mkdir -p "$repo/App Store/screenshots"
+printf '%s\n' 'adopted image bytes' >"$repo/App Store/screenshots/iphone-ja.png"
+/usr/bin/git -C "$repo" add -- 'App Store/screenshots/iphone-ja.png'
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+expect_rejection adopted-appstore-asset 'workflow-only diff contains a release or App Store path: App Store/screenshots/iphone-ja.png'
+
+prepare_fixture signing-configuration
+/bin/mkdir -p "$repo/Config"
+printf '%s\n' 'DEVELOPMENT_TEAM = EXAMPLE' >"$repo/Config/Signing.xcconfig"
+/usr/bin/git -C "$repo" add -- Config/Signing.xcconfig
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+expect_rejection signing-configuration 'workflow-only path is not allowlisted: Config/Signing.xcconfig'
+
+prepare_fixture provider-implementation
+/bin/mkdir -p "$repo/tools/lib"
+printf '%s\n' '# remote provider mutation' >"$repo/tools/lib/appstore-provider.rb"
+/usr/bin/git -C "$repo" add -- tools/lib/appstore-provider.rb
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+expect_rejection provider-implementation 'workflow-only diff contains a release or App Store path: tools/lib/appstore-provider.rb'
+
+prepare_fixture separated-provider-implementation
+/bin/mkdir -p "$repo/tools/lib"
+printf '%s\n' '# remote provider mutation with alternate service spelling' >"$repo/tools/lib/app-store-provider.rb"
+/usr/bin/git -C "$repo" add -- tools/lib/app-store-provider.rb
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+expect_rejection separated-provider-implementation 'workflow-only diff contains a release or App Store path: tools/lib/app-store-provider.rb'
+
+prepare_fixture dotted-provider-implementation
+/bin/mkdir -p "$repo/tools/lib"
+printf '%s\n' '# remote provider mutation with dotted service spelling' >"$repo/tools/lib/app.store-provider.rb"
+/usr/bin/git -C "$repo" add -- tools/lib/app.store-provider.rb
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+expect_rejection dotted-provider-implementation 'workflow-only diff contains a release or App Store path: tools/lib/app.store-provider.rb'
+
+prepare_fixture testflight-helper
+/bin/mkdir -p "$repo/tools"
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/testflight-upload.sh"
+/bin/chmod +x "$repo/tools/testflight-upload.sh"
+/usr/bin/git -C "$repo" add -- tools/testflight-upload.sh
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+expect_rejection testflight-helper 'workflow-only diff contains a release or App Store path: tools/testflight-upload.sh'
+
+semantic_index=0
+for semantic_path in tools/asc-provider.rb tools/connect-upload.sh tools/sign-release.sh tools/tf-client.sh tools/ascProvider.rb tools/iTunesConnectClient.rb tools/tfUpload.sh tools/ascprovider.rb tools/itunesconnectclient.rb tools/tfupload.sh tools/itunesconnect/client.rb tools/appleconnect/provider.rb tools/asc-save.rb tools/itunesconnectupdate.rb tools/tf-distribute.sh tools/asc.rb tools/itunes.rb tools/itunesconnect.rb tools/apple-connect.rb tools/asc-put.rb tools/asc-post.rb; do
+  semantic_index=$((semantic_index + 1))
+  fixture_name="semantic-$semantic_index-$(printf '%s' "$semantic_path" | /usr/bin/sed 's#[/.]#-#g')"
+  prepare_fixture "$fixture_name"
+  /bin/mkdir -p "$(/usr/bin/dirname "$repo/$semantic_path")"
+  printf '%s\n' '# semantic remote release implementation alias' >"$repo/$semantic_path"
+  /usr/bin/git -C "$repo" add -- "$semantic_path"
+  /usr/bin/git -C "$repo" commit -q --amend --no-edit
+  head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+  expect_rejection "$fixture_name" "workflow-only diff contains a release or App Store path: $semantic_path"
+done
+
+prepare_fixture unknown-appstore-helper
+/bin/mkdir -p "$repo/tools/lib"
+printf '%s\n' '# unknown local helper' >"$repo/tools/lib/appstore-unknown.rb"
+/usr/bin/git -C "$repo" add -- tools/lib/appstore-unknown.rb
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+expect_rejection unknown-appstore-helper 'workflow-only diff contains a release or App Store path: tools/lib/appstore-unknown.rb'
 
 prepare_fixture missing-repository-evidence
 /usr/bin/ruby -e 'File.unlink(ARGV.fetch(0))' "$repo/.artifacts/issues/42/$head_sha/repository-tests.json"

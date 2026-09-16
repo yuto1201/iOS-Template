@@ -196,7 +196,7 @@ D-050対象ではDelivery profileが通常ならreview省略可能な値でも`v
 
 cutover後にClaimする新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。UI変更の3 field `UI verification`はClaim前のlive guidanceに限ります。既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持たせ、AC本文先頭を`UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、適用事実をReasonの後へ、確定anchorを`Spec anchors`、選択前提をDependenciesへ記載します。Identity bootstrapと純非UIの`UI verification`はexact `Not applicable`だけとし、scope／非UI理由をGoal／In scope等と`not-applicable`宣言へ、関連product／spec anchorを`Spec anchors`へ分けます。新しいmutable contract fieldは追加しません。選択の正本は、Issue contractへ封印される`Spec anchors`が参照する確定仕様と追記型Decisionです。pre-D-030 legacy contractにはこの新規要件を補完しません。
 
-workflow-only Issueは`harden + strict`とし、`Verification`／`Verification scope`を省略します。application、Xcode、asset、localization、Bundle設定、App Store metadata／signing／provider実装、TestFlight、external release operationを含む場合はこの分類を使えません。App Store関連で許可するのはexact allowlistのlocal guidance、非認証capture producer、直接regression testだけです。`release` stageは`type:release`の実アプリrelease candidateだけに予約します。
+workflow-only Issueは`harden + strict`とし、`Verification`／`Verification scope`を省略します。application、Xcode、asset、localization、Bundle設定、実アプリApp Store metadata内容／signing／provider実装、TestFlight、external release operationを含む場合はこの分類を使えません。App Store関連で許可するのはexact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression testだけです。`release` stageは`type:release`の実アプリrelease candidateだけに予約します。
 
 ```markdown
 ## Delivery stage

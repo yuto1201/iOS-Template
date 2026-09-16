@@ -14,6 +14,7 @@
         "tools/build-appstore-screenshot-set.sh",
         "tools/capture-appstore-screenshots.sh",
         "tools/prepare-appstore-legal-handoff.sh",
+        "tools/prepare-appstore-sources.sh",
         "tools/validate-appstore-package.sh"
       ],
       "prefixes": [
@@ -307,6 +308,8 @@
     {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-appstore-legal-handoff.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-package.sh", "domains": ["appstore"]},
+    {"path": "tools/tests/test-appstore-preparation-migration.sh", "domains": ["appstore"]},
+    {"path": "tools/tests/test-appstore-preparation.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-screenshots.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore", "evidence-applicability", "release-disposition"]},
     {"path": "tools/tests/test-bounded-command.sh", "domains": ["workflow-state"]},
@@ -364,7 +367,7 @@
     {"path": "tools/tests/test-verification-contract.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-visual-review"]},
     {"path": "tools/tests/test-workflow-e2e.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["workflow-evidence"]},
+    {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["ios-verification", "workflow-evidence"]},
     {"path": "tools/tests/test-workflow-state.sh", "domains": ["workflow-state"]}
   ]
 }
