@@ -95,8 +95,22 @@ ruby -rjson -ryaml -rfileutils -ropen3 -rtime -rdigest - "$entrypoint" "$test_wo
 entrypoint, scratch, repo_root = ARGV
 project = File.join(scratch, "registration")
 baseline = {
-  "Config/app-identity.json" => {"schemaVersion" => 1, "displayName" => "Garden Notes", "moduleName" => "GardenNotes", "appSlug" => "garden-notes", "bundleId" => "com.example.garden"},
-  "Config/ownership.yml" => {"schemaVersion" => 2, "appStore" => {"teamId" => "TEAM123456", "bundleId" => "com.example.garden"}},
+  "Config/app-identity.json" => {"schemaVersion" => 1, "sourceIdentityVersion" => 1, "displayName" => "Garden Notes", "moduleName" => "GardenNotes", "appSlug" => "garden-notes", "bundleId" => "com.example.garden"},
+  "Config/template-identity.json" => {
+    "schemaVersion" => 1,
+    "source" => {"project" => "TemplateApp", "module" => "TemplateApp", "bundleId" => "com.yuto.TemplateApp"},
+    "renamePaths" => [], "liveContentPaths" => []
+  },
+  "Config/ownership.yml" => {
+    "schemaVersion" => 2,
+    "github" => {"login" => "fixture-owner"},
+    "supabase" => {"organizationId" => nil, "organizationName" => nil, "projectRef" => nil},
+    "cloudflare" => {"accountId" => nil, "accountName" => nil, "plan" => nil, "target" => nil},
+    "linear" => {"workspaceSlug" => nil, "workspaceUrl" => nil, "teamKey" => nil},
+    "vercel" => {"teamId" => nil, "teamSlug" => nil, "plan" => nil, "projectId" => nil},
+    "elevenlabs" => {"accountId" => nil, "workspaceId" => nil},
+    "appStore" => {"teamId" => "TEAM123456", "bundleId" => "com.example.garden"}
+  },
   "App Store/metadata/app.yml" => {
     "schemaVersion" => 1, "bundleId" => "com.example.garden", "version" => "1.0", "primaryLocale" => "en-US",
     "platforms" => {"iphone" => true, "ipad" => true}, "category" => "Utilities", "copyright" => "2026 Garden Notes",
@@ -157,11 +171,43 @@ scenario = lambda do |label, expected, edit|
   [report, stdout]
 end
 scenario.call("matching existing app", nil, nil)
+report, = scenario.call("invalid ownership schema stays unready", "invalid-source-schema", ->(d) { d[ownership_path]["schemaVersion"] = 999 })
+abort "invalid ownership schema was accepted" unless report["fields"].find { |row| row["fieldId"] == "account.teamId" }["reasons"].include?("invalid-source-schema")
+scenario.call("invalid identity schema cannot match registration", "invalid-source-schema", ->(d) { d["Config/app-identity.json"]["schemaVersion"] = 999 })
+scenario.call("invalid app metadata schema cannot match registration", "invalid-source-schema", ->(d) { d[app_path]["schemaVersion"] = 999 })
+report, stdout = scenario.call("early source block still redacts account observation", "invalid-source-schema", lambda do |d|
+  d[ownership_path]["schemaVersion"] = 999
+  d[observation_path]["phoneNumber"] = "private-observation-phone-090-1234-5678"
+end)
+observation_source = report.fetch("registration").fetch("observation")
+abort "early registration block hashed a private observation" unless observation_source["digest"].nil? && observation_source["revision"].nil?
+abort "early registration block leaked private observation" if stdout.include?("private-observation-phone-090-1234-5678")
+report, stdout = scenario.call("generic international phone in account evidence is redacted", "invalid-account-observation", lambda do |d|
+  d[observation_path]["note"] = "+81 90-1234-5678"
+end)
+observation_source = report.fetch("registration").fetch("observation")
+abort "generic phone account evidence was hashed" unless observation_source["digest"].nil? && observation_source["revision"].nil?
+abort "generic phone account evidence leaked" if stdout.include?("+81 90-1234-5678")
+report, stdout = scenario.call("compact domestic phone in account evidence is redacted", "invalid-account-observation", lambda do |d|
+  d[observation_path]["note"] = "09012345678"
+end)
+observation_source = report.fetch("registration").fetch("observation")
+abort "compact domestic phone account evidence was hashed" unless observation_source["digest"].nil? && observation_source["revision"].nil?
+abort "compact domestic phone account evidence leaked" if stdout.include?("09012345678")
+{"compact landline" => "0312345678", "compact toll-free" => "0120123456"}.each do |label, phone|
+  report, stdout = scenario.call("#{label} in account evidence is redacted", "invalid-account-observation", lambda do |documents|
+    documents[observation_path]["note"] = phone
+  end)
+  observation_source = report.fetch("registration").fetch("observation")
+  abort "#{label} account evidence was hashed" unless observation_source["digest"].nil? && observation_source["revision"].nil?
+  abort "#{label} account evidence leaked" if stdout.include?(phone)
+end
 scenario.call("matching app after lost response", nil, ->(d) { d[preparation_path]["account"].delete("appId") })
 scenario.call("Team unset", "team-unset", ->(d) { d[ownership_path]["appStore"]["teamId"] = nil })
 scenario.call("wrong active Team", "account-mismatch", ->(d) { d[observation_path]["teamId"] = "OTHER12345" })
 scenario.call("Bundle unset", "bundle-unset", ->(d) { d[ownership_path]["appStore"]["bundleId"] = nil })
 scenario.call("wrong metadata identity", "bundle-identity-mismatch", ->(d) { d[app_path]["bundleId"] = "com.other.garden" })
+scenario.call("supplied registration targets another bundle", "bundle-registration-mismatch", ->(d) { d[preparation_path]["account"]["bundleRegistration"] = "com.other.garden" })
 scenario.call("Bundle not registered", "bundle-not-registered", ->(d) { d[observation_path]["bundles"] = []; d[observation_path]["apps"] = [] })
 scenario.call("App absent", "app-not-created", ->(d) { d[observation_path]["apps"] = [] })
 scenario.call("duplicate app", "duplicate-app-identities", ->(d) { d[observation_path]["apps"] << d[observation_path]["apps"].first.merge("appId" => "9999999999") })
@@ -187,11 +233,12 @@ report.fetch("fields").select { |row| row["sources"].any? { |s| s["path"] == app
   sensitive_sources = row["sources"].select { |source| source["path"] == app_path }
   abort "sensitive file was hashed or error bypassed" unless row["reasons"].include?("sensitive-source") && sensitive_sources.all? { |source| source["digest"].nil? && source["revision"].nil? }
 end
-puts "PASS: public registration preparation distinguishes 26 synthetic matching, blocked and redacted cases without mutation"
+puts "PASS: public registration preparation distinguishes 28 synthetic matching, blocked and redacted cases without mutation"
 
 scenario.call("restore valid sources", nil, nil)
 identity_path = File.join(project, "Config/app-identity.json")
 valid_identity = File.binread(identity_path)
+valid_identity_document = JSON.parse(valid_identity)
 check_source = lambda do |label, expected_reason, expected_revision = nil|
   stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
   abort "#{label}: unexpected public result" unless status.exitstatus == 1 && stderr.empty?
@@ -219,14 +266,84 @@ git.call("add", "Config/app-identity.json")
 git.call("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "synthetic identity")
 sha = git.call("rev-parse", "HEAD")
 check_source.call("exact committed provenance", nil, sha)
+fsmonitor_marker = File.join(scratch, "unexpected-fsmonitor-execution")
+fsmonitor_hook = File.join(scratch, "malicious-fsmonitor.sh")
+File.write(fsmonitor_hook, "#!/bin/sh\n: > #{fsmonitor_marker.dump}\nexit 1\n")
+File.chmod(0o755, fsmonitor_hook)
+git.call("config", "core.fsmonitor", fsmonitor_hook)
+check_source.call("repository fsmonitor is never executed", nil, sha)
+git.call("config", "--unset", "core.fsmonitor")
+abort "repository-configured fsmonitor executed during read-only preparation" if File.exist?(fsmonitor_marker)
+filter_marker = File.join(scratch, "unexpected-clean-filter-execution")
+filter_hook = File.join(scratch, "malicious-clean-filter.sh")
+attributes_path = File.join(project, ".gitattributes")
+File.write(filter_hook, "#!/bin/sh\n: > #{filter_marker.dump}\nexit 1\n")
+File.chmod(0o755, filter_hook)
+File.write(attributes_path, "Config/app-identity.json filter=audit\n")
+git.call("config", "filter.audit.clean", filter_hook)
+git.call("config", "filter.audit.process", filter_hook)
+git.call("config", "filter.audit.required", "true")
+File.utime(Time.now, Time.now, identity_path)
+check_source.call("repository clean and process filters are never executed", nil, sha)
+git.call("config", "--unset", "filter.audit.clean")
+git.call("config", "--unset", "filter.audit.process")
+git.call("config", "--unset", "filter.audit.required")
+File.unlink(attributes_path)
+abort "repository-configured clean or process filter executed during read-only preparation" if File.exist?(filter_marker)
+File.write(identity_path, JSON.generate(valid_identity_document.merge("displayName" => "Replacement Identity")))
+git.call("add", "Config/app-identity.json")
+git.call("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "synthetic replacement commit")
+replacement_sha = git.call("rev-parse", "HEAD")
+git.call("update-ref", "HEAD", sha)
+git.call("replace", sha, replacement_sha)
+check_source.call("replacement refs cannot redefine source revision", nil)
+git.call("replace", "-d", sha)
 File.write(identity_path, valid_identity + "\n")
 check_source.call("edited source is not attributed to old commit", nil)
+identity_schema_check = lambda do |label, document|
+  File.write(identity_path, JSON.generate(document))
+  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+  abort "#{label}: invalid identity schema lost the partial report" unless status.exitstatus == 1 && stderr.empty?
+  rows = JSON.parse(stdout).fetch("fields").select { |row| row["fieldId"].start_with?("identity.") }
+  abort "#{label}: invalid identity schema was accepted" unless rows.all? { |row| row["reasons"].include?("invalid-source-schema") }
+end
+identity_schema_check.call("wrong identity schema version", valid_identity_document.merge("schemaVersion" => 999))
+identity_schema_check.call("missing identity source version", valid_identity_document.reject { |key, _| key == "sourceIdentityVersion" })
+identity_schema_check.call("unknown identity field", valid_identity_document.merge("unexpected" => true))
+identity_schema_check.call("one-character module", valid_identity_document.merge("moduleName" => "G"))
+identity_schema_check.call("underscore module", valid_identity_document.merge("moduleName" => "Garden_Notes"))
+identity_schema_check.call("Swift keyword module", valid_identity_document.merge("moduleName" => "class"))
+identity_schema_check.call("overlong display name", valid_identity_document.merge("displayName" => "G" * 31))
+identity_schema_check.call("Unicode control in display name", valid_identity_document.merge("displayName" => "Garden\u0085Notes"))
+identity_schema_check.call("Unicode format control in display name", valid_identity_document.merge("displayName" => "Garden\u202eNotes"))
+identity_schema_check.call("Unicode leading space in display name", valid_identity_document.merge("displayName" => "\u00a0Garden Notes"))
+identity_schema_check.call("overlong slug", valid_identity_document.merge("appSlug" => "g" * 51))
+identity_schema_check.call("leading-hyphen bundle label", valid_identity_document.merge("bundleId" => "-garden.example"))
+identity_schema_check.call("overlong bundle label", valid_identity_document.merge("bundleId" => "g" * 64 + ".example"))
+identity_schema_check.call("template display name remains", valid_identity_document.merge("displayName" => "TemplateApp"))
+identity_schema_check.call("template module remains", valid_identity_document.merge("moduleName" => "TemplateApp"))
+identity_schema_check.call("template slug remains", valid_identity_document.merge("appSlug" => "template-app"))
+identity_schema_check.call("template bundle remains", valid_identity_document.merge("bundleId" => "com.yuto.TemplateApp"))
+unicode_identity = valid_identity_document.merge("displayName" => ("e\u0301" * 30))
+File.write(identity_path, JSON.generate(unicode_identity))
+stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+unicode_identity_rows = JSON.parse(stdout).fetch("fields").select { |row| row["fieldId"].start_with?("identity.") }
+abort "canonical 30-grapheme display name was rejected" unless status.exitstatus == 1 && stderr.empty? &&
+  unicode_identity_rows.none? { |row| row["reasons"].include?("invalid-source-schema") }
 File.write(identity_path, "{broken-json")
 check_source.call("invalid schema repeated lookup", "invalid-source-schema")
 File.write(identity_path, '{"bundleId":"com.example.garden","bundleId":"com.other.garden"}')
 check_source.call("duplicate identity key", "invalid-source-schema")
 File.write(identity_path, '{"displayName":"Garden Notes","reviewContact\\u0045mail":"PRIVATE-ESCAPED-CONTACT"}')
 check_source.call("escaped sensitive key", "sensitive-source")
+File.write(identity_path, '{"displayName":"Garden Notes","password":"none"}')
+check_source.call("literal none is still a password value", "sensitive-source")
+File.write(identity_path, '{"displayName":"Garden Notes","contact":"person@example.com:notes"}')
+check_source.call("SCM-looking contact email is not exempt", "sensitive-source")
+File.write(identity_path, '{"displayName":"Garden Notes","location":"person@example.com:notes"}')
+check_source.call("generic location cannot claim the Package.resolved SSH exemption", "sensitive-source")
+File.write(identity_path, '{"displayName":"Garden Notes","login":"private-user"}')
+check_source.call("structured private login is never hashed", "sensitive-source")
 File.write(identity_path, valid_identity)
 outside = File.join(scratch, "preserved-outside.json")
 File.write(outside, valid_identity)
@@ -264,6 +381,11 @@ pbx = File.binread(File.join(repo_root, "TemplateApp.xcodeproj/project.pbxproj")
 pbx = pbx.gsub("com.yuto.TemplateApp", "com.example.garden").gsub("TemplateApp", "GardenNotes")
 pbx = pbx.gsub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;", 'PRODUCT_BUNDLE_IDENTIFIER = com.example.garden; INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";')
 File.write(pbx_path, pbx)
+scheme_relative = "GardenNotes.xcodeproj/xcshareddata/xcschemes/GardenNotes.xcscheme"
+scheme_path = File.join(project, scheme_relative)
+FileUtils.mkdir_p(File.dirname(scheme_path))
+scheme = File.binread(File.join(repo_root, "TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme")).gsub("TemplateApp", "GardenNotes")
+File.write(scheme_path, scheme)
 public_config = File.join(project, "Config/Public.xcconfig")
 FileUtils.cp(File.join(repo_root, "Config/Public.xcconfig"), public_config)
 prepared = JSON.parse(File.binread(File.join(project, preparation_path)))
@@ -278,16 +400,52 @@ xcode_check = lambda do |label, expected_field, expected_reason|
   if expected_field
     row = fields.find { |field| field["fieldId"] == expected_field }
     abort "#{label}: expected #{expected_reason}, got #{row['reasons']}" unless row["reasons"].include?(expected_reason)
+    if %w[xcode-scheme-runtime-input-unsupported xcode-scheme-script-action-unsupported].include?(expected_reason)
+      scheme_source = row["sources"].find { |source| source["path"] == scheme_relative }
+      abort "#{label}: private scheme retained a public digest" unless scheme_source && scheme_source["digest"].nil? && scheme_source["revision"].nil?
+    end
   else
     errors = fields.flat_map { |field| field["reasons"] }.select { |reason| reason.start_with?("xcode-", "xcconfig-") }.uniq
     abort "#{label}: valid settings rejected #{errors}" unless errors.empty?
     %w[identity.displayName identity.module identity.bundleId platforms deviceSupport version build supportedLocales].each do |id|
       row = fields.find { |field| field["fieldId"] == id }
       abort "#{label}: project provenance missing" unless row["sources"].any? { |source| source["path"] == "GardenNotes.xcodeproj/project.pbxproj" && source["digest"] == "sha256:#{Digest::SHA256.file(pbx_path).hexdigest}" }
+      abort "#{label}: shared scheme provenance missing" unless row["sources"].any? { |source| source["path"] == scheme_relative && source["digest"] == "sha256:#{Digest::SHA256.file(scheme_path).hexdigest}" }
     end
   end
 end
 xcode_check.call("matching actual target configurations", nil, nil)
+debug_archive_scheme = scheme.sub(/(<ArchiveAction\b.*?buildConfiguration = )"Release"/m, '\1"Debug"')
+abort "scheme archive configuration fixture did not change ArchiveAction" if debug_archive_scheme == scheme
+File.write(scheme_path, debug_archive_scheme)
+xcode_check.call("archive configuration cannot silently become Debug", "identity.bundleId", "xcode-scheme-archive-configuration-invalid")
+scripted_scheme = scheme.sub(
+  "</ArchiveAction>",
+  '<PreActions><ExecutionAction ActionType="Xcode.IDEStandardExecutionActionsCore.ExecutionActionType.ShellScriptAction"><ActionContent title="private hook" scriptText="notify private@example.com"/></ExecutionAction></PreActions></ArchiveAction>'
+)
+abort "scheme script fixture did not change the archive action" if scripted_scheme == scheme
+File.write(scheme_path, scripted_scheme)
+xcode_check.call("scheme execution actions are fail-closed", "identity.bundleId", "xcode-scheme-script-action-unsupported")
+private_scheme_inputs = {
+  "scheme environment values are never hashed" => '<EnvironmentVariables><EnvironmentVariable key="DEMO_EMAIL" value="private@example.com" isEnabled="YES"/></EnvironmentVariables>',
+  "scheme command-line values are never hashed" => '<CommandLineArguments><CommandLineArgument argument="--password=private-review-value" isEnabled="YES"/></CommandLineArguments>'
+}
+private_scheme_inputs.each do |label, element|
+  value = scheme.sub("</LaunchAction>", "#{element}</LaunchAction>")
+  abort "#{label}: fixture did not change LaunchAction" if value == scheme
+  File.write(scheme_path, value)
+  xcode_check.call(label, "identity.bundleId", "xcode-scheme-runtime-input-unsupported")
+end
+deep_nodes = 101
+deep_scheme = scheme.sub("</ArchiveAction>", "#{'<Nested>' * deep_nodes}#{'</Nested>' * deep_nodes}</ArchiveAction>")
+abort "deep scheme fixture did not change ArchiveAction" if deep_scheme == scheme
+File.write(scheme_path, deep_scheme)
+xcode_check.call("deeply nested scheme is bounded", "identity.bundleId", "xcode-scheme-invalid")
+archive_entry = scheme[/<BuildActionEntry\b.*?<\/BuildActionEntry>/m]
+abort "scheme archive target fixture could not find a build entry" unless archive_entry
+File.write(scheme_path, scheme.sub("</BuildActionEntries>", "#{archive_entry}\n</BuildActionEntries>"))
+xcode_check.call("multiple archive build targets are ambiguous", "identity.bundleId", "xcode-scheme-archive-target-ambiguous")
+File.write(scheme_path, scheme)
 File.write(pbx_path, pbx.sub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;", "PRODUCT_BUNDLE_IDENTIFIER = com.other.garden;"))
 xcode_check.call("one configuration has wrong Bundle", "identity.bundleId", "xcode-identity.bundleId-mismatch")
 File.write(pbx_path, pbx.sub('INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";', 'INFOPLIST_KEY_CFBundleDisplayName = "Other Name";'))
@@ -302,11 +460,85 @@ File.write(pbx_path, pbx.sub("SDKROOT = iphoneos;", "SDKROOT = macosx;"))
 xcode_check.call("non-iOS SDK", "platforms", "xcode-platform-mismatch")
 File.write(pbx_path, pbx.sub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;", 'PRODUCT_BUNDLE_IDENTIFIER = "$(MISSING_SETTING)";'))
 xcode_check.call("unresolved variable", "identity.bundleId", "xcode-setting-unresolved")
+conditional_alias = pbx.sub(
+  "PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;",
+  "PRODUCT_BUNDLE_IDENTIFIER = \"$(APP_ID)\"; APP_ID = com.example.garden; \"APP_ID[sdk=iphoneos*]\" = com.other.bad;"
+)
+File.write(pbx_path, conditional_alias)
+xcode_check.call("conditional indirect identity alias", "identity.bundleId", "xcode-conditional-settings-unresolved")
+inherited_linker_input = pbx.sub(
+  "ALWAYS_SEARCH_USER_PATHS = NO;",
+  'ALWAYS_SEARCH_USER_PATHS = NO; LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor";'
+).sub(
+  "ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;",
+  'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; LIBRARY_SEARCH_PATHS = "$(inherited)";'
+)
+abort "inherited linker input fixture did not update both settings layers" if inherited_linker_input == pbx
+File.write(pbx_path, inherited_linker_input)
+vendor_library = File.join(project, "Vendor/libAnalytics.a")
+FileUtils.mkdir_p(File.dirname(vendor_library))
+File.binwrite(vendor_library, "synthetic-inherited-static-library")
+xcode_check.call("project linker input inherited by app target", "identity.bundleId", "xcode-build-input-setting-unresolved")
+FileUtils.remove_entry(File.join(project, "Vendor"))
+system_header_input = pbx.sub(
+  "ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;",
+  'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; SYSTEM_HEADER_SEARCH_PATHS = "$(SRCROOT)/ExternalHeaders";'
+)
+abort "system header search path fixture did not update the app target" if system_header_input == pbx
+File.write(pbx_path, system_header_input)
+external_header = File.join(project, "ExternalHeaders/Injected.h")
+FileUtils.mkdir_p(File.dirname(external_header))
+File.write(external_header, "#define INJECTED_BUILD_INPUT 1\n")
+xcode_check.call("system header search path input is fail-closed", "identity.bundleId", "xcode-build-input-setting-unresolved")
+FileUtils.remove_entry(File.join(project, "ExternalHeaders"))
+absolute_info = pbx.sub(
+  "GENERATE_INFOPLIST_FILE = YES;",
+  "GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = /tmp/Actual.plist;"
+)
+abort "absolute Info.plist fixture did not update the project" if absolute_info == pbx
+File.write(pbx_path, absolute_info)
+decoy_info = File.join(project, "tmp/Actual.plist")
+FileUtils.mkdir_p(File.dirname(decoy_info))
+File.write(decoy_info, '<?xml version="1.0"?><plist version="1.0"><dict></dict></plist>')
+xcode_check.call("absolute Info.plist cannot bind a repository decoy", "identity.bundleId", "xcode-build-input-setting-unresolved")
+FileUtils.remove_entry(File.join(project, "tmp"))
+absolute_group_reference = pbx.sub(
+  'path = Public.xcconfig; sourceTree = "<group>";',
+  'path = /tmp/Public.xcconfig; sourceTree = "<group>";'
+)
+abort "absolute group reference fixture did not update the project" if absolute_group_reference == pbx
+File.write(pbx_path, absolute_group_reference)
+group_decoy = File.join(project, "Config/tmp/Public.xcconfig")
+FileUtils.mkdir_p(File.dirname(group_decoy))
+File.write(group_decoy, File.binread(public_config))
+xcode_check.call("absolute nested group reference cannot bind a repository decoy", "identity.bundleId", "xcode-reference-unresolved")
+FileUtils.remove_entry(File.join(project, "Config/tmp"))
+sdk_build_id = "C0D3E0010000000000000001"
+sdk_ref_id = "C0D3E0020000000000000002"
+sdk_build_section = "/* Begin PBXBuildFile section */\n\t\t#{sdk_build_id} /* Fake.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = #{sdk_ref_id} /* Fake.framework */; };\n/* End PBXBuildFile section */\n\n"
+unsafe_sdk_pbx = pbx.sub("/* Begin PBXFileReference section */", sdk_build_section + "/* Begin PBXFileReference section */")
+unsafe_sdk_reference = "\t\t#{sdk_ref_id} /* Fake.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = /tmp/Fake.framework; sourceTree = SDKROOT; };\n"
+unsafe_sdk_pbx = unsafe_sdk_pbx.sub("/* End PBXFileReference section */", unsafe_sdk_reference + "/* End PBXFileReference section */")
+unsafe_sdk_pbx = unsafe_sdk_pbx.sub(
+  "4E7ECA3730389D2700BBA255 /* Frameworks */ = {\n\t\t\tisa = PBXFrameworksBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n",
+  "4E7ECA3730389D2700BBA255 /* Frameworks */ = {\n\t\t\tisa = PBXFrameworksBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\t#{sdk_build_id} /* Fake.framework in Frameworks */,\n"
+)
+abort "unsafe SDKROOT framework fixture did not update the project" if unsafe_sdk_pbx == pbx
+File.write(pbx_path, unsafe_sdk_pbx)
+xcode_check.call("SDKROOT label cannot trust an absolute framework path", "privacy.collectsData", "code-inventory-unavailable")
 File.write(pbx_path, pbx)
 File.write(public_config, '#include "Public.xcconfig"' + "\n")
 xcode_check.call("recursive xcconfig include", "identity.bundleId", "xcconfig-include-cycle")
 File.write(public_config, '#include "../../../outside.xcconfig"' + "\n")
 xcode_check.call("escaping xcconfig include", "identity.bundleId", "unsafe-source-path")
+absolute_include_decoy = File.join(project, "Config/tmp/Actual.xcconfig")
+FileUtils.mkdir_p(File.dirname(absolute_include_decoy))
+File.write(absolute_include_decoy, "PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;\n")
+File.write(public_config, '#include "/tmp/Actual.xcconfig"' + "\n")
+xcode_check.call("absolute xcconfig include cannot bind a repository decoy", "identity.bundleId", "xcconfig-include-path-unresolved")
+FileUtils.remove_entry(File.join(project, "Config/tmp"))
+File.write(public_config, '#include "../.GIT/config"' + "\n")
+xcode_check.call("case-variant Git metadata include", "identity.bundleId", "unsafe-source-path")
 FileUtils.cp(File.join(repo_root, "Config/Public.xcconfig"), public_config)
 xcode_check.call("restored sources", nil, nil)
 puts "PASS: real project configuration reads reconcile identity, version, devices and safe xcconfig includes"
@@ -321,11 +553,24 @@ FileUtils.mkdir_p(File.join(project, "specs"))
 FileUtils.mkdir_p(File.join(project, "GardenNotes"))
 File.write(File.join(project, spec_relative), "# Garden journal\n\nStatus: Confirmed\n\nKeep a private garden journal.\n")
 File.write(File.join(project, code_relative), "struct Journal { var entries: [String] = [] }\n")
+git.call("add", "-A")
+git.call("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "synthetic reviewed source baseline")
 baseline_stdout, _, baseline_status = Open3.capture3(entrypoint, "--project-root", project)
 abort "confirmation baseline failed" unless baseline_status.exitstatus == 1
 baseline_rows = JSON.parse(baseline_stdout).fetch("fields")
 source_descriptor = lambda do |relative, anchor = "document"|
-  {"path" => relative, "anchor" => anchor, "revision" => nil, "digest" => "sha256:#{Digest::SHA256.file(File.join(project, relative)).hexdigest}"}
+  absolute = File.join(project, relative)
+  bytes = File.binread(absolute)
+  head = git.call("rev-parse", "HEAD")
+  tree, tree_status = Open3.capture2e(
+    {"GIT_OPTIONAL_LOCKS" => "0", "GIT_NO_REPLACE_OBJECTS" => "1", "GIT_NO_LAZY_FETCH" => "1"},
+    "/usr/bin/git", "--no-pager", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", project,
+    "--literal-pathspecs", "ls-tree", "-z", head, "--", relative
+  )
+  blob = Digest::SHA1.hexdigest("blob #{bytes.bytesize}\0".b + bytes.b)
+  mode = File.stat(absolute).mode & 0o111 == 0 ? "100644" : "100755"
+  revision = tree_status.success? && tree == "#{mode} blob #{blob}\t#{relative}\0" ? head : nil
+  {"path" => relative, "anchor" => anchor, "revision" => revision, "digest" => "sha256:#{Digest::SHA256.hexdigest(bytes)}"}
 end
 proof_directory = ".artifacts/appstore-preparation/proofs"
 FileUtils.mkdir_p(File.join(project, proof_directory))
@@ -419,6 +664,7 @@ privacy_file = File.join(project, privacy_relative)
 FileUtils.mkdir_p(File.dirname(privacy_file))
 privacy_values = {"schemaVersion" => 1, "collectsData" => false, "tracking" => false, "dataTypes" => [], "thirdPartySDKs" => [], "permissions" => [], "accountDeletion" => {"required" => false, "reason" => "No account feature is implemented."}}
 File.write(privacy_file, YAML.dump(privacy_values))
+privacy_app_values = YAML.safe_load(File.binread(File.join(project, app_path)))
 privacy_stdout, _, privacy_status = Open3.capture3(entrypoint, "--project-root", project)
 abort "privacy baseline failed" unless privacy_status.exitstatus == 1
 privacy_row = JSON.parse(privacy_stdout).fetch("fields").find { |row| row["fieldId"] == "privacy.collectsData" }
@@ -439,7 +685,7 @@ end
 privacy_index = JSON.parse(valid_index)
 privacy_index["records"] << privacy_record
 File.write(index_file, JSON.generate(privacy_index))
-privacy_check = lambda do |label, state, reason = nil|
+privacy_check = lambda do |label, state, reason = nil, expected_collects_data = false|
   before = snapshot.call
   stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
   abort "#{label}: changed inputs, diagnostics or unexpected status" unless status.exitstatus == 1 && stderr.empty? && before == snapshot.call
@@ -449,11 +695,99 @@ privacy_check = lambda do |label, state, reason = nil|
   abort "#{label}: expected #{reason}, got #{row['reasons']}" if reason && !row["reasons"].include?(reason)
   name_row = report.fetch("fields").find { |field| field["fieldId"] == "name" && field["locale"] == "en-US" }
   abort "#{label}: independent approved name lost" unless name_row["state"] == "confirmed"
-  abort "#{label}: invented a privacy declaration" unless YAML.safe_load(File.binread(privacy_file))["collectsData"] == false
+  abort "#{label}: invented a privacy declaration" unless YAML.safe_load(File.binread(privacy_file))["collectsData"] == expected_collects_data
   abort "#{label}: invented readiness" unless report["releaseReady"] == false && report["remoteMutations"] == []
   report
 end
 privacy_check.call("reviewed inventory without SDK", "confirmed")
+privacy_dependents = lambda do |label, report, reason|
+  %w[legal.privacyPolicy legal.termsOfUse privacyPolicyURL reviewNotes].each do |field_id|
+    rows = report.fetch("fields").select { |field| field["fieldId"] == field_id }
+    abort "#{label}: missing dependent #{field_id}" if rows.empty?
+    rows.each do |row|
+      abort "#{label}: #{field_id} omitted #{reason}: #{row['reasons']}" unless row["state"] == "draft" && row["reasons"].include?(reason)
+    end
+  end
+end
+unknown_privacy = privacy_values.merge("unexpected" => true)
+File.write(privacy_file, YAML.dump(unknown_privacy))
+report = privacy_check.call("unknown privacy declaration keys invalidate dependent policy and review", "draft", "invalid-source-schema")
+privacy_dependents.call("unknown privacy declaration keys", report, "invalid-source-schema")
+duplicate_data_types = privacy_values.merge("dataTypes" => ["EMAIL_ADDRESS", "EMAIL_ADDRESS"])
+File.write(privacy_file, YAML.dump(duplicate_data_types))
+report = privacy_check.call("duplicate privacy data types invalidate dependent policy and review", "draft", "invalid-field-value")
+privacy_dependents.call("duplicate privacy data types", report, "invalid-field-value")
+duplicate_permissions = privacy_values.merge("permissions" => ["NSCameraUsageDescription", "NSCameraUsageDescription"])
+File.write(privacy_file, YAML.dump(duplicate_permissions))
+report = privacy_check.call("duplicate privacy permissions invalidate dependent policy and review", "draft", "invalid-field-value")
+privacy_dependents.call("duplicate privacy permissions", report, "invalid-field-value")
+File.write(privacy_file, YAML.dump(privacy_values))
+privacy_check.call("valid privacy declaration restores dependent policy inputs", "confirmed")
+untracked_runtime = File.join(project, "GardenNotes/UntrackedRuntime.bin")
+File.binwrite(untracked_runtime, "untracked-runtime-input")
+privacy_check.call("untracked build-root inputs cannot reuse old privacy review", "draft", "code-inventory-source-drift")
+File.unlink(untracked_runtime)
+privacy_check.call("privacy review restores after untracked build input removal", "confirmed")
+public_config_bytes = File.binread(public_config)
+external_config = File.join(project, "BuildSettings/App.xcconfig")
+FileUtils.mkdir_p(File.dirname(external_config))
+File.write(external_config, 'INFOPLIST_KEY_NSCameraUsageDescription = "Capture journal photos";' + "\n")
+File.write(public_config, public_config_bytes + "\n#include \"../BuildSettings/App.xcconfig\"\nLIBRARY_SEARCH_PATHS = \"$(inherited)\";\n")
+privacy_check.call("Config-external included xcconfig permissions are inspected", "draft", "permission-declaration-missing")
+File.write(external_config, 'LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor";' + "\n")
+vendor_library = File.join(project, "Vendor/libAnalytics.a")
+FileUtils.mkdir_p(File.dirname(vendor_library))
+File.binwrite(vendor_library, "synthetic-static-library")
+privacy_check.call("linker path injection through xcconfig is fail-closed", "draft", "code-target-sources-unresolved")
+FileUtils.remove_entry(File.join(project, "BuildSettings"))
+FileUtils.remove_entry(File.join(project, "Vendor"))
+File.write(public_config, public_config_bytes)
+privacy_check.call("privacy review restores after external build settings removal", "confirmed")
+explicit_info_pbx = pbx.sub(
+  "GENERATE_INFOPLIST_FILE = YES;",
+  "GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = BuildSettings/Info.plist;"
+)
+abort "explicit Info.plist fixture did not update the project" if explicit_info_pbx == pbx
+File.write(pbx_path, explicit_info_pbx)
+explicit_info = File.join(project, "BuildSettings/Info.plist")
+FileUtils.mkdir_p(File.dirname(explicit_info))
+File.write(explicit_info, '<?xml version="1.0"?><plist version="1.0"><dict><key>NSCameraUsageDescription</key><string>Capture journal photos</string></dict></plist>')
+privacy_check.call("safe explicit Info.plist permissions are inspected", "draft", "permission-declaration-missing")
+FileUtils.remove_entry(File.join(project, "BuildSettings"))
+File.write(pbx_path, pbx)
+privacy_check.call("privacy review restores after explicit Info.plist removal", "confirmed")
+inconsistent_privacy = Marshal.load(Marshal.dump(privacy_values))
+inconsistent_privacy["dataTypes"] = ["EMAIL_ADDRESS"]
+File.write(privacy_file, YAML.dump(inconsistent_privacy))
+privacy_check.call("no-data declaration cannot retain collected data types", "draft", "privacy-declaration-inconsistent")
+tracking_without_collection = Marshal.load(Marshal.dump(privacy_values))
+tracking_without_collection["tracking"] = true
+File.write(privacy_file, YAML.dump(tracking_without_collection))
+privacy_check.call("tracking cannot be declared without data collection", "draft", "privacy-declaration-inconsistent")
+collection_without_types = Marshal.load(Marshal.dump(privacy_values))
+collection_without_types["collectsData"] = true
+File.write(privacy_file, YAML.dump(collection_without_types))
+privacy_check.call("data collection requires at least one data type", "draft", "privacy-declaration-inconsistent", true)
+File.write(privacy_file, YAML.dump(privacy_values))
+File.write(File.join(project, app_path), YAML.dump(privacy_app_values.merge("accountsSupported" => true)))
+report = privacy_check.call("account support requires account deletion readiness", "draft", "account-deletion-declaration-inconsistent")
+deletion_row = report.fetch("fields").find { |row| row["fieldId"] == "privacy.accountDeletion" }
+abort "account deletion row was not bound to the account-support source" unless deletion_row["reasons"].include?("account-deletion-declaration-inconsistent") &&
+  deletion_row["sources"].any? { |source| source["path"] == app_path && source["anchor"] == "accountsSupported" }
+File.write(File.join(project, app_path), YAML.dump(privacy_app_values))
+privacy_check.call("restored account and privacy declarations", "confirmed")
+inconsistent_deletion = Marshal.load(Marshal.dump(privacy_values))
+inconsistent_deletion["accountDeletion"] = {"required" => true, "reason" => "Synthetic contradiction without account support."}
+File.write(privacy_file, YAML.dump(inconsistent_deletion))
+privacy_check.call("account deletion cannot be required when accounts are unsupported", "draft", "account-deletion-declaration-inconsistent")
+File.write(privacy_file, YAML.dump(privacy_values))
+privacy_check.call("restored no-account privacy declaration", "confirmed")
+File.write(File.join(project, app_path), YAML.dump(privacy_app_values.reject { |key, _| key == "accountsSupported" }))
+privacy_check.call("missing account-support declaration stays unresolved", "draft", "privacy-declaration-unresolved")
+File.write(File.join(project, app_path), YAML.dump(privacy_app_values.merge("accountsSupported" => nil)))
+privacy_check.call("null account-support declaration stays unresolved", "draft", "privacy-declaration-unresolved")
+File.write(File.join(project, app_path), YAML.dump(privacy_app_values))
+privacy_check.call("explicit account-support declaration restores privacy", "confirmed")
 ads_file = File.join(project, "GardenNotes/Ads.swift")
 File.write(ads_file, "import GoogleMobileAds\nimport UserMessagingPlatform\n")
 report = privacy_check.call("AdMob added after old no-data review", "draft", "sdk-declaration-missing:admob")
@@ -463,18 +797,213 @@ description = report.fetch("fields").find { |row| row["fieldId"] == "description
 abort "new implementation file did not invalidate feature claims" unless description["state"] == "draft" && description["reasons"].include?("stale-derive-evidence")
 File.unlink(ads_file)
 privacy_check.call("original inventory restored", "confirmed")
+privacy_manifest = File.join(project, "GardenNotes/PrivacyInfo.xcprivacy")
+privacy_manifest_document = {
+  "NSPrivacyTracking" => true,
+  "NSPrivacyTrackingDomains" => [],
+  "NSPrivacyCollectedDataTypes" => [],
+  "NSPrivacyAccessedAPITypes" => []
+}
+File.write(privacy_manifest, JSON.generate(privacy_manifest_document))
+report = privacy_check.call("privacy manifest tracking contradicts no-tracking source", "draft", "privacy-manifest-declaration-inconsistent")
+description = report.fetch("fields").find { |row| row["fieldId"] == "description" && row["locale"] == "en-US" }
+abort "privacy manifest contradiction leaked into feature-copy reasons" if description["reasons"].include?("privacy-manifest-declaration-inconsistent")
+privacy_manifest_document["NSPrivacyTracking"] = false
+privacy_manifest_document["NSPrivacyCollectedDataTypes"] = [{
+  "NSPrivacyCollectedDataType" => "NSPrivacyCollectedDataTypeEmailAddress",
+  "NSPrivacyCollectedDataTypeLinked" => true,
+  "NSPrivacyCollectedDataTypeTracking" => false,
+  "NSPrivacyCollectedDataTypePurposes" => ["NSPrivacyCollectedDataTypePurposeAppFunctionality"]
+}]
+File.write(privacy_manifest, JSON.generate(privacy_manifest_document))
+privacy_check.call("privacy manifest collection contradicts no-data source", "draft", "privacy-manifest-declaration-inconsistent")
+tracking_data_privacy = Marshal.load(Marshal.dump(privacy_values))
+tracking_data_privacy["collectsData"] = true
+tracking_data_privacy["dataTypes"] = ["EMAIL_ADDRESS"]
+File.write(privacy_file, YAML.dump(tracking_data_privacy))
+privacy_manifest_document["NSPrivacyCollectedDataTypes"].first["NSPrivacyCollectedDataTypeTracking"] = true
+File.write(privacy_manifest, JSON.generate(privacy_manifest_document))
+privacy_check.call("collected-data tracking cannot hide behind top-level false", "draft", "privacy-manifest-unresolved", true)
+File.write(privacy_file, YAML.dump(privacy_values))
+privacy_manifest_document["NSPrivacyCollectedDataTypes"] = []
+privacy_manifest_document["NSPrivacyTrackingDomains"] = ["tracking.fixture.example"]
+File.write(privacy_manifest, JSON.generate(privacy_manifest_document))
+privacy_check.call("tracking domains cannot hide behind top-level false", "draft", "privacy-manifest-unresolved")
+privacy_manifest_document["NSPrivacyTrackingDomains"] = []
+privacy_manifest_document["NSPrivacyCollectedDataTypes"] = [{
+  "NSPrivacyCollectedDataType" => "NSPrivacyCollectedDataTypeEmailAddress",
+  "NSPrivacyCollectedDataTypeLinked" => true,
+  "NSPrivacyCollectedDataTypeTracking" => false,
+  "NSPrivacyCollectedDataTypePurposes" => []
+}]
+File.write(privacy_manifest, JSON.generate(privacy_manifest_document))
+privacy_check.call("privacy manifest collection purposes cannot be empty", "draft", "privacy-manifest-unresolved")
+privacy_manifest_document["NSPrivacyCollectedDataTypes"] = []
+privacy_manifest_document["NSPrivacyAccessedAPITypes"] = [{
+  "NSPrivacyAccessedAPIType" => "NSPrivacyAccessedAPICategoryUserDefaults",
+  "NSPrivacyAccessedAPITypeReasons" => []
+}]
+File.write(privacy_manifest, JSON.generate(privacy_manifest_document))
+privacy_check.call("privacy manifest accessed API reasons cannot be empty", "draft", "privacy-manifest-unresolved")
+privacy_manifest_document["NSPrivacyAccessedAPITypes"] = []
+privacy_manifest_document["NSPrivacyTracking"] = "false"
+File.write(privacy_manifest, JSON.generate(privacy_manifest_document))
+privacy_check.call("malformed privacy manifest remains unresolved", "draft", "privacy-manifest-unresolved")
+File.unlink(privacy_manifest)
+privacy_check.call("privacy inventory restores after manifest removal", "confirmed")
+resource_build_id = "C0D3A0010000000000000001"
+resource_ref_id = "C0D3A0020000000000000002"
+resource_relative = "SharedPrivacy/PrivacyInfo.xcprivacy"
+build_file_section = "/* Begin PBXBuildFile section */\n\t\t#{resource_build_id} /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = #{resource_ref_id} /* PrivacyInfo.xcprivacy */; };\n/* End PBXBuildFile section */\n\n"
+resource_pbx = pbx.sub("/* Begin PBXFileReference section */", build_file_section + "/* Begin PBXFileReference section */")
+file_reference = "\t\t#{resource_ref_id} /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = #{resource_relative}; sourceTree = SOURCE_ROOT; };\n"
+resource_pbx = resource_pbx.sub("/* End PBXFileReference section */", file_reference + "/* End PBXFileReference section */")
+resource_pbx = resource_pbx.sub(
+  "4E7ECA3830389D2700BBA255 /* Resources */ = {\n\t\t\tisa = PBXResourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n",
+  "4E7ECA3830389D2700BBA255 /* Resources */ = {\n\t\t\tisa = PBXResourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\t#{resource_build_id} /* PrivacyInfo.xcprivacy in Resources */,\n"
+)
+abort "resource privacy fixture did not update the project" if resource_pbx == pbx
+File.write(pbx_path, resource_pbx)
+resource_manifest = File.join(project, resource_relative)
+FileUtils.mkdir_p(File.dirname(resource_manifest))
+File.write(resource_manifest, JSON.generate({
+  "NSPrivacyTracking" => true,
+  "NSPrivacyTrackingDomains" => [],
+  "NSPrivacyCollectedDataTypes" => [],
+  "NSPrivacyAccessedAPITypes" => []
+}))
+privacy_check.call("resource-phase privacy manifest outside source root is inspected", "draft", "privacy-manifest-declaration-inconsistent")
+File.unlink(resource_manifest)
+Dir.rmdir(File.dirname(resource_manifest))
+File.write(pbx_path, pbx)
+privacy_check.call("privacy inventory restores after resource manifest removal", "confirmed")
+bundle_build_id = "C0D3A1010000000000000001"
+bundle_ref_id = "C0D3A1020000000000000002"
+bundle_relative = "External/Vendor.bundle"
+bundle_build_section = "/* Begin PBXBuildFile section */\n\t\t#{bundle_build_id} /* Vendor.bundle in Resources */ = {isa = PBXBuildFile; fileRef = #{bundle_ref_id} /* Vendor.bundle */; };\n/* End PBXBuildFile section */\n\n"
+bundle_pbx = pbx.sub("/* Begin PBXFileReference section */", bundle_build_section + "/* Begin PBXFileReference section */")
+bundle_reference = "\t\t#{bundle_ref_id} /* Vendor.bundle */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = #{bundle_relative}; sourceTree = SOURCE_ROOT; };\n"
+bundle_pbx = bundle_pbx.sub("/* End PBXFileReference section */", bundle_reference + "/* End PBXFileReference section */")
+bundle_pbx = bundle_pbx.sub(
+  "4E7ECA3830389D2700BBA255 /* Resources */ = {\n\t\t\tisa = PBXResourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n",
+  "4E7ECA3830389D2700BBA255 /* Resources */ = {\n\t\t\tisa = PBXResourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\t#{bundle_build_id} /* Vendor.bundle in Resources */,\n"
+)
+abort "resource bundle fixture did not update the project" if bundle_pbx == pbx
+File.write(pbx_path, bundle_pbx)
+bundle_manifest = File.join(project, bundle_relative, "PrivacyInfo.xcprivacy")
+FileUtils.mkdir_p(File.dirname(bundle_manifest))
+File.write(bundle_manifest, JSON.generate({
+  "NSPrivacyTracking" => true,
+  "NSPrivacyTrackingDomains" => [],
+  "NSPrivacyCollectedDataTypes" => [],
+  "NSPrivacyAccessedAPITypes" => []
+}))
+privacy_check.call("resource bundle outside source root is recursively inspected", "draft", "privacy-manifest-declaration-inconsistent")
+FileUtils.remove_entry(File.join(project, "External"))
+File.write(pbx_path, pbx)
+privacy_check.call("privacy inventory restores after resource bundle removal", "confirmed")
+framework_build_id = "C0D3B0010000000000000001"
+framework_ref_id = "C0D3B0020000000000000002"
+framework_relative = "Vendor/Foo.xcframework"
+framework_build_section = "/* Begin PBXBuildFile section */\n\t\t#{framework_build_id} /* Foo.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = #{framework_ref_id} /* Foo.xcframework */; };\n/* End PBXBuildFile section */\n\n"
+framework_pbx = pbx.sub("/* Begin PBXFileReference section */", framework_build_section + "/* Begin PBXFileReference section */")
+framework_reference = "\t\t#{framework_ref_id} /* Foo.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = #{framework_relative}; sourceTree = SOURCE_ROOT; };\n"
+framework_pbx = framework_pbx.sub("/* End PBXFileReference section */", framework_reference + "/* End PBXFileReference section */")
+framework_pbx = framework_pbx.sub(
+  "4E7ECA3730389D2700BBA255 /* Frameworks */ = {\n\t\t\tisa = PBXFrameworksBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n",
+  "4E7ECA3730389D2700BBA255 /* Frameworks */ = {\n\t\t\tisa = PBXFrameworksBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\t#{framework_build_id} /* Foo.xcframework in Frameworks */,\n"
+)
+abort "framework audit fixture did not update the project" if framework_pbx == pbx
+File.write(pbx_path, framework_pbx)
+framework_binary = File.join(project, framework_relative, "ios-arm64/Foo.framework/Foo")
+FileUtils.mkdir_p(File.dirname(framework_binary))
+File.binwrite(framework_binary, "synthetic-framework-v1")
+privacy_check.call("target-linked non-system framework is fail-closed", "draft", "code-target-sources-unresolved")
+File.binwrite(framework_binary, "synthetic-framework-v2")
+privacy_check.call("unreviewed framework byte drift remains fail-closed", "draft", "code-target-sources-unresolved")
+FileUtils.remove_entry(File.join(project, "Vendor"))
+File.write(pbx_path, pbx)
+privacy_check.call("privacy inventory restores after framework removal", "confirmed")
+copy_phase_id = "C0D3C0010000000000000001"
+extension_build_id = "C0D3C0020000000000000002"
+extension_ref_id = "C0D3C0030000000000000003"
+dependency_id = "C0D3C0040000000000000004"
+extension_relative = "Embedded/FixtureWidget.appex"
+extension_build_section = "/* Begin PBXBuildFile section */\n\t\t#{extension_build_id} /* FixtureWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = #{extension_ref_id} /* FixtureWidget.appex */; };\n/* End PBXBuildFile section */\n\n"
+extension_pbx = pbx.sub("/* Begin PBXFileReference section */", extension_build_section + "/* Begin PBXFileReference section */")
+extension_reference = "\t\t#{extension_ref_id} /* FixtureWidget.appex */ = {isa = PBXFileReference; explicitFileType = wrapper.app-extension; path = #{extension_relative}; sourceTree = SOURCE_ROOT; };\n"
+extension_pbx = extension_pbx.sub("/* End PBXFileReference section */", extension_reference + "/* End PBXFileReference section */")
+copy_phase = "/* Begin PBXCopyFilesBuildPhase section */\n\t\t#{copy_phase_id} /* Embed App Extensions */ = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstSubfolderSpec = 13; files = (#{extension_build_id} /* FixtureWidget.appex in Embed App Extensions */,); runOnlyForDeploymentPostprocessing = 0; };\n/* End PBXCopyFilesBuildPhase section */\n\n"
+extension_pbx = extension_pbx.sub("/* Begin PBXResourcesBuildPhase section */", copy_phase + "/* Begin PBXResourcesBuildPhase section */")
+extension_pbx = extension_pbx.sub(
+  "\t\t\t\t4E7ECA3830389D2700BBA255 /* Resources */,\n",
+  "\t\t\t\t4E7ECA3830389D2700BBA255 /* Resources */,\n\t\t\t\t#{copy_phase_id} /* Embed App Extensions */,\n"
+)
+extension_pbx = extension_pbx.sub(
+  "\t\t\tdependencies = (\n\t\t\t);",
+  "\t\t\tdependencies = (\n\t\t\t\t#{dependency_id} /* PBXTargetDependency */,\n\t\t\t);"
+)
+abort "embedded extension audit fixture did not update the project" if extension_pbx == pbx
+File.write(pbx_path, extension_pbx)
+extension_binary = File.join(project, extension_relative, "FixtureWidget")
+FileUtils.mkdir_p(File.dirname(extension_binary))
+File.binwrite(extension_binary, "synthetic-extension-v1")
+privacy_check.call("embedded extension and target dependency are fail-closed", "draft", "code-target-sources-unresolved")
+File.binwrite(extension_binary, "synthetic-extension-v2")
+privacy_check.call("unreviewed embedded extension drift remains fail-closed", "draft", "code-target-sources-unresolved")
+FileUtils.remove_entry(File.join(project, "Embedded"))
+File.write(pbx_path, pbx)
+privacy_check.call("privacy inventory restores after embedded extension removal", "confirmed")
+build_rule_pbx = pbx.sub(
+  "\t\t\tbuildRules = (\n\t\t\t);",
+  "\t\t\tbuildRules = (\n\t\t\t\tC0D3D0010000000000000001 /* PBXBuildRule */,\n\t\t\t);"
+)
+abort "custom build rule fixture did not update the app target" if build_rule_pbx == pbx
+File.write(pbx_path, build_rule_pbx)
+privacy_check.call("custom app-target build rules are fail-closed", "draft", "code-target-sources-unresolved")
+unknown_phase_id = "C0D3D0020000000000000002"
+unknown_phase = "/* Begin PBXHeadersBuildPhase section */\n\t\t#{unknown_phase_id} /* Headers */ = {isa = PBXHeadersBuildPhase; buildActionMask = 2147483647; files = (C0D3D0030000000000000003,); runOnlyForDeploymentPostprocessing = 0; };\n/* End PBXHeadersBuildPhase section */\n\n"
+unknown_phase_pbx = pbx.sub("/* Begin PBXResourcesBuildPhase section */", unknown_phase + "/* Begin PBXResourcesBuildPhase section */")
+unknown_phase_pbx = unknown_phase_pbx.sub(
+  "\t\t\t\t4E7ECA3830389D2700BBA255 /* Resources */,\n",
+  "\t\t\t\t4E7ECA3830389D2700BBA255 /* Resources */,\n\t\t\t\t#{unknown_phase_id} /* Headers */,\n"
+)
+abort "unknown build phase fixture did not update the app target" if unknown_phase_pbx == pbx
+File.write(pbx_path, unknown_phase_pbx)
+privacy_check.call("nonempty unsupported app-target build phases are fail-closed", "draft", "code-target-sources-unresolved")
+missing_phases_pbx = pbx.sub(/\n\t\t\tbuildPhases = \(.*?\n\t\t\t\);/m, "")
+abort "missing build phases fixture did not update the app target" if missing_phases_pbx == pbx
+File.write(pbx_path, missing_phases_pbx)
+privacy_check.call("missing app-target build phase topology is fail-closed", "draft", "code-target-sources-unresolved")
+missing_target_pbx = pbx.sub("name = GardenNotes;", "name = OtherNotes;")
+abort "missing app target fixture did not update the project" if missing_target_pbx == pbx
+File.write(pbx_path, missing_target_pbx)
+privacy_check.call("missing matching app target cannot fall back to a module walk", "draft", "code-target-sources-unresolved")
+duplicate_target_pbx = pbx.sub("name = GardenNotesTests;", "name = GardenNotes;").sub(
+  'productType = "com.apple.product-type.bundle.unit-test";',
+  'productType = "com.apple.product-type.application";'
+)
+abort "duplicate app target fixture did not update the project" if duplicate_target_pbx == pbx
+File.write(pbx_path, duplicate_target_pbx)
+privacy_check.call("ambiguous matching app targets cannot fall back to a module walk", "draft", "code-target-sources-unresolved")
+File.write(pbx_path, pbx)
+privacy_check.call("privacy inventory restores after build topology fixtures", "confirmed")
 new_feature = File.join(project, "GardenNotes/NewFeature.swift")
 File.write(new_feature, "struct NewFeature { let enabled = true }\n")
 privacy_check.call("unknown feature addition also invalidates review", "draft", "stale-derive-evidence")
 File.unlink(new_feature)
+native_feature = File.join(project, "GardenNotes/NativeFeature.cc")
+File.write(native_feature, "// GoogleMobileAds dependency marker in a synchronized C++ source\n")
+report = privacy_check.call("synchronized C++ source additions trigger SDK re-audit", "draft", "sdk-declaration-missing:admob")
+description = report.fetch("fields").find { |row| row["fieldId"] == "description" && row["locale"] == "en-US" }
+abort "synchronized C++ source addition did not invalidate feature-copy evidence" unless description["state"] == "draft" && description["reasons"].include?("stale-derive-evidence")
+File.unlink(native_feature)
+privacy_check.call("inventory restores after synchronized C++ source removal", "confirmed")
 resolved_file = File.join(project, "Package.resolved")
-pins = {"version" => 2, "pins" => [{"identity" => "example-library", "kind" => "remoteSourceControl", "location" => "https://github.com/example/library", "state" => {"revision" => "a" * 40, "version" => "1.0.0"}}]}
+pins = {"version" => 2, "pins" => [{"identity" => "example-library", "kind" => "remoteSourceControl", "location" => "https://github.com/example/example-library", "state" => {"revision" => "a" * 40, "version" => "1.0.0"}}]}
 File.write(resolved_file, JSON.generate(pins))
-privacy_check.call("unlisted package is not inferred absent", "draft", "dependency-declaration-missing")
-privacy_with_sdk = Marshal.load(Marshal.dump(privacy_values))
-privacy_with_sdk["thirdPartySDKs"] = ["example-library"]
-File.write(privacy_file, YAML.dump(privacy_with_sdk))
-privacy_check.call("declaring a package does not reuse old confirmation", "draft", "stale-derive-evidence")
+privacy_check.call("unlisted package invalidates old review without inventing a privacy SDK", "draft", "stale-derive-evidence")
+File.write(privacy_file, YAML.dump(privacy_values))
 current_stdout, _, current_status = Open3.capture3(entrypoint, "--project-root", project)
 abort "package review input failed" unless current_status.exitstatus == 1
 current_row = JSON.parse(current_stdout).fetch("fields").find { |row| row["fieldId"] == "privacy.collectsData" }
@@ -498,6 +1027,108 @@ privacy_check.call("changed package version invalidates its own prior approval",
 File.unlink(resolved_file)
 File.write(privacy_file, YAML.dump(privacy_values))
 File.write(index_file, JSON.generate(privacy_index))
+
+remote_reference_id = "ABCDEF1234567890ABCDEF12"
+remote_product_id = "ABCDEF1234567890ABCDEF13"
+remote_build_file_id = "ABCDEF1234567890ABCDEF14"
+remote_pbx = pbx.sub("\t\t\tproductRefGroup =", "\t\t\tpackageReferences = (\n\t\t\t\t#{remote_reference_id},\n\t\t\t);\n\t\t\tproductRefGroup =")
+remote_section = <<~PBX
+  /* Begin XCRemoteSwiftPackageReference section */
+  \t\t#{remote_reference_id} = {
+  \t\t\tisa = XCRemoteSwiftPackageReference;
+  \t\t\trepositoryURL = "https://github.com/example/example-library.git";
+  \t\t\trequirement = { kind = upToNextMajorVersion; minimumVersion = 1.0.0; };
+  \t\t};
+  /* End XCRemoteSwiftPackageReference section */
+
+PBX
+remote_pbx = remote_pbx.sub("/* Begin XCBuildConfiguration section */", remote_section + "/* Begin XCBuildConfiguration section */")
+remote_build_section = "/* Begin PBXBuildFile section */\n\t\t#{remote_build_file_id} /* ExampleLibrary in Frameworks */ = {isa = PBXBuildFile; productRef = #{remote_product_id} /* ExampleLibrary */; };\n/* End PBXBuildFile section */\n\n"
+remote_pbx = remote_pbx.sub("/* Begin PBXFileReference section */", remote_build_section + "/* Begin PBXFileReference section */")
+remote_pbx = remote_pbx.sub(
+  "4E7ECA3730389D2700BBA255 /* Frameworks */ = {\n\t\t\tisa = PBXFrameworksBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n",
+  "4E7ECA3730389D2700BBA255 /* Frameworks */ = {\n\t\t\tisa = PBXFrameworksBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n\t\t\t\t#{remote_build_file_id} /* ExampleLibrary in Frameworks */,\n"
+)
+remote_pbx = remote_pbx.sub(
+  "\t\t\tpackageProductDependencies = (\n\t\t\t);",
+  "\t\t\tpackageProductDependencies = (\n\t\t\t\t#{remote_product_id} /* ExampleLibrary */,\n\t\t\t);"
+)
+remote_product_section = <<~PBX
+  /* Begin XCSwiftPackageProductDependency section */
+  \t\t#{remote_product_id} /* ExampleLibrary */ = {
+  \t\t\tisa = XCSwiftPackageProductDependency;
+  \t\t\tpackage = #{remote_reference_id} /* XCRemoteSwiftPackageReference "example-library" */;
+  \t\t\tproductName = ExampleLibrary;
+  \t\t};
+  /* End XCSwiftPackageProductDependency section */
+
+PBX
+remote_pbx = remote_pbx.sub("/* Begin XCBuildConfiguration section */", remote_product_section + "/* Begin XCBuildConfiguration section */")
+abort "linked Swift package fixture did not update every target edge" unless remote_pbx.include?(remote_build_file_id) && remote_pbx.include?(remote_product_id)
+File.write(pbx_path, remote_pbx)
+workspace_lock = File.join(project, "GardenNotes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved")
+FileUtils.mkdir_p(File.dirname(workspace_lock))
+remote_pins = lambda do |entries|
+  {"version" => 2, "pins" => entries.map do |identity, location|
+    {"identity" => identity, "kind" => "remoteSourceControl", "location" => location, "state" => {"revision" => "c" * 40, "version" => "1.0.0"}}
+  end}
+end
+privacy_check.call("remote package without workspace lock", "draft", "dependency-lock-unavailable")
+File.write(workspace_lock, JSON.generate({"version" => 2, "pins" => [{"location" => "person@example.com:notes"}]}))
+privacy_check.call("malformed package pin cannot claim the SSH exemption", "draft", "unsafe-code-source")
+File.write(workspace_lock, JSON.generate(remote_pins.call([])))
+privacy_check.call("empty workspace lock cannot satisfy remote package", "draft", "dependency-lock-mismatch")
+File.write(workspace_lock, JSON.generate(remote_pins.call([["unrelated-library", "https://github.com/example/unrelated-library.git"]])))
+privacy_check.call("unrelated workspace pin cannot satisfy remote package", "draft", "dependency-lock-mismatch")
+File.write(workspace_lock, JSON.generate(remote_pins.call([["example-library", "https://github.com/other/example-library.git"]])))
+privacy_check.call("same package basename at another location cannot satisfy remote package", "draft", "dependency-lock-mismatch")
+File.write(workspace_lock, JSON.generate(remote_pins.call([["example-library", "https://github.com/example/example-library.git"]])))
+File.write(privacy_file, YAML.dump(privacy_values))
+stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+abort "exact remote package reconciliation lost safe partial output" unless status.exitstatus == 1 && stderr.empty?
+remote_reasons = JSON.parse(stdout)["fields"].find { |row| row["fieldId"] == "privacy.collectsData" }["reasons"]
+abort "exact linked remote pin was not reconciled: #{remote_reasons}" if (remote_reasons & %w[dependency-lock-unavailable dependency-lock-mismatch code-target-sources-unresolved]).any?
+broken_package_link = remote_pbx.sub(
+  "package = #{remote_reference_id} /* XCRemoteSwiftPackageReference \"example-library\" */;",
+  "package = ABCDEF1234567890ABCDEFFF /* missing package reference */;"
+)
+abort "broken Swift package linkage fixture did not update the product" if broken_package_link == remote_pbx
+File.write(pbx_path, broken_package_link)
+privacy_check.call("package product linked to an unknown project reference is fail-closed", "draft", "code-target-sources-unresolved")
+File.write(pbx_path, remote_pbx)
+File.write(workspace_lock, JSON.generate(remote_pins.call([
+  ["example-library", "https://github.com/example/example-library.git"],
+  ["transitive-library", "https://github.com/example/transitive-library.git"]
+])))
+File.write(privacy_file, YAML.dump(privacy_values))
+stdout, _, status = Open3.capture3(entrypoint, "--project-root", project)
+transitive_reasons = JSON.parse(stdout)["fields"].find { |row| row["fieldId"] == "privacy.collectsData" }["reasons"]
+abort "valid transitive pin caused a direct lock mismatch" if status.exitstatus != 1 || transitive_reasons.include?("dependency-lock-mismatch")
+ssh_pbx = remote_pbx.sub("https://github.com/example/example-library.git", "git@github.com:example/example-library.git")
+File.write(pbx_path, ssh_pbx)
+File.write(workspace_lock, JSON.generate(remote_pins.call([["example-library", "git@github.com:example/example-library.git"]])))
+File.write(privacy_file, YAML.dump(privacy_values))
+stdout, _, status = Open3.capture3(entrypoint, "--project-root", project)
+ssh_reasons = JSON.parse(stdout)["fields"].find { |row| row["fieldId"] == "privacy.collectsData" }["reasons"]
+abort "valid SSH package URL was treated as PII or an unresolved lock: #{ssh_reasons}" if status.exitstatus != 1 ||
+  (ssh_reasons & %w[unsafe-code-source unsafe-xcode-project dependency-lock-mismatch dependency-lock-unavailable]).any?
+orphan_reference_id = "ABCDEF1234567890ABCDEF99"
+orphan_section = <<~PBX
+  /* Begin XCRemoteSwiftPackageReference section */
+  \t\t#{orphan_reference_id} = {
+  \t\t\tisa = XCRemoteSwiftPackageReference;
+  \t\t\trepositoryURL = "person@example.com:notes";
+  \t\t\trequirement = { kind = upToNextMajorVersion; minimumVersion = 1.0.0; };
+  \t\t};
+  /* End XCRemoteSwiftPackageReference section */
+
+PBX
+File.write(pbx_path, pbx.sub("/* Begin XCBuildConfiguration section */", orphan_section + "/* Begin XCBuildConfiguration section */"))
+privacy_check.call("unreferenced Xcode package object cannot claim the SSH exemption", "draft", "unsafe-code-source")
+File.unlink(workspace_lock)
+File.write(pbx_path, pbx)
+File.write(privacy_file, YAML.dump(privacy_values))
+File.write(index_file, JSON.generate(privacy_index))
 File.write(pbx_path, pbx.sub("GENERATE_INFOPLIST_FILE = YES;", 'GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_NSCameraUsageDescription = "Capture journal photos";'))
 privacy_check.call("undeclared usage permission", "draft", "permission-declaration-missing")
 File.write(pbx_path, pbx)
@@ -512,7 +1143,7 @@ app_values["supportURL"] = public_url
 File.write(File.join(project, app_path), YAML.dump(app_values))
 support_relative = "App Store/metadata/public-text/support.md"
 FileUtils.mkdir_p(File.dirname(File.join(project, support_relative)))
-support_text = "# Support\n\nHelp for Garden Notes.\n"
+support_text = "# Support\n\nHelp for Garden Notes. Email public-support@fixture-garden.yutodev.com.\n"
 File.write(File.join(project, support_relative), support_text)
 preparation_values = JSON.parse(File.binread(File.join(project, preparation_path)))
 preparation_values["publicPages"] = {"supportURL" => {"url" => public_url, "textSource" => source_descriptor.call(support_relative)}}
@@ -524,7 +1155,8 @@ page_directory = ".artifacts/appstore-preparation/public-pages"
 FileUtils.mkdir_p(File.join(project, page_directory))
 body_relative = "#{page_directory}/support.txt"
 observation_relative = "#{page_directory}/support.json"
-File.write(File.join(project, body_relative), "Support Help for Garden Notes.\n")
+support_body = "Support Help for Garden Notes. Email public-support@fixture-garden.yutodev.com.\n"
+File.write(File.join(project, body_relative), support_body)
 public_observation = {
   "schemaVersion" => 1, "recordType" => "appstore-public-page-observation", "source" => "synthetic-fixture",
   "observedAt" => Time.now.utc.iso8601, "url" => public_url, "finalURL" => public_url,
@@ -564,7 +1196,7 @@ public_check = lambda do |label, state, reason = nil|
   abort "#{label}: invented live inspection or readiness" unless report["liveRemoteInspection"] == false && report["releaseReady"] == false && report["remoteMutations"] == []
 end
 public_check.call("approved exact page and matching body snapshot", "confirmed")
-observe = lambda do |changes, body = "Support Help for Garden Notes.\n"|
+observe = lambda do |changes, body = support_body|
   File.write(File.join(project, body_relative), body)
   updated = public_observation.merge(changes)
   updated["bodyTextSource"] = source_descriptor.call(body_relative)
@@ -601,6 +1233,9 @@ public_check.call("matching unchanged snapshot remains confirmed", "confirmed")
   "https://support.example.invalid/app" => "placeholder-public-url",
   "https://example.com/support" => "placeholder-public-url",
   "https://app.yutodev.com/" => "catalog-top-public-url",
+  "https://a..com/support" => "invalid-public-url",
+  "https://a.-bad.com/support" => "invalid-public-url",
+  "https://#{'a' * 64}.com/support" => "invalid-public-url",
   "http://fixture-garden.yutodev.com/support" => "invalid-public-url"
 }.each do |url, reason|
   altered_app = app_values.merge("supportURL" => url)
@@ -668,6 +1303,12 @@ iap_check = lambda do |label, state, reason = nil|
   abort "#{label}: unexpected remote action or release readiness" unless report["liveRemoteInspection"] == false && report["remoteMutations"] == [] && report["releaseReady"] == false
 end
 iap_check.call("exact production IAP and approved price", "confirmed")
+iap_privacy_bytes = File.binread(privacy_file)
+iap_privacy_values = YAML.safe_load(iap_privacy_bytes)
+iap_privacy_values["dataTypes"] = ["EMAIL_ADDRESS"]
+File.write(privacy_file, YAML.dump(iap_privacy_values))
+iap_check.call("privacy-only drift does not invalidate unrelated production IAP", "confirmed")
+File.binwrite(privacy_file, iap_privacy_bytes)
 observe_account = lambda do |edit|
   observation = Marshal.load(Marshal.dump(account_observation))
   edit.call(observation)
@@ -689,8 +1330,15 @@ observe_account.call(->(o) { o["identity"]["teamId"] = "OTHER12345" })
 iap_check.call("different production Team", "draft", "account-field-identity-mismatch")
 observe_account.call(->(o) { o["identity"]["appId"] = "9999999999" })
 iap_check.call("different production App", "draft", "account-field-identity-mismatch")
+observe_account.call(->(o) { o["remoteReference"] = "asc://apps/1234567890/in-app-purchases/other" })
+iap_check.call("different production product resource", "draft", "account-field-resource-mismatch")
 observe_account.call(->(o) { o["identity"]["version"] = "2.0" })
 iap_check.call("different app version", "draft", "account-field-identity-mismatch")
+valid_version_app = YAML.safe_load(File.binread(File.join(project, app_path)))
+File.write(File.join(project, app_path), YAML.dump(valid_version_app.merge("version" => nil)))
+observe_account.call(->(o) { o["identity"]["version"] = nil })
+iap_check.call("missing local and observed version cannot form an account identity", "draft", "account-identity-unconfirmed")
+File.write(File.join(project, app_path), YAML.dump(valid_version_app))
 observe_account.call(->(o) { o["status"] = "unknown" })
 iap_check.call("unknown account response", "draft", "account-field-unknown")
 observe_account.call(->(o) { o["products"].first["price"]["amount"] = "9.99" })
@@ -711,6 +1359,18 @@ observe_account.call(->(o) { o["observedAt"] = (Time.now.utc - 7200).iso8601 })
 iap_check.call("stale production observation", "draft", "stale-account-field-observation")
 observe_account.call(->(_) {})
 iap_check.call("same exact observation restored", "confirmed")
+finite_app = YAML.safe_load(File.binread(File.join(project, app_path)))
+{"NaN" => Float::NAN, "positive infinity" => Float::INFINITY, "negative infinity" => -Float::INFINITY}.each do |label, value|
+  File.write(File.join(project, app_path), YAML.dump(finite_app.merge("version" => value)))
+  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+  abort "#{label} source did not return safe blocked JSON" unless status.exitstatus == 1 && stderr.empty?
+  report = JSON.parse(stdout)
+  version = report.fetch("fields").find { |row| row["fieldId"] == "version" }
+  abort "#{label} source was not rejected at the source boundary" unless version && version["reasons"].include?("invalid-source-schema")
+  abort "#{label} source or non-finite JSON token leaked" if stdout.match?(/(?:NaN|Infinity|-Infinity)/)
+end
+File.write(File.join(project, app_path), YAML.dump(finite_app))
+iap_check.call("finite version restores account evidence", "confirmed")
 puts "PASS: account/IAP confirmations require fresh production identity, product configuration and approved matching values"
 
 # A genuine linked Git worktree must consume the canonical shared preparation
@@ -849,6 +1509,9 @@ save_check = lambda do |label, expected_state, reason = nil|
   abort "#{label}: missing rejection #{reason}: #{row['reasons']}" if reason && !row["reasons"].include?(reason)
   abort "#{label}: fixture claimed live access" unless report["remoteMutations"] == [] && report["liveRemoteInspection"] == false && report["releaseReady"] == false
   abort "#{label}: private values leaked" if stdout.include?(scratch) || stdout.include?("An independent previous description.")
+  private_form_value = "opaque-private-form-secret"
+  abort "#{label}: nested private form value or value hash leaked" if stdout.include?(private_form_value) ||
+    stdout.include?(Digest::SHA256.hexdigest(private_form_value)) || stdout.include?(canonical_digest.call(private_form_value))
   abort "#{label}: missing supplied observation provenance" if expected_state == "remote-saved" && !row["observationOrigins"].include?("synthetic-fixture")
 end
 write_save.call
@@ -858,6 +1521,8 @@ save_check.call("authorized exact source-bound save and readback", "remote-saved
   ["unknown publication effect", "remote-public-effect-unresolved", ->(_, r) { r["remoteState"]["publicEffect"] = "unknown" }],
   ["changed publication effect invalidates approval", "remote-readback-source-mismatch", ->(_, r) { r["remoteState"]["publicEffect"] = "immediate-public-change" }],
   ["wrong target", "remote-readback-identity-mismatch", ->(_, r) { r["identity"]["appId"] = "9999999999" }],
+  ["missing selected version", "remote-readback-identity-mismatch", ->(_, r) { r["identity"]["version"] = nil }],
+  ["invalid selected version", "remote-readback-identity-mismatch", ->(_, r) { r["identity"]["version"] = "1.2.3.4" }],
   ["wrong locale", "remote-readback-scope-mismatch", ->(_, r) { r["locale"] = "ja" }],
   ["wrong ASC resource kind", "invalid-remote-readback-reference", ->(_, r) { r["remoteReference"] = "asc://apps/1234567890/appStoreVersions/version-one" }],
   ["another resource was not approved", "remote-readback-source-mismatch", ->(_, r) { r["remoteReference"] = "asc://apps/1234567890/appInfoLocalizations/other-info" }],
@@ -868,7 +1533,9 @@ save_check.call("authorized exact source-bound save and readback", "remote-saved
   ["unselected field changed", "remote-preserved-value-mismatch", ->(i, _) { i["readback.json"]["values"]["subtitle"] = "Unexpected replacement" }],
   ["missing preserved field", "incomplete-remote-form", ->(i, _) { i["readback.json"]["values"].delete("subtitle") }],
   ["missing privacy property in both forms", "incomplete-remote-form", ->(i, _) { %w[baseline.json readback.json].each { |file| i[file]["values"].delete("privacyChoicesURL") } }],
-  ["numeric type drift is not equality", "remote-preserved-value-mismatch", ->(i, _) { i["baseline.json"]["values"]["extraField"] = 1; i["readback.json"]["values"]["extraField"] = 1.0 }],
+  ["numeric localization values are not a valid form projection", "incomplete-remote-form", ->(i, _) { i["baseline.json"]["values"]["subtitle"] = 1; i["readback.json"]["values"]["subtitle"] = 1.0 }],
+  ["unmodeled fields never enter public evidence", "incomplete-remote-form", ->(i, _) { %w[baseline.json readback.json].each { |file| i[file]["values"]["unmodeledFlag"] = false } }],
+  ["nested private objects never enter public evidence", "incomplete-remote-form", ->(i, _) { %w[baseline.json readback.json].each { |file| i[file]["values"]["subtitle"] = {"raw" => "opaque-private-form-secret"} } }],
   ["null and empty are different", "remote-preserved-value-mismatch", ->(i, _) { i["baseline.json"]["values"]["subtitle"] = nil; i["readback.json"]["values"]["subtitle"] = "" }],
   ["Unicode normalization cannot hide drift", "remote-preserved-value-mismatch", ->(i, _) { i["baseline.json"]["values"]["subtitle"] = "caf\u00e9"; i["readback.json"]["values"]["subtitle"] = "cafe\u0301" }],
   ["private form values are not public evidence", "remote-save-evidence-missing", ->(i, _) { i["readback.json"]["values"]["password"] = "fixture-do-not-emit" }],
@@ -902,60 +1569,6 @@ end)
 save_check.call("Claude save evidence has the same exact authority checks", "remote-saved")
 write_save.call
 puts "PASS: supplied authorized readback binds identity, source, approval, exact selected values and preserved form fields without mutations"
-
-# Protected values arrive only on an explicit pipe, never in source files,
-# command arguments, reports, or reusable public value hashes.
-protected_reference = "protected-observation://synthetic-contact-preservation"
-contact_reference = "keychain://garden/review/contact"
-write_save.call(lambda do |inputs, receipt|
-  %w[baseline.json readback.json].each { |file| inputs[file]["values"]["contactEmail"] = contact_reference }
-  receipt["protectedObservation"] = protected_reference
-  inputs["approval.json"]["intentDigest"] = receipt["intentDigest"] = canonical_digest.call(intent.merge("protectedObservation" => protected_reference))
-end)
-protected_receipt = JSON.parse(File.binread(File.join(project, save_root, "receipt.json")))
-private_contact = "private-fixture-review@sample.invalid"
-protected_observation = protected_receipt.select { |key, _| %w[source identity sourceRevision section locale intentDigest savedAt observedAt].include?(key) }.merge(
-  "reference" => protected_reference, "references" => {"contactEmail" => contact_reference},
-  "baseline" => {"contactEmail" => private_contact}, "readback" => {"contactEmail" => private_contact})
-protected_input = {"schemaVersion" => 1, "recordType" => "appstore-protected-form-input", "observations" => [protected_observation]}
-protected_check = lambda do |label, input, expected_state, reason = nil|
-  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project, "--protected-forms-stdin", stdin_data: JSON.generate(input))
-  abort "#{label}: protected input lost safe partial report" unless status.exitstatus == 1 && stderr.empty?
-  report = JSON.parse(stdout)
-  row = report["fields"].find { |field| field["fieldId"] == "name" && field["locale"] == "en-US" }
-  abort "#{label}: wrong protected comparison state" unless row["state"] == expected_state
-  abort "#{label}: missing protected comparison reason" if reason && !row["reasons"].include?(reason)
-  [private_contact, Digest::SHA256.hexdigest(private_contact), canonical_digest.call(private_contact)].each do |private_value|
-    abort "#{label}: private value or hash leaked" if (stdout + stderr).include?(private_value)
-  end
-  abort "#{label}: protected input granted authority" unless report["remoteMutations"] == [] && report["liveRemoteInspection"] == false
-end
-protected_check.call("protected contact preserved", protected_input, "remote-saved")
-[
-  "{}", "[]", JSON.generate(protected_input).sub('"schemaVersion":1', '"schemaVersion":1,"schemaVersion":1'),
-  JSON.generate(protected_input.merge("observations" => [protected_observation, protected_observation])),
-  JSON.generate(protected_input).sub(JSON.generate(private_contact), '1e999')
-].each do |invalid_input|
-  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project, "--protected-forms-stdin", stdin_data: invalid_input)
-  abort "malformed private pipe input was not safely rejected" unless status.exitstatus == 2 && stderr.empty? && JSON.parse(stdout)["status"] == "invalid" && !stdout.include?(private_contact)
-end
-save_check.call("protected observation cannot be replayed without transient values", "draft", "protected-form-input-missing")
-[
-  ["changed private value", "protected-form-value-mismatch", ->(o) { o["readback"]["contactEmail"] = "different-private@sample.invalid" }],
-  ["wrong private identity", "protected-form-binding-mismatch", ->(o) { o["identity"]["appId"] = "9999999999" }],
-  ["wrong private source", "protected-form-binding-mismatch", ->(o) { o["sourceRevision"] = "0" * 40 }],
-  ["wrong private reference", "protected-form-reference-mismatch", ->(o) { o["references"]["contactEmail"] = "keychain://other/contact" }],
-  ["missing protected field", "incomplete-protected-form", ->(o) { o["readback"].delete("contactEmail") }]
-].each do |label, reason, mutate|
-  input = Marshal.load(Marshal.dump(protected_input))
-  mutate.call(input["observations"].first)
-  protected_check.call(label, input, "draft", reason)
-end
-Dir.glob(File.join(project, "**", "*"), File::FNM_DOTMATCH).select { |path| File.file?(path) && !File.symlink?(path) }.each do |path|
-  abort "private observation was persisted" if File.binread(path).include?(private_contact)
-end
-write_save.call
-puts "PASS: transient protected comparison verifies preserved contact values without persistence, value hashes, implicit reads or remote authority"
 
 # Type and questionnaire checks go through the same public entrypoint. Missing
 # information is retained as draft; arbitrary maps cannot become declarations.
@@ -1002,6 +1615,98 @@ end
   ["unanswered content rights", "contentRights", "invalid-questionnaire-schema", ->(p, _) { p["contentRights"] = {} }],
   ["unanswered export compliance", "exportCompliance", "invalid-questionnaire-schema", ->(p, _) { p["exportCompliance"] = {} }]
 ].each { |label, field, reason, edit| schema_case.call(label, field, reason, edit) }
+
+template_copy_check = lambda do |label, expected_rows, writes|
+  originals = writes.keys.each_with_object({}) do |relative, out|
+    path = File.join(project, relative)
+    out[relative] = File.file?(path) ? File.binread(path) : nil
+  end
+  writes.each do |relative, bytes|
+    path = File.join(project, relative)
+    FileUtils.mkdir_p(File.dirname(path))
+    File.binwrite(path, bytes)
+  end
+  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+  abort "#{label}: template-copy check lost the partial report" unless status.exitstatus == 1 && stderr.empty?
+  rows = JSON.parse(stdout).fetch("fields")
+  expected_rows.each do |field_id, locale|
+    row = rows.find { |entry| entry["fieldId"] == field_id && entry["locale"] == locale }
+    abort "#{label}: #{field_id}/#{locale.inspect} was not blocked as template copy: #{row && row['reasons']}" unless row && row["reasons"].include?("template-value")
+  end
+ensure
+  originals&.each do |relative, bytes|
+    path = File.join(project, relative)
+    bytes.nil? ? FileUtils.rm_f(path) : File.binwrite(path, bytes)
+  end
+end
+
+%w[en-US ja].each do |locale|
+  relative = "App Store/metadata/localizations/#{locale}.yml"
+  template_copy_check.call(
+    "#{locale} template localization",
+    %w[name subtitle description keywords promotionalText].map { |field_id| [field_id, locale] },
+    relative => File.binread(File.join(repo_root, relative))
+  )
+  notes_relative = "App Store/release-notes/#{locale}.md"
+  template_copy_check.call(
+    "#{locale} template release notes",
+    [["releaseNotes", locale]],
+    notes_relative => File.binread(File.join(repo_root, notes_relative))
+  )
+end
+template_copy_check.call(
+  "punctuation cannot disguise English template localization",
+  [["subtitle", "en-US"], ["keywords", "en-US"]],
+  "App Store/metadata/localizations/en-US.yml" => YAML.dump({
+    "name" => "Garden Notes", "subtitle" => "Replace before submission.",
+    "description" => "A real garden journal.", "keywords" => "template, utility", "promotionalText" => "Garden notes."
+  })
+)
+template_copy_check.call(
+  "punctuation cannot disguise Japanese template localization",
+  [["subtitle", "ja"], ["promotionalText", "ja"]],
+  "App Store/metadata/localizations/ja.yml" => YAML.dump({
+    "name" => "ガーデンノート", "subtitle" => "提出前に置き換えてください。 ",
+    "description" => "庭の記録を残します。", "keywords" => "庭,記録", "promotionalText" => "プロモーション文の下書きです!"
+  })
+)
+template_app = YAML.safe_load(File.binread(File.join(repo_root, "App Store/metadata/app.yml")))
+fixture_app = YAML.safe_load(File.binread(File.join(project, app_path)))
+%w[copyright supportURL privacyPolicyURL].each { |key| fixture_app[key] = template_app.fetch(key) }
+template_copy_check.call(
+  "shared template metadata",
+  [["copyright", nil]] + %w[en-US ja].flat_map { |locale| %w[supportURL privacyPolicyURL].map { |field_id| [field_id, locale] } },
+  app_path => YAML.dump(fixture_app)
+)
+review_relative = "App Store/review/review-notes.md"
+template_copy_check.call(
+  "template review notes",
+  [["reviewNotes", nil]],
+  review_relative => File.binread(File.join(repo_root, review_relative))
+)
+{
+  "legal.privacyPolicy" => "App Store/legal/privacy-policy.md",
+  "legal.termsOfUse" => "App Store/legal/terms-of-use.md"
+}.each do |field_id, relative|
+  changed_status = File.binread(File.join(repo_root, relative)).sub("Status: Draft", "Status: Confirmed")
+  template_copy_check.call(
+    "#{field_id} template legal body after status edit",
+    [[field_id, nil]],
+    relative => changed_status
+  )
+end
+puts "PASS: every current localized, release-note, shared-metadata and review template placeholder stays blocked"
+
+nullable_groups = JSON.parse(schema_baseline)
+%w[localizedURLs localizedPublicPages screenshots publicPages].each { |key| nullable_groups[key] = nil }
+File.write(File.join(project, preparation_path), JSON.generate(nullable_groups))
+stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+abort "explicit null preparation groups were not retained as unanswered" unless status.exitstatus == 1 && stderr.empty?
+nullable_report = JSON.parse(stdout)
+null_schema_errors = nullable_report["fields"].flat_map { |row| row["reasons"] } & %w[invalid-localized-url-schema invalid-screenshot-source-schema invalid-public-page-schema]
+abort "explicit null preparation groups became schema errors: #{null_schema_errors.inspect}" unless null_schema_errors.empty?
+File.binwrite(File.join(project, preparation_path), schema_baseline)
+
 age_booleans = %w[parentalControls ageAssurance unrestrictedWebAccess userGeneratedContent socialMedia socialMediaUnder13Disabled messagingAndChat advertising healthOrWellnessTopics gambling lootBox]
 age_frequencies = %w[profanityOrCrudeHumor horrorOrFearThemes alcoholTobaccoOrDrugUseOrReferences medicalOrTreatmentInformation matureOrSuggestiveThemes sexualContentOrNudity sexualContentGraphicAndNudity violenceCartoonOrFantasy violenceRealistic violenceRealisticProlongedGraphicOrSadistic gunsOrOtherWeapons gamblingSimulated contests]
 age_answers = age_booleans.each_with_object({}) { |key, out| out[key] = false }.merge(age_frequencies.each_with_object({}) { |key, out| out[key] = "NONE" })
@@ -1084,7 +1789,11 @@ puts "PASS: versioned preparation types and complete explicit age questionnaires
 # labelled evidence, never an actual Xcode archive, live page or Apple mutation.
 require "zlib"
 full_values = JSON.parse(schema_baseline)
-full_values.merge!({"secondaryCategory" => "Lifestyle", "marketingURL" => "https://fixture-garden.yutodev.com/about", "ageRating" => age_questionnaire, "contentRights" => rights, "exportCompliance" => export, "demoAccess" => {"required" => false, "credentialsReference" => nil, "instructionsSource" => nil}})
+full_export = export.merge(
+  "usesEncryption" => true, "encryptionTypes" => ["proprietary"], "documentationRequired" => true,
+  "documents" => [{"kind" => "ccats", "status" => "approved", "reference" => "asc://apps/1234567890/encryption/synthetic-doc"}]
+)
+full_values.merge!({"secondaryCategory" => "Lifestyle", "marketingURL" => "https://fixture-garden.yutodev.com/about", "ageRating" => age_questionnaire, "contentRights" => rights, "exportCompliance" => full_export, "demoAccess" => {"required" => false, "credentialsReference" => nil, "instructionsSource" => nil}})
 full_values["account"]["bundleRegistration"] = "com.example.garden"
 full_values["publicPages"] = {}
 full_app = YAML.safe_load(File.binread(File.join(project, app_path)))
@@ -1098,6 +1807,16 @@ File.write(File.join(project, app_path), YAML.dump(full_app))
 end
 FileUtils.mkdir_p(File.join(project, "App Store/review"))
 File.write(File.join(project, "App Store/review/review-notes.md"), "# Review notes\n\nUse the garden journal without creating an account.\n")
+app_icon_relative = "GardenNotes/Assets.xcassets/AppIcon.appiconset/icon-fixture.bin"
+FileUtils.mkdir_p(File.dirname(File.join(project, app_icon_relative)))
+File.binwrite(File.join(project, app_icon_relative), "committed-app-icon-fixture")
+ignored_resource_relative = "GardenNotes/IgnoredAfterExport.bin"
+File.write(File.join(project, ".gitignore"), "/#{ignored_resource_relative}\n")
+strict_optional_config_relative = "BuildSettings/Optional.xcconfig"
+strict_optional_config = File.join(project, strict_optional_config_relative)
+FileUtils.mkdir_p(File.dirname(strict_optional_config))
+File.write(strict_optional_config, "OPTIONAL_BUILD_SETTING = YES;\n")
+File.write(public_config, File.binread(public_config) + "\n#include? \"../#{strict_optional_config_relative}\"\n")
 {
   "supportURL" => ["App Store/metadata/public-text/support.md", full_app["supportURL"]],
   "privacyPolicyURL" => ["App Store/legal/privacy-policy.md", full_app["privacyPolicyURL"]],
@@ -1111,6 +1830,10 @@ File.write(File.join(project, "App Store/review/review-notes.md"), "# Review not
   full_values["publicPages"][field] = {"url" => url, "textSource" => source_descriptor.call(relative)}
 end
 full_values["legal"] = {"eula" => full_values["publicPages"]["legal.eula"].merge("choice" => "custom")}
+File.write(File.join(project, preparation_path), JSON.generate(full_values))
+git.call("add", "Config", "BuildSettings", "GardenNotes", "GardenNotes.xcodeproj", "App Store", "specs", ".gitignore")
+git.call("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "synthetic release source checkout")
+committed_sha = git.call("rev-parse", "HEAD")
 artifact_directory = ".artifacts/appstore-preparation/builds"
 FileUtils.mkdir_p(File.join(project, artifact_directory))
 zip_root = File.join(scratch, "export")
@@ -1189,7 +1912,7 @@ abort "complete source inventory did not prepare: #{unresolved.inspect}" unless 
 abort "source preparation became release or remote authority" unless complete_report["releaseReady"] == false && complete_report["remoteMutations"] == [] && complete_report["liveRemoteInspection"] == false
 puts "PASS: a full non-secret synthetic inventory prepares only with all required current source, public, account and asset evidence"
 
-asset_originals = [preparation_path, build_relative, artifact_relative, manifest_relative, review_relative, requirements_relative, "App Store/screenshots/#{screenshot_cases.first['path']}"].each_with_object({}) { |relative, out| out[relative] = File.binread(File.join(project, relative)) }
+asset_originals = [preparation_path, build_relative, artifact_relative, manifest_relative, review_relative, requirements_relative, "App Store/screenshots/#{screenshot_cases.first['path']}", code_relative, app_icon_relative, strict_optional_config_relative, scheme_relative].each_with_object({}) { |relative, out| out[relative] = File.binread(File.join(project, relative)) }
 asset_case = lambda do |label, field_id, expected_reason, edit|
   edit.call
   stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
@@ -1224,6 +1947,44 @@ asset_case.call("different valid image cannot reuse an adopted digest", "screens
   replacement = "App Store/screenshots/#{screenshot_cases.find { |entry| entry['locale'] == 'ja' && entry['family'] == 'iphone-6.9' }['path']}"
   FileUtils.copy_file(File.join(project, replacement), File.join(project, target))
 end)
+asset_case.call("dirty application source cannot reuse an old build", "build", "distribution-source-revision-mismatch", lambda do
+  File.binwrite(File.join(project, code_relative), asset_originals[code_relative] + "// changed after export\n")
+end)
+asset_case.call("deleted application source cannot reuse an old build", "build", "distribution-source-revision-mismatch", lambda do
+  File.unlink(File.join(project, code_relative))
+end)
+asset_case.call("dirty AppIcon resource cannot reuse an old build", "build", "distribution-source-revision-mismatch", lambda do
+  File.binwrite(File.join(project, app_icon_relative), asset_originals[app_icon_relative] + "-changed")
+end)
+asset_case.call("deleted external optional xcconfig cannot reuse an old build", "build", "distribution-source-revision-mismatch", lambda do
+  File.unlink(strict_optional_config)
+end)
+asset_case.call("dirty shared scheme cannot reuse an old build", "build", "distribution-source-revision-mismatch", lambda do
+  File.binwrite(scheme_path, asset_originals[scheme_relative] + "\n<!-- changed after export -->\n")
+end)
+asset_case.call("deleted shared scheme cannot reuse an old build", "build", "distribution-source-revision-mismatch", lambda do
+  File.unlink(scheme_path)
+end)
+untracked_source = File.join(project, "GardenNotes/UntrackedAfterExport.swift")
+File.write(untracked_source, "struct UntrackedAfterExport {}\n")
+stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+abort "untracked application source broke safe partial output" unless status.exitstatus == 1 && stderr.empty?
+untracked_report = JSON.parse(stdout)
+%w[build screenshots.iphone screenshots.ipad].each do |field_id|
+  rows = untracked_report["fields"].select { |row| row["fieldId"] == field_id }
+  abort "untracked application source reused old #{field_id} evidence" unless rows.all? { |row| row["state"] == "draft" && row["reasons"].include?("distribution-source-revision-mismatch") }
+end
+File.unlink(untracked_source)
+ignored_resource = File.join(project, ignored_resource_relative)
+File.binwrite(ignored_resource, "ignored-build-input")
+stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+abort "ignored application resource broke safe partial output" unless status.exitstatus == 1 && stderr.empty?
+ignored_report = JSON.parse(stdout)
+%w[build screenshots.iphone screenshots.ipad].each do |field_id|
+  rows = ignored_report["fields"].select { |row| row["fieldId"] == field_id }
+  abort "ignored application resource reused old #{field_id} evidence" unless rows.all? { |row| row["state"] == "draft" && row["reasons"].include?("distribution-source-revision-mismatch") }
+end
+File.unlink(ignored_resource)
 refresh_asset_references = lambda do
   values = JSON.parse(asset_originals[preparation_path])
   manifest = JSON.parse(File.binread(File.join(project, manifest_relative)))
@@ -1243,6 +2004,14 @@ asset_case.call("fresh manifest cannot replace visual approval", "screenshots.ip
   review = JSON.parse(asset_originals[review_relative])
   review["visualReviewStatus"] = "failed"
   File.write(File.join(project, review_relative), JSON.generate(review))
+  refresh_asset_references.call
+end)
+asset_case.call("screenshot family ids must be unique across platforms", "screenshots.iphone", "invalid-screenshot-requirements", lambda do
+  requirements = JSON.parse(asset_originals[requirements_relative])
+  iphone = requirements.fetch("screenshots").fetch("requiredFamilies").find { |family| family["platform"] == "iphone" }
+  ipad = requirements.fetch("screenshots").fetch("requiredFamilies").find { |family| family["platform"] == "ipad" }
+  %w[id deviceTypes portraitSizes landscapeSizes].each { |key| ipad[key] = Marshal.load(Marshal.dump(iphone[key])) }
+  File.write(File.join(project, requirements_relative), JSON.generate(requirements))
   refresh_asset_references.call
 end)
 asset_case.call("old screenshot requirements are not current", "screenshots.iphone", "screenshot-requirements-stale", lambda do
@@ -1307,6 +2076,16 @@ refresh_planning_proofs = lambda do
   planned_report.call
 end
 
+wrong_export_values = JSON.parse(asset_originals[preparation_path])
+wrong_export_values["exportCompliance"]["documents"].first["reference"] = "asc://apps/9999999999/encryption/synthetic-doc"
+File.write(File.join(project, preparation_path), JSON.generate(wrong_export_values))
+wrong_export_report = refresh_planning_proofs.call
+wrong_export_row = wrong_export_report["fields"].find { |row| row["fieldId"] == "exportCompliance" }
+abort "another App's export document was accepted" unless wrong_export_row["state"] == "draft" && wrong_export_row["reasons"].include?("account-field-identity-mismatch")
+File.binwrite(File.join(project, preparation_path), asset_originals[preparation_path])
+File.write(index_file, JSON.generate(full_index))
+abort "wrong-App export check did not restore prepared inputs" unless planned_report.call["status"] == "prepared"
+
 demo_instructions_relative = "App Store/review/demo-instructions.md"
 demo_instructions_file = File.join(project, demo_instructions_relative)
 demo_instructions = "# Demo access\n\nUse the synthetic fixture account described by its Keychain reference.\n"
@@ -1324,6 +2103,29 @@ demo_source = demo_row["sources"].find { |source| source["path"] == demo_instruc
 abort "required demo instructions were not source-bound" unless demo_report["status"] == "prepared" && demo_row["state"] == "confirmed" &&
   demo_source && demo_source["anchor"] == "document" && demo_source["digest"] == source_descriptor.call(demo_instructions_relative)["digest"]
 confirmed_demo_fingerprint = demo_row["sourceFingerprint"]
+[
+  ["session", "Session: opaque-review-session"],
+  ["contact phone", "Contact phone: 090-1234-5678"],
+  ["national phone in prose", "Call 090-1234-5678 for access."],
+  ["compact national phone in prose", "Call 09012345678 for access."],
+  ["compact landline phone in prose", "Call 0312345678 for access."],
+  ["compact toll-free phone in prose", "Call 0120123456 for access."],
+  ["demo username", "Demo username: private-review-fixture@sample.invalid"],
+  ["literal password", "Password: none"]
+].each do |label, private_line|
+  private_demo_instructions = "# Demo access\n\n#{private_line}\n"
+  File.write(demo_instructions_file, private_demo_instructions)
+  private_demo_digest = "sha256:#{Digest::SHA256.hexdigest(private_demo_instructions)}"
+  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+  abort "private demo #{label} broke safe partial output" unless status.exitstatus == 1 && stderr.empty?
+  private_demo_report = JSON.parse(stdout)
+  private_demo_row = private_demo_report["fields"].find { |row| row["fieldId"] == "demoAccess" && row["locale"].nil? }
+  private_demo_source = private_demo_row["sources"].find { |source| source["path"] == demo_instructions_relative }
+  abort "private demo #{label} was hashed or accepted" unless private_demo_row["reasons"].include?("sensitive-source") &&
+    private_demo_source && private_demo_source["digest"].nil? && private_demo_source["revision"].nil?
+  abort "private demo #{label} or its digest leaked" if stdout.include?(private_line.split(": ", 2).last) || stdout.include?(private_demo_digest)
+end
+File.write(demo_instructions_file, demo_instructions)
 File.write(demo_instructions_file, demo_instructions + "Changed after confirmation.\n")
 demo_row = planned_report.call["fields"].find { |row| row["fieldId"] == "demoAccess" && row["locale"].nil? }
 abort "changed demo instructions reused old confirmation" unless demo_row["state"] == "draft" &&
@@ -1490,13 +2292,41 @@ notes_inputs = {
   "baseline.json" => Marshal.load(Marshal.dump(notes_form)), "readback.json" => notes_form
 }
 notes_inputs["baseline.json"]["values"]["reviewNotes"] = "Earlier review instructions"
-notes_inputs.each { |name, value| File.write(File.join(project, save_root, "notes-#{name}"), value.is_a?(String) ? value : JSON.generate(value)) }
-%w[contract issueBody preflight approval baseline readback].zip(%w[contract.json issue.md preflight.json approval.json baseline.json readback.json]).each do |key, name|
-  notes_receipt[key] = source_descriptor.call("#{save_root}/notes-#{name}")
+write_notes_evidence = lambda do |mutation = nil|
+  inputs, receipt = Marshal.load(Marshal.dump([notes_inputs, notes_receipt]))
+  mutation.call(inputs, receipt) if mutation
+  inputs.each { |name, value| File.write(File.join(project, save_root, "notes-#{name}"), value.is_a?(String) ? value : JSON.generate(value)) }
+  %w[contract issueBody preflight approval baseline readback].zip(%w[contract.json issue.md preflight.json approval.json baseline.json readback.json]).each do |key, name|
+    receipt[key] = source_descriptor.call("#{save_root}/notes-#{name}")
+  end
+  File.write(File.join(project, save_root, "notes-receipt.json"), JSON.generate(receipt))
+  record = Marshal.load(Marshal.dump(notes_record))
+  record["remoteReadback"] = source_descriptor.call("#{save_root}/notes-receipt.json")
+  File.write(index_file, JSON.generate({"schemaVersion" => 1, "recordType" => "appstore-preparation-confirmations", "records" => [record]}))
 end
-File.write(File.join(project, save_root, "notes-receipt.json"), JSON.generate(notes_receipt))
-notes_record["remoteReadback"] = source_descriptor.call("#{save_root}/notes-receipt.json")
-File.write(index_file, JSON.generate({"schemaVersion" => 1, "recordType" => "appstore-preparation-confirmations", "records" => [notes_record]}))
+write_notes_evidence.call
+write_notes_evidence.call(lambda do |inputs, _|
+  %w[baseline.json readback.json].each do |name|
+    inputs[name]["values"]["reviewAttachments"] = ["asc://apps/9999999999/reviewAttachments/wrong-app"]
+  end
+end)
+stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+abort "malformed review attachments broke safe partial output" unless status.exitstatus == 1 && stderr.empty?
+attachment_row = JSON.parse(stdout)["fields"].find { |field| field["fieldId"] == "reviewNotes" }
+abort "malformed review attachments were accepted" unless attachment_row["state"] == "draft" && attachment_row["reasons"].include?("incomplete-remote-form")
+private_review_value = "opaque-private-demo-secret"
+write_notes_evidence.call(lambda do |inputs, _|
+  %w[baseline.json readback.json].each do |name|
+    inputs[name]["values"]["demoAccess"] = {"credentialsReference" => "keychain://garden/review/demo", "raw" => private_review_value}
+  end
+end)
+private_baseline_digest = source_descriptor.call("#{save_root}/notes-baseline.json")["digest"]
+stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+abort "nested private review value broke safe partial output" unless status.exitstatus == 1 && stderr.empty?
+private_review_row = JSON.parse(stdout)["fields"].find { |field| field["fieldId"] == "reviewNotes" }
+abort "nested private review value was accepted" unless private_review_row["state"] == "draft" && private_review_row["reasons"].include?("incomplete-remote-form")
+abort "nested private review value or artifact hash leaked" if stdout.include?(private_review_value) || stdout.include?(private_baseline_digest)
+write_notes_evidence.call
 private_notes_values = {
   "reviewContactReference" => {"contactFirstName" => "Review", "contactLastName" => "Fixture", "contactPhone" => "+1-555-0100", "contactEmail" => "private-review-fixture@sample.invalid"},
   "demoAccess" => {"demoAccountRequired" => false, "demoAccountName" => nil, "demoAccountPassword" => nil}
@@ -1512,13 +2342,38 @@ notes_check = lambda do |label, mutation, reason|
   abort "#{label}: failed safe review-detail output" unless status.exitstatus == 1 && stderr.empty?
   row = JSON.parse(stdout)["fields"].find { |field| field["fieldId"] == "reviewNotes" }
   abort "#{label}: wrong review-detail result #{row['reasons']}" unless reason ? row["state"] == "draft" && row["reasons"].include?(reason) : row["state"] == "remote-saved"
-  abort "#{label}: review contact leaked" if stdout.include?("private-review-fixture@sample.invalid")
+  private_contact = "private-review-fixture@sample.invalid"
+  [private_contact, Digest::SHA256.hexdigest(private_contact), canonical_digest.call(private_contact)].each do |private_value|
+    abort "#{label}: review contact value or value hash leaked" if stdout.include?(private_value)
+  end
+  abort "#{label}: protected input granted authority" unless report["remoteMutations"] == [] && report["liveRemoteInspection"] == false
 end
 notes_check.call("version-wide review notes preserve complete private details", nil, nil)
+stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+review_without_pipe = JSON.parse(stdout)["fields"].find { |field| field["fieldId"] == "reviewNotes" }
+abort "protected review observation was replayed without transient input" unless status.exitstatus == 1 && stderr.empty? &&
+  review_without_pipe["state"] == "draft" && review_without_pipe["reasons"].include?("protected-form-input-missing")
+valid_notes_payload = {"schemaVersion" => 1, "recordType" => "appstore-protected-form-input", "observations" => [notes_observation]}
+[
+  "{}", "[]", JSON.generate(valid_notes_payload).sub('"schemaVersion":1', '"schemaVersion":1,"schemaVersion":1'),
+  JSON.generate(valid_notes_payload.merge("observations" => [notes_observation, notes_observation])),
+  JSON.generate(valid_notes_payload).sub(JSON.generate("private-review-fixture@sample.invalid"), "1e999")
+].each do |invalid_input|
+  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project, "--protected-forms-stdin", stdin_data: invalid_input)
+  abort "malformed private review pipe was not safely rejected" unless status.exitstatus == 2 && stderr.empty? &&
+    JSON.parse(stdout)["status"] == "invalid" && !stdout.include?("private-review-fixture@sample.invalid")
+end
 notes_check.call("omitted demo requirement is not false", ->(o) { %w[baseline readback].each { |key| o[key]["demoAccess"].delete("demoAccountRequired") } }, "incomplete-protected-review-details")
 notes_check.call("required demo needs credentials", ->(o) { %w[baseline readback].each { |key| o[key]["demoAccess"]["demoAccountRequired"] = true } }, "incomplete-protected-review-details")
 notes_check.call("contact property omitted from both snapshots", ->(o) { %w[baseline readback].each { |key| o[key]["reviewContactReference"].delete("contactPhone") } }, "incomplete-protected-review-details")
 notes_check.call("changed protected contact", ->(o) { o["readback"]["reviewContactReference"]["contactFirstName"] = "Changed" }, "protected-form-value-mismatch")
+notes_check.call("wrong protected review identity", ->(o) { o["identity"]["appId"] = "9999999999" }, "protected-form-binding-mismatch")
+notes_check.call("wrong protected review source", ->(o) { o["sourceRevision"] = "0" * 40 }, "protected-form-binding-mismatch")
+notes_check.call("wrong protected review reference", ->(o) { o["references"]["demoAccess"] = "keychain://other/demo" }, "protected-form-reference-mismatch")
+notes_check.call("missing protected review field", ->(o) { o["readback"].delete("demoAccess") }, "incomplete-protected-form")
+Dir.glob(File.join(project, "**", "*"), File::FNM_DOTMATCH).select { |path| File.file?(path) && !File.symlink?(path) }.each do |path|
+  abort "private review observation was persisted" if File.binread(path).include?("private-review-fixture@sample.invalid")
+end
 puts "PASS: version-wide review notes require complete observed contact and demo details and preserve their actual private values"
 
 # A source inventory chapter is not an ASC resource. Give a local-only module

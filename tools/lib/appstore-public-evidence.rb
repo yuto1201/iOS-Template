@@ -17,7 +17,10 @@ module IOSTemplate
         uri = URI.parse(url)
         return "invalid-public-url" unless uri.is_a?(URI::HTTPS) && uri.host && uri.userinfo.nil? && uri.query.nil? && uri.fragment.nil? && uri.port == 443
         host = uri.host.downcase
-        return "invalid-public-url" unless host.match?(/\A[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\z/) && host.include?(".")
+        labels = host.split(".", -1)
+        return "invalid-public-url" unless host.bytesize <= 253 && labels.length >= 2 && labels.all? do |label|
+          label.bytesize.between?(1, 63) && label.match?(/\A[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\z/)
+        end
         return "placeholder-public-url" if host == "localhost" || host.end_with?(".localhost", ".local", ".invalid", ".test", ".example") ||
           %w[example.com example.org example.net].any? { |domain| host == domain || host.end_with?(".#{domain}") }
         begin

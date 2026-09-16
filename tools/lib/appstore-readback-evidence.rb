@@ -98,7 +98,7 @@ module IOSTemplate
       FORM_FIELDS = {
         "app-info-localization" => %w[name subtitle privacyPolicyURL privacyChoicesURL privacyPolicyText],
         "version-localization" => %w[description keywords promotionalText releaseNotes supportURL marketingURL],
-        "review" => %w[reviewNotes reviewContactReference demoAccess],
+        "review" => %w[reviewNotes reviewContactReference demoAccess reviewAttachments],
         "version" => %w[version copyright earliestReleaseDate releaseType downloadable reviewType usesIdfa build],
         "app-information" => %w[category primarySubcategoryOne primarySubcategoryTwo secondaryCategory secondarySubcategoryOne secondarySubcategoryTwo]
       }.freeze
@@ -174,6 +174,32 @@ module IOSTemplate
         "remote-save-contract-mismatch"
       end
 
+      def form_value_valid?(section, field, value, app_id)
+        case section
+        when "app-info-localization", "version-localization", "app-information"
+          value.nil? || value.is_a?(String)
+        when "version"
+          if %w[downloadable usesIdfa].include?(field)
+            value.nil? || value.equal?(true) || value.equal?(false)
+          else
+            value.nil? || value.is_a?(String)
+          end
+        when "review"
+          case field
+          when "reviewContactReference", "demoAccess"
+            value.is_a?(String) && value.match?(ProtectedFormInput::SECRET_REFERENCE)
+          when "reviewAttachments"
+            value.is_a?(Array) && value.length <= 10 && value.uniq == value && value.all? do |reference|
+              reference.is_a?(String) && reference.match?(%r{\Aasc://apps/#{Regexp.escape(app_id)}/reviewAttachments/[A-Za-z0-9_-]{1,128}\z})
+            end
+          else
+            value.nil? || value.is_a?(String)
+          end
+        else
+          false
+        end
+      end
+
       def projection_error(receipt, inputs)
         forms = inputs.values_at("baseline", "readback")
         expected_ids = FORM_FIELDS.fetch(receipt["section"])
@@ -181,8 +207,10 @@ module IOSTemplate
           return "incomplete-remote-form" unless form.is_a?(Hash) && form.keys.sort == FORM_KEYS.sort &&
             form["schemaVersion"] == 1 && form["recordType"] == "appstore-form-projection" &&
             %w[identity section locale remoteReference].all? { |key| form[key] == receipt[key] } && form["values"].is_a?(Hash) &&
-            form["values"].length.between?(1, 256) && (expected_ids - form["values"].keys).empty? &&
-            form["values"].keys.all? { |key| key.match?(/\A[A-Za-z][A-Za-z0-9.]{0,127}\z/) }
+            form["values"].keys.sort == expected_ids.sort
+          return "incomplete-remote-form" unless form["values"].all? do |field, value|
+            form_value_valid?(receipt["section"], field, value, receipt["identity"]["appId"])
+          end
         end
         baseline, readback = forms.map { |form| form["values"] }
         return "incomplete-remote-form" unless baseline.keys.sort == readback.keys.sort
@@ -226,7 +254,7 @@ module IOSTemplate
           %w[appStatus versionStatus].all? { |key| state[key].is_a?(String) && state[key].match?(/\A[A-Z][A-Z0-9_]{1,63}\z/) && state[key] != "UNKNOWN" } &&
           (state["build"].nil? || state["build"].is_a?(String) && state["build"].match?(/\A[0-9]+(?:\.[0-9]+){0,2}\z/)) &&
           %w[draft-only immediate-public-change].include?(state["publicEffect"])
-        return "remote-readback-identity-mismatch" unless receipt["identity"].is_a?(Hash) && receipt["identity"].keys.sort == AccountEvidence::IDENTITY_KEYS.sort && receipt["identity"] == @account.expected_identity
+        return "remote-readback-identity-mismatch" unless AccountEvidence.valid_identity?(receipt["identity"]) && receipt["identity"] == @account.expected_identity
         return "remote-readback-scope-mismatch" unless receipt["section"] == row["section"] && receipt["locale"] == row["locale"]
         return "not-a-remote-metadata-field" if LOCAL_SOURCE_FIELDS.include?(row["fieldId"])
         return "remote-form-adapter-unavailable" unless SELECTABLE_FIELDS.fetch(receipt["section"], []).include?(row["fieldId"])

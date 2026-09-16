@@ -13,8 +13,8 @@ module IOSTemplate
       REVIEW_KEYS = %w[schemaVersion sourceSha buildDigest visualReviewStatus releaseAuditor cases].freeze
       REVIEW_CASE_KEYS = %w[locale family state path digest safeArea textClipping truthfulRepresentation localeParity].freeze
 
-      def initialize(sources, values, now)
-        @sources, @values, @now = sources, values, now
+      def initialize(sources, values, now, code_inventory)
+        @sources, @values, @now, @code_inventory = sources, values, now, code_inventory
         @validator = Confirmation.new(sources, now)
       end
 
@@ -33,6 +33,9 @@ module IOSTemplate
 
       def build
         return @build if @build
+        unless @code_inventory["sourceRevisionCurrent"]
+          return @build = result(["distribution-source-revision-mismatch"], @code_inventory.fetch("sources", []))
+        end
         reference = @values.call(VALUES, "buildArtifact")
         record = json_reference(reference, %r{\A\.artifacts/appstore-preparation/builds/[a-z0-9-]+\.json\z})
         return @build = result(["distribution-build-evidence-missing"]) unless exact?(record, BUILD_KEYS) && record["schemaVersion"] == 1 && record["recordType"] == "appstore-distribution-build"
@@ -43,7 +46,7 @@ module IOSTemplate
         return @build = result(["distribution-artifact-mismatch"]) unless bytes && bytes.start_with?("PK\x03\x04".b) && bytes.include?("PK\x05\x06".b) && @sources.binary_descriptor(artifact["path"]) == artifact
         return @build = result(["distribution-artifact-identity-mismatch"]) unless archive_identity?(bytes, record)
         @build_digest = artifact["digest"]
-        @build = result([], [reference, artifact], [record["source"]])
+        @build = result([], @code_inventory.fetch("sources", []) + [reference, artifact], [record["source"]])
       end
 
       def inflate_bounded(bytes, maximum, raw: false)
@@ -163,6 +166,8 @@ module IOSTemplate
         return result(["screenshot-requirements-stale"]) unless max_age.is_a?(Integer) && max_age.between?(1, 30) && (@now - retrieved).between?(0, max_age * 86_400)
         limits = requirements["screenshots"]
         return result(["invalid-screenshot-requirements"]) unless requirements["schemaVersion"] == 1 && exact?(limits, %w[minimumPerFamily maximumPerFamily formats allowAlpha requiredFamilies]) && limits["formats"].is_a?(Array) && limits["formats"].include?("png") && (limits["formats"] - %w[png jpg jpeg]).empty? && [true, false].include?(limits["allowAlpha"]) && limits["requiredFamilies"].is_a?(Array) && limits["requiredFamilies"].all? { |family| exact?(family, %w[id platform deviceTypes portraitSizes landscapeSizes]) && family["id"].is_a?(String) && family["id"].match?(/\A[a-z0-9][a-z0-9.-]+\z/) && %w[iphone ipad].include?(family["platform"]) } && limits["minimumPerFamily"].is_a?(Integer) && limits["maximumPerFamily"].is_a?(Integer) && limits["minimumPerFamily"].between?(1, 10) && limits["maximumPerFamily"].between?(limits["minimumPerFamily"], 10)
+        family_ids = limits["requiredFamilies"].map { |family| family["id"] }
+        return result(["invalid-screenshot-requirements"]) unless family_ids.uniq.length == family_ids.length
         families = limits["requiredFamilies"].select { |family| family.is_a?(Hash) && family["platform"] == id.split(".").last }
         return result(["invalid-screenshot-requirements"]) if families.empty? || families.map { |family| family["id"] }.uniq.length != families.length
         cases, reviews = manifest["cases"], review["cases"]

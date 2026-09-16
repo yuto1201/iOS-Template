@@ -24,10 +24,21 @@ module IOSTemplate
         "sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(value)))}"
       end
 
+      def self.valid_identity?(identity)
+        identity.is_a?(Hash) && identity.keys.sort == IDENTITY_KEYS.sort &&
+          identity["teamId"].is_a?(String) && identity["teamId"].match?(/\A[A-Z0-9]{10}\z/) &&
+          identity["appId"].is_a?(String) && identity["appId"].match?(/\A[0-9]+\z/) &&
+          identity["bundleId"].is_a?(String) && identity["bundleId"].bytesize <= 255 &&
+          identity["bundleId"].match?(/\A[A-Za-z0-9][A-Za-z0-9-]{0,62}(?:\.[A-Za-z0-9][A-Za-z0-9-]{0,62})+\z/) &&
+          identity["platform"] == "IOS" && identity["version"].is_a?(String) &&
+          identity["version"].match?(/\A[0-9]+(?:\.[0-9]+){0,2}\z/)
+      end
+
       def expected_identity
         existing = @registration["existingApp"]
         return nil unless @registration["status"] == "matched-observation" && existing.is_a?(Hash)
-        existing.merge("platform" => "IOS", "version" => @values.call(APP, "version"))
+        identity = existing.merge("platform" => "IOS", "version" => @values.call(APP, "version"))
+        identity if self.class.valid_identity?(identity)
       end
 
       def current_value(row)
@@ -91,12 +102,18 @@ module IOSTemplate
           observation["schemaVersion"] == 1 && observation["recordType"] == "appstore-account-field-observation" &&
           %w[synthetic-fixture app-store-connect].include?(observation["source"])
         return "stale-account-field-observation" unless @validator.fresh_source(reference)
-        return "account-field-identity-mismatch" unless observation["identity"].is_a?(Hash) && observation["identity"].keys.sort == IDENTITY_KEYS.sort && observation["identity"] == identity
+        return "account-field-identity-mismatch" unless self.class.valid_identity?(observation["identity"]) && observation["identity"] == identity
         return "account-field-scope-mismatch" unless observation["fieldId"] == row["fieldId"] && observation["locale"] == row["locale"] && observation["section"] == row["section"]
         return "non-production-account-observation" unless observation["environment"] == "production"
         return "account-field-unknown" unless observation["status"] == "observed"
         return "stale-account-field-source" unless observation["sourceFingerprint"] == row["sourceFingerprint"]
         value = current_value(row)
+        if row["fieldId"] == "exportCompliance" && value.is_a?(Hash) && value["documents"].is_a?(Array)
+          expected_prefix = "asc://apps/#{identity['appId']}/encryption/"
+          return "account-field-identity-mismatch" unless value["documents"].all? do |document|
+            document.is_a?(Hash) && document["reference"].is_a?(String) && document["reference"].start_with?(expected_prefix)
+          end
+        end
         return "account-field-value-mismatch" if value.nil? || observation["valueDigest"] != self.class.value_digest(value)
         remote = observation["remoteReference"]
         return "invalid-account-remote-reference" unless remote.is_a?(String) && remote.match?(%r{\Aasc://apps/#{Regexp.escape(identity['appId'])}/[a-z0-9/-]+\z}) && remote.index("//", 6).nil?
@@ -107,6 +124,15 @@ module IOSTemplate
         return "stale-account-field-observation" unless observed.utc.iso8601 == timestamp && age >= 0 && age <= 3600 && observed <= Time.iso8601(proof["checkedAt"])
         error = product_error(row, observation["products"])
         return error if error
+        if row["fieldId"].start_with?("iap.")
+          products = observation["products"]
+          expected_remote = if products.length == 1
+                              "asc://apps/#{identity['appId']}/in-app-purchases/#{products.first['appleId']}"
+                            else
+                              "asc://apps/#{identity['appId']}/in-app-purchases"
+                            end
+          return "account-field-resource-mismatch" unless remote == expected_remote
+        end
         return "account-observer-evidence-missing" unless proof["reviewer"] == "account-inspector" && proof["decision"] == "observed" && proof["reference"].match?(%r{\Aaccount-observation://[a-z0-9-]{1,128}\z})
         row["evidenceSources"] << reference
         row["observationOrigins"] << observation["source"]

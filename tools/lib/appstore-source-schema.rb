@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "ownership"
+
 module IOSTemplate
   module AppStorePreparation
     # Versioned partial sources: missing/null values remain unanswered. A valid
@@ -12,6 +14,9 @@ module IOSTemplate
       }.freeze
       APP_KEYS = %w[schemaVersion bundleId version primaryLocale platforms category copyright supportURL privacyPolicyURL reviewContactReference accountsSupported].freeze
       PRIVACY_KEYS = %w[schemaVersion collectsData tracking dataTypes thirdPartySDKs permissions accountDeletion].freeze
+      PRIVACY_FIELDS = (PRIVACY_KEYS - %w[schemaVersion]).freeze
+      IDENTITY_KEYS = %w[schemaVersion sourceIdentityVersion displayName moduleName appSlug bundleId].freeze
+      TEMPLATE_SOURCE_KEYS = %w[project module bundleId].freeze
       AGE_BOOLEANS = %w[parentalControls ageAssurance unrestrictedWebAccess userGeneratedContent socialMedia socialMediaUnder13Disabled messagingAndChat advertising healthOrWellnessTopics gambling lootBox].freeze
       AGE_FREQUENCIES = %w[profanityOrCrudeHumor horrorOrFearThemes alcoholTobaccoOrDrugUseOrReferences medicalOrTreatmentInformation matureOrSuggestiveThemes sexualContentOrNudity sexualContentGraphicAndNudity violenceCartoonOrFantasy violenceRealistic violenceRealisticProlongedGraphicOrSadistic gunsOrOtherWeapons gamblingSimulated contests].freeze
       AGE_KEYS = %w[schemaVersion questionnaireVersion answers ageCategory ageSuitabilityURL].freeze
@@ -19,6 +24,13 @@ module IOSTemplate
       SCREENSHOT_DEVICES = %w[iphone ipad].freeze
       PUBLIC_PAGE_FIELDS = %w[supportURL privacyPolicyURL marketingURL legal.privacyPolicy legal.termsOfUse legal.eula ageRating].freeze
       DEMO_INSTRUCTIONS_SOURCE = %r{\AApp Store/review/[A-Za-z0-9][A-Za-z0-9._-]*\.md\z}
+      SWIFT_KEYWORDS = %w[
+        associatedtype async await break case catch class continue default defer deinit do dynamic each else enum extension
+        fallthrough fileprivate final for func get guard if import in indirect infix init inout internal is isolated lazy let
+        macro mutating nil nonisolated open operator optional override package postfix precedencegroup prefix private protocol
+        public repeat required rethrows return self Self set some static struct subscript super switch throws throw try typealias
+        unowned var weak where while willSet didSet actor any borrowing consuming distributed nonmutating sending
+      ].freeze
       # Reviewed against Apple's age-rating definitions and setting procedure
       # on 2026-09-09; see the preparation format documentation for source URLs.
       AGE_VERSION = "apple-age-rating-2026-09-09"
@@ -44,6 +56,23 @@ module IOSTemplate
         value.is_a?(String) && !value.strip.empty? && value.bytesize <= 65_536 && !value.match?(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/)
       end
 
+      def source_slug(value)
+        previous_lower_or_digit = false
+        value.each_char.each_with_object(String.new) do |character, result|
+          result << "-" if character.match?(/[A-Z]/) && previous_lower_or_digit
+          result << character.downcase
+          previous_lower_or_digit = character.match?(/[a-z0-9]/)
+        end
+      end
+
+      def template_source
+        manifest = document(TEMPLATE_IDENTITY)
+        return nil unless object?(manifest, %w[schemaVersion source renamePaths liveContentPaths]) && manifest["schemaVersion"] == 1
+        source = manifest["source"]
+        return nil unless object?(source, TEMPLATE_SOURCE_KEYS) && source.values.all? { |entry| entry.is_a?(String) && !entry.empty? }
+        source
+      end
+
       def string_list_error(value, allow_empty: false)
         return "invalid-field-type" unless value.is_a?(Array) && value.all? { |entry| entry.is_a?(String) }
         return "invalid-field-value" unless value.length <= 256 && (allow_empty || !value.empty?) && value.uniq == value && value.all? { |entry| text?(entry) }
@@ -57,18 +86,19 @@ module IOSTemplate
         %w[localizedURLs localizedPublicPages].each do |key|
           next unless value.key?(key)
           group = value[key]
+          next if group.nil?
           return "invalid-localized-url-schema" unless object?(group, MODELED_LOCALES, exact: false) && group.values.all? do |entries|
             object?(entries, %w[supportURL privacyPolicyURL marketingURL], exact: false)
           end
         end
         if value.key?("screenshots")
           screenshots = value["screenshots"]
-          return "invalid-screenshot-source-schema" unless object?(screenshots, MODELED_LOCALES, exact: false) && screenshots.values.all? do |devices|
+          return "invalid-screenshot-source-schema" unless screenshots.nil? || object?(screenshots, MODELED_LOCALES, exact: false) && screenshots.values.all? do |devices|
             object?(devices, SCREENSHOT_DEVICES, exact: false)
           end
         end
         if value.key?("publicPages")
-          return "invalid-public-page-schema" unless object?(value["publicPages"], PUBLIC_PAGE_FIELDS, exact: false)
+          return "invalid-public-page-schema" unless value["publicPages"].nil? || object?(value["publicPages"], PUBLIC_PAGE_FIELDS, exact: false)
         end
         nil
       end
@@ -89,12 +119,41 @@ module IOSTemplate
           keys = path == APP ? APP_KEYS : PRIVACY_KEYS
           return "invalid-source-schema" unless object?(value, keys, exact: false) && value["schemaVersion"] == 1
           return "invalid-source-schema" if path == APP && value.key?("accountsSupported") && !boolean?(value["accountsSupported"])
+        elsif path == IDENTITY
+          value = document(path)
+          return nil if value.nil? && @sources.error(path)
+          template = template_source
+          return "invalid-source-schema" unless object?(value, IDENTITY_KEYS) && value["schemaVersion"] == 1 && value["sourceIdentityVersion"] == 1 &&
+            text?(value["displayName"]) && value["displayName"] == value["displayName"].strip &&
+            !value["displayName"].match?(/[\p{Cc}\p{Cf}]/) && !value["displayName"].match?(/\A\p{Zs}|\p{Zs}\z/) &&
+            value["displayName"].scan(/\X/).length.between?(1, 30) && !value["displayName"].include?("/") &&
+            value["moduleName"].is_a?(String) && value["moduleName"].match?(/\A[A-Za-z][A-Za-z0-9]{1,49}\z/) && !SWIFT_KEYWORDS.include?(value["moduleName"]) &&
+            value["appSlug"].is_a?(String) && value["appSlug"].bytesize <= 50 && value["appSlug"].match?(/\A[a-z0-9]+(?:-[a-z0-9]+)*\z/) &&
+            value["bundleId"].is_a?(String) && value["bundleId"].bytesize <= 255 && value["bundleId"].match?(/\A[A-Za-z0-9][A-Za-z0-9-]{0,62}(?:\.[A-Za-z0-9][A-Za-z0-9-]{0,62})+\z/) &&
+            template && value["displayName"] != template["module"] && value["moduleName"] != template["module"] &&
+            value["appSlug"] != source_slug(template["module"]) && value["bundleId"] != template["bundleId"]
+        elsif path == OWNERSHIP
+          bytes = @sources.read(path)
+          return nil if bytes.nil? && @sources.error(path)
+          begin
+            IOSTemplate::Ownership.parse(bytes)
+          rescue IOSTemplate::Ownership::ValidationError
+            return "invalid-source-schema"
+          end
         elsif path.start_with?("App Store/metadata/localizations/")
           value = document(path)
           return nil if value.nil? && @sources.error(path)
           return "invalid-source-schema" unless object?(value, %w[name subtitle description keywords promotionalText], exact: false)
         end
         nil
+      end
+
+      def privacy_document_reasons
+        results = [@sources.error(PRIVACY), structure_error(PRIVACY, "schemaVersion")]
+        PRIVACY_FIELDS.each do |field|
+          results << value_error("privacy.#{field}", @values.call(PRIVACY, field))
+        end
+        results.compact.uniq
       end
 
       def age_error(value)

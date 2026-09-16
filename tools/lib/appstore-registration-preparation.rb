@@ -10,8 +10,8 @@ module IOSTemplate
       APP_KEYS = %w[appId bundleId name sku primaryLocale platforms userAccess].freeze
       MAX_AGE_SECONDS = 3600
 
-      def initialize(sources, values, now)
-        @sources, @values, @now = sources, values, now
+      def initialize(sources, values, now, source_schema)
+        @sources, @values, @now, @source_schema = sources, values, now, source_schema
       end
 
       def value(path, anchor)
@@ -61,6 +61,13 @@ module IOSTemplate
       end
 
       def run
+        source_errors = [
+          @source_schema.structure_error(OWNERSHIP, "appStore.teamId"),
+          @source_schema.structure_error(IDENTITY, "bundleId"),
+          @source_schema.structure_error(APP, "bundleId")
+        ].compact
+        return result(%w[invalid-source-schema]) unless source_errors.empty?
+
         team = value(OWNERSHIP, "appStore.teamId")
         return result(%w[team-unset]) unless nonempty_string?(team)
         return result(%w[invalid-team-identifier]) unless team.match?(/\A[A-Z0-9]{10}\z/)
@@ -70,6 +77,10 @@ module IOSTemplate
         identity_bundle = value(IDENTITY, "bundleId")
         metadata_bundle = value(APP, "bundleId")
         return result(%w[bundle-identity-mismatch]) unless bundle == identity_bundle && bundle == metadata_bundle
+        supplied_registration = value(VALUES, "account.bundleRegistration")
+        if !supplied_registration.nil? && supplied_registration != bundle
+          return result(%w[bundle-registration-mismatch])
+        end
         return result(%w[template-bundle]) if bundle.match?(/templateapp/i)
 
         observation = @sources.document(OBSERVATION)

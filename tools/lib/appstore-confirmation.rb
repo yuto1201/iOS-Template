@@ -44,7 +44,8 @@ module IOSTemplate
         current = @sources.descriptor(path, descriptor["anchor"])
         return false unless current == descriptor
         bytes = @sources.read(path)
-        return false unless bytes && !@sources.sensitive_document?(bytes)
+        return false unless bytes
+        return false if @sources.sensitive?(bytes) || @sources.sensitive_private_text?(path, bytes)
         if descriptor["anchor"] != "document"
           return false unless path.end_with?(".md") && bytes.lines.any? { |line| line.sub(/\r?\n\z/, "") == descriptor["anchor"] && line.start_with?("#") }
         end
