@@ -457,3 +457,13 @@
 - Decision: 共有`report-template-issue` skillを追加し、発見元repositoryと明示的な報告先`yuto1201/iOS-Template`を分離する。current templateとの比較、`app-specific`／`template-common`／`environment-only`の根拠付き分類、open／closed Issueの本文と解決内容を含む重複確認、現行Issue形式とvalidatorによるdraft検証、`external-ops`によるaccount／target／operation／Executor確認、作成後readbackを順に必須化する。upstream remoteやローカルcheckoutがなくてもfixed targetを検証できるが、由来、target、共通性、権限を推測しない。曖昧な作成応答は検索で照合し、無条件に再実行しない。
 - Consequence: 共通問題は追跡可能なIssueへ集約でき、アプリ固有または環境だけの問題、既存Issue、現行版で修正済みの問題を新規投稿から除外できる。skillは報告だけを完了し、template修正、PR／merge、派生アプリへの反映を完了扱いしない。新規派生アプリは共有skillとportable Claude symlinkを含み、既存アプリには正本、symlink、依存skill、validatorを明示して個別導入する。
 - Related Issue: #67
+
+## D-053: 6フェーズをIssue consumerとApp Store画像経路へ統合する
+
+- Date: 2026-09-16
+- Status: 確定
+- Supersedes: None。D-038の6フェーズ、D-040／D-046のSimulator資源境界、D-049のPhase 5→6証拠適用をconsumerへ接続し、各producerとlegacy互換は維持する。
+- Context: Phase record、Claim gate、証拠適用、残件判断は実装済みでも、Issue formとplanning／shipping／verification／App Store skillsがbindingを標準入力として案内しなければ、新しいIssueが旧運用へ戻る余地があった。またApp Store撮影はdisplay familyを先に複数作成し、独立Goldie skillはPhase 6、locale分離、iPad代替、共通Simulator枠と接続されていなかった。
+- Decision: release unitに属する新規Issueは既存AC一つのexact `Release-phase binding:`からBase commit上のimmutable recordを参照し、planning、Claim、batch、bootstrap、verification、preparation、submissionが同じrelease／revision／Phase／scopeを消費する。bindingのないsealed Issueは`legacy-unbound`として遡及変更しない。Phase 3を日本語iPhone、Phase 4を英語／iPad、Phase 5を完全品質、Phase 6を証拠適用と公開準備へrouteする。Phase 6のiPhone 6.9-inch画像はlocale別Goldie config／import／renderを標準とし、iPadはrepository撮影経路を使う。新規raw撮影はMac共通resource managerで一session一台を逐次allocate／deleteし、画像とreceiptをdevice外へ保存する。
+- Consequence: proposed IssueはClaim前にsuccessor依存とbindingをvalidate/readbackでき、claimed／paused／superseded historyはsealed contractとstate authorityを保つ。Goldieの成功はfull verification、visual／release audit、package seal、upload／submitを代替しない。tracked regressionはconsumer guidance、phase engine、locale分離、iPad routing、成功／失敗cleanup、最大同時保持1台をfake `xcrun`で確認し、実Simulator検証とは区別する。
+- Related Issue: #88

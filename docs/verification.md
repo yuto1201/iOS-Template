@@ -158,6 +158,14 @@ ruby tools/lib/ios-simulator-resource.rb recover --dry-run
 
 `tools/tests/test-ios-runner-system-locale.sh`は、4条件の値・再起動順序・環境変数の非採用と、言語／地域不一致、欠落・型違い・不正plist、書込み／読取り失敗、再起動後の設定消失、UI操作後の設定変化を検査します。fake Simulatorによる回帰テストは実Simulatorの表示確認とは別の証拠です。
 
+### 3.3 Phase 6のApp Store画像
+
+Phase 6のスクリーンショットは通常の4条件application verificationとは別のdisplay-family成果物です。iPhone 6.9-inchの装飾・編集はGoldieを標準参照とし、`goldie/ja/`と`goldie/en-US/`を別config／raw／flow／outputとして扱います。iPadはGoldie対象外なので`tools/capture-appstore-screenshots.sh`へrouteし、iPhone画像を拡大しません。既存画像の見出し、背景、frame、font、順序だけの変更は再撮影しません。
+
+新規raw撮影は`tools/with-ios-simulator-lock.sh`の内側で同じMac共通resource managerを使用します。撮影scriptはIssueとbatch identityを受け取り、locale／familyごとに一台をallocateし、画像とsanitized allocation receiptをdevice外へ保存してからexact UDIDとdata pathの削除を確認します。その後だけ次の条件へ進みます。失敗、timeout、INT／TERMも同じrelease経路を通し、cleanup失敗は枠とdurable recordを残して成功扱いしません。fake `xcrun`によるrepository testはこの順序とcleanupの回帰であり、実画像品質の証拠ではありません。
+
+Goldie／capture成功はPhase 5 full proof、`evidence-applicability.json`、visual audit、release-auditor、package seal、App Store account／target preflight、upload、submitの代用ではありません。`reuse`は元のPhase 5証拠が同じcandidate／contextへ適用可能という意味だけで、新たに実行したと報告しません。
+
 ## 4. 実行段階
 
 ### Fast route: focused Build and Test

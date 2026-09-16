@@ -303,6 +303,58 @@ end
 abort "no non-ASCII Ruby sources were checked" if checked.zero?
 RUBY
 
+# Phase routing is consumer-visible: new Issue forms tell planners where the
+# canonical binding lives, while planning, shipping, bootstrap, and verification
+# skills preserve the same release/revision/phase identity without inventing a
+# mutable field or retrofitting legacy contracts.
+ruby - <<'RUBY'
+forms = %w[
+  .github/ISSUE_TEMPLATE/feature.yml
+  .github/ISSUE_TEMPLATE/regression.yml
+  .github/ISSUE_TEMPLATE/release.yml
+]
+forms.each do |path|
+  text = File.binread(path)
+  abort "Issue form lacks Release-phase binding guidance: #{path}" unless text.include?("Release-phase binding:")
+end
+
+skills = %w[
+  .agents/skills/plan-issue-batch/SKILL.md
+  .agents/skills/ship-issue/SKILL.md
+  .agents/skills/ship-issue-batch/SKILL.md
+  .agents/skills/app-bootstrap/SKILL.md
+  .agents/skills/ios-verify/SKILL.md
+]
+skills.each do |path|
+  text = File.binread(path)
+  abort "workflow skill lacks release-phase routing: #{path}" unless
+    text.include?("Release-phase binding:") && text.include?("legacy-unbound")
+end
+
+ship = File.binread(".agents/skills/ship-issue/SKILL.md")
+abort "ship skill bypasses canonical Claim validation" unless ship.include?("tools/claim-issue.sh") && ship.include?("implementation")
+batch = File.binread(".agents/skills/ship-issue-batch/SKILL.md")
+abort "batch skill lacks phase ordering" unless batch.include?("previous Phase") && batch.include?("read-only")
+abort "batch skill lacks Mac-wide/session Simulator routing" unless
+  batch.include?("Mac-wide resource manager") && batch.include?("four total") && batch.include?("per inherited session")
+bootstrap = File.binread(".agents/skills/app-bootstrap/SKILL.md")
+abort "bootstrap does not route its four Simulator cases through shared ownership" unless
+  bootstrap.include?("tools/with-ios-simulator-lock.sh") &&
+  bootstrap.include?("tools/lib/ios-simulator-resource.rb") &&
+  bootstrap.include?("one device at a time") &&
+  bootstrap.include?("Mac-wide cap remains four")
+verify = File.binread(".agents/skills/ios-verify/SKILL.md")
+%w[Phase\ 3 Phase\ 4 Phase\ 5 Phase\ 6 evidence-applicability.json].each do |required|
+  abort "verification skill lacks #{required}" unless verify.include?(required.gsub("\\ ", " "))
+end
+RUBY
+
+# Reuse the canonical phase engine regression instead of duplicating its
+# fixtures. It covers normal progression, the Phase 3 implementation gate,
+# minor and major backtracking, unclassified/independent lanes, and emergency
+# reuse while the assertions above verify the user-facing consumers.
+ruby tools/lib/workflow-release-phase-test.rb
+
 printf '%s\n' 'No specification reference.' > "$fixture_dir/unlinked.md"
 expect_rejected unlinked 'Issue body has no local Markdown specification reference'
 

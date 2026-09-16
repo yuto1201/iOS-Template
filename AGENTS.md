@@ -26,6 +26,7 @@
 - 現在のユーザーが対象範囲のHTML比較を明示した場合は確定方向の有無にかかわらず最優先で[UI Direction skill](.agents/skills/ui-direction/SKILL.md)を使い、明示省略は現行性、scope、権限、理由が明確で比較指示と矛盾しないときだけ通常判定を上書きする。それ以外は、exact hierarchy／flowを覆う確定方向があればconfirmed-direction reuse、覆う方向がなく対象方向が未確定かつ最初のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかならGate、方向未確定かつその3 triggerなしならAcceptance criteriaがhierarchy／navigation／primary-flow interactionを決めない範囲だけbounded direction-neutralとし、曖昧ならGateを実行する。
 - cutover後にClaimするcontractは、既存Acceptance criteria全体でexactly oneの有効な宣言を持つ。一つのAC本文先頭（`AC-*:`直後）をexact `UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、routeは`comparison`、`explicit-skip`、`confirmed-direction reuse`、`bounded direction-neutral`、`not-applicable`だけを許可する。固有事実はReason後へ続け、prefix外のroute語は数えない。確定anchorを`Spec anchors`、選択前提をDependenciesへ置く。cutover後のIdentity bootstrapと純非UIは`not-applicable`を宣言し、`UI verification`はexact `Not applicable`だけ、scope／非UI理由はGoal／In scope等と宣言、関連product／spec anchorは`Spec anchors`へ分け、UI方向anchorを要求しない。UI Issueの3 field `UI verification`はlive guidanceであり、最終reviewの正本にしない。
 - D-030 cutoverは`2026-09-06T00:31:41Z`。封印済みcontractの`fetchedAt`がこれより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合だけpre-D-030 legacyとし、routeを推測せず、HTMLやroute宣言を遡及要求せず、contractを変更・再封印しない。cutover前でも候補が一つ以上あれば通常検証へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。cutoverと同時刻以降とcutover後のpre-Claim Issueにも同じexactly-one／完全性を必須とする。prefix外のroute語は候補に数えない。
+- release unitへ属する新規Issueは、既存Acceptance criteriaの一つをexact `Release-phase binding: <canonical JSON>`で開始し、Git管理下のimmutable phase recordへrelease identifier、revision、Phase、scope、route、work kind、path、digestを束縛する。Phase-aware `implementation`は前Phase出口を満たすまでClaimしない。`research`／`draft`と理由付き`independent`だけを非実装laneとして進められる。bindingのない既存contractは`legacy-unbound`のまま扱い、推測、遡及追記、再封印をしない。
 - 実行していない Build、Test、Simulator 操作を成功として報告しない。
 - `release`または`strict`は反対モデルの承認を必須とする。`shape`／`harden`の`standard`は、現在Headの段階別証拠でマージできる。
 - 反対モデルの既定pairはCodex primary→Claude、Claude primary→Codexとする。例外はsealed Acceptance criterionがexact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`で始まるexactly oneの宣言を持つIssueだけで、Codex primary→exact Grokを固定read-only launcherから使える。silent fallback、Claude primaryからのGrok利用、任意model、自己承認は許可しない。
@@ -45,6 +46,8 @@ ClaudeとCodexは同じ権限を持ち、どちらもローカル作業と認証
 - `shape`: 操作可能な主要導線を短時間で作る。標準は120分、Build、重要Unit Test、日本語iPhone 1条件のSmoke Test。画像評価、4条件、正式反対モデルレビューを要求せず、`release ready`と報告しない。
 - `harden`: 承認済みの形に対し、保存復旧、特定画面のDynamic Type、VoiceOver、localization、Dark Mode、性能、回帰など一つの問題を狭く改善する。`targeted`なcaseだけを検証し、無関係な品質項目を同じIssueへ集めない。
 - `release`: リリース候補Headへ従来の完全品質ゲートを適用する。4条件、Light/Dark、Dynamic Type、VoiceOver、44pt、目視、統合UI Test、同一Head証拠、反対モデルレビュー、premerge、提出前確認を必須にする。
+
+Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの主要機能と軽量検証、Phase 4は英語／iPadの対象拡張、Phase 5は完全品質、Phase 6は同一candidateに対する証拠適用判断と公開準備を担当する。Phase 6のApp Store用iPhone画像はGoldieを標準参照とし、`ja`／`en-US`を分離する。iPadは検証済み既存撮影経路を使い、どちらも共通Simulator資源管理、全画像監査、package／upload／submitの独立gateを維持する。
 
 すべてのstageで、コンパイル可能性、重要な金額・日付・保存ロジック、データ非破壊、秘密・個人情報の非保存、ユーザー所有ファイル保護、Scope境界、実行結果の正確な報告を省略しません。`strict`対象の認証・migration・本番データ・課金・法務・workflow gateは、stageが早くても対象別安全確認と必要な承認を維持します。
 

@@ -16,15 +16,35 @@ Independent text preparation can continue before complete release inputs exist. 
 ## Preconditions
 
 1. Read the release Issue, confirmed `specs/` documents, `App Store/README.md`, `docs/AUTHORITY.md`, and `docs/agent-contracts/release-auditor.md`.
-2. Require exact source Head, trusted verification Base and Issue, canonical passed full application verify.json for that Head and Bundle ID, the separate distribution-build digest, version, and first-publication status. English/iPad adaptation must be complete. Japanese iPhone-only evidence never satisfies release readiness.
-3. Use the selected Codex or Claude executor to refresh `App Store/submission/requirements.json` from official Apple documentation when its `retrievedAt` exceeds `maxAgeDays`. Store only public limits and source URLs.
-4. Refuse to continue if the build, package, requirements, or specification is changing.
+2. For a phase-aware publication Issue, require an exact Phase 6 `Release-phase binding:` and its committed record. Validate `.artifacts/issues/<issue>/<head>/evidence-applicability.json`: reuse only the exact Phase 5 candidate/context, and require the recorded target re-verification for `targeted-reverify` or `expanded-verification`. A sealed Issue without a binding remains `legacy-unbound`; do not synthesize or retrofit a record.
+3. Require exact source Head, trusted verification Base and Issue, canonical passed full application verify.json for that Head and Bundle ID, the separate distribution-build digest, version, and first-publication status. English/iPad adaptation must be complete. Japanese iPhone-only evidence never satisfies release readiness.
+4. Use the selected Codex or Claude executor to refresh `App Store/submission/requirements.json` from official Apple documentation when its `retrievedAt` exceeds `maxAgeDays`. Store only public limits and source URLs.
+5. Refuse to continue if the build, package, requirements, or specification is changing.
+
+## Phase 6 screenshot routing
+
+Use [`goldie`](../goldie/SKILL.md) as the standard Phase 6 presentation workflow for iPhone 6.9-inch App Store images. Keep `goldie/ja/` and `goldie/en-US/` as separate configs, raw inputs, flows, and disposable outputs. Existing real screenshots that need only headline, background, frame, font, layout, or order changes are imported and rendered without recapture.
+
+For new raw capture, acquire one inherited session through `tools/with-ios-simulator-lock.sh`; all device creation must flow through `tools/lib/ios-simulator-resource.rb`. Prefer the repository-owned capture tool and import its iPhone raw images into Goldie because Goldie 0.3.1 cannot select an exact UDID. If direct Goldie capture is explicitly requested, use it only when the device its installed selector will choose is the exact active allocation owned by this session; otherwise fall back to owned capture plus import. Save screenshots and diagnostics outside the device, then require the released allocation receipt before continuing.
+
+Goldie does not support iPad. Route iPad capture through `tools/capture-appstore-screenshots.sh`; never stretch an iPhone export. The repository capture is invoked under the shared lock and captures all required locale/family conditions sequentially:
+
+```sh
+tools/with-ios-simulator-lock.sh --timeout 0 -- \
+  tools/capture-appstore-screenshots.sh \
+    --requirements "$REQUIREMENTS" --states "App Store/screenshots/states.json" \
+    --app-path "$APP_PATH" --bundle-id "$BUNDLE_ID" --source-sha "$HEAD_SHA" \
+    --build-digest "$BUILD_DIGEST" --runtime "$RUNTIME_ID" --output-root "$RAW_ROOT" \
+    --issue "$ISSUE" --batch-id "$BATCH_ID"
+```
+
+The Mac-wide cap remains four iPhone/iPad allocations total and one allocation per session. Four conditions are create/capture/save/delete sequences, not a four-device pool. Failure, timeout, or interruption must release the exact owned allocation; a cleanup failure is reported and remains blocked for durable recovery. Do not erase, reuse, or delete user/other-owner devices.
 
 ## Prepare the source package
 
 1. Derive `metadata/`, localized English and Japanese copy, `privacy/data-use.yml`, review notes, and release notes from observable app behavior and confirmed specifications. Do not invent marketing, privacy, account-deletion, or legal claims.
 2. Draft privacy policy and terms from the same facts. For a first publication, stop until the user confirms both legal documents and an approval receipt is available. Mark their exact `Status: Confirmed`; an AI or release auditor cannot supply this approval.
-3. Capture an independent release matrix with `tools/capture-appstore-screenshots.sh` and `App Store/screenshots/states.json`. Do not reuse the ordinary verification matrix when Apple requires another display family such as Pro Max.
+3. Follow the Phase 6 screenshot routing above. Use Goldie for reviewed iPhone presentation and the repository capture path for iPad; do not reuse the ordinary verification matrix when Apple requires another display family such as Pro Max. Preserve exact source/build provenance across imported and rendered images.
 4. Have the visual evaluator inspect every raw image for safe area, clipping, truthfulness, ordering, and English/Japanese parity. Then obtain `release-auditor` approval for the exact source SHA, build digest, package digest, privacy/legal declarations, and screenshots.
 5. Assemble final screenshots with `tools/build-appstore-screenshot-set.sh`. Never stretch or silently transform them.
 6. Validate the complete package with `tools/validate-appstore-package.sh --require-fresh`.

@@ -9,6 +9,7 @@ workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-appstore-skills.XXXXXX")
 trap 'rm -rf -- "$workspace"' EXIT
 prepare_skill="$repo_root/.agents/skills/prepare-appstore-assets"
 submit_skill="$repo_root/.agents/skills/submit-appstore-release"
+goldie_skill="$repo_root/.agents/skills/goldie"
 seal="$prepare_skill/scripts/seal-package.sh"
 record="$submit_skill/scripts/record-section.sh"
 requirements_source="$repo_root/tools/tests/fixtures/appstore/requirements.json"
@@ -20,6 +21,7 @@ version=1.0
 [[ -f "$prepare_skill/SKILL.md" && -x "$seal" && -f "$submit_skill/SKILL.md" && -x "$record" ]] || {
   echo 'App Store skill scripts are incomplete' >&2; exit 1
 }
+[[ -f "$goldie_skill/SKILL.md" ]] || { echo 'Goldie skill is unavailable' >&2; exit 1; }
 [[ -L "$repo_root/.claude/skills/prepare-appstore-assets" && "$(readlink "$repo_root/.claude/skills/prepare-appstore-assets")" == ../../.agents/skills/prepare-appstore-assets ]] || {
   echo 'prepare skill symlink is invalid' >&2; exit 1
 }
@@ -29,6 +31,24 @@ version=1.0
 ! rg -q 'TODO|\[TODO' "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md"
 rg -q 'Codex and Claude may perform' "$submit_skill/SKILL.md" && ! rg -q 'Claude.*delegate|Claude.*委託' "$submit_skill/SKILL.md"
 rg -q 'first.publication|first publication|初回公開' "$prepare_skill/SKILL.md"
+for phase_skill in "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md" "$goldie_skill/SKILL.md"; do
+  rg -q 'Phase 6' "$phase_skill" || { echo "Phase 6 routing is missing: $phase_skill" >&2; exit 1; }
+done
+rg -q 'goldie/ja/' "$prepare_skill/SKILL.md" && rg -q 'goldie/en-US/' "$prepare_skill/SKILL.md" || {
+  echo 'prepare skill does not separate Goldie locales' >&2; exit 1
+}
+rg -q 'iPad.*capture-appstore-screenshots|capture-appstore-screenshots.*iPad' "$prepare_skill/SKILL.md" || {
+  echo 'prepare skill does not route iPad outside Goldie' >&2; exit 1
+}
+rg -q 'with-ios-simulator-lock\.sh' "$prepare_skill/SKILL.md" "$goldie_skill/SKILL.md" || {
+  echo 'App Store capture skills do not require the shared Simulator session' >&2; exit 1
+}
+rg -q 'ios-simulator-resource\.rb' "$goldie_skill/SKILL.md" || {
+  echo 'Goldie capture does not use the Mac-wide Simulator resource manager' >&2; exit 1
+}
+rg -q 'evidence-applicability\.json' "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md" || {
+  echo 'Phase 6 evidence applicability is not preserved through preparation and submission' >&2; exit 1
+}
 
 project="$workspace/project"; package="$project/App Store"
 audit="$workspace/release-audit.json"; approval="$workspace/legal-approval.json"; preflight="$workspace/app-store-preflight.json"

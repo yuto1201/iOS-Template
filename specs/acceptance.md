@@ -160,7 +160,7 @@ AI検証用deviceは必要時作成・最終使用後削除とし、同じMac全
 
 成功、失敗、timeout、cancel、部分作成失敗、強制終了後の孤児をcleanup対象とする。証拠をdevice外へ保存し、exact UDIDとowner／lease／非活動状態を確認してからdeviceとdataを削除し、一覧とdata残留の確認後だけ枠を返す。停止／erase、名前一致、Shutdownだけを削除完了や所有根拠にしない。手動device、他repository／session、使用中、不明なdevice、Runtime、Xcode、共通cache、ユーザーDerivedData、canonical evidenceを保護する。
 
-容量／memoryが不足すれば4台未満でも新規作成と長時間反復を止める。#93以後のschema v2 matrixはMac共通lease、session上限、孤児回収、容量preflightを使い、実行UDIDと削除receiptをversioned artifactへ固定する。#89は#93への移植元履歴として保持する。旧schema v1の固定UDID matrixと既存証拠はimmutable legacyとして受理し、遡及変換しない。skills全体と既存Issueの移行は#88で扱う。
+容量／memoryが不足すれば4台未満でも新規作成と長時間反復を止める。#93以後のschema v2 matrixはMac共通lease、session上限、孤児回収、容量preflightを使い、実行UDIDと削除receiptをversioned artifactへ固定する。#89は#93への移植元履歴として保持する。旧schema v1の固定UDID matrixと既存証拠はimmutable legacyとして受理し、遡及変換しない。検証／App Store skillsと既存Issue移行は#88の共通consumer境界を使う。
 
 ## 5. 常設品質ゲート
 

@@ -31,6 +31,17 @@ Never start canonical Simulator verification for an intermediate commit. After a
 
 When XcodeBuildMCP is callable, you may inspect its session defaults to identify future compatibility work. No canonical XcodeBuildMCP evidence producer exists in this repository, so inspection never selects it as an execution route. Always use `tools/verify-ios-issue.sh`, the tested `xcodebuild-simctl` producer, until a canonical MCP producer and integration coverage are added. Do not bypass it with manual `xcodebuild`, `simctl`, screenshots, or JSON. Tool unavailability is never test success.
 
+## Release-phase evidence routing
+
+Read the sealed Acceptance criteria before selecting commands. A phase-aware contract has exactly one `Release-phase binding:` whose record identity was already validated by Claim; verification consumes that identity and never rewrites it. A sealed contract without the declaration is `legacy-unbound` and follows its original stage/profile/scope path without a synthesized phase record.
+
+- Phase 3 verifies the operable Japanese-iPhone core with the Issue's `shape` or focused `harden` evidence. It does not add English/iPad or claim release readiness.
+- Phase 4 verifies only the ordered English/iPad adaptation cases affected by each Issue, while preserving the completed Phase 3 path.
+- Phase 5 uses the release candidate's complete `full` quality path and records canonical residual disposition before review when the cutover applies.
+- Phase 6 first resolves `.artifacts/issues/<issue>/<head>/evidence-applicability.json`. Exact same candidate/context may reuse the Phase 5 proof; an affected context requires targeted re-verification and unknown, missing dependency, or expanded scope requires expanded verification. Never report reuse as a new run. Package integrity, screenshots, privacy, legal, account, upload, and submit checks remain Phase 6-specific and are never inherited from the applicability decision.
+
+Delivery stage still controls the breadth of an individual Issue. Phase number does not turn a `shape` into `release`, and a `release` stage does not by itself complete a Phase exit. User-authority exit events remain separate from AI verification success.
+
 ## Application verification
 
 Acquire the single repository-wide Simulator verification lock immediately before matrix lifecycle work. Hold it through the runner, then release it before visual review and finalization. `tools/with-ios-simulator-lock.sh` uses a stable repository identity and a crash-released macOS kernel lock, and exports one stable `IOS_TEMPLATE_SIMULATOR_SESSION_ID` to every child worker. The runner's Issue/Head lock prevents duplicate runs but does not replace the Mac-wide resource manager. Lock order is repository lock first, then the resource manager's short state lock; never reverse it.

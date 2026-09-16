@@ -6,6 +6,10 @@
     {
       "domain": "appstore",
       "paths": [
+        ".agents/skills/goldie/SKILL.md",
+        ".agents/skills/prepare-appstore-assets/SKILL.md",
+        ".agents/skills/submit-appstore-release/SKILL.md",
+        "docs/goldie.md",
         "tools/build-appstore-screenshot-set.sh",
         "tools/capture-appstore-screenshots.sh",
         "tools/validate-appstore-package.sh"
