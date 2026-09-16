@@ -553,7 +553,7 @@ FileUtils.mkdir_p(File.join(project, "specs"))
 FileUtils.mkdir_p(File.join(project, "GardenNotes"))
 File.write(File.join(project, spec_relative), "# Garden journal\n\nStatus: Confirmed\n\nKeep a private garden journal.\n")
 File.write(File.join(project, code_relative), "struct Journal { var entries: [String] = [] }\n")
-git.call("add", "-A")
+git.call("add", "Config", "GardenNotes", "GardenNotes.xcodeproj", "App Store", "specs")
 git.call("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "synthetic reviewed source baseline")
 baseline_stdout, _, baseline_status = Open3.capture3(entrypoint, "--project-root", project)
 abort "confirmation baseline failed" unless baseline_status.exitstatus == 1
@@ -1378,6 +1378,7 @@ puts "PASS: account/IAP confirmations require fresh production identity, product
 git.call("add", "Config", "GardenNotes", "GardenNotes.xcodeproj", "App Store", "specs")
 git.call("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "synthetic complete source checkout")
 committed_sha = git.call("rev-parse", "HEAD")
+abort "synthetic source commit tracked preparation evidence" unless git.call("ls-tree", "-r", "--name-only", committed_sha, "--", ".artifacts").empty?
 committed_stdout, _, committed_status = Open3.capture3(entrypoint, "--project-root", project)
 abort "committed source inventory failed" unless committed_status.exitstatus == 1
 committed_name = JSON.parse(committed_stdout).fetch("fields").find { |row| row["fieldId"] == "name" && row["locale"] == "en-US" }
@@ -1834,6 +1835,10 @@ File.write(File.join(project, preparation_path), JSON.generate(full_values))
 git.call("add", "Config", "BuildSettings", "GardenNotes", "GardenNotes.xcodeproj", "App Store", "specs", ".gitignore")
 git.call("-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", "synthetic release source checkout")
 committed_sha = git.call("rev-parse", "HEAD")
+full_values["publicPages"].each_value do |page|
+  page["textSource"] = source_descriptor.call(page.fetch("textSource").fetch("path"))
+end
+full_values["legal"]["eula"]["textSource"] = source_descriptor.call(full_values["legal"]["eula"].fetch("textSource").fetch("path"))
 artifact_directory = ".artifacts/appstore-preparation/builds"
 FileUtils.mkdir_p(File.join(project, artifact_directory))
 zip_root = File.join(scratch, "export")
@@ -1879,7 +1884,8 @@ complete_rows.each do |row|
   slug = [row["fieldId"], row["locale"]].compact.join("-").downcase.gsub(/[^a-z0-9-]/, "-")
   record = {"fieldId" => row["fieldId"], "locale" => row["locale"], "proofs" => {}, "remoteReadback" => nil}
   row["classification"].each do |kind|
-    proof = {"schemaVersion" => 1, "recordType" => "appstore-preparation-proof", "kind" => kind, "fieldId" => row["fieldId"], "locale" => row["locale"], "section" => row["section"], "sourceFingerprint" => row["sourceFingerprint"], "checkedAt" => Time.now.utc.iso8601, "reviewer" => {"derive" => "codex", "user" => "user", "public" => "public-page-inspector", "account" => "account-inspector"}.fetch(kind), "decision" => {"derive" => "reviewed", "user" => "approved", "public" => "observed", "account" => "observed"}.fetch(kind), "reference" => {"derive" => "review", "user" => "user-approval", "public" => "public-observation", "account" => "account-observation"}.fetch(kind) + "://synthetic-full-#{slug}", "basis" => [source_descriptor.call(spec_relative, "# Garden journal").merge("revision" => committed_sha), source_descriptor.call(code_relative).merge("revision" => committed_sha)]}
+    implementation_basis = row["fieldId"] == "name" ? "GardenNotes.xcodeproj/project.pbxproj" : code_relative
+    proof = {"schemaVersion" => 1, "recordType" => "appstore-preparation-proof", "kind" => kind, "fieldId" => row["fieldId"], "locale" => row["locale"], "section" => row["section"], "sourceFingerprint" => row["sourceFingerprint"], "checkedAt" => Time.now.utc.iso8601, "reviewer" => {"derive" => "codex", "user" => "user", "public" => "public-page-inspector", "account" => "account-inspector"}.fetch(kind), "decision" => {"derive" => "reviewed", "user" => "approved", "public" => "observed", "account" => "observed"}.fetch(kind), "reference" => {"derive" => "review", "user" => "user-approval", "public" => "public-observation", "account" => "account-observation"}.fetch(kind) + "://synthetic-full-#{slug}", "basis" => [source_descriptor.call(spec_relative, "# Garden journal").merge("revision" => committed_sha), source_descriptor.call(implementation_basis).merge("revision" => committed_sha)]}
     if kind == "public"
       page = full_values["publicPages"].fetch(row["fieldId"])
       raw_body = File.binread(File.join(project, page["textSource"]["path"]))
@@ -1894,7 +1900,12 @@ complete_rows.each do |row|
       bytes = File.binread(File.join(project, source["path"]))
       value = source["anchor"] == "document" ? bytes : source["anchor"].split(".").reduce(source["path"].end_with?(".json") ? JSON.parse(bytes) : YAML.safe_load(bytes)) { |v, key| v.fetch(key) }
       observation = "#{account_directory}/full-#{slug}.json"
-      File.write(File.join(project, observation), JSON.generate({"schemaVersion" => 1, "recordType" => "appstore-account-field-observation", "source" => "synthetic-fixture", "observedAt" => Time.now.utc.iso8601, "environment" => "production", "status" => "observed", "identity" => save_identity, "fieldId" => row["fieldId"], "locale" => row["locale"], "section" => row["section"], "sourceFingerprint" => row["sourceFingerprint"], "valueDigest" => canonical_digest.call(value), "remoteReference" => "asc://apps/1234567890/metadata/#{slug}", "products" => row["fieldId"].start_with?("iap.") ? [production_product] : []}))
+      remote_reference = if row["fieldId"].start_with?("iap.")
+                           "asc://apps/1234567890/in-app-purchases/#{production_product.fetch('appleId')}"
+                         else
+                           "asc://apps/1234567890/metadata/#{slug}"
+                         end
+      File.write(File.join(project, observation), JSON.generate({"schemaVersion" => 1, "recordType" => "appstore-account-field-observation", "source" => "synthetic-fixture", "observedAt" => Time.now.utc.iso8601, "environment" => "production", "status" => "observed", "identity" => save_identity, "fieldId" => row["fieldId"], "locale" => row["locale"], "section" => row["section"], "sourceFingerprint" => row["sourceFingerprint"], "valueDigest" => canonical_digest.call(value), "remoteReference" => remote_reference, "products" => row["fieldId"].start_with?("iap.") ? [production_product] : []}))
       proof["observation"] = source_descriptor.call(observation)
     end
     proof["checkedAt"] = Time.now.utc.iso8601
