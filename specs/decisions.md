@@ -477,3 +477,13 @@
 - Decision: workflow-only path判定は、Phase 6のlocal guidance、`tools/capture-appstore-screenshots.sh`、その直接regression testをexact path allowlistで許可する。App Store metadata、採用画像、package内容、signing、provider実装、TestFlight、App Store external operationは引き続き拒否し、contractも`appstore.*` operationを許可しない。exact list外を名前やdirectoryだけからlocal toolと推測しない。
 - Consequence: delivery-tool契約はXcode／Simulator実行を捏造せずrepository evidenceで検証できる一方、公開内容と認証操作はrelease経路からworkflow-onlyへ流入しない。publisher regressionは許可された全path群の成功と`App Store/Metadata.md`の拒否を同時に固定する。
 - Related Issue: #88
+
+## D-055: AppLibrary法務ページのIssue引き継ぎと公開検証を固定する
+
+- Date: 2026-09-16
+- Status: 確定
+- Supersedes: None。D-026の公開先方針、D-007の外部操作境界、D-054のworkflow-only用途別判定、既存の法務承認・release gateを維持する。
+- Context: 派生アプリの法務原稿からWeb-AppLibrary実装へ移る際、事実、言語、原稿、route、承認、返却値が会話だけに残ると、別repositoryへの誤投稿、重複Issue、未承認本文や仮URLの公開、deployを承認とみなす誤り、公開URLと正本のdriftが起きる。PayCycleのpilotではWeb Issueへ引き継げた一方、公開ページの一部未到達もあり、Issue作成と公開検証を別々の成功条件にする必要がある。
+- Decision: confirmedな英語／日本語support・privacy・terms正本、digest／approval、source Issue／Head、app facts、ユーザー承認済みhost／route、返却契約から、exact `yuto1201/Web-AppLibrary`向けcopy-ready Markdownを決定的に生成する。作成はsource contractのoperation／executor、open／closed重複検索、account／target preflight、一度だけのdispatch、exact readbackに従う。ユーザーがprompt転送と法務・公開承認を保持する。返却後はrequest／prompt／Web Issue／deployment／user actions／source digests／URLを結び、HTTPS exact route、redirectなし、unauthenticated HTTP 200、本文・locale、同一locale相互linkをlive検証する。fixtureは`appStoreEligible: false`とし、live `verified`だけをApp Store準備・提出へ渡す。
+- Consequence: Web実装や公開をこのrepositoryから暗黙実行せず、Issue作成完了、ユーザー承認、ページ公開、App Store利用可否を別々に追跡できる。source／route／approval／pageが変われば再生成または再検証が必要になる。workflow-onlyではこの非認証producer、guidance、README、直接testだけをexact allowlistし、法務本文、metadata、採用asset、provider実装、外部公開操作は拒否し続ける。
+- Related Issue: #101

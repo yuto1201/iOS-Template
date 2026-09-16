@@ -9,12 +9,15 @@
         ".agents/skills/goldie/SKILL.md",
         ".agents/skills/prepare-appstore-assets/SKILL.md",
         ".agents/skills/submit-appstore-release/SKILL.md",
+        "docs/agent-contracts/appstore-submission.md",
         "docs/goldie.md",
         "tools/build-appstore-screenshot-set.sh",
         "tools/capture-appstore-screenshots.sh",
+        "tools/prepare-appstore-legal-handoff.sh",
         "tools/validate-appstore-package.sh"
       ],
       "prefixes": [
+        ".agents/skills/prepare-appstore-assets/templates/",
         "App Store/",
         "tools/lib/appstore-"
       ]
@@ -302,6 +305,7 @@
   "tests": [
     {"path": "tools/tests/test-app-bootstrap.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
+    {"path": "tools/tests/test-appstore-legal-handoff.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-package.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-screenshots.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore", "evidence-applicability", "release-disposition"]},

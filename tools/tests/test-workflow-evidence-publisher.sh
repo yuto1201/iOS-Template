@@ -129,20 +129,31 @@ published="$(run_publisher)"
 [[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
 
 prepare_fixture appstore-delivery-tools
-/bin/mkdir -p "$repo/.agents/skills/prepare-appstore-assets" "$repo/.agents/skills/submit-appstore-release" \
-  "$repo/App Store/screenshots" "$repo/tools/tests"
+/bin/mkdir -p "$repo/.agents/skills/prepare-appstore-assets/templates" "$repo/.agents/skills/submit-appstore-release" \
+  "$repo/App Store/legal" "$repo/App Store/screenshots" "$repo/docs/agent-contracts" "$repo/tools/lib" "$repo/tools/tests"
 printf '%s\n' '# local preparation guidance' >"$repo/.agents/skills/prepare-appstore-assets/SKILL.md"
+printf '%s\n' '# legal handoff guidance' >"$repo/.agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md"
 printf '%s\n' '# local submission guidance' >"$repo/.agents/skills/submit-appstore-release/SKILL.md"
+printf '%s\n' '# legal handoff readme' >"$repo/App Store/legal/README.md"
 printf '%s\n' '# screenshot workflow guidance' >"$repo/App Store/screenshots/README.md"
+printf '%s\n' '# app store submission contract' >"$repo/docs/agent-contracts/appstore-submission.md"
 printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/capture-appstore-screenshots.sh"
+printf '%s\n' '# local legal handoff library' >"$repo/tools/lib/appstore-legal-handoff.rb"
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/prepare-appstore-legal-handoff.sh"
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/tests/test-appstore-legal-handoff.sh"
 printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/tests/test-appstore-screenshots.sh"
 printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/tests/test-appstore-skills.sh"
-/bin/chmod +x "$repo/tools/capture-appstore-screenshots.sh" \
+/bin/chmod +x "$repo/tools/capture-appstore-screenshots.sh" "$repo/tools/prepare-appstore-legal-handoff.sh" \
+  "$repo/tools/tests/test-appstore-legal-handoff.sh" \
   "$repo/tools/tests/test-appstore-screenshots.sh" "$repo/tools/tests/test-appstore-skills.sh"
 previous_head="$head_sha"
 /usr/bin/git -C "$repo" add -- .agents/skills/prepare-appstore-assets/SKILL.md \
+  .agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md \
   .agents/skills/submit-appstore-release/SKILL.md 'App Store/screenshots/README.md' \
-  tools/capture-appstore-screenshots.sh tools/tests/test-appstore-screenshots.sh \
+  'App Store/legal/README.md' docs/agent-contracts/appstore-submission.md \
+  tools/capture-appstore-screenshots.sh \
+  tools/lib/appstore-legal-handoff.rb tools/prepare-appstore-legal-handoff.sh \
+  tools/tests/test-appstore-legal-handoff.sh tools/tests/test-appstore-screenshots.sh \
   tools/tests/test-appstore-skills.sh
 /usr/bin/git -C "$repo" commit -q --amend --no-edit
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
@@ -227,6 +238,14 @@ printf '%s\n' 'metadata' >"$repo/App Store/Metadata.md"
 /usr/bin/git -C "$repo" commit -q --amend --no-edit
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 expect_rejection appstore-path 'workflow-only diff contains a release or App Store path: App Store/Metadata.md'
+
+prepare_fixture legal-source-path
+/bin/mkdir -p "$repo/App Store/legal"
+printf '%s\n' '# Privacy Policy' 'Status: Confirmed' >"$repo/App Store/legal/privacy-policy.md"
+/usr/bin/git -C "$repo" add -- 'App Store/legal/privacy-policy.md'
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+expect_rejection legal-source-path 'workflow-only diff contains a release or App Store path: App Store/legal/privacy-policy.md'
 
 prepare_fixture missing-repository-evidence
 /usr/bin/ruby -e 'File.unlink(ARGV.fetch(0))' "$repo/.artifacts/issues/42/$head_sha/repository-tests.json"

@@ -28,6 +28,8 @@ ruby tools/lib/release-verification.rb "$PWD" "$PACKAGE_MANIFEST" "$HEAD_SHA" "$
 
 This read-only check does not authorize submission or replace account, legal, build, package or independent screenshot requirements. record-section.sh rechecks the same proof before publishing each result.
 
+If support, privacy, or terms URLs are part of the candidate, also require the exact live `publication-verification.json` produced by the `prepare-appstore-assets` legal-page handoff. It must be `verified` and `appStoreEligible: true`, and its source digests, routes, Web-AppLibrary Issue, user approval references, and public checks must match the sealed package. Reject `fixture-validated`, a changed source/URL, a login-only/non-200 page, or a record from another candidate. This record verifies publication; it does not replace the user's legal approval or authorize submission.
+
 For a phase-aware submission, also require the exact Phase 6 `Release-phase binding:` and revalidate the same `.artifacts/issues/<issue>/<head>/evidence-applicability.json` consumed by preparation, review, PR, and pre-merge. `reuse` proves applicability of the Phase 5 run; it does not claim a new run. `targeted-reverify` and `expanded-verification` require their later target proof. Package integrity, Goldie/iPad screenshot audit, privacy, legal, configured account/target, remote readback, upload, and explicit submit authorization are always Phase 6-specific. A sealed unbound Issue stays `legacy-unbound`; never invent or retrofit a record.
 
 1. Read the release Issue operation declarations, `docs/AUTHORITY.md`, `docs/agent-contracts/appstore-submission.md`, and `${VERSION}-package.json`.
