@@ -343,6 +343,15 @@ abort "bootstrap does not route its four Simulator cases through shared ownershi
   bootstrap.include?("tools/lib/ios-simulator-resource.rb") &&
   bootstrap.include?("one device at a time") &&
   bootstrap.include?("Mac-wide cap remains four")
+workflow = File.binread("docs/workflow.md").force_encoding(Encoding::UTF_8)
+%w[proposed approved claimed in-progress paused blocked:* superseded done].each do |state|
+  abort "workflow migration lacks #{state} handling" unless workflow.include?("`#{state}`")
+end
+abort "workflow migration does not preserve a sealed binding" unless
+  workflow.include?("Release-phase binding:") &&
+  workflow.include?("\u4fdd\u8b77\u5bfe\u8c61") &&
+  workflow.include?("legacy-unbound") &&
+  workflow.include?("successor")
 verify = File.binread(".agents/skills/ios-verify/SKILL.md")
 %w[Phase\ 3 Phase\ 4 Phase\ 5 Phase\ 6 evidence-applicability.json].each do |required|
   abort "verification skill lacks #{required}" unless verify.include?(required.gsub("\\ ", " "))
