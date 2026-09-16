@@ -241,6 +241,10 @@ D-030 cutoverは`2026-09-06T00:31:41Z`です。封印済みcontractの`fetchedAt
 
 HTMLは情報階層や操作仮説を早く比較するための資料です。製品の正本、CSS pixel仕様、WKWebView実装、またはnativeなBuild／Test／Simulator証拠として扱いません。
 
+### 派生アプリからテンプレートへの改善報告
+
+派生アプリで共通化できる不具合や改善を見つけた場合は、[Template Issue reporting skill](./.agents/skills/report-template-issue/SKILL.md)を使います。発見元と報告先`yuto1201/iOS-Template`を分け、current templateとの比較、open／closed Issueの重複確認、現行本文validator、外部操作権限の順に確認します。共通性や権限を確認できない場合はlocal draftまでに留め、Issue作成をテンプレート修正や派生アプリへの反映完了とは扱いません。
+
 ## 条件付き統合と秘密管理
 
 Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundation のアプリ本体へ組み込まれていません。必要性を確定仕様と Issue の受け入れ条件に明記した場合だけ、別 Issue で有効化します。テンプレートの状態では root `supabase/`、外部 SDK、認証済み接続を持たず、不要なサービスの保守や権限を発生させません。

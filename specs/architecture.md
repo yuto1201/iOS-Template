@@ -154,6 +154,7 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | `ios-verify` | Delivery stageに応じてshape 1条件、harden targeted、release 4条件の有界検証を選び、現在Headの証拠を生成する |
 | `cross-model-review` | `strict`または`release`で反対モデルへレビューを依頼し、Head SHA付き結果を保存する。非releaseのstandard shape/hardenと`fast`ではblocking gateにしない |
 | `external-ops` | CodexとClaudeに共通のアカウント／target照合後、認証済み外部操作を実行する |
+| `report-template-issue` | 派生アプリで見つかった共通改善を現行テンプレートと照合し、重複と権限を確認して明示的な報告先へIssue化する |
 | `app-bootstrap` | 新規リポジトリのXcode・Swift・設定Identityを機能開発前に安全に初期化する |
 | `app-icon` | Identity確定後にシンプルな画像生成候補から1案を選び、検証済みAppIconへ組み込む |
 | `ios-system-experiences` | Identity確定後に5つのsystem surfaceをApple公式情報で評価し、採用面だけを依存Issueへ設計する |

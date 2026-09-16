@@ -260,6 +260,14 @@
       "prefixes": [".agents/skills/ios-system-experiences/"]
     },
     {
+      "domain": "template-issue-reporting",
+      "paths": [
+        ".claude/skills/report-template-issue",
+        "tools/tests/test-report-template-issue-skill.sh"
+      ],
+      "prefixes": [".agents/skills/report-template-issue/"]
+    },
+    {
       "domain": "ui-direction",
       "paths": [],
       "prefixes": [".agents/skills/ui-direction/"]
@@ -333,6 +341,7 @@
     {"path": "tools/tests/test-provider-preflight.sh", "domains": ["provider-security"]},
     {"path": "tools/tests/test-release-disposition.sh", "domains": ["release-disposition"]},
     {"path": "tools/tests/test-render-pr-body.sh", "domains": ["descriptor-files", "review-contract"]},
+    {"path": "tools/tests/test-report-template-issue-skill.sh", "domains": ["template-issue-reporting"]},
     {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-review-route.sh", "domains": ["review-contract"]},
