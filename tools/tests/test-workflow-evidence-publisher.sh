@@ -326,8 +326,10 @@ printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/testflight-upload.sh"
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 expect_rejection testflight-helper 'workflow-only diff contains a release or App Store path: tools/testflight-upload.sh'
 
+semantic_index=0
 for semantic_path in tools/asc-provider.rb tools/connect-upload.sh tools/sign-release.sh tools/tf-client.sh tools/ascProvider.rb tools/iTunesConnectClient.rb tools/tfUpload.sh tools/ascprovider.rb tools/itunesconnectclient.rb tools/tfupload.sh tools/itunesconnect/client.rb tools/appleconnect/provider.rb tools/asc-save.rb tools/itunesconnectupdate.rb tools/tf-distribute.sh tools/asc.rb tools/itunes.rb tools/itunesconnect.rb tools/apple-connect.rb tools/asc-put.rb tools/asc-post.rb; do
-  fixture_name=$(printf '%s' "$semantic_path" | /usr/bin/sed 's#[/.]#-#g')
+  semantic_index=$((semantic_index + 1))
+  fixture_name="semantic-$semantic_index-$(printf '%s' "$semantic_path" | /usr/bin/sed 's#[/.]#-#g')"
   prepare_fixture "$fixture_name"
   /bin/mkdir -p "$(/usr/bin/dirname "$repo/$semantic_path")"
   printf '%s\n' '# semantic remote release implementation alias' >"$repo/$semantic_path"

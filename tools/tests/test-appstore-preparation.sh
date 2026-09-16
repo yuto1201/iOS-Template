@@ -92,6 +92,7 @@ echo 'PASS: public App Store preparation retains the complete unresolved invento
 # All registration scenarios go through the same public CLI. The observation
 # files are deliberately synthetic and can never authorize an Apple operation.
 ruby -rjson -ryaml -rfileutils -ropen3 -rtime -rdigest - "$entrypoint" "$test_workspace" "$repo_root" <<'RUBY'
+# encoding: UTF-8
 entrypoint, scratch, repo_root = ARGV
 project = File.join(scratch, "registration")
 baseline = {
