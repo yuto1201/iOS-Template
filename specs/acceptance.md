@@ -125,9 +125,9 @@ profileを下げてstage要件を回避しない。`shape`はUIを含むので`f
 
 ### 3.3 Workflow-only検証
 
-delivery tool、review schema、validator、evidence producerだけを変更する`harden + strict` Issueは、application `Verification`と`Verification scope`を持たないworkflow-only経路を選べる。Base..Headの全pathがworkflow allowlist内で、App Store／TestFlight pathとoperationを含まないことをcurrent Headから再判定する。canonical `verify.json`は`changeClassification: workflow-only`、`executionRoute: repository-tests`、`status: passed`を持ち、Xcode、Build、Unit、Simulator case、Screenshot、visual evaluationを`not-applicable`として固定する。
+delivery tool、review schema、validator、evidence producerだけを変更する`harden + strict` Issueは、application `Verification`と`Verification scope`を持たないworkflow-only経路を選べる。Base..Headの全pathがworkflow allowlist内であることをcurrent Headから再判定する。App Store／TestFlightはexternal operation、metadata、画像asset、signing、provider実装を拒否し、exact allowlistにあるlocal guidance、非認証producer、対応regression testだけを許可する。canonical `verify.json`は`changeClassification: workflow-only`、`executionRoute: repository-tests`、`status: passed`を持ち、Xcode、Build、Unit、Simulator case、Screenshot、visual evaluationを`not-applicable`として固定する。
 
-workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、仕様anchor、contract digest、Base／Head、strict review、blocking finding、PR、pre-merge gateを省略しない。D-037 cutover後はsealed要求scopeとimmutable Base..Head入力からexact test planを生成し、`targeted`、`head-all`、`base-and-head`の解決結果だけを実行する。cutover前のworkflow-onlyは全ACの`--map`が参照するtracked test pathのexact unionを各1回実行し、その他の従来Head-only contractは全tracked testを維持する。application path、Xcode project、asset、localization、Bundle設定、release operation、別Issue／Head／contract、改ざん済みplan／repository evidenceを拒否する。
+workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、仕様anchor、contract digest、Base／Head、strict review、blocking finding、PR、pre-merge gateを省略しない。D-037 cutover後はsealed要求scopeとimmutable Base..Head入力からexact test planを生成し、`targeted`、`head-all`、`base-and-head`の解決結果だけを実行する。cutover前のworkflow-onlyは全ACの`--map`が参照するtracked test pathのexact unionを各1回実行し、その他の従来Head-only contractは全tracked testを維持する。application path、Xcode project、App Store metadata／画像asset、localization、Bundle設定、release operation、別Issue／Head／contract、改ざん済みplan／repository evidenceを拒否する。
 
 ### 3.4 Repository testsのBase／Head要件
 

@@ -12,7 +12,7 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 `shape`はBuild、重要Unit Test、主要導線の日本語iPhone Smokeを実行し、Screenshotやvisual reviewなしでcanonical `verify.json`を発行します。理由は`Delivery stage shape passed; not release-ready.`です。`harden`もvisual checkを明示しない限り同じ非visual経路を使います。`release`とvisual checkを持つhardenだけがdraft、Screenshot、visual result、finalizeの二段階経路を使います。
 
-非applicationのdelivery tool／schema／validator／review／evidence変更はworkflow-only経路です。`harden + strict`、application `Verification`／`Verification scope`なし、allowlist内の差分だけを受理します。先にcanonical repository-test evidenceを発行し、次に`.artifacts/issues/${ISSUE}/workflow-evidence-input.json`へschemaVersion 1と非空reasonを書き、`tools/publish-workflow-verify.sh`で`verify.json`を発行します。この経路はXcode、Build、Unit、Simulator matrix、Screenshot、visual evaluationを起動せず、repository evidenceのAC mappingをverifyへ固定します。
+非applicationのdelivery tool／schema／validator／review／evidence変更はworkflow-only経路です。`harden + strict`、application `Verification`／`Verification scope`なし、allowlist内の差分だけを受理します。App Store関連はexact allowlistのlocal guidance、認証を行わないcapture producer、対応regression testだけを許可し、metadata、画像asset、signing、provider実装、App Store／TestFlight operationは拒否します。先にcanonical repository-test evidenceを発行し、次に`.artifacts/issues/${ISSUE}/workflow-evidence-input.json`へschemaVersion 1と非空reasonを書き、`tools/publish-workflow-verify.sh`で`verify.json`を発行します。この経路はXcode、Build、Unit、Simulator matrix、Screenshot、visual evaluationを起動せず、repository evidenceのAC mappingをverifyへ固定します。
 
 workflow-onlyのGit modeはregular fileの追加・削除・同一mode変更だけを原則とします。共有skill追加時だけ、`.claude/skills/<skill-name>`の新規symlinkがexact `../../.agents/skills/<skill-name>`を指し、同じHeadにregular `.agents/skills/<skill-name>/SKILL.md`が存在する場合を許可します。既存symlinkの変更・削除、absolute／escaping target、別名target、target不在は拒否し、worktree上の解決結果だけで承認しません。
 

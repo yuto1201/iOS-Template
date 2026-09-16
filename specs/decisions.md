@@ -467,3 +467,13 @@
 - Decision: release unitに属する新規Issueは既存AC一つのexact `Release-phase binding:`からBase commit上のimmutable recordを参照し、planning、Claim、batch、bootstrap、verification、preparation、submissionが同じrelease／revision／Phase／scopeを消費する。bindingのないsealed Issueは`legacy-unbound`として遡及変更しない。Phase 3を日本語iPhone、Phase 4を英語／iPad、Phase 5を完全品質、Phase 6を証拠適用と公開準備へrouteする。Phase 6のiPhone 6.9-inch画像はlocale別Goldie config／import／renderを標準とし、iPadはrepository撮影経路を使う。新規raw撮影はMac共通resource managerで一session一台を逐次allocate／deleteし、画像とreceiptをdevice外へ保存する。
 - Consequence: proposed IssueはClaim前にsuccessor依存とbindingをvalidate/readbackでき、claimed／paused／superseded historyはsealed contractとstate authorityを保つ。Goldieの成功はfull verification、visual／release audit、package seal、upload／submitを代替しない。tracked regressionはconsumer guidance、phase engine、locale分離、iPad routing、成功／失敗cleanup、最大同時保持1台をfake `xcrun`で確認し、実Simulator検証とは区別する。
 - Related Issue: #88
+
+## D-054: workflow-onlyでlocal App Store delivery toolだけをexact allowlistする
+
+- Date: 2026-09-16
+- Status: 確定
+- Supersedes: D-033のworkflow-only path境界を、App Store関連pathの用途別判定について限定的に補足する。application、asset、provider operation、strict review境界は維持する。
+- Context: #88は`harden + strict`の非application Issueとして、Phase 6のApp Store guidanceと認証を行わないSimulator capture producerを変更する一方、従来validatorはpath名に`appstore`または`App Store/`が含まれるだけでmetadata／asset／provider実装と同一に拒否した。そのためcanonical targeted repository evidenceが成功してもworkflow verifyを発行できなかった。
+- Decision: workflow-only path判定は、Phase 6のlocal guidance、`tools/capture-appstore-screenshots.sh`、その直接regression testをexact path allowlistで許可する。App Store metadata、採用画像、package内容、signing、provider実装、TestFlight、App Store external operationは引き続き拒否し、contractも`appstore.*` operationを許可しない。exact list外を名前やdirectoryだけからlocal toolと推測しない。
+- Consequence: delivery-tool契約はXcode／Simulator実行を捏造せずrepository evidenceで検証できる一方、公開内容と認証操作はrelease経路からworkflow-onlyへ流入しない。publisher regressionは許可された全path群の成功と`App Store/Metadata.md`の拒否を同時に固定する。
+- Related Issue: #88
