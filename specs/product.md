@@ -148,9 +148,11 @@ ClaudeとCodexの一般開発方針は維持する。Claudeや別のCodex model�
 - **配置は未決・ユーザー指定待ち**。AppLibraryは開発中のため、各アプリサイトと法務ページのリポジトリ内配置、URLパス、ルーティング、Vercel project、対応言語別の公開URLは、ユーザーから詳細が伝えられた後に確定する。一覧のドメインだけからこれらを推測せず、固定ディレクトリ、ファイル名、サブドメインを先回りして決めない。
 - 配置が未決でも、独立した通常のアプリ開発、データ利用の棚卸し、法務原稿の下書きは継続できる。公開先の確定を必要とする公開・申請作業は、該当Issueを `blocked:user` として確認を求める。仮URL、一覧トップURL、ローカルファイルを正式な法務ページURLとして登録しない。
 - 公開・申請前に、ユーザーが指定した各ページの公開URL、ログイン不要での到達性、公開本文と確認済み原稿・プライバシー申告の一致、アプリ内リンクと申請情報の整合を確認する。初回の法務内容に対するユーザー承認は引き続き必須で、この公開方針への合意を法務本文への承認として扱わない。
+- 配置と原稿が確定したら、アプリrepositoryから`yuto1201/Web-AppLibrary`向けに、source Issue／Head、英語・日本語のsupport／privacy／terms原稿とdigest、実装・データ利用・広告・課金の事実、承認済みroute、期待する返却値を含むcopy-ready Issue本文を生成する。作成前にopen／closed Issueを重複確認し、許可されたaccount／target／operationで一度だけ作成してtitle／body／URL／stateをreadbackする。ユーザーがWeb実装AIへのprompt転送と法務本文・公開の最終承認を行う。
+- Web実装からの返却はdeployment reference、Web Issue、ユーザー操作参照、公開URLとsource digestを固定し、公開host／route、ログイン不要のHTTP 200、確認済み本文、locale、同一言語内のsupport／privacy／terms相互linkをlive検証する。fixture検証はtool regressionに限定し、App Store証拠にしない。live検証済みの結果だけを申請準備・提出へ引き継ぐ。
 - この方針はAppLibraryの編集・移行・デプロイ、DNS変更、App Store提出を単独で認可しない。実操作は対象リポジトリの規則、確定した配置、設定済み個人アカウント／target、Issue contractと必要な承認に従う。既存のoperation allowlistや検証gateは変更しない。
 
-決定の経緯は [D-026](decisions.md#d-026-applibraryのアプリサイトを法務ページの公開先とする) を参照する。
+決定の経緯は [D-026](decisions.md#d-026-applibraryのアプリサイトを法務ページの公開先とする) と [D-055](decisions.md#d-055-applibrary法務ページのissue引き継ぎと公開検証を固定する) を参照する。
 
 ## 7. 自動化の範囲
 

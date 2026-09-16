@@ -13,6 +13,12 @@ For inventory, draft promotion or a new App record's prerequisites, first follow
 
 Independent text preparation can continue before complete release inputs exist. If screenshots are explicitly deferred or their scope remains for the user to decide, stop before capture; do not execute the screenshot steps below or seal a complete package. Continue the complete preparation sequence only when its prerequisites and screenshot scope are established. This does not waive any release gate or authorize partial remote saves.
 
+## Legal-page handoff
+
+When confirmed support, privacy, or terms sources need public AppLibrary pages, follow the [legal-page handoff contract](templates/legal-page-handoff.md) and `tools/prepare-appstore-legal-handoff.sh`. Generate a copy-ready Issue for exactly `yuto1201/Web-AppLibrary`, perform duplicate search and authenticated creation/readback only under the source Issue's declared GitHub operation, then leave prompt forwarding and legal/publication approval to the user. This workflow does not edit or deploy the Web repository.
+
+Before URL fields or release readiness may consume the result, require a live `publication-verification.json` whose exact source/route digests, Web Issue, user actions, HTTP 200 responses, approved text, locale, and interlinks were verified. A `fixture-validated` result is not App Store evidence and is not App Store eligible.
+
 ## Preconditions
 
 1. Read the release Issue, confirmed `specs/` documents, `App Store/README.md`, `docs/AUTHORITY.md`, and `docs/agent-contracts/release-auditor.md`.
@@ -43,7 +49,7 @@ The Mac-wide cap remains four iPhone/iPad allocations total and one allocation p
 ## Prepare the source package
 
 1. Derive `metadata/`, localized English and Japanese copy, `privacy/data-use.yml`, review notes, and release notes from observable app behavior and confirmed specifications. Do not invent marketing, privacy, account-deletion, or legal claims.
-2. Draft privacy policy and terms from the same facts. For a first publication, stop until the user confirms both legal documents and an approval receipt is available. Mark their exact `Status: Confirmed`; an AI or release auditor cannot supply this approval.
+2. Draft privacy policy, terms, and support text from the same facts. For a first publication, stop until the user confirms the legal documents and an approval receipt is available. Mark their exact `Status: Confirmed`; an AI or release auditor cannot supply this approval. If public pages are required, complete the legal-page handoff above and bind the live verification record before treating their URLs as ready.
 3. Follow the Phase 6 screenshot routing above. Use Goldie for reviewed iPhone presentation and the repository capture path for iPad; do not reuse the ordinary verification matrix when Apple requires another display family such as Pro Max. Preserve exact source/build provenance across imported and rendered images.
 4. Have the visual evaluator inspect every raw image for safe area, clipping, truthfulness, ordering, and English/Japanese parity. Then obtain `release-auditor` approval for the exact source SHA, build digest, package digest, privacy/legal declarations, and screenshots.
 5. Assemble final screenshots with `tools/build-appstore-screenshot-set.sh`. Never stretch or silently transform them.

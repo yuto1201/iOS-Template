@@ -1829,9 +1829,15 @@ func validateWorkflowPath(_ path: String) throws {
     let components = try relativeComponents(path, at: "workflow-only path")
     let localDeliveryToolPaths: Set<String> = [
         ".agents/skills/prepare-appstore-assets/SKILL.md",
+        ".agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md",
         ".agents/skills/submit-appstore-release/SKILL.md",
+        "App Store/legal/README.md",
         "App Store/screenshots/README.md",
+        "docs/agent-contracts/appstore-submission.md",
         "tools/capture-appstore-screenshots.sh",
+        "tools/lib/appstore-legal-handoff.rb",
+        "tools/prepare-appstore-legal-handoff.sh",
+        "tools/tests/test-appstore-legal-handoff.sh",
         "tools/tests/test-appstore-screenshots.sh",
         "tools/tests/test-appstore-skills.sh"
     ]

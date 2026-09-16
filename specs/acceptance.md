@@ -204,3 +204,11 @@ Foundation、Identity bootstrap、Simulator verificationなどテンプレート
 - package外の別形式にsource相対path・anchor・revision/digest、locale/section、remote identity、差分・保存結果・readback digest、blocked/deferred理由を記録する。片言語だけの成功を全件成功とせず、source/remote driftと認証を再確認してから再開する。
 - [手動検証表](../docs/agent-contracts/appstore-submission.md#selective-save-verification-plan)の全caseを確認し、後続実装では実入口の合成fixtureへ落とす。英語／日本語、Unicode、byteと文字数、Apple公式要件の再取得を含み、未知値の空文字上書き、権限外のform同時保存、曖昧応答の盲目的再試行を拒否する。
 - 部分保存記録では全素材・申告・法務・release audit・明示提出許可を満たせず、既存release journalに流用できない。実装Issueのwrite-setとTest計画は§9.2で定め、#62のread-only準備と実保存を混同しない。
+
+AppLibrary法務ページへの引き継ぎは、次を満たす。
+
+- confirmedな英語／日本語のsupport・privacy・terms原稿、source path／digest／approval、source Issue／Head、app identity、実装・データ利用・広告・課金の事実、ユーザー承認済みhost／route、返却契約から、exact target `yuto1201/Web-AppLibrary`向けのcopy-ready Markdownを決定的に生成する。不足、未知field、symlink／path escape、digest不一致、秘密らしい値を拒否する。
+- Web Issue作成はsource Issueの`github.create_issue`、executor、設定済みaccount／targetに従い、open／closed重複検索、直前preflight、一度だけの作成、title／body／URL／stateのexact readbackを必須とする。曖昧な応答後は検索・readbackで照合し、盲目的に再作成しない。
+- promptのWeb実装AIへの転送と法務本文・公開の承認はユーザー操作として別々に参照を残す。Issue作成、AI review、PR、deploymentから承認を推測しない。
+- 公開返却はrequest／prompt／Web Issue／deployment／user actions／source digests／URLsを結び、approved HTTPS host／route、redirectなし、ログイン不要HTTP 200、approved source本文とlocale、同一localeの3ページ相互linkを検証する。live `verified`だけをApp Store用URLへ引き継ぎ、`fixture-validated`は`appStoreEligible: false`としてrelease証拠にしない。
+- 手順は既存の初回法務承認、release package、監査、提出権限を弱めず、Web repository編集、Vercel deploy、Cloudflare／DNS変更、App Store Connect更新・提出を認可しない。tracked regressionは正常系に加えwrong repository、401、本文不一致、link欠落、fixture非適格を固定する。
