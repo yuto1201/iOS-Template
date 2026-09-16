@@ -128,6 +128,28 @@ rebind_head_artifacts "$previous_head"
 published="$(run_publisher)"
 [[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
 
+prepare_fixture appstore-delivery-tools
+/bin/mkdir -p "$repo/.agents/skills/prepare-appstore-assets" "$repo/.agents/skills/submit-appstore-release" \
+  "$repo/App Store/screenshots" "$repo/tools/tests"
+printf '%s\n' '# local preparation guidance' >"$repo/.agents/skills/prepare-appstore-assets/SKILL.md"
+printf '%s\n' '# local submission guidance' >"$repo/.agents/skills/submit-appstore-release/SKILL.md"
+printf '%s\n' '# screenshot workflow guidance' >"$repo/App Store/screenshots/README.md"
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/capture-appstore-screenshots.sh"
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/tests/test-appstore-screenshots.sh"
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/tests/test-appstore-skills.sh"
+/bin/chmod +x "$repo/tools/capture-appstore-screenshots.sh" \
+  "$repo/tools/tests/test-appstore-screenshots.sh" "$repo/tools/tests/test-appstore-skills.sh"
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- .agents/skills/prepare-appstore-assets/SKILL.md \
+  .agents/skills/submit-appstore-release/SKILL.md 'App Store/screenshots/README.md' \
+  tools/capture-appstore-screenshots.sh tools/tests/test-appstore-screenshots.sh \
+  tools/tests/test-appstore-skills.sh
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
+
 prepare_fixture escaping-skill-link
 /bin/mkdir -p "$repo/.claude/skills"
 /bin/ln -s ../../../outside "$repo/.claude/skills/example"

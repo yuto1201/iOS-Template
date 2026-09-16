@@ -7,7 +7,7 @@ labels:
 body:
   - type: markdown
     attributes:
-      value: "Use this form only for a post-merge or physical-device regression; pre-merge defects remain in the original Issue."
+      value: "Use this form only for a post-merge or physical-device regression; pre-merge defects remain in the original Issue. If the regression belongs to a release unit, bind its exact committed phase record and classify whether it stays in the current Phase or reopens an earlier Phase."
   - type: textarea
     id: goal
     attributes:
@@ -33,7 +33,7 @@ body:
     id: acceptance-criteria
     attributes:
       label: Acceptance criteria
-      description: "Use stable, unique IDs. For workflow-only harden + strict work claimed at or after `2026-09-13T13:03:38Z`, start exactly one AC with `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`; choose targeted for one known domain, head-all for broad/test-infrastructure changes, and base-and-head only for explicit revision comparison."
+      description: "Use stable, unique IDs. For a phase-aware regression, start one AC with exact `Release-phase binding: {\"phase\":5,\"reason\":\"...\",\"recordDigest\":\"sha256:...\",\"recordPath\":\"Config/releases/<release>/phase-records/<record>.json\",\"releaseIdentifier\":\"<release>\",\"revision\":1,\"route\":\"standard\",\"scope\":[\"<scope>\"],\"workKind\":\"implementation\"}` in canonical key order; preserve an existing unbound sealed contract as `legacy-unbound`. For workflow-only harden + strict work claimed at or after `2026-09-13T13:03:38Z`, start exactly one AC with `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`; choose targeted for one known domain, head-all for broad/test-infrastructure changes, and base-and-head only for explicit revision comparison."
     validations:
       required: true
   - type: textarea

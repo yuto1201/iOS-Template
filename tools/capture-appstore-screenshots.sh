@@ -5,11 +5,11 @@ capture_script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 source "$capture_script_dir/lib/bounded-command.sh"
 
 usage() {
-  echo "usage: $0 --requirements FILE --states FILE --app-path APP --bundle-id ID --source-sha SHA --build-digest sha256:HEX --runtime ID --output-root DIR" >&2
+  echo "usage: $0 --requirements FILE --states FILE --app-path APP --bundle-id ID --source-sha SHA --build-digest sha256:HEX --runtime ID --output-root DIR --issue NUMBER --batch-id ID" >&2
   exit 64
 }
 
-requirements= states= app_path= bundle_id= source_sha= build_digest= runtime= output_root=
+requirements= states= app_path= bundle_id= source_sha= build_digest= runtime= output_root= issue= batch_id=
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --requirements) requirements=${2-}; shift 2 ;;
@@ -20,19 +20,48 @@ while [[ $# -gt 0 ]]; do
     --build-digest) build_digest=${2-}; shift 2 ;;
     --runtime) runtime=${2-}; shift 2 ;;
     --output-root) output_root=${2-}; shift 2 ;;
+    --issue) issue=${2-}; shift 2 ;;
+    --batch-id) batch_id=${2-}; shift 2 ;;
     *) usage ;;
   esac
 done
-[[ -n "$requirements" && -n "$states" && -n "$app_path" && -n "$bundle_id" && -n "$source_sha" && -n "$build_digest" && -n "$runtime" && -n "$output_root" ]] || usage
+[[ -n "$requirements" && -n "$states" && -n "$app_path" && -n "$bundle_id" && -n "$source_sha" && -n "$build_digest" && -n "$runtime" && -n "$output_root" && -n "$issue" && -n "$batch_id" ]] || usage
 [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'source SHA must be a full lowercase Git SHA' >&2; exit 1; }
 [[ "$build_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'build digest is invalid' >&2; exit 1; }
 [[ "$bundle_id" =~ ^[A-Za-z0-9]+([.-][A-Za-z0-9-]+)+$ ]] || { echo 'bundle identifier is invalid' >&2; exit 1; }
 [[ "$runtime" =~ ^[A-Za-z0-9._-]+$ ]] || { echo 'runtime identifier is invalid' >&2; exit 1; }
+[[ "$issue" =~ ^[1-9][0-9]*$ ]] || { echo 'Issue number is invalid' >&2; exit 1; }
+[[ "$batch_id" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,63}$ ]] || { echo 'batch identifier is invalid' >&2; exit 1; }
 for file in "$requirements" "$states"; do
   [[ -f "$file" && ! -L "$file" ]] || { echo "input must be a regular non-symbolic-link file: $(basename "$file")" >&2; exit 1; }
 done
 [[ -d "$app_path" && ! -L "$app_path" ]] || { echo 'app path must be a non-symbolic-link directory' >&2; exit 1; }
-xcrun_bin=$(command -v xcrun) || { echo 'xcrun is unavailable' >&2; exit 1; }
+repository_root=$(git -C "$capture_script_dir/.." rev-parse --show-toplevel 2>/dev/null) || { echo 'capture requires a Git worktree' >&2; exit 1; }
+repository_root=$(cd "$repository_root" && /bin/pwd -P)
+[[ "$(git -C "$repository_root" rev-parse HEAD)" == "$source_sha" ]] || { echo 'source SHA differs from the capture worktree Head' >&2; exit 1; }
+resource_manager="$capture_script_dir/lib/ios-simulator-resource.rb"
+[[ -f "$resource_manager" && ! -L "$resource_manager" ]] || { echo 'Simulator resource manager is unavailable' >&2; exit 1; }
+
+resource_test_mode=${IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE:-0}
+resource_test_flags=()
+if [[ "$resource_test_mode" == 1 ]]; then
+  xcrun_bin=${IOS_TEMPLATE_APPSTORE_XCRUN:-}
+  state_root=${IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT:-}
+  [[ -x "$xcrun_bin" && "$state_root" == /* ]] || { echo 'Simulator resource test configuration is incomplete' >&2; exit 1; }
+  resource_test_flags=(--test-mode --state-root "$state_root" --xcrun "$xcrun_bin" --minimum-free-bytes 0)
+else
+  [[ "$resource_test_mode" == 0 && -z "${IOS_TEMPLATE_APPSTORE_XCRUN:-}" && -z "${IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT:-}" ]] || {
+    echo 'Simulator resource test hooks require explicit test mode' >&2; exit 1;
+  }
+  xcrun_bin=/usr/bin/xcrun
+  [[ -x "$xcrun_bin" ]] || { echo 'xcrun is unavailable' >&2; exit 1; }
+fi
+
+simulator_session_id=${IOS_TEMPLATE_SIMULATOR_SESSION_ID:-${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}}
+if [[ -z "$simulator_session_id" ]]; then
+  simulator_session_id=$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')
+fi
+[[ "$simulator_session_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$ ]] || { echo 'Simulator session identity is invalid' >&2; exit 1; }
 
 for variable in requirements states app_path; do
   value=${!variable}; directory=$(cd "$(dirname "$value")" && /bin/pwd -P)
@@ -42,17 +71,49 @@ output_parent=$(cd "$(dirname "$output_root")" && /bin/pwd -P)
 output_root="$output_parent/$(basename "$output_root")"
 [[ ! -e "$output_root" && ! -L "$output_root" ]] || { echo 'output root already exists; refusing to overwrite it' >&2; exit 1; }
 staging=$(mktemp -d "$output_parent/.appstore-capture.XXXXXX")
-created_devices=()
-cleanup() {
-  local udid
-  for udid in "${created_devices[@]}"; do
-    bounded_run appstore-simulator-cleanup "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl shutdown "$udid" >/dev/null 2>&1 || true
-    bounded_run appstore-simulator-delete "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl delete "$udid" >/dev/null 2>&1 || true
-  done
-  [[ -n "${staging:-}" && -d "$staging" ]] && rm -rf -- "$staging"
-  return 0
+allocation_receipt_dir="$staging/simulator-allocations"
+/bin/mkdir -m 700 "$allocation_receipt_dir"
+attempt_id="appstore-$$"
+active_case_id=
+active_allocation_id=
+active_allocation_udid=
+active_allocation_receipt=
+
+run_simulator_resource() {
+  /usr/bin/ruby --disable-gems "$resource_manager" "$@"
 }
-trap cleanup EXIT INT TERM
+
+release_active_simulator() {
+  local reason=$1 output allocation_id udid receipt
+  [[ -n "$active_allocation_id" ]] || return 0
+  output=$(run_simulator_resource release "${resource_test_flags[@]}" \
+    --session "$simulator_session_id" --allocation-id "$active_allocation_id" \
+    --reason "$reason" --receipt-dir "$allocation_receipt_dir") || return 1
+  IFS=$'\t' read -r allocation_id udid receipt <<<"$output"
+  [[ "$allocation_id" == "$active_allocation_id" && "$udid" == "$active_allocation_udid" && \
+     "$receipt" == "$active_allocation_receipt" && -f "$receipt" ]] || return 1
+  active_case_id=
+  active_allocation_id=
+  active_allocation_udid=
+  active_allocation_receipt=
+}
+
+cleanup() {
+  local status=$? cleanup_status=0
+  trap - EXIT INT TERM
+  if [[ -n "$active_allocation_id" ]]; then
+    release_active_simulator appstore-capture-aborted || cleanup_status=1
+  fi
+  [[ -n "${staging:-}" && -d "$staging" ]] && rm -rf -- "$staging"
+  if [[ "$cleanup_status" -ne 0 ]]; then
+    echo 'App Store capture failed to release its owned Simulator; durable allocation remains for recovery' >&2
+    status=1
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 bounded_run appstore-simulator-inventory "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl list -j devicetypes > "$staging/inventory.json"
 REQUIREMENTS="$requirements" STATES="$states" INVENTORY="$staging/inventory.json" PLAN="$staging/plan.json" ruby <<'RUBY'
@@ -100,45 +161,79 @@ end
 File.binwrite(ENV.fetch("PLAN"),JSON.generate({"schemaVersion"=>1,"devices"=>devices,"cases"=>cases}))
 RUBY
 
-device_map="$staging/devices.tsv"
-: > "$device_map"
-while IFS=$'\t' read -r family device_type device_identifier; do
-  [[ -n "$family" && -n "$device_type" && -n "$device_identifier" ]] || { echo 'release device plan is incomplete' >&2; exit 1; }
-  name="iOS-Template-AppStore-${family}-$$"
-  udid=$(bounded_run appstore-simulator-create "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl create "$name" "$device_identifier" "$runtime")
-  [[ "$udid" =~ ^[0-9A-Fa-f-]{36}$ ]] || { echo "simctl returned an invalid UDID for $family" >&2; exit 1; }
-  created_devices+=("$udid")
-  printf '%s\t%s\t%s\n' "$family" "$udid" "$device_type" >> "$device_map"
-done < <(ruby -rjson -e 'JSON.parse(File.binread(ARGV.fetch(0))).fetch("devices").each{|entry| puts entry.values_at("family","deviceType","deviceTypeIdentifier").join("\t")}' "$staging/plan.json")
-
 case_count=$(ruby -rjson -e 'puts JSON.parse(File.binread(ARGV.fetch(0))).fetch("cases").length' "$staging/plan.json")
-index=0
-while [[ "$index" -lt "$case_count" ]]; do
-  IFS=$'\t' read -r locale language apple_locale family state order device_type < <(
-    ruby -rjson -e 'entry=JSON.parse(File.binread(ARGV.fetch(0))).fetch("cases").fetch(Integer(ARGV.fetch(1))); puts entry.values_at("locale","appleLanguage","appleLocale","family","state","order","deviceType").join("\t")' "$staging/plan.json" "$index"
+group_count=$(ruby -rjson -e '
+  cases=JSON.parse(File.binread(ARGV.fetch(0))).fetch("cases")
+  puts cases.map{|entry| entry.values_at("locale","family")}.uniq.length
+' "$staging/plan.json")
+group_index=0
+while [[ "$group_index" -lt "$group_count" ]]; do
+  IFS=$'\t' read -r locale language apple_locale family device_type device_identifier < <(
+    ruby -rjson -e '
+      cases=JSON.parse(File.binread(ARGV.fetch(0))).fetch("cases")
+      groups=cases.group_by{|entry| entry.values_at("locale","family")}.values.map(&:first)
+      entry=groups.fetch(Integer(ARGV.fetch(1)))
+      puts entry.values_at("locale","appleLanguage","appleLocale","family","deviceType","deviceTypeIdentifier").join("\t")
+    ' "$staging/plan.json" "$group_index"
   )
-  udid=$(/usr/bin/awk -F '\t' -v family="$family" '$1==family {print $2}' "$device_map")
-  [[ -n "$udid" ]] || { echo "release Simulator is unavailable for $family" >&2; exit 1; }
-  launch_arguments=()
-  while IFS= read -r argument; do launch_arguments+=("$argument"); done < <(
-    ruby -rjson -e 'JSON.parse(File.binread(ARGV.fetch(0))).fetch("cases").fetch(Integer(ARGV.fetch(1))).fetch("launchArguments").each{|arg| puts arg}' "$staging/plan.json" "$index"
-  )
-  destination_directory="$staging/$locale/$family"
-  mkdir -p "$destination_directory"
-  destination="$destination_directory/$(printf '%02d' "$order")-$state.png"
-  bounded_run appstore-simulator-boot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl boot "$udid"
-  bounded_run appstore-simulator-bootstatus "${IOS_TEMPLATE_SIMULATOR_BOOT_TIMEOUT_SECONDS:-300}" "$xcrun_bin" simctl bootstatus "$udid" -b
-  bounded_run appstore-status-bar "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl status_bar "$udid" override --time 9:41 --dataNetwork wifi --wifiBars 3 --cellularBars 4 --batteryState charged --batteryLevel 100
-  bounded_run appstore-simulator-install "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl install "$udid" "$app_path"
-  bounded_run appstore-simulator-launch "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl launch --terminate-running-process "$udid" "$bundle_id" \
-    -AppleLanguages "($language)" -AppleLocale "$apple_locale" -AppleInterfaceStyle Light \
-    --disable-animations --fixed-date 2026-01-01T09:41:00Z "${launch_arguments[@]}"
-  bounded_run appstore-screenshot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl io "$udid" screenshot --type=png "$destination"
-  bounded_run appstore-simulator-terminate "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl terminate "$udid" "$bundle_id"
-  bounded_run appstore-status-bar-clear "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl status_bar "$udid" clear
-  bounded_run appstore-simulator-shutdown "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl shutdown "$udid"
-  bounded_run appstore-simulator-erase "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl erase "$udid"
-  index=$((index+1))
+  case "$family:$locale" in
+    iphone-*:en-US) active_case_id=iphone-en ;;
+    iphone-*:ja) active_case_id=iphone-ja ;;
+    ipad-*:en-US) active_case_id=ipad-en ;;
+    ipad-*:ja) active_case_id=ipad-ja ;;
+    *) echo "unsupported App Store capture condition: $family/$locale" >&2; exit 1 ;;
+  esac
+  allocation_output=$(run_simulator_resource allocate "${resource_test_flags[@]}" \
+    --session "$simulator_session_id" --repository "$repository_root" --issue "$issue" --head "$source_sha" \
+    --batch "$batch_id" --attempt "$attempt_id" --case "$active_case_id" --runtime "$runtime" \
+    --device-type "$device_identifier" --owner-pid "$$" --wait-seconds 60 \
+    --receipt-dir "$allocation_receipt_dir")
+  IFS=$'\t' read -r active_allocation_id active_allocation_udid active_allocation_receipt <<<"$allocation_output"
+  allocation_receipt_dir_physical=$(cd "$allocation_receipt_dir" && /bin/pwd -P)
+  [[ "$active_allocation_id" =~ ^[0-9a-f-]{36}$ && "$active_allocation_udid" =~ ^[0-9A-Fa-f-]+$ && \
+     "$active_allocation_receipt" == "$allocation_receipt_dir_physical/allocation-$active_allocation_id.json" && \
+     -f "$active_allocation_receipt" ]] || { echo 'Simulator allocation receipt is invalid' >&2; exit 1; }
+
+  bounded_run appstore-simulator-boot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl boot "$active_allocation_udid"
+  bounded_run appstore-simulator-bootstatus "${IOS_TEMPLATE_SIMULATOR_BOOT_TIMEOUT_SECONDS:-300}" "$xcrun_bin" simctl bootstatus "$active_allocation_udid" -b
+  bounded_run appstore-status-bar "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl status_bar "$active_allocation_udid" override --time 9:41 --dataNetwork wifi --wifiBars 3 --cellularBars 4 --batteryState charged --batteryLevel 100
+
+  state_count=$(ruby -rjson -e '
+    cases=JSON.parse(File.binread(ARGV.fetch(0))).fetch("cases")
+    puts cases.count{|entry| entry["locale"]==ARGV.fetch(1) && entry["family"]==ARGV.fetch(2)}
+  ' "$staging/plan.json" "$locale" "$family")
+  state_index=0
+  while [[ "$state_index" -lt "$state_count" ]]; do
+    IFS=$'\t' read -r state order < <(
+      ruby -rjson -e '
+        cases=JSON.parse(File.binread(ARGV.fetch(0))).fetch("cases").select{|entry| entry["locale"]==ARGV.fetch(1) && entry["family"]==ARGV.fetch(2)}
+        entry=cases.fetch(Integer(ARGV.fetch(3))); puts entry.values_at("state","order").join("\t")
+      ' "$staging/plan.json" "$locale" "$family" "$state_index"
+    )
+    launch_arguments=()
+    while IFS= read -r argument; do launch_arguments+=("$argument"); done < <(
+      ruby -rjson -e '
+        cases=JSON.parse(File.binread(ARGV.fetch(0))).fetch("cases").select{|entry| entry["locale"]==ARGV.fetch(1) && entry["family"]==ARGV.fetch(2)}
+        cases.fetch(Integer(ARGV.fetch(3))).fetch("launchArguments").each{|arg| puts arg}
+      ' "$staging/plan.json" "$locale" "$family" "$state_index"
+    )
+    destination_directory="$staging/$locale/$family"
+    mkdir -p "$destination_directory"
+    destination="$destination_directory/$(printf '%02d' "$order")-$state.png"
+    bounded_run appstore-simulator-install "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl install "$active_allocation_udid" "$app_path"
+    bounded_run appstore-simulator-launch "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl launch --terminate-running-process "$active_allocation_udid" "$bundle_id" \
+      -AppleLanguages "($language)" -AppleLocale "$apple_locale" -AppleInterfaceStyle Light \
+      --disable-animations --fixed-date 2026-01-01T09:41:00Z "${launch_arguments[@]}"
+    bounded_run appstore-screenshot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl io "$active_allocation_udid" screenshot --type=png "$destination"
+    bounded_run appstore-simulator-terminate "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl terminate "$active_allocation_udid" "$bundle_id"
+    bounded_run appstore-simulator-uninstall "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl uninstall "$active_allocation_udid" "$bundle_id"
+    state_index=$((state_index+1))
+  done
+
+  bounded_run appstore-status-bar-clear "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl status_bar "$active_allocation_udid" clear
+  bounded_run appstore-simulator-shutdown "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl shutdown "$active_allocation_udid"
+  release_active_simulator appstore-capture-complete || { echo 'owned Simulator release failed' >&2; exit 1; }
+  group_index=$((group_index+1))
 done
 
 PLAN="$staging/plan.json" ROOT="$staging" REQUIREMENTS="$requirements" SOURCE_SHA="$source_sha" \
@@ -186,10 +281,8 @@ File.binwrite(File.join(root,"manifest.json"),JSON.generate(manifest))
 File.chmod(0644,File.join(root,"manifest.json"))
 RUBY
 
-rm -f -- "$staging/inventory.json" "$staging/plan.json" "$staging/devices.tsv"
+rm -f -- "$staging/inventory.json" "$staging/plan.json"
 /bin/mv "$staging" "$output_root"
 staging=
-cleanup
-created_devices=()
 trap - EXIT INT TERM
 printf '{"cases":%s,"status":"captured"}\n' "$case_count"

@@ -88,7 +88,7 @@ Phase 5で問題を見つけた場合は、問題別のRegression／harden Issue
 
 既存アプリの緊急修正は、現在も適用可能な目的、Identity、UI方向、基盤を理由付きで再利用し、影響するPhaseから開始します。毎回App IconやHTML比較をやり直しませんが、Issue／Branch／PR、対象Test、安全確認、必要review、外部操作承認は省略しません。
 
-AI検証用Simulatorは必要時に作成し、使用後にdeviceとdataを削除します。同じMac全体でiPhone／iPad合計最大4台、sessionごと原則1台とし、一つのsessionのmatrixは作成、検証、証拠保存、削除確認、枠返却を逐次行います。共有枠、所有lease、異常終了回収、容量preflightの実装は#93、skillsへの統合は#88で行います。#89は#93への移植元履歴として保持します。それまでは既存lock／固定UDID契約を維持し、手動deviceや不明なdeviceを削除せず、本仕様だけで新運用が稼働済みとは報告しません。
+AI検証用Simulatorは必要時に作成し、使用後にdeviceとdataを削除します。同じMac全体でiPhone／iPad合計最大4台、sessionごと原則1台とし、一つのsessionのmatrixは作成、検証、証拠保存、削除確認、枠返却を逐次行います。#93の共有枠、所有lease、異常終了回収、容量preflightをrunner、検証skill、App Store撮影へ共通接続します。#89は#93への移植元履歴として保持します。手動deviceや不明なdeviceを削除せず、resource managerを通らない旧経路を共通上限対応済みと報告しません。
 
 #### Phase recordとIssue binding
 
@@ -128,7 +128,22 @@ ruby tools/lib/workflow-release-phase-cli.rb validate \
   --previous Config/releases/example-v1/phase-records/record-0001.json
 ```
 
-`Release-phase binding:`宣言を持たない既存Issueは`legacy-unbound`として従来のIssue state／stage／profile gateを維持し、phase recordを合成・補完・再封印しません。新規Issue formとskillsへの標準入力追加は#88で行います。#86の証拠適用resolverと#87の不具合許容判断もこのrecordだけから推測しません。
+`Release-phase binding:`宣言を持たない既存Issueは`legacy-unbound`として従来のIssue state／stage／profile gateを維持し、phase recordを合成・補完・再封印しません。新規Issue form、planning、Claim、batch、bootstrap、verification、App Store skillsは同じbindingを標準入力として扱います。#86の証拠適用resolverと#87の不具合許容判断もこのrecordだけから推測しません。
+
+#### Phase consumer routing
+
+計画時はPhase recordを将来のClaim Baseへ先にmergeし、新規phase-aware Issueの既存AC一つへbindingを記載します。Claimは`implementation`の前Phase出口を検証し、batchは同じrelease／revision内でPhase順とIssue依存を両方守ります。`research`／`draft`はread-only、`independent`は理由付き非依存laneに限定します。Minor修正は同Phase、major変更はユーザー承認付きの新revisionと最も早い影響Phaseへの部分再gateです。
+
+実行と検証では、Phase 3を日本語iPhone主要機能と軽量証拠、Phase 4を英語／iPadの対象拡張、Phase 5を完全品質、Phase 6を証拠適用判断と公開準備へrouteします。Phase 6のiPhone 6.9-inch画像はGoldieのlocale別config／import／renderを標準とし、iPadは`tools/capture-appstore-screenshots.sh`を使います。両経路とも共通Simulator session、全画像監査、package seal、upload／submitの独立gateを維持します。
+
+既存Issueの移行はstateごとに扱います。
+
+- `proposed`／未Claimの`approved`: 現行spec、successor依存、phase record、expected write-setを本文へ反映し、`validate-issue-body.sh`、GitHub更新、readbackの順で確認してからClaimする。
+- `claimed`／`in-progress`／検証以降: sealed contractを直接編集しない。既存契約のまま完了するか、目的を変えない許可範囲だけ#38の追記型revision経路を使う。`Release-phase binding:` identityは保護対象なので後付けせず、phase-awareな続きは新Issueへ分ける。
+- `paused`／`blocked:*`: 移行だけを理由に無断再開しない。所有者の明示判断と記録済み`resumeState`に従い、旧contractを保持して再開するか、履歴を残してsuccessorへ置き換える。
+- `superseded`／`done`: immutable historyとして保持する。旧Issueを再利用せず、successor番号と理由をactive IssueのDependenciesへ記録する。
+
+optionalな非公開機能をrelease全体のblockerへ昇格させません。successorへ置換した依存は旧Issueをcloseし直したり完了扱いせず、履歴として明記します。
 
 #### Phase 5から6への証拠適用
 
@@ -181,7 +196,7 @@ D-050対象ではDelivery profileが通常ならreview省略可能な値でも`v
 
 cutover後にClaimする新規Issue本文にはDelivery stageとVerification scopeを別々に記載します。Feature formの既定は`shape / 120 minutes / standard / iphone-ja`です。UI変更の3 field `UI verification`はClaim前のlive guidanceに限ります。既存のAcceptance criteria全体でexactly oneの有効なroute宣言を持たせ、AC本文先頭を`UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>`で開始し、適用事実をReasonの後へ、確定anchorを`Spec anchors`、選択前提をDependenciesへ記載します。Identity bootstrapと純非UIの`UI verification`はexact `Not applicable`だけとし、scope／非UI理由をGoal／In scope等と`not-applicable`宣言へ、関連product／spec anchorを`Spec anchors`へ分けます。新しいmutable contract fieldは追加しません。選択の正本は、Issue contractへ封印される`Spec anchors`が参照する確定仕様と追記型Decisionです。pre-D-030 legacy contractにはこの新規要件を補完しません。
 
-workflow-only Issueは`harden + strict`とし、`Verification`／`Verification scope`を省略します。差分がapplication、Xcode、asset、localization、Bundle設定、App Store／TestFlight経路を含む場合はこの分類を使えません。`release` stageは`type:release`の実アプリrelease candidateだけに予約します。
+workflow-only Issueは`harden + strict`とし、`Verification`／`Verification scope`を省略します。application、Xcode、asset、localization、Bundle設定、App Store metadata／signing／provider実装、TestFlight、external release operationを含む場合はこの分類を使えません。App Store関連で許可するのはexact allowlistのlocal guidance、非認証capture producer、直接regression testだけです。`release` stageは`type:release`の実アプリrelease candidateだけに予約します。
 
 ```markdown
 ## Delivery stage
@@ -496,11 +511,11 @@ PR本文の要約が永続的な証拠です。巨大なBuild logや秘密を貼
 - Xcodeまたは必要Runtimeがなく全Issueを検証できない
 - ユーザーが明示的に停止した
 
-ソース編集Issueは、依存がなく編集ファイルが重ならない場合に最大2件まで並行化できます。AI Simulatorは一つのsessionにつき原則1台、同じMac全体でiPhone／iPad合計最大4台です。一つのsession内の複数caseは逐次実行します。#93／#88の移行前は既存のrepository排他lockを維持し、Mac共通上限や使用後削除を実装済みと推測しません。
+ソース編集Issueは、依存がなく編集ファイルが重ならない場合に最大2件まで並行化できます。AI Simulatorは一つのsessionにつき原則1台、同じMac全体でiPhone／iPad合計最大4台です。一つのsession内の複数caseは逐次実行します。runnerとApp Store撮影はrepository排他lockの内側でMac共通resource managerを使い、旧経路を共通上限対応済みと推測しません。
 
 ## 9. Bootstrap
 
-Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むため選択された実行モデルが同じ手順を手動実行します。手動であってもIssue、Branch、PR、要求scopeのSimulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。#93／#88の移行後に4条件を実行する場合も、同一sessionでは一条件ずつ作成・検証・証拠保存・削除します。
+Foundation、Identity bootstrap、Simulator verificationの3件は、Issue自動化が未実装の段階を含むため選択された実行モデルが同じ手順を手動実行します。手動であってもIssue、Branch、PR、要求scopeのSimulator、反対モデルレビュー、Head SHA照合、Squash Merge、Branch削除を省略しません。Identity bootstrapはFoundationの後、Feature実装より前に完了します。4条件を実行する場合も、同一sessionでは一条件ずつ作成・検証・証拠保存・削除します。
 
 Bootstrap IssueのPRには、各受け入れ条件IDと証拠、GitHub account preflightのsanitized要約、Verify対象SHA、Review対象SHAを記載します。Simulator verificationが入った後は`verify.json`を使用し、Security and workflowが入った後は全Issueを自動状態機械へ移行します。
 

@@ -135,7 +135,7 @@ D-050対象candidateはDelivery profileによる通常のreview省略経路を�
 
 削除対象は作成記録、exact UDID、repository／worktree／session／run owner、lease、非活動状態を照合できるdeviceだけとする。手動device、他owner、使用中、不明なdeviceを削除せず、名前やShutdown状態だけで所有を推測しない。蓄積済みdeviceはinventoryとdry-runで候補を示し、所有と未使用を証明できる対象だけを回収する。Runtime、Xcode、共通cache、ユーザーのDerivedData、canonical evidenceを一括削除しない。検証前後の空き容量と残留数を記録し、削除失敗は未回収として報告する。
 
-#93以後の新規matrixはschema v2としてRuntime／Device Type／locale／case順だけを封印し、実行UDIDはcaseごとのversioned allocation記録へ分離する。runnerはrepository lockの内側でMac共通枠を取得し、一台ずつ作成・検証・証拠保全・削除する。旧schema v1の固定UDID matrix、sealed contract、既存証拠は書き換えずlegacy consumerとして維持する。#89は移植元の履歴として保持し、skills全体と既存Issueの移行は#88で行い、未移行の旧証拠をschema v2の実行結果へ付け替えない。
+#93以後の新規matrixはschema v2としてRuntime／Device Type／locale／case順だけを封印し、実行UDIDはcaseごとのversioned allocation記録へ分離する。runnerはrepository lockの内側でMac共通枠を取得し、一台ずつ作成・検証・証拠保全・削除する。旧schema v1の固定UDID matrix、sealed contract、既存証拠は書き換えずlegacy consumerとして維持する。#89は移植元の履歴として保持する。skills、App Store撮影、既存Issue移行も同じ#93 consumerへ接続し、未移行の旧証拠をschema v2の実行結果へ付け替えない。
 
 ## 2. Delivery stage
 
@@ -145,7 +145,7 @@ D-050対象candidateはDelivery profileによる通常のreview省略経路を�
 | `harden` | 承認済みの形に対し、一つの品質問題を狭く改善する | 対象Test、関連回帰、明示した`targeted` Simulator case。変更に必要な品質確認だけ | 「対象をharden済み。release-readyではない」 |
 | `release` | リリース候補Headの全体品質と提出準備を確定する | §5の完全検証 | 完全検証が成功した場合だけrelease-ready |
 
-アプリsource、Xcode project、asset、localization、Bundle設定、App Store／TestFlight経路へ触れないdelivery tool、schema、validator、review、evidence producerの変更は`harden + strict`のworkflow-only経路を使う。application `Verification`と`Verification scope`を持たず、Build、Unit Test、Simulator、Screenshot、visual evaluationは`not-applicable`とする。一方で対象repository tests、仕様整合、current-Head、strict review、pre-merge gateは省略しない。allowlist外pathまたはApp Store operationが混ざればworkflow-onlyを拒否する。
+アプリsource、Xcode project、asset、localization、Bundle設定へ触れないdelivery tool、schema、validator、review、evidence producerの変更は`harden + strict`のworkflow-only経路を使う。App Store関連はexact allowlistのlocal guidance、非認証capture producer、直接regression testだけを含められ、metadata、画像asset、signing、provider実装、TestFlight、external operationは拒否する。application `Verification`と`Verification scope`を持たず、Build、Unit Test、Simulator、Screenshot、visual evaluationは`not-applicable`とする。一方で対象repository tests、仕様整合、current-Head、strict review、pre-merge gateは省略しない。allowlist外pathまたはApp Store operationが混ざればworkflow-onlyを拒否する。
 
 `shape`のTime budget既定値は120分とし、Issueで変更できる。超過しそうならScopeを狭める、`harden` Issueへ分ける、環境障害で停止する、または受け入れ条件を変える判断だけを`blocked:user`にする。追加の品質項目を同じIssueへ積み増して延長しない。
 
@@ -229,4 +229,4 @@ Claim済みで`deliveryStage`を持たない既存contractはcanonical bytesを�
 
 ## 8. 依存関係
 
-Issue #44がDelivery stage、Issue forms、skills、validator、runner、repository tests、bootstrap後repositoryを同じ契約へ揃えた。D-038のPhase記録／部分再gateは#85、証拠適用は#86、D-050の不具合許容／停止後判断は#87、Simulator資源契約と明示承認Grok review fallbackは#93が実装する。skills／既存Issue移行は#88で行い、未移行範囲を新contractとして推測しない。#89は#93の移植元履歴として保持する。
+Issue #44がDelivery stage、Issue forms、skills、validator、runner、repository tests、bootstrap後repositoryを同じ契約へ揃えた。D-038のPhase記録／部分再gateは#85、証拠適用は#86、D-050の不具合許容／停止後判断は#87、Simulator資源契約と明示承認Grok review fallbackは#93が実装する。#88はIssue forms、planning／shipping／verification／App Store skillsと既存Issue移行を同じconsumer境界へ接続し、未移行範囲を新contractとして推測しない。#89は#93の移植元履歴として保持する。

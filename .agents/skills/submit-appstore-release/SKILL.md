@@ -28,6 +28,8 @@ ruby tools/lib/release-verification.rb "$PWD" "$PACKAGE_MANIFEST" "$HEAD_SHA" "$
 
 This read-only check does not authorize submission or replace account, legal, build, package or independent screenshot requirements. record-section.sh rechecks the same proof before publishing each result.
 
+For a phase-aware submission, also require the exact Phase 6 `Release-phase binding:` and revalidate the same `.artifacts/issues/<issue>/<head>/evidence-applicability.json` consumed by preparation, review, PR, and pre-merge. `reuse` proves applicability of the Phase 5 run; it does not claim a new run. `targeted-reverify` and `expanded-verification` require their later target proof. Package integrity, Goldie/iPad screenshot audit, privacy, legal, configured account/target, remote readback, upload, and explicit submit authorization are always Phase 6-specific. A sealed unbound Issue stays `legacy-unbound`; never invent or retrofit a record.
+
 1. Read the release Issue operation declarations, `docs/AUTHORITY.md`, `docs/agent-contracts/appstore-submission.md`, and `${VERSION}-package.json`.
 2. Require the Issue to authorize the exact App Store operation and executor. Verify the active authenticated session belongs to the configured Team and the remote App, Bundle ID, version, and build are exact. Never use another visible Team.
 3. Run `tools/provider-preflight.sh --executor "$EXECUTOR" --issue "$ISSUE" app-store --version "$VERSION"` through the authenticated App Store adapter. Require healthy production evidence whose account and target equal `Config/ownership.yml`.

@@ -27,6 +27,26 @@ or updating. This is a local asset workflow, not App Store Connect submission.
 Respect a user's named platform and previously selected scope. Infer App Store
 for a native iOS-only project. Ask about platforms only if genuinely unresolved.
 
+## Phase 6 boundary and Simulator ownership
+
+Goldie is the standard Phase 6 presentation route for iPhone 6.9-inch App Store
+images after the exact release candidate, Phase 5 quality proof, and any required
+`evidence-applicability.json` decision are fixed. It is not Phase 3/4 product UI
+verification and does not complete a Phase exit, release audit, package seal,
+upload, or submit operation. A sealed Issue without `Release-phase binding:` is
+`legacy-unbound`; do not add or infer a phase record merely to use Goldie.
+
+Every new native capture runs under `tools/with-ios-simulator-lock.sh` and uses
+`tools/lib/ios-simulator-resource.rb` for the Mac-wide four-device cap, one-device
+session limit, exact owned-device deletion, data-path confirmation, and durable
+recovery. Prefer `tools/capture-appstore-screenshots.sh` followed by the import
+recipe because Goldie 0.3.1 has no explicit UDID selector. Direct Goldie capture
+is allowed only after its installed selection rule resolves to the exact active
+allocation owned by this inherited session. Preserve images and diagnostics
+outside the device, release it, and verify the released allocation receipt before
+rendering or moving to another locale/family. Failure, timeout, and interruption
+use the same release path; never erase or delete a user or other-owner device.
+
 ## Runtime
 
 Requires macOS/Xcode for iOS capture, Node >=20.12, ffmpeg/ffprobe. npm packages

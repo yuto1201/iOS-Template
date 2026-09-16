@@ -19,7 +19,7 @@ Classify the trusted Base-to-Head range before touching Simulator state. Only `R
 
 Read `deliveryStage.name`, `deliveryProfile.name`, and Verification scope from the canonical Issue contract. A missing Delivery stage or profile is a sealed legacy contract and remains release-level/strict. Never reseal a claimed contract or infer a narrower scope.
 
-For a non-application delivery-tool/schema/validator/review/evidence change, use workflow-only verification only when the sealed contract is `harden + strict`, omits application Verification and Verification scope, and the exact Base..Head paths pass the workflow allowlist. Publish canonical repository-test evidence first, then use `tools/publish-workflow-verify.sh`. Do not start Xcode or a Simulator for this route. Never use it for application, project, asset, localization, Bundle, App Store, or TestFlight changes.
+For a non-application delivery-tool/schema/validator/review/evidence change, use workflow-only verification only when the sealed contract is `harden + strict`, omits application Verification and Verification scope, and the exact Base..Head paths pass the workflow allowlist. Publish canonical repository-test evidence first, then use `tools/publish-workflow-verify.sh`. Do not start Xcode or a Simulator for this route. Never use it for application, project, asset, localization, Bundle, App Store metadata/signing/provider implementation, TestFlight, or external release operations. Only exact-allowlisted local App Store guidance, the non-authenticated capture producer, and their direct regression tests may remain workflow-only.
 
 - `shape`: use `iphone-ja`; require Build, critical Unit Test, and one primary-flow smoke test. Do not capture screenshots or claim release readiness.
 - `harden`: use the exact `targeted` canonical subset declared by the contract. Verify only the affected behavior and related regressions. A harden contract requests visual evidence only when an AC explicitly contains a `visual:` check.
@@ -30,6 +30,17 @@ For a non-application delivery-tool/schema/validator/review/evidence change, use
 Never start canonical Simulator verification for an intermediate commit. After a failure, run in this order: affected test, related regression tests, stage-standard verification, then full verification only for release. Affected repository-test commands stop at 300 seconds and normal completion `targeted` suites stop at 900 seconds aggregate. Do not auto-escalate manifest, runner, tracked-test, unknown-path, or multi-domain changes to the full inventory: use the known-domain union, reject unknown paths before execution, and reserve `head-all`／`base-and-head` for release or an explicit approved request. The same Issue／Head／scope may retry only once after a selected affected test succeeds; a second failure stops. Every Xcode, Unit/UI Test, and Simulator command must go through the repository's finite-timeout wrappers; a timeout is failure and must not publish successful evidence.
 
 When XcodeBuildMCP is callable, you may inspect its session defaults to identify future compatibility work. No canonical XcodeBuildMCP evidence producer exists in this repository, so inspection never selects it as an execution route. Always use `tools/verify-ios-issue.sh`, the tested `xcodebuild-simctl` producer, until a canonical MCP producer and integration coverage are added. Do not bypass it with manual `xcodebuild`, `simctl`, screenshots, or JSON. Tool unavailability is never test success.
+
+## Release-phase evidence routing
+
+Read the sealed Acceptance criteria before selecting commands. A phase-aware contract has exactly one `Release-phase binding:` whose record identity was already validated by Claim; verification consumes that identity and never rewrites it. A sealed contract without the declaration is `legacy-unbound` and follows its original stage/profile/scope path without a synthesized phase record.
+
+- Phase 3 verifies the operable Japanese-iPhone core with the Issue's `shape` or focused `harden` evidence. It does not add English/iPad or claim release readiness.
+- Phase 4 verifies only the ordered English/iPad adaptation cases affected by each Issue, while preserving the completed Phase 3 path.
+- Phase 5 uses the release candidate's complete `full` quality path and records canonical residual disposition before review when the cutover applies.
+- Phase 6 first resolves `.artifacts/issues/<issue>/<head>/evidence-applicability.json`. Exact same candidate/context may reuse the Phase 5 proof; an affected context requires targeted re-verification and unknown, missing dependency, or expanded scope requires expanded verification. Never report reuse as a new run. Package integrity, screenshots, privacy, legal, account, upload, and submit checks remain Phase 6-specific and are never inherited from the applicability decision.
+
+Delivery stage still controls the breadth of an individual Issue. Phase number does not turn a `shape` into `release`, and a `release` stage does not by itself complete a Phase exit. User-authority exit events remain separate from AI verification success.
 
 ## Application verification
 

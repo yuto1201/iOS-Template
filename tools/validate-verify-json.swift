@@ -1827,18 +1827,26 @@ func validateWorkflowPath(_ path: String) throws {
         throw ValidationFailure("workflow-only diff contains an unsafe path")
     }
     let components = try relativeComponents(path, at: "workflow-only path")
+    let localDeliveryToolPaths: Set<String> = [
+        ".agents/skills/prepare-appstore-assets/SKILL.md",
+        ".agents/skills/submit-appstore-release/SKILL.md",
+        "App Store/screenshots/README.md",
+        "tools/capture-appstore-screenshots.sh",
+        "tools/tests/test-appstore-screenshots.sh",
+        "tools/tests/test-appstore-skills.sh"
+    ]
     let deniedPrefixes = [
         "App Store/", ".agents/skills/prepare-appstore-assets/",
         ".agents/skills/submit-appstore-release/"
     ]
-    guard !deniedPrefixes.contains(where: { path.hasPrefix($0) }),
-          !path.lowercased().contains("appstore"),
-          !path.lowercased().contains("testflight") else {
+    let releaseOrStorePath = deniedPrefixes.contains(where: { path.hasPrefix($0) }) ||
+        path.lowercased().contains("appstore") || path.lowercased().contains("testflight")
+    guard !releaseOrStorePath || localDeliveryToolPaths.contains(path) else {
         throw ValidationFailure("workflow-only diff contains a release or App Store path: \(path)")
     }
     let exact: Set<String> = ["README.md", "AGENTS.md", "Config/repository-tests.json"]
     let prefixes = ["tools/", "docs/", "specs/", ".agents/", ".codex/", ".claude/", ".github/"]
-    guard exact.contains(path) || prefixes.contains(where: { path.hasPrefix($0) }) else {
+    guard exact.contains(path) || localDeliveryToolPaths.contains(path) || prefixes.contains(where: { path.hasPrefix($0) }) else {
         throw ValidationFailure("workflow-only path is not allowlisted: \(path)")
     }
     guard components.allSatisfy({ $0 != ".git" }) else {

@@ -13,6 +13,19 @@ Resume from durable GitHub/state artifacts; never infer completion from local fi
 - Every authenticated operation uses `external-ops`; the live Issue operation block must name the executing model and match `Config/ownership.yml`.
 - When a `release` stage or `strict` profile requires opposite review, always use `cross-model-review`; never invoke a reviewer CLI directly or self-approve. The canonical tool keeps the default Codex→Claude／Claude→Codex pair and selects exact `cursor-grok-4.6-xhigh` only from one complete user-explicit Grok fallback declaration sealed in a Codex-primary Issue. Explicit non-release `shape`/`harden` work with `standard` and every explicit `fast` Issue omit the blocking review stage.
 
+## Release-phase preflight
+
+Before Claim, inspect the live Acceptance criteria for exactly one `Release-phase binding: <canonical JSON>` declaration when the Issue is phase-aware. Do not parse or reproduce the phase gate yourself: `tools/claim-issue.sh` validates the exact Base-commit blob, record digest, release, revision, scope, route, work kind, and required prior-Phase exits before it creates a Branch or worktree. A phase-aware `implementation` cannot start while its predecessor exit is missing. `research` and `draft` remain read-only; `independent` must have a sealed non-dependent reason and must not implement blocked output.
+
+Dispatch the work according to the sealed Phase as well as its independent Delivery stage:
+
+- Phase 3 implements the Japanese-iPhone core and only its stage-standard lightweight evidence.
+- Phase 4 implements English/iPad adaptation with the exact affected cases.
+- Phase 5 performs complete candidate quality and records disposition; findings return to focused regression/harden Issues without rewriting prior evidence.
+- Phase 6 evaluates `evidence-applicability.json`, reuses only an exact applicable Phase 5 proof, reruns affected scope when required, and retains separate package, legal, privacy, account, upload, and submit gates.
+
+If a sealed contract has no declaration, treat it as `legacy-unbound` and preserve its existing state/stage/profile workflow. Never infer a release unit, edit the live body, or reseal the contract. If scope or revision must change after Claim, use the allowed append-only specification/revision workflow; a binding identity itself is protected and cannot be revised in place.
+
 ## System experiences preflight
 
 For a post-Identity major app Feature, do not Claim until a completed System Experiences Planning Issue and its five-surface matrix are reachable from the Issue's specification anchors or Dependencies. If the Feature is dependent on an `adopt-now` surface, require the exact design／shared-domain／capability predecessor to be `done`; `defer` and `not-applicable` do not authorize implementation. A `blocked:user` surface blocks only its dependent Issue, so continue unrelated non-UI work. Do not retroactively rewrite an already sealed legacy contract solely to add this gate. User-facing system UI remains dependent on `ui-direction`; the planning matrix is not a UI selection record.

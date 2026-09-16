@@ -12,7 +12,7 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 `shape`はBuild、重要Unit Test、主要導線の日本語iPhone Smokeを実行し、Screenshotやvisual reviewなしでcanonical `verify.json`を発行します。理由は`Delivery stage shape passed; not release-ready.`です。`harden`もvisual checkを明示しない限り同じ非visual経路を使います。`release`とvisual checkを持つhardenだけがdraft、Screenshot、visual result、finalizeの二段階経路を使います。
 
-非applicationのdelivery tool／schema／validator／review／evidence変更はworkflow-only経路です。`harden + strict`、application `Verification`／`Verification scope`なし、allowlist内の差分だけを受理します。先にcanonical repository-test evidenceを発行し、次に`.artifacts/issues/${ISSUE}/workflow-evidence-input.json`へschemaVersion 1と非空reasonを書き、`tools/publish-workflow-verify.sh`で`verify.json`を発行します。この経路はXcode、Build、Unit、Simulator matrix、Screenshot、visual evaluationを起動せず、repository evidenceのAC mappingをverifyへ固定します。
+非applicationのdelivery tool／schema／validator／review／evidence変更はworkflow-only経路です。`harden + strict`、application `Verification`／`Verification scope`なし、allowlist内の差分だけを受理します。App Store関連はexact allowlistのlocal guidance、認証を行わないcapture producer、対応regression testだけを許可し、metadata、画像asset、signing、provider実装、App Store／TestFlight operationは拒否します。先にcanonical repository-test evidenceを発行し、次に`.artifacts/issues/${ISSUE}/workflow-evidence-input.json`へschemaVersion 1と非空reasonを書き、`tools/publish-workflow-verify.sh`で`verify.json`を発行します。この経路はXcode、Build、Unit、Simulator matrix、Screenshot、visual evaluationを起動せず、repository evidenceのAC mappingをverifyへ固定します。
 
 workflow-onlyのGit modeはregular fileの追加・削除・同一mode変更だけを原則とします。共有skill追加時だけ、`.claude/skills/<skill-name>`の新規symlinkがexact `../../.agents/skills/<skill-name>`を指し、同じHeadにregular `.agents/skills/<skill-name>/SKILL.md`が存在する場合を許可します。既存symlinkの変更・削除、absolute／escaping target、別名target、target不在は拒否し、worktree上の解決結果だけで承認しません。
 
@@ -157,6 +157,14 @@ ruby tools/lib/ios-simulator-resource.rb recover --dry-run
 出力はdurable allocation、owner／allocatorの活動状態、空き容量、cleanup結果と、active durable recordを持たない`iOS-Template-` deviceを`protectedUnmanagedDevices`として分けます。data容量を測定していない場合は`dataBytes: null`と`dataMeasurement: not-measured`を明示します。引数なしの`recover`はこのmanagerが作成記録を持つ非活動orphanだけを回収し、管理外device、手動device、別owner、identity不一致を削除しません。全件削除、`delete unavailable`、名前やShutdown状態だけの手動削除は行いません。
 
 `tools/tests/test-ios-runner-system-locale.sh`は、4条件の値・再起動順序・環境変数の非採用と、言語／地域不一致、欠落・型違い・不正plist、書込み／読取り失敗、再起動後の設定消失、UI操作後の設定変化を検査します。fake Simulatorによる回帰テストは実Simulatorの表示確認とは別の証拠です。
+
+### 3.3 Phase 6のApp Store画像
+
+Phase 6のスクリーンショットは通常の4条件application verificationとは別のdisplay-family成果物です。iPhone 6.9-inchの装飾・編集はGoldieを標準参照とし、`goldie/ja/`と`goldie/en-US/`を別config／raw／flow／outputとして扱います。iPadはGoldie対象外なので`tools/capture-appstore-screenshots.sh`へrouteし、iPhone画像を拡大しません。既存画像の見出し、背景、frame、font、順序だけの変更は再撮影しません。
+
+新規raw撮影は`tools/with-ios-simulator-lock.sh`の内側で同じMac共通resource managerを使用します。撮影scriptはIssueとbatch identityを受け取り、locale／familyごとに一台をallocateし、画像とsanitized allocation receiptをdevice外へ保存してからexact UDIDとdata pathの削除を確認します。その後だけ次の条件へ進みます。失敗、timeout、INT／TERMも同じrelease経路を通し、cleanup失敗は枠とdurable recordを残して成功扱いしません。fake `xcrun`によるrepository testはこの順序とcleanupの回帰であり、実画像品質の証拠ではありません。
+
+Goldie／capture成功はPhase 5 full proof、`evidence-applicability.json`、visual audit、release-auditor、package seal、App Store account／target preflight、upload、submitの代用ではありません。`reuse`は元のPhase 5証拠が同じcandidate／contextへ適用可能という意味だけで、新たに実行したと報告しません。
 
 ## 4. 実行段階
 

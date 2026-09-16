@@ -21,7 +21,16 @@ Codexには、たとえば次のように依頼できます。
 最初のlocaleのUIしか撮影しないためです。出力 `out/` はGit管理外とし、採用した
 最終画像だけを既存の `App Store/screenshots/` 準備手順へ渡します。
 
-現在のGoldieはiPhone 6.9インチ向けです。iPadは既存のApp Store撮影手順を使います。
+GoldieはPhase 6のiPhone 6.9インチ用presentation経路です。新規raw撮影は
+`tools/with-ios-simulator-lock.sh`の同一session内で
+`tools/lib/ios-simulator-resource.rb`が割り当てた1台だけを使います。Goldie 0.3.1は
+exact UDIDを指定できないため、標準は`tools/capture-appstore-screenshots.sh`で
+owned deviceから撮影してlocale別にimportする経路です。直接captureはGoldieが選ぶ
+deviceと現在のallocationが完全一致する場合だけ許可します。画像と診断を端末外へ
+保存後、deviceとdataの削除receiptを確認してから次の条件へ進みます。
+
+現在のGoldieはiPhone 6.9インチ向けです。iPadは既存のApp Store撮影手順を使い、
+同じsessionで日英・iPhone・iPadを一台ずつ作成／撮影／削除します。
 Goldieの成功は、ネイティブアプリの検証、法務確認、提出パッケージの封印や
 App Store審査完了の代わりにはなりません。
 

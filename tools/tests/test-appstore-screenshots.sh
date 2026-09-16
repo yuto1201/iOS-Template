@@ -15,7 +15,7 @@ states="$repo_root/App Store/screenshots/states.json"
 raw="$workspace/raw"
 final="$workspace/final"
 review="$workspace/review.json"
-source_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+source_sha=$(git -C "$repo_root" rev-parse HEAD)
 runtime=com.apple.CoreSimulator.SimRuntime.iOS-26-5
 build_digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
@@ -154,47 +154,141 @@ write_valid_fixture
 ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].find{|e| e["family"]=="iphone-6.9"}["deviceType"]="iPhone 17 Pro"; File.binwrite(p,JSON.generate(v))' "$raw/manifest.json"
 assert_failure 'required Pro Max capture' 'deviceType'
 
-# Exercise deterministic Simulator capture through a fake xcrun adapter. The
-# pinned fixture intentionally makes the 6.9-inch family Pro-Max-only.
+# Exercise deterministic Simulator capture through the shared resource manager
+# and a fake xcrun adapter. The pinned fixture intentionally makes the 6.9-inch
+# family Pro-Max-only. Each locale/family is allocated and deleted before the
+# next one, so one session never holds two devices.
 fake_bin="$workspace/fake-bin"; mkdir -p "$fake_bin"
 fake_png="$workspace/fake.png"; write_png "$fake_png" 1260 2736 2 77
 fake_ipad_png="$workspace/fake-ipad.png"; write_png "$fake_ipad_png" 2064 2752 2 78
-fake_log="$workspace/xcrun.log"; fake_counter="$workspace/counter"; printf '0\n' > "$fake_counter"
-cat > "$fake_bin/xcrun" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-printf '%s\n' "$*" >> "$FAKE_XCRUN_LOG"
-[[ "${1-}" == simctl ]] || exit 2
-shift
-case "${1-}" in
-  list)
-    printf '%s\n' '{"devicetypes":[{"name":"iPhone 17 Pro Max","identifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max"},{"name":"iPad Air (M4)","identifier":"com.apple.CoreSimulator.SimDeviceType.iPad-Air-M4-13-inch"}]}'
-    ;;
-  create)
-    count=$(<"$FAKE_COUNTER"); count=$((count+1)); printf '%s\n' "$count" > "$FAKE_COUNTER"
-    printf '00000000-0000-0000-0000-%012d\n' "$count"
-    ;;
-  io)
-    destination=${@: -1}
-    if [[ "$destination" == *'/ipad-13/'* ]]; then /bin/cp "$FAKE_IPAD_PNG" "$destination"; else /bin/cp "$FAKE_PNG" "$destination"; fi
-    ;;
-  *) ;;
-esac
-EOF
+fake_log="$workspace/xcrun.log"
+fake_state="$workspace/simctl-state.json"
+resource_state="$workspace/resource-state"
+printf '%s\n' '{"sequence":0,"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[]}}' > "$fake_state"
+cat > "$fake_bin/xcrun" <<'RUBY'
+#!/usr/bin/ruby --disable-gems
+require "fileutils"
+require "json"
+
+state_path = ENV.fetch("FAKE_SIMCTL_STATE")
+log_path = ENV.fetch("FAKE_XCRUN_LOG")
+File.open(log_path, "a", 0o600) { |file| file.puts(ARGV.join(" ")) }
+abort "expected simctl" unless ARGV.shift == "simctl"
+command = ARGV.shift
+runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+
+lock = File.open(state_path + ".lock", File::RDWR | File::CREAT, 0o600)
+lock.flock(File::LOCK_EX)
+begin
+  state = JSON.parse(File.binread(state_path))
+  devices = state.fetch("devices").fetch(runtime)
+  case command
+  when "list"
+    case ARGV
+    when %w[-j devicetypes]
+      puts JSON.generate("devicetypes" => [
+        {"name" => "iPhone 17 Pro Max", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max"},
+        {"name" => "iPad Air (M4)", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Air-M4-13-inch"}
+      ])
+    when %w[devices -j]
+      puts JSON.generate("devices" => state.fetch("devices"))
+    else
+      abort "unexpected list arguments"
+    end
+  when "create"
+    name, device_type, requested_runtime = ARGV
+    abort "invalid create" unless ARGV.length == 3 && requested_runtime == runtime
+    state["sequence"] += 1
+    udid = format("00000000-0000-0000-0000-%012d", state.fetch("sequence"))
+    data_path = File.join(File.dirname(state_path), "data", udid)
+    FileUtils.mkdir_p(data_path)
+    devices << {
+      "udid" => udid, "name" => name, "state" => "Shutdown", "isAvailable" => true,
+      "deviceTypeIdentifier" => device_type, "dataPath" => data_path
+    }
+    File.binwrite(state_path, JSON.generate(state))
+    puts udid
+  when "boot"
+    device = devices.find { |entry| entry.fetch("udid") == ARGV.fetch(0) } or abort "missing boot target"
+    device["state"] = "Booted"
+    File.binwrite(state_path, JSON.generate(state))
+  when "shutdown"
+    device = devices.find { |entry| entry.fetch("udid") == ARGV.fetch(0) } or abort "missing shutdown target"
+    device["state"] = "Shutdown"
+    File.binwrite(state_path, JSON.generate(state))
+  when "delete"
+    device = devices.find { |entry| entry.fetch("udid") == ARGV.fetch(0) } or abort "missing delete target"
+    FileUtils.rm_rf(device.fetch("dataPath"))
+    devices.delete(device)
+    File.binwrite(state_path, JSON.generate(state))
+  when "io"
+    abort "configured screenshot failure" if ENV["FAKE_FAIL_SCREENSHOT"] == "1"
+    destination = ARGV.fetch(-1)
+    source = destination.include?("/ipad-13/") ? ENV.fetch("FAKE_IPAD_PNG") : ENV.fetch("FAKE_PNG")
+    FileUtils.cp(source, destination)
+  when "bootstatus", "status_bar", "install", "launch", "terminate", "uninstall"
+    # Deterministic no-op fixture commands.
+  else
+    abort "unexpected simctl command #{command}"
+  end
+ensure
+  lock.flock(File::LOCK_UN)
+  lock.close
+end
+RUBY
 chmod +x "$fake_bin/xcrun"
 mkdir -p "$workspace/Fake.app"
 capture_root="$workspace/captured"
-FAKE_XCRUN_LOG="$fake_log" FAKE_COUNTER="$fake_counter" FAKE_PNG="$fake_png" FAKE_IPAD_PNG="$fake_ipad_png" PATH="$fake_bin:$PATH" \
+FAKE_XCRUN_LOG="$fake_log" FAKE_SIMCTL_STATE="$fake_state" FAKE_PNG="$fake_png" FAKE_IPAD_PNG="$fake_ipad_png" \
+  IOS_TEMPLATE_SIMULATOR_SESSION_ID=appstore-test-session IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE=1 \
+  IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT="$resource_state" IOS_TEMPLATE_APPSTORE_XCRUN="$fake_bin/xcrun" \
   "$capture" --requirements "$requirements" --states "$states" --app-path "$workspace/Fake.app" \
   --bundle-id com.yuto.TemplateApp --source-sha "$source_sha" --build-digest "$build_digest" \
-  --runtime "$runtime" --output-root "$capture_root" >/dev/null
+  --runtime "$runtime" --output-root "$capture_root" --issue 88 --batch-id appstore-test >/dev/null
 ruby -rjson -e '
   value=JSON.parse(File.binread(ARGV.fetch(0))); abort "capture cases" unless value.fetch("cases").length==4
   iphone=value.fetch("cases").find{|entry| entry.fetch("family")=="iphone-6.9"}
   abort "Pro Max not resolved" unless iphone.fetch("deviceType")=="iPhone 17 Pro Max"
 ' "$capture_root/manifest.json"
+[[ "$(find "$capture_root/simulator-allocations" -type f -name 'allocation-*.json' | wc -l | tr -d ' ')" == 4 ]] || {
+  echo 'released allocation receipts were not preserved' >&2; exit 1
+}
+ruby -rjson -e '
+  files=Dir.glob(File.join(ARGV.fetch(0),"allocation-*.json")); abort "receipt count" unless files.length==4
+  files.each do |path|
+    value=JSON.parse(File.binread(path))
+    abort "allocation not released" unless value.fetch("status")=="released" && value.dig("cleanup","status")=="passed"
+  end
+' "$capture_root/simulator-allocations"
+ruby -e '
+  active=0; maximum=0; creates=deletes=0
+  File.readlines(ARGV.fetch(0),chomp:true).each do |line|
+    if line.start_with?("simctl create ") then active+=1; creates+=1; maximum=[maximum,active].max
+    elsif line.start_with?("simctl delete ") then active-=1; deletes+=1; abort "delete without create" if active.negative?
+    end
+  end
+  abort "not sequential" unless creates==4 && deletes==4 && active.zero? && maximum==1
+' "$fake_log"
+[[ "$(jq '[.devices[] | .[]] | length' "$fake_state")" == 0 ]] || { echo 'fake Simulator device leaked after capture' >&2; exit 1; }
+! rg -q '^simctl erase ' "$fake_log" || { echo 'capture used erase instead of exact resource release' >&2; exit 1; }
 rg -q 'status_bar .*--time 9:41' "$fake_log" || { echo 'fixed status bar was not applied' >&2; exit 1; }
 rg -q -- '-AppleLanguages.*en' "$fake_log" || { echo 'English launch arguments are missing' >&2; exit 1; }
 rg -q -- '-AppleLanguages.*ja' "$fake_log" || { echo 'Japanese launch arguments are missing' >&2; exit 1; }
 
-echo 'PASS: App Store screenshots require exact unmodified images, audited review, deterministic locales, and release-only device families'
+# A capture failure must still release and delete the exact owned device.
+failure_root="$workspace/capture-failure"
+set +e
+FAKE_XCRUN_LOG="$fake_log" FAKE_SIMCTL_STATE="$fake_state" FAKE_PNG="$fake_png" FAKE_IPAD_PNG="$fake_ipad_png" \
+  FAKE_FAIL_SCREENSHOT=1 IOS_TEMPLATE_SIMULATOR_SESSION_ID=appstore-failure-session \
+  IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE=1 IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT="$resource_state" \
+  IOS_TEMPLATE_APPSTORE_XCRUN="$fake_bin/xcrun" \
+  "$capture" --requirements "$requirements" --states "$states" --app-path "$workspace/Fake.app" \
+  --bundle-id com.yuto.TemplateApp --source-sha "$source_sha" --build-digest "$build_digest" \
+  --runtime "$runtime" --output-root "$failure_root" --issue 88 --batch-id appstore-failure \
+  >"$workspace/failure.out" 2>"$workspace/failure.err"
+failure_status=$?
+set -e
+[[ "$failure_status" -ne 0 && ! -e "$failure_root" ]] || { echo 'failed capture published output' >&2; exit 1; }
+[[ "$(jq '[.devices[] | .[]] | length' "$fake_state")" == 0 ]] || { echo 'failed capture leaked its Simulator' >&2; exit 1; }
+
+echo 'PASS: App Store screenshots require exact images, deterministic locales, sequential managed Simulators, cleanup, and release-only device families'

@@ -7,6 +7,23 @@ description: Use when a requested iOS change or backlog must be split into imple
 
 Produce a reviewable Issue graph before Claim. Keep setup with its first useful outcome unless it has independent acceptance value; preserve `1 Issue = 1 Branch = 1 PR`.
 
+## Release-phase planning
+
+Before creating Issues for a release unit, identify its release identifier, current revision, sorted scope, current Phase, and the exact prior-Phase exit. Use the canonical producer in `tools/lib/workflow-release-phase-cli.rb`; the latest immutable record must already be a regular Git blob on the future Claim Base. Never hand-author or overwrite a record that has already been referenced.
+
+Every new phase-aware Issue starts exactly one existing Acceptance criterion with `Release-phase binding: <canonical JSON>`. Copy the exact nine-key declaration produced from the record: `phase`, `reason`, `recordDigest`, `recordPath`, `releaseIdentifier`, `revision`, `route`, `scope`, and `workKind`. Use `implementation` only when every required prior exit is present. `research` and `draft` may run before an exit only as read-only work; `independent` needs a specific non-dependent reason and cannot consume blocked output. Put Issue dependencies on the exact predecessor Issues as well as sealing the record identity.
+
+Route work by outcome, not by Delivery stage name:
+
+- Phase 1 fixes the release goal, scope, MVP boundary, System Experiences decisions, and user approval.
+- Phase 2 fixes architecture, data/flow contracts, Issue graph, and any UI-direction prerequisites.
+- Phase 3 delivers the operable Japanese-iPhone core with lightweight stage evidence.
+- Phase 4 finishes English and iPad through focused adaptation Issues and targeted cases.
+- Phase 5 applies full release quality and records defects, omitted tests, unverified scope, and the user's time-bounded disposition.
+- Phase 6 prepares publication, evaluates Phase 5 evidence applicability, creates audited store assets, and preserves separate upload/submit authority.
+
+Minor corrections stay in the same revision and Phase through an appended `change-classified` event. A goal, MVP, major flow/hierarchy, adopted system surface, data compatibility, or material risk change appends a major change, advances the revision, and reopens only the earliest affected Phase after user approval. A new Issue that intentionally does not belong to a release unit may remain unbound with an explicit planning reason. An already sealed unbound Issue is `legacy-unbound`: do not infer a release, add a declaration, edit its body, or reseal it merely to adopt this workflow.
+
 ## Required planning pass
 
 After Identity bootstrap and before creating the graph for a major app Feature, require a completed System Experiences Planning Issue produced by [`ios-system-experiences`](../ios-system-experiences/SKILL.md). Its matrix must cover all five surfaces and contain the user's current adoption decisions. Create implementation nodes only for `adopt-now`; connect their exact shared-domain, extension, capability, and UI-direction prerequisites. Treat `defer` and `not-applicable` as recorded non-scope, not hidden implementation. A `blocked:user` surface blocks only dependent nodes, while App Icon and unrelated domain/data/non-UI nodes may continue.
