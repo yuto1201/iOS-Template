@@ -1,8 +1,8 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 2.0
-Date: 2026-09-15
+Version: 2.1
+Date: 2026-09-17
 
 ## 1. 目的
 
@@ -103,6 +103,18 @@ Identity/bootstrap完了後の通常機能開発は、まず`shape`で日本語i
 - Supabase のスキーマ正本: `supabase/migrations/*.sql`。
 - iOS アプリに渡せる鍵: Project URL と Publishable Key のみ。
 - Secret Key、旧 `service_role`、管理権限のある鍵: iOS アプリへ入れない。
+
+### 4.1 条件付きAdMob収益化
+
+Google Mobile Adsは全アプリの標準依存にせず、派生アプリの確定仕様が広告収益化を明示採用した場合だけ有効化する。採用前に、対象画面と配置、広告対象外とするユーザーまたは権利、対象年齢／地域、データ利用とprivacy申告、対象release revisionを確定する。これらが未決または矛盾する間は、有効化を`blocked:user`とする。
+
+既定の採用範囲は、UMPによる同意更新／必要form／privacy optionsと、非trackingのanchored adaptive bannerだけとする。ATT promptは表示せず、Publisher first-party IDは無効とする。personalized ads、tracking、IDFA／ATT、interstitial、native、rewarded、app openその他の広告形式は、利用者価値、年齢、同意、データ収集、Apple／Google申告への影響を分離した新しいDecisionとIssueで明示承認しない限り含めない。
+
+有効化入力は、アプリIdentity／Deployment Target、対象年齢／地域、実行時にGoogle／Apple公式sourceで再確認したSDK版と対応Xcode／iOS、Debug用Google demo identifier、Release用のアプリ固有production App ID／Banner Unit ID、配置／eligibilityのsource of truth、アプリ内privacy options入口、SKAdNetwork／privacy／App Store申告の対応を含む。参照した公式URL、取得時刻、採用versionと判断結果を有効化記録へ残す。未有効化の`TemplateApp`と生成直後の派生アプリは、Google Mobile Ads SDK／package、AdMob設定、identifier、広告sourceを持たず、有効化しない場合の出力を不変とする。
+
+DebugはGoogle公式demo identifierのみ、UI Testはネットワークと実SDK requestに依存しないoffline fixture、Releaseは確認済みproduction identifierのみを使う。欠落、demo／productionの混在、対象configurationとidentifierの不整合は配信前に拒否する。offline fixture、Google demo smoke、AdMob remote state、productionのApp Store readiness／配信状態は別の証拠とし、一つの成功から他を推測しない。
+
+AdMob Consoleでのaccount／app／ad unit作成、契約・支払・税務情報、consent message公開、app-ads.txt公開、production identifier取得、App Store Connectの保存／提出はこの採用に含めない。それぞれに明示的なIssue contract、設定済みaccount／target、必要なユーザー承認とreadbackを要求する。決定の経緯は[D-057](decisions.md#d-057-広告収益化を非trackingの条件付きadmob統合として採用する)を参照する。
 
 ## 5. 音声素材方針
 

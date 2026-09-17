@@ -1,8 +1,8 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 3.1
-Date: 2026-09-15
+Version: 3.2
+Date: 2026-09-17
 
 ## 1. テンプレート完成条件
 
@@ -213,3 +213,17 @@ AppLibrary法務ページへの引き継ぎは、次を満たす。
 - promptのWeb実装AIへの転送と法務本文・公開の承認はユーザー操作として別々に参照を残す。Issue作成、AI review、PR、deploymentから承認を推測しない。
 - 公開返却はrequest／prompt／Web Issue／deployment／user actions／source digests／URLsを結び、approved HTTPS host／route、redirectなし、ログイン不要HTTP 200、approved source本文とlocale、同一localeの3ページ相互linkを検証する。live `verified`だけをApp Store用URLへ引き継ぎ、`fixture-validated`は`appStoreEligible: false`としてrelease証拠にしない。
 - 手順は既存の初回法務承認、release package、監査、提出権限を弱めず、Web repository編集、Vercel deploy、Cloudflare／DNS変更、App Store Connect更新・提出を認可しない。tracked regressionは正常系に加えwrong repository、401、本文不一致、link欠落、fixture非適格を固定する。
+
+## 9. 条件付きAdMob統合
+
+[プロダクト方針 §4.1](product.md#41-条件付きadmob収益化)と[構成 §7.1](architecture.md#71-条件付きadmob統合境界)を正本とする。この節は後続実装／品質Issueのend-state受け入れ条件を固定するものであり、仕様Issueの完了だけで下記を実装済み・検証済みとしない。各項は対応する後続Issueのcurrent-Head成果とstage別証拠が揃った場合だけ完了とする。
+
+- [ ] 未採用の`TemplateApp`とbootstrap outputにGoogle Mobile Ads SDK／package、AdMob設定、identifier、consent／banner sourceが追加されず、有効化しない生成結果が不変である。
+- [ ] 専用activationはアプリIdentity／Deployment Target、対象年齢／地域、実行時にGoogle／Apple公式sourceで再確認したSDK条件／exact version／対応Xcode・iOS／SKAdNetwork・privacy要件、Debug demo identifier、Release production identifier、配置、eligibility／広告非表示権利、privacy options入口、data use／App Store申告を入力とし、参照URL／取得時刻／判断結果を記録する。未決・欠落・矛盾は変更前に`blocked:user`または適切なblocked状態で拒否する。
+- [ ] DebugはGoogle公式demo identifierのみ、UI Testはnetwork-free fixtureのみ、Releaseはapp固有production identifierのみを使い、欠落、demo／productionの混在、別アプリ／configurationのidentifierをvalidatorが拒否する。
+- [ ] UMPのconsent info更新、必要form、`canRequestAds`、privacy options入口が設計どおりに接続され、SDK初期化と広告要求が一つのapplication lifecycle内で1回化される。consentとeligibilityが広告要求の先に評価される。
+- [ ] 既定の非tracking経路はATT promptを表示せず、Publisher first-party IDを無効化する。personalized ads、tracking、IDFA／ATT、anchored adaptive banner以外の広告形式は別Decision／Issueの明示承認なしに追加されない。
+- [ ] adaptive banner hostは実container widthからsizeを解決し、回転、safe area、Tab再選択、scroll内配置、SwiftUI再構築で不要な再requestを起こさず、広告非表示／対象外／load失敗時は領域をcollapseする。対象画面と配置は派生アプリの確定仕様／UI Issueにより、有効なUI Direction routeとnative検証へ結び付く。
+- [ ] `Info.plist`のGoogle Mobile Ads App ID／SKAdNetworkItems、resolved SDK／privacy manifest／signature、アプリの`PrivacyInfo.xcprivacy`、実装data use、App Store申告の差異を同一candidateで検出する。#110のread-only source preparationはdriftを報告できるが、provider実装、remote設定、App Store Connect保存／提出、release-readyを実行または証明しない。
+- [ ] offline fixture、Google demo smoke、AdMob Console remote state、productionのApp Store readiness／配信状態が個別に報告され、一つの成功から他の完了、収益発生、審査通過を推測しない。
+- [ ] AdMob Consoleのaccount／app／ad unit作成、契約・支払・税務、consent message／app-ads.txt公開、production identifier取得、App Store Connect保存／提出は、個別のoperation／Executor／account／target／必要なユーザー承認／readbackなしに実行されない。#101の法務ページ引き継ぎも広告設定、公開承認、App Store操作への権限を拡張しない。
