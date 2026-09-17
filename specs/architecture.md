@@ -1,8 +1,8 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.8
-Date: 2026-09-15
+Version: 1.9
+Date: 2026-09-17
 
 ## 1. 設計原則
 
@@ -193,9 +193,34 @@ Codex は `.codex/agents/*.toml`、Claude は `.claude/agents/*.md` を使いま
 - Linear: Issue／Project連携が必要な場合だけ
 - Vercel: Web配信または補助サービスのdeployが必要な場合だけ
 - ElevenLabs: 承認済みの音声・画像・動画処理が必要な場合だけ
+- Google Mobile Ads／UMP: 派生アプリの確定仕様でAdMob収益化を明示採用した場合だけ
 - App Store Connect: TestFlight、提出、審査対応
 
 認証済み操作はCodexとClaudeのどちらも実行できます。実行モデルに関係なく、Issue contractで指定されたoperation／Executorと`Config/ownership.yml`のアカウント／targetを完全一致で検証し、未設定または不一致なら操作しません。
+
+### 7.1 条件付きAdMob統合境界
+
+`TemplateApp`とIdentity bootstrap直後の派生アプリに、Google Mobile Ads SDK／package reference、AdMob設定、App ID／Ad Unit ID、consent／banner sourceを含めない。[プロダクト方針 §4.1](product.md#41-条件付きadmob収益化)の入力が確定した派生アプリだけが、専用Issueの有界なactivationを行う。未採用時のbootstrap outputとXcode projectを不変とし、生成後の全アプリへprovider依存を注入しない。
+
+後続実装Issueが追加する有効化経路は、共有`admob-monetization` skillと決定論的なactivation toolを入口とする。ツールは対象root、`Config/app-identity.json`、確定済み入力を照合し、実行時のGoogle／Apple公式sourceで必要Xcode／iOS条件、SDKのexact version、SKAdNetworkとprivacy要件を再確認したうえで公式Swift Package Manager経路を使う。参照URL、取得時刻、採用versionと判断結果をsanitizedな有効化記録へ固定する。部分適用を残さず原子的に適用し、同じ入力の再実行は冗等、異なる入力は変更前に停止する。
+
+有効化後のapplication境界は、設定解決、consent、広告対象判定、adaptive banner hostを個別に注入可能にする。UI Testはそれらのoffline fixtureを使い、Google SDK初期化、広告request、network成功を通常フローの決定論的な合格条件にしない。実runtimeでは起動ごとにUMPのconsent infoを更新し、必要formを表示し、`canRequestAds`が確認できた後だけSDK初期化と広告要求を1回化する。要求できない、広告対象外、load失敗の場合は広告領域をcollapseし、利用可能な場合はcontainer widthからanchored adaptive sizeを解決する。配置画面、safe area／scroll／Tabとの統合、広告非表示権利のsource of truthは各派生アプリのUI／domain Issueで確定する。
+
+設定は次の3経路を交差させない。
+
+| Configuration | 許可する値と実行 | 拒否する状態 |
+| --- | --- | --- |
+| Debug | Google公式demo App ID／Banner Unit IDと有界なdemo smoke | production identifier、demoとproductionの混在 |
+| UI Test | network-freeのconsent／eligibility／banner fixture | 実SDK初期化、広告request、remote配信に依存する合格判定 |
+| Release | 対象Bundle／configurationと一致するapp固有production identifier | demo identifier、欠落、別アプリのidentifier、混在 |
+
+既定のprivacy境界は非trackingであり、ATTを起動せず、Publisher first-party IDを無効化する。tracking／personalization／IDFAを将来採用する場合は、この有効化のフラグや設定変更に混ぜず、別の確定DecisionとIssueで受け入れ条件、consent、privacy／App Store申告を再設計する。
+
+後続のrelease-readiness検証は、`Info.plist`のGoogle Mobile Ads App ID／SKAdNetworkItems、resolved SDK／privacy manifest／signature、アプリ側`PrivacyInfo.xcprivacy`、実装data useとApp Store回答を同一candidateで照合する。[#110のread-only source preparation](architecture.md#91-原稿の正本と登録準備)はSDK／privacy driftを報告できるが、provider実装、AdMob remote state、App Store Connect保存／提出、release-readyを実行または証明しない。[#101のAppLibrary引き継ぎ](../docs/agent-contracts/appstore-submission.md#legal-page-handoff-and-verified-return)も確認済み原稿の受渡しに限り、広告のremote設定や公開権限を拡張しない。
+
+offline fixtureの成功、Google demo smokeの成功、AdMob Consoleのremote state、productionのApp Store readiness／配信状態は独立した証拠とする。ローカル成功をremote完了／収益発生／審査通過に読み替えず、remote操作は別Issue contractのoperation／Executor／account／target／ユーザー承認がある場合だけ行う。
+
+この節と[D-057](decisions.md#d-057-広告収益化を非trackingの条件付きadmob統合として採用する)は実装契約の確定だけを行う。共有skill／activation tool／runtime source／validatorとそのBuild／Test／Simulator／release evidenceは後続Issueのcurrent-Head成果が揃うまで未実装・未検証である。
 
 ## 8. Supabase構成
 

@@ -247,9 +247,10 @@ HTMLは情報階層や操作仮説を早く比較するための資料です。�
 
 ## 条件付き統合と秘密管理
 
-Supabase、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundation のアプリ本体へ組み込まれていません。必要性を確定仕様と Issue の受け入れ条件に明記した場合だけ、別 Issue で有効化します。テンプレートの状態では root `supabase/`、外部 SDK、認証済み接続を持たず、不要なサービスの保守や権限を発生させません。
+Supabase、AdMob、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundation のアプリ本体へ組み込まれていません。必要性を確定仕様と Issue の受け入れ条件に明記した場合だけ、別 Issue で有効化します。テンプレートの状態では root `supabase/`、外部 SDK、認証済み接続を持たず、不要なサービスの保守や権限を発生させません。
 
 - データベース、認証、同期、Storageが必要なアプリでは [Supabase operations skill](./.agents/skills/supabase-ops/SKILL.md)を使用します。`Status: 確定`かつ`Supabase: required`の仕様だけが有効化でき、`supabase/migrations/`を唯一のスキーマ履歴としてRLSとPolicyを同時に追加します。CodexとClaudeのどちらもlocal／remote作業を実行できますが、remoteではOrganization IDとProject Refを照合します。
+- 広告収益化を確定した派生アプリだけが、[条件付きAdMob契約](./specs/product.md#41-条件付きadmob収益化)に従ってUMPと非trackingのanchored adaptive bannerを有効化できます。未採用出力にSDK／設定／広告sourceを追加せず、DebugはGoogle demo、UI Testはoffline fixture、Releaseはapp固有productionへ分離します。契約の確定だけで実装済みと扱わず、共有skill／activation／validator／runtimeとその証拠は後続Issueのcurrent-Head成果を要求します。AdMob Console、契約／支払／税務、app-ads.txt、App Store Connectは別の外部操作です。
 - 読み上げ、Voice Changer、文字起こし、効果音、音声分離、音楽、一般画像、動画が必要な場合は [iOS media assets skill](./.agents/skills/ios-media-assets/SKILL.md)を使用します。実行モデルが設定済みElevenLabs Account／Workspaceとmode別entitlementを先に確認し、受理した出力とsanitized manifestだけを統合します。必須アプリアイコンだけは前述の`app-icon`とbuilt-in画像生成を使い、そのためにElevenLabsを有効化しません。
 - 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が必要な場合は [iOS 3D assets skill](./.agents/skills/ios-3d-assets/SKILL.md)を使用し、authoringをCodexのexact model `gpt-6-astra`へ固定します。利用不能時は別modelへfallbackせず停止します。既存assetの組み込み、変換結果の検査、RealityKit側の実装、レビューはClaudeまたはCodexが担当できます。
 - GitHub、Supabase、Cloudflare、Linear、Vercel、ElevenLabs、App Store Connectを含む認証済み外部操作は、CodexとClaudeが同じ [external operations skill](./.agents/skills/external-ops/SKILL.md)を使い、実行直前に設定済みアカウントと対象を照合します。
