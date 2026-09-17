@@ -1,6 +1,9 @@
 #!/bin/bash -p
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" git /usr/bin/git /usr/bin/ruby
+
 unset CDPATH ENV BASH_ENV GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 repo_root=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && /bin/pwd -P)
