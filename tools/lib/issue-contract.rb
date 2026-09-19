@@ -78,6 +78,22 @@ module IOSTemplate
     REPOSITORY_TEST_SCOPES = %w[targeted head-all base-and-head].freeze
     REPOSITORY_TEST_DECLARATION_PREFIX = "Repository-test scope:"
     RELEASE_PHASE_DECLARATION_PREFIX = "Release-phase binding:"
+    APPLICATION_FIXTURE_DECLARATION_PREFIX = "Application-fixture binding:"
+    APPLICATION_FIXTURE_KEYS = %w[fixtureRoot project route schemaVersion skillRoot toolPaths].freeze
+    APPLICATION_FIXTURE_ROUTE = "tracked-fixture-v1"
+    APPLICATION_FIXTURE_PROTECTED_SKILL_NAMES = %w[
+      app-bootstrap app-icon cross-model-review external-ops goldie ios-3d-assets
+      ios-media-assets ios-system-experiences ios-verify plan-issue-batch
+      prepare-appstore-assets report-template-issue ship-issue ship-issue-batch
+      spec-workflow submit-appstore-release supabase-ops ui-direction
+    ].freeze
+    APPLICATION_FIXTURE_PROTECTED_TOOL_FRAGMENTS = %w[
+      authority claim-issue cleanup-issue cross-model-review github-account-preflight
+      issue-contract issue-state merge-issue premerge provider-preflight repository-test
+      review-packet review-result security validate-verify-json verification-contract
+      verify-ios-issue workflow
+    ].freeze
+    SAFE_REPOSITORY_PATH = %r{\A[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\z}
     SNAPSHOT_REQUIRED_KEYS = %w[
       schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies
       externalOperations externalOperationDetailsDigest fetchedAt
@@ -130,6 +146,137 @@ module IOSTemplate
       ReleasePhase.binding_from_contract!(contract)
     rescue ReleasePhase::ValidationError => error
       failures << error.message
+    end
+
+    def safe_repository_relative_path?(value)
+      return false unless value.is_a?(String) && !value.empty? && value == value.strip
+      return false unless value.match?(SAFE_REPOSITORY_PATH)
+
+      components = value.split("/")
+      components.none? { |component| component.empty? || component == "." || component == ".." || component == ".git" }
+    end
+
+    def application_fixture_namespace?(binding, provider)
+      fixture_name = binding.fetch("fixtureRoot").split("/").last.downcase
+      project_name = File.basename(binding.fetch("project"), ".xcodeproj").downcase
+      fixture_matches = fixture_name.split(/[^a-z0-9]+/).include?(provider)
+      project_matches = project_name.start_with?(provider)
+      tools_match = binding.fetch("toolPaths").all? do |path|
+        File.basename(path).downcase.split(/[^a-z0-9]+/).include?(provider)
+      end
+      fixture_matches && project_matches && tools_match
+    end
+
+    def validate_application_fixture_binding(contract, failures)
+      criteria = contract["acceptanceCriteria"]
+      return nil unless criteria.is_a?(Array)
+
+      declarations = criteria.select do |criterion|
+        criterion.is_a?(Hash) && criterion["text"].is_a?(String) &&
+          criterion["text"].start_with?(APPLICATION_FIXTURE_DECLARATION_PREFIX)
+      end
+      return nil if declarations.empty?
+      if declarations.length != 1
+        failures << "exactly one Application-fixture binding declaration is allowed"
+        return nil
+      end
+
+      text = declarations.first.fetch("text")
+      payload = text.delete_prefix(APPLICATION_FIXTURE_DECLARATION_PREFIX)
+      unless payload.start_with?(" ") && payload == " #{payload.strip}" && !payload.strip.empty?
+        failures << "Application-fixture binding must contain one canonical JSON object"
+        return nil
+      end
+      json = payload.strip
+      binding = begin
+        JSON.parse(json, object_class: UniqueVerificationKeys)
+      rescue JSON::ParserError
+        failures << "Application-fixture binding must contain one canonical JSON object"
+        return nil
+      end
+      unless binding.is_a?(Hash)
+        failures << "Application-fixture binding must contain one canonical JSON object"
+        return nil
+      end
+      failures << "applicationFixture has unknown or missing fields" unless binding.keys.sort == APPLICATION_FIXTURE_KEYS.sort
+      failures << "Application-fixture binding JSON must be canonical" unless canonical_json(binding) == json
+      return nil unless binding.keys.sort == APPLICATION_FIXTURE_KEYS.sort
+
+      failures << "applicationFixture.schemaVersion must be 1" unless binding["schemaVersion"] == 1
+      failures << "applicationFixture.route must be tracked-fixture-v1" unless binding["route"] == APPLICATION_FIXTURE_ROUTE
+
+      fixture_root = binding["fixtureRoot"]
+      project = binding["project"]
+      skill_root = binding["skillRoot"]
+      tool_paths = binding["toolPaths"]
+      failures << "applicationFixture.fixtureRoot must be a safe repository-relative path" unless safe_repository_relative_path?(fixture_root)
+      if safe_repository_relative_path?(fixture_root) && !fixture_root.start_with?("tools/tests/fixtures/")
+        failures << "Application-fixture route requires a dedicated tools/tests/fixtures root"
+      end
+      failures << "applicationFixture.project must be a safe repository-relative path" unless safe_repository_relative_path?(project)
+      if safe_repository_relative_path?(fixture_root) && safe_repository_relative_path?(project)
+        unless project.start_with?("#{fixture_root}/") && project.end_with?(".xcodeproj")
+          failures << "applicationFixture.project must be a .xcodeproj inside fixtureRoot"
+        end
+      end
+
+      skill_match = skill_root.is_a?(String) && skill_root.match(%r{\A\.agents/skills/(?<provider>[a-z0-9]+(?:-[a-z0-9]+)*)\z})
+      failures << "applicationFixture.skillRoot must be .agents/skills/<provider>" unless skill_match
+      if skill_match && APPLICATION_FIXTURE_PROTECTED_SKILL_NAMES.include?(skill_match[:provider])
+        failures << "Application-fixture route must not modify a core workflow skill"
+      end
+      tool_paths_valid = tool_paths.is_a?(Array) && !tool_paths.empty? &&
+        tool_paths.all? { |path| safe_repository_relative_path?(path) && path.start_with?("tools/") }
+      failures << "applicationFixture.toolPaths must contain exact safe tools/ paths" unless tool_paths_valid
+      if tool_paths.is_a?(Array) && (!tool_paths.empty? && (tool_paths.uniq != tool_paths || tool_paths.sort != tool_paths))
+        failures << "applicationFixture.toolPaths must be nonempty, unique, and sorted"
+      elsif tool_paths.is_a?(Array) && tool_paths.empty?
+        failures << "applicationFixture.toolPaths must be nonempty, unique, and sorted"
+      end
+      if tool_paths_valid && tool_paths.any? do |path|
+           normalized = path.downcase
+           APPLICATION_FIXTURE_PROTECTED_TOOL_FRAGMENTS.any? { |fragment| normalized.include?(fragment) }
+         end
+        failures << "Application-fixture route must not declare a core workflow, review, merge, or security tool"
+      end
+      if skill_match && safe_repository_relative_path?(fixture_root) && safe_repository_relative_path?(project) && tool_paths_valid
+        provider = skill_match[:provider].split("-").first
+        unless application_fixture_namespace?(binding, provider)
+          failures << "applicationFixture paths must share the skill provider namespace"
+        end
+      end
+
+      profile = begin
+        DeliveryProfile.effective_name(contract)
+      rescue ArgumentError
+        nil
+      end
+      failures << "Application-fixture binding requires strict delivery profile" unless profile == "strict"
+      verification = contract["verification"]
+      failures << "Application-fixture binding requires application Verification" unless verification.is_a?(Hash)
+      visual_required = verification.is_a?(Hash) && Array(verification["acceptanceMappings"]).any? do |mapping|
+        checks = mapping.is_a?(Hash) ? mapping["checks"] : nil
+        Array(checks).any? { |check| check.is_a?(String) && check.start_with?("visual:") }
+      end
+      if visual_required
+        failures << "Application-fixture binding must retain xcodebuild-stage without visual evidence"
+      end
+      stage_value = contract["deliveryStage"]
+      scope_value = contract["verificationScope"]
+      stage = stage_value.is_a?(Hash) ? stage_value["name"] : nil
+      scope = scope_value.is_a?(Hash) ? scope_value["name"] : nil
+      unless (stage == "shape" && scope == "iphone-ja") || (stage == "harden" && scope == "targeted")
+        failures << "Application-fixture binding requires shape/iphone-ja or harden/targeted verification"
+      end
+      binding
+    end
+
+    def application_fixture_binding_from_contract!(contract)
+      failures = []
+      binding = validate_application_fixture_binding(contract, failures)
+      raise ValidationError, failures unless failures.empty?
+
+      binding
     end
 
     # Shared producer/reconstruction interface. Callers that only validate may
@@ -229,6 +376,7 @@ module IOSTemplate
       )
       delivery_profile = parse_delivery_profile(lines, headings, failures)
       scope_context = {"externalOperations" => external_details.map { |detail| detail.fetch("operation") }}
+      scope_context["acceptanceCriteria"] = acceptance_items
       scope_context["verificationScope"] = verification_scope if verification_scope
       scope_context["verification"] = verification if verification
       scope_context["deliveryProfile"] = delivery_profile if delivery_profile
@@ -242,6 +390,7 @@ module IOSTemplate
       rescue ArgumentError => error
         failures << error.message
       end
+      validate_application_fixture_binding(scope_context, failures)
       if delivery_profile
         name = delivery_profile.fetch("name")
         if name == "fast" && verification
@@ -656,6 +805,7 @@ module IOSTemplate
         failures << error.message
       end
       validate_release_phase_binding(value, failures)
+      validate_application_fixture_binding(value, failures)
       failures << "Issue contract operation-details digest is invalid" unless value["externalOperationDetailsDigest"].is_a?(String) && value["externalOperationDetailsDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
       fetched_at = begin
         Time.iso8601(value["fetchedAt"].to_s)

@@ -1,7 +1,7 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 3.2
+Version: 3.3
 Date: 2026-09-17
 
 ## 1. テンプレート完成条件
@@ -129,15 +129,31 @@ delivery tool、review schema、validator、evidence producerだけを変更す�
 
 workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、仕様anchor、contract digest、Base／Head、strict review、blocking finding、PR、pre-merge gateを省略しない。D-037 cutover後はsealed要求scopeとimmutable Base..Head入力からexact test planを生成し、`targeted`、`head-all`、`base-and-head`の解決結果だけを実行する。cutover前のworkflow-onlyは全ACの`--map`が参照するtracked test pathのexact unionを各1回実行し、その他の従来Head-only contractは全tracked testを維持する。application path、Xcode project、exact allowlistのformat guidanceではない実アプリApp Store metadata／画像asset、localization、Bundle設定、release operation、別Issue／Head／contract、改ざん済みplan／repository evidenceを拒否する。
 
-### 3.4 Repository testsのBase／Head要件
+### 3.4 Sealed tracked fixture検証
+
+provider統合を`TemplateApp`またはrepository rootのXcode projectへ導入せず、Git管理下の専用application fixtureでBuild／TestするIssueは、既存Acceptance criterion一つの本文全体をexact `Application-fixture binding: <canonical JSON>`とできる。候補はこのprefixで始まるACだけで、最大一つとする。JSONはschema 1のexact key `fixtureRoot`、`project`、`route`、`schemaVersion`、`skillRoot`、`toolPaths`だけを辞書順、空白なしで持ち、`route`は`tracked-fixture-v1`だけ、`toolPaths`はsorted、unique、nonemptyとする。すべてのpathはportableなsafe relative pathで、`fixtureRoot`は`tools/tests/fixtures/`配下に置き、provider namespaceをfixture、skill、toolへ一貫して使い、`project`は`fixtureRoot`直下以下にあるcommitted `.xcodeproj`でなければならない。
+
+bindingを持つIssueはapplication経路であり、完全な`Verification`と、`shape / strict / iphone-ja`または`harden / strict / targeted`のどちらかを必須とする。workflow-only、`release`、`fast`／`standard`、`full`、application Verification欠落、`visual:` mappingは拒否する。CLIへ渡すprojectはsealed `project`とexact一致させ、最終`verify.json`でも同じprojectを再照合する。証拠は既存の`changeClassification: application-code`、`executionRoute: xcodebuild-stage`、source tree／project digest、Build、Unit Test、case、Simulator cleanupを維持し、shape／hardenをrelease-readyへ昇格させない。
+
+scoped application diffで許可できるのは、宣言した`fixtureRoot`、`skillRoot`、exact `toolPaths`、同名の`.claude/skills/<provider>`からexact `../../.agents/skills/<provider>`への新規symlink、およびrouteがexactに固定するrepository root `README.md`と`Config/repository-tests.json`だけである。binding外path、`TemplateApp`、root project／workspace、別provider、既存workflow／review／merge／security／authority実装、削除、rename、gitlink、許可外mode、不正symlinkを拒否する。directory名やproviderらしいpathから例外を推測しない。
+
+`skillRoot/application-fixture.json`をprovider ownership markerとし、そのbytesはprefixを除いたcanonical binding JSONと改行なしでexact一致し、Headでregular `100644`でなければならない。Baseでmarker自身を除く`fixtureRoot`／`skillRoot`配下、宣言済み`toolPaths`、同名Claude aliasのいずれかが既に存在する場合、Baseにも同じmarkerがregular `100644`で存在し同じbindingを所有していなければ拒否する。どのsurfaceもBaseに存在しない新規providerではBase markerを拒否し、markerをHeadでprovider surfaceと同時に追加する。Headでは`skillRoot/SKILL.md`、全tool path、同名Claude aliasのmode／bytes／targetも常に検証し、宣言だけの空bindingや既存aliasの流用を許可しない。Claim時のcore名拒否は補助防御であり、このBase ownership照合を置き換えない。
+
+`Config/repository-tests.json`を変更する場合、BaseとHeadを構造比較し、`schemaVersion`、`headAllPaths`、`headAllPrefixes`、Baseの全domain ruleと全test objectをexact保持する。追加できるのはcanonicalなprovider domain名とsafeな許可path／prefixへ閉じた新しいdomain rule、および宣言済みprovider toolを実行する対応testだけであり、各新domainに新testを対応付ける。path escape、既存rule／testの削除、置換、再分類、path拡張、既存testの引数やdomain変更を拒否する。単にmanifestが許可pathであることを、既存repository test境界を弱める権限へ読み替えない。
+
+bindingはClaim前に検証してIssue contractへそのまま封印し、Claim後のcontract revisionではcriterion位置と宣言全文を保護する。bindingがない既存／新規application contractは従来のscoped diff判定をbyte互換で維持し、fixture例外を合成しない。workflow-only Issueはこのroute自体のguard、仕様、直接regression testを実装できるが、同じIssueへprovider fixture、provider skill、provider tool、application projectを追加してはならない。routeの正常系regressionはfake adapterで既存runner entrypointを最後まで実行し、Build、Unit、required case、cleanup、final publicationとsealed project再照合を確認する。
+
+このrouteを利用するapplication Issueは、contractと確定仕様を追加する#121、およびscoped validator／runner／evidence consumer／Issue formを有効化する#122の双方を`state:done`の依存として持つ。#121だけの完了からruntime routeを利用可能と推測せず、#122完了前はbindingを持つprovider実装IssueをClaimしない。
+
+### 3.5 Repository testsのBase／Head要件
 
 cutover前のexact `Repository-test scope: base-and-head; <nonempty>`またはcutover後のexact `Repository-test scope: base-and-head; Reason: <nonempty>`を一つのAC本文先頭に宣言したIssueは、現在HeadのproducerでBaseとHeadそれぞれの全tracked `tools/tests/test-*.sh`を実行する。宣言ACは両revisionの全suiteへ対応付け、各ACのHead実装証拠とBaseのbaseline／regression証拠を区別する。cutover前のcanonical schema v2またはcutover後のplan-bound schema v3 record、packetのexact-byte参照、同じpacketに束縛したreview／receipt、premergeの再検証まで完了条件に含める。片方の欠落、subset、別SHA／Issue／contract、失敗／timeout／未完了、差し替えは成功ではない。
 
 選択条件と互換境界は[D-034](decisions.md#d-034-baseとheadの全repository-test証拠を明示契約へ束縛する)および[D-037](decisions.md#d-037-repository-testの要求scopeと実行計画を二段階で封印する)、手順とschemaは[repository evidence](../docs/verification.md#repository-test-planと対象実行)を正とする。宣言を持たない既存sealed contractと旧Head-only record／packet／receiptのbytesを変更せず、旧証拠から新planやBase実行の証拠を作らない。
 
-### 3.5 Claim後のIssue contract revision
+### 3.6 Claim後のIssue contract revision
 
-Claim後に同じIssueの検証方法またはAcceptance criteriaの説明を修正する必要がある場合は、Issueがexact `in-progress`である間だけ専用revision経路を使う。変更可能なのは`verification`、既存と同一ID・同一順序の`acceptanceCriteria[].text`、再取得時刻`fetchedAt`だけである。ただしAC本文先頭の`UI-direction route:`はcriterion位置・route・Scope、`Repository-test scope:`はcriterion位置・scope、`Opposite-review route:`はcriterion位置・route／primary／reviewer／approval、`Release-phase binding:`はcriterion位置・宣言全文を保護し、追加、削除、移動、保護値の変更を許可しない。Goal、MVP、Spec anchors、Dependencies、Delivery stage／profile／scope、Issue type、外部操作と承認を変更してはならない。許可field内でも目的またはMVPを別物へ置換する意味変更は、別Issueと現在ユーザーの判断へ戻す。
+Claim後に同じIssueの検証方法またはAcceptance criteriaの説明を修正する必要がある場合は、Issueがexact `in-progress`である間だけ専用revision経路を使う。変更可能なのは`verification`、既存と同一ID・同一順序の`acceptanceCriteria[].text`、再取得時刻`fetchedAt`だけである。ただしAC本文先頭の`UI-direction route:`はcriterion位置・route・Scope、`Repository-test scope:`はcriterion位置・scope、`Opposite-review route:`はcriterion位置・route／primary／reviewer／approval、`Release-phase binding:`と`Application-fixture binding:`はcriterion位置・宣言全文を保護し、追加、削除、移動、保護値の変更を許可しない。Goal、MVP、Spec anchors、Dependencies、Delivery stage／profile／scope、Issue type、外部操作と承認を変更してはならない。許可field内でも目的またはMVPを別物へ置換する意味変更は、別Issueと現在ユーザーの判断へ戻す。
 
 authorityは次の三つだけを許可する。`review-finding`は同じIssue、現行contract digest、source Headに束縛されたcanonical `changes-requested` review／receiptのblocking findingを参照し、reasonをその`requiredChange`とexact一致させる。`user-explicit`は設定済みGitHub ownerが、変更前contract digest、変更後body digest、source Head、scope、reasonを含むcanonical markerを同じIssueへ投稿する。`user-delegated`は同じmarkerで現在executorをdelegateとして明示する。別Issue、古いcontract／Head、owner以外、silent approval、推測delegateをauthorityにしない。
 

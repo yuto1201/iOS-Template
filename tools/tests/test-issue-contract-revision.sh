@@ -50,6 +50,7 @@ body_scope_change="$workspace/body-scope-change.md"
 body_ui_change="$workspace/body-ui-change.md"
 body_opposite_add="$workspace/body-opposite-add.md"
 body_release_add="$workspace/body-release-add.md"
+application_fixture_binding='Application-fixture binding: {"fixtureRoot":"tools/tests/fixtures/admob-integration","project":"tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj","route":"tracked-fixture-v1","schemaVersion":1,"skillRoot":".agents/skills/admob-monetization","toolPaths":["tools/activate-admob-integration.sh","tools/lib/admob-activation.rb","tools/tests/test-admob-integration.sh","tools/validate-admob-integration.sh"]}'
 cat > "$body_v1" <<'BODY'
 ## Goal
 
@@ -201,6 +202,27 @@ assert_fails 'protected opposite-review route addition' ruby "$tool" marker --re
   --body "$body_opposite_add" --live-json "$live" --trigger user-explicit --reason 'Forbidden reviewer authority change'
 assert_fails 'protected release-phase binding addition' ruby "$tool" marker --repo-root "$worktree" --repo "$repository" --issue "$issue" \
   --body "$body_release_add" --live-json "$live" --trigger user-explicit --reason 'Forbidden release phase change'
+
+APPLICATION_FIXTURE_BINDING="$application_fixture_binding" ruby -I "$worktree/tools/lib" -rjson -rissue-contract-revision -e '
+  base=JSON.parse(File.binread(ARGV.fetch(0)))
+  declaration=ENV.fetch("APPLICATION_FIXTURE_BINDING")
+  variant=lambda do |from,to,time|
+    value=Marshal.load(Marshal.dump(base)); value["acceptanceCriteria"][from]["text"]=to
+    value["fetchedAt"]=time; value
+  end
+  binding=variant.call(2,declaration,"2026-09-15T00:00:01Z")
+  changed=variant.call(2,declaration.sub("AdMobFixtureApp.xcodeproj","AdMobFixtureV2.xcodeproj"),"2026-09-15T00:00:02Z")
+  moved=Marshal.load(Marshal.dump(binding)); moved["acceptanceCriteria"][1]["text"],moved["acceptanceCriteria"][2]["text"]=moved["acceptanceCriteria"][2]["text"],moved["acceptanceCriteria"][1]["text"]; moved["fetchedAt"]="2026-09-15T00:00:02Z"
+  removed=Marshal.load(Marshal.dump(base)); removed["fetchedAt"]="2026-09-15T00:00:02Z"
+  [[base,binding,"addition"],[binding,removed,"removal"],[binding,moved,"move"],[binding,changed,"byte change"]].each do |before,after,label|
+    begin
+      IOSTemplate::IssueContractRevision.contract_delta!(before,after)
+      abort "Application-fixture binding #{label} was accepted"
+    rescue IOSTemplate::IssueContractRevision::ValidationError => error
+      abort error.message unless error.message.include?("protected Acceptance criteria declarations")
+    end
+  end
+' "$artifact_issue/issue-contract.json"
 
 opposite_before="$workspace/opposite-before.json"
 opposite_removed="$workspace/opposite-removed.json"

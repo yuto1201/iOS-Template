@@ -514,4 +514,212 @@ assert_fails 'plan-era workflow-only contract rejects unknown repository-test sc
   --issue 82 --repo yuto1201/iOS-Template --fetched-at 2026-09-13T13:03:38Z
 rg -Fq 'repository-test scope declaration is malformed' "$workspace/output"
 
+APPLICATION_FIXTURE_BINDING='Application-fixture binding: {"fixtureRoot":"tools/tests/fixtures/admob-integration","project":"tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj","route":"tracked-fixture-v1","schemaVersion":1,"skillRoot":".agents/skills/admob-monetization","toolPaths":["tools/activate-admob-integration.sh","tools/lib/admob-activation.rb","tools/tests/test-admob-integration.sh","tools/validate-admob-integration.sh"]}'
+export APPLICATION_FIXTURE_BINDING
+cat > "$workspace/application-fixture.md" <<'EOF'
+## Goal
+
+Verify one provider integration through a committed fixture application.
+
+## In scope
+
+- Bind one tracked provider fixture to application verification.
+
+## Out of scope
+
+- Change the live TemplateApp.
+
+## Acceptance criteria
+
+- AC-1: UI-direction route: not-applicable; Scope: provider fixture verification; Reason: the fixture validates integration plumbing without changing product UI.
+- AC-2: The provider fixture builds and runs its targeted checks.
+- AC-3: __APPLICATION_FIXTURE_BINDING__
+
+## Spec anchors
+
+- [Issue Definition of Done](specs/acceptance.md#3-issue-definition-of-done)
+
+## Dependencies
+
+- None.
+
+## UI verification
+
+- Not applicable.
+
+## Delivery stage
+
+- Stage: harden
+- Time budget: 120 minutes
+- Reason: Harden one provider integration boundary.
+
+## Verification scope
+
+- Scope: targeted
+- Reason: Run the committed Japanese iPhone fixture path only.
+
+## Verification
+
+```json
+{"acceptanceMappings":[{"checks":["stage:build"],"id":"AC-1"},{"checks":["stage:unit-tests"],"id":"AC-2"},{"checks":["case:iphone-ja"],"id":"AC-3"}],"bundleIdentifier":"com.example.admobfixture","cases":[{"id":"iphone-ja","testIdentifier":"AdMobFixtureAppUITests/AdMobFixtureSmokeTests/testJapaneseSmoke()"}],"unitTestIdentifier":"AdMobFixtureAppTests/AdMobFixtureTests/testActivation()"}
+```
+
+## Delivery profile
+
+- Profile: strict
+- Reason: A sealed exception to application verification paths is security-sensitive.
+
+## External operations
+
+- None.
+
+## User approvals
+
+- None.
+EOF
+ruby -e 'path,binding=ARGV; body=File.binread(path).sub("__APPLICATION_FIXTURE_BINDING__",binding); File.binwrite(path,body)' \
+  "$workspace/application-fixture.md" "$APPLICATION_FIXTURE_BINDING"
+
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/application-fixture.md" --type feature --format contract \
+  --issue 113 --repo yuto1201/iOS-Template --fetched-at 2026-09-17T00:00:00Z \
+  > "$workspace/application-fixture.json"
+ruby -I"$repo_root/tools/lib" -rjson -rissue-contract -e '
+  contract=JSON.parse(File.binread(ARGV.fetch(0)))
+  binding=IOSTemplate::IssueContract.application_fixture_binding_from_contract!(contract)
+  abort unless binding=={
+    "fixtureRoot"=>"tools/tests/fixtures/admob-integration",
+    "project"=>"tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj",
+    "route"=>"tracked-fixture-v1", "schemaVersion"=>1,
+    "skillRoot"=>".agents/skills/admob-monetization",
+    "toolPaths"=>["tools/activate-admob-integration.sh","tools/lib/admob-activation.rb","tools/tests/test-admob-integration.sh","tools/validate-admob-integration.sh"]
+  }
+  abort if contract.key?("applicationFixture")
+  IOSTemplate::IssueContract.validate_snapshot!(contract,issue:113,repository:"yuto1201/iOS-Template")
+' "$workspace/application-fixture.json"
+ruby -e '
+  path,output=ARGV; body=File.binread(path)
+  body.sub!("- Not applicable.\n\n## Delivery stage", "- Target screens/states: Provider fixture launch.\n- English expectations: Not evaluated in shape.\n- Japanese expectations: Fixture smoke succeeds in Japanese.\n\n## Delivery stage") or abort
+  body.sub!("Stage: harden", "Stage: shape") or abort
+  body.sub!("Scope: targeted", "Scope: iphone-ja") or abort
+  File.binwrite(output,body)
+' "$workspace/application-fixture.md" "$workspace/application-fixture-shape.md"
+ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/application-fixture-shape.md" --type feature --format contract \
+  --issue 113 --repo yuto1201/iOS-Template --fetched-at 2026-09-17T00:00:00Z \
+  > "$workspace/application-fixture-shape.json"
+
+fixture_rejects() {
+  local message=$1 expression=$2 replacement=$3 expected=$4
+  ruby -e 'path,output,expression,replacement=ARGV; body=File.binread(path); abort "fixture mutation did not match" unless body.gsub!(expression,replacement); File.binwrite(output,body)' \
+    "$workspace/application-fixture.md" "$workspace/application-fixture-invalid.md" "$expression" "$replacement"
+  assert_fails "$message" ruby "$repo_root/tools/lib/issue-contract.rb" \
+    --body "$workspace/application-fixture-invalid.md" --type feature --format contract \
+    --issue 113 --repo yuto1201/iOS-Template --fetched-at 2026-09-17T00:00:00Z
+  rg -Fq "$expected" "$workspace/output"
+}
+
+fixture_rejects 'duplicate application fixture binding' \
+  '## Spec anchors' "- AC-4: $APPLICATION_FIXTURE_BINDING\n\n## Spec anchors" \
+  'exactly one Application-fixture binding declaration is allowed'
+fixture_rejects 'noncanonical application fixture JSON' \
+  '{"fixtureRoot":"tools/tests/fixtures/admob-integration"' '{ "fixtureRoot":"tools/tests/fixtures/admob-integration"' \
+  'Application-fixture binding JSON must be canonical'
+fixture_rejects 'unknown application fixture route' \
+  '"route":"tracked-fixture-v1"' '"route":"future-fixture-v2"' \
+  'applicationFixture.route must be tracked-fixture-v1'
+fixture_rejects 'missing application fixture key' \
+  '"route":"tracked-fixture-v1",' '' \
+  'applicationFixture has unknown or missing fields'
+fixture_rejects 'unknown application fixture schema' \
+  '"schemaVersion":1' '"schemaVersion":2' \
+  'applicationFixture.schemaVersion must be 1'
+fixture_rejects 'unsafe fixture root' \
+  '"fixtureRoot":"tools/tests/fixtures/admob-integration"' '"fixtureRoot":"tools/tests/fixtures/../admob-integration"' \
+  'applicationFixture.fixtureRoot must be a safe repository-relative path'
+fixture_rejects 'internal repository fixture root' \
+  '"fixtureRoot":"tools/tests/fixtures/admob-integration"' '"fixtureRoot":".git/admob-integration"' \
+  'applicationFixture.fixtureRoot must be a safe repository-relative path'
+fixture_rejects 'fixture root outside dedicated fixture directory' \
+  'tools/tests/fixtures/admob-integration' 'examples/fixtures/admob-integration' \
+  'Application-fixture route requires a dedicated tools/tests/fixtures root'
+fixture_rejects 'project outside fixture root' \
+  '"project":"tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj"' '"project":"tools/tests/fixtures/other/AdMobFixtureApp.xcodeproj"' \
+  'applicationFixture.project must be a .xcodeproj inside fixtureRoot'
+fixture_rejects 'skill outside provider root' \
+  '"skillRoot":".agents/skills/admob-monetization"' '"skillRoot":"skills/admob-monetization"' \
+  'applicationFixture.skillRoot must be .agents/skills/<provider>'
+fixture_rejects 'provider namespace mismatch' \
+  'tools/lib/admob-activation.rb' 'tools/lib/payments-activation.rb' \
+  'applicationFixture paths must share the skill provider namespace'
+fixture_rejects 'protected core workflow tool' \
+  'tools/validate-admob-integration.sh' 'tools/validate-admob-workflow.sh' \
+  'Application-fixture route must not declare a core workflow, review, merge, or security tool'
+fixture_rejects 'protected repository-test tool' \
+  'tools/tests/test-admob-integration.sh' 'tools/tests/test-admob-repository-tests.sh' \
+  'Application-fixture route must not declare a core workflow, review, merge, or security tool'
+fixture_rejects 'unsorted tool paths' \
+  '"tools/activate-admob-integration.sh","tools/lib/admob-activation.rb"' '"tools/lib/admob-activation.rb","tools/activate-admob-integration.sh"' \
+  'applicationFixture.toolPaths must be nonempty, unique, and sorted'
+fixture_rejects 'duplicate tool path' \
+  '"tools/lib/admob-activation.rb"' '"tools/activate-admob-integration.sh"' \
+  'applicationFixture.toolPaths must be nonempty, unique, and sorted'
+fixture_rejects 'application fixture requires strict profile' \
+  'Profile: strict' 'Profile: standard' \
+  'Application-fixture binding requires strict delivery profile'
+fixture_rejects 'application harden fixture requires targeted scope' \
+  'Scope: targeted' 'Scope: full' \
+  'harden requires targeted Verification scope'
+ruby -e '
+  path,output=ARGV; body=File.binread(path)
+  body.sub!("Stage: harden", "Stage: release") or abort "fixture stage mutation did not match"
+  body.sub!("Scope: targeted", "Scope: full") or abort "fixture scope mutation did not match"
+  File.binwrite(output,body)
+' "$workspace/application-fixture.md" "$workspace/application-fixture-invalid.md"
+assert_fails 'application fixture rejects unsupported release/full route' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/application-fixture-invalid.md" --type feature --format contract \
+  --issue 113 --repo yuto1201/iOS-Template --fetched-at 2026-09-17T00:00:00Z
+rg -Fq 'Application-fixture binding requires shape/iphone-ja or harden/targeted verification' "$workspace/output"
+fixture_rejects 'application fixture requires Verification' \
+  $'## Verification\n\n```json' $'## Removed verification\n\n```json' \
+  'Application-fixture binding requires application Verification'
+fixture_rejects 'application fixture cannot request visual evidence' \
+  '"checks":["stage:build"]' '"checks":["stage:build","visual:iphone-ja"]' \
+  'Application-fixture binding must retain xcodebuild-stage without visual evidence'
+
+while IFS= read -r protected_skill; do
+  PROTECTED_SKILL="$protected_skill" ruby -e '
+    path,output=ARGV; body=File.binread(path); skill=ENV.fetch("PROTECTED_SKILL")
+    provider=skill.split("-",2).first
+    project_provider=provider[0].upcase + provider[1..]
+    abort unless body.gsub!("admob", provider)
+    abort unless body.gsub!("AdMob", project_provider)
+    abort unless body.sub!("#{provider}-monetization", skill)
+    File.binwrite(output,body)
+  ' "$workspace/application-fixture.md" "$workspace/application-fixture-core-skill.md"
+  assert_fails "protected core workflow skill: $protected_skill" ruby "$repo_root/tools/lib/issue-contract.rb" \
+    --body "$workspace/application-fixture-core-skill.md" --type feature --format contract \
+    --issue 113 --repo yuto1201/iOS-Template --fetched-at 2026-09-17T00:00:00Z
+  rg -Fq 'Application-fixture route must not modify a core workflow skill' "$workspace/output"
+done <<'PROTECTED_SKILLS'
+app-bootstrap
+app-icon
+cross-model-review
+external-ops
+goldie
+ios-3d-assets
+ios-media-assets
+ios-system-experiences
+ios-verify
+plan-issue-batch
+prepare-appstore-assets
+report-template-issue
+ship-issue
+ship-issue-batch
+spec-workflow
+submit-appstore-release
+supabase-ops
+ui-direction
+PROTECTED_SKILLS
+
 echo 'PASS: Issue forms, Definition of Ready validator, PR template, labels, and model-neutral label sync'

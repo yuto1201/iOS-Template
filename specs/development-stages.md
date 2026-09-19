@@ -1,7 +1,7 @@
 # 動く形から品質を固める段階的開発
 
 Status: 確定
-Version: 3.6
+Version: 3.7
 Date: 2026-09-15
 
 ## 1. 原則
@@ -107,7 +107,7 @@ Phase 1〜3の軽微な修正は、目的、MVP境界、主要hierarchy／flow�
 
 ### 1.5.4 Revision、証拠、不具合
 
-release revisionを変える記録は追記型とし、少なくとも変更前、変更後、理由、判断者または委任根拠、影響する仕様／Issue／Phase、失効する証拠、再利用する証拠と根拠、繰越、記録時刻を持つ。過去のDecisionとsealed Issue contractを上書きしない。同一Issue contractの改訂は[受け入れ条件 §3.5](acceptance.md#35-claim後のissue-contract-revision)の専用経路に限定し、release revisionやPhase承認の代替にしない。
+release revisionを変える記録は追記型とし、少なくとも変更前、変更後、理由、判断者または委任根拠、影響する仕様／Issue／Phase、失効する証拠、再利用する証拠と根拠、繰越、記録時刻を持つ。過去のDecisionとsealed Issue contractを上書きしない。同一Issue contractの改訂は[受け入れ条件 §3.6](acceptance.md#36-claim後のissue-contract-revision)の専用経路に限定し、release revisionやPhase承認の代替にしない。
 
 同一Issue contract revisionは`verification`、同一ID・同一順序のAcceptance criteria本文、`fetchedAt`だけを変更でき、現行contract／source Headに束縛した`review-finding`、設定済みownerの`user-explicit`、同ownerが現在executorを指定する`user-delegated`のいずれかを必要とする。旧／新body、旧／新contract、state、authority、前record digestをimmutable chainへ残し、以前のverification／review／Head bindingを失効させる。Goal、MVP、Phase、stage、profile、scope、外部authorityの変更はこの経路で吸収せず、影響する最も早いPhaseと別Issueへ戻す。
 
@@ -146,6 +146,10 @@ D-050対象candidateはDelivery profileによる通常のreview省略経路を�
 | `release` | リリース候補Headの全体品質と提出準備を確定する | §5の完全検証 | 完全検証が成功した場合だけrelease-ready |
 
 アプリsource、Xcode project、asset、localization、Bundle設定へ触れないdelivery tool、schema、validator、review、evidence producerの変更は`harden + strict`のworkflow-only経路を使う。App Store関連はexact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression testだけを含められ、実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationは拒否する。application `Verification`と`Verification scope`を持たず、Build、Unit Test、Simulator、Screenshot、visual evaluationは`not-applicable`とする。一方で対象repository tests、仕様整合、current-Head、strict review、pre-merge gateは省略しない。allowlist外pathまたはApp Store operationが混ざればworkflow-onlyを拒否する。
+
+条件付きproviderの実装をtemplate本体へ入れずにapplicationとして検証する場合は、[sealed tracked fixture](acceptance.md#34-sealed-tracked-fixture検証)を使用できる。これはworkflow-onlyの例外ではなく、`shape / strict / iphone-ja`またはapplication `harden / strict / targeted`として、専用のcommitted fixture projectを既存Build／Unit／case／Simulator経路で実測する。`skillRoot/application-fixture.json`のprovider ownership markerをBaseとHeadで照合し、`Config/repository-tests.json`は既存entryを不変にした追加だけを許可する。provider実装を含まないguard整備Issueはworkflow-only、provider fixtureと実装を含むIssueはapplicationとして分離し、同じIssueで境界をまたがない。
+
+routeを利用するapplication Issueは、確定仕様とClaim封印を提供する#121、およびscoped validator／runner／evidence経路を提供する#122の双方が`state:done`となるまでClaimしない。仕様だけ、contract parserだけ、またはfake regressionの一部だけをapplication Build／Test経路の稼働証拠にしない。
 
 `shape`のTime budget既定値は120分とし、Issueで変更できる。超過しそうならScopeを狭める、`harden` Issueへ分ける、環境障害で停止する、または受け入れ条件を変える判断だけを`blocked:user`にする。追加の品質項目を同じIssueへ積み増して延長しない。
 
@@ -218,6 +222,8 @@ D-050対象では、同じHead directoryに存在する`repository-test-failure-
 新規Issueの`Delivery stage`節は`Stage`、`Time budget`、`Reason`をこの順で持つ。`Verification scope`節は`Scope`と`Reason`を持ち、stageを重複記載しない。Feature formは`shape / 120 minutes / standard / iphone-ja`、Regression formは`harden / targeted`、Release formは`release / strict / full`を既定とする。
 
 D-037 cutover後のworkflow-only `harden + strict` Issueは、既存Acceptance criterionの一つをexact `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`で開始する。宣言は実行結果ではなく要求方針であり、Claim後にexact test一覧へ書き換えない。plan、evidence、review、PR、premergeが同じIssue／Base／Headへ束縛されなければ完了しない。
+
+`tracked-fixture-v1`のtracked application fixtureを使うIssueは、既存Acceptance criterionの一つをexact `Application-fixture binding: <canonical JSON>`で開始し、Claim時にfixture root、nested project、provider skill、exact toolsを封印する。bindingは最大一つで、Issue contract revisionでもcriterion位置と宣言全文を変更しない。bindingなしのIssueへfixture権限を推測せず、bindingありでもlive app、root project、別provider、core workflow／security path、削除／rename／gitlinkを許可しない。
 
 `shape`と`harden`の`standard`はblockingな反対モデルレビューを要求しない。`strict`または`release`は現在Headの正式な反対モデルレビューを必須とする。shape/hardenのPRと完了報告は必ずnot release-readyを明記する。`release`は`type:release`の実際のアプリrelease candidateだけに使用し、Feature／Regression／workflow変更を完全検証へ迂回させない。
 

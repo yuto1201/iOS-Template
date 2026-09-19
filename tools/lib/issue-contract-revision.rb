@@ -24,7 +24,8 @@ module IOSTemplate
       "ui-direction" => "UI-direction route:",
       "repository-test" => "Repository-test scope:",
       "opposite-review" => "Opposite-review route:",
-      "release-phase" => "Release-phase binding:"
+      "release-phase" => "Release-phase binding:",
+      "application-fixture" => "Application-fixture binding:"
     }.freeze
     INVALIDATED_EVIDENCE = %w[head-binding review verification].freeze
     REVISION_REFERENCE_KEYS = %w[digest path revision].freeze
@@ -369,6 +370,9 @@ module IOSTemplate
                            "reviewer" => match[:reviewer], "approval" => match[:approval]}
         elsif text.start_with?(PROTECTED_ACCEPTANCE_PREFIXES.fetch("release-phase"))
           declarations << {"kind" => "release-phase", "criterionId" => id, "position" => index,
+                           "declaration" => text}
+        elsif text.start_with?(PROTECTED_ACCEPTANCE_PREFIXES.fetch("application-fixture"))
+          declarations << {"kind" => "application-fixture", "criterionId" => id, "position" => index,
                            "declaration" => text}
         end
       end
