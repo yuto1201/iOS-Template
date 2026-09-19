@@ -670,6 +670,16 @@ fixture_rejects 'application fixture requires strict profile' \
 fixture_rejects 'application harden fixture requires targeted scope' \
   'Scope: targeted' 'Scope: full' \
   'harden requires targeted Verification scope'
+ruby -e '
+  path,output=ARGV; body=File.binread(path)
+  body.sub!("Stage: harden", "Stage: release") or abort "fixture stage mutation did not match"
+  body.sub!("Scope: targeted", "Scope: full") or abort "fixture scope mutation did not match"
+  File.binwrite(output,body)
+' "$workspace/application-fixture.md" "$workspace/application-fixture-invalid.md"
+assert_fails 'application fixture rejects unsupported release/full route' ruby "$repo_root/tools/lib/issue-contract.rb" \
+  --body "$workspace/application-fixture-invalid.md" --type feature --format contract \
+  --issue 113 --repo yuto1201/iOS-Template --fetched-at 2026-09-17T00:00:00Z
+rg -Fq 'Application-fixture binding requires shape/iphone-ja or harden/targeted verification' "$workspace/output"
 fixture_rejects 'application fixture requires Verification' \
   $'## Verification\n\n```json' $'## Removed verification\n\n```json' \
   'Application-fixture binding requires application Verification'
