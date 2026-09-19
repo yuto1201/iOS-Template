@@ -822,9 +822,24 @@ struct IssueContract {
     let deliveryStage: DeliveryStageInfo
     let visualRequired: Bool
     let externalOperations: [String]
+    let applicationFixtureBinding: ApplicationFixtureBinding?
 
     var acceptanceIDs: [String] { acceptanceCriteria.map(\.id) }
     var caseIDs: [String] { verification?.cases.map(\.id) ?? verificationScope.fixedCaseIDs ?? [] }
+}
+
+struct ApplicationFixtureBinding {
+    let fixtureRoot: String
+    let project: String
+    let route: String
+    let schemaVersion: Int
+    let skillRoot: String
+    let toolPaths: [String]
+    let provider: String
+    let canonicalData: Data
+
+    var claudeSkillPath: String { ".claude/skills/\(skillRoot.split(separator: "/").last!)" }
+    var ownershipMarkerPath: String { skillRoot + "/application-fixture.json" }
 }
 
 struct AcceptanceCriterion {
@@ -843,6 +858,142 @@ struct VerificationInfo {
     let unitTestIdentifier: String
     let cases: [VerificationCaseInfo]
     let acceptanceMappings: [[String]]
+}
+
+let applicationFixtureDeclarationPrefix = "Application-fixture binding:"
+let applicationFixtureProtectedSkillNames: Set<String> = [
+    "app-bootstrap", "app-icon", "cross-model-review", "external-ops", "goldie",
+    "ios-3d-assets", "ios-media-assets", "ios-system-experiences", "ios-verify",
+    "plan-issue-batch", "prepare-appstore-assets", "report-template-issue", "ship-issue",
+    "ship-issue-batch", "spec-workflow", "submit-appstore-release", "supabase-ops",
+    "ui-direction"
+]
+let applicationFixtureProtectedToolFragments = [
+    "authority", "claim-issue", "cleanup-issue", "cross-model-review", "github-account-preflight",
+    "issue-contract", "issue-state", "merge-issue", "premerge", "provider-preflight", "repository-test",
+    "review-packet", "review-result", "security", "validate-verify-json", "verification-contract",
+    "verify-ios-issue", "workflow"
+]
+
+func safeApplicationFixturePath(_ value: Any, at path: String) throws -> (String, [String]) {
+    let string = try requireString(value, at: path)
+    guard string == string.trimmingCharacters(in: .whitespacesAndNewlines),
+          string.range(
+            of: "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$", options: .regularExpression
+          ) != nil else {
+        throw ValidationFailure("\(path) must be a safe repository-relative path")
+    }
+    let components = try relativeComponents(string, at: path)
+    guard !components.contains(".git") else {
+        throw ValidationFailure("\(path) must be a safe repository-relative path")
+    }
+    return (string, components)
+}
+
+func applicationFixtureNamespaceTokens(_ value: String) -> [String] {
+    value.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+}
+
+func validateApplicationFixtureBinding(_ criteria: [AcceptanceCriterion]) throws -> ApplicationFixtureBinding? {
+    let declarations = criteria.filter { $0.text.hasPrefix(applicationFixtureDeclarationPrefix) }
+    guard declarations.count <= 1 else {
+        throw ValidationFailure("issueContract must contain at most one Application-fixture binding declaration")
+    }
+    guard let declaration = declarations.first else { return nil }
+    let exactPrefix = applicationFixtureDeclarationPrefix + " "
+    guard declaration.text.hasPrefix(exactPrefix) else {
+        throw ValidationFailure("Application-fixture binding declaration must use the exact prefix")
+    }
+    let jsonText = String(declaration.text.dropFirst(exactPrefix.count))
+    guard !jsonText.isEmpty, let jsonData = jsonText.data(using: .utf8) else {
+        throw ValidationFailure("Application-fixture binding declaration must contain canonical JSON")
+    }
+    let raw: Any
+    do {
+        raw = try JSONSerialization.jsonObject(with: jsonData, options: [])
+    } catch {
+        throw ValidationFailure("Application-fixture binding declaration must contain canonical JSON")
+    }
+    let binding = try requireObject(raw, at: "Application-fixture binding")
+    try requireExactKeys(
+        binding,
+        ["fixtureRoot", "project", "route", "schemaVersion", "skillRoot", "toolPaths"],
+        at: "Application-fixture binding"
+    )
+    guard JSONSerialization.isValidJSONObject(binding),
+          try JSONSerialization.data(
+            withJSONObject: binding, options: [.sortedKeys, .withoutEscapingSlashes]
+          ) == jsonData else {
+        throw ValidationFailure("Application-fixture binding declaration must use canonical JSON")
+    }
+    let schemaVersion = try requireInteger(
+        binding["schemaVersion"]!, at: "Application-fixture binding.schemaVersion"
+    )
+    guard schemaVersion == 1 else {
+        throw ValidationFailure("Application-fixture binding.schemaVersion must be 1")
+    }
+    let route = try requireString(binding["route"]!, at: "Application-fixture binding.route")
+    guard route == "tracked-fixture-v1" else {
+        throw ValidationFailure("Application-fixture binding.route is not supported")
+    }
+
+    let (fixtureRoot, fixtureComponents) = try safeApplicationFixturePath(
+        binding["fixtureRoot"]!, at: "Application-fixture binding.fixtureRoot"
+    )
+    guard !fixtureComponents.isEmpty else {
+        throw ValidationFailure("Application-fixture binding.fixtureRoot must be a safe repository-relative path")
+    }
+    guard fixtureRoot.hasPrefix("tools/tests/fixtures/") else {
+        throw ValidationFailure("Application-fixture route requires a dedicated tools/tests/fixtures root")
+    }
+    let (skillRoot, skillComponents) = try safeApplicationFixturePath(
+        binding["skillRoot"]!, at: "Application-fixture binding.skillRoot"
+    )
+    let providerPattern = try! NSRegularExpression(pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    guard skillComponents.count == 3,
+          skillComponents[0] == ".agents", skillComponents[1] == "skills",
+          matches(skillComponents[2], regex: providerPattern) else {
+        throw ValidationFailure("Application-fixture binding.skillRoot must identify one provider skill")
+    }
+    guard !applicationFixtureProtectedSkillNames.contains(skillComponents[2]) else {
+        throw ValidationFailure("Application-fixture route must not modify a core workflow skill")
+    }
+    let provider = skillComponents[2].split(separator: "-", omittingEmptySubsequences: true).first.map(String.init)!
+    guard applicationFixtureNamespaceTokens(fixtureComponents.last!).contains(provider) else {
+        throw ValidationFailure("Application-fixture binding.fixtureRoot must use the provider namespace")
+    }
+
+    let (project, projectComponents) = try safeApplicationFixturePath(
+        binding["project"]!, at: "Application-fixture binding.project"
+    )
+    guard project.hasPrefix(fixtureRoot + "/"),
+          projectComponents.last?.hasSuffix(".xcodeproj") == true,
+          String(projectComponents.last!.dropLast(".xcodeproj".count)).lowercased().hasPrefix(provider) else {
+        throw ValidationFailure("Application-fixture binding.project must be a provider project inside fixtureRoot")
+    }
+
+    let toolPaths = try requireStringArray(
+        binding["toolPaths"]!, at: "Application-fixture binding.toolPaths", nonempty: true, unique: true
+    )
+    guard toolPaths == toolPaths.sorted() else {
+        throw ValidationFailure("Application-fixture binding.toolPaths must be sorted and unique")
+    }
+    for (index, rawToolPath) in toolPaths.enumerated() {
+        let path = "Application-fixture binding.toolPaths[\(index)]"
+        let (_, components) = try safeApplicationFixturePath(rawToolPath, at: path)
+        guard components.count >= 2, components[0] == "tools",
+              applicationFixtureNamespaceTokens(components.last!).contains(provider) else {
+            throw ValidationFailure("\(path) must identify a provider-specific tool")
+        }
+        let normalized = rawToolPath.lowercased()
+        guard !applicationFixtureProtectedToolFragments.contains(where: normalized.contains) else {
+            throw ValidationFailure("Application-fixture route must not declare a core workflow, review, merge, or security tool")
+        }
+    }
+    return ApplicationFixtureBinding(
+        fixtureRoot: fixtureRoot, project: project, route: route, schemaVersion: schemaVersion,
+        skillRoot: skillRoot, toolPaths: toolPaths, provider: provider, canonicalData: jsonData
+    )
 }
 
 func validateOptionalVerification(_ value: Any, acceptanceIDs: [String], expectedIDs: [String], deliveryStage: DeliveryStageInfo) throws -> VerificationInfo {
@@ -1100,6 +1251,25 @@ func validateIssueContract(
             .flatMap { $0 }
             .contains(where: { $0.hasPrefix("visual:") }) ?? false
     }
+    let applicationFixtureBinding = try validateApplicationFixtureBinding(criteria)
+    if applicationFixtureBinding != nil {
+        guard normalizedVerification != nil else {
+            throw ValidationFailure("Application-fixture binding requires application Verification")
+        }
+        guard deliveryProfile == "strict" else {
+            throw ValidationFailure("Application-fixture binding requires strict delivery profile")
+        }
+        guard deliveryStage.explicit, ["shape", "harden"].contains(deliveryStage.name) else {
+            throw ValidationFailure("Application-fixture binding requires shape or harden Delivery stage")
+        }
+        let requiredScope: VerificationScope = deliveryStage.name == "shape" ? .iphoneJapanese : .targeted
+        guard verificationScope == requiredScope else {
+            throw ValidationFailure("Application-fixture binding Delivery stage and Verification scope are contradictory")
+        }
+        guard !visualRequired else {
+            throw ValidationFailure("Application-fixture binding must retain xcodebuild-stage without visual evidence")
+        }
+    }
     return IssueContract(
         acceptanceCriteria: criteria,
         fetchedAt: fetchedAt,
@@ -1109,7 +1279,8 @@ func validateIssueContract(
         verificationStage: (contract["verificationScope"] as? JSONObject)?["stage"] as? String,
         deliveryStage: deliveryStage,
         visualRequired: visualRequired,
-        externalOperations: externalOperations
+        externalOperations: externalOperations,
+        applicationFixtureBinding: applicationFixtureBinding
     )
 }
 
@@ -1466,8 +1637,397 @@ func loadRunnerSimulatorAllocationEvidence(
     )
 }
 
-func validateScopeDiff(_ scope: VerificationScope, expectedBase: String, expectedHead: String) throws {
+struct RevisionBlob {
+    let mode: String
+    let data: Data
+}
+
+func revisionBlob(revision: String, path: String, at label: String) throws -> RevisionBlob? {
+    let result = try runGitProcess(["ls-tree", "-z", revision, "--", path])
+    guard result.status == 0 else { throw ValidationFailure("unable to inspect \(label)") }
+    var records = result.stdout.split(separator: 0, omittingEmptySubsequences: false)
+    guard records.last?.isEmpty == true else {
+        throw ValidationFailure("\(label) tree entry is not NUL terminated")
+    }
+    records.removeLast()
+    guard !records.isEmpty else { return nil }
+    guard records.count == 1,
+          let tab = records[0].firstIndex(of: 9),
+          let metadata = String(data: Data(records[0][..<tab]), encoding: .utf8),
+          let recordedPath = String(data: Data(records[0][records[0].index(after: tab)...]), encoding: .utf8),
+          recordedPath == path else {
+        throw ValidationFailure("\(label) tree entry is ambiguous")
+    }
+    let fields = metadata.split(separator: " ").map(String.init)
+    guard fields.count == 3, fields[1] == "blob" else {
+        throw ValidationFailure("\(label) must be a blob")
+    }
+    let blob = try runGitProcess(["cat-file", "blob", fields[2]])
+    guard blob.status == 0 else { throw ValidationFailure("unable to read \(label)") }
+    return RevisionBlob(mode: fields[0], data: blob.stdout)
+}
+
+func revisionTrackedPaths(revision: String, at label: String) throws -> Set<String> {
+    let result = try runGitProcess(["ls-tree", "-r", "--name-only", "-z", "--full-tree", revision, "--"])
+    guard result.status == 0 else { throw ValidationFailure("unable to inspect \(label)") }
+    var records = result.stdout.split(separator: 0, omittingEmptySubsequences: false)
+    guard records.last?.isEmpty == true else {
+        throw ValidationFailure("\(label) inventory is not NUL terminated")
+    }
+    records.removeLast()
+    var paths = Set<String>()
+    for record in records {
+        guard let path = String(data: Data(record), encoding: .utf8),
+              paths.insert(path).inserted else {
+            throw ValidationFailure("\(label) inventory is invalid")
+        }
+    }
+    return paths
+}
+
+func validateApplicationFixtureOwnership(
+    binding: ApplicationFixtureBinding,
+    expectedBase: String,
+    expectedHead: String
+) throws {
+    let markerPath = binding.ownershipMarkerPath
+    let headMarker = try revisionBlob(
+        revision: expectedHead, path: markerPath, at: "Application-fixture Head ownership marker"
+    )
+    guard let headMarker, headMarker.mode == "100644", headMarker.data == binding.canonicalData else {
+        throw ValidationFailure("Application-fixture Head ownership marker must be regular 100644 exact canonical binding bytes")
+    }
+    let headSkill = try revisionBlob(
+        revision: expectedHead, path: binding.skillRoot + "/SKILL.md",
+        at: "Application-fixture Head provider skill"
+    )
+    guard headSkill?.mode == "100644" else {
+        throw ValidationFailure("Application-fixture Head provider skill must be a regular 100644 SKILL.md")
+    }
+    for toolPath in binding.toolPaths {
+        let tool = try revisionBlob(
+            revision: expectedHead, path: toolPath, at: "Application-fixture Head provider tool"
+        )
+        guard let tool, ["100644", "100755"].contains(tool.mode) else {
+            throw ValidationFailure("Application-fixture Head toolPaths must be regular 100644 or 100755 blobs")
+        }
+    }
+    let headAlias = try revisionBlob(
+        revision: expectedHead, path: binding.claudeSkillPath,
+        at: "Application-fixture Head Claude skill alias"
+    )
+    guard let headAlias, headAlias.mode == "120000",
+          String(data: headAlias.data, encoding: .utf8) == "../../\(binding.skillRoot)" else {
+        throw ValidationFailure("Application-fixture Head Claude skill alias must be an exact provider symlink")
+    }
+    let basePaths = try revisionTrackedPaths(revision: expectedBase, at: "Application-fixture Base")
+    let providerExistedAtBase = basePaths.contains(where: {
+        $0 != markerPath && $0.hasPrefix(binding.skillRoot + "/")
+    }) ||
+        basePaths.contains(where: { $0.hasPrefix(binding.fixtureRoot + "/") }) ||
+        basePaths.contains(binding.claudeSkillPath) ||
+        binding.toolPaths.contains(where: basePaths.contains)
+    let baseMarker = try revisionBlob(
+        revision: expectedBase, path: markerPath, at: "Application-fixture Base ownership marker"
+    )
+    if providerExistedAtBase {
+        guard let baseMarker, baseMarker.mode == "100644", baseMarker.data == binding.canonicalData else {
+            throw ValidationFailure("pre-existing Application-fixture provider requires the same Base ownership marker")
+        }
+    } else if baseMarker != nil {
+        throw ValidationFailure("new Application-fixture provider must not have a Base ownership marker")
+    }
+}
+
+func canonicalJSONData(_ value: Any, at label: String) throws -> Data {
+    let wrapped: [String: Any] = ["value": value]
+    guard JSONSerialization.isValidJSONObject(wrapped) else {
+        throw ValidationFailure("\(label) is not valid JSON")
+    }
+    return try JSONSerialization.data(
+        withJSONObject: wrapped, options: [.sortedKeys, .withoutEscapingSlashes]
+    )
+}
+
+func validateApplicationFixtureManifest(
+    binding: ApplicationFixtureBinding,
+    expectedBase: String,
+    expectedHead: String
+) throws {
+    let manifestPath = "Config/repository-tests.json"
+    let baseBlob = try revisionBlob(
+        revision: expectedBase, path: manifestPath, at: "Base repository-test manifest"
+    )
+    let headBlob = try revisionBlob(
+        revision: expectedHead, path: manifestPath, at: "Head repository-test manifest"
+    )
+    if baseBlob?.data == headBlob?.data { return }
+    guard let baseBlob, let headBlob,
+          baseBlob.mode == "100644", headBlob.mode == "100644" else {
+        throw ValidationFailure("Application-fixture repository-test manifest change requires regular Base and Head files")
+    }
+    let base = try readJSONObject(data: baseBlob.data, at: "Base repository-test manifest")
+    let head = try readJSONObject(data: headBlob.data, at: "Head repository-test manifest")
+    let manifestKeys: Set<String> = [
+        "schemaVersion", "headAllPaths", "headAllPrefixes", "domainRules", "tests"
+    ]
+    try requireExactKeys(base, manifestKeys, at: "Base repository-test manifest")
+    try requireExactKeys(head, manifestKeys, at: "Head repository-test manifest")
+    for key in ["schemaVersion", "headAllPaths", "headAllPrefixes"] {
+        guard try canonicalJSONData(base[key]!, at: "Base repository-test manifest.\(key)") ==
+                canonicalJSONData(head[key]!, at: "Head repository-test manifest.\(key)") else {
+            throw ValidationFailure("Application-fixture repository-test manifest must not change \(key)")
+        }
+    }
+
+    func indexedObjects(_ value: Any, key: String, at label: String) throws -> ([String: JSONObject], [String]) {
+        let array = try requireArray(value, at: label)
+        var objects: [String: JSONObject] = [:]
+        var order: [String] = []
+        for (index, raw) in array.enumerated() {
+            let object = try requireObject(raw, at: "\(label)[\(index)]")
+            let identity = try requireString(object[key] ?? NSNull(), at: "\(label)[\(index)].\(key)")
+            guard objects[identity] == nil else {
+                throw ValidationFailure("\(label) contains duplicate \(key)")
+            }
+            objects[identity] = object
+            order.append(identity)
+        }
+        return (objects, order)
+    }
+
+    let (baseRules, _) = try indexedObjects(base["domainRules"]!, key: "domain", at: "Base repository-test manifest.domainRules")
+    let (headRules, headRuleOrder) = try indexedObjects(head["domainRules"]!, key: "domain", at: "Head repository-test manifest.domainRules")
+    let (baseTests, _) = try indexedObjects(base["tests"]!, key: "path", at: "Base repository-test manifest.tests")
+    let (headTests, headTestOrder) = try indexedObjects(head["tests"]!, key: "path", at: "Head repository-test manifest.tests")
+    guard headRuleOrder == headRuleOrder.sorted(), headTestOrder == headTestOrder.sorted() else {
+        throw ValidationFailure("Application-fixture repository-test manifest additions must remain sorted")
+    }
+    for (domain, rule) in baseRules {
+        guard let current = headRules[domain],
+              try canonicalJSONData(rule, at: "Base repository-test domain") ==
+                canonicalJSONData(current, at: "Head repository-test domain") else {
+            throw ValidationFailure("Application-fixture repository-test manifest must exactly retain existing domainRules")
+        }
+    }
+    for (path, test) in baseTests {
+        guard let current = headTests[path],
+              try canonicalJSONData(test, at: "Base repository-test entry") ==
+                canonicalJSONData(current, at: "Head repository-test entry") else {
+            throw ValidationFailure("Application-fixture repository-test manifest must exactly retain existing tests")
+        }
+    }
+    let newDomains = Set(headRules.keys).subtracting(baseRules.keys)
+    let newTestPaths = Set(headTests.keys).subtracting(baseTests.keys)
+    guard !newDomains.isEmpty, !newTestPaths.isEmpty else {
+        throw ValidationFailure("Application-fixture repository-test manifest change must add provider domains and tests")
+    }
+    let allowedExactPaths = Set(binding.toolPaths + [binding.claudeSkillPath, binding.ownershipMarkerPath])
+    func providerPathAllowed(_ path: String) -> Bool {
+        allowedExactPaths.contains(path) || path.hasPrefix(binding.fixtureRoot + "/") ||
+            path.hasPrefix(binding.skillRoot + "/")
+    }
+    for domain in newDomains {
+        guard domain.range(
+                of: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", options: .regularExpression
+              ) != nil,
+              applicationFixtureNamespaceTokens(domain).contains(binding.provider),
+              let rule = headRules[domain] else {
+            throw ValidationFailure("new repository-test domain must use the Application-fixture provider namespace")
+        }
+        try requireExactKeys(rule, ["domain", "paths", "prefixes"], at: "new repository-test domain")
+        let paths = try requireStringArray(
+            rule["paths"]!, at: "new repository-test domain.paths", unique: true
+        )
+        let prefixes = try requireStringArray(
+            rule["prefixes"]!, at: "new repository-test domain.prefixes", unique: true
+        )
+        for (index, path) in paths.enumerated() {
+            _ = try safeApplicationFixturePath(path, at: "new repository-test domain.paths[\(index)]")
+        }
+        var normalizedPrefixes: [String] = []
+        for (index, prefix) in prefixes.enumerated() {
+            guard prefix.hasSuffix("/") else {
+                throw ValidationFailure("new repository-test domain coverage must be additive and provider-bound")
+            }
+            let normalized = String(prefix.dropLast())
+            let (safePrefix, _) = try safeApplicationFixturePath(
+                normalized, at: "new repository-test domain.prefixes[\(index)]"
+            )
+            normalizedPrefixes.append(safePrefix)
+        }
+        guard paths == paths.sorted(), prefixes == prefixes.sorted(), !paths.isEmpty || !prefixes.isEmpty,
+              paths.allSatisfy(providerPathAllowed),
+              normalizedPrefixes.allSatisfy({ prefix in
+                  prefix == binding.fixtureRoot || prefix.hasPrefix(binding.fixtureRoot + "/") ||
+                    prefix == binding.skillRoot || prefix.hasPrefix(binding.skillRoot + "/")
+              }) else {
+            throw ValidationFailure("new repository-test domain coverage must be additive and provider-bound")
+        }
+    }
+    var coveredDomains = Set<String>()
+    for path in newTestPaths {
+        guard binding.toolPaths.contains(path),
+              path.range(of: "^tools/tests/test-[a-z0-9-]+\\.sh$", options: .regularExpression) != nil,
+              applicationFixtureNamespaceTokens(URL(fileURLWithPath: path).lastPathComponent).contains(binding.provider),
+              let test = headTests[path] else {
+            throw ValidationFailure("new repository-test entry must be a declared provider test")
+        }
+        try requireExactKeys(test, ["path", "domains"], at: "new repository-test entry")
+        let domains = try requireStringArray(
+            test["domains"]!, at: "new repository-test entry.domains", nonempty: true, unique: true
+        )
+        guard domains == domains.sorted(), domains.allSatisfy(newDomains.contains),
+              let testBlob = try revisionBlob(revision: expectedHead, path: path, at: "provider repository test"),
+              testBlob.mode == "100755" else {
+            throw ValidationFailure("new repository-test entry must reference executable provider test and new domains")
+        }
+        coveredDomains.formUnion(domains)
+    }
+    guard coveredDomains == newDomains else {
+        throw ValidationFailure("every new repository-test domain requires a new provider test")
+    }
+}
+
+func validateApplicationFixtureProject(
+    _ binding: ApplicationFixtureBinding,
+    expectedHead: String
+) throws {
+    let entries = try headTreeEntries(head: expectedHead)
+    let fixturePrefix = binding.fixtureRoot + "/"
+    var projects = Set<String>()
+    for entry in entries where entry.path.hasPrefix(fixturePrefix) {
+        let suffix = String(entry.path.dropFirst(fixturePrefix.count))
+        let components = try relativeComponents(suffix, at: "Application-fixture project inventory")
+        for (projectIndex, component) in components.enumerated() where component.hasSuffix(".xcodeproj") {
+            projects.insert(
+                binding.fixtureRoot + "/" + components.prefix(projectIndex + 1).joined(separator: "/")
+            )
+        }
+        guard !components.contains(where: { $0.hasSuffix(".xcworkspace") }) else {
+            throw ValidationFailure("Application-fixture binding fixtureRoot must not contain an Xcode workspace")
+        }
+    }
+    guard projects == Set([binding.project]) else {
+        throw ValidationFailure("Application-fixture binding fixtureRoot must contain exactly its one committed project")
+    }
+    let projectFile = binding.project + "/project.pbxproj"
+    guard entries.contains(where: { $0.path == projectFile && $0.mode == "100644" }) else {
+        throw ValidationFailure("Application-fixture binding project must contain a committed project.pbxproj")
+    }
+}
+
+func validateApplicationFixtureDiff(
+    binding: ApplicationFixtureBinding,
+    expectedBase: String,
+    expectedHead: String
+) throws {
+    guard binding.fixtureRoot.hasPrefix("tools/tests/fixtures/"),
+          binding.project.hasPrefix(binding.fixtureRoot + "/") else {
+        throw ValidationFailure("Application-fixture route requires a dedicated tools/tests/fixtures root")
+    }
+    let skillName = String(binding.skillRoot.split(separator: "/").last!)
+    guard !applicationFixtureProtectedSkillNames.contains(skillName) else {
+        throw ValidationFailure("Application-fixture route must not modify a core workflow skill")
+    }
+    guard binding.toolPaths.allSatisfy({ toolPath in
+        let normalized = toolPath.lowercased()
+        return !applicationFixtureProtectedToolFragments.contains(where: normalized.contains)
+    }) else {
+        throw ValidationFailure("Application-fixture route must not declare a core workflow, review, merge, or security tool")
+    }
+    try validateApplicationFixtureOwnership(
+        binding: binding, expectedBase: expectedBase, expectedHead: expectedHead
+    )
+    try validateApplicationFixtureManifest(
+        binding: binding, expectedBase: expectedBase, expectedHead: expectedHead
+    )
+    let result = try runGitProcess(["diff", "--raw", "-z", "--find-renames", expectedBase, expectedHead, "--"])
+    guard result.status == 0 else {
+        throw ValidationFailure("unable to inspect tracked Application-fixture range")
+    }
+    var fields = result.stdout.split(separator: 0, omittingEmptySubsequences: false)
+    guard fields.last?.isEmpty == true else {
+        throw ValidationFailure("Application-fixture Git raw diff was not NUL terminated")
+    }
+    fields.removeLast()
+    guard !fields.isEmpty else {
+        throw ValidationFailure("tracked Application-fixture range contains no changes")
+    }
+    let fixturePrefix = binding.fixtureRoot + "/"
+    let skillPrefix = binding.skillRoot + "/"
+    let exactRegularPaths = Set(binding.toolPaths + ["README.md", "Config/repository-tests.json"])
+    var index = 0
+    while index < fields.count {
+        guard index + 1 < fields.count,
+              let header = String(data: Data(fields[index]), encoding: .utf8), header.hasPrefix(":"),
+              let path = String(data: Data(fields[index + 1]), encoding: .utf8) else {
+            throw ValidationFailure("Application-fixture Git raw diff contains malformed metadata")
+        }
+        let metadata = header.dropFirst().split(separator: " ").map(String.init)
+        guard metadata.count == 5 else {
+            throw ValidationFailure("Application-fixture Git raw diff contains malformed metadata")
+        }
+        let oldMode = metadata[0]
+        let newMode = metadata[1]
+        let status = metadata[4]
+        guard status == "A" || status == "M" else {
+            throw ValidationFailure("Application-fixture diff must not delete, copy, or rename tracked paths")
+        }
+        guard !path.contains("\\"),
+              !path.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else {
+            throw ValidationFailure("Application-fixture diff contains an unsafe path")
+        }
+        _ = try relativeComponents(path, at: "Application-fixture diff path")
+        let isClaudeSkillLink = path == binding.claudeSkillPath
+        let allowedPath = path.hasPrefix(fixturePrefix) || path.hasPrefix(skillPrefix) ||
+            exactRegularPaths.contains(path) || isClaudeSkillLink
+        guard allowedPath else {
+            throw ValidationFailure("Application-fixture diff path is not declared by the sealed binding: \(path)")
+        }
+        if isClaudeSkillLink {
+            guard status == "A", oldMode == "000000", newMode == "120000" else {
+                throw ValidationFailure("Application-fixture Claude skill link must be one newly added symbolic link")
+            }
+            let expectedTarget = "../../\(binding.skillRoot)"
+            let link = try runGitProcess(["cat-file", "blob", "\(expectedHead):\(path)"])
+            guard link.status == 0, String(data: link.stdout, encoding: .utf8) == expectedTarget else {
+                throw ValidationFailure("Application-fixture Claude skill link target is invalid")
+            }
+            let targetSkill = binding.skillRoot + "/SKILL.md"
+            let target = try runGitProcess(["ls-tree", "-z", expectedHead, "--", targetSkill])
+            guard target.status == 0,
+                  let entry = String(data: target.stdout, encoding: .utf8),
+                  entry.hasPrefix("100644 blob "), entry.hasSuffix("\t\(targetSkill)\0") else {
+                throw ValidationFailure("Application-fixture Claude skill link target is not a committed skill")
+            }
+        } else {
+            let allowedMode = (status == "A" && oldMode == "000000" && ["100644", "100755"].contains(newMode)) ||
+                (status == "M" && oldMode == newMode && ["100644", "100755"].contains(oldMode))
+            guard allowedMode else {
+                throw ValidationFailure("Application-fixture diff contains a gitlink, symbolic link, or mode change")
+            }
+        }
+        index += 2
+    }
+    try validateApplicationFixtureProject(binding, expectedHead: expectedHead)
+}
+
+func validateScopeDiff(
+    _ scope: VerificationScope,
+    expectedBase: String,
+    expectedHead: String,
+    applicationFixtureBinding: ApplicationFixtureBinding? = nil
+) throws {
     guard scope != .full else { return }
+    if let applicationFixtureBinding {
+        try validateApplicationFixtureDiff(
+            binding: applicationFixtureBinding,
+            expectedBase: expectedBase,
+            expectedHead: expectedHead
+        )
+        return
+    }
     let result = try runGitProcess(["diff", "--name-only", "-z", "--no-renames", expectedBase, expectedHead, "--"])
     guard result.status == 0, result.stdout.last == 0 else {
         throw ValidationFailure("unable to inspect scoped verification range")
@@ -1540,7 +2100,8 @@ func validateBuild(
     _ value: Any,
     documentationOnly: Bool,
     repository: TrustedRepository? = nil,
-    expectedHead: String? = nil
+    expectedHead: String? = nil,
+    expectedProjectPath: String? = nil
 ) throws {
     let build = try requireObject(value, at: "build")
     try requireExactKeys(build, ["status", "scheme", "warningsAdded", "project", "sourceTree"], at: "build")
@@ -1566,6 +2127,9 @@ func validateBuild(
         let project = try validateProjectReference(
             build["project"]!, repository: repository, expectedHead: expectedHead, at: "build.project"
         )
+        if let expectedProjectPath, project.path != expectedProjectPath {
+            throw ValidationFailure("build.project.path must exactly match the sealed Application-fixture binding")
+        }
         let source = try requireObject(build["sourceTree"]!, at: "build.sourceTree")
         try requireExactKeys(source, ["headSha", "digest", "projectPath"], at: "build.sourceTree")
         let head = try requireString(source["headSha"]!, at: "build.sourceTree.headSha")
@@ -2449,7 +3013,13 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
     )
     let matrix = try validateMatrix(data: matrixData, recordedPath: options.matrix)
     try validateScopeMatch(contract: contract, matrix: matrix)
-    try validateScopeDiff(contract.verificationScope, expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+    try validateScopeDiff(
+        contract.verificationScope, expectedBase: options.expectedBase, expectedHead: options.expectedHead,
+        applicationFixtureBinding: contract.applicationFixtureBinding
+    )
+    if let binding = contract.applicationFixtureBinding, options.project != binding.project {
+        throw ValidationFailure("--project must exactly match the sealed Application-fixture binding")
+    }
     let sourceIdentity = try sourceTreeIdentity(
         entries: entries, head: options.expectedHead, projectPath: options.project
     )
@@ -2583,7 +3153,13 @@ func verifyRunnerInputs(
     }
     let matrix = try validateMatrix(data: matrixData, recordedPath: options.matrix)
     try validateScopeMatch(contract: contract, matrix: matrix)
-    try validateScopeDiff(contract.verificationScope, expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+    try validateScopeDiff(
+        contract.verificationScope, expectedBase: options.expectedBase, expectedHead: options.expectedHead,
+        applicationFixtureBinding: contract.applicationFixtureBinding
+    )
+    if let binding = contract.applicationFixtureBinding, options.project != binding.project {
+        throw ValidationFailure("--project must exactly match the sealed Application-fixture binding")
+    }
     let sourceIdentity = try sourceTreeIdentity(
         entries: entries, head: options.expectedHead, projectPath: options.project
     )
@@ -4444,7 +5020,10 @@ func validateCanonicalRunnerDraft(
     try validateDigest(draft["matrixDigest"]!, data: matrixData, at: "draft matrixDigest")
     let matrix = try validateMatrix(data: matrixData, recordedPath: matrixPath)
     try validateScopeMatch(contract: contract, matrix: matrix)
-    try validateScopeDiff(contract.verificationScope, expectedBase: expectedBase, expectedHead: expectedHead)
+    try validateScopeDiff(
+        contract.verificationScope, expectedBase: expectedBase, expectedHead: expectedHead,
+        applicationFixtureBinding: contract.applicationFixtureBinding
+    )
     let simulatorAllocations: [[String: Any]]?
     if matrix.schemaVersion == 2 {
         guard let allocationValue = draft["simulatorAllocations"] else {
@@ -4464,7 +5043,8 @@ func validateCanonicalRunnerDraft(
         throw ValidationFailure("draft execution identity is invalid")
     }
     try validateBuild(
-        draft["build"]!, documentationOnly: false, repository: repository, expectedHead: expectedHead
+        draft["build"]!, documentationOnly: false, repository: repository, expectedHead: expectedHead,
+        expectedProjectPath: contract.applicationFixtureBinding?.project
     )
     try validateTests(draft["tests"]!, documentationOnly: false)
 
@@ -5940,7 +6520,10 @@ func validate(options: Options) throws {
     if contract.verificationStage != nil && classification != "application-code" {
         throw ValidationFailure("explicit Verification scope requires application-code verification")
     }
-    try validateScopeDiff(contract.verificationScope, expectedBase: options.expectedBase, expectedHead: options.expectedHead)
+    try validateScopeDiff(
+        contract.verificationScope, expectedBase: options.expectedBase, expectedHead: options.expectedHead,
+        applicationFixtureBinding: contract.applicationFixtureBinding
+    )
     var candidatePublicationCheck: (() throws -> Void)?
     switch classification {
     case "application-code":
@@ -6011,7 +6594,8 @@ func validate(options: Options) throws {
         }
         try validateBuild(
             root["build"]!, documentationOnly: false,
-            repository: repository, expectedHead: headSha
+            repository: repository, expectedHead: headSha,
+            expectedProjectPath: contract.applicationFixtureBinding?.project
         )
         try validateTests(root["tests"]!, documentationOnly: false)
         guard let verification = contract.verification else {

@@ -33,6 +33,7 @@ git_policy_sentinel="$scratch/git-policy-sentinel"
 adapter_state="$scratch/adapter-state"
 test_source="$scratch/test-source"
 runner="$test_source/tools/verify-ios-issue.sh"
+APPLICATION_FIXTURE_BINDING_JSON='{"fixtureRoot":"tools/tests/fixtures/admob-integration","project":"tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj","route":"tracked-fixture-v1","schemaVersion":1,"skillRoot":".agents/skills/admob-monetization","toolPaths":["tools/activate-admob-integration.sh","tools/lib/admob-activation.rb","tools/tests/test-admob-integration.sh","tools/validate-admob-integration.sh"]}'
 mkdir -p "$adapter_bin" "$poison_bin" "$adapter_state" "$fake_developer/usr/bin" \
   "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin" "$test_source/tools/lib"
 /bin/cp "$source_repo/tools/verify-ios-issue.sh" "$runner"
@@ -218,6 +219,19 @@ cat >"$fake_developer/usr/bin/xcodebuild" <<'SH'
 set -euo pipefail
 state_dir="@STATE_DIR@" fake_log="@FAKE_LOG@"
 state() { [[ -f "$state_dir/$1" ]] && /bin/cat "$state_dir/$1" || true; }
+if [[ "$(state application_fixture)" == 1 ]]; then
+  project_relative=tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj
+  app_name=AdMobFixtureApp
+  bundle_identifier=com.example.admobfixture
+  unit_identifier='AdMobFixtureAppTests/AdMobFixtureTests/testActivation()'
+  ui_identifier='AdMobFixtureAppUITests/AdMobFixtureSmokeTests/testJapaneseSmoke()'
+else
+  project_relative=TemplateApp.xcodeproj
+  app_name=TemplateApp
+  bundle_identifier=com.example.TemplateApp
+  unit_identifier='TemplateAppTests/UnitSmokeTests/testUnit()'
+  ui_identifier='TemplateAppUITests/SmokeTests/testLaunch'
+fi
 for variable in "${!GIT_@}"; do echo "xcodebuild environment retained $variable" >&2; exit 1; done
 [[ -z "${TOOLCHAINS-}${SDKROOT-}" ]] || { echo 'xcodebuild environment was not scrubbed' >&2; exit 1; }
 {
@@ -253,27 +267,31 @@ if [[ "$mode" == build-for-testing ]]; then
     [[ "$previous" != -parallel-testing-enabled ]] || parallel="$argument"
     previous="$argument"
   done
-  [[ "$project" == */Source/TemplateApp.xcodeproj ]] || { echo 'build did not use the private raw-Head source snapshot' >&2; exit 1; }
-  source_root="${project%/TemplateApp.xcodeproj}"
+  [[ "$project" == */Source/"$project_relative" ]] || { echo 'build did not use the private raw-Head source snapshot' >&2; exit 1; }
+  source_root="${project%/$project_relative}"
   [[ "$(/bin/pwd -P)" == "$(builtin cd "$source_root" && /bin/pwd -P)" ]] || { echo 'xcodebuild cwd escaped the private raw-Head source snapshot' >&2; exit 1; }
-  [[ "$(/bin/cat "$source_root/Sources/App.swift")" == HEAD-SOURCE ]] || { echo 'raw-Head source snapshot is incomplete' >&2; exit 1; }
+  if [[ "$(state application_fixture)" == 1 ]]; then
+    [[ "$(/bin/cat "$source_root/tools/tests/fixtures/admob-integration/Sources/App.swift")" == 'struct AdMobFixtureApp {}' ]] || { echo 'raw-Head Application-fixture source snapshot is incomplete' >&2; exit 1; }
+  else
+    [[ "$(/bin/cat "$source_root/Sources/App.swift")" == HEAD-SOURCE ]] || { echo 'raw-Head source snapshot is incomplete' >&2; exit 1; }
+  fi
   [[ "$(/bin/cat "$source_root/Config/App.xcconfig")" == HEAD-CONFIG ]] || { echo 'raw-Head config snapshot is incomplete' >&2; exit 1; }
   [[ ! -e "$source_root/Sources/Ignored.swift" ]] || { echo 'ignored source entered raw-Head snapshot' >&2; exit 1; }
   printf '%s\n' Booted >"$state_dir/device-state-$(state first_udid)"
   mutate_path="$(state mutate_worktree_path)"
   [[ "$(state mutate_worktree)" != 1 || -z "$mutate_path" ]] || printf '%s\n' MUTATED-WORKTREE >"$mutate_path"
   [[ "$parallel" == NO && "$destination_count" == 1 && "$destination" == *id="$(state first_udid)" ]] || { echo 'build destination or parallel setting is invalid' >&2; exit 1; }
-  app="$derived/Build/Products/Debug-iphonesimulator/TemplateApp.app"
+  app="$derived/Build/Products/Debug-iphonesimulator/$app_name.app"
   mkdir -p "$app" "$result"
-  plist='<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.TemplateApp</string><key>CFBundleExecutable</key><string>TemplateApp</string></dict></plist>'
+  plist='<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>'"$bundle_identifier"'</string><key>CFBundleExecutable</key><string>'"$app_name"'</string></dict></plist>'
   if [[ "$(state build_mode)" == plist-symlink ]]; then
     printf '%s\n' "$plist" >"$derived/outside-info.plist"
     /bin/ln -s "$derived/outside-info.plist" "$app/Info.plist"
   else
     printf '%s\n' "$plist" >"$app/Info.plist"
   fi
-  printf '%s\n' '#!/bin/sh' 'exit 0' >"$app/TemplateApp"
-  chmod 0700 "$app/TemplateApp"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$app/$app_name"
+  chmod 0700 "$app/$app_name"
   case "$(state app_mode)" in
     nested-symlink)
       mkdir -p "$app/Resources"
@@ -312,10 +330,10 @@ for argument in "$@"; do
   previous="$argument"
 done
 [[ "$parallel" == NO && "$destination_count" == 1 ]] || { echo 'parallel testing or destination count is invalid' >&2; exit 1; }
-[[ "$project" == */Source/TemplateApp.xcodeproj ]] || { echo 'test did not use the private raw-Head source snapshot' >&2; exit 1; }
-source_root="${project%/TemplateApp.xcodeproj}"
+[[ "$project" == */Source/"$project_relative" ]] || { echo 'test did not use the private raw-Head source snapshot' >&2; exit 1; }
+source_root="${project%/$project_relative}"
 [[ "$(/bin/pwd -P)" == "$(builtin cd "$source_root" && /bin/pwd -P)" ]] || { echo 'test cwd escaped the private raw-Head source snapshot' >&2; exit 1; }
-  if [[ "$identifier" == TemplateAppTests/UnitSmokeTests/testUnit\(\) ]]; then
+if [[ "$identifier" == "$unit_identifier" ]]; then
   [[ "$(state test_mode)" != command-fail ]] || { echo 'configured unit test command failure' >&2; exit 1; }
   [[ "$destination" == *id="$(state first_udid)" ]] || { echo 'wrong unit destination' >&2; exit 1; }
   [[ -z "$language$region" && "$result" == */Tests.xcresult ]] || { echo 'unit stage included UI locale or wrong result' >&2; exit 1; }
@@ -338,7 +356,7 @@ case "$destination" in
   *id=00000000-0000-0000-0000-000000000003) expected_case=ipad-en; expected_language=en; expected_region=US ;;
   *) echo 'wrong UI destination' >&2; exit 1 ;;
 esac
-[[ "$identifier" == TemplateAppUITests/SmokeTests/testLaunch ]] || { echo 'wrong UI identifier' >&2; exit 1; }
+[[ "$identifier" == "$ui_identifier" ]] || { echo 'wrong UI identifier' >&2; exit 1; }
 [[ "$language" == "$expected_language" && "$region" == "$expected_region" ]] || { echo 'wrong UI locale' >&2; exit 1; }
 [[ "$result" == */Cases/"$expected_case".xcresult ]] || { echo 'wrong or missing UI result path' >&2; exit 1; }
 mkdir -p "$result"
@@ -370,15 +388,23 @@ File.open(config.fetch('lockPath'), File::RDWR) do |lock|
 end
 root = config.fetch('attemptRoot')
 abort 'attempt permissions changed before cleanup' unless File.stat(root).mode & 0777 == 0700
-config.fetch('cases').each do |entry|
-  case_id = entry.fetch('id')
-  image = root + '/Screenshots/' + case_id + '.png'
-  receipt = root + '/' + case_id + '-screenshot.sha256'
-  abort 'screenshot was not sealed before cleanup' unless [image, receipt].all? { |path| File.stat(path).mode & 0777 == 0400 }
-  abort 'screenshot receipt mismatch before cleanup' unless File.read(receipt).strip == 'sha256:' + Digest::SHA256.file(image).hexdigest
+if config.fetch('visualRequired') == 'true'
+  config.fetch('cases').each do |entry|
+    case_id = entry.fetch('id')
+    image = root + '/Screenshots/' + case_id + '.png'
+    receipt = root + '/' + case_id + '-screenshot.sha256'
+    abort 'screenshot was not sealed before cleanup' unless [image, receipt].all? { |path| File.stat(path).mode & 0777 == 0400 }
+    abort 'screenshot receipt mismatch before cleanup' unless File.read(receipt).strip == 'sha256:' + Digest::SHA256.file(image).hexdigest
+  end
+  observation = 'lock, config, directory mode, screenshot seal and digest'
+else
+  screenshot_root = root + '/Screenshots'
+  abort 'nonvisual stage captured screenshots' if Dir.exist?(screenshot_root) && !Dir.children(screenshot_root).empty?
+  abort 'nonvisual stage created screenshot receipts' unless Dir.glob(root + '/*-screenshot.sha256').empty?
+  observation = 'lock, config, directory mode, and no screenshots'
 end
 FileUtils.cp(config_path, destination + '/config.json')
-File.write(destination + '/checked', 'lock, config, directory mode, screenshot seal and digest')
+File.write(destination + '/checked', observation)
 RUBY
     fi
     "$validator_binary" "$@"
@@ -441,6 +467,27 @@ cat >"$adapter_bin/xcrun" <<'SH'
 set -euo pipefail
 state_dir="@STATE_DIR@" fake_log="@FAKE_LOG@"
 state() { [[ -f "$state_dir/$1" ]] && /bin/cat "$state_dir/$1" || true; }
+if [[ "$(state application_fixture)" == 1 ]]; then
+  app_name=AdMobFixtureApp
+  bundle_identifier=com.example.admobfixture
+  unit_target=AdMobFixtureAppTests
+  unit_class=AdMobFixtureTests
+  unit_method=testActivation
+  ui_target=AdMobFixtureAppUITests
+  ui_class=AdMobFixtureSmokeTests
+  ui_method=testJapaneseSmoke
+  ui_url_method='testJapaneseSmoke()'
+else
+  app_name=TemplateApp
+  bundle_identifier=com.example.TemplateApp
+  unit_target=TemplateAppTests
+  unit_class=UnitSmokeTests
+  unit_method=testUnit
+  ui_target=TemplateAppUITests
+  ui_class=SmokeTests
+  ui_method=testLaunch
+  ui_url_method=testLaunch
+fi
 for variable in "${!GIT_@}"; do echo "xcrun environment retained $variable" >&2; exit 1; done
 [[ -z "${TOOLCHAINS-}${SDKROOT-}" ]] || { echo 'xcrun environment was not scrubbed' >&2; exit 1; }
 {
@@ -469,7 +516,7 @@ if [[ "${1-}" == xcresulttool ]]; then
   [[ "${2-}" == get && "${3-}" == test-results ]] || { echo 'unexpected xcresulttool query' >&2; exit 1; }
   if [[ "$result_path" == */Tests.xcresult ]]; then
     passed=1 failed=0 skipped=0 total=1 udid="$(state first_udid)"
-    selected_target=TemplateAppTests selected_class=UnitSmokeTests selected_method=testUnit selected_url_method='testUnit()'
+    selected_target="$unit_target" selected_class="$unit_class" selected_method="$unit_method" selected_url_method="$unit_method()"
     case "$(state test_mode)" in
       failed) passed=0; failed=1 ;;
       skipped) passed=0; skipped=1 ;;
@@ -479,7 +526,7 @@ if [[ "${1-}" == xcresulttool ]]; then
     esac
   else
     passed=1 failed=0 skipped=0 total=1
-    selected_target=TemplateAppUITests selected_class=SmokeTests selected_method=testLaunch selected_url_method=testLaunch
+    selected_target="$ui_target" selected_class="$ui_class" selected_method="$ui_method" selected_url_method="$ui_url_method"
     case "$result_path" in
       */Cases/iphone-en.xcresult) udid=00000000-0000-0000-0000-000000000001 ;;
       */Cases/iphone-ja.xcresult) udid=00000000-0000-0000-0000-000000000002 ;;
@@ -493,15 +540,15 @@ if [[ "${1-}" == xcresulttool ]]; then
     esac
   fi
   if [[ "${4-}" == summary ]]; then
-    printf '{"devicesAndConfigurations":[{"device":{"architecture":"arm64","deviceId":"%s","deviceName":"fixture","modelName":"fixture","osBuildNumber":"23F77","osVersion":"26.5","platform":"iOS Simulator"},"expectedFailures":0,"failedTests":%s,"passedTests":%s,"skippedTests":%s,"testPlanConfiguration":{"configurationId":"1","configurationName":"Test Scheme Action"}}],"environmentDescription":"fixture","expectedFailures":0,"failedTests":%s,"finishTime":1,"passedTests":%s,"result":"Passed","skippedTests":%s,"startTime":0,"statistics":[],"testFailures":[],"title":"Test - TemplateApp","topInsights":[],"totalTestCount":%s}\n' \
-      "$udid" "$failed" "$passed" "$skipped" "$failed" "$passed" "$skipped" "$total"
+    printf '{"devicesAndConfigurations":[{"device":{"architecture":"arm64","deviceId":"%s","deviceName":"fixture","modelName":"fixture","osBuildNumber":"23F77","osVersion":"26.5","platform":"iOS Simulator"},"expectedFailures":0,"failedTests":%s,"passedTests":%s,"skippedTests":%s,"testPlanConfiguration":{"configurationId":"1","configurationName":"Test Scheme Action"}}],"environmentDescription":"fixture","expectedFailures":0,"failedTests":%s,"finishTime":1,"passedTests":%s,"result":"Passed","skippedTests":%s,"startTime":0,"statistics":[],"testFailures":[],"title":"Test - %s","topInsights":[],"totalTestCount":%s}\n' \
+      "$udid" "$failed" "$passed" "$skipped" "$failed" "$passed" "$skipped" "$app_name" "$total"
     exit 0
   fi
   if [[ "${4-}" == tests ]]; then
-    printf '{"devices":[{"deviceId":"%s"}],"testNodes":[{"children":[{"children":[{"children":[{"duration":"0.1s","durationInSeconds":0.1,"name":"selected","nodeIdentifier":"%s/%s()","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s/%s/%s","nodeType":"Test Case","result":"%s"}],"name":"suite","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s/%s","nodeType":"Test Suite","result":"%s"}],"name":"target","nodeIdentifierURL":"test://com.apple.xcode/TemplateApp/%s","nodeType":"Unit test bundle","result":"%s"}],"name":"Test Plan","nodeType":"Test Plan","result":"%s"}]}\n' \
-      "$udid" "$selected_class" "$selected_method" "$selected_target" "$selected_class" "$selected_url_method" \
-      "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" "$selected_target" "$selected_class" \
-      "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" "$selected_target" \
+    printf '{"devices":[{"deviceId":"%s"}],"testNodes":[{"children":[{"children":[{"children":[{"duration":"0.1s","durationInSeconds":0.1,"name":"selected","nodeIdentifier":"%s/%s()","nodeIdentifierURL":"test://com.apple.xcode/%s/%s/%s/%s","nodeType":"Test Case","result":"%s"}],"name":"suite","nodeIdentifierURL":"test://com.apple.xcode/%s/%s/%s","nodeType":"Test Suite","result":"%s"}],"name":"target","nodeIdentifierURL":"test://com.apple.xcode/%s/%s","nodeType":"Unit test bundle","result":"%s"}],"name":"Test Plan","nodeType":"Test Plan","result":"%s"}]}\n' \
+      "$udid" "$selected_class" "$selected_method" "$app_name" "$selected_target" "$selected_class" "$selected_url_method" \
+      "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" "$app_name" "$selected_target" "$selected_class" \
+      "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" "$app_name" "$selected_target" \
       "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)" \
       "$([[ "$failed" == 0 && "$skipped" == 0 ]] && printf Passed || printf Failed)"
     exit 0
@@ -625,15 +672,16 @@ RUBY
     ;;
   bootstatus) exit 0 ;;
   get_app_container)
-    [[ "${4-}" == com.example.TemplateApp && "${5-}" == app ]] || { echo 'wrong app container lookup' >&2; exit 1; }
+    [[ "${4-}" == "$bundle_identifier" && "${5-}" == app ]] || { echo 'wrong app container lookup' >&2; exit 1; }
     container_root=Containers
     if [[ "${3-}" == "00000000-0000-0000-0000-000000000001" && -e "$state_dir/ui-ran-iphone-en" ]] || \
        [[ "${3-}" == "00000000-0000-0000-0000-000000000003" && -e "$state_dir/ui-ran-ipad-en" ]]; then
       container_root=ContainersAfterUI
     fi
-    printf '%s\n' "/Users/fixture/$container_root/${3-}/TemplateApp.app"
+    printf '%s\n' "/Users/fixture/$container_root/${3-}/$app_name.app"
     ;;
   terminate)
+    [[ "${4-}" == "$bundle_identifier" ]] || { echo 'wrong terminate bundle identifier' >&2; exit 1; }
     if [[ "$(state case_mode)" == term-blocked-probe && "${3-}" == "00000000-0000-0000-0000-000000000001" && -e "$state_dir/term-blocked-probe-pgid" ]]; then
       probe_pgid="$(state term-blocked-probe-pgid)"
       if [[ "$probe_pgid" =~ ^[1-9][0-9]*$ ]] && /bin/kill -0 -- "-$probe_pgid" >/dev/null 2>&1; then
@@ -674,6 +722,7 @@ RUBY
     exit 0
     ;;
   launch)
+    [[ "${4-}" == "$bundle_identifier" ]] || { echo 'wrong launch bundle identifier' >&2; exit 1; }
     /usr/bin/awk -F '\t' -v udid="${3-}" '$3 == "simctl" && $4 == "terminate" && $5 == udid {seen=1} END {exit seen ? 0 : 1}' "$fake_log" || { echo 'launch lacked pre-termination' >&2; exit 1; }
     [[ "$(state case_mode)" != launch-fail || "${3-}" != "00000000-0000-0000-0000-000000000002" ]] || { echo 'configured launch failure' >&2; exit 1; }
     [[ "$(state case_mode)" != late-fail || "${3-}" != "00000000-0000-0000-0000-000000000004" ]] || { echo 'configured late launch failure' >&2; exit 1; }
@@ -732,7 +781,7 @@ RUBY
       trap '' TERM
       while true; do /bin/sleep 0.05; done
     fi
-    if [[ "${4-}" == /usr/bin/pgrep && "${5-}" == -x && "${6-}" == TemplateApp ]]; then
+    if [[ "${4-}" == /usr/bin/pgrep && "${5-}" == -x && "${6-}" == "$app_name" ]]; then
       echo 'sysmon request failed with error: sysmond service not found' >&2
       echo 'pgrep: Cannot get process list' >&2
       exit 3
@@ -746,7 +795,7 @@ RUBY
          [[ "${3-}" == "00000000-0000-0000-0000-000000000003" && -e "$state_dir/ui-ran-ipad-en" ]]; then
         container_root=ContainersAfterUI
       fi
-      printf '%s\n' "/Users/fixture/$container_root/${3-}/TemplateApp.app/TemplateApp"
+      printf '%s\n' "/Users/fixture/$container_root/${3-}/$app_name.app/$app_name"
       exit 0
     fi
     expected_pid=4321
@@ -932,7 +981,7 @@ RUBY
 prepare_repo() {
   local label="$1" contract_mode="${2:-valid}" head_directory="${3:-present}" scope="${4:-full}" matrix_schema="${5:-1}"
   repo="$scratch/$label/repository"
-  mkdir -p "$repo/TemplateApp.xcodeproj" "$repo/docs" "$repo/Sources" "$repo/Config"
+  mkdir -p "$repo/TemplateApp.xcodeproj" "$repo/docs" "$repo/Sources" "$repo/Config" "$repo/tools/tests"
   repo="$(cd "$repo" && pwd -P)"
   git -C "$repo" init -q
   git -C "$repo" config user.name 'Runner Test'
@@ -942,7 +991,36 @@ prepare_repo() {
   printf '%s\n' HEAD-SOURCE >"$repo/Sources/App.swift"
   printf '%s\n' HEAD-CONFIG >"$repo/Config/App.xcconfig"
   printf '%s\n' '# Base' >"$repo/docs/base.md"
-  git -C "$repo" add -- .gitignore TemplateApp.xcodeproj Sources Config docs/base.md
+  printf '%s\n' '# Base Template' >"$repo/README.md"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$repo/tools/tests/test-base-fixture.sh"
+  chmod +x "$repo/tools/tests/test-base-fixture.sh"
+  printf '%s' '{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"base","paths":["Config/repository-tests.json","README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-base-fixture.sh","domains":["base"]}]}' \
+    >"$repo/Config/repository-tests.json"
+  if [[ "${FAKE_BASE_PROVIDER_MODE-}" == unowned || "${FAKE_BASE_PROVIDER_MODE-}" == owned ]]; then
+    mkdir -p "$repo/.agents/skills/admob-monetization"
+    printf '%s\n' '# Existing AdMob provider skill' >"$repo/.agents/skills/admob-monetization/SKILL.md"
+  fi
+  if [[ "${FAKE_BASE_PROVIDER_MODE-}" == owned || "${FAKE_BASE_PROVIDER_MODE-}" == marker-only ]]; then
+    mkdir -p "$repo/.agents/skills/admob-monetization"
+    printf '%s' "$APPLICATION_FIXTURE_BINDING_JSON" \
+      >"$repo/.agents/skills/admob-monetization/application-fixture.json"
+  fi
+  if [[ "${FAKE_BASE_PROVIDER_MODE-}" == core-tool-unowned ]]; then
+    mkdir -p "$repo/tools/lib"
+    printf '%s\n' 'module ExistingAdMobSecret; end' >"$repo/tools/lib/secret-admob.rb"
+  fi
+  if [[ "${FAKE_BASE_PROVIDER_MODE-}" == fixture-unowned ]]; then
+    mkdir -p "$repo/tools/tests/fixtures/admob-integration"
+    printf '%s\n' 'existing fixture surface' >"$repo/tools/tests/fixtures/admob-integration/README.md"
+  fi
+  if [[ "${FAKE_BASE_PROVIDER_MODE-}" == alias-unowned ]]; then
+    mkdir -p "$repo/.claude/skills"
+    /bin/ln -s ../../.agents/skills/admob-monetization "$repo/.claude/skills/admob-monetization"
+  fi
+  git -C "$repo" add -- .gitignore TemplateApp.xcodeproj Sources Config docs/base.md README.md tools/tests
+  [[ ! -d "$repo/tools/lib" ]] || git -C "$repo" add -- tools/lib
+  [[ ! -d "$repo/.agents" ]] || git -C "$repo" add -- .agents
+  [[ ! -d "$repo/.claude" ]] || git -C "$repo" add -- .claude
   git -C "$repo" commit -q -m base
   base_sha="$(git -C "$repo" rev-parse HEAD)"
   printf '%s\n' '# Head' >"$repo/docs/head.md"
@@ -983,7 +1061,7 @@ prepare_repo() {
   /bin/rm -f "$adapter_state"/term-blocked-probe-* "$adapter_state/term-blocked-runner-pid" "$adapter_state/term-cleanup-before-probe-stop"
   /bin/rm -f "$adapter_state"/device-state-* "$adapter_state"/erase-count-*
   /bin/rm -f "$adapter_state"/allocated-* "$adapter_state"/device-name-* "$adapter_state"/device-type-*
-  /bin/rm -rf "$adapter_state/data"
+  /bin/rm -rf "$adapter_state/data" "$adapter_state/cleanup-observation"
   /bin/rm -f "$adapter_state"/system-language-* "$adapter_state"/system-locale-* "$adapter_state"/active-system-*
   for udid in \
     00000000-0000-0000-0000-000000000001 \
@@ -992,6 +1070,196 @@ prepare_repo() {
     00000000-0000-0000-0000-000000000004; do
     [[ "$matrix_schema" == 2 ]] || printf '%s\n' Booted >"$adapter_state/device-state-$udid"
   done
+}
+
+write_application_fixture_contract() {
+  /usr/bin/ruby -I"$source_repo/tools/lib" -rissue-contract -rjson - \
+    "$contract" "$APPLICATION_FIXTURE_BINDING_JSON" <<'RUBY'
+path, binding_json = ARGV
+document = JSON.parse(File.binread(path))
+binding = JSON.parse(binding_json)
+document.fetch("acceptanceCriteria") << {
+  "id" => "AC-3",
+  "text" => "#{IOSTemplate::IssueContract::APPLICATION_FIXTURE_DECLARATION_PREFIX} #{IOSTemplate::IssueContract.canonical_json(binding)}"
+}
+verification = document.fetch("verification")
+verification["bundleIdentifier"] = "com.example.admobfixture"
+verification["unitTestIdentifier"] = "AdMobFixtureAppTests/AdMobFixtureTests/testActivation()"
+verification.fetch("cases").fetch(0)["testIdentifier"] = "AdMobFixtureAppUITests/AdMobFixtureSmokeTests/testJapaneseSmoke()"
+verification.fetch("acceptanceMappings") << {
+  "id" => "AC-3", "checks" => ["stage:build", "stage:unit-tests", "case:iphone-ja"]
+}
+document["deliveryProfile"] = {
+  "name" => "strict", "reason" => "The sealed fixture route changes strict verification boundaries."
+}
+File.binwrite(path, IOSTemplate::IssueContract.canonical_json(document))
+RUBY
+}
+
+prepare_application_fixture_repo() {
+  local label="$1" matrix_schema="${2:-1}"
+  prepare_repo "$label" valid present shape "$matrix_schema"
+  git -C "$repo" rm -q -- docs/head.md
+  mkdir -p "$repo/.agents/skills/admob-monetization" "$repo/.claude/skills" \
+    "$repo/tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj" \
+    "$repo/tools/tests/fixtures/admob-integration/Sources" "$repo/tools/lib" "$repo/tools/tests"
+  printf '%s\n' '# AdMob provider skill' >"$repo/.agents/skills/admob-monetization/SKILL.md"
+  /bin/rm -f "$repo/.claude/skills/admob-monetization"
+  /bin/ln -s ../../.agents/skills/admob-monetization "$repo/.claude/skills/admob-monetization"
+  printf '%s\n' '{}' >"$repo/tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj/project.pbxproj"
+  printf '%s\n' 'struct AdMobFixtureApp {}' >"$repo/tools/tests/fixtures/admob-integration/Sources/App.swift"
+  printf '%s\n' '# iOS Template' >"$repo/README.md"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$repo/tools/activate-admob-integration.sh"
+  printf '%s\n' 'module AdMobActivation; end' >"$repo/tools/lib/admob-activation.rb"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$repo/tools/tests/test-admob-integration.sh"
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$repo/tools/validate-admob-integration.sh"
+  chmod +x "$repo/tools/activate-admob-integration.sh" "$repo/tools/tests/test-admob-integration.sh" \
+    "$repo/tools/validate-admob-integration.sh"
+  write_application_fixture_contract
+  printf '%s' "$APPLICATION_FIXTURE_BINDING_JSON" \
+    >"$repo/.agents/skills/admob-monetization/application-fixture.json"
+  /usr/bin/ruby -rjson - "$repo/Config/repository-tests.json" <<'RUBY'
+path = ARGV.fetch(0)
+manifest = JSON.parse(File.binread(path))
+manifest.fetch("domainRules") << {
+  "domain" => "admob-integration",
+  "paths" => [
+    ".claude/skills/admob-monetization",
+    "tools/activate-admob-integration.sh",
+    "tools/lib/admob-activation.rb",
+    "tools/tests/test-admob-integration.sh",
+    "tools/validate-admob-integration.sh"
+  ],
+  "prefixes" => [
+    ".agents/skills/admob-monetization/",
+    "tools/tests/fixtures/admob-integration/"
+  ]
+}
+manifest.fetch("domainRules").sort_by! { |entry| entry.fetch("domain") }
+manifest.fetch("tests") << {
+  "path" => "tools/tests/test-admob-integration.sh", "domains" => ["admob-integration"]
+}
+manifest.fetch("tests").sort_by! { |entry| entry.fetch("path") }
+File.binwrite(path, JSON.generate(manifest))
+RUBY
+  git -C "$repo" add -A
+  git -C "$repo" commit -q --amend -m fixture-head
+  refresh_head_paths
+  : >"$fake_log"
+}
+
+commit_application_fixture_mutation() {
+  git -C "$repo" add -A
+  git -C "$repo" commit -q -m fixture-mutation
+  refresh_head_paths
+  : >"$fake_log"
+}
+
+run_application_fixture_snapshot() {
+  (cd "$repo" && "$validator_binary" --runner-snapshot --issue 42 \
+    --expected-base "$base_sha" --expected-head "$head_sha" \
+    --issue-contract .artifacts/issues/42/issue-contract.json \
+    --matrix .artifacts/batches/runner-fixture/simulator-matrix.json \
+    --project "${FAKE_PROJECT_PATH:-tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj}")
+}
+
+clean_application_fixture_snapshot() {
+  local receipt="$1" config digest
+  IFS=$'\t' read -r config digest _ <<<"$receipt"
+  "$validator_binary" --runner-clean-attempt --config "$config" --digest "$digest"
+}
+
+expect_application_fixture_snapshot_failure() {
+  local label="$1" diagnostic="$2"
+  if run_application_fixture_snapshot >"$scratch/$label.fixture.stdout" 2>"$scratch/$label.fixture.stderr"; then
+    echo "Application-fixture snapshot unexpectedly accepted $label" >&2
+    exit 1
+  fi
+  /usr/bin/grep -Fq -- "$diagnostic" "$scratch/$label.fixture.stderr" || {
+    echo "Application-fixture snapshot rejected $label for the wrong reason; expected $diagnostic" >&2
+    /bin/cat "$scratch/$label.fixture.stderr" >&2
+    exit 1
+  }
+  [[ ! -s "$fake_log" ]] || {
+    echo "Application-fixture preflight reached Xcode or Simulator for $label" >&2
+    /bin/cat "$fake_log" >&2
+    exit 1
+  }
+}
+
+write_mismatched_application_fixture_evidence() {
+  mkdir -p "$(dirname "$final")"
+  REPO="$repo" BASE_SHA="$base_sha" HEAD_SHA="$head_sha" CONTRACT="$contract" MATRIX="$matrix" \
+    FINAL="$final" DEVELOPER="$fake_developer" /usr/bin/ruby --disable-gems -rjson -rdigest -rtime <<'RUBY'
+def length_prefixed(digest, value)
+  bytes = value.b
+  digest.update([bytes.bytesize].pack("Q>"))
+  digest.update(bytes)
+end
+
+repo = ENV.fetch("REPO")
+head = ENV.fetch("HEAD_SHA")
+records = IO.popen(["/usr/bin/git", "-C", repo, "ls-tree", "-r", "-z", "--full-tree", head], "rb", &:read)
+entries = records.split("\0", -1).tap(&:pop).map do |record|
+  metadata, path = record.split("\t", 2)
+  mode, type, object = metadata.split(" ")
+  abort "unexpected tree entry" unless type == "blob"
+  data = IO.popen(["/usr/bin/git", "-C", repo, "cat-file", "blob", object], "rb", &:read)
+  [mode, object, path, data]
+end
+project = "TemplateApp.xcodeproj"
+project_digest = Digest::SHA256.new
+length_prefixed(project_digest, "ios-template-project-v1")
+entries.select { |entry| entry.fetch(2).start_with?("#{project}/") }.each do |mode, _, path, data|
+  length_prefixed(project_digest, mode == "100755" ? "X" : "F")
+  length_prefixed(project_digest, path.delete_prefix("#{project}/"))
+  length_prefixed(project_digest, data)
+end
+source_digest = Digest::SHA256.new
+length_prefixed(source_digest, "ios-template-source-tree-v1")
+length_prefixed(source_digest, head)
+length_prefixed(source_digest, project)
+entries.each do |mode, object, path, data|
+  length_prefixed(source_digest, mode)
+  length_prefixed(source_digest, object)
+  length_prefixed(source_digest, path)
+  length_prefixed(source_digest, data)
+end
+contract_digest = "sha256:#{Digest::SHA256.file(ENV.fetch('CONTRACT')).hexdigest}"
+matrix_digest = "sha256:#{Digest::SHA256.file(ENV.fetch('MATRIX')).hexdigest}"
+document = {
+  "schemaVersion" => 1,
+  "status" => "passed",
+  "changeClassification" => "application-code",
+  "reason" => "Delivery stage shape passed; not release-ready.",
+  "issue" => 42,
+  "baseSha" => ENV.fetch("BASE_SHA"),
+  "headSha" => head,
+  "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => contract_digest},
+  "matrixFile" => ".artifacts/batches/runner-fixture/simulator-matrix.json",
+  "matrixDigest" => matrix_digest,
+  "executionRoute" => "xcodebuild-stage",
+  "xcode" => {"path" => ENV.fetch("DEVELOPER"), "version" => "26.5", "build" => "17F42"},
+  "build" => {
+    "status" => "passed", "scheme" => "TemplateApp", "warningsAdded" => 0,
+    "project" => {"path" => project, "digest" => "sha256:#{project_digest.hexdigest}"},
+    "sourceTree" => {"headSha" => head, "digest" => "sha256:#{source_digest.hexdigest}", "projectPath" => project}
+  },
+  "tests" => {"status" => "passed", "passed" => 1, "failed" => 0, "skipped" => 0},
+  "cases" => [{
+    "id" => "iphone-ja", "status" => "passed",
+    "mechanicalCheck" => "test:AdMobFixtureAppUITests/AdMobFixtureSmokeTests/testJapaneseSmoke()"
+  }],
+  "visualEvaluation" => {"status" => "not-applicable", "findings" => []},
+  "acceptanceEvidence" => [
+    {"id" => "AC-1", "status" => "passed", "evidence" => ["stage:build", "stage:unit-tests"]},
+    {"id" => "AC-2", "status" => "passed", "evidence" => ["case:iphone-ja"]},
+    {"id" => "AC-3", "status" => "passed", "evidence" => ["stage:build", "stage:unit-tests", "case:iphone-ja"]}
+  ],
+  "completedAt" => Time.now.iso8601
+}
+File.binwrite(ENV.fetch("FINAL"), JSON.pretty_generate(document) + "\n")
+RUBY
 }
 
 refresh_head_paths() {
@@ -1022,6 +1290,12 @@ assert_no_failed_attempts() {
 }
 
 run_execute() {
+  local project_path="${FAKE_PROJECT_PATH:-TemplateApp.xcodeproj}"
+  local scheme="${FAKE_SCHEME:-TemplateApp}"
+  if [[ "${FAKE_APPLICATION_FIXTURE-}" == 1 ]]; then
+    project_path="${FAKE_PROJECT_PATH:-tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj}"
+    scheme="${FAKE_SCHEME:-AdMobFixtureApp}"
+  fi
   set_state build_mode "${FAKE_BUILD_MODE-}"
   set_state test_mode "${FAKE_TEST_MODE-}"
   set_state ui_mode "${FAKE_UI_MODE-}"
@@ -1045,6 +1319,7 @@ run_execute() {
   set_state publication_kill_target "${FAKE_PUBLICATION_KILL_TARGET-}"
   set_state publication_kill_after_target "${FAKE_PUBLICATION_KILL_AFTER_TARGET-}"
   set_state mutate_worktree "${FAKE_MUTATE_WORKTREE-}"
+  set_state application_fixture "${FAKE_APPLICATION_FIXTURE-}"
   set_state mutate_worktree_path "$repo/Sources/App.swift"
   set_state contract_path "$contract"
   set_state matrix_path "$matrix"
@@ -1065,7 +1340,7 @@ run_execute() {
     "$runner" --issue 42 --expected-base "${FAKE_EXPECTED_BASE:-$base_sha}" \
       --issue-contract .artifacts/issues/42/issue-contract.json \
       --matrix .artifacts/batches/runner-fixture/simulator-matrix.json \
-      --project "${FAKE_PROJECT_PATH:-TemplateApp.xcodeproj}" --scheme TemplateApp)
+      --project "$project_path" --scheme "$scheme")
 }
 
 run_finalize() {

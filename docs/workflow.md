@@ -292,9 +292,27 @@ documentation-only Issueでは節を省略するか、`Not applicable`／GitHub�
 
 このobjectはIssue contractのdigestへ含まれます。runnerは開始時にbytesをdescriptor-boundなsealed snapshotへ固定し、各caseとScreenshot/draftのno-replace publication境界でGit Head、tracked Head inventory/bytes/flags、canonical contract/matrixのexact bytes/digestを再照合します。trusted Git `ls-tree`/`cat-file blob`からcontained relative symlinkを含むprivate raw-Head source snapshotを構築してXcodeへ渡し、project pathをlength-prefixしたfull source digestを`build.sourceTree`、project subtree digestを`build.project`としてdraft/finalへ固定し、両者のproject path exact一致を要求します。Build productはprivate attemptへ再帰copyしてlength-prefixしたtree digestを固定し、各install直前に再検証します。Task 5はcanonical draftからdescriptor-bound `visual-packet.json`をno-replace生成し、primaryと追加stateを含む全PNGを順序、path、SHA-256、dimensionへ固定します。`visual-result.json`とfinal `visualEvaluation`はpacket exact bytesと全reviewed imageをattestし、finalizeとstandalone validatorはcurrent bytesまで再照合します。Screenshot/draft publicationはIssue/Head lock下のdurable journalからSIGKILL後のpartial transactionをrollbackし、complete transactionをidempotent successとして回収します。finalもexact既存bytesだけをidempotent successとします。CLI引数や環境変数でBundle ID、test identifier、assertionを差し替えません。
 
+### Sealed tracked application fixture
+
+任意providerを有効化した結果をtemplate本体とroot Xcode projectから隔離して検証するapplication Issueは、Acceptance criteriaの最大一つを次のexact形式にできます。prefix後はcanonical JSON objectだけを置きます。
+
+```text
+Application-fixture binding: {"fixtureRoot":"tools/tests/fixtures/example-provider","project":"tools/tests/fixtures/example-provider/ExampleFixtureApp.xcodeproj","route":"tracked-fixture-v1","schemaVersion":1,"skillRoot":".agents/skills/example-provider","toolPaths":["tools/activate-example-provider.sh","tools/validate-example-provider.sh"]}
+```
+
+Claimはexact six keys、key順、route／schema、`tools/tests/fixtures/`配下のsafe relative fixture root、nested `.xcodeproj`、sorted unique tool paths、fixture／skill／toolのprovider namespace一致を検証し、宣言をcontract ACへそのまま封印します。許可する組合せは`shape / strict / iphone-ja`またはapplication `harden / strict / targeted`だけで、完全かつ`visual:` mappingを持たない`Verification`を必要とします。workflow-only、release、binding重複、不完全／非canonical JSONを拒否します。bindingがないcontractは従来挙動を維持します。
+
+このrouteを利用するIssueは#121と#122を直接`Dependencies`へ記載し、承認またはClaimの直前に両Issueが`state:done`であることを確認します。どちらかが未完了なら`blocked:dependency`としてClaimせず、仕様やparserの一部だけをruntime routeの稼働証拠にしません。
+
+実装差分はbindingで特定したfixture root、skill root、exact tool paths、routeが固定する同名Claude symlink、repository root `README.md`、`Config/repository-tests.json`だけへ閉じます。`skillRoot/application-fixture.json`はprefixを除くcanonical binding JSONと改行なしでexact一致するregular `100644` ownership markerです。Baseにmarker以外のfixture root／skill root配下、宣言toolまたは同名Claude aliasが既にあれば同じBase markerを必須とし、新規providerならBase markerを拒否してHeadでprovider surfaceと同時に追加します。Headでは`skillRoot/SKILL.md`、全toolのregular mode、Claude aliasの`120000` modeとexact targetを差分の有無にかかわらず確認します。これにより既存coreやfixtureをprovider名へ見せかける後付けmarkerを拒否します。
+
+`Config/repository-tests.json`を変更するときは、Baseの`schemaVersion`、`headAllPaths`、`headAllPrefixes`、既存domain rule、既存test objectをHeadでexact保持します。canonicalなprovider domain名とsafeな許可path／prefixへ閉じた新domain rule、および宣言済みprovider testだけを追加し、新domainごとに対応testを要求します。path escape、既存entryの削除、再分類、path拡張、command／arguments／domain変更ではrouteを使用できません。
+
+`TemplateApp`、root project／workspace、別provider、既存のworkflow／review／merge／security／authority実装、delete、rename、gitlink、許可外mode、escaping／別名symlinkは常に拒否します。runnerの`--project`はsealed projectとexact一致させ、final evidenceの`build.project.path`でも再確認します。このrouteは既存の`application-code`／`xcodebuild-stage`、source／project digest、Build、Unit、case、Simulator cleanupを使い、別evidence schemaを作らず、shape／hardenをrelease-readyにしません。
+
 ### 3.1 Claim後の監査付きcontract revision
 
-Claim済みIssueの本文を直接編集してcanonical contractとの差を放置しません。Issueがexact `in-progress`で、同じIssueの`github.read_issue`と`github.update_issue`がsealed contractに宣言されている場合だけ、`tools/revise-issue-verification.sh`を使います。許可fieldは`Verification`、既存と同一ID・同一順序のAcceptance criteria本文、更新時の`fetchedAt`だけです。ただしAC本文先頭の`UI-direction route:`はcriterion位置・route・Scope、`Repository-test scope:`はcriterion位置・scope、`Opposite-review route:`はcriterion位置・route／primary／reviewer／approval、`Release-phase binding:`はcriterion位置・宣言全文を固定し、追加・削除・移動・保護値変更を拒否します。Goal、MVP、Spec anchors、Dependencies、stage、profile、scope、type、external operation／approvalを変える提案は拒否し、意味的に別の目的・MVPとなる場合は別Issueと現在ユーザー判断へ戻します。
+Claim済みIssueの本文を直接編集してcanonical contractとの差を放置しません。Issueがexact `in-progress`で、同じIssueの`github.read_issue`と`github.update_issue`がsealed contractに宣言されている場合だけ、`tools/revise-issue-verification.sh`を使います。許可fieldは`Verification`、既存と同一ID・同一順序のAcceptance criteria本文、更新時の`fetchedAt`だけです。ただしAC本文先頭の`UI-direction route:`はcriterion位置・route・Scope、`Repository-test scope:`はcriterion位置・scope、`Opposite-review route:`はcriterion位置・route／primary／reviewer／approval、`Release-phase binding:`と`Application-fixture binding:`はcriterion位置・宣言全文を固定し、追加・削除・移動・保護値変更を拒否します。Goal、MVP、Spec anchors、Dependencies、stage、profile、scope、type、external operation／approvalを変える提案は拒否し、意味的に別の目的・MVPとなる場合は別Issueと現在ユーザー判断へ戻します。
 
 現在ユーザーが自分で改訂を明示する場合、まず候補本文からexact markerを生成します。
 
