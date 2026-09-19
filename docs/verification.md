@@ -16,6 +16,8 @@ AIが「コード上は正しそう」ではなく、Build、Test、操作、見
 
 workflow-onlyのGit modeはregular fileの追加・削除・同一mode変更だけを原則とします。共有skill追加時だけ、`.claude/skills/<skill-name>`の新規symlinkがexact `../../.agents/skills/<skill-name>`を指し、同じHeadにregular `.agents/skills/<skill-name>/SKILL.md`が存在する場合を許可します。既存symlinkの変更・削除、absolute／escaping target、別名target、target不在は拒否し、worktree上の解決結果だけで承認しません。
 
+`Application-fixture binding:`を持つ`tracked-fixture-v1` Issueはworkflow-onlyではなくapplication経路です。#121と#122を直接Dependenciesへ置き、双方の`state:done`を承認／Claim直前に確認します。`shape / strict / iphone-ja`またはapplication `harden / strict / targeted`に限定し、`visual:` mappingを拒否したうえでsealed nested fixture projectを既存iOS runnerへ渡し、`xcodebuild-stage`でBuild、Unit、case、Simulator cleanupを実測します。bindingの宣言、provider ownership marker、Baseから単調追加されたrepository-test manifest、CLI project、current-Headのcommitted project、final evidenceの`build.project.path`がexact一致しない場合はBuild前または最終検証で拒否します。bindingなしのcontractへfixture allowlistを適用しません。
+
 正式reviewerはsealed contractから決めます。既定はCodex primary→Claude、Claude primary→Codexです。Codex-primary contractがexactly oneの完全な`Opposite-review route: grok-fallback`宣言とユーザー明示承認を持つ場合だけ、exact `cursor-grok-4.6-xhigh`を固定Cursor `ask` launcherで使います。packet、result、receipt、PR renderer、premerge gateはreviewer modelとlauncher bytesを同じIssue／contract／Base／Headへ束縛し、別model、手書き証拠、自己承認を拒否します。
 
 stage未指定のClaim済みcontractは旧release-level gateを維持します。未実行は`deferred / unverified`であり成功ではありません。shape／hardenをrelease readyと報告しません。
@@ -198,6 +200,7 @@ tools/verify-fast-issue.sh \
 - `bounded direction-neutral`では、対象方向が未確定でも3 triggerのいずれもなく、Acceptance criteriaと実装がhierarchy、navigation、primary-flow interactionを決めないこと。route宣言のScope／ReasonとReason後の非決定境界、関連する確定済みproduct／behavior anchorが一致すること
 - 現在の明示的な比較省略では、`explicit-skip`宣言のScope／ReasonとReason後の指示の現行性、権限、比較指示との非矛盾が封印済みAcceptance criterionから裏付けられ、関連する確定済みproduct／spec／Decision anchorが`Spec anchors`にあること
 - Identity bootstrapまたは純非UIでは、封印済みGoal／Acceptance criteriaとcurrent-Head差分から非UI scope／理由が裏付けられ、関連する確定済みproduct／spec anchorがある一方、UI方向anchorを要求していないこと。live bodyの`UI verification` exact `Not applicable`形式はClaim前に検証し、最終証拠として代用しないこと。Gateを評価するのは依存する後続native UIであること
+- `Application-fixture binding:`候補がある場合は最大一つで、#121と#122を直接Dependenciesへ持ち両方が`state:done`であることをClaim前に確認し、exact six-key canonical JSON、`tracked-fixture-v1`／schema 1、`tools/tests/fixtures/`配下のsafe relative fixture root、fixture内のcommitted `.xcodeproj`、sorted unique tool paths、同一provider namespace、許可stage／profile／scopeと完全なapplication Verificationを満たすこと。`skillRoot/application-fixture.json`がHeadのbinding bytesと改行なしでexact一致し、Base既存fixture／skill／tool／Claude aliasの所有権を後付けしていないこと。Headの`SKILL.md`、全tool、Claude aliasが宣言どおり存在すること。repository-test manifest変更はBaseのschema、head-all設定、既存rule／testをexact保持したsafeなprovider固有追加だけであること。binding外path、live app、root project／workspace、別provider、core workflow／security、delete／rename／gitlink／不正mode／symlinkを拒否すること
 - App Icon Issueでは、ユーザーが明示選択したstable concept IDと確定brief、選択済みPNG、default AppIcon entry、`Config/app-icon.json`のprompt summary／generator／dimensions／asset path／exact SHA-256が一致し、`tools/validate-app-icon.sh`が成功すること。候補やpreviewを製品assetまたはcanonical iOS evidenceとして扱わず、この選択でUI Direction Gateを満たしたと推測しないこと
 - 3D asset authoringを含むIssueでは、共有`ios-3d-assets` routeが使われ、Issue／PR証拠のauthoring modelがexact `gpt-6-astra`であること。Claudeや別のCodex modelが作成・形状変更した3D bytesへfallbackしていないこと。統合・format validation・RealityKit実装・Build／Test・reviewは一般のClaude／Codex経路で検証してよい
 
@@ -211,6 +214,8 @@ tools/verify-fast-issue.sh \
 - worktreeごとのDerivedDataを使用
 
 BuildとUnit Testは同じHead SHAにつき一度実行し、4つのlocaleごとに重複実行しません。
+
+tracked fixture routeではrunner入力の`--project`をsealed bindingへ照合し、fixture root内のcommitted projectがexactly oneであることを確認します。Build前にHead ownership marker／`SKILL.md`／全tool／Claude aliasのmode／bytes／target、Baseでのfixture／skill／tool／alias surfaceとmarkerの関係、Base→Head repository-test manifestのsafeな単調追加を検証します。raw-Head source snapshotとproject subtreeの既存digestをそのまま発行し、final `verify.json`でproject pathを再照合します。applicationの`changeClassification: application-code`と`executionRoute: xcodebuild-stage`を維持し、fixture成功をTemplateApp統合、production provider設定、remote operation、release-readyへ読み替えません。
 
 Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evidence producer自体へ依存する場合は、iOSのUnit Testだけで代用しません。`tools/run-repository-tests.sh` を使い、runner所有のclean detached worktreeでcontractが決めたrepository testsを実行します。成功したtestのexit status、sanitized output digest、時刻、source／runner bytes、AC別mappingを `.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-tests.json` へno-replaceで保存します。test本文のstdout/stderrはartifactへ保存しません。失敗、Head変更、dirty caller、contract／plan不一致、mapping不足、既存artifact衝突のどれかがあればcanonical evidenceは発行しません。
 
@@ -588,6 +593,7 @@ gateはprimary checkoutのartifactをpathごとに読み直しません。Issue 
 - Acceptance criteriaの証拠欠落 = 0
 - `gh issue view`のfixed fieldsがcaller Issueと一致し、許可されたIssue typeがexact一つ存在
 - live Issue本文をshared Issue parserで再構成したcanonical contract bytesが `issue-contract.json` と完全一致
+- `Application-fixture binding:`を持つ場合、packet-bound contract、actual diff、ownership marker、Baseから単調追加されたrepository-test manifest、runner project、`verify.json`のproject pathが同じsealed fixtureを示し、許可path／mode境界を逸脱していない
 - Provider外部操作はproviderごとに一つ以下で、exact operationとenvironmentがIssueの五field operation blockに一致し、account/target、health、timestamp、digestが安全
 - Providerのexecutor/account/targetはIssue contractと`Config/ownership.yml`のexact case-sensitive値に一致する。Supabaseは`organizationId`/`projectRef`、Cloudflareは`accountId`/`target`、Linearは`workspaceSlug`/`teamKey`、Vercelは`teamId`/`teamSlug`、ElevenLabsは`accountId`/`workspaceId`、App Store Connectは`teamId`/`bundleId`へ対応し、必要なtargetがnullまたは未設定ならfail closed
 - Issue contractが`github.merge_pr`を宣言し、live Issueから再構成した構造化operation details digestもcanonical snapshotと一致

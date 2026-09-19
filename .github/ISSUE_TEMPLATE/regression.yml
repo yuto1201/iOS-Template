@@ -33,7 +33,7 @@ body:
     id: acceptance-criteria
     attributes:
       label: Acceptance criteria
-      description: "Use stable, unique IDs. For a phase-aware regression, start one AC with exact `Release-phase binding: {\"phase\":5,\"reason\":\"...\",\"recordDigest\":\"sha256:...\",\"recordPath\":\"Config/releases/<release>/phase-records/<record>.json\",\"releaseIdentifier\":\"<release>\",\"revision\":1,\"route\":\"standard\",\"scope\":[\"<scope>\"],\"workKind\":\"implementation\"}` in canonical key order; preserve an existing unbound sealed contract as `legacy-unbound`. For workflow-only harden + strict work claimed at or after `2026-09-13T13:03:38Z`, start exactly one AC with `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`; choose targeted for one known domain, head-all for broad/test-infrastructure changes, and base-and-head only for explicit revision comparison."
+      description: "Use stable, unique IDs. For a phase-aware regression, start one AC with exact `Release-phase binding: {\"phase\":5,\"reason\":\"...\",\"recordDigest\":\"sha256:...\",\"recordPath\":\"Config/releases/<release>/phase-records/<record>.json\",\"releaseIdentifier\":\"<release>\",\"revision\":1,\"route\":\"standard\",\"scope\":[\"<scope>\"],\"workKind\":\"implementation\"}` in canonical key order; preserve an existing unbound sealed contract as `legacy-unbound`. A strict shape/iphone-ja or application harden/targeted regression that intentionally verifies a provider in a committed isolated fixture may start at most one AC with exact `Application-fixture binding: {\"fixtureRoot\":\"tools/tests/fixtures/<provider>\",\"project\":\"tools/tests/fixtures/<provider>/<Fixture>.xcodeproj\",\"route\":\"tracked-fixture-v1\",\"schemaVersion\":1,\"skillRoot\":\".agents/skills/<provider>\",\"toolPaths\":[\"tools/<provider-tool>\"]}`. Keep canonical key order, sorted unique tool paths, the same provider namespace, and complete application Verification; do not use it for workflow-only or release work. Head must contain `.agents/skills/<provider>/application-fixture.json` with the exact canonical binding bytes: add it only with a new provider surface, or retain the exact Base marker for an already owned provider. Repository-test manifest changes may only add provider-specific entries without changing existing ones. For workflow-only harden + strict work claimed at or after `2026-09-13T13:03:38Z`, start exactly one AC with `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`; choose targeted for one known domain, head-all for broad/test-infrastructure changes, and base-and-head only for explicit revision comparison."
     validations:
       required: true
   - type: textarea
@@ -47,7 +47,7 @@ body:
     id: dependencies
     attributes:
       label: Dependencies
-      description: List prerequisite Issues and blockers, or write `None`.
+      description: List prerequisite Issues and blockers, or write `None`. An Issue using `Application-fixture binding:` must list both #121 and #122 directly and must not be approved or claimed until both are `state:done`.
     validations:
       required: true
   - type: textarea
@@ -96,7 +96,7 @@ body:
     id: verification
     attributes:
       label: Verification
-      description: "For application verification, provide this complete JSON object with real app/test identifiers and explicit checks for every AC in order. Omit for documentation-only, fast, or workflow-only Issues. The placeholder is an example, not proof of your ACs. See docs/workflow.md."
+      description: "For application verification, provide this complete JSON object with real app/test identifiers and explicit checks for every AC in order. When `Application-fixture binding:` is present, the runner project must exactly equal its committed nested `project` and mappings must not contain `visual:` checks, preserving the `xcodebuild-stage` route; the binding does not create a workflow-only route or weaken Build/Test evidence. Omit for documentation-only, fast, or workflow-only Issues. The placeholder is an example, not proof of your ACs. See docs/workflow.md."
       placeholder: |
         {
           "bundleIdentifier": "com.example.ExampleApp",

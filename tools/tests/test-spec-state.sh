@@ -366,6 +366,53 @@ verify = File.binread(".agents/skills/ios-verify/SKILL.md")
 %w[Phase\ 3 Phase\ 4 Phase\ 5 Phase\ 6 evidence-applicability.json].each do |required|
   abort "verification skill lacks #{required}" unless verify.include?(required.gsub("\\ ", " "))
 end
+
+%w[
+  .github/ISSUE_TEMPLATE/feature.yml
+  .github/ISSUE_TEMPLATE/regression.yml
+].each do |path|
+  text = File.binread(path)
+  abort "Issue form lacks tracked fixture guidance: #{path}" unless
+    text.include?("Application-fixture binding:") && text.include?("tracked-fixture-v1") &&
+      text.include?("application-fixture.json") && text.include?("Repository-test manifest") &&
+      text.include?("#121") && text.include?("#122") && text.include?("state:done")
+end
+release_form = File.binread(".github/ISSUE_TEMPLATE/release.yml")
+abort "release form must not advertise tracked fixture route" if release_form.include?("Application-fixture binding:")
+
+%w[
+  AGENTS.md
+  specs/acceptance.md
+  specs/development-stages.md
+  docs/workflow.md
+  docs/verification.md
+  docs/agent-contracts/review-packet.md
+].each do |path|
+  text = File.binread(path).force_encoding(Encoding::UTF_8)
+  abort "tracked fixture contract is missing from #{path}" unless
+    text.include?("Application-fixture binding:") && text.include?("tracked-fixture-v1") &&
+      text.include?("application-fixture.json") && text.include?("Config/repository-tests.json")
+end
+%w[
+  AGENTS.md
+  specs/acceptance.md
+  specs/development-stages.md
+  docs/workflow.md
+  docs/verification.md
+  docs/agent-contracts/review-packet.md
+].each do |path|
+  text = File.binread(path).force_encoding(Encoding::UTF_8)
+  abort "tracked fixture dependency gate is missing from #{path}" unless
+    text.include?("#121") && text.include?("#122") && text.include?("state:done")
+end
+decisions = File.binread("specs/decisions.md").force_encoding(Encoding::UTF_8)
+abort "D-058 tracked fixture decision is missing" unless
+  decisions.include?("## D-058:") && decisions.include?("#113") && decisions.include?("#116") &&
+    decisions.include?("#117") && decisions.include?("#121") && decisions.include?("#122")
+abort "tracked fixture ownership marker contract is missing" unless
+  decisions.include?("skillRoot/application-fixture.json") && decisions.include?("ownership marker")
+abort "tracked fixture repository-test manifest monotonicity is missing" unless
+  decisions.include?("Config/repository-tests.json") && decisions.include?("headAllPaths") && decisions.include?("headAllPrefixes")
 RUBY
 
 # Reuse the canonical phase engine regression instead of duplicating its
