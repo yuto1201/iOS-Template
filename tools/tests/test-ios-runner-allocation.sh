@@ -7,6 +7,70 @@ require_test_commands "$0" rg git jq ruby /usr/bin/ruby /usr/bin/swiftc
 [[ $# == 0 ]] || exit 64
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ios-runner-fixture.sh"
 
+# Exercise the production empty array with the real Bash entrypoint. The adapter
+# flags are injected only after each unchanged resource call has expanded its
+# arguments, so the usual nonempty test array cannot hide a Bash 3.2 failure.
+/bin/cp "$runner" "$scratch/runner-with-adapter-flags.sh"
+empty_flags_log="$scratch/empty-resource-calls.jsonl"
+/usr/bin/ruby --disable-gems -rshellwords - "$runner" "$empty_flags_log" <<'RUBY'
+path, log = ARGV
+source = File.binread(path)
+selection = 'if [[ "$TRUSTED_XCRUN" != "/usr/bin/xcrun" ]]; then'
+entry = "run_simulator_resource() {\n"
+abort "resource test-flag selection changed" unless source.scan(selection).length == 1
+abort "resource call boundary changed" unless source.scan(entry).length == 1
+source.sub!(selection, "if false; then")
+injection = <<~'SH'
+  /usr/bin/ruby --disable-gems -rjson -e 'File.open(ARGV.shift, "a") { |file| file.puts(JSON.generate(ARGV)) }' @LOG@ "$@"
+  set -- "$@" --test-mode --state-root "$attempt_root/SimulatorResourceState" --xcrun "$TRUSTED_XCRUN" --minimum-free-bytes 0
+SH
+source.sub!(entry, entry + injection.sub("@LOG@", Shellwords.escape(log)))
+# The no-expected-state helper branch is normally reached only by legacy
+# reclamation. Call that existing branch while the schema v2 allocation is live.
+build_stage = "stage=\"build\"\n"
+abort "build stage boundary changed" unless source.scan(build_stage).length == 1
+source.sub!(build_stage, <<~'SH' + build_stage)
+  capture_simulator_identities "empty-flags-before-build" "$active_case_id" || fail "empty-flags identity probe failed"
+SH
+File.binwrite(path, source)
+RUBY
+
+prepare_repo allocation-v2-empty-flags valid present shape 2
+run_execute
+[[ -f "$final" && ! -e "$draft" ]] || {
+  echo "empty resource flags did not publish shape evidence" >&2; exit 1
+}
+(cd "$repo" && "$validator_binary" --file "$final" --expected-issue 42 \
+  --expected-base "$base_sha" --expected-head "$head_sha")
+/usr/bin/ruby --disable-gems -rjson - "$empty_flags_log" "$final" "$repo" <<'RUBY'
+log, final, repository = ARGV
+calls = File.readlines(log).map { |line| JSON.parse(line) }
+abort "empty flags introduced an empty argument" if calls.any? { |args| args.any?(&:empty?) }
+abort "production call supplied test flags" if calls.any? do |args|
+  !(args & %w[--test-mode --state-root --xcrun --minimum-free-bytes]).empty?
+end
+%w[recover allocate release].each do |operation|
+  abort "empty flags did not reach #{operation}" unless calls.any? { |args| args.first == operation }
+end
+validations = calls.select { |args| args.first == "validate" }
+abort "empty flags did not reach both validation branches" unless
+  validations.any? { |args| args.include?("--expected-state") } &&
+  validations.any? { |args| !args.include?("--expected-state") }
+evidence = JSON.parse(File.binread(final))
+abort "empty flags did not complete the shape stages" unless
+  evidence.fetch("executionRoute") == "xcodebuild-stage" &&
+  evidence.dig("build", "status") == "passed" && evidence.dig("tests", "passed") == 1 &&
+  evidence.fetch("cases").map { |entry| [entry.fetch("id"), entry.fetch("status")] } == [["iphone-ja", "passed"]]
+allocations = evidence.fetch("simulatorAllocations")
+abort "empty flags did not use exactly one allocation" unless allocations.length == 1
+receipt = JSON.parse(File.binread(File.join(repository, allocations.first.fetch("path"))))
+abort "empty flags did not clean up its allocation" unless
+  receipt.fetch("status") == "released" && receipt.dig("cleanup", "deviceAbsent") == true &&
+  receipt.dig("cleanup", "dataPathAbsent") == true
+RUBY
+assert_no_failed_attempts
+/bin/cp "$scratch/runner-with-adapter-flags.sh" "$runner"
+
 prepare_repo allocation-v2 valid present full 2
 run_execute
 
