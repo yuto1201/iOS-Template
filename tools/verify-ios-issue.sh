@@ -297,7 +297,7 @@ allocate_owned_simulator() {
   for index in "${case_indexes[@]}"; do
     [[ "${case_ids[$index]}" == "$case_id" ]] || continue
     type_identifier="$(config_value "cases.$index.deviceType.identifier")" || return 1
-    output="$(run_simulator_resource allocate "${simulator_resource_test_flags[@]}" \
+    output="$(run_simulator_resource allocate ${simulator_resource_test_flags[@]+"${simulator_resource_test_flags[@]}"} \
       --session "$simulator_session_id" --repository "$repository_root" --issue "$issue" --head "$head_sha" \
       --batch "$(config_value batchId)" --attempt "$attempt_id" --case "$case_id" \
       --runtime "$(config_value runtime.identifier)" --device-type "$type_identifier" \
@@ -328,7 +328,7 @@ publish_allocation_receipt() {
 release_allocated_simulator() {
   local case_id="$1" reason="$2" output allocation_id udid receipt
   [[ "$matrix_schema_version" == 2 && "$active_case_id" == "$case_id" && -n "$active_allocation_id" ]] || return 1
-  output="$(run_simulator_resource release "${simulator_resource_test_flags[@]}" \
+  output="$(run_simulator_resource release ${simulator_resource_test_flags[@]+"${simulator_resource_test_flags[@]}"} \
     --session "$simulator_session_id" --allocation-id "$active_allocation_id" \
     --reason "$reason" --receipt-dir "$allocation_receipt_dir")" || return 1
   IFS=$'\t' read -r allocation_id udid receipt <<<"$output"
@@ -437,11 +437,11 @@ capture_simulator_identities() {
   if [[ "$matrix_schema_version" == 2 ]]; then
     [[ -n "$target_case" && "$target_case" == "$active_case_id" && -n "$active_allocation_id" ]] || return 1
     if [[ -n "$expected_state" ]]; then
-      output="$(run_simulator_resource validate "${simulator_resource_test_flags[@]}" \
+      output="$(run_simulator_resource validate ${simulator_resource_test_flags[@]+"${simulator_resource_test_flags[@]}"} \
         --session "$simulator_session_id" --allocation-id "$active_allocation_id" \
         --expected-state "$expected_state")" || return 1
     else
-      output="$(run_simulator_resource validate "${simulator_resource_test_flags[@]}" \
+      output="$(run_simulator_resource validate ${simulator_resource_test_flags[@]+"${simulator_resource_test_flags[@]}"} \
         --session "$simulator_session_id" --allocation-id "$active_allocation_id")" || return 1
     fi
     current_simulator_state="$output"
@@ -615,7 +615,7 @@ fi
 
 stage="simulator-ownership"
 if [[ "$matrix_schema_version" == 2 ]]; then
-  run_simulator_resource recover "${simulator_resource_test_flags[@]}" >"$run_state/simulator-resource-startup.json" \
+  run_simulator_resource recover ${simulator_resource_test_flags[@]+"${simulator_resource_test_flags[@]}"} >"$run_state/simulator-resource-startup.json" \
     || fail "owned Simulator orphan recovery failed"
 else
   capture_simulator_identities "startup-full-set" || fail "dedicated Simulator ownership validation failed"
