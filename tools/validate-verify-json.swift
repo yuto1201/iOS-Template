@@ -2392,6 +2392,15 @@ func validateWorkflowPath(_ path: String) throws {
     }
     let components = try relativeComponents(path, at: "workflow-only path")
     let localDeliveryToolPaths: Set<String> = [
+        "Config/asc-cli.json",
+        "tools/asc-run.sh",
+        "tools/install-asc-cli.sh",
+        "tools/lib/asc-cli.rb",
+        "tools/tests/fixtures/asc/checksums.txt",
+        "tools/tests/fixtures/asc/fake-asc",
+        "tools/tests/fixtures/asc/fake-security",
+        "tools/tests/fixtures/asc/pin.json",
+        "tools/tests/test-asc-cli.sh",
         ".agents/skills/prepare-appstore-assets/SKILL.md",
         ".agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md",
         ".agents/skills/submit-appstore-release/SKILL.md",

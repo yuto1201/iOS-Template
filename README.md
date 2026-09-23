@@ -8,6 +8,12 @@ Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、
 
 開発順序は**条件に該当すればHTMLでUI方向を比較・選択する → shapeで日本語iPhoneの主要導線を動かす → hardenで必要な品質を対象別に固める → releaseで完全検証する**です。現在のユーザーによる対象範囲のHTML比較指示を最優先し、それ以外では対象範囲のUI方向が未確定で、初回のユーザー向けUI、ルートnavigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかに該当するときだけ比較Gateを必須にします。[段階的開発仕様](./specs/development-stages.md)に従い、通常UIのshapeは既定120分・`standard` + `iphone-ja`、hardenは`targeted`、releaseは`strict` + `full`で検証します。文字列管理・可変レイアウトと安全の土台は初期から維持します。既存のClaim済みIssueは自動で縮小せず、旧release-level契約を維持します。
 
+## 固定版App Store Connect CLI
+
+`tools/install-asc-cli.sh`は`Config/asc-cli.json`の固定版ascをchecksum照合後にrepository外へ配置します。利用時は`tools/asc-run.sh --operation appstore.inspect_app -- apps list`を入口とし、起動ごとにversion／digestを確認、JSON出力と120秒上限を強制します。現在は4種類の読取commandだけに対応しています。
+
+秘密は[security手順](docs/security.md#固定版ascの利用)に従い、Key ID／Issuer IDをアプリ別Keychainへ、Team keyの`.p8`を専用ディレクトリ直下の`app-store-connect-production.p8`へ置きます。runnerは既存wrapperから子process envへだけ渡し、ascのHOME／configを隔離して出力をredactします。`tools/tests/test-asc-cli.sh`はfake binaryによるoffline回帰です。基盤の検証成功は実install、live API、release readinessを証明せず、production preflightとlive実行の権限確認は別途必要です。
+
 ## Foundation の検証
 
 リポジトリ方針は次で検証します。
