@@ -81,7 +81,7 @@ preflight証拠には秘密値を含めず、Issue、executor、provider、accou
 
 Linear／Vercelのmutation operationは、必要なworkflowとschemaを別Issueで追加するまでallowlistへ含めません。利用可能なconnectorが存在することだけではmutation権限になりません。
 
-App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)の固定版`asc` guarded runnerだけで行います。`appstore.distribute_testflight`の宣言には他のlive `appstore.*`と同じ`release` stage、`full` scope、`strict`、Issue contractとExecutorの一致を要します。#146がoperationごとのproduction preflight証拠を実装するまで、live操作へ進めません。App Privacy申告だけは既存のauthenticated browser sectionで行います。
+App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)の固定版`asc` guarded runnerだけで行います。`appstore.distribute_testflight`の宣言には他のlive `appstore.*`と同じ`release` stage、`full` scope、`strict`、Issue contractとExecutorの一致を要します。production preflightは宣言済みoperationごとに読取専用照会と証拠発行を行い、そのoperation自体は実行しません。live操作には設定済みownership、同一Headの検証・レビュー、必要なユーザー承認を別途要します。App Privacy申告だけは既存のauthenticated browser sectionで行います。
 
 ## 6. Provider別preflight
 
@@ -126,6 +126,8 @@ App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.
 - Team、App、Bundle ID、version、build
 - 提出準備か実提出か、法的文面とprivacy監査状態
 - pinned `asc`のversion／digest、guarded runner経由の読取専用API照会、宣言済みoperationごとのpreflight証拠
+- `bundle-ids list`の`seedId`をownershipの`appStore.teamId`へ、`identifier`とApp recordの`bundleId`を`appStore.bundleId`へ完全一致で照合する。要求versionのiOS recordも一致させ、未取得ページや複数件は拒否する
+- 証拠は宣言済みoperationごとに`.artifacts/issues/<Issue>/provider-preflights/app-store-<suffix>.json`へ保存する（例: `app-store-update_metadata.json`）。`operation` fieldもその宣言と完全一致させる
 - API keyがTeam keyのApp Manager roleであること。Admin role、Individual key、Apple IDのpassword／2FA、web sessionは使わない
 
 ## 7. ユーザー承認が必要な操作

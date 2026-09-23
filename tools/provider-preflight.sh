@@ -17,7 +17,7 @@ usage:
   provider-preflight.sh --executor codex|claude --issue NUMBER linear --target TEAM_KEY
   provider-preflight.sh --executor codex|claude --issue NUMBER vercel --target TEAM_SLUG
   provider-preflight.sh --executor codex|claude --issue NUMBER elevenlabs --operation text-to-speech|speech-to-speech|speech-to-text|sound-effect|audio-isolation|music|image|video
-  provider-preflight.sh --executor codex|claude --issue NUMBER app-store --version VERSION
+  provider-preflight.sh --executor codex|claude --issue NUMBER app-store --version VERSION [--operation appstore.OPERATION]
 USAGE
   exit 2
 }
@@ -88,10 +88,14 @@ case "$provider" in
     evidence_operation=elevenlabs.process_media
     ;;
   app-store)
-    [[ -n "$requested_version" && -z "$requested_target$requested_environment$requested_media_operation" ]] || usage
+    [[ -n "$requested_version" && -z "$requested_target$requested_environment" ]] || usage
     [[ "$requested_version" =~ ^[0-9]+([.][0-9]+){1,2}$ ]] || fail 'App Store version is invalid'
     evidence_environment=production
-    evidence_operation=appstore.inspect_app
+    evidence_operation=${requested_media_operation:-appstore.inspect_app}
+    case "$evidence_operation" in
+      appstore.inspect_app|appstore.update_metadata|appstore.upload_build|appstore.submit_review|appstore.distribute_testflight) ;;
+      *) fail 'App Store operation is invalid' ;;
+    esac
     ;;
 esac
 
@@ -107,20 +111,128 @@ if [[ "$test_mode" == 1 ]]; then
   provider_adapter=${IOS_TEMPLATE_TEST_PROVIDER_BIN:-}
   [[ "$ownership_file" == /* && -f "$ownership_file" && ! -L "$ownership_file" ]] || fail 'test ownership file is invalid'
   [[ "$artifact_root" == /* ]] || fail 'test artifact root is invalid'
-  [[ "$provider_adapter" == /* && -f "$provider_adapter" && -x "$provider_adapter" && ! -L "$provider_adapter" ]] || fail 'test provider adapter is invalid'
+  if [[ "$provider" != app-store ]]; then
+    [[ "$provider_adapter" == /* && -f "$provider_adapter" && -x "$provider_adapter" && ! -L "$provider_adapter" ]] || fail 'test provider adapter is invalid'
+  fi
 else
-  [[ -z "${IOS_TEMPLATE_TEST_OWNERSHIP_FILE:-}${IOS_TEMPLATE_TEST_ARTIFACT_ROOT:-}${IOS_TEMPLATE_TEST_NOW:-}${IOS_TEMPLATE_TEST_PROVIDER_BIN:-}" ]] || fail 'test overrides are not allowed in production mode'
+  [[ -z "${IOS_TEMPLATE_TEST_OWNERSHIP_FILE:-}${IOS_TEMPLATE_TEST_ARTIFACT_ROOT:-}${IOS_TEMPLATE_TEST_NOW:-}${IOS_TEMPLATE_TEST_PROVIDER_BIN:-}${IOS_TEMPLATE_TEST_ASC_RUNNER:-}" ]] || fail 'test overrides are not allowed in production mode'
 fi
 
 [[ "$checked_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail 'checked timestamp is invalid'
 [[ -f "$ownership_file" && ! -L "$ownership_file" ]] || fail 'ownership configuration is unavailable'
+
+if [[ "$provider" == app-store ]]; then
+  issue_root="$artifact_root/issues/$issue_number"
+  [[ -f "$issue_root/issue-contract.json" && ! -L "$issue_root/issue-contract.json" && -f "$issue_root/state.json" && ! -L "$issue_root/state.json" ]] || fail 'sealed Issue contract is unavailable'
+  ISSUE="$issue_number" OPERATION="$evidence_operation" /usr/bin/ruby --disable-gems -rjson -rdigest -e '
+    issue=Integer(ENV.fetch("ISSUE"))
+    contract_path,state_path=ARGV
+    [contract_path,state_path].each do |path|
+      stat=File.lstat(path)
+      abort unless stat.file? && stat.nlink == 1
+    end
+    bytes=File.binread(contract_path)
+    contract=JSON.parse(bytes)
+    state=JSON.parse(File.binread(state_path))
+    abort unless contract.is_a?(Hash) && contract["issue"] == issue && contract["externalOperations"].is_a?(Array) && contract["externalOperations"].include?(ENV.fetch("OPERATION"))
+    seal=state.fetch("issueContract")
+    abort unless state["issue"] == issue && seal.fetch("path") == ".artifacts/issues/#{issue}/issue-contract.json" && seal.fetch("digest") == "sha256:#{Digest::SHA256.hexdigest(bytes)}"
+  ' "$issue_root/issue-contract.json" "$issue_root/state.json" 2>/dev/null || fail 'App Store operation is not in the sealed Issue contract'
+  expected_bundle_id=$(/usr/bin/ruby --disable-gems "$repo_root/tools/lib/ownership.rb" --file "$ownership_file" --provider app-store | jq -er '.target | strings') || fail 'configured App Store Bundle ID is missing or invalid'
+fi
 
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-provider-preflight.XXXXXX")
 trap 'rm -rf -- "$temporary_directory"' EXIT
 chmod 700 "$temporary_directory"
 raw_response="$temporary_directory/raw.json"
 
-if [[ "$test_mode" == 1 ]]; then
+run_app_store_inspection() {
+  /usr/bin/ruby --disable-gems - "$repo_root" "$expected_bundle_id" "$requested_version" > "$raw_response" 2>/dev/null <<'RUBY' || fail 'App Store inspection failed'
+require "json"
+require "open3"
+
+# asc 5.4.0 source: internal/cli/{bundleids/bundle_ids.go,apps/apps.go,
+# versions/versions.go} pass API responses to internal/cli/shared/shared.go
+# PrintOutput/printOutput, whose JSON branch uses internal/asc/output_core.go
+# PrintJSON to encode the response object.
+# internal/asc/types/resources.go defines data[], resource id/attributes,
+# links.next and meta.paging.total. internal/asc/{signing.go,client_apps.go,
+# client_versions.go} define attributes.identifier/seedId, bundleId,
+# versionString and platform.
+module AppStoreASCPreflight
+  MAX_OUTPUT_BYTES = 1_048_576
+  class Refused < StandardError; end
+  module_function
+
+  def refuse
+    raise Refused
+  end
+
+  def runner(root)
+    override = ENV["IOS_TEMPLATE_TEST_ASC_RUNNER"]
+    return File.join(root, "tools/asc-run.sh") unless override
+    refuse unless ENV["IOS_TEMPLATE_TEST_MODE"] == "1"
+    refuse unless override.start_with?("/") && File.expand_path(override) == override
+    cursor = "/"
+    override.split("/").reject(&:empty?).each do |component|
+      cursor = File.join(cursor, component)
+      refuse if File.lstat(cursor).symlink?
+    end
+    stat = File.lstat(override)
+    refuse unless stat.file? && File.executable?(override)
+    override
+  end
+
+  def list(runner_path, type, *command)
+    output, _error, status = Open3.capture3(runner_path, "--operation", "appstore.inspect_app", "--", *command, "--output", "json")
+    refuse unless status.success? && output.bytesize <= MAX_OUTPUT_BYTES
+    value = JSON.parse(output)
+    refuse unless value.is_a?(Hash) && value["data"].is_a?(Array)
+    links = value["links"]
+    refuse unless links.nil? || (links.is_a?(Hash) && (links["next"].nil? || links["next"] == ""))
+    total = value.dig("meta", "paging", "total")
+    refuse if !total.nil? && (!total.instance_of?(Integer) || total != value["data"].length)
+    value["data"].each do |item|
+      refuse unless item.is_a?(Hash) && item["type"] == type && item["id"].is_a?(String) && !item["id"].empty? && item["attributes"].is_a?(Hash)
+    end
+    value["data"]
+  end
+
+  def one(items)
+    refuse unless items.length == 1
+    items.first
+  end
+
+  def main(root, bundle_id, version)
+    refuse unless bundle_id.match?(/\A[A-Za-z0-9][A-Za-z0-9.-]*\z/) && version.match?(/\A[0-9]+(?:\.[0-9]+){1,2}\z/)
+    run = runner(root)
+    bundle = one(list(run, "bundleIds", "bundle-ids", "list", "--identifier", bundle_id))
+    refuse unless bundle.dig("attributes", "identifier") == bundle_id
+    seed_id = bundle.dig("attributes", "seedId")
+    refuse unless seed_id.is_a?(String) && seed_id.match?(/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/)
+    app = one(list(run, "apps", "apps", "list", "--bundle-id", bundle_id))
+    refuse unless app.dig("attributes", "bundleId") == bundle_id
+    app_id = app["id"]
+    refuse unless app_id.match?(/\A[1-9][0-9]*\z/)
+    versions = list(run, "appStoreVersions", "versions", "list", "--app", app_id, "--version", version, "--platform", "IOS")
+    found = one(versions)
+    refuse unless found.dig("attributes", "versionString") == version && found.dig("attributes", "platform") == "IOS"
+    STDOUT.write(JSON.generate({"provider"=>"app-store", "account"=>seed_id, "target"=>bundle_id, "health"=>"healthy", "versions"=>versions.map { |entry| entry.dig("attributes", "versionString") }}))
+    STDOUT.write("\n")
+    0
+  rescue Refused, JSON::ParserError, ArgumentError, TypeError, SystemCallError
+    warn "App Store inspection failed"
+    1
+  end
+end
+
+exit AppStoreASCPreflight.main(*ARGV)
+RUBY
+}
+
+if [[ "$provider" == app-store ]]; then
+  run_app_store_inspection
+elif [[ "$test_mode" == 1 ]]; then
   "$provider_adapter" "$provider" "$evidence_operation" > "$raw_response" 2>/dev/null || fail 'provider adapter failed'
 else
   case "$provider" in
@@ -155,7 +267,7 @@ else
       fail 'ElevenLabs entitlement inspection requires an authenticated media capability'
       ;;
     app-store)
-      fail 'App Store identity inspection requires an authenticated App Store workflow'
+      fail 'App Store inspection dispatch is invalid'
       ;;
   esac
 fi
@@ -244,7 +356,9 @@ mkdir -p "$destination_directory"
 artifact_physical=$(cd "$artifact_root" && /bin/pwd -P)
 destination_physical=$(cd "$destination_directory" && /bin/pwd -P)
 [[ "$destination_physical" == "$artifact_physical/issues/$issue_number/provider-preflights" ]] || fail 'artifact path escapes the configured root'
-destination="$destination_physical/$provider.json"
+destination_name="$provider.json"
+if [[ "$provider" == app-store ]]; then destination_name="app-store-${evidence_operation#appstore.}.json"; fi
+destination="$destination_physical/$destination_name"
 publication=$(mktemp "$destination.tmp.XXXXXX")
 /bin/cp "$candidate" "$publication"
 chmod 600 "$publication"

@@ -364,6 +364,7 @@
     {"path": "tools/tests/test-media-skill.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-merge-issue.sh", "domains": ["descriptor-files", "merge-publication"]},
     {"path": "tools/tests/test-premerge-gate.sh", "domains": ["descriptor-files", "review-evidence-sealing"]},
+    {"path": "tools/tests/test-premerge-provider-operations.sh", "domains": ["review-evidence-sealing"]},
     {"path": "tools/tests/test-prerequisites.sh", "domains": ["release-disposition", "workflow-state"]},
     {"path": "tools/tests/test-provider-ownership.sh", "domains": ["authority-policy", "provider-security"]},
     {"path": "tools/tests/test-provider-preflight.sh", "domains": ["provider-security"]},
