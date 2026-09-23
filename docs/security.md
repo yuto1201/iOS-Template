@@ -103,6 +103,16 @@ App Store Connectのmulti-line `.p8` private keyはKeychainの1行secret interfa
 
 [固定版`asc` adapter](../specs/architecture.md#72-app-store-connect-api-adapter)では、Team keyのApp Manager roleだけを使います。Key IDとIssuer IDは`ios-template/${appSlug}/app-store-connect/production/`配下のKeychain generic passwordから、`.p8`は上記の専用ディレクトリから、guarded runnerが起動する子processのenvへだけ渡します。`asc auth login`、`asc`自身のKeychain保存、`~/.asc/`やrepository内`.asc/`のconfig、web session、Apple IDのpassword／2FAは使いません。runnerはtelemetryを無効化し、stdout／stderrをredactし、Key ID、Issuer ID、private keyとその値hashをartifact、Issue、PR、log、promptへ残しません。
 
+### 固定版ascの利用
+
+`tools/install-asc-cli.sh`は`Config/asc-cli.json`の固定releaseをHTTPSで取得し、checksum fileとbinaryのSHA-256を照合して、repository外の`~/Library/Application Support/iOS-Template/tools/asc/<version>/asc`へ排他的に配置します。同じbytesは再利用し、異なる既存fileやsymlinkを上書きしません。更新は別Issueでpinを変更します。
+
+Identity bootstrap済みのアプリでは、Team keyのApp Manager roleを使い、Keychainの上記命名に従う`app-store-connect/production/key-id`と`issuer-id`、アプリの専用秘密ディレクトリ直下の`app-store-connect-production.p8`を準備します。runnerは`Config/app-identity.json`の`appSlug`から固定pathを計算し、既存secret wrapperを実HOMEで連鎖させます。任意の秘密pathや資格情報をCLI flagで渡しません。最内側のhelperだけが空の一時HOMEとcwd、固定PATH、telemetry無効、Keychain bypass、存在しないconfig path、JSON出力、Team key設定を構成し、秘密を子process envへ渡します。起動ごとのversion／digest照合、120秒の上限、両出力のredactionを強制します。
+
+使用例は`tools/asc-run.sh --operation appstore.inspect_app -- apps list --bundle-id com.example.app`です。現在のallowlistは`apps list`、`apps info view --app <id>`、`versions list --app <id>`、`bundle-ids list`の読取subsetだけです。`--output json`はrunnerが強制し、その他のcommand／flag、web、auth、signing、workflow実行、telemetry設定は拒否します。live実行には引き続きrelease／full／strict、宣言済みoperation／Executor、account／target確認と必要な承認が必要です。この基盤だけではproduction preflightやlive操作を承認しません。
+
+`tools/tests/test-asc-cli.sh`はfake binaryと一時HOMEだけを使い、network／実Keychainを利用しません。`IOS_TEMPLATE_TEST_MODE=1`時だけpin、install root、release directory、security executableとtimeoutのtest overrideを許可し、pathは絶対・非symlinkを要求します。本番modeではtest overrideの存在を拒否します。
+
 ## 7. 漏えい時
 
 1. 進行中の外部操作を止める。

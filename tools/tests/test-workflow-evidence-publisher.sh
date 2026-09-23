@@ -2,13 +2,18 @@
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" git ruby swift
+require_test_commands "$0" git ruby swift swiftc
 
 source_repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 publisher="$source_repo/tools/publish-workflow-verify.sh"
 validator="$source_repo/tools/validate-verify-json.swift"
 scratch="$(mktemp -d -t ios-workflow-evidence.XXXXXX)"
 trap '/bin/rm -rf "$scratch"' EXIT
+# Compile the same production validator once for the full rejection matrix.
+# Keep a real shell-entrypoint check below; repeated interpretation exceeded
+# the 300-second targeted-test budget without adding different coverage.
+compiled_validator="$scratch/validate-verify-json"
+/usr/bin/swiftc "$validator" -o "$compiled_validator"
 
 prepare_fixture() {
   local label="$1"
@@ -65,7 +70,7 @@ RUBY
 }
 
 run_publisher() {
-  (cd "$repo" && "$publisher" --issue 42 --expected-base "$base_sha" --expected-head "$head_sha" --input .artifacts/issues/42/workflow-evidence-input.json)
+  (cd "$repo" && "$compiled_validator" --publish-workflow --issue 42 --expected-base "$base_sha" --expected-head "$head_sha" --input .artifacts/issues/42/workflow-evidence-input.json)
 }
 
 refresh_record_contract_digest() {
@@ -102,6 +107,11 @@ expect_rejection() {
   }
   [[ ! -e "$issue_root/$head_sha/verify.json" ]] || { echo "workflow rejection published verify.json: $label" >&2; exit 1; }
 }
+
+prepare_fixture shell-entrypoint
+published="$(cd "$repo" && "$publisher" --issue 42 --expected-base "$base_sha" --expected-head "$head_sha" --input .artifacts/issues/42/workflow-evidence-input.json)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
+(cd "$repo" && "$compiled_validator" --file "$published" --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha") >/dev/null
 
 prepare_fixture valid
 published="$(run_publisher)"
@@ -155,6 +165,20 @@ previous_head="$head_sha"
   tools/lib/appstore-legal-handoff.rb tools/prepare-appstore-legal-handoff.sh \
   tools/tests/test-appstore-legal-handoff.sh tools/tests/test-appstore-screenshots.sh \
   tools/tests/test-appstore-skills.sh
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
+
+# Only the enumerated asc adapter files qualify for fake-only workflow evidence.
+prepare_fixture asc-adapter-exact-paths
+for asc_path in Config/asc-cli.json tools/asc-run.sh tools/install-asc-cli.sh tools/lib/asc-cli.rb tools/tests/fixtures/asc/checksums.txt tools/tests/fixtures/asc/fake-asc tools/tests/fixtures/asc/fake-security tools/tests/fixtures/asc/pin.json tools/tests/test-asc-cli.sh; do
+  /bin/mkdir -p "$(/usr/bin/dirname "$repo/$asc_path")"
+  /bin/cp "$source_repo/$asc_path" "$repo/$asc_path"
+done
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- Config/asc-cli.json tools
 /usr/bin/git -C "$repo" commit -q --amend --no-edit
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 rebind_head_artifacts "$previous_head"
@@ -222,6 +246,16 @@ File.binwrite(path, JSON.generate(value))
 RUBY
 refresh_record_contract_digest
 expect_rejection appstore-operation 'App Store operations require release Delivery stage'
+
+prepare_fixture asc-inspect-operation
+CONTRACT="$issue_root/issue-contract.json" /usr/bin/ruby --disable-gems -rjson <<'RUBY'
+path = ENV.fetch("CONTRACT")
+value = JSON.parse(File.binread(path))
+value["externalOperations"] = ["appstore.inspect_app"]
+File.binwrite(path, JSON.generate(value))
+RUBY
+refresh_record_contract_digest
+expect_rejection asc-inspect-operation 'App Store operations require release Delivery stage'
 
 prepare_fixture application-verification
 CONTRACT="$issue_root/issue-contract.json" /usr/bin/ruby --disable-gems -rjson <<'RUBY'
@@ -327,7 +361,7 @@ head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 expect_rejection testflight-helper 'workflow-only diff contains a release or App Store path: tools/testflight-upload.sh'
 
 semantic_index=0
-for semantic_path in tools/asc-provider.rb tools/connect-upload.sh tools/sign-release.sh tools/tf-client.sh tools/ascProvider.rb tools/iTunesConnectClient.rb tools/tfUpload.sh tools/ascprovider.rb tools/itunesconnectclient.rb tools/tfupload.sh tools/itunesconnect/client.rb tools/appleconnect/provider.rb tools/asc-save.rb tools/itunesconnectupdate.rb tools/tf-distribute.sh tools/asc.rb tools/itunes.rb tools/itunesconnect.rb tools/apple-connect.rb tools/asc-put.rb tools/asc-post.rb; do
+for semantic_path in Config/asc.json tools/tests/fixtures/asc/unlisted tools/lib/asc.rb tools/asc-provider.rb tools/connect-upload.sh tools/sign-release.sh tools/tf-client.sh tools/ascProvider.rb tools/iTunesConnectClient.rb tools/tfUpload.sh tools/ascprovider.rb tools/itunesconnectclient.rb tools/tfupload.sh tools/itunesconnect/client.rb tools/appleconnect/provider.rb tools/asc-save.rb tools/itunesconnectupdate.rb tools/tf-distribute.sh tools/asc.rb tools/itunes.rb tools/itunesconnect.rb tools/apple-connect.rb tools/asc-put.rb tools/asc-post.rb; do
   semantic_index=$((semantic_index + 1))
   fixture_name="semantic-$semantic_index-$(printf '%s' "$semantic_path" | /usr/bin/sed 's#[/.]#-#g')"
   prepare_fixture "$fixture_name"
