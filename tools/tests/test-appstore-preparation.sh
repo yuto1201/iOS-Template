@@ -2494,10 +2494,15 @@ revision_probe = <<~'PROBE'
     sources.const_set(:COMMITTED_TREE_MAX_BYTES, 1)
   end
   calls = []
+  failed_status = Struct.new(:success?).new(false)
+  passed_status = Struct.new(:success?).new(true)
   Open3.singleton_class.prepend(Module.new do
     define_method(:capture2e) do |*args, **options|
       command = args.drop_while { |value| value.is_a?(Hash) }
       calls << command if command.include?("ls-tree")
+      listing = !command.include?("--") && command.each_cons(3).include?(["-r", "-z", "--full-tree"])
+      next ["", failed_status] if listing && mode == "failed"
+      next ["not a tree record\0", passed_status] if listing && mode == "malformed"
       super(*args, **options)
     end
   end)
@@ -2533,5 +2538,11 @@ abort "batched attribution still ran #{batched['perFile']} per-file lookups" unl
 abort "fallback did not use the per-file lookup" unless per_file["full"] == 1 && per_file["perFile"] >= committed
 strip_time = ->(report) { report.reject { |key, _| key == "checkedAt" } }
 abort "batched attribution changed the preparation report" unless strip_time.call(batched["report"]) == strip_time.call(per_file["report"])
-puts "PASS: committed-revision attribution lists the fixed revision once and matches the per-file fallback for every source"
+# A failed or malformed listing must not fall back to per-file attribution.
+%w[failed malformed].each do |mode|
+  probe = run_revision_probe.call(mode)
+  abort "#{mode} listing fell back to per-file lookups" unless probe["full"] == 1 && probe["perFile"].zero?
+  abort "#{mode} listing attributed sources to the revision" unless report_sources.call(probe).none? { |source| source["revision"] }
+end
+puts "PASS: committed-revision attribution lists the fixed revision once, matches the oversized per-file fallback and attributes nothing after a failed or malformed listing"
 RUBY
