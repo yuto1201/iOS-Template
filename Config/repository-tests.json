@@ -224,6 +224,7 @@
         "tools/lib/validate-review-receipt.rb",
         "tools/prepare-review-packet.sh",
         "tools/render-pr-body.sh",
+        "tools/request-codex-review.sh",
         "tools/request-grok-review.sh",
         "tools/validate-review-result.sh"
       ],
