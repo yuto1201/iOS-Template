@@ -29,3 +29,5 @@ tools/provider-preflight.sh --executor "$EXECUTOR" --issue "$ISSUE" \
 ## Configured-but-incomplete targets
 
 Account-level identity may be configured before an app-specific target exists. Supabase Project Ref, Cloudflare deploy target, Vercel Project ID, ElevenLabs Workspace ID, and App Store Team/Bundle ID remain fail-closed until explicitly configured for the app.
+
+For App Store Connect, select the exact declared `appstore.*` operation with `--operation` (default `appstore.inspect_app`). Production preflight uses the guarded `asc` runner for read-only bundle ID, app, and iOS version queries; its `seedId` must equal the configured Team ID, and both Bundle ID fields must equal the configured app target. It publishes one sanitized `provider-preflights/app-store-<suffix>.json` per declared operation. Premerge checks each file against that operation and configured identity. Preflight does not execute the operation or establish release readiness.

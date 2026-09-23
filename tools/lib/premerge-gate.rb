@@ -313,6 +313,7 @@ begin
   operation_details = contract.fetch("externalOperations", []).map { |operation| [operation, nil] }.to_h
   refuse("Issue contract does not declare github.merge_pr") unless operation_details.key?("github.merge_pr")
   provider_files = {}
+  non_appstore_providers = {}
   non_github_operations = operation_details.keys.reject { |operation| operation.start_with?("github.") }
   unless non_github_operations.empty?
     provider_root = artifact_snapshots.directory(issue_directory, "provider-preflights", "provider-preflights")
@@ -320,8 +321,16 @@ begin
     non_github_operations.each do |operation|
       prefix = operation.split(".", 2).first
       provider = provider_by_prefix.fetch(prefix) { refuse("unsupported provider operation: #{operation}") }
-      refuse("multiple operations for provider #{provider}") if provider_files.key?(provider)
-      provider_files[provider] = artifact_snapshots.leaf(provider_root, "#{provider}.json", "#{provider} provider preflight")
+      if provider == "app-store"
+        suffix = operation.delete_prefix("appstore.")
+        refuse("invalid App Store operation suffix") unless suffix.match?(/\A[a-z][a-z0-9_]*\z/)
+        filename = "app-store-#{suffix}.json"
+      else
+        refuse("multiple operations for provider #{provider}") if non_appstore_providers[provider]
+        non_appstore_providers[provider] = true
+        filename = "#{provider}.json"
+      end
+      provider_files[operation] = [provider, artifact_snapshots.leaf(provider_root, filename, "#{operation} provider preflight")]
     end
   end
 
@@ -346,12 +355,12 @@ begin
   parsed_contract.external_operation_details.each { |detail| operation_details[detail.fetch("operation")] = detail }
   refuse("live Issue operation details differ from the contract") if operation_details.any? { |_, detail| detail.nil? }
 
-  provider_files.each do |provider, held|
+  provider_files.each do |expected_operation, (provider, held)|
     value = parse_object(held.bytes, "#{provider} provider preflight")
     exact_keys!(value, %w[schemaVersion issue executor provider account target environment operation health checkedAt digest], "#{provider} provider preflight")
     operation = value["operation"]
-    detail = operation_details[operation]
-    refuse("#{provider} provider operation does not match the Issue contract") unless detail && operation.split(".", 2).first == (provider == "app-store" ? "appstore" : provider)
+    detail = operation_details[expected_operation]
+    refuse("#{provider} provider operation does not match the Issue contract") unless operation == expected_operation && detail && operation.split(".", 2).first == (provider == "app-store" ? "appstore" : provider)
     refuse("#{provider} provider identity is invalid") unless value["schemaVersion"] == 2 && value["issue"] == issue && value["provider"] == provider && value["health"] == "healthy"
     refuse("#{provider} provider executor differs from the Issue contract") unless value["executor"] == detail.fetch("executor").downcase
     safe_identifier!(value["account"], "#{provider} provider account")

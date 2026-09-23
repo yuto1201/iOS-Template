@@ -235,7 +235,7 @@ offline fixtureの成功、Google demo smokeの成功、AdMob Consoleのremote s
 - **証拠**: API readbackはsanitized digestと`asc://` remote referenceだけを記録し、field値、秘密、tester個人情報を保存しない。テンプレート内Issueはfake `asc`とfake `xcodebuild`だけで検証し、live API、実upload、実提出、実配信の成功を主張しない。live結果は派生アプリのrelease Issueで別の証拠とする。
 - **Workflow-only境界**: [受け入れ条件 §3.3](acceptance.md#33-workflow-only検証)のexact allowlistは、後続Issueが自Headでexact pathとして列挙したasc adapterのtool、helper、fixture、直接regression testだけを追加できる。directory、prefix、`asc`名の一致では許可せず、`appstore.*` operationやlive外部操作をworkflow-onlyで認可しない。
 
-実装は#130（pinned installerとguarded runner）、#131（production preflightとoperation model）、#132（§9.2のselective save）、#133（build upload）、#134（release sectionのAPI移行）、#135（TestFlight配信）の順に分ける。#134が完了するまでは、既存のauthenticated browser section workflowだけが完全releaseの実行経路である。この節と[D-059](decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)は契約の確定だけを行い、adapterのinstall、実装、live API成功を主張しない。
+実装は#130（pinned installerとguarded runner）、#145（operation model）、#146（production preflightとpremerge）、#132（§9.2のselective save）、#133（build upload）、#134（release sectionのAPI移行）、#135（TestFlight配信）の順に分ける。#134が完了するまでは、既存のauthenticated browser section workflowだけが完全releaseの実行経路である。この節と[D-059](decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)は契約の確定だけを行い、adapterのinstall、実装、live API成功を主張しない。
 
 ## 8. Supabase構成
 
