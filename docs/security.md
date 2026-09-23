@@ -90,7 +90,7 @@ CodexとClaudeはmigrationファイルの作成、ローカルDB検証、認証�
 
 - `security find-generic-password` などのKeychain読取
 - 専用秘密ディレクトリの読取
-- GitHub、Supabase、Cloudflare、Linear、Vercel、ElevenLabs、App Store Connect CLI／MCP／plugin
+- GitHub、Supabase、Cloudflare、Linear、Vercel、ElevenLabs、App Store Connect CLI（固定版`asc`を含む）／MCP／plugin
 - 認証済みremote Git
 - 外部MCP・プラグイン
 - `.env`、private key、Tokenを表示するコマンド
@@ -100,6 +100,8 @@ CodexとClaudeのどちらも、秘密値を読み取って表示する操作、
 アカウント分離は端末ごとのprovider sessionと`Config/ownership.yml`のpreflightで行います。同一OSユーザー上の暗号学的分離ではありません。
 
 App Store Connectのmulti-line `.p8` private keyはKeychainの1行secret interfaceへ入れません。リポジトリ外の専用ディレクトリへ`0600`で保存し、認可済み実行モデルが必要な子processへ渡す間だけ使用します。Key IDとIssuer IDはKeychainまたは公開ownership設定へ分けます。
+
+[固定版`asc` adapter](../specs/architecture.md#72-app-store-connect-api-adapter)では、Team keyのApp Manager roleだけを使います。Key IDとIssuer IDは`ios-template/${appSlug}/app-store-connect/production/`配下のKeychain generic passwordから、`.p8`は上記の専用ディレクトリから、guarded runnerが起動する子processのenvへだけ渡します。`asc auth login`、`asc`自身のKeychain保存、`~/.asc/`やrepository内`.asc/`のconfig、web session、Apple IDのpassword／2FAは使いません。runnerはtelemetryを無効化し、stdout／stderrをredactし、Key ID、Issuer ID、private keyとその値hashをartifact、Issue、PR、log、promptへ残しません。
 
 ## 7. 漏えい時
 

@@ -99,7 +99,7 @@ Reuse the inventory above; do not create a second field schema. Select the narro
 
 `save` can precede `ready`; it never replaces it. Missing screenshots, build or unapproved privacy/legal rows defer those rows and full release readiness, not an independent confirmed general description. The actual remote form may still require coupled fields: if those cannot be supplied safely, defer that entire form while continuing other independent drafts/forms. General copy that makes a privacy, legal, price or unsupported feature claim is not exempt merely because it is in Description.
 
-The existing `submit-appstore-release` skill routes requests to this contract, offline preparation or its complete release workflow. Its scripts do **not** implement selective save. Until the [dedicated implementation](../../specs/architecture.md#92-原稿保存と正式提出の分離) is merged, return the draft/diff and the missing implementation dependency; do not invent a `--draft` flag, feed incomplete inputs to `record-section.sh`, or bypass it with manual authenticated browser input. #52 itself performs no Apple operation.
+The existing `submit-appstore-release` skill routes requests to this contract, offline preparation or its complete release workflow. Its scripts do **not** implement selective save. Until the [dedicated implementation](../../specs/architecture.md#92-原稿保存と正式提出の分離) (#132) is merged, return the draft/diff and the missing implementation dependency; do not invent a `--draft` flag, feed incomplete inputs to `record-section.sh`, or bypass it with manual authenticated browser input. #52 itself performs no Apple operation. The dedicated implementation reads the baseline, saves and reads back only through the [pinned `asc` guarded runner](../../specs/architecture.md#72-app-store-connect-api-adapter).
 
 ### Selective-save preconditions and transaction
 
@@ -189,6 +189,7 @@ Check current [Apple version-field requirements](https://developer.apple.com/hel
 The following sections govern the existing complete release workflow, not the future selective-save entrypoint. Before any final submission require an explicit, still-current authorization for this exact candidate; earlier permission to prepare or save text is insufficient. The separate save journal cannot satisfy these gates.
 
 - Codex and Claude may execute App Store Connect, authenticated browser, upload, signing-account, and provider operations when named as the Issue executor.
+- Operations that the public App Store Connect API can perform use only the [pinned `asc` guarded runner](../../specs/architecture.md#72-app-store-connect-api-adapter) with a Team key that has the App Manager role. Only the App Privacy declaration remains an authenticated-browser section. Until #134 migrates the ordered transaction below, the existing authenticated-browser section workflow remains the only complete-release route; do not mix the adapter into it section by section before then.
 - The release Issue must declare each intended production operation, including inspection, section updates, screenshot upload, build selection, and submission for review. No skill invocation broadens Issue authority.
 - Immediately before each mutation batch, the selected executor verifies the active configured Team, App, Bundle ID, version, and build against `Config/ownership.yml` and the sealed package. Another identity or ambiguous target is a hard stop.
 - `prepare-appstore-assets` must have produced `${VERSION}-package.json` for the exact source SHA and build digest, with current Apple requirements and an approved release-auditor result.
@@ -228,6 +229,8 @@ Process `app-information`, `localization`, `privacy`, `screenshots`, `build`, `r
 5. Compare them to the sealed source and record only a sanitized remote reference and readback digest.
 
 Do not continue when App Store Connect presents an unexpected agreement, price, legal claim, destructive replacement, paid action, target, or remote value. Treat transport ambiguity as unknown state and read back before retrying; never submit a duplicate action speculatively.
+
+After #134, every section except `privacy` enters, saves and reads back through the pinned `asc` guarded runner, and `privacy` keeps this authenticated-browser procedure. #134 records each section's readback source so that API and browser readbacks are distinguishable. The section order, sealed-value rule and stop conditions above are unchanged.
 
 ## Result and resume
 

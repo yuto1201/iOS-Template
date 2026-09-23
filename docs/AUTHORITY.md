@@ -23,7 +23,7 @@
 | Linear | workspace slug `yuto33004` | URL `https://linear.app/yuto33004`、team key `YUT` |
 | Vercel | Team ID `team_ANEUn6gVL8dccPaY08wkvxFt` | team slug `yuto16`、plan `hobby`。Project ID未設定中はdeployしない |
 | ElevenLabs | 未設定 | Account IDとWorkspace IDが設定されるまで認証済み操作を行わない |
-| App Store Connect | 未設定 | Team IDとアプリ固有Bundle IDが設定されるまで認証済み操作を行わない |
+| App Store Connect | 未設定 | Team IDとアプリ固有Bundle ID、Team keyのApp Manager role API keyが設定されるまで認証済み操作を行わない |
 
 メールアドレス、表示名、role、public repository件数は補助的な観察情報であり、単独の認可predicateにしません。メールアドレスは公開Repositoryの設定へ保存せず、providerが必要とする場合だけ認証session内で確認します。
 
@@ -81,6 +81,8 @@ preflight証拠には秘密値を含めず、Issue、executor、provider、accou
 
 Linear／Vercelのmutation operationは、必要なworkflowとschemaを別Issueで追加するまでallowlistへ含めません。利用可能なconnectorが存在することだけではmutation権限になりません。
 
+App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)の固定版`asc` guarded runnerだけで行います。TestFlight配信用の`appstore.distribute_testflight`は、#131がcontract parser、strict判定、preflightへ追加するまで宣言できません。App Privacy申告だけは既存のauthenticated browser sectionで行います。
+
 ## 6. Provider別preflight
 
 ### GitHub
@@ -123,6 +125,8 @@ Linear／Vercelのmutation operationは、必要なworkflowとschemaを別Issue�
 
 - Team、App、Bundle ID、version、build
 - 提出準備か実提出か、法的文面とprivacy監査状態
+- pinned `asc`のversion／digest、guarded runner経由の読取専用API照会、宣言済みoperationごとのpreflight証拠
+- API keyがTeam keyのApp Manager roleであること。Admin role、Individual key、Apple IDのpassword／2FA、web sessionは使わない
 
 ## 7. ユーザー承認が必要な操作
 
@@ -140,5 +144,6 @@ Linear／Vercelのmutation operationは、必要なworkflowとschemaを別Issue�
 - 秘密は`docs/security.md`に従い、実行直前にだけ取得する。
 - Token、Cookie、private key、認証済みbrowser storageをGit、Issue、PR、prompt、log、artifactへ残さない。
 - 一行secretは`tools/run-with-secret.sh`、file secretは`tools/run-with-private-key.sh`を使い、子processへだけ渡す。
+- `asc`へのApp Store Connect API key情報は子process envだけで渡し、`asc`自身のKeychain／config／profile、repository内`.asc/`、web sessionへ保存・読込しない。
 - モデル固有の秘密アクセス拒否hookは置かない。両モデルへ同じaccount／target／approval／secret-handling gateを適用する。
 - このMacで会社用または別個人アカウントへ接続されたproviderを検出した場合、モデルに関係なく操作を止め、正しいlocal sessionへ切り替えてから再preflightする。

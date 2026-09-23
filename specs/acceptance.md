@@ -125,7 +125,7 @@ profileを下げてstage要件を回避しない。`shape`はUIを含むので`f
 
 ### 3.3 Workflow-only検証
 
-delivery tool、review schema、validator、evidence producerだけを変更する`harden + strict` Issueは、application `Verification`と`Verification scope`を持たないworkflow-only経路を選べる。Base..Headの全pathがworkflow allowlist内であることをcurrent Headから再判定する。App Store／TestFlightはexternal operation、実アプリmetadata内容、採用画像asset、signing、provider実装を拒否し、exact allowlistにあるlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producer、そのexactなversioned-format guidance／enumerated helpers／直接regression testだけを許可する。canonical `verify.json`は`changeClassification: workflow-only`、`executionRoute: repository-tests`、`status: passed`を持ち、Xcode、Build、Unit、Simulator case、Screenshot、visual evaluationを`not-applicable`として固定する。
+delivery tool、review schema、validator、evidence producerだけを変更する`harden + strict` Issueは、application `Verification`と`Verification scope`を持たないworkflow-only経路を選べる。Base..Headの全pathがworkflow allowlist内であることをcurrent Headから再判定する。App Store／TestFlightはexternal operation、実アプリmetadata内容、採用画像asset、signing、provider実装を拒否し、exact allowlistにあるlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producer、そのexactなversioned-format guidance／enumerated helpers／直接regression test、[D-059](decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)に従い後続Issueが自Headでexact列挙したasc adapterのtool／helper／fixture／直接regression testだけを許可する。asc adapterの許可はfake `asc`による検証に限り、`appstore.*` operationやlive外部操作をworkflow-onlyで認可しない。canonical `verify.json`は`changeClassification: workflow-only`、`executionRoute: repository-tests`、`status: passed`を持ち、Xcode、Build、Unit、Simulator case、Screenshot、visual evaluationを`not-applicable`として固定する。
 
 workflow-onlyでも、全ACへ対応するcanonical repository-test evidence、仕様anchor、contract digest、Base／Head、strict review、blocking finding、PR、pre-merge gateを省略しない。D-037 cutover後はsealed要求scopeとimmutable Base..Head入力からexact test planを生成し、`targeted`、`head-all`、`base-and-head`の解決結果だけを実行する。cutover前のworkflow-onlyは全ACの`--map`が参照するtracked test pathのexact unionを各1回実行し、その他の従来Head-only contractは全tracked testを維持する。application path、Xcode project、exact allowlistのformat guidanceではない実アプリApp Store metadata／画像asset、localization、Bundle設定、release operation、別Issue／Head／contract、改ざん済みplan／repository evidenceを拒否する。
 
@@ -221,6 +221,15 @@ Foundation、Identity bootstrap、Simulator verificationなどテンプレート
 - package外の別形式にsource相対path・anchor・revision/digest、locale/section、remote identity、差分・保存結果・readback digest、blocked/deferred理由を記録する。片言語だけの成功を全件成功とせず、source/remote driftと認証を再確認してから再開する。
 - [手動検証表](../docs/agent-contracts/appstore-submission.md#selective-save-verification-plan)の全caseを確認し、後続実装では実入口の合成fixtureへ落とす。英語／日本語、Unicode、byteと文字数、Apple公式要件の再取得を含み、未知値の空文字上書き、権限外のform同時保存、曖昧応答の盲目的再試行を拒否する。
 - 部分保存記録では全素材・申告・法務・release audit・明示提出許可を満たせず、既存release journalに流用できない。実装Issueのwrite-setとTest計画は§9.2で定め、#110のread-only準備と実保存を混同しない。
+
+App Store Connect API adapterは[構成 §7.2](architecture.md#72-app-store-connect-api-adapter)に従い、次を満たす。#129は契約の確定だけであり、次の実装・install・live API成功を完了済みとは報告しない。
+
+- `asc`は公式releaseのmacOS arm64 assetをexact versionとSHA-256で固定し、公開checksum fileとpin recordの双方に一致したbytesだけをrepository外へ配置する。起動ごとにversionとdigestを再照合し、Homebrew、install script、自動update、未固定versionを使わない。
+- guarded runnerだけが`asc`を起動し、operationごとのsubcommand／flag allowlist、JSON出力、有限timeout、redaction、telemetry無効、隔離設定を強制する。web session、`--deep`、`auth login`、`apps wall`、`install-skills`、`signing`系、`workflow run`、allowlist外subcommandを拒否する。
+- 認証はTeam keyのApp Manager roleとし、Key ID、Issuer ID、`.p8`を子process envへだけ渡す。値と値hashをartifact、Issue、PR、log、promptへ残さず、`asc`自身の認証保存やrepository内設定を使わない。
+- production preflightは読取専用API照会でTeam、Bundle ID、App record、versionをexact照合し、宣言済みoperationごとの証拠を発行する。TestFlight配信operationを含む全`appstore.*` operationは`release`、`full`、`strict`、宣言済みExecutor、必要なユーザー承認を要する。
+- metadata save、build upload、release section、TestFlight配信はそれぞれbaselineまたは固定入力、実行、readbackの一致だけを成功とし、部分成功、曖昧応答、timeout、digest不一致を成功にしない。App Privacyだけを既存browser sectionに残し、readback sourceを区別して記録する。
+- テンプレート内の実装Issueはfake `asc`とfake `xcodebuild`による正常／拒否／曖昧応答の回帰で完了し、派生アプリのlive API結果、App Store審査、TestFlight beta reviewの結果とは別の証拠として扱う。
 
 AppLibrary法務ページへの引き継ぎは、次を満たす。
 
