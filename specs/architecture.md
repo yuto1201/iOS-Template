@@ -168,7 +168,7 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | `ios-media-assets` | 音声、文字起こし、効果音、音声分離、音楽、画像または動画が受け入れ条件になったとき |
 | `ios-3d-assets` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。authoringはCodexのexact model `gpt-6-astra`だけが行う |
 | `prepare-appstore-assets` | App Store原稿のread-only準備、登録前提の照合、または完全な提出packageを準備するとき |
-| `submit-appstore-release` | CodexまたはClaudeが原稿準備／先行保存と正式提出を振り分け、監査済みpackageを明示許可の下で提出・再開するとき。先行save実装は§9.2の後続Issue |
+| `submit-appstore-release` | CodexまたはClaudeが原稿準備／先行保存と正式提出を振り分け、監査済みpackageを明示許可の下で提出・再開するとき。先行save実装は§9.2の後続Issue、API入出力は§7.2の`asc` adapter |
 
 ## 6. エージェント構成
 
@@ -194,7 +194,7 @@ Codex は `.codex/agents/*.toml`、Claude は `.claude/agents/*.md` を使いま
 - Vercel: Web配信または補助サービスのdeployが必要な場合だけ
 - ElevenLabs: 承認済みの音声・画像・動画処理が必要な場合だけ
 - Google Mobile Ads／UMP: 派生アプリの確定仕様でAdMob収益化を明示採用した場合だけ
-- App Store Connect: TestFlight、提出、審査対応
+- App Store Connect: metadata保存、build upload、TestFlight配信、提出、審査対応。公開APIで扱える操作は[固定版`asc` adapter](#72-app-store-connect-api-adapter)だけを使う
 
 認証済み操作はCodexとClaudeのどちらも実行できます。実行モデルに関係なく、Issue contractで指定されたoperation／Executorと`Config/ownership.yml`のアカウント／targetを完全一致で検証し、未設定または不一致なら操作しません。
 
@@ -221,6 +221,21 @@ Codex は `.codex/agents/*.toml`、Claude は `.claude/agents/*.md` を使いま
 offline fixtureの成功、Google demo smokeの成功、AdMob Consoleのremote state、productionのApp Store readiness／配信状態は独立した証拠とする。ローカル成功をremote完了／収益発生／審査通過に読み替えず、remote操作は別Issue contractのoperation／Executor／account／target／ユーザー承認がある場合だけ行う。
 
 この節と[D-057](decisions.md#d-057-広告収益化を非trackingの条件付きadmob統合として採用する)は実装契約の確定だけを行う。共有skill／activation tool／runtime source／validatorとそのBuild／Test／Simulator／release evidenceは後続Issueのcurrent-Head成果が揃うまで未実装・未検証である。
+
+### 7.2 App Store Connect API adapter
+
+公開App Store Connect APIで扱えるApp Store Connect／TestFlight操作は、[App Store Connect CLI](https://github.com/rorkai/App-Store-Connect-CLI)（`asc`）をguarded runner経由で呼ぶadapterだけで行う。ユーザーは2026-09-23に、移行範囲をmetadata save、正式提出、build upload、TestFlight配信の全四領域とし、公開APIで扱えないApp Privacy申告を既存のauthenticated browser sectionに残すことを採用した。
+
+- **固定版の導入**: 公式GitHub releaseのmacOS arm64 assetをexact versionとSHA-256でrepository内のpin recordへ固定する。取得したbytesが公開checksum fileとpin recordの双方に一致した場合だけ、repository外の固定locationへno-replaceで配置する。Homebrew、`curl | bash`のinstall script、自動update、`asc install-skills`、未固定versionは使わない。version更新は新しいpin recordと回帰testを持つ別Issueで行う。
+- **起動境界**: guarded runnerが唯一の起動口であり、起動ごとにpinned binaryのversionとdigestを再照合する。operationごとのsubcommand／flag allowlist、JSON出力、有限timeout、stdout／stderrのredactionを強制し、telemetryを無効化し、`asc`自身のKeychain／config／profile／web sessionを読まない隔離設定で起動する。`asc web`、`--deep`、`auth login`／`auth logout`、`apps wall`、`install-skills`、`signing`系command、`workflow run`、telemetry有効化、allowlist外subcommandは拒否する。
+- **認証**: App Store Connect API keyはTeam keyのApp Manager roleとする。Key IDとIssuer IDは[Keychain命名](../docs/security.md#2-保存先)、`.p8`は専用file-secret directoryへ置き、`run-with-secret.sh`／`run-with-private-key.sh`で子process envへだけ渡す。Admin role、Individual key、Apple IDのpassword／2FA、web session、`asc`自身の認証保存、repository内`.asc/`は使わない。
+- **Operation model**: `appstore.inspect_app`はidentityと状態の読取専用照会とreadback、`appstore.update_metadata`はapp information、localization、screenshot、review information、`appstore.upload_build`はarchive／export成果物のuploadとprocessing readback、`appstore.submit_review`はreadback済みbuildの選択と審査提出、新規`appstore.distribute_testflight`はTestFlight group配信と外部group向けbeta app review提出を担当する。同じIssueは同一providerの複数operationを宣言でき、preflightは宣言済みoperationごとに発行する。live operationは従来どおり`release` stage、`full` scope、`strict`、宣言済みoperation／Executor、必要なユーザー承認を要する。
+- **Build署名**: archive／exportはautomatic signingと同じAPI key認証によるprovisioning更新だけを使う。証明書／profileの作成・失効・同期、manual signing、Apple ID sign-inは行わない。
+- **Web専用操作**: App Privacy申告は既存authenticated browser sectionで入力・readbackし、readback sourceをAPI sectionと区別して記録する。新規App record作成、契約、税務、銀行、価格は引き続き対象外とする。
+- **証拠**: API readbackはsanitized digestと`asc://` remote referenceだけを記録し、field値、秘密、tester個人情報を保存しない。テンプレート内Issueはfake `asc`とfake `xcodebuild`だけで検証し、live API、実upload、実提出、実配信の成功を主張しない。live結果は派生アプリのrelease Issueで別の証拠とする。
+- **Workflow-only境界**: [受け入れ条件 §3.3](acceptance.md#33-workflow-only検証)のexact allowlistは、後続Issueが自Headでexact pathとして列挙したasc adapterのtool、helper、fixture、直接regression testだけを追加できる。directory、prefix、`asc`名の一致では許可せず、`appstore.*` operationやlive外部操作をworkflow-onlyで認可しない。
+
+実装は#130（pinned installerとguarded runner）、#131（production preflightとoperation model）、#132（§9.2のselective save）、#133（build upload）、#134（release sectionのAPI移行）、#135（TestFlight配信）の順に分ける。#134が完了するまでは、既存のauthenticated browser section workflowだけが完全releaseの実行経路である。この節と[D-059](decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)は契約の確定だけを行い、adapterのinstall、実装、live API成功を主張しない。
 
 ## 8. Supabase構成
 
@@ -268,7 +283,7 @@ App Store準備は、原稿の確認、remote保存、release readiness、提出
 
 §9.1のfield inventoryを再利用し、[4モードの入出力と保存・再開契約](../docs/agent-contracts/appstore-submission.md#operation-modes-and-selective-metadata-save)を適用する。原稿正本と確認根拠は`App Store/`、部分保存の実行記録はpackage外の`.artifacts/appstore-metadata/<issue>/<attempt>/`、正式releaseのpackage/resultは既存の`App Store/submission/`へ分離する。別形式の部分記録を既存recorderへ入力せず、package tree digestの除外規則も変えない。
 
-#52で実装するのは文書と既存`submit-appstore-release`の薄いmode routingだけである。実行可能なsave modeを追加する後続Issueは、#52とread-only準備の#110に依存し、次のwrite-setとTestをClaim前に確定する。
+#52で実装するのは文書と既存`submit-appstore-release`の薄いmode routingだけである。実行可能なsave modeを追加する後続Issueは#132とし、#52とread-only準備の#110に加えて§7.2の#131に依存し、次のwrite-setとTestをClaim前に確定する。remote formのbaseline、保存、readbackは§7.2のguarded runnerだけで行う。
 
 - 専用の共有`.agents/skills/save-appstore-metadata/`、対応する`.claude/skills/`相対symlink、§5のrouting。これは予定名であり、現在使えるskillや既存scriptの新flagではない。
 - そのskillのpublic entrypointと、field/locale差分・source固定・account/target照合・保存・readback・履歴公開を行うhelper。既存provider adapterで表現できない観察項目や権限は、その変更ファイルと安全確認もIssueに明示し、広い操作へ代用しない。

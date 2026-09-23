@@ -56,7 +56,7 @@ Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの�
 
 `shape`は`iphone-ja`、applicationを検証する`harden`はcanonical部分集合の`targeted`、`release`は`full`を使用します。repository testの`targeted`は既知domainの関連testだけを選び、manifest、runner、tracked test、複数domainを理由に全件へ自動昇格しません。未知pathは開始前に停止し、`head-all`／`base-and-head`と4条件検証はrelease、nightly相当の明示実行、またはユーザーのIssue contract上の明示要求に限定します。未確認の条件は延期・未検証として報告します。
 
-workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
+workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression test、D-059に従い後続Issueがexact列挙するasc adapterのtool／helper／fixture／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
 
 UI方向比較のHTMLは選択を助ける作業artifactであり、仕様の正本、pixel仕様、Build／Test／Simulator／画像評価の証拠にはしません。実装は選択した情報階層、主要導線、状態とaccessibility意図をnative SwiftUIへ翻訳します。
 
