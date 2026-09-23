@@ -18,7 +18,32 @@ artifact_contract="$artifact_issue_root/issue-contract.json"
 
 instruction='You are the opposite-model acceptance auditor. Read only the supplied local review packet and files it references. Do not edit files, run tests, operate simulators, commit, push, use network services, authentication, or external tools. If repositoryTests is present, assess its recorded execution and per-AC mappings as sealed evidence. If repositoryTestPlan is present, verify its requested/resolved scope, manifest/diff identity, exact test paths, ordered AC mappings, repositoryTestPlanFile exact-byte reference, and agreement with schema v3 repositoryTests. For scope base-and-head, verify both ordered revisions, their distinct tested SHA and full inventory, and the repositoryTestsFile exact-byte reference. Base tests support only baseline/regression claims, never a new Head feature. For each supported AC-N, include its exact zero-based mapping reference repository-tests.json#acceptanceEvidence/N-1 (replace N-1 with the numeric index); another AC mapping, prose, or reduced evidence is insufficient. Return exactly one raw JSON object conforming to docs/agent-contracts/review-packet.md Result schema, including the exact reviewPacketDigest from the schema v2 packet bytes. Do not add prose or Markdown fences before or after the JSON object.'
 packet_absolute="$artifact_issue_root/$head_sha/review-packet.json"
+review_scaffold=$(/usr/bin/ruby -rjson -rdigest - "$packet_absolute" <<'RUBY'
+packet_path = ARGV.fetch(0)
+packet = JSON.parse(File.binread(packet_path))
+evidence_file = packet.key?("repositoryTests") ? "repository-tests.json" : "verify.json"
+identity = {
+  "schemaVersion" => packet.fetch("schemaVersion"),
+  "issue" => packet.fetch("issue"),
+  "reviewerModel" => "codex",
+  "baseSha" => packet.fetch("baseSha"),
+  "headSha" => packet.fetch("headSha"),
+  "verifySha" => packet.fetch("verifySha"),
+  "issueContractDigest" => packet.fetch("issueContract").fetch("digest")
+}
+if packet.fetch("schemaVersion") == 2
+  identity["reviewPacketDigest"] = "sha256:#{Digest::SHA256.file(packet_path).hexdigest}"
+end
+references = packet.fetch("acceptanceCriteria").each_with_index.map do |criterion, index|
+  {"id" => criterion.fetch("id"), "evidence" => ["#{evidence_file}#acceptanceEvidence/#{index}"]}
+end
+puts "Exact result identity fields: #{JSON.generate(identity)}"
+puts "Exact ordered acceptance IDs and evidence references: #{JSON.generate(references)}"
+RUBY
+)
+instruction="$instruction acceptanceAssessment[].evidence must contain only current-Head packet artifact references, relative to the packet's canonical Issue/Head artifact directory: for example review.diff, verify.json#acceptanceEvidence/0, repository-tests.json#acceptanceEvidence/0, or repository-test-plan.json when present. Never use repository source paths, absolute paths, review-packet.json shorthand, or prose as acceptance evidence. Repository source paths belong only in findings[].file, relative to the executing Issue worktree root. Copy the exact identity fields and ordered AC evidence references below into the Result and acceptanceAssessment; add verdict, findings, reviewedAt in ISO 8601 format, and one supported or unsupported status per assessment. The scaffold does not decide verdict, findings, or supported/unsupported status; assess the supplied evidence independently."
 prompt="$instruction
+$review_scaffold
 Validated review packet: $packet_absolute
 Physical issue contract: $artifact_contract
 Physical current-Head evidence root: $artifact_head_root

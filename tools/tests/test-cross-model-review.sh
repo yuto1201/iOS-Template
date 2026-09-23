@@ -283,6 +283,109 @@ PATH="$script_launcher_bin:$fake_bin:$PATH" assert_fails 'script Codex launchers
 [[ $(cat "$workspace/output") == *'blocked:environment:'* ]] || { echo 'script Codex launcher did not fail as blocked:environment' >&2; exit 1; }
 write_packet codex claude
 
+# Exercise the actual Codex prompt and result publication for both packet
+# versions and both evidence sources. All inputs below are isolated fixtures.
+cp "$artifact_root/verify.json" "$workspace/scaffold-verify.before"
+cp "$artifact_root/review.diff" "$workspace/scaffold-diff.before"
+BODY="$FAKE_GH_ISSUE_BODY" ruby -e '
+  path = ENV.fetch("BODY"); body = File.binread(path)
+  body.sub!("\n## Spec anchors\n", "\n- AC-2: Every criterion has its own evidence reference\n- AC-3: Source paths remain finding locations only\n\n## Spec anchors\n") or abort
+  File.binwrite(path, body)
+'
+ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+  --issue "$issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > "$artifact_issue/issue-contract.json"
+refresh_contract_binding
+for scaffold_case in v1-verify v2-verify v2-repository; do
+  write_packet claude codex
+  ruby -I "$repo_root/tools/lib" -rjson -rdigest -rreview-contract - "$artifact_root" "$repo_root" "$scaffold_case" <<'RUBY'
+root, repo, variant = ARGV
+packet_path = File.join(root, "review-packet.json")
+packet = JSON.parse(File.binread(packet_path))
+criteria = packet.fetch("acceptanceCriteria")
+verify_path = File.join(root, "verify.json")
+verify = JSON.parse(File.binread(verify_path))
+verify["acceptanceEvidence"] = criteria.map { |entry| {"id" => entry.fetch("id"), "status" => "passed", "evidence" => ["review.diff"]} }
+verify["visualEvaluation"] = {"status" => "not-applicable"}
+verify["completedAt"] = "2026-08-24T00:00:30Z"
+File.binwrite(verify_path, JSON.generate(verify))
+if variant.start_with?("v2-")
+  packet["schemaVersion"] = 2
+  diff = IOSTemplate::ReviewContract.actual_diff(repo: repo, base_sha: packet.fetch("baseSha"), head_sha: packet.fetch("headSha"))
+  File.binwrite(File.join(root, "review.diff"), diff)
+  %w[diff verify].each do |key|
+    path = packet.delete("#{key}File")
+    packet[key] = {"path" => path, "digest" => "sha256:#{Digest::SHA256.file(File.join(root, File.basename(path))).hexdigest}"}
+  end
+  packet["imageFiles"] = []
+end
+if variant == "v2-repository"
+  test_path = "tools/tests/test-review-route.sh"
+  started = "2026-08-24T00:00:00Z"
+  completed = "2026-08-24T00:00:20Z"
+  record = packet.select { |key, _| %w[issue baseSha headSha issueContract].include?(key) }.merge(
+    "schemaVersion" => 1, "status" => "passed",
+    "runnerFiles" => %w[tools/run-repository-tests.sh tools/lib/run-repository-tests.rb].map { |path| {"path" => path, "digest" => "sha256:#{Digest::SHA256.file(File.join(repo, path)).hexdigest}"} },
+    "suite" => {"path" => "tools/tests", "pattern" => "test-*.sh", "total" => 1, "passed" => 1, "failed" => 0},
+    "tests" => [{"path" => test_path, "arguments" => [], "status" => "passed", "exitStatus" => 0,
+      "outputDigest" => "sha256:#{Digest::SHA256.hexdigest("synthetic fixture")}", "startedAt" => started, "completedAt" => completed}],
+    "acceptanceEvidence" => criteria.map { |entry| {"id" => entry.fetch("id"), "status" => "passed", "tests" => [test_path]} },
+    "startedAt" => started, "completedAt" => completed)
+  File.binwrite(File.join(root, "repository-tests.json"), JSON.generate(record))
+  packet["repositoryTests"] = record
+end
+File.binwrite(packet_path, JSON.generate(packet))
+RUBY
+  reset_review_requested
+  run_review claude
+  ruby -rjson -rdigest - "$artifact_root" <<'RUBY'
+root = ARGV.fetch(0)
+packet_path = File.join(root, "review-packet.json")
+packet = JSON.parse(File.binread(packet_path))
+result = JSON.parse(File.binread(File.join(root, "review.json")))
+expected_identity = packet.select { |key, _| %w[schemaVersion issue baseSha headSha verifySha].include?(key) }.merge(
+  "reviewerModel" => "codex", "issueContractDigest" => packet.fetch("issueContract").fetch("digest"))
+expected_identity["reviewPacketDigest"] = "sha256:#{Digest::SHA256.file(packet_path).hexdigest}" if packet.fetch("schemaVersion") == 2
+abort "published scaffold identity differs" unless result.select { |key, _| expected_identity.key?(key) } == expected_identity
+source = packet.key?("repositoryTests") ? "repository-tests.json" : "verify.json"
+expected = packet.fetch("acceptanceCriteria").each_with_index.map { |entry, index| {"id" => entry.fetch("id"), "status" => "supported", "evidence" => ["#{source}#acceptanceEvidence/#{index}"]} }
+abort "published scaffold assessment differs" unless result.fetch("acceptanceAssessment") == expected && result.fetch("verdict") == "approved"
+RUBY
+  assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["reviewerModel"] == "codex" && value["exitStatus"] == 0'
+  assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
+done
+
+# The same existing source is valid as a finding location, but never as AC
+# evidence. Keep the valid mapping as well to prove additional sources reject.
+ruby -rjson - "$artifact_root/review.json" "$artifact_root/fixture-review-result.json" <<'RUBY'
+source, target = ARGV
+result = JSON.parse(File.binread(source))
+result["findings"] = [{"severity" => "low", "category" => "maintainability", "file" => "tools/lib/review-contract.rb", "line" => 1,
+  "title" => "Synthetic source finding", "evidence" => "fixture", "requiredChange" => "clarify later"}]
+File.binwrite(target, JSON.generate(result))
+RUBY
+reset_review_requested
+run_review claude
+ruby -rjson -e 'abort "published Result differs from fixture" unless JSON.parse(File.binread(ARGV[0])) == JSON.parse(File.binread(ARGV[1]))' \
+  "$artifact_root/fixture-review-result.json" "$artifact_root/review.json"
+ruby -rjson - "$artifact_root/fixture-review-result.json" <<'RUBY'
+path = ARGV.fetch(0)
+result = JSON.parse(File.binread(path))
+result.fetch("acceptanceAssessment").fetch(1).fetch("evidence") << "tools/lib/review-contract.rb"
+File.binwrite(path, JSON.generate(result))
+RUBY
+reset_review_requested
+assert_fails 'Codex source-path AC evidence is still rejected by the unchanged validator' run_review claude
+[[ $(cat "$workspace/output") == *'result.acceptanceAssessment[1].evidence[1] is not readable without following links'* ]] || { cat "$workspace/output" >&2; exit 1; }
+[[ ! -e "$artifact_root/review.json" && ! -e "$artifact_root/review-receipt.json" ]]
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:review"]'
+rm "$artifact_root/fixture-review-result.json" "$artifact_root/repository-tests.json"
+cp "$workspace/scaffold-verify.before" "$artifact_root/verify.json"
+cp "$workspace/scaffold-diff.before" "$artifact_root/review.diff"
+restore_default_contract
+write_packet codex claude
+echo 'PASS: Codex exact scaffold, ordered multi-AC evidence, v1/v2 identity, publication and source-path rejection'
+
 # RED was observed with the previous assertion while the production tool was absent.
 export FAKE_REVIEWER_MODE=approved
 write_result approved
