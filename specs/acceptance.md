@@ -222,7 +222,7 @@ Foundation、Identity bootstrap、Simulator verificationなどテンプレート
 - [手動検証表](../docs/agent-contracts/appstore-submission.md#selective-save-verification-plan)の全caseを確認し、後続実装では実入口の合成fixtureへ落とす。英語／日本語、Unicode、byteと文字数、Apple公式要件の再取得を含み、未知値の空文字上書き、権限外のform同時保存、曖昧応答の盲目的再試行を拒否する。
 - 部分保存記録では全素材・申告・法務・release audit・明示提出許可を満たせず、既存release journalに流用できない。実装Issueのwrite-setとTest計画は§9.2で定め、#110のread-only準備と実保存を混同しない。
 
-App Store Connect API adapterは[構成 §7.2](architecture.md#72-app-store-connect-api-adapter)に従い、次を満たす。#129は契約の確定だけであり、次の実装・install・live API成功を完了済みとは報告しない。
+App Store Connect API adapterは[構成 §7.2](architecture.md#72-app-store-connect-api-adapter)に従い、次を満たす。#142（#129の後継）は契約の確定だけであり、次の実装・install・live API成功を完了済みとは報告しない。
 
 - `asc`は公式releaseのmacOS arm64 assetをexact versionとSHA-256で固定し、公開checksum fileとpin recordの双方に一致したbytesだけをrepository外へ配置する。起動ごとにversionとdigestを再照合し、Homebrew、install script、自動update、未固定versionを使わない。
 - guarded runnerだけが`asc`を起動し、operationごとのsubcommand／flag allowlist、JSON出力、有限timeout、redaction、telemetry無効、隔離設定を強制する。web session、`--deep`、`auth login`、`apps wall`、`install-skills`、`signing`系、`workflow run`、allowlist外subcommandを拒否する。
