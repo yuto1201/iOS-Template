@@ -1,0 +1,28 @@
+#!/bin/bash
+set -euo pipefail
+export LANG=en_US.UTF-8
+if [[ "${1:-}" == --version ]]; then
+  printf '%s\n' '5.4.0 (commit: fixture, date: fixture)'
+  exit 0
+fi
+exec /usr/bin/ruby --disable-gems -rjson -e '
+  abort "unsafe PATH" unless ENV["PATH"] == "/usr/bin:/bin"
+  %w[ASC_TELEMETRY_DISABLED DO_NOT_TRACK ASC_BYPASS_KEYCHAIN].each { |k| abort "unsafe isolation" unless ENV[k] == "1" }
+  abort "unsafe defaults" unless ENV["ASC_DEFAULT_OUTPUT"] == "json" && ENV["ASC_KEY_TYPE"] == "team"
+  abort "config exists" if File.exist?(ENV.fetch("ASC_CONFIG_PATH"))
+  abort "config outside HOME" unless File.dirname(ENV.fetch("ASC_CONFIG_PATH")) == ENV.fetch("HOME")
+  abort "ambient config" if File.exist?(File.join(ENV.fetch("HOME"), ".asc")) || File.exist?(".asc")
+  abort "cwd not isolated" unless Dir.pwd == ENV.fetch("HOME")
+  allowed = %w[PATH HOME ASC_TELEMETRY_DISABLED DO_NOT_TRACK ASC_BYPASS_KEYCHAIN ASC_CONFIG_PATH ASC_DEFAULT_OUTPUT ASC_KEY_TYPE ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY_PATH LANG PWD SHLVL _ __CF_USER_TEXT_ENCODING]
+  abort "ambient env: #{(ENV.keys - allowed).join(",")}" unless (ENV.keys - allowed).empty?
+  abort "wrong key" unless ENV["ASC_KEY_ID"] == "fixture-key-130" && ENV["ASC_ISSUER_ID"] == "fixture-issuer-130"
+  abort "wrong private key" unless File.read(ENV.fetch("ASC_PRIVATE_KEY_PATH")) == "synthetic key fixture\n"
+  abort "secret argv" if ARGV.any? { |arg| ENV.values_at("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH").any? { |s| arg.include?(s) } }
+  abort "wrong output" unless ARGV.last(2) == ["--output", "json"] && ARGV.count("--output") == 1
+  sleep 10 if ARGV.include?("fixture-timeout")
+  if ARGV.include?("fixture-leak") || ARGV.include?("fixture-fail")
+    ENV.values_at("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH").each { |v| STDOUT.write(v); STDERR.write(v) }
+    exit(ARGV.include?("fixture-fail") ? 17 : 0)
+  end
+  puts JSON.generate({"argv" => ARGV, "homeIsolated" => true, "envVerified" => true})
+' -- "$@"

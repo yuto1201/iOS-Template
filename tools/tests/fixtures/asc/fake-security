@@ -1,0 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+[[ $# == 6 && $1 == find-generic-password && $2 == -a && $3 == asc-fixture && $4 == -s && $6 == -w ]] || exit 41
+case "$5" in
+  ios-template/asc-fixture/app-store-connect/production/key-id) printf '%s' 'fixture-key-130' ;;
+  ios-template/asc-fixture/app-store-connect/production/issuer-id) printf '%s' 'fixture-issuer-130' ;;
+  *) exit 42 ;;
+esac
