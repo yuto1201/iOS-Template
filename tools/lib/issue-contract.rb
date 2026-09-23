@@ -62,6 +62,7 @@ module IOSTemplate
       appstore.upload_build
       appstore.update_metadata
       appstore.submit_review
+      appstore.distribute_testflight
     ].freeze
 
     ENVIRONMENTS = %w[local preview staging production].freeze

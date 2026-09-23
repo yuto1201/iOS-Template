@@ -15,6 +15,7 @@ module IOSTemplate
       appstore.upload_build
       appstore.update_metadata
       appstore.submit_review
+      appstore.distribute_testflight
     ].freeze
     RELEASE_DISPOSITION_CUTOVER = Time.iso8601("2026-09-15T11:00:00Z").freeze
     RELEASE_PHASE_PREFIX = "Release-phase binding:"

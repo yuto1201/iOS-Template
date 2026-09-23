@@ -270,6 +270,44 @@ assert_fails 'standard profile rejects any approval-required operation' "$repo_r
 write_feature_issue "$workspace/strict-release.md" $'- Operation: supabase.apply_migrations\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: strict\n- Reason: A production migration is a strict boundary.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/strict-release.md"
 
+write_feature_issue "$workspace/testflight-release.md" $'- Operation: appstore.distribute_testflight\n- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.' $'## Delivery profile\n\n- Profile: strict\n- Reason: TestFlight distribution requires strict verification.'
+ruby -e 'path=ARGV.fetch(0); body=File.binread(path); body.sub!(/## Delivery stage\n\n- Stage: harden\n- Time budget: 120 minutes\n- Reason: Validate one narrow workflow-contract concern.\n\n/, "") or abort; File.binwrite(path, body)' "$workspace/testflight-release.md"
+ruby "$repo_root/tools/lib/issue-contract.rb" --allow-legacy-delivery-stage --body "$workspace/testflight-release.md" --type feature --format contract \
+  --issue 42 --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z > "$workspace/testflight-release.json"
+REPO_ROOT="$repo_root" ruby -rjson -e '
+  require "#{ENV.fetch("REPO_ROOT")}/tools/lib/delivery-profile"
+  require "#{ENV.fetch("REPO_ROOT")}/tools/lib/verification-scope"
+  require "#{ENV.fetch("REPO_ROOT")}/tools/lib/issue-contract"
+  contract = JSON.parse(File.binread(ARGV.fetch(0)))
+  existing = %w[appstore.inspect_app appstore.update_metadata appstore.upload_build appstore.submit_review]
+  operation = "appstore.distribute_testflight"
+  abort "new operation missing from parsed contract" unless contract.fetch("externalOperations") == [operation]
+  abort "new operation is not strict" unless IOSTemplate::DeliveryProfile.strict_operation?(operation)
+  existing.each do |old|
+    abort "existing operation removed: #{old}" unless IOSTemplate::IssueContract::ALLOWED_OPERATIONS.include?(old)
+    abort "existing operation no longer has strict policy: #{old}" if old != "appstore.inspect_app" && !IOSTemplate::DeliveryProfile.strict_operation?(old)
+    prior = contract.merge("externalOperations" => [old])
+    release = prior.merge("deliveryStage" => {"name" => "release", "reason" => "Live release", "timeBudgetMinutes" => 120}, "verification" => {})
+    abort "existing operation no longer requires full scope: #{old}" unless IOSTemplate::VerificationScope.validate_contract!(release) == "full"
+    harden = prior.merge("deliveryStage" => {"name" => "harden", "reason" => "Too early", "timeBudgetMinutes" => 120})
+    begin IOSTemplate::VerificationScope.validate_contract!(harden); abort "harden accepted for #{old}"; rescue ArgumentError => e; abort unless e.message.include?("release Delivery stage"); end
+  end
+  abort "unknown App Store operation accepted" if IOSTemplate::IssueContract::ALLOWED_OPERATIONS.include?("appstore.unknown_operation")
+  release = contract.merge("deliveryStage" => {"name" => "release", "reason" => "Live release", "timeBudgetMinutes" => 120}, "verification" => {})
+  abort "new operation did not resolve to full scope" unless IOSTemplate::VerificationScope.validate_contract!(release) == "full"
+  harden = contract.merge("deliveryStage" => {"name" => "harden", "reason" => "Too early", "timeBudgetMinutes" => 120})
+  begin IOSTemplate::VerificationScope.validate_contract!(harden); abort "harden accepted"; rescue ArgumentError => e; abort unless e.message.include?("release Delivery stage"); end
+  targeted = release.merge("verificationScope" => {"name" => "targeted", "reason" => "Too narrow"})
+  begin IOSTemplate::VerificationScope.validate_contract!(targeted); abort "targeted accepted"; rescue ArgumentError => e; abort unless e.message.include?("full Verification scope"); end
+  %w[fast standard].each do |name|
+    weak = contract.merge("deliveryProfile" => {"name" => name, "reason" => "Too weak"})
+    begin IOSTemplate::IssueContract.validate_snapshot!(weak, issue: 42, repository: "yuto1201/iOS-Template"); abort "#{name} accepted"; rescue IOSTemplate::IssueContract::ValidationError => e; abort unless e.message.include?("strict delivery profile"); end
+  end
+' "$workspace/testflight-release.json"
+
+write_feature_issue "$workspace/unknown-appstore-operation.md" $'- Operation: appstore.unknown_operation\n- Service: App Store Connect\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.' $'## Delivery profile\n\n- Profile: strict\n- Reason: Unknown App Store operations must be rejected.'
+assert_fails 'unknown App Store operation is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-appstore-operation.md"
+
 write_feature_issue "$workspace/model-neutral-providers.md" $'- Operation: linear.inspect_workspace\n- Service: Linear\n- Environment: production\n- Executor: Claude\n- Approval required: no\n\n- Operation: vercel.inspect_team\n- Service: Vercel\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/model-neutral-providers.md"
 

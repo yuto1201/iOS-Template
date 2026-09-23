@@ -77,11 +77,11 @@ preflight証拠には秘密値を含めず、Issue、executor、provider、accou
 - Linear: `linear.inspect_workspace`
 - Vercel: `vercel.inspect_team`
 - ElevenLabs: `elevenlabs.process_media`。旧`elevenlabs.generate_audio`は新規Issueで使用しない
-- App Store Connect: `appstore.inspect_app`、`appstore.upload_build`、`appstore.update_metadata`、`appstore.submit_review`
+- App Store Connect: `appstore.inspect_app`、`appstore.upload_build`、`appstore.update_metadata`、`appstore.submit_review`、`appstore.distribute_testflight`
 
 Linear／Vercelのmutation operationは、必要なworkflowとschemaを別Issueで追加するまでallowlistへ含めません。利用可能なconnectorが存在することだけではmutation権限になりません。
 
-App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)の固定版`asc` guarded runnerだけで行います。TestFlight配信用の`appstore.distribute_testflight`は、#131がcontract parser、strict判定、preflightへ追加するまで宣言できません。App Privacy申告だけは既存のauthenticated browser sectionで行います。
+App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)の固定版`asc` guarded runnerだけで行います。`appstore.distribute_testflight`の宣言には他のlive `appstore.*`と同じ`release` stage、`full` scope、`strict`、Issue contractとExecutorの一致を要します。#146がoperationごとのproduction preflight証拠を実装するまで、live操作へ進めません。App Privacy申告だけは既存のauthenticated browser sectionで行います。
 
 ## 6. Provider別preflight
 
