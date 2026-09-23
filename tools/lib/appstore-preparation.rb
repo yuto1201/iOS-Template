@@ -223,9 +223,15 @@ module IOSTemplate
         return :failed unless records.pop == ""
 
         entries = {}
+        paths = {}
         records.each do |record|
           match = record.match(/\A(\d{6}) (blob|commit) ([0-9a-f]{40})\t(.+)\z/m)
           return :failed unless match
+          # A tree cannot name one path twice; treat that as an invalid entry
+          # rather than letting a later record win.
+          return :failed if paths.key?(match[4])
+
+          paths[match[4]] = true
           next unless match[2] == "blob"
 
           relative = match[4].dup.force_encoding(Encoding::UTF_8)

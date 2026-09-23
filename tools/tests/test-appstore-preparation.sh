@@ -2489,10 +2489,11 @@ revision_probe = <<~'PROBE'
   repo_root, project, mode = ARGV
   require File.join(repo_root, "tools/lib/appstore-preparation.rb")
   sources = IOSTemplate::AppStorePreparation::Sources
-  if mode == "fallback"
+  if %w[fallback duplicate-fallback].include?(mode)
     sources.send(:remove_const, :COMMITTED_TREE_MAX_BYTES)
     sources.const_set(:COMMITTED_TREE_MAX_BYTES, 1)
   end
+  duplicated = "Config/app-identity.json"
   calls = []
   failed_status = Struct.new(:success?).new(false)
   passed_status = Struct.new(:success?).new(true)
@@ -2503,7 +2504,13 @@ revision_probe = <<~'PROBE'
       listing = !command.include?("--") && command.each_cons(3).include?(["-r", "-z", "--full-tree"])
       next ["", failed_status] if listing && mode == "failed"
       next ["not a tree record\0", passed_status] if listing && mode == "malformed"
-      super(*args, **options)
+      output, status = super(*args, **options)
+      if listing && mode == "duplicate"
+        record = output.split("\0").find { |entry| entry.end_with?("\t#{duplicated}") }
+        output += "#{record}\0" if record
+      end
+      output *= 2 if mode == "duplicate-fallback" && !command.include?("-r") && command.last == duplicated
+      [output, status]
     end
   end)
   report = IOSTemplate::AppStorePreparation::Report.new(project).run
@@ -2519,7 +2526,8 @@ end
 head_revision = Open3.capture2e("/usr/bin/git", "-C", project, "rev-parse", "--verify", "HEAD").first.strip
 report_sources = ->(probe) { probe.fetch("report").fetch("fields").flat_map { |row| row.fetch("sources") }.uniq { |source| source["path"] } }
 # Edited bytes of committed sources must stay unattributed in both lookups.
-edited = report_sources.call(run_revision_probe.call("batched"))
+initial = report_sources.call(run_revision_probe.call("batched"))
+edited = initial
   .select { |source| source["revision"] == head_revision && source["path"].end_with?(".md") }
   .map { |source| source["path"] }.sort.first(2)
 abort "revision fixture lacks committed Markdown sources to edit" unless edited.length == 2
@@ -2544,5 +2552,13 @@ abort "batched attribution changed the preparation report" unless strip_time.cal
   abort "#{mode} listing fell back to per-file lookups" unless probe["full"] == 1 && probe["perFile"].zero?
   abort "#{mode} listing attributed sources to the revision" unless report_sources.call(probe).none? { |source| source["revision"] }
 end
-puts "PASS: committed-revision attribution lists the fixed revision once, matches the oversized per-file fallback and attributes nothing after a failed or malformed listing"
+# Duplicate entries for one committed source are invalid in either lookup.
+duplicate = run_revision_probe.call("duplicate")
+abort "duplicate tree entries fell back to per-file lookups" unless duplicate["full"] == 1 && duplicate["perFile"].zero?
+abort "duplicate tree entries attributed sources to the revision" unless report_sources.call(duplicate).none? { |source| source["revision"] }
+duplicate_fallback = run_revision_probe.call("duplicate-fallback")
+duplicated_source = report_sources.call(duplicate_fallback).find { |source| source["path"] == "Config/app-identity.json" }
+abort "duplicate per-file entries attributed the source to the revision" unless duplicated_source && duplicated_source["digest"] && duplicated_source["revision"].nil?
+abort "duplicate per-file entries changed unrelated attribution" unless report_sources.call(duplicate_fallback).count { |source| source["revision"] == head_revision } == initial.count { |source| source["revision"] == head_revision } - 1
+puts "PASS: committed-revision attribution lists the fixed revision once, matches the oversized per-file fallback and attributes nothing after a failed, malformed or duplicate listing"
 RUBY
