@@ -38,6 +38,7 @@ module IOSTemplate
       MAX_BUILD_INPUT_FILES = 20_000
       MAX_BUILD_INPUT_BYTES = 1_000_000_000
       MAX_BUILD_INPUT_FILE_BYTES = 512_000_000
+      COMMITTED_TREE_MAX_BYTES = 16_000_000
 
       def initialize(root, shared_evidence: true, git_context: true)
         raise InvalidInput, "invalid-project-root" unless root.start_with?("/") && File.realpath(root) == root
@@ -189,6 +190,57 @@ module IOSTemplate
 
       def committed_revision(relative, bytes)
         return nil unless @revision
+        entries = committed_tree_entries
+        return per_file_committed_revision(relative, bytes) if entries == :oversized
+        return nil unless entries.is_a?(Hash)
+
+        expected_blob = Digest::SHA1.hexdigest("blob #{bytes.bytesize}\0".b + bytes.b)
+        # An untracked or edited draft has a digest, but is not attributed to
+        # HEAD merely because it happens to live inside that checkout.
+        entries[relative] == ["100644", expected_blob] || entries[relative] == ["100755", expected_blob] ? @revision : nil
+      end
+
+      # The fixed revision's tree is immutable, so one listing per run replaces
+      # a Git process per source. Only an oversized listing keeps the per-file
+      # lookup; a failed or malformed listing attributes nothing.
+      def committed_tree_entries
+        return @committed_tree_entries if defined?(@committed_tree_entries)
+
+        output, status = Open3.capture2e(
+          {"GIT_OPTIONAL_LOCKS" => "0", "GIT_NO_REPLACE_OBJECTS" => "1", "GIT_NO_LAZY_FETCH" => "1"},
+          "/usr/bin/git", "--no-pager", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", @path,
+          "ls-tree", "-r", "-z", "--full-tree", @revision
+        )
+        @committed_tree_entries = committed_tree_listing(output, status)
+      end
+
+      def committed_tree_listing(output, status)
+        return :failed unless status.success?
+        return :oversized if output.bytesize > COMMITTED_TREE_MAX_BYTES
+        return {} if output.empty?
+
+        records = output.b.split("\0".b, -1)
+        return :failed unless records.pop == ""
+
+        entries = {}
+        paths = {}
+        records.each do |record|
+          match = record.match(/\A(\d{6}) (blob|commit) ([0-9a-f]{40})\t(.+)\z/m)
+          return :failed unless match
+          # A tree cannot name one path twice; treat that as an invalid entry
+          # rather than letting a later record win.
+          return :failed if paths.key?(match[4])
+
+          paths[match[4]] = true
+          next unless match[2] == "blob"
+
+          relative = match[4].dup.force_encoding(Encoding::UTF_8)
+          entries[relative] = [match[1], match[3]] if relative.valid_encoding?
+        end
+        entries
+      end
+
+      def per_file_committed_revision(relative, bytes)
         output, status = Open3.capture2e(
           {"GIT_OPTIONAL_LOCKS" => "0", "GIT_NO_REPLACE_OBJECTS" => "1", "GIT_NO_LAZY_FETCH" => "1"},
           "/usr/bin/git", "--no-pager", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", @path,
@@ -196,8 +248,6 @@ module IOSTemplate
         )
         return nil unless status.success?
         expected_blob = Digest::SHA1.hexdigest("blob #{bytes.bytesize}\0".b + bytes.b)
-        # An untracked or edited draft has a digest, but is not attributed to
-        # HEAD merely because it happens to live inside that checkout.
         output == "100644 blob #{expected_blob}\t#{relative}\0" ||
           output == "100755 blob #{expected_blob}\t#{relative}\0" ? @revision : nil
       end
