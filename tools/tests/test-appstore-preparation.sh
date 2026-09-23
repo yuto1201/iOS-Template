@@ -2482,4 +2482,56 @@ puts "PASS: confirmed local module identity cannot become remote-saved through a
   check_target.call("different #{resource} readback", ->(inputs, _) { inputs["readback.json"]["remoteReference"] = "asc://apps/1234567890/#{resource}/other-resource" }, "incomplete-remote-form")
 end
 puts "PASS: copyright and category readbacks bind their actual resources and complete preserved attributes without accepting unrelated source chapters"
+
+# Committed-revision attribution reads the fixed revision's tree once per run.
+# A forced per-file fallback is the pre-batching algorithm and must agree.
+revision_probe = <<~'PROBE'
+  repo_root, project, mode = ARGV
+  require File.join(repo_root, "tools/lib/appstore-preparation.rb")
+  sources = IOSTemplate::AppStorePreparation::Sources
+  if mode == "fallback"
+    sources.send(:remove_const, :COMMITTED_TREE_MAX_BYTES)
+    sources.const_set(:COMMITTED_TREE_MAX_BYTES, 1)
+  end
+  calls = []
+  Open3.singleton_class.prepend(Module.new do
+    define_method(:capture2e) do |*args, **options|
+      command = args.drop_while { |value| value.is_a?(Hash) }
+      calls << command if command.include?("ls-tree")
+      super(*args, **options)
+    end
+  end)
+  report = IOSTemplate::AppStorePreparation::Report.new(project).run
+  full = calls.count { |command| !command.include?("--") && command.each_cons(3).include?(["-r", "-z", "--full-tree"]) }
+  per_file = calls.count { |command| !command.include?("-r") && command.include?("--") }
+  puts JSON.generate({"report" => report, "full" => full, "perFile" => per_file})
+PROBE
+run_revision_probe = lambda do |mode|
+  stdout, stderr, status = Open3.capture3("/usr/bin/ruby", "--disable-gems", "-E", "UTF-8", "-rjson", "-e", revision_probe, repo_root, project, mode)
+  abort "#{mode} revision probe failed: #{stderr}" unless status.success? && stderr.empty?
+  JSON.parse(stdout)
+end
+head_revision = Open3.capture2e("/usr/bin/git", "-C", project, "rev-parse", "--verify", "HEAD").first.strip
+report_sources = ->(probe) { probe.fetch("report").fetch("fields").flat_map { |row| row.fetch("sources") }.uniq { |source| source["path"] } }
+# Edited bytes of committed sources must stay unattributed in both lookups.
+edited = report_sources.call(run_revision_probe.call("batched"))
+  .select { |source| source["revision"] == head_revision && source["path"].end_with?(".md") }
+  .map { |source| source["path"] }.sort.first(2)
+abort "revision fixture lacks committed Markdown sources to edit" unless edited.length == 2
+original_bytes = edited.map { |relative| [relative, File.binread(File.join(project, relative))] }.to_h
+original_bytes.each { |relative, bytes| File.binwrite(File.join(project, relative), bytes + "\nSynthetic uncommitted edit.\n") }
+batched = run_revision_probe.call("batched")
+per_file = run_revision_probe.call("fallback")
+original_bytes.each { |relative, bytes| File.binwrite(File.join(project, relative), bytes) }
+attributed = report_sources.call(batched)
+committed = attributed.count { |source| source["revision"] == head_revision }
+uncommitted = attributed.select { |source| source["digest"] && source["revision"].nil? }.map { |source| source["path"] }
+abort "revision fixture lacks committed sources" unless committed >= 5
+abort "edited committed sources were attributed to the revision" unless (edited - uncommitted).empty?
+abort "batched attribution listed the tree #{batched['full']} times" unless batched["full"] == 1
+abort "batched attribution still ran #{batched['perFile']} per-file lookups" unless batched["perFile"].zero?
+abort "fallback did not use the per-file lookup" unless per_file["full"] == 1 && per_file["perFile"] >= committed
+strip_time = ->(report) { report.reject { |key, _| key == "checkedAt" } }
+abort "batched attribution changed the preparation report" unless strip_time.call(batched["report"]) == strip_time.call(per_file["report"])
+puts "PASS: committed-revision attribution lists the fixed revision once and matches the per-file fallback for every source"
 RUBY
