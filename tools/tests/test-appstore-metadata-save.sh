@@ -114,18 +114,92 @@ report = prepare.call
   end
 end
 
-contract = JSON.parse(File.binread(File.join(root, '.artifacts/issues/132/issue-contract.json')))
-contract['issue'] = 42
-contract['repository'] = 'example/save-fixture'
-contract['externalOperations'] << 'appstore.update_metadata'
-contract['deliveryStage'] = {'name'=>'release','reason'=>'Synthetic release operation fixture.','timeBudgetMinutes'=>240}
-contract['verificationScope'] = {'name'=>'full','reason'=>'Synthetic full scope for a simulated external operation.'}
 case_ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
-contract['verification'] = {'bundleIdentifier'=>'com.example.garden','unitTestIdentifier'=>'GardenNotesTests/GardenNotesTests/testMetadata()',
+verification = {'bundleIdentifier'=>'com.example.garden','unitTestIdentifier'=>'GardenNotesTests/GardenNotesTests/testMetadata()',
   'cases'=>case_ids.map { |id| {'id'=>id,'testIdentifier'=>'GardenNotesUITests/GardenNotesUITests/testMetadata'} },
-  'acceptanceMappings'=>contract['acceptanceCriteria'].map { |ac| {'id'=>ac['id'],'checks'=>['stage:build','stage:unit-tests']+case_ids.map { |id| "case:#{id}" }+case_ids.map { |id| "visual:#{id}" }} }}
+  'acceptanceMappings'=>[{'id'=>'AC-1','checks'=>['stage:build','stage:unit-tests']+case_ids.map { |id| "case:#{id}" }+case_ids.map { |id| "visual:#{id}" }}]}
+operations = [
+  ['github.read_issue', 'GitHub'],
+  ['github.update_issue', 'GitHub'],
+  ['github.push_branch', 'GitHub'],
+  ['github.create_pr', 'GitHub'],
+  ['github.merge_pr', 'GitHub'],
+  ['appstore.update_metadata', 'App Store Connect']
+]
+operation_blocks = operations.map do |operation, service|
+  "- Operation: #{operation}\n- Service: #{service}\n- Environment: production\n- Executor: Codex\n- Approval required: no"
+end.join("\n\n")
+# A live App Store operation requires release/full/strict in the contract parser.
+# This synthetic Issue is separate from the workflow-only implementation Issue.
+issue_body = <<~ISSUE
+  ## Goal
+
+  Exercise selective metadata save against a synthetic App Store Issue.
+
+  ## In scope
+
+  - Guarded localization save with fake remote state.
+
+  ## Out of scope
+
+  - Live App Store Connect changes.
+
+  ## Acceptance criteria
+
+  - AC-1: UI-direction route: not-applicable; Scope: synthetic metadata save; Reason: no app UI change
+
+  ## Spec anchors
+
+  - [App Store acceptance](specs/acceptance.md#8)
+
+  ## Dependencies
+
+  - None.
+
+  ## UI verification
+
+  - Not applicable.
+
+  ## Delivery stage
+
+  - Stage: release
+  - Time budget: 240 minutes
+  - Reason: Exercise the contract for a simulated App Store mutation.
+
+  ## Delivery profile
+
+  - Profile: strict
+  - Reason: App Store metadata updates are high-risk external operations.
+
+  ## Verification scope
+
+  - Scope: full
+  - Reason: App Store operations require the full scope in the Issue contract.
+
+  ## Verification
+
+  #{JSON.generate(verification)}
+
+  ## External operations
+
+  #{operation_blocks}
+
+  ## User approvals
+
+  - No additional approval.
+ISSUE
+body_path = File.join(scratch, 'issue-body.md')
+File.binwrite(body_path, issue_body)
+contract_output, contract_error, contract_status = Open3.capture3('/usr/bin/ruby', '--disable-gems',
+  File.join(root, 'tools/lib/issue-contract.rb'), '--body', body_path, '--type', 'release', '--format', 'contract',
+  '--issue', '42', '--repo', 'yuto1201/iOS-Template', '--fetched-at', '2026-09-24T00:00:00Z')
+check(contract_status.success?, "synthetic Issue contract parses: #{contract_error}")
+contract = JSON.parse(contract_output)
+check(contract['issue'] == 42 && contract['repository'] == 'yuto1201/iOS-Template' &&
+  contract['externalOperations'].include?('github.read_issue') &&
+  contract['externalOperations'].include?('appstore.update_metadata'), 'synthetic Issue contract authority')
 contract_path = '.artifacts/issues/42/issue-contract.json'
-write(project, contract_path, contract)
+write(project, contract_path, contract_output)
 write(project, '.artifacts/issues/42/state.json', {'issue'=>42,'state'=>'in-progress','executor'=>'codex','issueContract'=>{'path'=>contract_path,'digest'=>"sha256:#{Digest::SHA256.file(File.join(project,contract_path)).hexdigest}"}})
 preflight_path = '.artifacts/issues/42/provider-preflights/app-store-update_metadata.json'
 preflight = {'schemaVersion'=>2,'issue'=>42,'executor'=>'codex','provider'=>'app-store','account'=>'TEAM123456','target'=>'com.example.garden','environment'=>'production','operation'=>'appstore.update_metadata','health'=>'healthy','checkedAt'=>Time.now.utc.iso8601}
