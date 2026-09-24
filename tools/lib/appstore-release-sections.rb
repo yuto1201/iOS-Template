@@ -31,6 +31,7 @@ module IOSTemplate
     SHA = /\A[0-9a-f]{40}\z/
     VERSION = /\A[0-9]+(?:\.[0-9]+){1,2}\z/
     APPROVAL = %r{\Aapproval: user-approval://[a-z0-9-]{1,128}\z}
+    TEST_KEYS = %w[IOS_TEMPLATE_TEST_ASC_RUNNER IOS_TEMPLATE_TEST_OPERATION_DETAIL].freeze
 
     def refuse(message)
       raise Refused, message
@@ -162,8 +163,9 @@ module IOSTemplate
       refuse('preflight-missing-stale-or-operation-mismatch') unless evidence.is_a?(Hash) && evidence.keys.sort == PREFLIGHT_KEYS.sort &&
         expected.all? { |key,value| evidence[key] == value } && evidence['digest'] == digest(evidence.reject { |key,_| key == 'digest' }) &&
         checked && (context[:now] - checked).between?(0, 3600)
-      validate_live_issue(contract, context, operation) unless ENV['IOS_TEMPLATE_TEST_MODE'] == '1'
-      context.merge(contract: contract, preflight: preflight)
+      detail = ENV['IOS_TEMPLATE_TEST_MODE'] == '1' ? test_operation_detail : validate_live_issue(contract, context, operation)
+      validate_operation_approval(detail, context, operation)
+      context.merge(contract: contract, contract_digest: state.dig('issueContract','digest'), preflight: preflight)
     rescue JSON::ParserError, AppStorePreparation::InvalidInput, IssueContract::ValidationError, Ownership::ValidationError
       refuse('release-authority-invalid')
     end
@@ -185,14 +187,28 @@ module IOSTemplate
         repository: contract['repository'], fetched_at: contract['fetchedAt'], allow_legacy_delivery_stage: !contract.key?('deliveryStage'))
       refuse('live-issue-contract-drift') unless parsed.contract == contract
       detail = parsed.external_operation_details.find { |entry| entry['operation'] == operation }
-      refuse('live-operation-authority-mismatch') unless detail && detail['executor'].downcase == context[:executor] &&
-        detail['environment'] == 'production' && detail['service'] == 'App Store Connect'
+      detail
+    rescue JSON::ParserError, AppStorePreparation::InvalidInput, IssueContract::ValidationError, KeyError
+      refuse('live-issue-unavailable-or-drifted')
+    end
+
+    def test_operation_detail
+      path = ENV.fetch('IOS_TEMPLATE_TEST_OPERATION_DETAIL')
+      AscCLI.physical_path!(path)
+      parse_json(path, 16_384)
+    end
+
+    def validate_operation_approval(detail, context, operation)
+      refuse('live-operation-authority-mismatch') unless detail.is_a?(Hash) &&
+        detail.keys.sort == %w[approvalReference approvalRequired environment executor operation service] &&
+        detail['operation'] == operation && detail['executor'].to_s.downcase == context[:executor] &&
+        detail['environment'] == 'production' && detail['service'] == 'App Store Connect' &&
+        [true,false].include?(detail['approvalRequired']) &&
+        (detail['approvalRequired'] ? detail['approvalReference'].to_s.match?(APPROVAL) : detail['approvalReference'].nil?)
       refuse('submission-approval-not-declared') if context[:section] == 'submission' && !detail['approvalRequired']
       if detail['approvalRequired']
         refuse('operation-approval-reference-mismatch') unless detail['approvalReference'] == context[:approval]
       end
-    rescue JSON::ParserError, AppStorePreparation::InvalidInput, IssueContract::ValidationError, KeyError
-      refuse('live-issue-unavailable-or-drifted')
     end
 
     def asc(context, *command)
@@ -262,12 +278,15 @@ module IOSTemplate
       journal_issue = File.basename(File.dirname(directory))
       refuse('build-journal-attempt-invalid') unless attempt.match?(/\Aa[0-9a-f]{24}\z/) &&
         journal_issue.match?(/\A[1-9][0-9]*\z/)
+      refuse('build-journal-issue-mismatch') unless journal_issue.to_i == context[:issue]
       previous = nil
       contract_digest = nil
       ipa_digest = nil
       events = names.each_with_index.map do |name,index|
         event_bytes = regular(File.join(directory,name), 100_000)
         event = JSON.parse(event_bytes, object_class: AppStorePreparation::UniqueObject)
+        refuse('build-journal-issue-mismatch') unless event['issue'] == context[:issue]
+        refuse('build-journal-contract-mismatch') unless event['contractDigest'] == context[:contract_digest]
         contract_digest ||= event['contractDigest']
         refuse('build-journal-chain-invalid') unless event['recordType'] == 'appstore-build-upload' &&
           event['schemaVersion'] == 1 && event['issue'] == journal_issue.to_i && event['attempt'] == attempt &&
@@ -631,6 +650,10 @@ module IOSTemplate
     end
 
     def run(options)
+      test_mode = ENV['IOS_TEMPLATE_TEST_MODE'] == '1'
+      overrides = ENV.keys.select { |key| key.start_with?('IOS_TEMPLATE_TEST_') }
+      refuse('test-overrides-in-production') unless test_mode || overrides.empty?
+      refuse('unknown-test-override') unless (overrides - TEST_KEYS - ['IOS_TEMPLATE_TEST_MODE']).empty?
       root = File.realpath(options.fetch(:root))
       refuse('invalid-repository-root') unless File.directory?(root)
       now = AppStoreMetadataSave.time(options.fetch(:now))
