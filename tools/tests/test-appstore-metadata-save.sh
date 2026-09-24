@@ -246,6 +246,14 @@ File.binwrite(fake_runner, <<~'FAKE'.gsub('__STATE_PATH__', state_path.dump))
   when ['localizations','list']
     locale = options.fetch('--locale')
     state['listCounts'][locale] = state['listCounts'].fetch(locale,0) + 1
+    if locale == 'en-US' && ((state['scenario'] == 'refuse-first-en' && state['listCounts'][locale] == 1) ||
+      (state['scenario'] == 'refuse-before-save-en' && state['listCounts'][locale] == 2))
+      File.binwrite(state_path, JSON.generate(state))
+      exit 75
+    end
+    if state['scenario'] == 'drift-on-first-en' && locale == 'en-US' && state['listCounts'][locale] == 1
+      state.fetch('forms').fetch(locale)['keywords'] = 'another,editor'
+    end
     if state['scenario'] == 'drift-before-save' && locale == 'en-US' && state['listCounts'][locale] == 2
       state.fetch('forms').fetch(locale)['keywords'] = 'another,editor'
     end
@@ -392,6 +400,62 @@ bad = Marshal.load(Marshal.dump(request)); bad['forms'] = [bad['forms'][0]]; bad
 _, remote = invoke.call(bad, expected: 1)
 check(remote['calls'].none? { |call| call[0] == ['localizations','update'] }, 'baseline drift wrote')
 single = Marshal.load(Marshal.dump(request)); single['forms'] = [form.call('en-US')]; single['selectedFields'] = [selected.call('en-US')]
+
+result, remote = invoke.call(single, scenario: 'refuse-first-en', expected: 1)
+prior = result.fetch('attempt')
+check(events.call(prior).any? { |e| e['outcome'] == 'blocked' && e['baselineDigest'].nil? }, 'refusal did not block without baseline')
+result, remote = invoke.call(single, resume: prior)
+saved = events.call(result.fetch('attempt')).find { |e| e['eventType'] == 'outcome' }
+check(saved['outcome'] == 'remote-saved' && saved['readbackDigest'] == saved['expectedReadbackDigest'] &&
+  remote['forms']['en-US']['description'] == 'A confirmed garden journal description.', 'refusal resume at request baseline did not save and read back')
+
+result, remote = invoke.call(single, scenario: 'refuse-before-save-en', expected: 1)
+prior = result.fetch('attempt')
+check(events.call(prior).any? { |e| e['eventType'] == 'intent' && e['expectedReadbackDigest'] } &&
+  events.call(prior).last['outcome'] == 'blocked', 'refusal after intent did not block')
+state = JSON.parse(File.binread(state_path)); state['forms']['en-US']['description'] = 'A confirmed garden journal description.'; File.binwrite(state_path,JSON.generate(state))
+result, remote = invoke.call(single, resume: prior)
+verified = events.call(result.fetch('attempt')).find { |e| e['eventType'] == 'outcome' }
+check(verified['outcome'] == 'unchanged-verified' && verified['readbackDigest'] == verified['expectedReadbackDigest'] &&
+  remote['calls'].none? { |call| call[0] == ['localizations','update'] }, 'prior intent expected readback was saved again')
+
+result, remote = invoke.call(single, scenario: 'refuse-first-en', expected: 1)
+prior = result.fetch('attempt')
+state = JSON.parse(File.binread(state_path)); state['forms']['en-US']['keywords'] = 'another,editor'; File.binwrite(state_path,JSON.generate(state))
+result, remote = invoke.call(single, resume: prior, expected: 1)
+blocked = events.call(result.fetch('attempt')).find { |e| e['eventType'] == 'outcome' }
+check(blocked['outcome'] == 'blocked' && blocked['reason'] == 'baseline-drift' &&
+  remote['calls'].none? { |call| call[0] == ['localizations','update'] }, 'refusal resume over drift wrote')
+
+result, remote = invoke.call(single, scenario: 'drift-on-first-en', expected: 1)
+prior = result.fetch('attempt')
+check(events.call(prior).any? { |e| e['outcome'] == 'blocked' && e['reason'] == 'baseline-drift' }, 'initial baseline drift did not block')
+result, remote = invoke.call(single, resume: prior, expected: 1)
+blocked = events.call(result.fetch('attempt')).find { |e| e['eventType'] == 'outcome' }
+check(blocked['outcome'] == 'blocked' && blocked['reason'] == 'baseline-drift' &&
+  remote['forms']['en-US']['keywords'] == 'another,editor' &&
+  remote['calls'].none? { |call| call[0] == ['localizations','update'] }, 'unchanged baseline drift was overwritten')
+
+result, remote = invoke.call(single, scenario: 'drift-on-first-en', expected: 1)
+prior = result.fetch('attempt')
+state = JSON.parse(File.binread(state_path)); state['forms']['en-US']['keywords'] = initial_forms.fetch('en-US').fetch('keywords'); File.binwrite(state_path,JSON.generate(state))
+result, remote = invoke.call(single, resume: prior)
+saved = events.call(result.fetch('attempt')).find { |e| e['eventType'] == 'outcome' }
+check(saved['outcome'] == 'remote-saved' && saved['readbackDigest'] == saved['expectedReadbackDigest'] &&
+  remote['forms']['en-US']['description'] == 'A confirmed garden journal description.', 'restored request baseline did not save')
+
+result, remote = invoke.call(single)
+prior = result.fetch('attempt')
+state = JSON.parse(File.binread(state_path)); state['forms']['en-US']['description'] = 'A different editor changed this.'; File.binwrite(state_path,JSON.generate(state))
+result, remote = invoke.call(single, resume: prior, expected: 1)
+stale = events.call(result.fetch('attempt')).find { |e| e['eventType'] == 'outcome' }
+check(stale['outcome'] == 'stale' && stale['reason'] == 'resume-remote-drift', 'first remote drift did not become stale')
+result, remote = invoke.call(single, resume: result.fetch('attempt'), expected: 1)
+blocked = events.call(result.fetch('attempt')).find { |e| e['eventType'] == 'outcome' }
+check(blocked['outcome'] == 'blocked' && blocked['reason'] == 'baseline-drift' &&
+  remote['forms']['en-US']['description'] == 'A different editor changed this.' &&
+  remote['calls'].none? { |call| call[0] == ['localizations','update'] }, 'second resume over stale drift wrote')
+
 _, remote = invoke.call(single, scenario: 'drift-before-save', expected: 1)
 check(remote['calls'].none? { |call| call[0] == ['localizations','update'] }, 'pre-dispatch baseline drift wrote')
 bad = Marshal.load(Marshal.dump(request)); bad['selectedFields'] = [selected.call('ja','promotionalText')]; bad['forms'] = [form.call('ja')]

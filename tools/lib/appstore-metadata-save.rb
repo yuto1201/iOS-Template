@@ -479,15 +479,29 @@ module IOSTemplate
           baseline, baseline_digest = form_value(runner_path, request['identity'], version_id, form)
           relevant = prior.select { |event| event['section'] == form['section'] && event['locale'] == form['locale'] }
           last = relevant.last
-          if last
-            expected = last['expectedReadbackDigest']
-            if expected && baseline_digest == expected
-              append.call(base.merge('eventType'=>'outcome','outcome'=>'unchanged-verified','reason'=>nil,
-                'baselineDigest'=>baseline_digest,'intendedPatchDigest'=>last['intendedPatchDigest'],
-                'expectedReadbackDigest'=>expected,'readbackDigest'=>baseline_digest,'versionStatus'=>version_state,'checkedAt'=>Time.now.utc.iso8601))
-              outcomes << 'unchanged-verified'
+          retry_from_baseline = last && %w[blocked stale].include?(last['outcome'])
+          expected_event = if retry_from_baseline
+                             relevant.reverse.find { |event| event['expectedReadbackDigest'] == baseline_digest }
+                           elsif last && last['expectedReadbackDigest'] == baseline_digest
+                             last
+                           end
+          if expected_event
+            append.call(base.merge('eventType'=>'outcome','outcome'=>'unchanged-verified','reason'=>nil,
+              'baselineDigest'=>baseline_digest,'intendedPatchDigest'=>expected_event['intendedPatchDigest'],
+              'expectedReadbackDigest'=>expected_event['expectedReadbackDigest'],'readbackDigest'=>baseline_digest,
+              'versionStatus'=>version_state,'checkedAt'=>Time.now.utc.iso8601))
+            outcomes << 'unchanged-verified'
+            next
+          end
+          if retry_from_baseline
+            unless baseline_digest == form['baselineDigest']
+              append.call(base.merge('eventType'=>'outcome','outcome'=>'blocked','reason'=>'baseline-drift',
+                'baselineDigest'=>baseline_digest,'intendedPatchDigest'=>nil,'expectedReadbackDigest'=>nil,'readbackDigest'=>nil,
+                'versionStatus'=>version_state,'checkedAt'=>Time.now.utc.iso8601))
+              outcomes << 'blocked'
               next
             end
+          elsif last
             unless baseline_digest == last['baselineDigest'] && !%w[remote-saved unchanged-verified].include?(last['outcome'])
               append.call(base.merge('eventType'=>'outcome','outcome'=>'stale','reason'=>'resume-remote-drift',
                 'baselineDigest'=>baseline_digest,'intendedPatchDigest'=>nil,'expectedReadbackDigest'=>nil,'readbackDigest'=>nil,
