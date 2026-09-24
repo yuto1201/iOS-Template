@@ -8,13 +8,17 @@
       "paths": [
         ".agents/skills/goldie/SKILL.md",
         ".agents/skills/prepare-appstore-assets/SKILL.md",
+        ".agents/skills/save-appstore-metadata/SKILL.md",
+        ".agents/skills/save-appstore-metadata/scripts/save-appstore-metadata.sh",
         ".agents/skills/submit-appstore-release/SKILL.md",
+        ".claude/skills/save-appstore-metadata",
         "docs/agent-contracts/appstore-submission.md",
         "docs/goldie.md",
         "tools/build-appstore-screenshot-set.sh",
         "tools/capture-appstore-screenshots.sh",
         "tools/prepare-appstore-legal-handoff.sh",
         "tools/prepare-appstore-sources.sh",
+        "tools/tests/test-appstore-metadata-save.sh",
         "tools/validate-appstore-package.sh"
       ],
       "prefixes": [
@@ -323,6 +327,7 @@
     {"path": "tools/tests/test-app-bootstrap.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-appstore-legal-handoff.sh", "domains": ["appstore"]},
+    {"path": "tools/tests/test-appstore-metadata-save.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-package.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-preparation-migration.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-preparation.sh", "domains": ["appstore"]},

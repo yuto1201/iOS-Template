@@ -15,16 +15,41 @@ module AscCLI
   TEST_KEYS = %w[IOS_TEMPLATE_TEST_ASC_PIN IOS_TEMPLATE_TEST_ASC_INSTALL_ROOT IOS_TEMPLATE_TEST_ASC_RELEASE_DIR IOS_TEMPLATE_TEST_ASC_TIMEOUT IOS_TEMPLATE_TEST_SECURITY_BIN].freeze
   SECRET_KEYS = %w[ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY_PATH].freeze
   # Deliberately a subset of 5.4.0's public command flags. No URL pagination,
-  # profile/config, debug, report-file, mutation, or credential flags.
+  # profile/config, debug, report-file, or credential flags.
   # Sources at https://github.com/rorkai/App-Store-Connect-CLI/tree/5.4.0:
   # internal/cli/{apps/apps.go,apps/app_info.go,versions/versions.go,bundleids/bundle_ids.go}
+  # Metadata source: internal/cli/localizations/{localizations.go,update.go}.
+  # update.go defines --name, --subtitle, --description, --keywords,
+  # --promotional-text, --whats-new and the --app/--version/--type/--locale
+  # selectors. Empty field flags are ignored by asc 5.4.0; refuse them here.
   OPERATIONS = {
     'appstore.inspect_app' => {
       %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},
       %w[apps info view] => {'--app'=>:id, '--limit'=>:limit, '--paginate'=>:boolean},
       %w[versions list] => {'--app'=>:id, '--version'=>:version, '--platform'=>:platform, '--limit'=>:limit, '--paginate'=>:boolean},
       %w[bundle-ids list] => {'--identifier'=>:identifier, '--limit'=>:limit, '--paginate'=>:boolean}
+    }.freeze,
+    'appstore.update_metadata' => {
+      %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},
+      %w[apps info view] => {'--app'=>:id, '--limit'=>:limit, '--paginate'=>:boolean},
+      %w[versions list] => {'--app'=>:id, '--version'=>:version, '--platform'=>:platform, '--limit'=>:limit, '--paginate'=>:boolean},
+      %w[bundle-ids list] => {'--identifier'=>:identifier, '--limit'=>:limit, '--paginate'=>:boolean},
+      %w[localizations list] => {'--version'=>:resource_id, '--app'=>:id, '--type'=>:localization_type, '--locale'=>:locale, '--paginate'=>:boolean},
+      %w[localizations update] => {'--version'=>:resource_id, '--app'=>:id, '--type'=>:localization_type, '--locale'=>:locale,
+                                    '--name'=>:localization_name, '--subtitle'=>:localization_subtitle,
+                                    '--description'=>:localization_description, '--keywords'=>:localization_keywords,
+                                    '--promotional-text'=>:localization_promotional, '--whats-new'=>:localization_whats_new}
     }.freeze
+  }.freeze
+  LOCALIZATION_TEXT_LIMITS = {
+    localization_name: [2, 30, nil], localization_subtitle: [1, 30, nil],
+    localization_description: [1, 4000, nil], localization_keywords: [1, nil, 100],
+    localization_promotional: [1, 170, nil], localization_whats_new: [1, 4000, nil]
+  }.freeze
+  LOCALIZATION_FIELD_FLAGS = {
+    '--name'=>:localization_name, '--subtitle'=>:localization_subtitle,
+    '--description'=>:localization_description, '--keywords'=>:localization_keywords,
+    '--promotional-text'=>:localization_promotional, '--whats-new'=>:localization_whats_new
   }.freeze
   module_function
 
@@ -200,6 +225,7 @@ module AscCLI
     command = table.keys.find { |prefix| tail.take(prefix.length) == prefix }
     refuse('subcommand is not allowlisted') unless command
     flags = table.fetch(command).merge('--output'=>:output)
+    metadata_command = args[1] == 'appstore.update_metadata' && command.first == 'localizations'
     remaining = tail.drop(command.length)
     forwarded = command.dup
     seen = []
@@ -213,9 +239,25 @@ module AscCLI
         next
       end
       value = remaining.shift
-      refuse('flag value is invalid') unless value && !value.empty? && value.bytesize <= 256 && !value.start_with?('-') && !value.match?(/[\x00-\x1f\x7f]/) && !value.include?('$') && !value.include?('`')
-      valid = case type
+      localization_text = LOCALIZATION_TEXT_LIMITS.key?(type)
+      if localization_text
+        refuse('flag value is invalid') unless value.is_a?(String) && value.valid_encoding? && !value.empty? &&
+          !value.match?(/[\x00-\x09\x0b-\x1f\x7f]/)
+        minimum, character_maximum, byte_maximum = LOCALIZATION_TEXT_LIMITS.fetch(type)
+        # Apple's character limits are checked conservatively in both Unicode
+        # code points and UTF-16 units. Keywords have an explicit UTF-8 byte cap.
+        characters = value.length
+        units = value.encode(Encoding::UTF_16BE).bytesize / 2
+        valid = characters >= minimum && units >= minimum &&
+          (!character_maximum || characters <= character_maximum && units <= character_maximum) &&
+          (!byte_maximum || value.bytesize <= byte_maximum)
+      else
+        refuse('flag value is invalid') unless value && !value.empty? && value.bytesize <= 256 && !value.start_with?('-') && !value.match?(/[\x00-\x1f\x7f]/) && !value.include?('$') && !value.include?('`')
+        valid = case type
               when :id then value.match?(/\A[1-9][0-9]*\z/)
+              when :resource_id then value.match?(/\A[A-Za-z0-9_-]{1,128}\z/)
+              when :localization_type then %w[version app-info].include?(value)
+              when :locale then %w[en-US ja].include?(value)
               when :identifier then value.match?(/\A[A-Za-z0-9][A-Za-z0-9.-]*\z/)
               when :limit then value.match?(/\A[1-9][0-9]*\z/) && value.to_i <= 200
               when :version then value.match?(/\A[0-9]+(?:\.[0-9]+){0,2}\z/)
@@ -223,10 +265,23 @@ module AscCLI
               when :output then value == 'json'
               when :text then true
               end
+      end
       refuse('flag value is invalid') unless valid
-      forwarded.concat([flag, value]) unless type == :output
+      forwarded.concat(localization_text ? ["#{flag}=#{value}"] : [flag, value]) unless type == :output
     end
     refuse('explicit app is required') if [%w[apps info view], %w[versions list]].include?(command) && !seen.include?('--app')
+    if metadata_command
+      kind = tail.each_cons(2).find { |pair| pair.first == '--type' }&.last
+      refuse('localization type and locale are required') unless %w[version app-info].include?(kind) && seen.include?('--locale')
+      selector = kind == 'version' ? '--version' : '--app'
+      other = kind == 'version' ? '--app' : '--version'
+      refuse('localization parent is invalid') unless seen.include?(selector) && !seen.include?(other)
+      if command == %w[localizations update]
+        allowed = kind == 'version' ? %w[--description --keywords --promotional-text --whats-new] : %w[--name --subtitle]
+        supplied = seen & LOCALIZATION_FIELD_FLAGS.keys
+        refuse('localization update fields are invalid') if supplied.empty? || !(supplied - allowed).empty?
+      end
+    end
     forwarded + ['--output', 'json']
   end
 
