@@ -123,6 +123,26 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
    build_op + ['builds','list','--app','123','--version','1.0','--build-number','7','--platform','IOS','--paginate','--next','https://example.invalid'],
    build_op + ['builds','info','--app','123','--version','1.0','--build-number','7'],
    build_op + ['signing','sync']].each { |args| invoke.call(runner,args,{},:failure) }
+  testflight_op = ['--operation','appstore.distribute_testflight','--']
+  [ ['apps','list','--bundle-id','com.example.ascfixture'],
+    ['builds','list','--app','123','--version','1.0','--build-number','7','--platform','IOS','--paginate'],
+    ['builds','info','--app','123','--version','1.0','--build-number','7','--platform','IOS'],
+    ['testflight','groups','list','--app','123','--paginate'],
+    ['testflight','groups','list','--app','123','--build-id','build-1'],
+    ['builds','add-groups','--app','123','--build-number','7','--version','1.0','--platform','IOS','--group','group-1'],
+    ['testflight','review','submissions','list','--build-id','build-1','--paginate'],
+    ['testflight','review','submit','--build-id','build-1','--confirm'] ].each do |args|
+    invoke.call(runner,testflight_op+args)
+  end
+  [ ['testflight','groups','list','--app','123'],
+    ['testflight','groups','list','--app','123','--build-id','build-1','--paginate'],
+    ['builds','add-groups','--app','123','--build-number','7','--version','1.0','--platform','IOS','--group','group-1','--submit'],
+    ['builds','remove-groups','--build-id','build-1','--group','group-1','--confirm'],
+    ['testflight','review','submit','--build-id','build-1'],
+    ['testflight','review','submissions','list','--build-id','build-1'],
+    ['builds','add-groups','--app','123','--build-number','7','--version','1.0','--platform','MAC_OS','--group','group-1'] ].each do |args|
+    invoke.call(runner,testflight_op+args,{},:failure)
+  end
   invoke.call(runner, read_args+['--output','json'])
   forbidden = [%w[web apps list], %w[auth login], %w[auth logout], %w[apps wall], %w[install-skills], %w[signing sync], %w[workflow run release], %w[telemetry enable], %w[apps update], %w[apps list --deep], %w[apps list --profile evil], %w[apps list --output table], %w[apps list --output=json], %w[apps list --debug], %w[apps list --next https://evil.example], %w[apps list --limit 0], %w[apps list --limit 201], %w[apps list --limit 2 --limit 3], %w[apps list extra], %w[apps list --bundle-id --deep]]
   forbidden.each { |args| invoke.call(runner, ['--operation','appstore.inspect_app','--']+args, {}, :failure) }
