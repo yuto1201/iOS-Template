@@ -55,7 +55,7 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   invoke = lambda do |command, args=[], overrides={}, expected=0|
     out, err, status = Open3.capture3(env.merge(overrides), command, *args, chdir: repo, unsetenv_others: true)
     count += 1
-    check(expected == :failure ? !status.success? : status.exitstatus == expected, "case #{count} expected #{expected}, got #{status.exitstatus}: #{err}")
+    check(expected == :failure ? !status.success? : status.exitstatus == expected, "case #{count} #{args.inspect} expected #{expected}, got #{status.exitstatus}: #{err}")
     ['fixture-key-130', 'fixture-issuer-130', key].each { |secret| check(!out.include?(secret) && !err.include?(secret), "case #{count} secret leak") }
     [out, err]
   end
@@ -101,7 +101,38 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   invoke.call(runner, read_args+['--output','json'])
   forbidden = [%w[web apps list], %w[auth login], %w[auth logout], %w[apps wall], %w[install-skills], %w[signing sync], %w[workflow run release], %w[telemetry enable], %w[apps update], %w[apps list --deep], %w[apps list --profile evil], %w[apps list --output table], %w[apps list --output=json], %w[apps list --debug], %w[apps list --next https://evil.example], %w[apps list --limit 0], %w[apps list --limit 201], %w[apps list --limit 2 --limit 3], %w[apps list extra], %w[apps list --bundle-id --deep]]
   forbidden.each { |args| invoke.call(runner, ['--operation','appstore.inspect_app','--']+args, {}, :failure) }
-  invoke.call(runner, read_args.map { |arg| arg == 'appstore.inspect_app' ? 'appstore.update_metadata' : arg }, {}, :failure)
+  update = ['--operation', 'appstore.update_metadata', '--', 'localizations', 'update', '--version', 'V1', '--type', 'version', '--locale', 'ja']
+  list = ['--operation', 'appstore.update_metadata', '--', 'localizations', 'list', '--version', 'V1', '--type', 'version', '--locale', 'ja', '--paginate']
+  invoke.call(runner, list)
+  unicode_copy = "日本語の説明\n次の行。"
+  out, = invoke.call(runner, update + ['--description', unicode_copy, '--keywords', '日本語,記録'])
+  check(JSON.parse(out).fetch('argv').include?("--description=#{unicode_copy}"), 'long text is forwarded as --flag=value')
+  out, = invoke.call(runner, ['--operation', 'appstore.update_metadata', '--', 'localizations', 'update', '--app', '123', '--type', 'app-info', '--locale', 'en-US', '--name', '-Leading name'])
+  check(JSON.parse(out).fetch('argv').include?('--name=-Leading name'), 'leading hyphen value stays a value')
+  invoke.call(runner, update + ['--description', 'A' * 4000])
+  invoke.call(runner, update + ['--description', "e\u0301" * 2000])
+  invoke.call(runner, update + ['--description', '💐' * 2000])
+  invoke.call(runner, update + ['--keywords', 'あ' * 33])
+  invoke.call(runner, update + ['--promotional-text', 'あ' * 170])
+  invoke.call(runner, update + ['--whats-new', 'A' * 4000])
+  [update + ['--description', 'A' * 4001], update + ['--keywords', 'あ' * 34],
+   update + ['--description', "e\u0301" * 2001], update + ['--description', '💐' * 2001],
+   update + ['--promotional-text', 'あ' * 171], update + ['--whats-new', 'A' * 4001],
+   update + ['--description', "bad\tvalue"],
+   update + ['--name', 'Wrong form'], update + ['--description', ''],
+   list + ['--description', 'write'],
+   ['--operation', 'appstore.update_metadata', '--', 'localizations', 'update', '--app', '123', '--type', 'app-info', '--locale', 'ja', '--privacy-policy-url', 'https://example.com'],
+   ['--operation', 'appstore.update_metadata', '--', 'localizations', 'create', '--version', 'V1', '--locale', 'ja'],
+   ['--operation', 'appstore.update_metadata', '--', 'versions', 'update', '--version-id', 'V1']].each do |args|
+    invoke.call(runner, args, {}, :failure)
+  end
+  begin
+    AscCLI.command_arguments(update + ['--description', "bad\0value"])
+    abort 'NUL localization value was accepted'
+  rescue AscCLI::Refused
+    # Refused before any process invocation.
+  end
+  invoke.call(runner, read_args.map { |arg| arg == 'appstore.inspect_app' ? 'appstore.update_metadata' : arg })
   out, err = invoke.call(runner, read_args+['--name','fixture-leak'])
   check(out.include?('[REDACTED]') && err.include?('[REDACTED]'), 'both streams redacted')
   invoke.call(runner, read_args+['--name','fixture-fail'], {}, 17)
