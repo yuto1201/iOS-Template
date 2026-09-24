@@ -173,6 +173,9 @@ contract_output,contract_error,contract_status=Open3.capture3('/usr/bin/ruby','-
   '--issue','77','--repo','example/release-fixture','--fetched-at',now)
 check(contract_status.success?,"synthetic contract: #{contract_error}")
 contract=JSON.parse(contract_output)
+require File.join(root,'tools/lib/issue-contract')
+details=IOSTemplate::IssueContract.parse(body,issue_type:'release',issue:77,
+  repository:'example/release-fixture',fetched_at:now).external_operation_details
 contract_path=put(project,'.artifacts/issues/77/issue-contract.json',contract)
 put(project,'.artifacts/issues/77/state.json',{'issue'=>77,'state'=>'in-progress','executor'=>'codex',
   'issueContract'=>{'path'=>'.artifacts/issues/77/issue-contract.json',
@@ -194,7 +197,8 @@ previous=nil
 ].each_with_index do |(type,extra),index|
   event={'schemaVersion'=>1,'recordType'=>'appstore-build-upload','eventType'=>type,'eventSequence'=>index+1,
     'previousEventDigest'=>previous,'issue'=>77,'attempt'=>File.basename(journal),'headSha'=>head,
-    'version'=>version,'buildNumber'=>build_number,'bundleId'=>bundle,'contractDigest'=>dig(contract),'checkedAt'=>now}.merge(extra)
+    'version'=>version,'buildNumber'=>build_number,'bundleId'=>bundle,
+    'contractDigest'=>"sha256:#{Digest::SHA256.file(contract_path).hexdigest}",'checkedAt'=>now}.merge(extra)
   path=put(journal,format('%04d-%s.json',index+1,type),JSON.generate(canon(event))+"\n")
   previous="sha256:#{Digest::SHA256.file(path).hexdigest}"
 end
@@ -319,6 +323,8 @@ File.binwrite(state_path,JSON.generate(initial))
 ENV['IOS_TEMPLATE_TEST_MODE']='1'
 ENV['IOS_TEMPLATE_TEST_ASC_RUNNER']=fake
 ENV['FAKE_ASC_STATE']=state_path
+detail_fixture=File.join(scratch,'operation-detail.json')
+ENV['IOS_TEMPLATE_TEST_OPERATION_DETAIL']=detail_fixture
 
 browser=put(scratch,'browser.json',{'schemaVersion'=>1,'sections'=>{
   'privacy'=>{'checkedAt'=>now,'remoteReference'=>"asc://apps/#{app_id}/privacy/DECL1",'readBackDigest'=>dig('privacy-readback'),
@@ -334,7 +340,9 @@ args=['--repo',project,'--issue','77','--team-id',team,'--app-id',app_id,'--bund
   '--version',version,'--build-id',build_id,'--build-number',build_number,'--source-sha',head,
   '--build-digest',build_digest,'--primary-model','codex','--audit',audit,'--build-journal',journal,
   '--browser-readbacks',browser,'--now',now]
-invoke=lambda do |section, expected=0, extra=[]|
+invoke=lambda do |section, expected=0, extra=[], journal_for_test=nil|
+  operation=IOSTemplate::AppStoreReleaseSections::OPERATIONS.fetch(section)
+  put(scratch,'operation-detail.json',details.find { |item| item['operation']==operation })
   if expected == 1 || section != 'app-information'
     # The full proof is exercised above, by the first section CLI, and by
     # record-section.sh for every successful section. In-process calls avoid
@@ -349,7 +357,7 @@ invoke=lambda do |section, expected=0, extra=[]|
         outcome=IOSTemplate::AppStoreReleaseSections.run({root:project,issue:77,team:team,app_id:app_id,
           bundle:bundle,version:version,build_id:build_id,build_number:build_number,head:head,
           build_digest:build_digest,executor:'codex',section:section,audit:audit,
-          build_journal:journal,browser_readbacks:browser,now:now,
+          build_journal:journal_for_test || journal,browser_readbacks:browser,now:now,
           approval:extra.last})
       rescue IOSTemplate::AppStoreReleaseSections::Refused => failure
         error=failure.message
@@ -434,13 +442,48 @@ journal_last=File.join(journal,'0005-processing-readback.json')
 journal_bytes=File.binread(journal_last)
 invalid=JSON.parse(journal_bytes); invalid['processingState']='PROCESSING'
 File.binwrite(journal_last,JSON.generate(canon(invalid))+"\n")
-invoke.call('build',1)
+build_approval=['--approval-reference','approval: user-approval://synthetic-release']
+invoke.call('build',1,build_approval)
 File.binwrite(journal_last,journal_bytes)
-scenario.call('build-readback'); invoke.call('build',1); scenario.call('normal')
-invoke.call('build')
+rewrite_journal=lambda do |target, issue_value, digest_value|
+  previous=nil
+  Dir.children(journal).sort.each do |name|
+    event=JSON.parse(File.binread(File.join(journal,name)))
+    event['issue']=issue_value
+    event['contractDigest']=digest_value
+    event['previousEventDigest']=previous
+    path=put(target,name,JSON.generate(canon(event))+"\n")
+    previous="sha256:#{Digest::SHA256.file(path).hexdigest}"
+  end
+end
+other_journal=File.join(project,'.artifacts/appstore-builds/999',File.basename(journal))
+rewrite_journal.call(other_journal,999,"sha256:#{Digest::SHA256.file(contract_path).hexdigest}")
+_out,error=invoke.call('build',1,build_approval,other_journal)
+check(error=='build-journal-issue-mismatch',"other Issue journal refused before section work: #{error}")
+wrong_event_journal=File.join(project,'.artifacts/appstore-builds/77/a888888888888888888888888')
+rewrite_journal.call(wrong_event_journal,999,"sha256:#{Digest::SHA256.file(contract_path).hexdigest}")
+_out,error=invoke.call('build',1,build_approval,wrong_event_journal)
+check(error=='build-journal-issue-mismatch','journal event Issue refused before section work')
+other_contract_journal=File.join(project,'.artifacts/appstore-builds/77/a999999999999999999999999')
+rewrite_journal.call(other_contract_journal,77,dig('other-contract'))
+_out,error=invoke.call('build',1,build_approval,other_contract_journal)
+check(error=='build-journal-contract-mismatch','other contract journal refused before section work')
+scenario.call('build-readback'); invoke.call('build',1,build_approval); scenario.call('normal')
+invoke.call('build',0,build_approval)
 invoke.call('review-information')
 
-invoke.call('submission',1)
+_out,error=invoke.call('submission',1)
+check(error=='operation-approval-reference-mismatch','submission without declared approval refused')
+before_calls=JSON.parse(File.binread(state_path))['calls'].length
+_out,error=invoke.call('submission',1,['--approval-reference','approval: user-approval://different-release'])
+check(error=='operation-approval-reference-mismatch','different declared approval refused')
+check(JSON.parse(File.binread(state_path))['calls'].length==before_calls,'approval mismatch refused before ASC call')
+ENV.delete('IOS_TEMPLATE_TEST_MODE')
+ENV.delete('IOS_TEMPLATE_TEST_ASC_RUNNER')
+_out,error=invoke.call('submission',1,['--approval-reference','approval: user-approval://synthetic-release'])
+check(error=='test-overrides-in-production','test operation detail refused in production')
+ENV['IOS_TEMPLATE_TEST_MODE']='1'
+ENV['IOS_TEMPLATE_TEST_ASC_RUNNER']=fake
 scenario.call('submission-readback')
 invoke.call('submission',1,['--approval-reference','approval: user-approval://synthetic-release'])
 scenario.call('normal')
