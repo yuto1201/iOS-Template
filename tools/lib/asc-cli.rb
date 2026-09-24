@@ -7,6 +7,8 @@ require 'tmpdir'
 require 'tempfile'
 require 'open3'
 require 'fiddle'
+require 'uri'
+require 'yaml'
 
 module AscCLI
   class Refused < StandardError; end
@@ -28,6 +30,16 @@ module AscCLI
   # BuildsInfoCommand (the four exact app-scoped selectors). The list version
   # is CFBundleShortVersionString; BuildAttributes.version is CFBundleVersion
   # (internal/asc/client_builds.go). Info adds a preReleaseVersion include.
+  # Release sections source at 5.4.0:
+  # internal/cli/versions/versions.go: update --version-id/--copyright,
+  # attach-build --version-id/--build-id;
+  # internal/cli/shared/categories_command.go: set --app/--primary;
+  # internal/cli/apps/app_info.go: view --app/--include;
+  # internal/cli/localizations/update.go: --privacy-policy-url/--support-url;
+  # internal/cli/assets/assets_screenshots.go: list/upload
+  # --version-localization/--path/--device-type (no --replace);
+  # internal/cli/reviews/{review_submit.go,review_overview.go}:
+  # submit --app/--version-id/--build-id/--confirm and status --app/--version-id.
   OPERATIONS = {
     'appstore.inspect_app' => {
       %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},
@@ -37,14 +49,22 @@ module AscCLI
     }.freeze,
     'appstore.update_metadata' => {
       %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},
-      %w[apps info view] => {'--app'=>:id, '--limit'=>:limit, '--paginate'=>:boolean},
+      %w[apps info view] => {'--app'=>:id, '--limit'=>:limit, '--paginate'=>:boolean, '--include'=>:app_info_include},
       %w[versions list] => {'--app'=>:id, '--version'=>:version, '--platform'=>:platform, '--limit'=>:limit, '--paginate'=>:boolean},
       %w[bundle-ids list] => {'--identifier'=>:identifier, '--limit'=>:limit, '--paginate'=>:boolean},
+      %w[builds list] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform, '--paginate'=>:boolean},
+      %w[builds info] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform},
       %w[localizations list] => {'--version'=>:resource_id, '--app'=>:id, '--type'=>:localization_type, '--locale'=>:locale, '--paginate'=>:boolean},
       %w[localizations update] => {'--version'=>:resource_id, '--app'=>:id, '--type'=>:localization_type, '--locale'=>:locale,
                                     '--name'=>:localization_name, '--subtitle'=>:localization_subtitle,
                                     '--description'=>:localization_description, '--keywords'=>:localization_keywords,
-                                    '--promotional-text'=>:localization_promotional, '--whats-new'=>:localization_whats_new}
+                                    '--promotional-text'=>:localization_promotional, '--whats-new'=>:localization_whats_new,
+                                    '--privacy-policy-url'=>:https_url, '--support-url'=>:https_url},
+      %w[versions update] => {'--version-id'=>:resource_id, '--copyright'=>:copyright},
+      %w[categories list] => {'--paginate'=>:boolean},
+      %w[categories set] => {'--app'=>:id, '--primary'=>:category},
+      %w[screenshots list] => {'--version-localization'=>:resource_id},
+      %w[screenshots upload] => {'--version-localization'=>:resource_id, '--path'=>:screenshot_path, '--device-type'=>:screenshot_type}
     }.freeze,
     'appstore.upload_build' => {
       %w[apps list] => {'--bundle-id'=>:identifier},
@@ -53,6 +73,16 @@ module AscCLI
                           '--platform'=>:platform, '--processing-state'=>:processing_state, '--paginate'=>:boolean},
       %w[builds info] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number,
                           '--platform'=>:platform}
+    }.freeze,
+    'appstore.submit_review' => {
+      %w[apps list] => {'--bundle-id'=>:identifier},
+      %w[bundle-ids list] => {'--identifier'=>:identifier},
+      %w[versions list] => {'--app'=>:id, '--version'=>:version, '--platform'=>:platform},
+      %w[builds list] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform, '--paginate'=>:boolean},
+      %w[builds info] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform},
+      %w[versions attach-build] => {'--version-id'=>:resource_id, '--build-id'=>:resource_id},
+      %w[review submit] => {'--app'=>:id, '--version-id'=>:resource_id, '--build-id'=>:resource_id, '--confirm'=>:boolean},
+      %w[review status] => {'--app'=>:id, '--version-id'=>:resource_id, '--platform'=>:platform}
     }.freeze
   }.freeze
   LOCALIZATION_TEXT_LIMITS = {
@@ -63,7 +93,8 @@ module AscCLI
   LOCALIZATION_FIELD_FLAGS = {
     '--name'=>:localization_name, '--subtitle'=>:localization_subtitle,
     '--description'=>:localization_description, '--keywords'=>:localization_keywords,
-    '--promotional-text'=>:localization_promotional, '--whats-new'=>:localization_whats_new
+    '--promotional-text'=>:localization_promotional, '--whats-new'=>:localization_whats_new,
+    '--privacy-policy-url'=>:https_url, '--support-url'=>:https_url
   }.freeze
   module_function
 
@@ -231,7 +262,7 @@ module AscCLI
     puts 'asc installed and verified'
   end
 
-  def command_arguments(args)
+  def command_arguments(args, package_root: File.join(ROOT, 'App Store'))
     refuse('usage: asc-run.sh --operation OPERATION -- ASC_ARGS') unless args.length >= 5 && args[0] == '--operation' && args[2] == '--'
     table = OPERATIONS[args[1]]
     refuse('operation is not allowlisted') unless table
@@ -256,6 +287,8 @@ module AscCLI
       localization_text = LOCALIZATION_TEXT_LIMITS.key?(type)
       if type == :ipa
         valid = valid_ipa?(value)
+      elsif type == :screenshot_path
+        valid = valid_screenshot_path?(value)
       elsif localization_text
         refuse('flag value is invalid') unless value.is_a?(String) && value.valid_encoding? && !value.empty? &&
           !value.match?(/[\x00-\x09\x0b-\x1f\x7f]/)
@@ -268,7 +301,7 @@ module AscCLI
           (!character_maximum || characters <= character_maximum && units <= character_maximum) &&
           (!byte_maximum || value.bytesize <= byte_maximum)
       else
-        refuse('flag value is invalid') unless value && !value.empty? && value.bytesize <= 256 && !value.start_with?('-') && !value.match?(/[\x00-\x1f\x7f]/) && !value.include?('$') && !value.include?('`')
+        refuse('flag value is invalid') unless value && !value.empty? && value.bytesize <= (type == :https_url ? 2048 : 256) && !value.start_with?('-') && !value.match?(/[\x00-\x1f\x7f]/) && !value.include?('$') && !value.include?('`')
         valid = case type
               when :id then value.match?(/\A[1-9][0-9]*\z/)
               when :resource_id then value.match?(/\A[A-Za-z0-9_-]{1,128}\z/)
@@ -282,6 +315,12 @@ module AscCLI
               when :processing_state then %w[VALID PROCESSING FAILED INVALID all].include?(value)
               when :output then value == 'json'
               when :text then true
+              when :copyright then value.length.between?(1, 200)
+              when :category then value.match?(/\A[A-Z][A-Z0-9_]{1,63}\z/)
+              when :app_info_include then value == 'primaryCategory'
+              when :screenshot_type then %w[APP_IPHONE_67 APP_IPAD_PRO_3GEN_129].include?(value)
+              when :https_url
+                valid_sealed_https_url?(value, flag, package_root)
               end
       end
       refuse('flag value is invalid') unless valid
@@ -307,10 +346,25 @@ module AscCLI
       other = kind == 'version' ? '--app' : '--version'
       refuse('localization parent is invalid') unless seen.include?(selector) && !seen.include?(other)
       if command == %w[localizations update]
-        allowed = kind == 'version' ? %w[--description --keywords --promotional-text --whats-new] : %w[--name --subtitle]
+        allowed = kind == 'version' ? %w[--description --keywords --promotional-text --whats-new --support-url] : %w[--name --subtitle --privacy-policy-url]
         supplied = seen & LOCALIZATION_FIELD_FLAGS.keys
         refuse('localization update fields are invalid') if supplied.empty? || !(supplied - allowed).empty?
       end
+    end
+    if command == %w[screenshots upload]
+      refuse('exact screenshot selectors required') unless %w[--version-localization --path --device-type].all? { |flag| seen.include?(flag) }
+    end
+    if command == %w[versions update]
+      refuse('exact version update selectors required') unless %w[--version-id --copyright].all? { |flag| seen.include?(flag) }
+    end
+    if command == %w[categories set]
+      refuse('exact category selectors required') unless %w[--app --primary].all? { |flag| seen.include?(flag) }
+    end
+    if command == %w[versions attach-build]
+      refuse('exact build attachment selectors required') unless %w[--version-id --build-id].all? { |flag| seen.include?(flag) }
+    end
+    if command == %w[review submit]
+      refuse('exact submission selectors required') unless %w[--app --version-id --build-id --confirm].all? { |flag| seen.include?(flag) }
     end
     forwarded + ['--output', 'json']
   end
@@ -323,6 +377,43 @@ module AscCLI
     regular!(value)
     true
   rescue Refused, SystemCallError
+    false
+  end
+
+  def valid_screenshot_path?(value)
+    return false unless value.is_a?(String) && value.bytesize.between?(1, 4096) && File.extname(value) == '.png'
+    physical_path!(value)
+    regular!(value)
+    return false if File.size(value).zero?
+    package_root = if ENV['IOS_TEMPLATE_TEST_MODE'] == '1'
+                     prefix = value.split('/App Store/screenshots/', 2)
+                     return false unless prefix.length == 2
+                     File.join(prefix.first, 'App Store')
+                   else
+                     File.join(ROOT, 'App Store')
+                   end
+    screenshots = File.join(package_root, 'screenshots')
+    return false unless value.start_with?(screenshots + '/')
+    relative = value.delete_prefix(screenshots + '/')
+    return false unless relative.match?(%r{\A(?:en-US|ja)/(?:iphone-6\.9|ipad-13)/[0-9]{2}-[a-z0-9-]+\.png\z})
+    manifest = JSON.parse(read_regular(File.join(screenshots, 'manifest.json'), 1_000_000))
+    return false unless manifest['schemaVersion'] == 1 && manifest['cases'].is_a?(Array)
+    rows = manifest['cases'].select { |entry| entry.is_a?(Hash) && entry['path'] == relative }
+    rows.length == 1 && rows.first['digest'] == "sha256:#{Digest::SHA256.file(value).hexdigest}"
+  rescue Refused, SystemCallError, JSON::ParserError
+    false
+  end
+
+  def valid_sealed_https_url?(value, flag, package_root)
+    return false unless %w[--privacy-policy-url --support-url].include?(flag)
+    uri = URI.parse(value)
+    return false unless uri.is_a?(URI::HTTPS) && uri.host && !uri.userinfo && !uri.fragment
+    physical_path!(package_root)
+    app = YAML.safe_load(read_regular(File.join(package_root, 'metadata', 'app.yml'), 65_536),
+      permitted_classes: [], permitted_symbols: [], aliases: false)
+    key = flag == '--privacy-policy-url' ? 'privacyPolicyURL' : 'supportURL'
+    app.is_a?(Hash) && app['schemaVersion'] == 1 && app[key] == value
+  rescue Refused, SystemCallError, URI::InvalidURIError, Psych::Exception
     false
   end
 

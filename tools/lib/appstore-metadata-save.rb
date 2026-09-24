@@ -32,7 +32,8 @@ module IOSTemplate
       'version-localization'=>{'type'=>'appStoreVersionLocalizations','ascType'=>'version','values'=>%w[description keywords promotionalText whatsNew supportUrl marketingUrl]}
     }.freeze
     FLAGS = {'name'=>'--name','subtitle'=>'--subtitle','description'=>'--description','keywords'=>'--keywords',
-             'promotionalText'=>'--promotional-text','whatsNew'=>'--whats-new'}.freeze
+             'promotionalText'=>'--promotional-text','whatsNew'=>'--whats-new',
+             'privacyPolicyUrl'=>'--privacy-policy-url','supportUrl'=>'--support-url'}.freeze
     FIELD_SECTIONS = {'name'=>'app-info-localization','subtitle'=>'app-info-localization',
                       'description'=>'version-localization','keywords'=>'version-localization',
                       'promotionalText'=>'version-localization','whatsNew'=>'version-localization'}.freeze
@@ -173,9 +174,9 @@ module IOSTemplate
       end
     end
 
-    def asc(runner_path, operation, *command)
+    def asc(runner_path, operation, *command, package_root: nil)
       args = ['--operation', operation, '--', *command, '--output', 'json']
-      AscCLI.command_arguments(args)
+      AscCLI.command_arguments(args, package_root: package_root || File.join(AscCLI::ROOT, 'App Store'))
       output, _error, status = Open3.capture3({'PATH'=>'/usr/bin:/bin','LANG'=>'en_US.UTF-8'}, runner_path, *args)
       refuse('asc-output-too-large') if output.bytesize > 1_048_576
       output.force_encoding(Encoding::UTF_8)
@@ -228,7 +229,7 @@ module IOSTemplate
       refuse('remote-form-unavailable') unless code.zero?
       item = data_one(response, section['type'])
       reference = "asc://apps/#{identity.fetch('appId')}/#{section['type']}/#{item.fetch('id')}"
-      refuse('remote-form-reference-mismatch') unless reference == form.fetch('remoteReference')
+      refuse('remote-form-reference-mismatch') if form.key?('remoteReference') && reference != form.fetch('remoteReference')
       attrs = item.fetch('attributes')
       expected = section['values'] + ['locale']
       refuse('remote-form-incomplete') unless attrs.keys.sort == expected.sort && attrs['locale'] == form['locale'] &&
@@ -236,6 +237,33 @@ module IOSTemplate
       projection = {'section'=>form['section'],'locale'=>form['locale'],'remoteReference'=>reference,
                     'values'=>section['values'].to_h { |key| [key, attrs.fetch(key)] }}
       [projection, digest(projection)]
+    end
+
+    # Shared full-form baseline, patch and readback path for selective save and
+    # sealed release sections. The latter supplies values from its package only.
+    def prepare_form_patch(baseline, values)
+      section = SECTIONS.fetch(baseline.fetch('section'))
+      refuse('invalid-form-patch') unless values.is_a?(Hash) && !values.empty? &&
+        values.keys.all? { |key| section['values'].include?(key) && FLAGS.key?(key) && values[key].is_a?(String) && !values[key].empty? }
+      intended = baseline.fetch('values').merge(values)
+      [digest(values), digest(baseline.merge('values'=>intended))]
+    end
+
+    def save_form_patch(runner_path, identity, version_id, form, values, baseline_digest, package_root: nil)
+      _again, before_digest = form_value(runner_path, identity, version_id, form)
+      refuse('baseline-drift-before-save') unless before_digest == baseline_digest
+      section = SECTIONS.fetch(form.fetch('section'))
+      args = ['localizations','update']
+      args.concat(section['ascType'] == 'version' ? ['--version',version_id,'--type','version'] : ['--app',identity.fetch('appId'),'--type','app-info'])
+      args.concat(['--locale',form.fetch('locale')])
+      values.each { |field,value| args.concat([FLAGS.fetch(field),value]) }
+      response, code = asc(runner_path, 'appstore.update_metadata', *args, package_root: package_root)
+      readback_digest = begin
+        form_value(runner_path, identity, version_id, form).last
+      rescue Refused
+        nil
+      end
+      [response, code, readback_digest]
     end
 
     def field_source(root, selected, report)
@@ -475,9 +503,7 @@ module IOSTemplate
             next
           end
           values = fields.to_h { |entry| [entry['fieldId'], field_source(root, entry, prepared).first] }
-          intended = baseline.fetch('values').merge(values)
-          patch_digest = digest(values)
-          expected_digest = digest(baseline.merge('values'=>intended))
+          patch_digest, expected_digest = prepare_form_patch(baseline, values)
           if expected_digest == baseline_digest
             append.call(base.merge('eventType'=>'outcome','outcome'=>'unchanged-verified','reason'=>nil,
               'baselineDigest'=>baseline_digest,'intendedPatchDigest'=>patch_digest,'expectedReadbackDigest'=>expected_digest,
@@ -492,22 +518,9 @@ module IOSTemplate
           preparation(root, request)
           fresh_version, fresh_state = inspect_identity(runner_path, request['identity'])
           refuse('version-changed-before-save') unless fresh_version == version_id && fresh_state == version_state
-          _again, before_digest = form_value(runner_path, request['identity'], version_id, form)
-          refuse('baseline-drift-before-save') unless before_digest == baseline_digest
-          section = SECTIONS.fetch(form['section'])
-          args = ['localizations','update']
-          args.concat(section['ascType'] == 'version' ? ['--version',version_id,'--type','version'] : ['--app',request['identity']['appId'],'--type','app-info'])
-          args.concat(['--locale',form['locale']])
-          fields.each { |entry| args.concat([FLAGS.fetch(entry['fieldId']),values.fetch(entry['fieldId'])]) }
-          response, code = asc(runner_path, 'appstore.update_metadata', *args)
+          response, code, readback_digest = save_form_patch(runner_path, request['identity'], version_id, form, values, baseline_digest)
           outcome = nil
           reason = nil
-          readback_digest = nil
-          begin
-            _readback, readback_digest = form_value(runner_path, request['identity'], version_id, form)
-          rescue Refused
-            readback_digest = nil
-          end
           if !code.zero?
             outcome = response.is_a?(Hash) && response['errors'].is_a?(Array) && !response['errors'].empty? &&
               response['errors'].all? { |error| error.is_a?(Hash) && error['status'] == '422' } ? 'failed' : 'unknown'

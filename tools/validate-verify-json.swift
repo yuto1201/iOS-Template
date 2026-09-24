@@ -2406,6 +2406,8 @@ func validateWorkflowPath(_ path: String) throws {
         ".agents/skills/save-appstore-metadata/SKILL.md",
         ".agents/skills/save-appstore-metadata/scripts/save-appstore-metadata.sh",
         ".agents/skills/submit-appstore-release/SKILL.md",
+        ".agents/skills/submit-appstore-release/agents/openai.yaml",
+        ".agents/skills/submit-appstore-release/scripts/record-section.sh",
         ".claude/skills/save-appstore-metadata",
         "App Store/README.md",
         "App Store/legal/README.md",
@@ -2423,6 +2425,7 @@ func validateWorkflowPath(_ path: String) throws {
         "tools/lib/appstore-preparation.rb",
         "tools/lib/appstore-public-evidence.rb",
         "tools/lib/appstore-readback-evidence.rb",
+        "tools/lib/appstore-release-sections.rb",
         "tools/lib/appstore-registration-preparation.rb",
         "tools/lib/appstore-source-schema.rb",
         "tools/lib/appstore-xcode-facts.rb",
@@ -2434,6 +2437,7 @@ func validateWorkflowPath(_ path: String) throws {
         "tools/tests/test-appstore-metadata-save.sh",
         "tools/tests/test-appstore-preparation-migration.sh",
         "tools/tests/test-appstore-preparation.sh",
+        "tools/tests/test-appstore-release-sections.sh",
         "tools/tests/test-appstore-screenshots.sh",
         "tools/tests/test-appstore-skills.sh"
     ]

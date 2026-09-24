@@ -2,13 +2,13 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 --repo DIR --package-root DIR --package-manifest FILE --preflight FILE --audit FILE --result FILE --team-id ID --bundle-id ID --version VERSION --build-id ID --source-sha SHA --build-digest DIGEST --primary-model codex|claude --section ID --remote-reference REF --readback-digest DIGEST --resume-readback yes|no --now ISO8601 [--submit-for-review yes|no]" >&2
+  echo "usage: $0 --repo DIR --package-root DIR --package-manifest FILE --preflight FILE --audit FILE --result FILE --team-id ID --bundle-id ID --version VERSION --build-id ID --source-sha SHA --build-digest DIGEST --primary-model codex|claude --section ID --readback-source api|browser --remote-reference REF --readback-digest DIGEST --resume-readback yes|no --now ISO8601 [--submit-for-review yes|no]" >&2
   exit 64
 }
 
 repo= package_root= package_manifest= preflight= audit= result= team_id= bundle_id= version= build_id= source_sha= build_digest=
 tool_root=$(cd "$(dirname "$0")/../../../.." && /bin/pwd -P)
-primary_model= section= remote_reference= readback_digest= resume_readback= now= submit_for_review=no
+primary_model= section= readback_source= remote_reference= readback_digest= resume_readback= now= submit_for_review=no
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) repo=${2-}; shift 2 ;;
@@ -25,6 +25,7 @@ while [[ $# -gt 0 ]]; do
     --build-digest) build_digest=${2-}; shift 2 ;;
     --primary-model) primary_model=${2-}; shift 2 ;;
     --section) section=${2-}; shift 2 ;;
+    --readback-source) readback_source=${2-}; shift 2 ;;
     --remote-reference) remote_reference=${2-}; shift 2 ;;
     --readback-digest) readback_digest=${2-}; shift 2 ;;
     --resume-readback) resume_readback=${2-}; shift 2 ;;
@@ -33,8 +34,12 @@ while [[ $# -gt 0 ]]; do
     *) usage ;;
   esac
 done
-[[ -n "$repo" && -n "$package_root" && -n "$package_manifest" && -n "$preflight" && -n "$audit" && -n "$result" && -n "$team_id" && -n "$bundle_id" && -n "$version" && -n "$build_id" && -n "$source_sha" && -n "$build_digest" && -n "$primary_model" && -n "$section" && -n "$remote_reference" && -n "$readback_digest" && -n "$resume_readback" && -n "$now" ]] || usage
+[[ -n "$repo" && -n "$package_root" && -n "$package_manifest" && -n "$preflight" && -n "$audit" && -n "$result" && -n "$team_id" && -n "$bundle_id" && -n "$version" && -n "$build_id" && -n "$source_sha" && -n "$build_digest" && -n "$primary_model" && -n "$section" && -n "$readback_source" && -n "$remote_reference" && -n "$readback_digest" && -n "$resume_readback" && -n "$now" ]] || usage
 [[ "$primary_model" == codex || "$primary_model" == claude ]] || { echo 'primary model must be codex or claude' >&2; exit 1; }
+case "$section:$readback_source" in
+  app-information:api|localization:api|screenshots:api|build:api|submission:api|privacy:browser|review-information:browser) ;;
+  *) echo 'section and readback source mismatch' >&2; exit 1 ;;
+esac
 [[ "$resume_readback" == yes || "$resume_readback" == no ]] || usage
 [[ "$submit_for_review" == yes || "$submit_for_review" == no ]] || usage
 [[ "$source_sha" =~ ^[0-9a-f]{40}$ && "$build_digest" =~ ^sha256:[0-9a-f]{64}$ && "$readback_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || usage
@@ -57,7 +62,7 @@ result_parent=$(cd "$(dirname "$result")" && /bin/pwd -P); result="$result_paren
 
 PACKAGE_ROOT="$package_root" PACKAGE_MANIFEST="$package_manifest" PREFLIGHT="$preflight" AUDIT="$audit" RESULT="$result" \
 TEAM_ID="$team_id" BUNDLE_ID="$bundle_id" VERSION="$version" BUILD_ID="$build_id" SOURCE_SHA="$source_sha" \
-BUILD_DIGEST="$build_digest" PRIMARY_MODEL="$primary_model" SECTION="$section" REMOTE_REFERENCE="$remote_reference" \
+BUILD_DIGEST="$build_digest" PRIMARY_MODEL="$primary_model" SECTION="$section" READBACK_SOURCE="$readback_source" REMOTE_REFERENCE="$remote_reference" \
 READBACK_DIGEST="$readback_digest" RESUME_READBACK="$resume_readback" NOW="$now" SUBMIT_FOR_REVIEW="$submit_for_review" \
 VERIFICATION_REPO="$repo" ruby -r"$tool_root/tools/lib/release-verification" <<'RUBY'
 require "json"
@@ -106,6 +111,13 @@ abort "release audit is not approved for the package" unless audit.is_a?(Hash) &
   audit["sourceSha"]==source_sha && audit["buildDigest"]==build_digest && audit["packageDigest"]==manifest["packageDigest"] && audit["findings"]==[]
 
 preflight=JSON.parse(File.binread(preflight_path))
+sections=%w[app-information localization privacy screenshots build review-information submission]
+requested=ENV.fetch("SECTION")
+operation = case requested
+            when "app-information", "localization", "screenshots" then "appstore.update_metadata"
+            when "build", "submission" then "appstore.submit_review"
+            else "appstore.inspect_app"
+            end
 preflight_keys=%w[schemaVersion issue executor provider account target environment operation health checkedAt digest]
 abort "App Store preflight schema is invalid" unless preflight.is_a?(Hash) && preflight.keys.sort==preflight_keys.sort && preflight["schemaVersion"]==2
 unsigned=preflight.reject{|key,_| key=="digest"}
@@ -114,10 +126,11 @@ abort "App Store preflight digest is invalid" unless preflight["digest"]==expect
 abort "App Store preflight executor mismatch" unless preflight["executor"]==ENV.fetch("PRIMARY_MODEL")
 abort "App Store personal team mismatch" unless preflight["provider"]=="app-store" && preflight["account"]==team
 abort "App Store bundle target mismatch" unless preflight["target"]==bundle
-abort "App Store preflight is not healthy production evidence" unless preflight["environment"]=="production" && preflight["operation"]=="appstore.inspect_app" && preflight["health"]=="healthy"
+abort "App Store preflight operation mismatch" unless preflight["operation"]==operation
+abort "App Store preflight is not healthy production evidence" unless preflight["environment"]=="production" && preflight["health"]=="healthy"
+checked_at=begin Time.iso8601(preflight.fetch("checkedAt")) rescue nil end
+abort "App Store preflight is stale or invalid" unless checked_at && (Time.iso8601(now)-checked_at).between?(0,3600)
 
-sections=%w[app-information localization privacy screenshots build review-information submission]
-requested=ENV.fetch("SECTION")
 abort "submission section is invalid" unless sections.include?(requested)
 existing=File.exist?(result_path)
 abort "resume requires an App Store Connect readback" if existing && ENV.fetch("RESUME_READBACK")!="yes"
@@ -133,20 +146,22 @@ section_keys=%w[id status remoteReference readBackDigest readBackSource verified
 if existing
   stat=File.lstat(result_path); abort "submission result is unsafe" unless stat.file? && !stat.symlink? && stat.nlink==1
   value=JSON.parse(File.binread(result_path))
-  abort "submission result schema is invalid" unless value.is_a?(Hash) && value.keys.sort==result_keys.sort && value["schemaVersion"]==1
+  abort "legacy schemaVersion 1 result; create a new result" if value.is_a?(Hash) && value["schemaVersion"]==1
+  abort "submission result schema is invalid" unless value.is_a?(Hash) && value.keys.sort==result_keys.sort && value["schemaVersion"]==2
   abort "submission result identity changed" unless value.values_at("primaryModel","teamId","bundleId","version","buildId","sourceSha","buildDigest","packageDigest")==
     [ENV.fetch("PRIMARY_MODEL"),team,bundle,version,build_id,source_sha,build_digest,manifest["packageDigest"]]
   completed=value["sections"]
-  abort "submission result sections are invalid" unless completed.is_a?(Array) && completed.each_with_index.all?{|entry,index| entry.is_a?(Hash) && entry.keys.sort==section_keys.sort && entry["id"]==sections[index] && entry["status"]=="verified" && entry["readBackSource"]=="app-store-connect"}
+  abort "submission result sections are invalid" unless completed.is_a?(Array) && completed.each_with_index.all?{|entry,index| entry.is_a?(Hash) && entry.keys.sort==section_keys.sort && entry["id"]==sections[index] && entry["status"]=="verified" &&
+    entry["readBackSource"]==( %w[privacy review-information].include?(sections[index]) ? "app-store-connect-browser" : "app-store-connect-api")}
 else
-  value={"schemaVersion"=>1,"status"=>"in-progress","primaryModel"=>ENV.fetch("PRIMARY_MODEL"),"teamId"=>team,"bundleId"=>bundle,
+  value={"schemaVersion"=>2,"status"=>"in-progress","primaryModel"=>ENV.fetch("PRIMARY_MODEL"),"teamId"=>team,"bundleId"=>bundle,
     "version"=>version,"buildId"=>build_id,"sourceSha"=>source_sha,"buildDigest"=>build_digest,"packageDigest"=>manifest["packageDigest"],
     "sections"=>[],"lastCompletedSection"=>nil,"updatedAt"=>now}
   completed=value["sections"]
 end
 abort "submission sections must be recorded in order" unless requested==sections.fetch(completed.length)
 entry={"id"=>requested,"status"=>"verified","remoteReference"=>ENV.fetch("REMOTE_REFERENCE"),
-  "readBackDigest"=>ENV.fetch("READBACK_DIGEST"),"readBackSource"=>"app-store-connect","verifiedAt"=>now}
+  "readBackDigest"=>ENV.fetch("READBACK_DIGEST"),"readBackSource"=>(ENV.fetch("READBACK_SOURCE")=="api" ? "app-store-connect-api" : "app-store-connect-browser"),"verifiedAt"=>now}
 completed << entry
 value["lastCompletedSection"]=requested; value["updatedAt"]=now
 value["status"]=(requested=="submission" ? "submitted" : "in-progress")

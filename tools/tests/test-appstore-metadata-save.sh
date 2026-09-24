@@ -2,6 +2,9 @@
 set -euo pipefail
 export LANG=en_US.UTF-8
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" ruby git
+
 root=$(cd "$(dirname "$0")/../.." && pwd -P)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-metadata-save.XXXXXX")
 scratch=$(cd "$scratch" && pwd -P)
