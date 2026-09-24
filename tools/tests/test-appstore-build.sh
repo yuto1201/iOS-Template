@@ -162,9 +162,11 @@ security = write(scratch,'fake-security',<<~'FAKE')
 FAKE
 File.chmod(0700,security)
 remote_path = write(scratch,'remote.json',{'scenario'=>'normal','calls'=>[],'build'=>nil,'polls'=>0})
-fake_xcode = write(scratch,'fake-xcodebuild',<<~'FAKE'.gsub('__REMOTE__',remote_path.dump))
+fake_xcode = write(scratch,'fake-xcodebuild',<<~'FAKE'.gsub('__REMOTE__',remote_path.dump).gsub('__PREFLIGHT__',File.join(project,preflight_path).dump))
   #!/usr/bin/ruby
   require 'json'
+  require 'digest'
+  require 'time'
   remote_path = __REMOTE__
   state = JSON.parse(File.binread(remote_path))
   abort 'missing key env' unless ENV['ASC_KEY_ID'] == 'fixture-key-133' && ENV['ASC_ISSUER_ID'] == 'fixture-issuer-133' &&
@@ -189,8 +191,8 @@ fake_xcode = write(scratch,'fake-xcodebuild',<<~'FAKE'.gsub('__REMOTE__',remote_
   end
   state['calls'] << action
   File.binwrite(remote_path,JSON.generate(state))
-  puts "#{ENV['ASC_KEY_ID']} #{ENV['ASC_ISSUER_ID']} #{ENV['ASC_PRIVATE_KEY_PATH']}"
-  warn "#{ENV['ASC_KEY_ID']} #{ENV['ASC_ISSUER_ID']} #{ENV['ASC_PRIVATE_KEY_PATH']}"
+  puts "xcode-output-must-not-persist #{ENV['ASC_KEY_ID']} #{ENV['ASC_ISSUER_ID']} #{ENV['ASC_PRIVATE_KEY_PATH']}"
+  warn "xcode-output-must-not-persist #{ENV['ASC_KEY_ID']} #{ENV['ASC_ISSUER_ID']} #{ENV['ASC_PRIVATE_KEY_PATH']}"
   exit 7 if state['scenario'] == "#{action}-fail"
   if action == 'archive'
     path = ARGV[ARGV.index('-archivePath')+1]
@@ -200,6 +202,13 @@ fake_xcode = write(scratch,'fake-xcodebuild',<<~'FAKE'.gsub('__REMOTE__',remote_
     path = ARGV[ARGV.index('-exportPath')+1]
     Dir.mkdir(path)
     File.binwrite(File.join(path,'GardenNotes.ipa'),'synthetic ipa bytes')
+    if state['scenario'] == 'stale-after-export'
+      preflight_path = __PREFLIGHT__
+      preflight = JSON.parse(File.binread(preflight_path))
+      preflight['checkedAt'] = (Time.now.utc-3700).iso8601
+      preflight['digest'] = "sha256:#{Digest::SHA256.hexdigest(JSON.generate(preflight.reject { |key,_| key == 'digest' }.sort.to_h))}"
+      File.binwrite(preflight_path,JSON.generate(preflight))
+    end
   else
     exit 8
   end
@@ -227,6 +236,7 @@ fake_runner = write(scratch,'fake-asc-runner',<<~'FAKE'.gsub('__REMOTE__',remote
     response = {'data'=>{'type'=>'builds','id'=>'BUILD123','attributes'=>{'version'=>'7','processingState'=>state['build']},
       'relationships'=>{'preReleaseVersion'=>{'data'=>{'type'=>'preReleaseVersions','id'=>'PRERELEASE1'}}}},
       'included'=>[{'type'=>'preReleaseVersions','id'=>'PRERELEASE1','attributes'=>{'version'=>'1.0','platform'=>'IOS'}}]}
+    response['included'][0]['attributes']['version'] = '9.9' if state['scenario'] == 'readback-refusal'
   when 'builds upload'
     abort 'invalid upload args' unless args.length == 8 && args[2] == '--app' && args[4] == '--ipa' && args[6..] == ['--output','json']
     path = args[5]
@@ -261,6 +271,7 @@ invoke = lambda do |expected, args=base_args, overrides={}|
   output, error, status = Open3.capture3(env.merge(overrides),entry,*args)
   check(status.exitstatus == expected,"exit #{status.exitstatus} expected #{expected}: #{error} #{output}")
   check(!["fixture-key-133","fixture-issuer-133",key_path].any? { |secret| output.include?(secret) || error.include?(secret) },'secret leaked to output')
+  check(!output.include?('xcode-output-must-not-persist') && !error.include?('xcode-output-must-not-persist'),'xcode output leaked to command result')
   [JSON.parse(output),JSON.parse(File.binread(remote_path))]
 end
 reset = lambda do |scenario='normal', build=nil|
@@ -371,9 +382,23 @@ assert_prearchive_block.call('duplicate remote build',base_args)
 reset.call('archive-fail')
 failed, remote = invoke.call(1,base_args)
 check(failed['status'] == 'failed' && remote['calls'].include?('archive') && !remote['calls'].include?('export'),'archive signing failure')
+archive_history = events.call(failed.fetch('attempt'))
+check(archive_history.any? { |event| event['eventType'] == 'stage-failed' && event['stage'] == 'archive' && event['exitStatus'] == 7 && event['timedOut'] == false },'archive exit metadata')
+check(!Dir.glob(File.join(project,'.artifacts/**/*'),File::FNM_DOTMATCH).select { |path| File.file?(path) }.any? { |path| File.binread(path).include?('xcode-output-must-not-persist') },'xcode output absent from artifacts')
 reset.call('export-fail')
 failed, remote = invoke.call(1,base_args)
 check(failed['status'] == 'failed' && remote['calls'].include?('export') && !remote['calls'].include?('builds upload'),'export failure')
+check(events.call(failed.fetch('attempt')).any? { |event| event['eventType'] == 'stage-failed' && event['stage'] == 'export' && event['exitStatus'] == 7 && event['timedOut'] == false },'export exit metadata')
+reset.call('stale-after-export')
+blocked, remote = invoke.call(1,base_args)
+check(blocked['status'] == 'blocked' && blocked['reason'] == 'preflight-missing-or-stale' && !remote['calls'].include?('builds upload'),'post-export stale preflight blocks upload')
+blocked_attempt = events.call(blocked.fetch('attempt'))
+check(blocked_attempt.last['eventType'] == 'stage-failed' && blocked_attempt.last['reason'] == 'preflight-missing-or-stale','post-export refusal journal')
+File.binwrite(preflight_file,original_preflight)
+reset.call('normal')
+resumed, remote = invoke.call(0,base_args+['--resume-attempt',blocked.fetch('attempt')])
+check(resumed['status'] == 'valid' && !remote['calls'].include?('archive') && !remote['calls'].include?('export') && remote['calls'].count('builds upload') == 1,'post-export refusal resumes')
+check(events.call(blocked.fetch('attempt')).any? { |event| event['eventType'] == 'stage-failed' && event['reason'] == 'preflight-missing-or-stale' },'resume preserves refusal event')
 reset.call('upload-reject')
 failed, remote = invoke.call(1,base_args)
 check(failed['status'] == 'failed' && remote['calls'].count('builds upload') == 1,'upload rejection')
@@ -385,6 +410,10 @@ reset.call('processing-timeout')
 unknown, remote = invoke.call(1,base_args)
 check(unknown['status'] == 'unknown' && remote['calls'].count('builds upload') == 1 &&
   events.call(unknown['attempt']).any? { |event| event['status'] == 'timeout' },'processing timeout')
+reset.call('readback-refusal')
+unknown, remote = invoke.call(1,base_args)
+check(unknown['status'] == 'unknown' && unknown['reason'] == 'remote-build-version-mismatch' &&
+  events.call(unknown.fetch('attempt')).any? { |event| event['eventType'] == 'processing-readback' && event['status'] == 'unknown' && event['reason'] == 'remote-build-version-mismatch' },'readback refusal reason')
 
 reset.call('upload-ambiguous')
 unknown, remote = invoke.call(1,base_args)

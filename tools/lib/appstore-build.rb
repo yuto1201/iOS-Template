@@ -384,10 +384,10 @@ module IOSTemplate
       timeout = stage == 'archive' ? '3600' : '900'
       # xcodebuild's raw streams may contain account values; discard both. The
       # bounded helper reports only its fixed stage and timeout metadata.
-      success = system('/usr/bin/ruby','--disable-gems',File.join(__dir__,'bounded-command.rb'),
+      system('/usr/bin/ruby','--disable-gems',File.join(__dir__,'bounded-command.rb'),
         '--stage',"appstore-build-#{stage}",'--timeout-seconds',timeout,'--grace-seconds','5','--',*command,
         out:File::NULL,err:File::NULL)
-      success ? 0 : 1
+      $?.exitstatus || 1
     end
 
     def xcode(root, stage, slug, *args)
@@ -406,7 +406,7 @@ module IOSTemplate
           'IOS_TEMPLATE_TEST_SECURITY_BIN'=>ENV.fetch('IOS_TEMPLATE_TEST_SECURITY_BIN'))
       end
       _output, _error, status = Open3.capture3(env,*command,unsetenv_others:true)
-      status.success?
+      status.exitstatus || 1
     end
 
     def export_options(team_id)
@@ -513,9 +513,9 @@ module IOSTemplate
             return ['valid',detail['buildId']] if detail['processingState'] == 'VALID'
             return ['failed',detail['buildId']] if %w[FAILED INVALID].include?(detail['processingState'])
           end
-        rescue Refused
-          append_event(context,'processing-readback','status'=>'unknown','ipaDigest'=>ipa_digest_value)
-          return ['unknown',nil]
+        rescue Refused => error
+          append_event(context,'processing-readback','status'=>'unknown','ipaDigest'=>ipa_digest_value,'reason'=>error.message)
+          return ['unknown',nil,error.message]
         end
         if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
           append_event(context,'processing-readback','status'=>'timeout','ipaDigest'=>ipa_digest_value)
@@ -570,8 +570,10 @@ module IOSTemplate
             append_event(context,'processing-readback',detail.merge('ipaDigest'=>ipa_hash))
             return {'status'=>'valid','attempt'=>resume,'buildId'=>detail['buildId'],'releaseReady'=>false} if detail['processingState'] == 'VALID'
             return {'status'=>'failed','attempt'=>resume,'buildId'=>detail['buildId'],'releaseReady'=>false} if %w[FAILED INVALID].include?(detail['processingState'])
-            status, build_id = poll(context,runner_path,app_id_value,ipa_hash)
-            return {'status'=>status,'attempt'=>resume,'buildId'=>build_id,'releaseReady'=>false}
+            status, build_id, reason = poll(context,runner_path,app_id_value,ipa_hash)
+            result = {'status'=>status,'attempt'=>resume,'buildId'=>build_id,'releaseReady'=>false}
+            result['reason'] = reason if reason
+            return result
           end
           refuse('upload-already-issued') if entries.any? { |event| event['eventType'] == 'upload-intent' }
         else
@@ -582,16 +584,18 @@ module IOSTemplate
           derived = File.join(directory,'DerivedData')
           options = File.join(directory,'ExportOptions.plist')
           write_new(options,export_options(authority['teamId']))
-          unless xcode(root,'archive',app['appSlug'],File.join(root,"#{app['moduleName']}.xcodeproj"),app['moduleName'],archive,derived,authority['teamId'])
-            append_event(context,'stage-failed','stage'=>'archive')
+          archive_status = xcode(root,'archive',app['appSlug'],File.join(root,"#{app['moduleName']}.xcodeproj"),app['moduleName'],archive,derived,authority['teamId'])
+          unless archive_status.zero?
+            append_event(context,'stage-failed','stage'=>'archive','exitStatus'=>archive_status,'timedOut'=>archive_status == 124)
             return {'status'=>'failed','attempt'=>context[:attempt],'releaseReady'=>false}
           end
           archive_stat = File.lstat(archive)
           refuse('archive-output-invalid') unless archive_stat.directory? && archive_stat.uid == Process.uid && !archive_stat.symlink?
           append_event(context,'archive-complete')
           export = File.join(directory,'export')
-          unless xcode(root,'export',app['appSlug'],archive,export,options,authority['teamId'])
-            append_event(context,'stage-failed','stage'=>'export')
+          export_status = xcode(root,'export',app['appSlug'],archive,export,options,authority['teamId'])
+          unless export_status.zero?
+            append_event(context,'stage-failed','stage'=>'export','exitStatus'=>export_status,'timedOut'=>export_status == 124)
             return {'status'=>'failed','attempt'=>context[:attempt],'releaseReady'=>false}
           end
           ipa_files = Dir.children(export).select { |name| name.end_with?('.ipa') }
@@ -602,12 +606,17 @@ module IOSTemplate
         end
         # The intent is durable before the only upload invocation. A lost or
         # ambiguous response can be resolved by readback, never by replay.
-        clean_head(root,head)
-        refreshed = authority(root,issue,app.fetch('bundleId'),Time.now.utc)
-        refuse('authority-changed-before-upload') unless refreshed.values_at('teamId','bundleId','contractDigest') ==
-          authority.values_at('teamId','bundleId','contractDigest')
-        refuse('ipa-digest-mismatch') unless ipa_digest(ipa) == ipa_hash
-        refuse('duplicate-remote-build') unless build_list(runner_path,app_id_value,version,build).empty?
+        begin
+          clean_head(root,head)
+          refreshed = authority(root,issue,app.fetch('bundleId'),Time.now.utc)
+          refuse('authority-changed-before-upload') unless refreshed.values_at('teamId','bundleId','contractDigest') ==
+            authority.values_at('teamId','bundleId','contractDigest')
+          refuse('ipa-digest-mismatch') unless ipa_digest(ipa) == ipa_hash
+          refuse('duplicate-remote-build') unless build_list(runner_path,app_id_value,version,build).empty?
+        rescue Refused => error
+          append_event(context,'stage-failed','reason'=>error.message)
+          return {'status'=>'blocked','attempt'=>context[:attempt],'reason'=>error.message,'releaseReady'=>false}
+        end
         append_event(context,'upload-intent','ipaDigest'=>ipa_hash)
         response, code = asc(runner_path,'builds','upload','--app',app_id_value,'--ipa',ipa)
         # asc 5.4.0 internal/cli/builds/builds_commands.go prints
@@ -622,8 +631,10 @@ module IOSTemplate
         result_fields.merge!('uploadId'=>response['uploadId'],'fileId'=>response['fileId']) if accepted
         append_event(context,'upload-result',result_fields)
         return {'status'=>outcome,'attempt'=>context[:attempt],'releaseReady'=>false} unless accepted
-        status, build_id = poll(context,runner_path,app_id_value,ipa_hash)
-        {'status'=>status,'attempt'=>context[:attempt],'buildId'=>build_id,'releaseReady'=>false}
+        status, build_id, reason = poll(context,runner_path,app_id_value,ipa_hash)
+        result = {'status'=>status,'attempt'=>context[:attempt],'buildId'=>build_id,'releaseReady'=>false}
+        result['reason'] = reason if reason
+        result
       end
     end
 
