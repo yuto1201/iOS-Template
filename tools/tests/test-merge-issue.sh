@@ -148,6 +148,7 @@ case "$1 $2" in
         delayed) if [[ "$read_count" == 0 ]]; then jq '.[0].closingIssuesReferences=[]' "$state/prs.json"; else cat "$state/prs.json"; fi ;;
         never) jq '.[0].closingIssuesReferences=[]' "$state/prs.json" ;;
         wrong) jq '.[0].closingIssuesReferences[0].number=43 | .[0].closingIssuesReferences[0].url="https://github.com/yuto1201/iOS-Template/issues/43"' "$state/prs.json" ;;
+        extra) jq '.[0].closingIssuesReferences += [.[0].closingIssuesReferences[0] | .number=43 | .url="https://github.com/yuto1201/iOS-Template/issues/43"]' "$state/prs.json" ;;
         empty-wrong-head) jq '.[0].closingIssuesReferences=[] | .[0].headRefOid="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' "$state/prs.json" ;;
         *) cat "$state/prs.json" ;;
       esac
@@ -275,9 +276,6 @@ run_recovery() {
     --pull-request "${RECOVERY_PR:-$pr}" --expected-head "${RECOVERY_HEAD:-$CASE_HEAD}"
 }
 
-if [[ "$scope" == scoped ]]; then
-make_case created-closing-regressions
-cp "$CASE_PRIMARY/.artifacts/issues/$issue/state.json" "$CASE_ROOT/initial-state.json"
 reset_created_case() {
   cp "$CASE_ROOT/initial-state.json" "$CASE_PRIMARY/.artifacts/issues/$issue/state.json"
   printf '[]\n' >"$CASE_GH/prs.json"
@@ -288,14 +286,7 @@ reset_created_case() {
   : >"$CASE_LOG"; : >"$CASE_MUTATIONS"
 }
 
-  body=$("$CASE_WORKTREE/tools/render-pr-body.sh" --issue 42 --head-sha "$CASE_HEAD")
-  grep -Fq 'Verify digest: `sha256:' <<<"$body" || fail_test 'scoped PR body omits verify digest'
-  grep -Fq 'Reviewer model: `claude`' <<<"$body" || fail_test 'scoped PR body omits reviewer model'
-  run_merge >"$CASE_ROOT/result.json"
-  jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/result.json" >/dev/null
-  jq -e '.state=="merged" and .pullRequest==57' "$CASE_PRIMARY/.artifacts/issues/42/state.json" >/dev/null
-  echo 'PASS: scoped exact-first-read PR merges the reviewed Head'
-
+run_created_closing_regressions() {
 reset_created_case
 FAKE_CREATED_CLOSING_MODE=delayed run_merge >"$CASE_ROOT/delayed-result.json"
 jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/delayed-result.json" >/dev/null
@@ -317,6 +308,13 @@ grep -Fq 'PR does not close the exact Issue' "$CASE_ROOT/err" || fail_test 'wron
 [[ "$(cat "$CASE_GH/created-reads")" == 1 ]] || fail_test 'wrong closing Issue waited instead of failing immediately'
 if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'wrong closing Issue reached merge'; fi
 echo 'PASS: created-closing-wrong fails on the first read'
+
+reset_created_case
+FAKE_CREATED_CLOSING_MODE=extra assert_fails 'created PR closes an extra Issue' run_merge
+grep -Fq 'PR does not close the exact Issue' "$CASE_ROOT/err" || fail_test 'extra closing Issue changed the existing error'
+[[ "$(cat "$CASE_GH/created-reads")" == 1 ]] || fail_test 'extra closing Issue waited instead of failing immediately'
+if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'extra closing Issue reached merge'; fi
+echo 'PASS: created-closing-extra fails on the first read'
 
 reset_created_case
 FAKE_CREATED_CLOSING_MODE=empty-wrong-head assert_fails 'created PR has empty closing references and wrong Head' run_merge
@@ -354,7 +352,21 @@ grep -Fq 'created PR identity differs' "$CASE_ROOT/err" || fail_test 'expired cl
 if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'expired closing-reference wait reached merge'; fi
 echo 'PASS: created-closing-expired fails after the first read without merge'
 
-echo 'PASS: scoped created PR closing-reference regressions (6 cases)'
+echo 'PASS: created PR closing-reference regressions (7 cases)'
+}
+
+if [[ "$scope" == scoped ]]; then
+make_case created-closing-regressions
+cp "$CASE_PRIMARY/.artifacts/issues/$issue/state.json" "$CASE_ROOT/initial-state.json"
+  body=$("$CASE_WORKTREE/tools/render-pr-body.sh" --issue 42 --head-sha "$CASE_HEAD")
+  grep -Fq 'Verify digest: `sha256:' <<<"$body" || fail_test 'scoped PR body omits verify digest'
+  grep -Fq 'Reviewer model: `claude`' <<<"$body" || fail_test 'scoped PR body omits reviewer model'
+  run_merge >"$CASE_ROOT/result.json"
+  jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/result.json" >/dev/null
+  jq -e '.state=="merged" and .pullRequest==57' "$CASE_PRIMARY/.artifacts/issues/42/state.json" >/dev/null
+  echo 'PASS: scoped exact-first-read PR merges the reviewed Head'
+
+run_created_closing_regressions
 exit 0
 fi
 
@@ -560,6 +572,7 @@ jq -e 'has("pullRequest")|not' "$state_path" >/dev/null || fail_test 'failed exc
 if find "$CASE_PRIMARY/.artifacts/issues/42" -maxdepth 1 -name '.state.json.tmp.*' -print -quit | grep -q .; then fail_test 'failed CAS left a temporary state file'; fi
 
 make_case new
+cp "$CASE_PRIMARY/.artifacts/issues/$issue/state.json" "$CASE_ROOT/initial-state.json"
 body=$("$CASE_WORKTREE/tools/render-pr-body.sh" --issue 42 --head-sha "$CASE_HEAD")
 grep -Fq 'Verify digest: `sha256:' <<<"$body" || fail_test 'PR body omits verify digest'
 grep -Fq 'Reviewer model: `claude`' <<<"$body" || fail_test 'PR body omits reviewer model'
@@ -603,18 +616,19 @@ preflight --repo $repo_name --issue $issue --intended-operation github.update_is
 gh issue comment transition
 EOF
 diff -u "$CASE_ROOT/expected-new.log" "$CASE_LOG" || fail_test 'complete new-PR operation order differed'
+run_created_closing_regressions
 
 make_case missing-merge-declaration
 set_contract_operations '["github.push_branch","github.create_pr"]'
 assert_fails 'missing merge declaration' run_merge
 assert_no_mutation 'missing merge declaration'
 
-make_case missing-push-declaration
+: >"$CASE_LOG"; : >"$CASE_MUTATIONS"
 set_contract_operations '["github.create_pr","github.merge_pr"]'
 assert_fails 'missing push declaration' run_merge
 assert_no_mutation 'missing push declaration'
 
-make_case missing-create-declaration
+: >"$CASE_LOG"; : >"$CASE_MUTATIONS"
 set_contract_operations '["github.push_branch","github.merge_pr"]'
 assert_fails 'missing create declaration for new PR path' run_merge
 assert_no_mutation 'missing create declaration for new PR path'
@@ -662,12 +676,12 @@ write_pr CLOSED
 assert_fails 'persisted closed-unmerged PR' run_merge
 assert_no_mutation 'persisted closed-unmerged PR'
 
-make_case foreign-fork approved-for-merge 57
+: >"$CASE_LOG"; : >"$CASE_MUTATIONS"
 write_pr OPEN 'foreign/project' true
 assert_fails 'foreign-fork PR source' run_merge
 assert_no_mutation 'foreign-fork PR source'
 
-make_case wrong-closing-issue approved-for-merge 57
+: >"$CASE_LOG"; : >"$CASE_MUTATIONS"
 write_pr OPEN "$repo_name" false 43
 assert_fails 'PR closes wrong Issue' run_merge
 assert_no_mutation 'wrong closing Issue'
