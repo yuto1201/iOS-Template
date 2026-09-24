@@ -44,7 +44,7 @@ end
 Dir.mktmpdir('asc-testflight-test.') do |scratch|
   scratch = File.realpath(scratch)
   count = 0
-  make_fixture = lambda do |name, external: false, approval: false, identity_mismatch: false, notes: nil, symlink_notes: false|
+  make_fixture = lambda do |name, external: false, approval: false, identity_mismatch: false|
     project = File.join(scratch, name)
     FileUtils.mkdir_p(project)
     write(project, '.gitignore', ".artifacts/\n")
@@ -53,20 +53,11 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
     ownership = YAML.safe_load(File.binread(File.join(root,'Config/ownership.yml')), permitted_classes: [], aliases: false)
     ownership['appStore'] = {'teamId'=>'TEAM123456','bundleId'=>identity_mismatch ? 'com.example.other' : 'com.example.garden'}
     write(project, 'Config/ownership.yml', YAML.dump(ownership))
-    if notes
-      source = 'App Store/release-notes/what-to-test.txt'
-      if symlink_notes
-        write(project,'App Store/release-notes/real-notes.txt',notes)
-        File.symlink('real-notes.txt',File.join(project,source))
-      else
-        write(project,source,notes)
-      end
-    end
     git(project,'init','-q')
     git(project,'config','user.name','Synthetic Fixture')
     git(project,'config','user.email','fixture@example.invalid')
     git(project,'remote','add','origin','https://github.com/example/distribution-fixture.git')
-    git(project,'add','--all')
+    git(project,'add','Config','.gitignore')
     git(project,'-c','core.hooksPath=/dev/null','commit','-q','-m','Synthetic distribution fixture')
     head = git(project,'rev-parse','HEAD')
     issue = 42
@@ -181,7 +172,7 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
     end
     remote_path = write(scratch,"#{name}-remote.json",{'appId'=>'1234567890','buildId'=>'build-1',
       'groups'=>[{'id'=>'group-internal','internal'=>true},{'id'=>'group-external','internal'=>false}],
-      'memberships'=>[],'review'=>[],'notes'=>{},'calls'=>[],'ambiguousOnce'=>false})
+      'memberships'=>[],'review'=>[],'calls'=>[],'ambiguousOnce'=>false})
     runner = write(scratch,"#{name}-runner", <<~'FAKE'.gsub('__REMOTE__',remote_path.dump))
       #!/usr/bin/ruby
       # encoding: UTF-8
@@ -195,8 +186,6 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
       command = args.take_while { |part| !part.start_with?('--') }.join(' ')
       flags = args.drop(command.split(' ').length)
       get = ->(flag) { i=flags.index(flag); i && flags[i+1] }
-      note_value = -> { direct=flags.find { |flag| flag.start_with?('--whats-new=') };
-        direct ? direct.delete_prefix('--whats-new=') : get.call('--whats-new') }
       remote['calls'] << command
       response = case command
       when 'apps list'
@@ -235,28 +224,6 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
         remote['review'] = ['WAITING_FOR_REVIEW']
         {'data'=>{'type'=>'betaAppReviewSubmissions','id'=>'review-1',
           'attributes'=>{'betaReviewState'=>'WAITING_FOR_REVIEW'}}}
-      when 'builds test-notes list'
-        locale=get.call('--locale')
-        value=remote['notes'][locale]
-        {'data'=>value ? [{'type'=>'betaBuildLocalizations','id'=>"note-#{locale}",
-          'attributes'=>{'locale'=>locale,'whatsNew'=>value}}] : []}
-      when 'builds test-notes view'
-        locale=get.call('--locale')
-        value=remote['notes'][locale]
-        value = "#{value} altered" if value && remote['notesReadbackMismatch']
-        {'data'=>{'type'=>'betaBuildLocalizations','id'=>"note-#{locale}",
-          'attributes'=>{'locale'=>locale,'whatsNew'=>value}}}
-      when 'builds test-notes create', 'builds test-notes update'
-        locale=get.call('--locale')
-        remote['notes'][locale]=note_value.call
-        if remote['ambiguousNotesOnce']
-          remote['ambiguousNotesOnce']=false
-          File.binwrite(path,JSON.generate(remote))
-          warn remote['notes'][locale]
-          exit 9
-        end
-        {'data'=>{'type'=>'betaBuildLocalizations','id'=>"note-#{locale}",
-          'attributes'=>{'locale'=>locale,'whatsNew'=>remote['notes'][locale]}}}
       else
         abort "unexpected command #{command}"
       end
@@ -368,60 +335,9 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
   invoke.call(project,env,['--group','group-internal'],success:false)
   check(JSON.parse(File.binread(remote))['calls'].empty?,'duplicate input group rejected')
 
-  note_text = "-Check onboarding\nVerify date handling"
-  project,env,remote,* = make_fixture.call('notes-create',notes:note_text)
-  result, = invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/what-to-test.txt'])
-  check(result['status']=='distributed' && result['whatToTestDigest']=="sha256:#{Digest::SHA256.hexdigest(note_text)}",'What to Test readback success')
-  check(JSON.parse(File.binread(remote))['notes']['en-US']==note_text,'What to Test source applied')
-  check(JSON.parse(File.binread(remote))['calls'].include?('builds test-notes create'),'What to Test create path')
-  check(!Dir.glob(File.join(project,'.artifacts/appstore-testflight/42/**/*')).select { |p| File.file?(p) }.any? { |p|
-    File.binread(p).include?(note_text) },'What to Test value absent from journal')
-
-  project,env,remote,* = make_fixture.call('notes-update',notes:note_text)
-  state=JSON.parse(File.binread(remote)); state['notes']['en-US']='Old instructions'; File.binwrite(remote,JSON.generate(state))
-  result, = invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/what-to-test.txt'])
-  check(result['whatToTestDigest']=="sha256:#{Digest::SHA256.hexdigest(note_text)}" &&
-    JSON.parse(File.binread(remote))['calls'].include?('builds test-notes update'),'What to Test update path')
-
-  project,env,remote,* = make_fixture.call('notes-mismatch',notes:note_text)
-  state=JSON.parse(File.binread(remote)); state['notesReadbackMismatch']=true; File.binwrite(remote,JSON.generate(state))
-  result, = invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/what-to-test.txt'],success:false)
-  check(result['status']=='unknown' && !JSON.parse(File.binread(remote))['calls'].include?('builds add-groups'),
-    'mismatched notes readback blocks distribution')
-
-  project,env,remote,* = make_fixture.call('notes-one-flag',notes:note_text)
-  invoke.call(project,env,['--whats-new-locale','en-US'],success:false)
-  invoke.call(project,env,['--whats-new-source','App Store/release-notes/what-to-test.txt'],success:false)
-  check(JSON.parse(File.binread(remote))['calls'].empty?,'one-sided What to Test flags rejected')
-
-  project,env,remote,* = make_fixture.call('notes-outside',notes:note_text)
-  invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','Config/ownership.yml'],success:false)
-  check(JSON.parse(File.binread(remote))['calls'].empty?,'outside source path rejected')
-
-  project,env,remote,* = make_fixture.call('notes-symlink',notes:note_text,symlink_notes:true)
-  invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/what-to-test.txt'],success:false)
-  check(JSON.parse(File.binread(remote))['calls'].empty?,'symlink source rejected')
-
-  project,env,remote,* = make_fixture.call('notes-too-long',notes:'A'*4001)
-  invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/what-to-test.txt'],success:false)
-  check(JSON.parse(File.binread(remote))['calls'].empty?,'oversized What to Test rejected')
-
-  project,env,remote,* = make_fixture.call('notes-control',notes:"A\tB")
-  invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/what-to-test.txt'],success:false)
-  check(JSON.parse(File.binread(remote))['calls'].empty?,'control character rejected')
-
-  project,env,remote,* = make_fixture.call('notes-edge-space',notes:"A note\n")
-  invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/what-to-test.txt'],success:false)
-  check(JSON.parse(File.binread(remote))['calls'].empty?,'edge whitespace rejected before mutation')
-
-  project,env,remote,* = make_fixture.call('notes-resume',notes:note_text)
-  state=JSON.parse(File.binread(remote)); state['ambiguousNotesOnce']=true; File.binwrite(remote,JSON.generate(state))
-  first, = invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/what-to-test.txt'],success:false)
-  check(first['status']=='unknown','ambiguous note response recorded')
-  result, = invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/what-to-test.txt',
-    '--resume-attempt',first['attempt']])
-  check(result['status']=='distributed' && JSON.parse(File.binread(remote))['calls'].count('builds test-notes create')==1,
-    'notes resume readback avoids duplicate mutation')
+  project,env,remote,* = make_fixture.call('notes-unavailable')
+  invoke.call(project,env,['--whats-new-locale','en-US','--whats-new-source','App Store/release-notes/notes.md'],success:false)
+  check(JSON.parse(File.binread(remote))['calls'].empty?,'What to Test options are not accepted')
 
   project,env,remote,* = make_fixture.call('resume')
   state=JSON.parse(File.binread(remote)); state['ambiguousOnce']=true; File.binwrite(remote,JSON.generate(state))

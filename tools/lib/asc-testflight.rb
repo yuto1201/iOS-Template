@@ -21,7 +21,7 @@ module IOSTemplate
     ID = /\A[A-Za-z0-9_-]{1,128}\z/
     ATTEMPT = /\Aa[0-9a-f]{24}\z/
     APPROVAL = %r{\Aapproval: user-approval://[a-z0-9-]{1,128}\z}
-    EVENTS = %w[started build-readback notes-intent notes-readback group-intent group-readback review-intent review-readback distribution-result].freeze
+    EVENTS = %w[started build-readback group-intent group-readback review-intent review-readback distribution-result].freeze
     TEST_KEYS = %w[IOS_TEMPLATE_TEST_ASC_RUNNER IOS_TEMPLATE_TEST_OPERATION_DETAIL].freeze
     TOOL_ROOT = File.expand_path('../..', __dir__)
 
@@ -56,28 +56,6 @@ module IOSTemplate
       refuse('invalid-resume-attempt') if options[:resume] && !options[:resume].match?(ATTEMPT)
       refuse('invalid-approval') if options[:approval] && !options[:approval].match?(APPROVAL)
       refuse('approval-without-beta-review') if options[:approval] && !options[:submit]
-      refuse('what-to-test-flags-must-be-paired') unless options.key?(:notes_locale) == options.key?(:notes_source)
-      if options.key?(:notes_locale)
-        refuse('invalid-what-to-test-locale') unless %w[en-US ja].include?(options[:notes_locale])
-        source = options[:notes_source]
-        refuse('invalid-what-to-test-source-path') unless source.is_a?(String) &&
-          source.start_with?('App Store/release-notes/') &&
-          source != 'App Store/release-notes/' && source.bytesize <= 1024 &&
-          source.split('/').none? { |part| part.empty? || part == '.' || part == '..' }
-      end
-    end
-
-    def notes_source(root, options)
-      return nil unless options.key?(:notes_source)
-      source = options.fetch(:notes_source)
-      text = bytes(root,source,16_384)
-      refuse('invalid-what-to-test-text') unless !text.empty? &&
-        text.length <= 4000 && text.encode(Encoding::UTF_16BE).bytesize / 2 <= 4000 &&
-        !text.match?(/[\x00-\x09\x0b-\x1f\x7f]/)
-      # asc 5.4.0 trims --whats-new before its API request. Reject edge
-      # whitespace rather than silently sending bytes unlike the source file.
-      refuse('what-to-test-edge-whitespace-cannot-readback-exactly') unless text == text.strip
-      {locale:options.fetch(:notes_locale),text:text,digest:"sha256:#{Digest::SHA256.hexdigest(text)}"}
     end
 
     def operation_detail(root, contract, issue, executor)
@@ -272,54 +250,6 @@ module IOSTemplate
       state
     end
 
-    def notes_list(runner_path, build_id, locale)
-      response, code = asc(runner_path,'builds','test-notes','list','--build-id',build_id,
-        '--locale',locale,'--paginate')
-      refuse('what-to-test-list-unavailable') unless code.zero? && Base.full_list?(response) && response['data'].length <= 1
-      return nil if response['data'].empty?
-      row = response['data'].first
-      refuse('what-to-test-list-ambiguous') unless row.is_a?(Hash) && row['type'] == 'betaBuildLocalizations' &&
-        row['id'].to_s.match?(ID) && row.dig('attributes','locale') == locale &&
-        row.dig('attributes','whatsNew').is_a?(String)
-      {id:row['id'],text:row.dig('attributes','whatsNew')}
-    end
-
-    def notes_view(runner_path, build_id, locale, expected_id=nil)
-      response, code = asc(runner_path,'builds','test-notes','view','--build-id',build_id,'--locale',locale)
-      refuse('what-to-test-readback-unavailable') unless code.zero? && response.is_a?(Hash)
-      row = response['data']
-      refuse('what-to-test-readback-ambiguous') unless row.is_a?(Hash) && row['type'] == 'betaBuildLocalizations' &&
-        row['id'].to_s.match?(ID) && (!expected_id || row['id'] == expected_id) &&
-        row.dig('attributes','locale') == locale && row.dig('attributes','whatsNew').is_a?(String)
-      row.dig('attributes','whatsNew')
-    end
-
-    def apply_notes(context, entries, runner_path, notes)
-      locale = notes.fetch(:locale)
-      source = notes.fetch(:text)
-      current = notes_list(runner_path,context[:build_id],locale)
-      if current && current.fetch(:text) == source
-        observed = notes_view(runner_path,context[:build_id],locale,current.fetch(:id))
-        refuse('what-to-test-readback-mismatch') unless observed == source
-        append_event(context,'notes-readback','locale'=>locale,'readbackDigest'=>notes.fetch(:digest))
-        return true
-      end
-      return false if entries.any? { |event| event['eventType'] == 'notes-intent' }
-      append_event(context,'notes-intent','locale'=>locale,'sourceDigest'=>notes.fetch(:digest))
-      command = current ? 'update' : 'create'
-      _response, code = asc(runner_path,'builds','test-notes',command,'--build-id',context[:build_id],
-        '--locale',locale,'--whats-new',source)
-      return false unless code.zero?
-      begin
-        observed = notes_view(runner_path,context[:build_id],locale,current && current.fetch(:id))
-        return false unless observed == source
-      rescue Refused
-        return false
-      end
-      append_event(context,'notes-readback','locale'=>locale,'readbackDigest'=>notes.fetch(:digest))
-      true
-    end
-
     def append_event(context, type, fields={})
       refuse('invalid-event-type') unless EVENTS.include?(type)
       context[:sequence] += 1
@@ -343,7 +273,7 @@ module IOSTemplate
         stat = File.lstat(directory)
         refuse('unsafe-attempt') unless stat.directory? && stat.uid == Process.uid && stat.mode & 0777 == 0700
         names = Dir.children(directory).sort
-        refuse('unsafe-attempt-contents') unless !names.empty? && names.all? { |event| event.match?(/\A[0-9]{4}-(?:started|build-readback|notes-intent|notes-readback|group-intent|group-readback|review-intent|review-readback|distribution-result)\.json\z/) }
+        refuse('unsafe-attempt-contents') unless !names.empty? && names.all? { |event| event.match?(/\A[0-9]{4}-(?:started|build-readback|group-intent|group-readback|review-intent|review-readback|distribution-result)\.json\z/) }
         previous = nil
         entries = names.each_with_index.map do |event_name,index|
           raw = Base.read_owned_file(File.join(directory,event_name),100_000)
@@ -359,9 +289,7 @@ module IOSTemplate
         end
         started = entries.first
         refuse('attempt-context-mismatch') unless started['eventType'] == 'started' &&
-          started['groupIds'] == options[:groups] && started['buildJournalDigest'] == build_journal[:digest] &&
-          started['notesLocale'] == options[:notes]&.fetch(:locale) &&
-          started['notesDigest'] == options[:notes]&.fetch(:digest)
+          started['groupIds'] == options[:groups] && started['buildJournalDigest'] == build_journal[:digest]
         context = {directory:directory,attempt:name,sequence:entries.length,last_digest:previous,issue:issue,
           head:authority[:head],version:options[:version],build:options[:build],build_id:build_journal[:build_id],
           contract_digest:authority[:contract_digest]}
@@ -374,8 +302,7 @@ module IOSTemplate
           head:authority[:head],version:options[:version],build:options[:build],build_id:build_journal[:build_id],
           contract_digest:authority[:contract_digest]}
         started = append_event(context,'started','groupIds'=>options[:groups],
-          'buildJournalDigest'=>build_journal[:digest],'preflightDigest'=>authority[:preflight_digest],
-          'notesLocale'=>options[:notes]&.fetch(:locale),'notesDigest'=>options[:notes]&.fetch(:digest))
+          'buildJournalDigest'=>build_journal[:digest],'preflightDigest'=>authority[:preflight_digest])
         [context,[started]]
       end
     end
@@ -383,7 +310,6 @@ module IOSTemplate
     def execute(options)
       validate_options!(options)
       root = Base.safe_root(options[:root])
-      options[:notes] = notes_source(root,options)
       test_mode = ENV['IOS_TEMPLATE_TEST_MODE'] == '1'
       refuse('tool-project-root-mismatch') unless test_mode || root == TOOL_ROOT
       overrides = ENV.keys.select { |key| key.start_with?('IOS_TEMPLATE_TEST_') }
@@ -415,9 +341,6 @@ module IOSTemplate
         append_event(context,'build-readback','readbackDigest'=>digest({'appId'=>app_id,
           'buildId'=>journal[:build_id],'version'=>options[:version],
           'buildNumber'=>options[:build],'processingState'=>'VALID'}))
-        if options[:notes] && !apply_notes(context,entries,runner_path,options[:notes])
-          return {'status'=>'unknown','attempt'=>context[:attempt],'betaReviewState'=>'unknown','releaseReady'=>false}
-        end
         options[:groups].each do |id|
           state = membership(runner_path,app_id,journal[:build_id],{id=>group_types.fetch(id)})
           if state.fetch(id)
@@ -460,12 +383,9 @@ module IOSTemplate
         append_event(context,'review-readback','betaReviewState'=>review_label,
           'readbackDigest'=>digest({'buildId'=>journal[:build_id],'betaReviewState'=>review_label})) if external
         append_event(context,'distribution-result','betaReviewState'=>review_label,
-          'readbackDigest'=>digest({'buildId'=>journal[:build_id],'groups'=>final_membership,
-            'betaReviewState'=>review_label,'whatToTestDigest'=>options[:notes]&.fetch(:digest)}))
-        result = {'status'=>'distributed','attempt'=>context[:attempt],'buildId'=>journal[:build_id],
+          'readbackDigest'=>digest({'buildId'=>journal[:build_id],'groups'=>final_membership,'betaReviewState'=>review_label}))
+        {'status'=>'distributed','attempt'=>context[:attempt],'buildId'=>journal[:build_id],
           'betaReviewState'=>review_label,'releaseReady'=>false}
-        result['whatToTestDigest'] = options[:notes].fetch(:digest) if options[:notes]
-        result
       end
     end
 
@@ -480,8 +400,6 @@ module IOSTemplate
         cli.on('--submit-beta-review') { refuse('duplicate-submit') if options[:submit]; options[:submit]=true }
         cli.on('--approval REFERENCE') { |value| refuse('duplicate-approval') if options.key?(:approval); options[:approval]=value }
         cli.on('--resume-attempt ID') { |value| refuse('duplicate-resume') if options.key?(:resume); options[:resume]=value }
-        cli.on('--whats-new-locale LOCALE') { |value| refuse('duplicate-whats-new-locale') if options.key?(:notes_locale); options[:notes_locale]=value }
-        cli.on('--whats-new-source PATH') { |value| refuse('duplicate-whats-new-source') if options.key?(:notes_source); options[:notes_source]=value }
       end
       parser.parse!(argv)
       refuse('invalid-arguments') unless argv.empty?

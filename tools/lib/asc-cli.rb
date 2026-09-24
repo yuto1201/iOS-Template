@@ -45,10 +45,8 @@ module AscCLI
   # groups list supports app/paginate or build-id/app (the latter paginates
   # internally); internal/cli/testflight/testflight_review.go exposes review
   # submit --build-id/--confirm and submissions list --build-id/--paginate.
-  # internal/cli/builds/build_test_notes.go exposes list/view/create/update
-  # with --build-id/--locale; list has --paginate, and create/update take
-  # --whats-new. The existing 4000-character long-text value type forwards
-  # --whats-new=<text>, including text that begins with a hyphen.
+  # internal/cli/testflight/{beta_groups.go,build_group_membership.go} produces membership readback;
+  # internal/asc/output_beta.go: appId/buildId/complete/groupCount/groups[id,type,membership], optional failures.
   OPERATIONS = {
     'appstore.inspect_app' => {
       %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},
@@ -100,11 +98,7 @@ module AscCLI
       %w[testflight groups list] => {'--app'=>:id, '--paginate'=>:boolean, '--build-id'=>:resource_id},
       %w[builds add-groups] => {'--app'=>:id, '--build-number'=>:build_number, '--version'=>:version, '--platform'=>:platform, '--group'=>:resource_id},
       %w[testflight review submissions list] => {'--build-id'=>:resource_id, '--paginate'=>:boolean},
-      %w[testflight review submit] => {'--build-id'=>:resource_id, '--confirm'=>:boolean},
-      %w[builds test-notes list] => {'--build-id'=>:resource_id, '--locale'=>:locale, '--paginate'=>:boolean},
-      %w[builds test-notes view] => {'--build-id'=>:resource_id, '--locale'=>:locale},
-      %w[builds test-notes create] => {'--build-id'=>:resource_id, '--locale'=>:locale, '--whats-new'=>:localization_whats_new},
-      %w[builds test-notes update] => {'--build-id'=>:resource_id, '--locale'=>:locale, '--whats-new'=>:localization_whats_new}
+      %w[testflight review submit] => {'--build-id'=>:resource_id, '--confirm'=>:boolean}
     }.freeze
   }.freeze
   LOCALIZATION_TEXT_LIMITS = {
@@ -371,9 +365,6 @@ module AscCLI
               when %w[builds add-groups] then %w[--app --build-number --version --platform --group]
               when %w[testflight review submissions list] then %w[--build-id --paginate]
               when %w[testflight review submit] then %w[--build-id --confirm]
-              when %w[builds test-notes list] then %w[--build-id --locale --paginate]
-              when %w[builds test-notes view] then %w[--build-id --locale]
-              when %w[builds test-notes create], %w[builds test-notes update] then %w[--build-id --locale --whats-new]
               end
       refuse('exact TestFlight selectors required') unless (seen - ['--output']).sort == exact.sort
       platform = tail.each_cons(2).find { |pair| pair.first == '--platform' }&.last

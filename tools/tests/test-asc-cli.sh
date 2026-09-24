@@ -131,18 +131,8 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
     ['testflight','groups','list','--app','123','--build-id','build-1'],
     ['builds','add-groups','--app','123','--build-number','7','--version','1.0','--platform','IOS','--group','group-1'],
     ['testflight','review','submissions','list','--build-id','build-1','--paginate'],
-    ['testflight','review','submit','--build-id','build-1','--confirm'],
-    ['builds','test-notes','list','--build-id','build-1','--locale','en-US','--paginate'],
-    ['builds','test-notes','view','--build-id','build-1','--locale','ja'] ].each do |args|
+    ['testflight','review','submit','--build-id','build-1','--confirm'] ].each do |args|
     invoke.call(runner,testflight_op+args)
-  end
-  notes_value = "-Check onboarding\nVerify date handling"
-  %w[create update].each do |action|
-    out, = invoke.call(runner,testflight_op+['builds','test-notes',action,'--build-id','build-1',
-      '--locale','en-US','--whats-new',notes_value])
-    forwarded = JSON.parse(out).fetch('argv')
-    check(forwarded.include?("--whats-new=#{notes_value}") && !forwarded.include?(notes_value) &&
-      !forwarded.include?('--whats-new'),'What to Test uses one --flag=value argument')
   end
   [ ['testflight','groups','list','--app','123'],
     ['testflight','groups','list','--app','123','--build-id','build-1','--paginate'],
@@ -150,10 +140,6 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
     ['builds','remove-groups','--build-id','build-1','--group','group-1','--confirm'],
     ['testflight','review','submit','--build-id','build-1'],
     ['testflight','review','submissions','list','--build-id','build-1'],
-    ['builds','test-notes','create','--build-id','build-1','--locale','en-US'],
-    ['builds','test-notes','update','--build-id','build-1','--locale','en-US','--whats-new',"bad\rvalue"],
-    ['builds','test-notes','list','--build-id','build-1','--locale','en-US'],
-    ['builds','test-notes','delete','--build-id','build-1','--locale','en-US','--confirm'],
     ['builds','add-groups','--app','123','--build-number','7','--version','1.0','--platform','MAC_OS','--group','group-1'] ].each do |args|
     invoke.call(runner,testflight_op+args,{},:failure)
   end
