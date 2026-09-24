@@ -71,7 +71,8 @@ module IOSTemplate
           refuse('what-to-test-source-not-committed')
         end
         text = bytes(root,relative,16_384).delete_suffix("\n")
-        refuse('invalid-what-to-test-text') if text.empty? || text.length > 4000 || text != text.strip ||
+        refuse('invalid-what-to-test-text') if text.empty? || text.length > 4000 ||
+          text.encode(Encoding::UTF_16BE).bytesize / 2 > 4000 || text != text.strip ||
           text.each_codepoint.any? { |point| (point < 0x20 && point != 0x0a) || (0x7f..0x9f).cover?(point) }
         {locale:locale,text:text,digest:"sha256:#{Digest::SHA256.hexdigest(text)}"}
       end
@@ -209,18 +210,22 @@ module IOSTemplate
 
     def app_and_build(runner_path, bundle, version, build, expected_id)
       response, code = asc(runner_path,'apps','list','--bundle-id',bundle)
-      refuse('remote-app-unavailable') unless code.zero? && Base.full_list?(response) && response['data'].length == 1
+      refuse('remote-app-unavailable') unless code.zero? && Base.full_list?(response) && response['data'].length == 1 &&
+        response['data'].all? { |entry| entry.is_a?(Hash) }
       item = response['data'].first
       refuse('remote-app-mismatch') unless item['type'] == 'apps' && item['id'].to_s.match?(/\A[1-9][0-9]*\z/) &&
         item.dig('attributes','bundleId') == bundle
       app_id = item['id']
       response, code = asc(runner_path,'builds','list','--app',app_id,'--version',version,'--build-number',build,'--platform','IOS','--paginate')
-      refuse('remote-build-unavailable') unless code.zero? && Base.full_list?(response) && response['data'].length == 1
+      refuse('remote-build-unavailable') unless code.zero? && Base.full_list?(response) && response['data'].length == 1 &&
+        response['data'].all? { |entry| entry.is_a?(Hash) }
       row = response['data'].first
       refuse('remote-build-mismatch') unless row['type'] == 'builds' && row['id'] == expected_id &&
         row.dig('attributes','version') == build
       response, code = asc(runner_path,'builds','info','--app',app_id,'--version',version,'--build-number',build,'--platform','IOS')
-      refuse('remote-build-info-unavailable') unless code.zero? && response.is_a?(Hash)
+      refuse('remote-build-info-unavailable') unless code.zero? && response.is_a?(Hash) &&
+        response['data'].is_a?(Hash) && response['included'].is_a?(Array) &&
+        response['included'].all? { |entry| entry.is_a?(Hash) }
       row = response['data']
       included = response['included']
       relation = row.dig('relationships','preReleaseVersion','data') if row.is_a?(Hash)

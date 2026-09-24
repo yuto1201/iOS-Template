@@ -197,16 +197,21 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
       flags = args.drop(command.split(' ').length)
       get = ->(flag) { i=flags.index(flag); i && flags[i+1] }
       whats_new = get.call('--whats-new') || flags.find { |part| part.start_with?('--whats-new=') }&.delete_prefix('--whats-new=')
+      bad_element = ->(key) { remote[key] == 'null' ? nil : true }
       remote['calls'] << command
       response = case command
       when 'apps list'
-        {'data'=>[{'type'=>'apps','id'=>remote['appId'],'attributes'=>{'bundleId'=>'com.example.garden'}}]}
+        row = {'type'=>'apps','id'=>remote['appId'],'attributes'=>{'bundleId'=>'com.example.garden'}}
+        {'data'=>[remote.key?('nonHashApp') ? bad_element.call('nonHashApp') : row]}
       when 'builds list'
-        {'data'=>[{'type'=>'builds','id'=>remote['buildId'],'attributes'=>{'version'=>'7'}}]}
+        row = {'type'=>'builds','id'=>remote['buildId'],'attributes'=>{'version'=>'7'}}
+        {'data'=>[remote.key?('nonHashBuild') ? bad_element.call('nonHashBuild') : row]}
       when 'builds info'
-        {'data'=>{'type'=>'builds','id'=>remote['buildId'],'attributes'=>{'version'=>'7','processingState'=>remote['processingState'] || 'VALID'},
-          'relationships'=>{'preReleaseVersion'=>{'data'=>{'type'=>'preReleaseVersions','id'=>'pre-1'}}}},
-          'included'=>[{'type'=>'preReleaseVersions','id'=>'pre-1','attributes'=>{'version'=>'1.0','platform'=>'IOS'}}]}
+        data = {'type'=>'builds','id'=>remote['buildId'],'attributes'=>{'version'=>'7','processingState'=>remote['processingState'] || 'VALID'},
+          'relationships'=>{'preReleaseVersion'=>{'data'=>{'type'=>'preReleaseVersions','id'=>'pre-1'}}}}
+        included = {'type'=>'preReleaseVersions','id'=>'pre-1','attributes'=>{'version'=>'1.0','platform'=>'IOS'}}
+        {'data'=>remote.key?('nonHashBuildInfoData') ? bad_element.call('nonHashBuildInfoData') : data,
+          'included'=>[remote.key?('nonHashIncluded') ? bad_element.call('nonHashIncluded') : included]}
       when 'testflight groups list'
         if get.call('--build-id')
           result = {'buildId'=>remote['buildId'],'appId'=>remote['appId'],'complete'=>true,'lookupMethod'=>'server-filter',
@@ -218,13 +223,13 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
             result['complete']=false
             result['failures']=[{'groupId'=>'group-internal','error'=>'fixture relationship incomplete'}]
           end
-          result['groups'] << 'invalid row' if remote['nonHashMembership']
+          result['groups'] << bad_element.call('nonHashMembership') if remote.key?('nonHashMembership')
           result['groupCount'] = result['groups'].length
           result
         else
           rows = remote['groups'].map { |g| {'type'=>'betaGroups','id'=>g['id'],
             'attributes'=>{'name'=>'tester@example.invalid','isInternalGroup'=>g['internal']}} }
-          rows << 'invalid row' if remote['nonHashGroup']
+          rows << bad_element.call('nonHashGroup') if remote.key?('nonHashGroup')
           {'data'=>rows}
         end
       when 'builds add-groups'
@@ -242,7 +247,7 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
         rows = remote['notes'].select { |row| row.is_a?(Hash) && row['locale']==locale }.map { |row|
           {'type'=>'betaBuildLocalizations','id'=>row['id'],
            'attributes'=>{'locale'=>row['locale'],'whatsNew'=>row['text']}} }
-        rows << 'invalid row' if remote['nonHashNotes']
+        rows << bad_element.call('nonHashNotes') if remote.key?('nonHashNotes')
         {'data'=>rows}
       when 'builds test-notes view'
         row = remote['notes'].find { |entry| entry.is_a?(Hash) && entry['locale']==get.call('--locale') }
@@ -264,7 +269,7 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
       when 'testflight review submissions list'
         rows = remote['review'].map { |state| {'type'=>'betaAppReviewSubmissions','id'=>'review-1',
           'attributes'=>{'betaReviewState'=>state}} }
-        rows << 'invalid row' if remote['nonHashReview']
+        rows << bad_element.call('nonHashReview') if remote.key?('nonHashReview')
         {'data'=>rows}
       when 'testflight review submit'
         remote['review'] = ['WAITING_FOR_REVIEW']
@@ -504,6 +509,7 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
    'edge-source'=>[note_option,{'en-US'=>' leading'}],
    'trailing-source'=>[note_option,{'en-US'=>'trailing '}],
    'oversized-source'=>[note_option,{'en-US'=>'A'*4001}],
+   'utf16-oversized-source'=>[note_option,{'en-US'=>'🌸'*2001}],
    'empty-source'=>[note_option,{'en-US'=>"\n"}],
    'double-lf-source'=>[note_option,{'en-US'=>"text\n\n"}]}.each do |name,(args,sources)|
     project,env,remote,* = make_fixture.call(name,note_sources:sources)
@@ -512,16 +518,29 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
       "#{name} refused before any asc call")
   end
 
-  {'nonhash-group'=>['nonHashGroup','remote-groups-unavailable',false],
+  {'nonhash-app'=>['nonHashApp','remote-app-unavailable',false],
+   'nonhash-build'=>['nonHashBuild','remote-build-unavailable',false],
+   'nonhash-build-info-data'=>['nonHashBuildInfoData','remote-build-info-unavailable',false],
+   'nonhash-included'=>['nonHashIncluded','remote-build-info-unavailable',false],
+   'nonhash-group'=>['nonHashGroup','remote-groups-unavailable',false],
    'nonhash-membership'=>['nonHashMembership','membership-unavailable',false],
    'nonhash-review'=>['nonHashReview','beta-review-readback-unavailable',true],
    'nonhash-notes'=>['nonHashNotes','what-to-test-list-unavailable',false]}.each do |name,(flag,reason,external)|
-    sources = name=='nonhash-notes' ? {'en-US'=>'Valid note'} : {}
-    project,env,remote,* = make_fixture.call(name,external:external,note_sources:sources)
-    state=JSON.parse(File.binread(remote)); state[flag]=true; File.binwrite(remote,JSON.generate(state))
-    args = name=='nonhash-notes' ? note_option : external ? ['--group','group-external'] : []
-    result, = invoke.call(project,env,args,success:false)
-    check(result['status']=='blocked' && result['reason']==reason,"#{name} gives specific blocked result")
+    %w[null true].each do |bad_value|
+      sources = name=='nonhash-notes' ? {'en-US'=>'Valid note'} : {}
+      project,env,remote,* = make_fixture.call("#{name}-#{bad_value}",external:external,note_sources:sources)
+      state=JSON.parse(File.binread(remote))
+      state[flag]=bad_value
+      state['memberships']=['group-internal','group-external'] if external
+      File.binwrite(remote,JSON.generate(state))
+      args = name=='nonhash-notes' ? note_option : external ? ['--group','group-external'] : []
+      result, = invoke.call(project,env,args,success:false)
+      calls = JSON.parse(File.binread(remote))['calls']
+      check(result['status']=='blocked' && result['reason']==reason &&
+        !calls.include?('builds add-groups') && !calls.include?('builds test-notes create') &&
+        !calls.include?('testflight review submit'),
+        "#{name} #{bad_value} gives specific blocked JSON without mutation")
+    end
   end
 
   puts "PASS: TestFlight distribution #{count} fake-runner cases"
