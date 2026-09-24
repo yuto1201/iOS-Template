@@ -202,10 +202,10 @@ write_valid_fixture; digest=$(package_digest); write_attestations "$digest"; rm 
 assert_seal_failure 'missing first publication approval' 'approval'
 
 write_preflight() {
-  local account=$1 executor=${2:-codex}
-  ACCOUNT="$account" EXECUTOR="$executor" TARGET="$bundle_id" FILE="$preflight" ruby -rjson -rdigest -e '
+  local account=$1 executor=${2:-codex} operation=${3:-appstore.update_metadata}
+  ACCOUNT="$account" EXECUTOR="$executor" OPERATION="$operation" TARGET="$bundle_id" FILE="$preflight" ruby -rjson -rdigest -e '
     value={"schemaVersion"=>2,"issue"=>8,"executor"=>ENV.fetch("EXECUTOR"),"provider"=>"app-store","account"=>ENV.fetch("ACCOUNT"),"target"=>ENV.fetch("TARGET"),
-      "environment"=>"production","operation"=>"appstore.inspect_app","health"=>"healthy","checkedAt"=>"2026-08-26T02:05:00Z"}
+      "environment"=>"production","operation"=>ENV.fetch("OPERATION"),"health"=>"healthy","checkedAt"=>"2026-08-26T02:05:00Z"}
     canonical=lambda{|item| item.is_a?(Hash) ? item.keys.sort.to_h{|key| [key,canonical.call(item.fetch(key))]} : item}
     value["digest"]="sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical.call(value)))}"
     File.binwrite(ENV.fetch("FILE"),JSON.generate(canonical.call(value)))
@@ -217,7 +217,7 @@ record_section() {
   "$record" --repo "$project" --package-root "$package" --package-manifest "$package/submission/$version-package.json" \
     --preflight "$preflight" --audit "$audit" --result "$package/submission/$version-result.json" \
     --team-id "$team_id" --bundle-id "$bundle_id" --version "$version" --build-id 42 --source-sha "$source_sha" \
-    --build-digest "$expected_build" --primary-model "$primary_model" --section "$section" \
+    --build-digest "$expected_build" --primary-model "$primary_model" --section "$section" --readback-source api \
     --remote-reference "asc://apps/$bundle_id/versions/$version/$section" \
     --readback-digest sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
     --resume-readback "$resume" --now 2026-08-26T02:10:00Z
@@ -239,7 +239,7 @@ set +e; output=$(record_section app-information 2>&1); command_status=$?; set -e
 
 write_valid_fixture; digest=$(package_digest); write_attestations "$digest"; seal_package >/dev/null; write_preflight "$team_id"
 first=$(record_section app-information)
-[[ "$first" == *'"status":"in-progress"'* ]] || { echo "first submission section failed: $first" >&2; exit 1; }
+[[ "$first" == *'"status":"in-progress"'* && "$first" == *'"schemaVersion":2'* && "$first" == *'"readBackSource":"app-store-connect-api"'* ]] || { echo "first submission section failed: $first" >&2; exit 1; }
 set +e; output=$(record_section localization "$build_digest" no 2>&1); command_status=$?; set -e
 [[ "$command_status" -ne 0 && "$output" == *'readback'* ]] || { echo "resume without readback was not blocked: $output" >&2; exit 1; }
 second=$(record_section localization "$build_digest" yes)

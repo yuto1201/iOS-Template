@@ -5,6 +5,7 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" ruby
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 exec /usr/bin/ruby --disable-gems - "$source_root" <<'RUBY'
+# encoding: UTF-8
 require 'json'
 require 'digest'
 require 'tmpdir'

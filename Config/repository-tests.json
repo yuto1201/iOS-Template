@@ -11,6 +11,8 @@
         ".agents/skills/save-appstore-metadata/SKILL.md",
         ".agents/skills/save-appstore-metadata/scripts/save-appstore-metadata.sh",
         ".agents/skills/submit-appstore-release/SKILL.md",
+        ".agents/skills/submit-appstore-release/agents/openai.yaml",
+        ".agents/skills/submit-appstore-release/scripts/record-section.sh",
         ".claude/skills/save-appstore-metadata",
         "docs/agent-contracts/appstore-submission.md",
         "docs/goldie.md",
@@ -22,6 +24,7 @@
         "tools/prepare-appstore-sources.sh",
         "tools/tests/test-appstore-build.sh",
         "tools/tests/test-appstore-metadata-save.sh",
+        "tools/tests/test-appstore-release-sections.sh",
         "tools/validate-appstore-package.sh"
       ],
       "prefixes": [
@@ -335,6 +338,7 @@
     {"path": "tools/tests/test-appstore-package.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-preparation-migration.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-preparation.sh", "domains": ["appstore"]},
+    {"path": "tools/tests/test-appstore-release-sections.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-screenshots.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore", "evidence-applicability", "release-disposition"]},
     {"path": "tools/tests/test-asc-cli.sh", "domains": ["asc-adapter"]},
