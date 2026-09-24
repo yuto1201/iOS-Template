@@ -14,6 +14,13 @@ while [[ $# -gt 0 ]]; do
 done
 [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && "$issue" =~ ^[1-9][0-9]*$ ]] || usage
 fail() { echo "merge refused: $*" >&2; exit 1; }
+if [[ "${IOS_TEMPLATE_TEST_MODE:-}" != 1 && ( -n "${IOS_TEMPLATE_TEST_MERGE_WAIT_ATTEMPTS+x}" || -n "${IOS_TEMPLATE_TEST_MERGE_WAIT_INTERVAL+x}" ) ]]; then
+  fail 'test wait overrides are not allowed in production mode'
+fi
+merge_wait_attempts=${IOS_TEMPLATE_TEST_MERGE_WAIT_ATTEMPTS:-20}
+merge_wait_interval=${IOS_TEMPLATE_TEST_MERGE_WAIT_INTERVAL:-1}
+[[ "$merge_wait_attempts" =~ ^[1-9][0-9]*$ && "$merge_wait_attempts" -le 60 ]] || fail 'invalid PR closing-reference wait attempts'
+[[ "$merge_wait_interval" =~ ^[01]$ ]] || fail 'invalid PR closing-reference wait interval'
 
 identity=$(ruby "$identity_tool" validate-worktree "$repo_root" "$repo" "$issue") || fail 'durable Issue identity is invalid'
 branch=$(jq -er '.branch | strings' <<<"$identity") || fail 'durable Branch is invalid'
@@ -63,8 +70,8 @@ require_origin() {
 require_origin
 
 validate_pr() {
-  local expected_state=$1 document=$2 expected_pr=$3
-  PR_JSON="$document" REPO="$repo" ISSUE="$issue" PR="$expected_pr" BRANCH="$branch" HEAD="$head_sha" EXPECTED_STATE="$expected_state" ruby -rjson -e '
+  local expected_state=$1 document=$2 expected_pr=$3 allow_empty=${4:-false}
+  PR_JSON="$document" REPO="$repo" ISSUE="$issue" PR="$expected_pr" BRANCH="$branch" HEAD="$head_sha" EXPECTED_STATE="$expected_state" ALLOW_EMPTY="$allow_empty" ruby -rjson -e '
     pr = JSON.parse(ENV.fetch("PR_JSON")); abort "PR must be an object" unless pr.is_a?(Hash)
     required = %w[number state baseRefName headRefName headRefOid headRepository headRepositoryOwner isCrossRepository closingIssuesReferences mergeCommit url]
     abort "PR fields differ" unless pr.keys.sort == required.sort
@@ -73,10 +80,6 @@ validate_pr() {
     abort "PR Base differs" unless pr["baseRefName"] == "main"
     abort "PR Branch or Head differs" unless pr["headRefName"] == ENV.fetch("BRANCH") && pr["headRefOid"] == ENV.fetch("HEAD")
     abort "PR source repository differs" unless pr["isCrossRepository"] == false && pr.dig("headRepository", "nameWithOwner") == ENV.fetch("REPO") && pr.dig("headRepositoryOwner", "login") == ENV.fetch("REPO").split("/", 2).first
-    closing = pr["closingIssuesReferences"]
-    target_owner, target_name = ENV.fetch("REPO").split("/", 2)
-    closing_repository = closing.is_a?(Array) && closing.length == 1 ? closing[0]["repository"] : nil
-    abort "PR does not close the exact Issue" unless closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing_repository.is_a?(Hash) && closing_repository["name"] == target_name && closing_repository.dig("owner", "login") == target_owner
     expected = ENV.fetch("EXPECTED_STATE")
     abort "PR state differs" unless expected == "ANY" ? %w[OPEN CLOSED MERGED].include?(pr["state"]) : pr["state"] == expected
     if pr["state"] == "MERGED"
@@ -84,6 +87,14 @@ validate_pr() {
     else
       abort "unmerged PR unexpectedly has merge commit" unless pr["mergeCommit"].nil?
     end
+    closing = pr["closingIssuesReferences"]
+    if closing == [] && ENV.fetch("ALLOW_EMPTY") == "true"
+      puts "EMPTY"
+      exit 0
+    end
+    target_owner, target_name = ENV.fetch("REPO").split("/", 2)
+    closing_repository = closing.is_a?(Array) && closing.length == 1 ? closing[0]["repository"] : nil
+    abort "PR does not close the exact Issue" unless closing.is_a?(Array) && closing.length == 1 && closing[0]["number"] == Integer(ENV.fetch("ISSUE")) && closing[0]["url"] == "https://github.com/#{ENV.fetch("REPO")}/issues/#{ENV.fetch("ISSUE")}" && closing_repository.is_a?(Hash) && closing_repository["name"] == target_name && closing_repository.dig("owner", "login") == target_owner
     puts pr["state"]
   ' || fail 'PR identity is stale or mismatched'
 }
@@ -196,10 +207,21 @@ if [[ -z "$pr_number" ]]; then
   "$repo_root/tools/github-account-preflight.sh" --repo "$repo" --issue "$issue" --intended-operation github.create_pr --expected-head "$head_sha" >/dev/null || fail 'PR creation preflight failed'
   require_current_declared_operation github.create_pr
   gh pr create --repo "$repo" --base main --head "$branch" --title "$title" --body "$body" >/dev/null || fail 'PR creation failed'
+  wait_deadline=$(ruby -e 'puts Process.clock_gettime(Process::CLOCK_MONOTONIC) + 60')
   created=$(gh pr list --repo "$repo" --head "$branch" --state open --json "$pr_fields") || fail 'created PR could not be resolved'
   selected=$(PRS="$created" ruby -rjson -e 'items = JSON.parse(ENV.fetch("PRS")); abort unless items.is_a?(Array) && items.length == 1; puts JSON.generate(items.fetch(0))') || fail 'created PR is ambiguous'
   pr_number=$(jq -er '.number' <<<"$selected") || fail 'created PR number is invalid'
-  [[ "$(validate_pr OPEN "$selected" "$pr_number")" == OPEN ]] || fail 'created PR identity differs'
+  created_state=$(validate_pr OPEN "$selected" "$pr_number" true) || fail 'created PR identity differs'
+  read_attempt=1
+  while [[ "$created_state" == EMPTY && "$read_attempt" -lt "$merge_wait_attempts" ]]; do
+    ruby -e 'exit(Process.clock_gettime(Process::CLOCK_MONOTONIC) + Integer(ARGV[1]) < Float(ARGV[0]) ? 0 : 1)' "$wait_deadline" "$merge_wait_interval" || break
+    sleep "$merge_wait_interval"
+    created=$(gh pr list --repo "$repo" --head "$branch" --state open --json "$pr_fields") || fail 'created PR could not be resolved'
+    selected=$(PRS="$created" ruby -rjson -e 'items = JSON.parse(ENV.fetch("PRS")); abort unless items.is_a?(Array) && items.length == 1; puts JSON.generate(items.fetch(0))') || fail 'created PR is ambiguous'
+    created_state=$(validate_pr OPEN "$selected" "$pr_number" true) || fail 'created PR identity differs'
+    read_attempt=$((read_attempt + 1))
+  done
+  [[ "$created_state" == OPEN ]] || { validate_pr OPEN "$selected" "$pr_number" >/dev/null; fail 'created PR identity differs'; }
   ruby "$identity_tool" persist-pr "$repo_root" "$repo" "$issue" "$pr_number" >/dev/null || fail 'created PR identity could not be persisted'
 fi
 

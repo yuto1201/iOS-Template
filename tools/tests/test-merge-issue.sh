@@ -141,10 +141,20 @@ case "$1 $2" in
   'pr list')
     [[ "$*" == "pr list --repo $repo --head $branch --state all --json $fields" || "$*" == "pr list --repo $repo --head $branch --state open --json $fields" ]] || { echo 'invalid pr list argv' >&2; exit 2; }
     printf 'gh pr list %s\n' "$8" >>"$log"
-    cat "$state/prs.json" ;;
+    if [[ "$8" == open && -f "$state/created-reads" ]]; then
+      read_count=$(cat "$state/created-reads")
+      printf '%s\n' "$((read_count + 1))" >"$state/created-reads"
+      case "${FAKE_CREATED_CLOSING_MODE:-exact}" in
+        delayed) if [[ "$read_count" == 0 ]]; then jq '.[0].closingIssuesReferences=[]' "$state/prs.json"; else cat "$state/prs.json"; fi ;;
+        never) jq '.[0].closingIssuesReferences=[]' "$state/prs.json" ;;
+        wrong) jq '.[0].closingIssuesReferences[0].number=43 | .[0].closingIssuesReferences[0].url="https://github.com/yuto1201/iOS-Template/issues/43"' "$state/prs.json" ;;
+        empty-wrong-head) jq '.[0].closingIssuesReferences=[] | .[0].headRefOid="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' "$state/prs.json" ;;
+        *) cat "$state/prs.json" ;;
+      esac
+    else cat "$state/prs.json"; fi ;;
   'pr create')
     [[ $# == 12 && $3 == --repo && $4 == "$repo" && $5 == --base && $6 == main && $7 == --head && $8 == "$branch" && $9 == --title && ${10} == 'Issue #42: Merge exact verified work.' && ${11} == --body && ${12} == *'Closes #42'* ]] || { echo 'invalid deterministic pr create argv' >&2; exit 2; }
-    printf 'gh pr create exact\n' >>"$log"; printf 'pr-create\n' >>"$mutations"; pr_json OPEN | jq -s . >"$state/prs.json" ;;
+    printf 'gh pr create exact\n' >>"$log"; printf 'pr-create\n' >>"$mutations"; pr_json OPEN | jq -s . >"$state/prs.json"; printf '0\n' >"$state/created-reads" ;;
   'pr view') [[ "$*" == "pr view $pr --repo $repo --json $fields" ]] || { echo 'invalid pr view argv' >&2; exit 2; }; printf 'gh pr view %s\n' "$pr" >>"$log"; jq -e 'length==1' "$state/prs.json" >/dev/null; jq '.[0]' "$state/prs.json" ;;
   'pr merge') [[ "$*" == "pr merge $pr --repo $repo --squash --match-head-commit $head" ]] || { echo 'invalid pr merge argv' >&2; exit 2; }; printf 'gh pr merge %s exact-squash\n' "$pr" >>"$log"; printf 'pr-merge\n' >>"$mutations"; pr_json MERGED | jq -s . >"$state/prs.json"; printf 'CLOSED\n' >"$state/issue-state" ;;
   'issue view')
@@ -195,7 +205,7 @@ write_review_closure() {
 }
 
 run_merge() {
-  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_GATE="${FAIL_GATE:-0}" FAKE_SOURCE_REPO="${FAKE_SOURCE_REPO:-$repo_name}" FAKE_CROSS_REPO="${FAKE_CROSS_REPO:-false}" FAKE_CLOSING_ISSUE="${FAKE_CLOSING_ISSUE:-$issue}" FAKE_REMOTE_HEAD_OVERRIDE="${FAKE_REMOTE_HEAD_OVERRIDE:-}" "$CASE_WORKTREE/tools/merge-issue.sh" --repo "$repo_name" --issue "$issue"
+  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_GATE="${FAIL_GATE:-0}" FAKE_SOURCE_REPO="${FAKE_SOURCE_REPO:-$repo_name}" FAKE_CROSS_REPO="${FAKE_CROSS_REPO:-false}" FAKE_CLOSING_ISSUE="${FAKE_CLOSING_ISSUE:-$issue}" FAKE_REMOTE_HEAD_OVERRIDE="${FAKE_REMOTE_HEAD_OVERRIDE:-}" FAKE_CREATED_CLOSING_MODE="${FAKE_CREATED_CLOSING_MODE:-exact}" IOS_TEMPLATE_TEST_MODE="${MERGE_TEST_MODE:-1}" IOS_TEMPLATE_TEST_MERGE_WAIT_ATTEMPTS="${MERGE_WAIT_ATTEMPTS:-3}" IOS_TEMPLATE_TEST_MERGE_WAIT_INTERVAL="${MERGE_WAIT_INTERVAL:-0}" "$CASE_WORKTREE/tools/merge-issue.sh" --repo "$repo_name" --issue "$issue"
 }
 
 write_pr() {
@@ -275,6 +285,35 @@ if [[ "$scope" == scoped ]]; then
   echo 'PASS: scoped merge validates and publishes one exact reviewed Head'
   exit 0
 fi
+
+make_case created-closing-delayed
+FAKE_CREATED_CLOSING_MODE=delayed run_merge >"$CASE_ROOT/delayed-result.json"
+jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/delayed-result.json" >/dev/null
+[[ "$(cat "$CASE_GH/created-reads")" == 2 ]] || fail_test 'created PR was not read exactly twice before delayed closing reference appeared'
+[[ "$(grep -Fxc 'pr-create' "$CASE_MUTATIONS")" == 1 ]] || fail_test 'delayed closing reference created multiple PRs'
+
+make_case created-closing-never
+FAKE_CREATED_CLOSING_MODE=never assert_fails 'created PR closing reference remains empty' run_merge
+grep -Fq 'PR does not close the exact Issue' "$CASE_ROOT/err" || fail_test 'empty closing reference changed the existing error'
+[[ "$(cat "$CASE_GH/created-reads")" == 3 ]] || fail_test 'created PR did not stop at the test wait bound'
+[[ "$(grep -Fxc 'pr-create' "$CASE_MUTATIONS")" == 1 ]] || fail_test 'empty closing reference created multiple PRs'
+if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'empty closing reference reached merge'; fi
+
+make_case created-closing-wrong
+FAKE_CREATED_CLOSING_MODE=wrong assert_fails 'created PR closes the wrong Issue' run_merge
+grep -Fq 'PR does not close the exact Issue' "$CASE_ROOT/err" || fail_test 'wrong closing Issue changed the existing error'
+[[ "$(cat "$CASE_GH/created-reads")" == 1 ]] || fail_test 'wrong closing Issue waited instead of failing immediately'
+if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'wrong closing Issue reached merge'; fi
+
+make_case created-empty-wrong-head
+FAKE_CREATED_CLOSING_MODE=empty-wrong-head assert_fails 'created PR has empty closing references and wrong Head' run_merge
+grep -Fq 'PR Branch or Head differs' "$CASE_ROOT/err" || fail_test 'wrong Head did not take precedence over empty closing references'
+[[ "$(cat "$CASE_GH/created-reads")" == 1 ]] || fail_test 'wrong Head waited on empty closing references'
+if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'wrong Head reached merge'; fi
+
+make_case wait-override-production
+MERGE_TEST_MODE=0 assert_fails 'test wait override in production' run_merge
+assert_no_mutation 'test wait override in production'
 
 make_case manual-merged-missing-pr merged none recovery
 set_contract_operations '["github.push_branch","github.create_pr","github.merge_pr","github.delete_branch"]'
