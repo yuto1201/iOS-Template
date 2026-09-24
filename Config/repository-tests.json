@@ -37,14 +37,18 @@
       "domain": "asc-adapter",
       "paths": [
         "Config/asc-cli.json",
+        "docs/agent-contracts/testflight-distribution.md",
         "tools/asc-run.sh",
+        "tools/distribute-testflight-build.sh",
         "tools/install-asc-cli.sh",
         "tools/lib/asc-cli.rb",
+        "tools/lib/asc-testflight.rb",
         "tools/tests/fixtures/asc/checksums.txt",
         "tools/tests/fixtures/asc/fake-asc",
         "tools/tests/fixtures/asc/fake-security",
         "tools/tests/fixtures/asc/pin.json",
-        "tools/tests/test-asc-cli.sh"
+        "tools/tests/test-asc-cli.sh",
+        "tools/tests/test-asc-testflight.sh"
       ],
       "prefixes": []
     },
@@ -342,6 +346,7 @@
     {"path": "tools/tests/test-appstore-screenshots.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore", "evidence-applicability", "release-disposition"]},
     {"path": "tools/tests/test-asc-cli.sh", "domains": ["asc-adapter"]},
+    {"path": "tools/tests/test-asc-testflight.sh", "domains": ["asc-adapter"]},
     {"path": "tools/tests/test-bounded-command.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-recovery.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-resume.sh", "domains": ["workflow-state"]},

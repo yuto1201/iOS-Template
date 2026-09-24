@@ -40,6 +40,11 @@ module AscCLI
   # --version-localization/--path/--device-type (no --replace);
   # internal/cli/reviews/{review_submit.go,review_overview.go}:
   # submit --app/--version-id/--build-id/--confirm and status --app/--version-id.
+  # TestFlight 5.4.0 source: internal/cli/builds/builds.go add-groups uses
+  # app/build-number/version/platform/group; internal/cli/testflight/beta_groups.go
+  # groups list supports app/paginate or build-id/app (the latter paginates
+  # internally); internal/cli/testflight/testflight_review.go exposes review
+  # submit --build-id/--confirm and submissions list --build-id/--paginate.
   OPERATIONS = {
     'appstore.inspect_app' => {
       %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},
@@ -83,6 +88,15 @@ module AscCLI
       %w[versions attach-build] => {'--version-id'=>:resource_id, '--build-id'=>:resource_id},
       %w[review submit] => {'--app'=>:id, '--version-id'=>:resource_id, '--build-id'=>:resource_id, '--confirm'=>:boolean},
       %w[review status] => {'--app'=>:id, '--version-id'=>:resource_id, '--platform'=>:platform}
+    }.freeze,
+    'appstore.distribute_testflight' => {
+      %w[apps list] => {'--bundle-id'=>:identifier},
+      %w[builds list] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform, '--paginate'=>:boolean},
+      %w[builds info] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform},
+      %w[testflight groups list] => {'--app'=>:id, '--paginate'=>:boolean, '--build-id'=>:resource_id},
+      %w[builds add-groups] => {'--app'=>:id, '--build-number'=>:build_number, '--version'=>:version, '--platform'=>:platform, '--group'=>:resource_id},
+      %w[testflight review submissions list] => {'--build-id'=>:resource_id, '--paginate'=>:boolean},
+      %w[testflight review submit] => {'--build-id'=>:resource_id, '--confirm'=>:boolean}
     }.freeze
   }.freeze
   LOCALIZATION_TEXT_LIMITS = {
@@ -338,6 +352,21 @@ module AscCLI
       when %w[builds info]
         refuse('exact build selectors required') unless %w[--app --version --build-number --platform].all? { |flag| seen.include?(flag) }
       end
+    end
+    if args[1] == 'appstore.distribute_testflight'
+      exact = case command
+              when %w[apps list] then %w[--bundle-id]
+              when %w[builds list] then %w[--app --version --build-number --platform --paginate]
+              when %w[builds info] then %w[--app --version --build-number --platform]
+              when %w[testflight groups list]
+                seen.include?('--build-id') ? %w[--app --build-id] : %w[--app --paginate]
+              when %w[builds add-groups] then %w[--app --build-number --version --platform --group]
+              when %w[testflight review submissions list] then %w[--build-id --paginate]
+              when %w[testflight review submit] then %w[--build-id --confirm]
+              end
+      refuse('exact TestFlight selectors required') unless (seen - ['--output']).sort == exact.sort
+      platform = tail.each_cons(2).find { |pair| pair.first == '--platform' }&.last
+      refuse('TestFlight requires IOS platform') if exact.include?('--platform') && platform != 'IOS'
     end
     if metadata_command
       kind = tail.each_cons(2).find { |pair| pair.first == '--type' }&.last

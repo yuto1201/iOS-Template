@@ -14,6 +14,8 @@ Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、
 
 秘密は[security手順](docs/security.md#固定版ascの利用)に従い、Key ID／Issuer IDをアプリ別Keychainへ、Team keyの`.p8`を専用ディレクトリ直下の`app-store-connect-production.p8`へ置きます。runnerは既存wrapperから子process envへだけ渡し、ascのHOME／configを隔離して出力をredactします。`tools/tests/test-asc-cli.sh`はfake binaryによるoffline回帰です。基盤の検証成功は実install、live API、release readinessを証明せず、production preflightとlive実行の権限確認は別途必要です。
 
+TestFlight group配信とbeta app review提出の条件は[TestFlight配信契約](docs/agent-contracts/testflight-distribution.md)を参照してください。
+
 ## Foundation の検証
 
 リポジトリ方針は次で検証します。
