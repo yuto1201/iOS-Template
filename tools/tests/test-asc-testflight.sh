@@ -44,7 +44,7 @@ end
 Dir.mktmpdir('asc-testflight-test.') do |scratch|
   scratch = File.realpath(scratch)
   count = 0
-  make_fixture = lambda do |name, external: false, approval: false, identity_mismatch: false|
+  make_fixture = lambda do |name, external: false, approval: false, identity_mismatch: false, note_sources: {}|
     project = File.join(scratch, name)
     FileUtils.mkdir_p(project)
     write(project, '.gitignore', ".artifacts/\n")
@@ -53,11 +53,21 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
     ownership = YAML.safe_load(File.binread(File.join(root,'Config/ownership.yml')), permitted_classes: [], aliases: false)
     ownership['appStore'] = {'teamId'=>'TEAM123456','bundleId'=>identity_mismatch ? 'com.example.other' : 'com.example.garden'}
     write(project, 'Config/ownership.yml', YAML.dump(ownership))
+    note_sources.each do |locale, content|
+      relative = "App Store/testflight/what-to-test/#{locale}.txt"
+      if content == :symlink
+        FileUtils.mkdir_p(File.dirname(File.join(project,relative)))
+        File.symlink('missing-target.txt',File.join(project,relative))
+      else
+        write(project,relative,content)
+      end
+    end
     git(project,'init','-q')
     git(project,'config','user.name','Synthetic Fixture')
     git(project,'config','user.email','fixture@example.invalid')
     git(project,'remote','add','origin','https://github.com/example/distribution-fixture.git')
     git(project,'add','Config','.gitignore')
+    git(project,'add','App Store') unless note_sources.empty?
     git(project,'-c','core.hooksPath=/dev/null','commit','-q','-m','Synthetic distribution fixture')
     head = git(project,'rev-parse','HEAD')
     issue = 42
@@ -172,7 +182,7 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
     end
     remote_path = write(scratch,"#{name}-remote.json",{'appId'=>'1234567890','buildId'=>'build-1',
       'groups'=>[{'id'=>'group-internal','internal'=>true},{'id'=>'group-external','internal'=>false}],
-      'memberships'=>[],'review'=>[],'calls'=>[],'ambiguousOnce'=>false})
+      'memberships'=>[],'review'=>[],'notes'=>[],'calls'=>[],'ambiguousOnce'=>false})
     runner = write(scratch,"#{name}-runner", <<~'FAKE'.gsub('__REMOTE__',remote_path.dump))
       #!/usr/bin/ruby
       # encoding: UTF-8
@@ -186,16 +196,22 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
       command = args.take_while { |part| !part.start_with?('--') }.join(' ')
       flags = args.drop(command.split(' ').length)
       get = ->(flag) { i=flags.index(flag); i && flags[i+1] }
+      whats_new = get.call('--whats-new') || flags.find { |part| part.start_with?('--whats-new=') }&.delete_prefix('--whats-new=')
+      bad_element = ->(key) { remote[key] == 'null' ? nil : true }
       remote['calls'] << command
       response = case command
       when 'apps list'
-        {'data'=>[{'type'=>'apps','id'=>remote['appId'],'attributes'=>{'bundleId'=>'com.example.garden'}}]}
+        row = {'type'=>'apps','id'=>remote['appId'],'attributes'=>{'bundleId'=>'com.example.garden'}}
+        {'data'=>[remote.key?('nonHashApp') ? bad_element.call('nonHashApp') : row]}
       when 'builds list'
-        {'data'=>[{'type'=>'builds','id'=>remote['buildId'],'attributes'=>{'version'=>'7'}}]}
+        row = {'type'=>'builds','id'=>remote['buildId'],'attributes'=>{'version'=>'7'}}
+        {'data'=>[remote.key?('nonHashBuild') ? bad_element.call('nonHashBuild') : row]}
       when 'builds info'
-        {'data'=>{'type'=>'builds','id'=>remote['buildId'],'attributes'=>{'version'=>'7','processingState'=>remote['processingState'] || 'VALID'},
-          'relationships'=>{'preReleaseVersion'=>{'data'=>{'type'=>'preReleaseVersions','id'=>'pre-1'}}}},
-          'included'=>[{'type'=>'preReleaseVersions','id'=>'pre-1','attributes'=>{'version'=>'1.0','platform'=>'IOS'}}]}
+        data = {'type'=>'builds','id'=>remote['buildId'],'attributes'=>{'version'=>'7','processingState'=>remote['processingState'] || 'VALID'},
+          'relationships'=>{'preReleaseVersion'=>{'data'=>{'type'=>'preReleaseVersions','id'=>'pre-1'}}}}
+        included = {'type'=>'preReleaseVersions','id'=>'pre-1','attributes'=>{'version'=>'1.0','platform'=>'IOS'}}
+        {'data'=>remote.key?('nonHashBuildInfoData') ? bad_element.call('nonHashBuildInfoData') : data,
+          'included'=>[remote.key?('nonHashIncluded') ? bad_element.call('nonHashIncluded') : included]}
       when 'testflight groups list'
         if get.call('--build-id')
           result = {'buildId'=>remote['buildId'],'appId'=>remote['appId'],'complete'=>true,'lookupMethod'=>'server-filter',
@@ -207,10 +223,14 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
             result['complete']=false
             result['failures']=[{'groupId'=>'group-internal','error'=>'fixture relationship incomplete'}]
           end
+          result['groups'] << bad_element.call('nonHashMembership') if remote.key?('nonHashMembership')
+          result['groupCount'] = result['groups'].length
           result
         else
-          {'data'=>remote['groups'].map { |g| {'type'=>'betaGroups','id'=>g['id'],
-            'attributes'=>{'name'=>'tester@example.invalid','isInternalGroup'=>g['internal']}} }}
+          rows = remote['groups'].map { |g| {'type'=>'betaGroups','id'=>g['id'],
+            'attributes'=>{'name'=>'tester@example.invalid','isInternalGroup'=>g['internal']}} }
+          rows << bad_element.call('nonHashGroup') if remote.key?('nonHashGroup')
+          {'data'=>rows}
         end
       when 'builds add-groups'
         id = get.call('--group')
@@ -222,9 +242,35 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
           exit 9
         end
         {'buildId'=>remote['buildId'],'groupIds'=>[id],'action'=>'added'}
+      when 'builds test-notes list'
+        locale = get.call('--locale')
+        rows = remote['notes'].select { |row| row.is_a?(Hash) && row['locale']==locale }.map { |row|
+          {'type'=>'betaBuildLocalizations','id'=>row['id'],
+           'attributes'=>{'locale'=>row['locale'],'whatsNew'=>row['text']}} }
+        rows << bad_element.call('nonHashNotes') if remote.key?('nonHashNotes')
+        {'data'=>rows}
+      when 'builds test-notes view'
+        row = remote['notes'].find { |entry| entry.is_a?(Hash) && entry['locale']==get.call('--locale') }
+        {'data'=>row && {'type'=>'betaBuildLocalizations','id'=>row['id'],
+          'attributes'=>{'locale'=>row['locale'],'whatsNew'=>remote['notesViewMismatch'] ? 'remote mismatch' : row['text']}}}
+      when 'builds test-notes create'
+        abort 'missing what to test text' unless whats_new
+        row = remote['notes'].find { |entry| entry.is_a?(Hash) && entry['locale']==get.call('--locale') }
+        unless remote['notesCreateNoWrite']
+          if row then row['text']=whats_new
+          else remote['notes'] << {'id'=>"note-#{get.call('--locale')}",'locale'=>get.call('--locale'),'text'=>whats_new}
+          end
+        end
+        if remote.delete('notesCreateFailure')
+          File.binwrite(path,JSON.generate(remote))
+          exit 9
+        end
+        {'data'=>{'type'=>'betaBuildLocalizations','id'=>row ? row['id'] : "note-#{get.call('--locale')}"}}
       when 'testflight review submissions list'
-        {'data'=>remote['review'].map { |state| {'type'=>'betaAppReviewSubmissions','id'=>'review-1',
-          'attributes'=>{'betaReviewState'=>state}} }}
+        rows = remote['review'].map { |state| {'type'=>'betaAppReviewSubmissions','id'=>'review-1',
+          'attributes'=>{'betaReviewState'=>state}} }
+        rows << bad_element.call('nonHashReview') if remote.key?('nonHashReview')
+        {'data'=>rows}
       when 'testflight review submit'
         remote['review'] = ['WAITING_FOR_REVIEW']
         {'data'=>{'type'=>'betaAppReviewSubmissions','id'=>'review-1',
@@ -358,6 +404,144 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
   result, = invoke.call(project,env,['--resume-attempt',first['attempt']])
   check(result['status']=='distributed','resume resolves remote membership')
   check(JSON.parse(File.binread(remote))['calls'].count('builds add-groups')==1,'ambiguous add never replayed')
+
+  note_option = ['--what-to-test-locale','en-US']
+  project,env,remote,* = make_fixture.call('notes-create',note_sources:{'en-US'=>"Try the new flow\n"})
+  result, = invoke.call(project,env,note_option)
+  state = JSON.parse(File.binread(remote))
+  check(result['status']=='distributed' && state['notes']==[{'id'=>'note-en-US','locale'=>'en-US','text'=>'Try the new flow'}],
+    'one terminal LF removed and note created')
+  check(state['calls'].index('builds test-notes list') < state['calls'].index('builds test-notes create') &&
+    state['calls'].index('builds test-notes view') < state['calls'].index('builds add-groups'),
+    'notes readback precedes group assignment')
+  events = Dir.glob(File.join(project,'.artifacts/appstore-testflight/42',result.fetch('attempt'),'*.json')).sort.map { |path| JSON.parse(File.binread(path)) }
+  check(events.map { |event| event['eventType'] }.include?('notes-intent') &&
+    events.map { |event| event['eventType'] }.include?('notes-readback') &&
+    events.first['whatToTestSources']==[{'locale'=>'en-US','digest'=>"sha256:#{Digest::SHA256.hexdigest('Try the new flow')}"}],
+    'started binds locale and digest')
+  check(events.none? { |event| JSON.generate(event).include?('Try the new flow') },'journal stores digest only')
+  calls_before = state['calls'].length
+  event_count = events.length
+  refused, = invoke.call(project,env,note_option+['--resume-attempt',result.fetch('attempt')],success:false)
+  check(refused['reason']=='attempt-already-complete' && JSON.parse(File.binread(remote))['calls'].length==calls_before &&
+    Dir.glob(File.join(project,'.artifacts/appstore-testflight/42',result.fetch('attempt'),'*.json')).length==event_count,
+    'completed attempt refuses with no asc call or event')
+
+  project,env,remote,* = make_fixture.call('notes-same',note_sources:{'en-US'=>'Already published'})
+  state=JSON.parse(File.binread(remote)); state['notes']=[{'id'=>'note-old','locale'=>'en-US','text'=>'Already published'}]; File.binwrite(remote,JSON.generate(state))
+  result, = invoke.call(project,env,note_option)
+  check(result['status']=='distributed' && !JSON.parse(File.binread(remote))['calls'].include?('builds test-notes create'),
+    'matching note uses view without write')
+
+  project,env,remote,* = make_fixture.call('notes-upsert',note_sources:{'en-US'=>'Replacement'})
+  state=JSON.parse(File.binread(remote)); state['notes']=[{'id'=>'note-old','locale'=>'en-US','text'=>'Old note'}]; File.binwrite(remote,JSON.generate(state))
+  result, = invoke.call(project,env,note_option)
+  state=JSON.parse(File.binread(remote))
+  check(result['status']=='distributed' && state['notes'].first['text']=='Replacement' &&
+    state['calls'].include?('builds test-notes create'),'create upserts existing note')
+
+  project,env,remote,* = make_fixture.call('notes-leading-hyphen',note_sources:{'en-US'=>'-Try this flow'})
+  result, = invoke.call(project,env,note_option)
+  check(result['status']=='distributed' && JSON.parse(File.binread(remote))['notes'].first['text']=='-Try this flow',
+    'leading hyphen remains note text')
+
+  project,env,remote,* = make_fixture.call('notes-two',note_sources:{'en-US'=>'English note','ja'=>'日本語の案内'})
+  result, = invoke.call(project,env,['--what-to-test-locale','ja']+note_option)
+  events = Dir.glob(File.join(project,'.artifacts/appstore-testflight/42',result.fetch('attempt'),'*.json')).sort.map { |path| JSON.parse(File.binread(path)) }
+  check(result['status']=='distributed' && events.first['whatToTestSources'].map { |row| row['locale'] }==%w[en-US ja] &&
+    events.select { |event| event['eventType']=='notes-intent' }.map { |event| event['locale'] }==%w[en-US ja],
+    'two locales are processed in sorted order')
+
+  project,env,remote,* = make_fixture.call('notes-resume-input-mismatch',note_sources:{'en-US'=>'English','ja'=>'日本語'})
+  state=JSON.parse(File.binread(remote)); state['notesCreateFailure']=true; File.binwrite(remote,JSON.generate(state))
+  first, = invoke.call(project,env,note_option,success:false)
+  calls_before = JSON.parse(File.binread(remote))['calls'].length
+  result, = invoke.call(project,env,['--what-to-test-locale','ja','--resume-attempt',first.fetch('attempt')],success:false)
+  check(result['reason']=='attempt-context-mismatch' && JSON.parse(File.binread(remote))['calls'].length==calls_before,
+    'resume requires the same locale and source digest pair')
+
+  project,env,remote,* = make_fixture.call('notes-mismatch',note_sources:{'en-US'=>'Expected'})
+  state=JSON.parse(File.binread(remote)); state['notesViewMismatch']=true; File.binwrite(remote,JSON.generate(state))
+  result, = invoke.call(project,env,note_option,success:false)
+  check(result['status']=='unknown' && !JSON.parse(File.binread(remote))['calls'].include?('builds add-groups'),
+    'mismatched readback is unknown before assignment')
+
+  project,env,remote,* = make_fixture.call('notes-existing-mismatch',note_sources:{'en-US'=>'Expected'})
+  state=JSON.parse(File.binread(remote)); state['notes']=[{'id'=>'note-old','locale'=>'en-US','text'=>'Expected'}]
+  state['notesViewMismatch']=true; File.binwrite(remote,JSON.generate(state))
+  result, = invoke.call(project,env,note_option,success:false)
+  state=JSON.parse(File.binread(remote))
+  check(result['status']=='unknown' && !state['calls'].include?('builds test-notes create') &&
+    !state['calls'].include?('builds add-groups'),'matching list still requires exact view')
+
+  project,env,remote,* = make_fixture.call('notes-ambiguous-list',note_sources:{'en-US'=>'Expected'})
+  state=JSON.parse(File.binread(remote)); state['notes']=[
+    {'id'=>'note-one','locale'=>'en-US','text'=>'Old one'},
+    {'id'=>'note-two','locale'=>'en-US','text'=>'Old two'}]; File.binwrite(remote,JSON.generate(state))
+  result, = invoke.call(project,env,note_option,success:false)
+  check(result['status']=='unknown' && !JSON.parse(File.binread(remote))['calls'].include?('builds add-groups'),
+    'ambiguous notes list is unknown without assignment')
+
+  project,env,remote,* = make_fixture.call('notes-resume',note_sources:{'en-US'=>'Resumable'})
+  state=JSON.parse(File.binread(remote)); state['notesCreateFailure']=true; File.binwrite(remote,JSON.generate(state))
+  first, = invoke.call(project,env,note_option,success:false)
+  check(first['status']=='unknown','failed create is unknown')
+  result, = invoke.call(project,env,note_option+['--resume-attempt',first.fetch('attempt')])
+  state=JSON.parse(File.binread(remote))
+  check(result['status']=='distributed' && state['calls'].count('builds test-notes create')==1,
+    'resume reads matching note without resending create')
+
+  project,env,remote,* = make_fixture.call('notes-resume-mismatch',note_sources:{'en-US'=>'Expected'})
+  state=JSON.parse(File.binread(remote)); state['notesCreateNoWrite']=true; File.binwrite(remote,JSON.generate(state))
+  first, = invoke.call(project,env,note_option,success:false)
+  second, = invoke.call(project,env,note_option+['--resume-attempt',first.fetch('attempt')],success:false)
+  state=JSON.parse(File.binread(remote))
+  check(first['status']=='unknown' && second['status']=='unknown' && state['calls'].count('builds test-notes create')==1 &&
+    !state['calls'].include?('builds add-groups'),'resume mismatch remains unknown without resend')
+
+  {'unknown-locale'=>[['--what-to-test-locale','fr'],{}],
+   'duplicate-locale'=>[note_option+note_option,{'en-US'=>'Valid'}],
+   'missing-source'=>[note_option,{}],
+   'symlink-source'=>[note_option,{'en-US'=>:symlink}],
+   'cr-source'=>[note_option,{'en-US'=>"bad\rtext"}],
+   'control-source'=>[note_option,{'en-US'=>"bad\ttext"}],
+   'c1-control-source'=>[note_option,{'en-US'=>"bad\u0085text"}],
+   'edge-source'=>[note_option,{'en-US'=>' leading'}],
+   'trailing-source'=>[note_option,{'en-US'=>'trailing '}],
+   'oversized-source'=>[note_option,{'en-US'=>'A'*4001}],
+   'utf16-oversized-source'=>[note_option,{'en-US'=>'🌸'*2001}],
+   'empty-source'=>[note_option,{'en-US'=>"\n"}],
+   'double-lf-source'=>[note_option,{'en-US'=>"text\n\n"}]}.each do |name,(args,sources)|
+    project,env,remote,* = make_fixture.call(name,note_sources:sources)
+    result, = invoke.call(project,env,args,success:false)
+    check(result['status']=='blocked' && JSON.parse(File.binread(remote))['calls'].empty?,
+      "#{name} refused before any asc call")
+  end
+
+  {'nonhash-app'=>['nonHashApp','remote-app-unavailable',false],
+   'nonhash-build'=>['nonHashBuild','remote-build-unavailable',false],
+   'nonhash-build-info-data'=>['nonHashBuildInfoData','remote-build-info-unavailable',false],
+   'nonhash-included'=>['nonHashIncluded','remote-build-info-unavailable',false],
+   'nonhash-group'=>['nonHashGroup','remote-groups-unavailable',false],
+   'nonhash-membership'=>['nonHashMembership','membership-unavailable',false],
+   'nonhash-review'=>['nonHashReview','beta-review-readback-unavailable',true],
+   'nonhash-notes'=>['nonHashNotes','what-to-test-list-unavailable',false]}.each do |name,(flag,reason,external)|
+    %w[null true].each do |bad_value|
+      sources = name=='nonhash-notes' ? {'en-US'=>'Valid note'} : {}
+      project,env,remote,* = make_fixture.call("#{name}-#{bad_value}",external:external,note_sources:sources)
+      state=JSON.parse(File.binread(remote))
+      state[flag]=bad_value
+      state['memberships']=['group-internal','group-external'] if external
+      File.binwrite(remote,JSON.generate(state))
+      args = name=='nonhash-notes' ? note_option : external ? ['--group','group-external'] : []
+      result, = invoke.call(project,env,args,success:false)
+      calls = JSON.parse(File.binread(remote))['calls']
+      check(result['status']=='blocked' && result['reason']==reason &&
+        !calls.include?('builds add-groups') && !calls.include?('builds test-notes create') &&
+        !calls.include?('testflight review submit'),
+        "#{name} #{bad_value} gives specific blocked JSON without mutation")
+    end
+  end
 
   puts "PASS: TestFlight distribution #{count} fake-runner cases"
 end

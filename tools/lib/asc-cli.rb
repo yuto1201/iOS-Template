@@ -47,6 +47,9 @@ module AscCLI
   # submit --build-id/--confirm and submissions list --build-id/--paginate.
   # internal/cli/testflight/build_group_membership.go builds membership readback;
   # internal/asc/output_beta.go emits appId/buildId/complete/groupCount/groups[id,type,membership]; empty failures is omitted.
+  # internal/cli/builds/build_test_notes.go: list accepts --build-id/--locale/--paginate,
+  # view accepts --build-id/--locale, and create accepts --build-id/--locale/--whats-new.
+  # create calls UpsertBetaBuildLocalization and trims --whats-new with strings.TrimSpace.
   OPERATIONS = {
     'appstore.inspect_app' => {
       %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},
@@ -95,6 +98,9 @@ module AscCLI
       %w[apps list] => {'--bundle-id'=>:identifier},
       %w[builds list] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform, '--paginate'=>:boolean},
       %w[builds info] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform},
+      %w[builds test-notes list] => {'--build-id'=>:resource_id, '--locale'=>:locale, '--paginate'=>:boolean},
+      %w[builds test-notes view] => {'--build-id'=>:resource_id, '--locale'=>:locale},
+      %w[builds test-notes create] => {'--build-id'=>:resource_id, '--locale'=>:locale, '--whats-new'=>:localization_whats_new},
       %w[testflight groups list] => {'--app'=>:id, '--paginate'=>:boolean, '--build-id'=>:resource_id},
       %w[builds add-groups] => {'--app'=>:id, '--build-number'=>:build_number, '--version'=>:version, '--platform'=>:platform, '--group'=>:resource_id},
       %w[testflight review submissions list] => {'--build-id'=>:resource_id, '--paginate'=>:boolean},
@@ -360,6 +366,9 @@ module AscCLI
               when %w[apps list] then %w[--bundle-id]
               when %w[builds list] then %w[--app --version --build-number --platform --paginate]
               when %w[builds info] then %w[--app --version --build-number --platform]
+              when %w[builds test-notes list] then %w[--build-id --locale --paginate]
+              when %w[builds test-notes view] then %w[--build-id --locale]
+              when %w[builds test-notes create] then %w[--build-id --locale --whats-new]
               when %w[testflight groups list]
                 seen.include?('--build-id') ? %w[--app --build-id] : %w[--app --paginate]
               when %w[builds add-groups] then %w[--app --build-number --version --platform --group]
