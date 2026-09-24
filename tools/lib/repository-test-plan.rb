@@ -25,6 +25,8 @@ module IOSTemplate
     ].freeze
     TEST_PATH = %r{\Atools/tests/test-[a-z0-9-]+\.sh\z}
     SAFE_PATH = %r{\A(?!/)(?!.*(?:\A|/)\.\.(?:/|\z))[A-Za-z0-9._+@ /-]+\z}
+    SHELL_LINT_DOMAIN = "repository-lint"
+    SHELL_LINT_TESTS = %w[tools/tests/test-prerequisites.sh tools/tests/test-spec-state.sh].freeze
 
     def policy(contract)
       criteria = contract.fetch("acceptanceCriteria")
@@ -124,6 +126,7 @@ module IOSTemplate
         exact_keys!(rule, %w[domain paths prefixes], "manifest.domainRules[#{index}]")
         domain = rule["domain"]
         reject("repository-test manifest domain is invalid") unless domain.is_a?(String) && domain.match?(/\A[a-z][a-z0-9-]*\z/)
+        reject("repository-lint must not have a path rule") if domain == SHELL_LINT_DOMAIN
         reject("repository-test manifest domain is duplicated") if domains.include?(domain)
         domains << domain
         paths = unique_paths!(rule["paths"], "manifest domain paths")
@@ -140,13 +143,14 @@ module IOSTemplate
         reject("repository-test manifest test path is invalid") unless path.is_a?(String) && path.match?(TEST_PATH)
         test_domains = entry["domains"]
         reject("repository-test manifest test domains are invalid") unless test_domains.is_a?(Array) && !test_domains.empty? &&
-          test_domains == test_domains.sort && test_domains.uniq == test_domains && test_domains.all? { |domain| domains.include?(domain) }
+          test_domains == test_domains.sort && test_domains.uniq == test_domains &&
+          test_domains.all? { |domain| domains.include?(domain) || (domain == SHELL_LINT_DOMAIN && SHELL_LINT_TESTS.include?(path)) }
         path
       end
       reject("repository-test manifest tests must be sorted and unique") unless test_paths == test_paths.sort && test_paths.uniq == test_paths
       reject("repository-test manifest inventory differs from tracked tests") unless test_paths == inventory
       referenced = tests.flat_map { |entry| entry.fetch("domains") }.uniq.sort
-      reject("repository-test manifest contains a domain without tests") unless referenced == domains
+      reject("repository-test manifest contains a domain without tests") unless (referenced - [SHELL_LINT_DOMAIN]) == domains
       if tracked_paths
         exact_coverage = rules.flat_map { |rule| rule.fetch("paths") }
         reject("repository-test manifest exact path is not tracked at Head") unless exact_coverage.all? { |path| tracked_paths.include?(path) }
@@ -171,6 +175,13 @@ module IOSTemplate
         end
         reject("changed path has no manifest coverage: #{path}") if matches.empty?
         domains.concat(matches)
+      end
+      if changed.any? { |path| path.end_with?(".sh") }
+        lint_tests = manifest.fetch("tests").select do |entry|
+          SHELL_LINT_TESTS.include?(entry.fetch("path")) && entry.fetch("domains").include?(SHELL_LINT_DOMAIN)
+        end.map { |entry| entry.fetch("path") }
+        reject("repository-lint tests are missing from the manifest") unless lint_tests == SHELL_LINT_TESTS
+        domains << SHELL_LINT_DOMAIN
       end
       domains.uniq!
       domains.sort!

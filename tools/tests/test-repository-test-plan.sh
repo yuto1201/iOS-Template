@@ -43,6 +43,52 @@ module Fixture
 end
 
 runner = IOSTemplate::RepositoryTestPlan
+lint_manifest = {
+  "schemaVersion" => 1,
+  "headAllPaths" => [],
+  "headAllPrefixes" => [],
+  "domainRules" => [
+    {"domain" => "appstore", "paths" => ["tools/appstore.rb"], "prefixes" => []},
+    {"domain" => "ios-verification", "paths" => ["tools/ios.rb"], "prefixes" => []},
+    {"domain" => "release-disposition", "paths" => ["tools/release.rb"], "prefixes" => []},
+    {"domain" => "repository-testing", "paths" => ["tools/lib/repository-test-plan.rb", "tools/sample.sh"], "prefixes" => []},
+    {"domain" => "specification", "paths" => ["docs/verification.md"], "prefixes" => []},
+    {"domain" => "workflow-state", "paths" => ["tools/workflow.rb"], "prefixes" => []}
+  ],
+  "tests" => [
+    {"path" => "tools/tests/test-alpha.sh", "domains" => ["repository-testing"]},
+    {"path" => "tools/tests/test-appstore.sh", "domains" => ["appstore"]},
+    {"path" => "tools/tests/test-ios.sh", "domains" => ["ios-verification"]},
+    {"path" => "tools/tests/test-prerequisites.sh", "domains" => %w[release-disposition repository-lint workflow-state]},
+    {"path" => "tools/tests/test-spec-state.sh", "domains" => %w[repository-lint specification]},
+    {"path" => "tools/tests/test-workflow.sh", "domains" => ["workflow-state"]}
+  ]
+}
+lint_tests = %w[tools/tests/test-prerequisites.sh tools/tests/test-spec-state.sh]
+inventory = lint_manifest.fetch("tests").map { |entry| entry.fetch("path") }
+runner.validate_manifest!(lint_manifest, inventory)
+%w[tools/tests/test-alpha.sh tools/sample.sh].each do |shell_path|
+  scope, reason, tests = runner.resolve(lint_manifest, "targeted", [shell_path])
+  abort "shell change did not select only the repository test and both lints: #{shell_path}" unless
+    scope == "targeted" && reason.include?("repository-lint") && tests == ["tools/tests/test-alpha.sh", *lint_tests]
+end
+scope, reason, tests = runner.resolve(lint_manifest, "targeted", ["tools/lib/repository-test-plan.rb"])
+abort "non-shell plan changed" unless scope == "targeted" &&
+  reason == "Changed paths resolve to repository-test domains: repository-testing." && tests == ["tools/tests/test-alpha.sh"]
+begin
+  runner.resolve(lint_manifest, "targeted", ["tools/sample.sh", "tools/uncovered.sh"])
+  abort "uncovered shell path was accepted"
+rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+  abort "uncovered shell path failed for the wrong reason" unless error.message.include?("no manifest coverage: tools/uncovered.sh")
+end
+missing_lints = Marshal.load(Marshal.dump(lint_manifest))
+missing_lints.fetch("tests").reject! { |entry| lint_tests.include?(entry.fetch("path")) }
+begin
+  runner.resolve(missing_lints, "targeted", ["tools/sample.sh"])
+  abort "shell change without lint entries was accepted"
+rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+  abort "missing lints failed for the wrong reason" unless error.message.include?("repository-lint")
+end
 abort "targeted merge did not use its bounded scenario" unless
   runner.test_arguments("tools/tests/test-merge-issue.sh", "targeted") == ["scoped"]
 abort "targeted premerge did not use its bounded scenario" unless
@@ -125,10 +171,13 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   Fixture.git(repo, "add", ".")
   Fixture.git(repo, "commit", "-qm", "inventory infrastructure")
   broad_head = Fixture.git(repo, "rev-parse", "HEAD")
-  broad = runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head,
-    contract_bytes: contract, mappings: mappings)
-  abort "test change did not remain targeted" unless broad["resolvedScope"] == "targeted" &&
-    broad["testPaths"] == ["tools/tests/test-alpha.sh"]
+  begin
+    runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head,
+      contract_bytes: contract, mappings: mappings)
+    abort "test change without repository-lint entries was accepted"
+  rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+    abort "missing lint entries failed for the wrong reason" unless error.message.include?("repository-lint")
+  end
 
   valid_manifest_change = Fixture.manifest
   valid_manifest_change.fetch("domainRules").first.fetch("prefixes") << "docs/review-notes/"
