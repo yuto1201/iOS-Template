@@ -537,3 +537,13 @@
 - Decision: review informationをApp Privacyと同じauthenticated browser sectionに残し、executorがsealed packageとの照合後にsanitized readback digestとremote referenceだけを記録する。app information、localization、screenshots、build選択、submissionは固定版`asc` guarded runnerのAPI sectionとする。将来`asc`が秘密を引数以外で受け取れるようになった場合は別Issueで再評価する。
 - Consequence: 完全releaseのsection順序、sealed package、release verification、operation別preflight、ユーザーの明示提出承認、再開時の全section再readbackを維持する。結果schemaはAPIとbrowserのreadback sourceを区別し、秘密や連絡先実値を保存しない。テンプレート内のfake runner検証はlive入力・審査提出・Apple承認の証拠ではない。
 - Related Issue: #128、#134
+
+## D-061: TestFlight What to Testをguarded配信operationへ含める
+
+- Date: 2026-09-25
+- Status: 確定
+- Supersedes: D-059のoperation modelを限定的に補足する。D-059本文は変更しない。
+- Context: #135のreviewではWhat to Testがsealed contractの範囲外と判定された。ユーザーは2026-09-25に#166を含む後続Issueへの着手を承認した。
+- Decision: [構成 §7.2](architecture.md#72-app-store-connect-api-adapter)に従い、readback済みbuildのWhat to Test（beta build localization）の設定とreadbackを`appstore.distribute_testflight`の責務へ含める。新しいoperationは作らない。
+- Consequence: live操作は従来どおり`release` stage、`full` scope、`strict`、宣言済みoperationとExecutor、必要なユーザー承認を要する。本文は非秘密の公開テキストとして単一argvで渡し、journalにはdigestだけを残す。4000文字はテンプレート側の上限であり、Appleの上限とは主張しない。D-059のConsequenceにある#131のoperation modelとproduction preflight／premergeは、それぞれ#145と#146で実現済みである。
+- Related Issue: #135、#166

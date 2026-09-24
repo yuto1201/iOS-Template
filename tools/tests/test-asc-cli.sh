@@ -131,6 +131,9 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
     ['testflight','groups','list','--app','123','--build-id','build-1'],
     ['builds','add-groups','--app','123','--build-number','7','--version','1.0','--platform','IOS','--group','group-1'],
     ['testflight','review','submissions','list','--build-id','build-1','--paginate'],
+    ['builds','test-notes','list','--build-id','build-1','--locale','en-US','--paginate'],
+    ['builds','test-notes','view','--build-id','build-1','--locale','ja'],
+    ['builds','test-notes','create','--build-id','build-1','--locale','en-US','--whats-new','-Try this flow'],
     ['testflight','review','submit','--build-id','build-1','--confirm'] ].each do |args|
     invoke.call(runner,testflight_op+args)
   end
@@ -140,9 +143,19 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
     ['builds','remove-groups','--build-id','build-1','--group','group-1','--confirm'],
     ['testflight','review','submit','--build-id','build-1'],
     ['testflight','review','submissions','list','--build-id','build-1'],
+    ['builds','test-notes','update','--build-id','build-1','--locale','en-US','--whats-new','No'],
+    ['builds','test-notes','delete','--build-id','build-1','--locale','en-US','--confirm'],
+    ['builds','test-notes','list','--build-id','build-1','--locale','en-US'],
+    ['builds','test-notes','view','--build-id','build-1'],
+    ['builds','test-notes','create','--build-id','build-1','--locale','en-US'],
+    ['builds','test-notes','create','--build-id','build-1','--locale','fr','--whats-new','No'],
     ['builds','add-groups','--app','123','--build-number','7','--version','1.0','--platform','MAC_OS','--group','group-1'] ].each do |args|
     invoke.call(runner,testflight_op+args,{},:failure)
   end
+  note_args = testflight_op + ['builds','test-notes','create','--build-id','build-1','--locale','en-US','--whats-new','-Try this flow']
+  out, = invoke.call(runner,note_args)
+  check(JSON.parse(out).fetch('argv').include?('--whats-new=-Try this flow'),
+    'What to Test leading hyphen remains one --whats-new=value argument')
   invoke.call(runner, read_args+['--output','json'])
   forbidden = [%w[web apps list], %w[auth login], %w[auth logout], %w[apps wall], %w[install-skills], %w[signing sync], %w[workflow run release], %w[telemetry enable], %w[apps update], %w[apps list --deep], %w[apps list --profile evil], %w[apps list --output table], %w[apps list --output=json], %w[apps list --debug], %w[apps list --next https://evil.example], %w[apps list --limit 0], %w[apps list --limit 201], %w[apps list --limit 2 --limit 3], %w[apps list extra], %w[apps list --bundle-id --deep]]
   forbidden.each { |args| invoke.call(runner, ['--operation','appstore.inspect_app','--']+args, {}, :failure) }
