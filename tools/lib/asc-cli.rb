@@ -45,8 +45,8 @@ module AscCLI
   # groups list supports app/paginate or build-id/app (the latter paginates
   # internally); internal/cli/testflight/testflight_review.go exposes review
   # submit --build-id/--confirm and submissions list --build-id/--paginate.
-  # internal/cli/testflight/{beta_groups.go,build_group_membership.go} produces membership readback;
-  # internal/asc/output_beta.go: appId/buildId/complete/groupCount/groups[id,type,membership], optional failures.
+  # internal/cli/testflight/build_group_membership.go builds membership readback;
+  # internal/asc/output_beta.go emits appId/buildId/complete/groupCount/groups[id,type,membership]; empty failures is omitted.
   OPERATIONS = {
     'appstore.inspect_app' => {
       %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},

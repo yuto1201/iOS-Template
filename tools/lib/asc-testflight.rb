@@ -226,9 +226,11 @@ module IOSTemplate
 
     def membership(runner_path, app_id, build_id, group_types)
       response, code = asc(runner_path,'testflight','groups','list','--app',app_id,'--build-id',build_id)
+      failures_ok = response.is_a?(Hash) && (!response.key?('failures') ||
+        (response['failures'].is_a?(Array) && response['failures'].empty?))
       refuse('membership-unavailable') unless code.zero? && response.is_a?(Hash) && response['complete'] == true &&
         response['buildId'] == build_id && response['appId'] == app_id && response['groups'].is_a?(Array) &&
-        response['groupCount'] == response['groups'].length && response['failures'] == []
+        response['groupCount'] == response['groups'].length && failures_ok
       ids = response['groups'].map { |entry| entry['id'] }
       refuse('membership-ambiguous') unless ids.all? { |id| id.to_s.match?(ID) } && ids.uniq == ids
       group_types.to_h do |id,type|

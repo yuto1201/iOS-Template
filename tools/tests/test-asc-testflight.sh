@@ -198,11 +198,16 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
           'included'=>[{'type'=>'preReleaseVersions','id'=>'pre-1','attributes'=>{'version'=>'1.0','platform'=>'IOS'}}]}
       when 'testflight groups list'
         if get.call('--build-id')
-          {'buildId'=>remote['buildId'],'appId'=>remote['appId'],'complete'=>true,'lookupMethod'=>'server-filter',
-            'groupCount'=>remote['memberships'].length,'failures'=>[],
+          result = {'buildId'=>remote['buildId'],'appId'=>remote['appId'],'complete'=>true,'lookupMethod'=>'server-filter',
+            'groupCount'=>remote['memberships'].length,
             'groups'=>remote['memberships'].map { |id| group=remote['groups'].find { |g| g['id']==id };
               {'id'=>id,'name'=>'tester@example.invalid','type'=>remote['membershipTypeOverride'] || (group['internal'] ? 'internal' : 'external'),
                'membership'=>'explicit','hasAccessToAllBuilds'=>false} }}
+          if remote.delete('membershipIncompleteOnce')
+            result['complete']=false
+            result['failures']=[{'groupId'=>'group-internal','error'=>'fixture relationship incomplete'}]
+          end
+          result
         else
           {'data'=>remote['groups'].map { |g| {'type'=>'betaGroups','id'=>g['id'],
             'attributes'=>{'name'=>'tester@example.invalid','isInternalGroup'=>g['internal']}} }}
@@ -324,6 +329,13 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
   state=JSON.parse(File.binread(remote)); state['groups'] << state['groups'].first; File.binwrite(remote,JSON.generate(state))
   invoke.call(project,env,[],success:false)
   check(!JSON.parse(File.binread(remote))['calls'].include?('builds add-groups'),'duplicate remote group rejected')
+
+  project,env,remote,* = make_fixture.call('incomplete-membership')
+  state=JSON.parse(File.binread(remote)); state['membershipIncompleteOnce']=true; File.binwrite(remote,JSON.generate(state))
+  result, = invoke.call(project,env,[],success:false)
+  check(result['status']=='blocked' && result['reason']=='membership-unavailable' &&
+    !JSON.parse(File.binread(remote))['calls'].include?('builds add-groups'),
+    'incomplete membership readback blocks group assignment')
 
   project,env,remote,* = make_fixture.call('group-type-mismatch')
   state=JSON.parse(File.binread(remote)); state['memberships']=['group-internal']; state['membershipTypeOverride']='external'
