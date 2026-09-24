@@ -99,6 +99,11 @@ validate_pr() {
   ' || fail 'PR identity is stale or mismatched'
 }
 
+created_closing_within_deadline() {
+  [[ "$1" != EMPTY ]] && return 0
+  ruby -e 'exit(Process.clock_gettime(Process::CLOCK_MONOTONIC) <= Float(ARGV[0]) ? 0 : 1)' "$wait_deadline"
+}
+
 view_exact_pr() {
   gh pr view "$1" --repo "$repo" --json "$pr_fields"
 }
@@ -212,6 +217,7 @@ if [[ -z "$pr_number" ]]; then
   selected=$(PRS="$created" ruby -rjson -e 'items = JSON.parse(ENV.fetch("PRS")); abort unless items.is_a?(Array) && items.length == 1; puts JSON.generate(items.fetch(0))') || fail 'created PR is ambiguous'
   pr_number=$(jq -er '.number' <<<"$selected") || fail 'created PR number is invalid'
   created_state=$(validate_pr OPEN "$selected" "$pr_number" true) || fail 'created PR identity differs'
+  created_closing_within_deadline "$created_state" || fail 'created PR identity differs'
   read_attempt=1
   while [[ "$created_state" == EMPTY && "$read_attempt" -lt "$merge_wait_attempts" ]]; do
     ruby -e 'exit(Process.clock_gettime(Process::CLOCK_MONOTONIC) + Integer(ARGV[1]) < Float(ARGV[0]) ? 0 : 1)' "$wait_deadline" "$merge_wait_interval" || break
@@ -219,6 +225,7 @@ if [[ -z "$pr_number" ]]; then
     created=$(gh pr list --repo "$repo" --head "$branch" --state open --json "$pr_fields") || fail 'created PR could not be resolved'
     selected=$(PRS="$created" ruby -rjson -e 'items = JSON.parse(ENV.fetch("PRS")); abort unless items.is_a?(Array) && items.length == 1; puts JSON.generate(items.fetch(0))') || fail 'created PR is ambiguous'
     created_state=$(validate_pr OPEN "$selected" "$pr_number" true) || fail 'created PR identity differs'
+    created_closing_within_deadline "$created_state" || fail 'created PR identity differs'
     read_attempt=$((read_attempt + 1))
   done
   [[ "$created_state" == OPEN ]] || { validate_pr OPEN "$selected" "$pr_number" >/dev/null; fail 'created PR identity differs'; }

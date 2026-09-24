@@ -170,6 +170,7 @@ esac
 EOF
   chmod +x "$CASE_BIN/gh"
   REAL_GIT=$(command -v git)
+  REAL_RUBY=$(command -v ruby)
   cat >"$CASE_BIN/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -205,7 +206,7 @@ write_review_closure() {
 }
 
 run_merge() {
-  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_GATE="${FAIL_GATE:-0}" FAKE_SOURCE_REPO="${FAKE_SOURCE_REPO:-$repo_name}" FAKE_CROSS_REPO="${FAKE_CROSS_REPO:-false}" FAKE_CLOSING_ISSUE="${FAKE_CLOSING_ISSUE:-$issue}" FAKE_REMOTE_HEAD_OVERRIDE="${FAKE_REMOTE_HEAD_OVERRIDE:-}" FAKE_CREATED_CLOSING_MODE="${FAKE_CREATED_CLOSING_MODE:-exact}" IOS_TEMPLATE_TEST_MODE="${MERGE_TEST_MODE:-1}" IOS_TEMPLATE_TEST_MERGE_WAIT_ATTEMPTS="${MERGE_WAIT_ATTEMPTS:-3}" IOS_TEMPLATE_TEST_MERGE_WAIT_INTERVAL="${MERGE_WAIT_INTERVAL:-0}" "$CASE_WORKTREE/tools/merge-issue.sh" --repo "$repo_name" --issue "$issue"
+  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" REAL_RUBY="$REAL_RUBY" FAKE_WORKTREE="$CASE_WORKTREE" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR="$pr" FAKE_MERGE="$merge_sha" FAKE_GH="$CASE_GH" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_GATE="${FAIL_GATE:-0}" FAKE_SOURCE_REPO="${FAKE_SOURCE_REPO:-$repo_name}" FAKE_CROSS_REPO="${FAKE_CROSS_REPO:-false}" FAKE_CLOSING_ISSUE="${FAKE_CLOSING_ISSUE:-$issue}" FAKE_REMOTE_HEAD_OVERRIDE="${FAKE_REMOTE_HEAD_OVERRIDE:-}" FAKE_CREATED_CLOSING_MODE="${FAKE_CREATED_CLOSING_MODE:-exact}" FAKE_EXPIRED_DEADLINE="${FAKE_EXPIRED_DEADLINE:-0}" FAKE_DEADLINE_LOG="${FAKE_DEADLINE_LOG:-$CASE_ROOT/deadline.log}" IOS_TEMPLATE_TEST_MODE="${MERGE_TEST_MODE:-1}" IOS_TEMPLATE_TEST_MERGE_WAIT_ATTEMPTS="${MERGE_WAIT_ATTEMPTS:-3}" IOS_TEMPLATE_TEST_MERGE_WAIT_INTERVAL="${MERGE_WAIT_INTERVAL:-0}" "$CASE_WORKTREE/tools/merge-issue.sh" --repo "$repo_name" --issue "$issue"
 }
 
 write_pr() {
@@ -275,45 +276,87 @@ run_recovery() {
 }
 
 if [[ "$scope" == scoped ]]; then
-  make_case scoped-new
+make_case created-closing-regressions
+cp "$CASE_PRIMARY/.artifacts/issues/$issue/state.json" "$CASE_ROOT/initial-state.json"
+reset_created_case() {
+  cp "$CASE_ROOT/initial-state.json" "$CASE_PRIMARY/.artifacts/issues/$issue/state.json"
+  printf '[]\n' >"$CASE_GH/prs.json"
+  printf 'OPEN\n' >"$CASE_GH/issue-state"
+  printf 'state:approved-for-merge\n' >"$CASE_GH/issue-label"
+  printf '0\n' >"$CASE_GH/gate-count"
+  printf '0\n' >"$CASE_GH/merge-preflight-count"
+  : >"$CASE_LOG"; : >"$CASE_MUTATIONS"
+}
+
   body=$("$CASE_WORKTREE/tools/render-pr-body.sh" --issue 42 --head-sha "$CASE_HEAD")
   grep -Fq 'Verify digest: `sha256:' <<<"$body" || fail_test 'scoped PR body omits verify digest'
   grep -Fq 'Reviewer model: `claude`' <<<"$body" || fail_test 'scoped PR body omits reviewer model'
   run_merge >"$CASE_ROOT/result.json"
   jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/result.json" >/dev/null
   jq -e '.state=="merged" and .pullRequest==57' "$CASE_PRIMARY/.artifacts/issues/42/state.json" >/dev/null
-  echo 'PASS: scoped merge validates and publishes one exact reviewed Head'
-  exit 0
-fi
+  echo 'PASS: scoped exact-first-read PR merges the reviewed Head'
 
-make_case created-closing-delayed
+reset_created_case
 FAKE_CREATED_CLOSING_MODE=delayed run_merge >"$CASE_ROOT/delayed-result.json"
 jq -e '.status=="merged" and .pullRequest==57' "$CASE_ROOT/delayed-result.json" >/dev/null
 [[ "$(cat "$CASE_GH/created-reads")" == 2 ]] || fail_test 'created PR was not read exactly twice before delayed closing reference appeared'
 [[ "$(grep -Fxc 'pr-create' "$CASE_MUTATIONS")" == 1 ]] || fail_test 'delayed closing reference created multiple PRs'
+echo 'PASS: created-closing-delayed merges after two reads and one PR create'
 
-make_case created-closing-never
+reset_created_case
 FAKE_CREATED_CLOSING_MODE=never assert_fails 'created PR closing reference remains empty' run_merge
 grep -Fq 'PR does not close the exact Issue' "$CASE_ROOT/err" || fail_test 'empty closing reference changed the existing error'
 [[ "$(cat "$CASE_GH/created-reads")" == 3 ]] || fail_test 'created PR did not stop at the test wait bound'
 [[ "$(grep -Fxc 'pr-create' "$CASE_MUTATIONS")" == 1 ]] || fail_test 'empty closing reference created multiple PRs'
 if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'empty closing reference reached merge'; fi
+echo 'PASS: created-closing-never stops after three reads without merge'
 
-make_case created-closing-wrong
+reset_created_case
 FAKE_CREATED_CLOSING_MODE=wrong assert_fails 'created PR closes the wrong Issue' run_merge
 grep -Fq 'PR does not close the exact Issue' "$CASE_ROOT/err" || fail_test 'wrong closing Issue changed the existing error'
 [[ "$(cat "$CASE_GH/created-reads")" == 1 ]] || fail_test 'wrong closing Issue waited instead of failing immediately'
 if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'wrong closing Issue reached merge'; fi
+echo 'PASS: created-closing-wrong fails on the first read'
 
-make_case created-empty-wrong-head
+reset_created_case
 FAKE_CREATED_CLOSING_MODE=empty-wrong-head assert_fails 'created PR has empty closing references and wrong Head' run_merge
 grep -Fq 'PR Branch or Head differs' "$CASE_ROOT/err" || fail_test 'wrong Head did not take precedence over empty closing references'
 [[ "$(cat "$CASE_GH/created-reads")" == 1 ]] || fail_test 'wrong Head waited on empty closing references'
 if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'wrong Head reached merge'; fi
+echo 'PASS: created-empty-wrong-head fails on the first read'
 
-make_case wait-override-production
+reset_created_case
 MERGE_TEST_MODE=0 assert_fails 'test wait override in production' run_merge
 assert_no_mutation 'test wait override in production'
+echo 'PASS: wait-override-production refuses before mutation'
+
+cat >"$CASE_BIN/ruby" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${FAKE_EXPIRED_DEADLINE:-0}" == 1 && "$1" == -e ]]; then
+  if [[ "$2" == 'puts Process.clock_gettime(Process::CLOCK_MONOTONIC) + 60' ]]; then
+    printf '0\n'
+    exit 0
+  fi
+  if [[ "$2" == 'exit(Process.clock_gettime(Process::CLOCK_MONOTONIC) <= Float(ARGV[0]) ? 0 : 1)' ]]; then
+    printf 'checked-after-read\n' >>"${FAKE_DEADLINE_LOG:?}"
+  fi
+fi
+exec "${REAL_RUBY:?}" "$@"
+EOF
+chmod +x "$CASE_BIN/ruby"
+reset_created_case
+: >"$CASE_ROOT/deadline.log"
+FAKE_CREATED_CLOSING_MODE=never FAKE_EXPIRED_DEADLINE=1 MERGE_WAIT_ATTEMPTS=1 assert_fails 'empty first read crosses the deadline' run_merge
+grep -Fqx 'checked-after-read' "$CASE_ROOT/deadline.log" || fail_test 'empty first read did not check the deadline'
+grep -Fq 'created PR identity differs' "$CASE_ROOT/err" || fail_test 'expired closing-reference wait changed the existing error'
+[[ "$(cat "$CASE_GH/created-reads")" == 1 ]] || fail_test 'expired first read was retried'
+if grep -Fqx 'pr-merge' "$CASE_MUTATIONS"; then fail_test 'expired closing-reference wait reached merge'; fi
+echo 'PASS: created-closing-expired fails after the first read without merge'
+
+echo 'PASS: scoped created PR closing-reference regressions (6 cases)'
+exit 0
+fi
 
 make_case manual-merged-missing-pr merged none recovery
 set_contract_operations '["github.push_branch","github.create_pr","github.merge_pr","github.delete_branch"]'
@@ -501,14 +544,13 @@ diff -u "$CASE_ROOT/expected-cleanup.log" "$CASE_MUTATIONS" || fail_test 'manual
 make_case cas-inplace
 write_cas_patch
 state_path="$CASE_PRIMARY/.artifacts/issues/42/state.json"
+cp "$state_path" "$CASE_ROOT/state.before-cas"
 before_inode=$(stat -f '%i' "$state_path")
 assert_fails 'same-inode same-size state rewrite' run_persist_pr_with_injection inplace
 [[ "$(stat -f '%i' "$state_path")" == "$before_inode" ]] || fail_test 'same-inode injection unexpectedly replaced state'
 jq -e '(.transitionedAt=="2026-08-24T00:03:01Z") and (has("pullRequest")|not)' "$state_path" >/dev/null || fail_test 'same-inode rewrite was overwritten'
 
-make_case cas-destination-swap
-write_cas_patch
-state_path="$CASE_PRIMARY/.artifacts/issues/42/state.json"
+cp "$CASE_ROOT/state.before-cas" "$state_path"
 cp "$state_path" "$CASE_ROOT/replacement.json"
 ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v["transitionedAt"]="2026-08-24T00:03:02Z";File.binwrite(p,JSON.generate(v))' "$CASE_ROOT/replacement.json"
 cp "$CASE_ROOT/replacement.json" "$CASE_ROOT/replacement.expected"
@@ -643,31 +685,36 @@ make_case remote-ref-race
 FAKE_REMOTE_HEAD_OVERRIDE=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb assert_fails 'remote ref moved after exact push' run_merge
 if grep -Eq '^(pr-create|pr-merge)$' "$CASE_MUTATIONS"; then fail_test 'ref move race created or merged a PR'; fi
 
-make_case invalid-state in-progress
+make_case validation-negatives
+cp "$CASE_PRIMARY/.artifacts/issues/42/state.json" "$CASE_ROOT/state.good"
+reset_validation_case() {
+  cp "$CASE_ROOT/state.good" "$CASE_PRIMARY/.artifacts/issues/42/state.json"
+  : >"$CASE_LOG"; : >"$CASE_MUTATIONS"
+}
+ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v["state"]="in-progress";File.binwrite(p,JSON.generate(v))' "$CASE_PRIMARY/.artifacts/issues/42/state.json"
 assert_fails 'non-approved normal state' run_merge
 [[ ! -s "$CASE_LOG" ]] || fail_test 'invalid durable state reached an external call'
 assert_no_mutation 'invalid durable state'
 
-make_case bad-digest
-cp "$CASE_PRIMARY/.artifacts/issues/42/state.json" "$CASE_ROOT/state.good"
+reset_validation_case
 ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v["issueContract"]["digest"]="sha256:"+"0"*64;File.binwrite(p,JSON.generate(v))' "$CASE_PRIMARY/.artifacts/issues/42/state.json"
 assert_fails 'contract digest mismatch' run_merge
 [[ ! -s "$CASE_LOG" ]] || fail_test 'contract mismatch reached external calls'
 assert_no_mutation 'contract mismatch'
 
-make_case mismatched-slug
+reset_validation_case
 ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v["worktree"]=".worktrees/42-other-slug";File.binwrite(p,JSON.generate(v))' "$CASE_PRIMARY/.artifacts/issues/42/state.json"
 assert_fails 'Branch/worktree slug mismatch' run_merge
 [[ ! -s "$CASE_LOG" ]] || fail_test 'slug mismatch reached external calls'
 assert_no_mutation 'Branch/worktree slug mismatch'
 
-make_case missing-transition-time
+reset_validation_case
 ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v.delete("transitionedAt");File.binwrite(p,JSON.generate(v))' "$CASE_PRIMARY/.artifacts/issues/42/state.json"
 assert_fails 'approved state missing transition timestamp' run_merge
 [[ ! -s "$CASE_LOG" ]] || fail_test 'missing transition timestamp reached external calls'
 assert_no_mutation 'missing transition timestamp'
 
-make_case bad-link
+reset_validation_case
 rm "$CASE_WORKTREE/.artifacts" && ln -s ../../../.artifacts "$CASE_WORKTREE/.artifacts"
 assert_fails 'raw artifact link mismatch' run_merge
 [[ ! -s "$CASE_LOG" ]] || fail_test 'artifact-link mismatch reached external calls'
@@ -681,7 +728,8 @@ jq -e '.status=="already-merged" and .pullRequest==57' "$CASE_ROOT/recovery.json
 [[ "$(head -1 "$CASE_LOG")" == "preflight --repo $repo_name" ]] || fail_test 'recovery skipped account preflight'
 assert_no_mutation 'already-merged recovery'
 
-make_case merged-without-pr merged none
+: >"$CASE_LOG"; : >"$CASE_MUTATIONS"
+ruby -rjson -e 'p=ARGV[0];v=JSON.parse(File.binread(p));v.delete("pullRequest");File.binwrite(p,JSON.generate(v))' "$CASE_PRIMARY/.artifacts/issues/42/state.json"
 assert_fails 'merged state without persisted PR' run_merge
 [[ ! -s "$CASE_LOG" ]] || fail_test 'invalid merged state reached external calls'
 assert_no_mutation 'merged state without PR'
