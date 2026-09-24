@@ -98,6 +98,30 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   [['apps','info','view','--app','123'], ['versions','list','--app','123'], ['bundle-ids','list','--identifier','com.example.app']].each do |args|
     invoke.call(runner, ['--operation','appstore.inspect_app','--']+args)
   end
+  ipa_dir = File.join(repo, '.artifacts/appstore-builds/42/a123456789012345678901234/export')
+  FileUtils.mkdir_p(ipa_dir)
+  ipa = File.join(ipa_dir, 'GardenNotes.ipa')
+  File.binwrite(ipa, 'synthetic ipa')
+  build_op = ['--operation','appstore.upload_build','--']
+  invoke.call(runner, build_op + ['apps','list','--bundle-id','com.example.ascfixture'])
+  invoke.call(runner, build_op + ['builds','list','--app','123','--version','1.0','--build-number','7','--platform','IOS','--paginate'])
+  invoke.call(runner, build_op + ['builds','info','--app','123','--version','1.0','--build-number','7','--platform','IOS'])
+  invoke.call(runner, build_op + ['builds','upload','--app','123','--ipa',ipa])
+  outside_ipa = File.join(temporary, 'outside.ipa')
+  File.binwrite(outside_ipa, 'synthetic ipa')
+  symlink_ipa = File.join(ipa_dir, 'alias.ipa')
+  File.symlink(ipa, symlink_ipa)
+  [outside_ipa, symlink_ipa, ipa + '/..', File.join(ipa_dir,'missing.ipa'),
+   File.join(ipa_dir,'wrong.pkg')].each do |bad|
+    invoke.call(runner, build_op + ['builds','upload','--app','123','--ipa',bad], {}, :failure)
+  end
+  [build_op + ['builds','upload','--app','123','--ipa',ipa,'--wait'],
+   build_op + ['builds','upload','--app','123','--ipa',ipa,'--version','1.0'],
+   build_op + ['builds','upload','--app','123'],
+   build_op + ['builds','list','--app','123','--version','1.0','--build-number','7','--platform','IOS'],
+   build_op + ['builds','list','--app','123','--version','1.0','--build-number','7','--platform','IOS','--paginate','--next','https://example.invalid'],
+   build_op + ['builds','info','--app','123','--version','1.0','--build-number','7'],
+   build_op + ['signing','sync']].each { |args| invoke.call(runner,args,{},:failure) }
   invoke.call(runner, read_args+['--output','json'])
   forbidden = [%w[web apps list], %w[auth login], %w[auth logout], %w[apps wall], %w[install-skills], %w[signing sync], %w[workflow run release], %w[telemetry enable], %w[apps update], %w[apps list --deep], %w[apps list --profile evil], %w[apps list --output table], %w[apps list --output=json], %w[apps list --debug], %w[apps list --next https://evil.example], %w[apps list --limit 0], %w[apps list --limit 201], %w[apps list --limit 2 --limit 3], %w[apps list extra], %w[apps list --bundle-id --deep]]
   forbidden.each { |args| invoke.call(runner, ['--operation','appstore.inspect_app','--']+args, {}, :failure) }

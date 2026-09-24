@@ -22,6 +22,12 @@ module AscCLI
   # update.go defines --name, --subtitle, --description, --keywords,
   # --promotional-text, --whats-new and the --app/--version/--type/--locale
   # selectors. Empty field flags are ignored by asc 5.4.0; refuse them here.
+  # Build source at 5.4.0: internal/cli/builds/builds_commands.go defines
+  # BuildsUploadCommand (--app, --ipa), BuildsListCommand (--app, --version,
+  # --build-number, --platform, --processing-state, --paginate), and
+  # BuildsInfoCommand (the four exact app-scoped selectors). The list version
+  # is CFBundleShortVersionString; BuildAttributes.version is CFBundleVersion
+  # (internal/asc/client_builds.go). Info adds a preReleaseVersion include.
   OPERATIONS = {
     'appstore.inspect_app' => {
       %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},
@@ -39,6 +45,14 @@ module AscCLI
                                     '--name'=>:localization_name, '--subtitle'=>:localization_subtitle,
                                     '--description'=>:localization_description, '--keywords'=>:localization_keywords,
                                     '--promotional-text'=>:localization_promotional, '--whats-new'=>:localization_whats_new}
+    }.freeze,
+    'appstore.upload_build' => {
+      %w[apps list] => {'--bundle-id'=>:identifier},
+      %w[builds upload] => {'--app'=>:id, '--ipa'=>:ipa},
+      %w[builds list] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number,
+                          '--platform'=>:platform, '--processing-state'=>:processing_state, '--paginate'=>:boolean},
+      %w[builds info] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number,
+                          '--platform'=>:platform}
     }.freeze
   }.freeze
   LOCALIZATION_TEXT_LIMITS = {
@@ -240,7 +254,9 @@ module AscCLI
       end
       value = remaining.shift
       localization_text = LOCALIZATION_TEXT_LIMITS.key?(type)
-      if localization_text
+      if type == :ipa
+        valid = valid_ipa?(value)
+      elsif localization_text
         refuse('flag value is invalid') unless value.is_a?(String) && value.valid_encoding? && !value.empty? &&
           !value.match?(/[\x00-\x09\x0b-\x1f\x7f]/)
         minimum, character_maximum, byte_maximum = LOCALIZATION_TEXT_LIMITS.fetch(type)
@@ -261,7 +277,9 @@ module AscCLI
               when :identifier then value.match?(/\A[A-Za-z0-9][A-Za-z0-9.-]*\z/)
               when :limit then value.match?(/\A[1-9][0-9]*\z/) && value.to_i <= 200
               when :version then value.match?(/\A[0-9]+(?:\.[0-9]+){0,2}\z/)
+              when :build_number then value.match?(/\A[1-9][0-9]*\z/)
               when :platform then %w[IOS MAC_OS TV_OS VISION_OS].include?(value)
+              when :processing_state then %w[VALID PROCESSING FAILED INVALID all].include?(value)
               when :output then value == 'json'
               when :text then true
               end
@@ -270,6 +288,18 @@ module AscCLI
       forwarded.concat(localization_text ? ["#{flag}=#{value}"] : [flag, value]) unless type == :output
     end
     refuse('explicit app is required') if [%w[apps info view], %w[versions list]].include?(command) && !seen.include?('--app')
+    if args[1] == 'appstore.upload_build'
+      case command
+      when %w[apps list]
+        refuse('exact bundle selector required') unless seen.include?('--bundle-id')
+      when %w[builds upload]
+        refuse('exact upload selectors required') unless %w[--app --ipa].all? { |flag| seen.include?(flag) }
+      when %w[builds list]
+        refuse('exact build selectors and pagination required') unless %w[--app --version --build-number --platform --paginate].all? { |flag| seen.include?(flag) }
+      when %w[builds info]
+        refuse('exact build selectors required') unless %w[--app --version --build-number --platform].all? { |flag| seen.include?(flag) }
+      end
+    end
     if metadata_command
       kind = tail.each_cons(2).find { |pair| pair.first == '--type' }&.last
       refuse('localization type and locale are required') unless %w[version app-info].include?(kind) && seen.include?('--locale')
@@ -283,6 +313,17 @@ module AscCLI
       end
     end
     forwarded + ['--output', 'json']
+  end
+
+  def valid_ipa?(value)
+    return false unless value.is_a?(String) && value.bytesize.between?(1, 4096) && File.extname(value) == '.ipa'
+    physical_path!(value)
+    artifacts = File.realpath(File.join(ROOT, '.artifacts'))
+    return false unless value.start_with?(File.join(artifacts, 'appstore-builds') + '/')
+    regular!(value)
+    true
+  rescue Refused, SystemCallError
+    false
   end
 
   def app_slug
