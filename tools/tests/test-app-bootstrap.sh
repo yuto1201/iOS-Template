@@ -39,6 +39,14 @@ if [[ -f "$source_root/Config/app-identity.json" && ! -L "$source_root/Config/ap
   cd "$root"
 fi
 
+set_clone_default_for_detached_root() {
+  local clone="$1"
+  if ! git -C "$root" symbolic-ref --quiet HEAD >/dev/null 2>&1; then
+    git -C "$clone" update-ref refs/remotes/origin/main "$(git -C "$clone" rev-parse HEAD)"
+    git -C "$clone" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  fi
+}
+
 fixture_hash() {
   {
     find TemplateApp TemplateAppTests TemplateAppUITests TemplateApp.xcodeproj Config specs docs -type f -print
@@ -104,6 +112,7 @@ new_safety_fixture() {
   fixture="$(mktemp -d -t "app-bootstrap-${label}.XXXXXX")"
   rm -rf "$fixture"
   git clone --no-local "$root" "$fixture" >/dev/null
+  set_clone_default_for_detached_root "$fixture"
   git -C "$fixture" checkout -b "codex/safety-${label}" >/dev/null
   cp "$root/tools/bootstrap-app.swift" "$fixture/tools/bootstrap-app.swift"
   if ! git -C "$fixture" diff --quiet -- tools/bootstrap-app.swift; then
@@ -656,6 +665,7 @@ if [[ "$mode" == "transaction" ]]; then
   fixture="$(mktemp -d -t app-bootstrap-transaction.XXXXXX)"
   rm -rf "$fixture"
   git clone --no-local "$root" "$fixture" >/dev/null
+  set_clone_default_for_detached_root "$fixture"
   git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
   cp "$root/tools/bootstrap-app.swift" "$fixture/tools/bootstrap-app.swift"
   if ! git -C "$fixture" diff --quiet -- tools/bootstrap-app.swift; then
@@ -748,6 +758,7 @@ if [[ "$mode" == "trunk-default" ]]; then
   fixture="$(mktemp -d -t app-bootstrap-trunk.XXXXXX)"
   rm -rf "$fixture"
   git clone --no-local "$root" "$fixture" >/dev/null
+  set_clone_default_for_detached_root "$fixture"
   git -C "$fixture" branch trunk
   git -C "$fixture" update-ref refs/remotes/origin/trunk "$(git -C "$fixture" rev-parse HEAD)"
   git -C "$fixture" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
@@ -781,6 +792,7 @@ if [[ "$mode" == "cleanup-failure" ]]; then
   fixture="$(mktemp -d -t app-bootstrap-cleanup.XXXXXX)"
   rm -rf "$fixture"
   git clone --no-local "$root" "$fixture" >/dev/null
+  set_clone_default_for_detached_root "$fixture"
   git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
 
   set +e
@@ -821,6 +833,7 @@ if [[ "$mode" == "transform" ]]; then
   fixture="$(mktemp -d -t app-bootstrap-transform.XXXXXX)"
   rm -rf "$fixture"
   git clone --no-local "$root" "$fixture" >/dev/null
+  set_clone_default_for_detached_root "$fixture"
   git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
   cp "$root/README.md" "$fixture/README.md"
   cp "$root/Config/ownership.yml" "$fixture/Config/ownership.yml"
@@ -1346,6 +1359,7 @@ PY
   escaped_fixture="$(mktemp -d -t app-bootstrap-escaped.XXXXXX)"
   rm -rf "$escaped_fixture"
   git clone --no-local "$root" "$escaped_fixture" >/dev/null
+  set_clone_default_for_detached_root "$escaped_fixture"
   git -C "$escaped_fixture" checkout -b codex/test-bootstrap-escaped >/dev/null
   escaped_display_name='Garden "Notes" \ Draft'
   if ! swift "$bootstrap" apply \

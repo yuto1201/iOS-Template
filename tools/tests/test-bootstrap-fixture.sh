@@ -129,8 +129,8 @@ Dir.mktmpdir("bootstrap-fixture-test.") do |temp|
   BootstrapFixture.create(stale, broken)
   ok, output = command("bash", "tools/tests/test-app-bootstrap.sh", "transform", chdir: broken)
   assert(!ok, "bootstrap-incompatible fixture passed transform")
-  diagnostic = "bootstrap fixture compatibility failed: #{output}\n#{instruction}"
-  assert(diagnostic.include?(instruction), "compatibility failure omitted update instruction")
+  assert(output.include?("required transformation anchor is missing"),
+    "incompatible fixture failed for an unrelated reason: #{output}")
   puts instruction
 
   derived = File.join(temp, "derived")
