@@ -45,6 +45,7 @@ service_role_allowed = {
     "docs/superpowers/plans/2026-08-21-integrations-appstore-release.md",
     "specs/product.md",
     "tools/install-app-icon.sh",
+    "tools/tests/fixtures/bootstrap-template/source-identity.json",
     "tools/tests/test-supabase-skill.sh",
     "tools/tests/test-tracked-credential-scan.sh",
     "tools/validate-app-icon.sh",

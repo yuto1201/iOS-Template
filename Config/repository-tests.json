@@ -80,6 +80,11 @@
       ]
     },
     {
+      "domain": "bootstrap-fixture",
+      "paths": ["Config/template-identity.json", "tools/bootstrap-app.sh", "tools/bootstrap-app.swift", "tools/tests/lib/bootstrap-fixture.rb", "tools/tests/test-app-bootstrap.sh"],
+      "prefixes": ["tools/tests/fixtures/bootstrap-template/"]
+    },
+    {
       "domain": "descriptor-files",
       "paths": ["tools/lib/descriptor-files.rb"],
       "prefixes": []
@@ -356,6 +361,7 @@
     {"path": "tools/tests/test-appstore-skills.sh", "domains": ["appstore", "evidence-applicability", "release-disposition"]},
     {"path": "tools/tests/test-asc-cli.sh", "domains": ["asc-adapter"]},
     {"path": "tools/tests/test-asc-testflight.sh", "domains": ["asc-adapter"]},
+    {"path": "tools/tests/test-bootstrap-fixture.sh", "domains": ["bootstrap-fixture"]},
     {"path": "tools/tests/test-bounded-command.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-recovery.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-resume.sh", "domains": ["workflow-state"]},
