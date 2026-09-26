@@ -11,9 +11,10 @@ if [[ "$mode" != "validation" && "$mode" != "transform" && "$mode" != "transacti
   exit 64
 fi
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$root"
-source "$root/tools/lib/bounded-command.sh"
+source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+root="$source_root"
+cd "$source_root"
+source "$source_root/tools/lib/bounded-command.sh"
 
 manifest="Config/template-identity.json"
 bootstrap="tools/bootstrap-app.swift"
@@ -21,7 +22,8 @@ output="$(mktemp -t app-bootstrap-output.XXXXXX)"
 errors="$(mktemp -t app-bootstrap-errors.XXXXXX)"
 fixture=""
 escaped_fixture=""
-trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"; [[ -z "$escaped_fixture" ]] || rm -rf "$escaped_fixture"' EXIT
+seed_parent=""
+trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"; [[ -z "$escaped_fixture" ]] || rm -rf "$escaped_fixture"; [[ -z "$seed_parent" ]] || rm -rf "$seed_parent"' EXIT
 
 if [[ "$mode" == "all" ]]; then
   for suite in validation transform transaction trunk-default cleanup-failure safety; do
@@ -29,6 +31,12 @@ if [[ "$mode" == "all" ]]; then
   done
   echo 'all app bootstrap tests passed'
   exit 0
+fi
+
+if [[ -f "$source_root/Config/app-identity.json" && ! -L "$source_root/Config/app-identity.json" ]]; then
+  seed_parent="$(mktemp -d -t app-bootstrap-seed.XXXXXX)"
+  root="$(ruby "$source_root/tools/tests/lib/bootstrap-fixture.rb" create "$source_root" "$seed_parent/repository")"
+  cd "$root"
 fi
 
 fixture_hash() {
