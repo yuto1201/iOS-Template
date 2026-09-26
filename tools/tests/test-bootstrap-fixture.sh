@@ -31,6 +31,11 @@ def succeed(*argv, chdir: nil)
   output
 end
 
+def check_compatibility(seed, instruction)
+  ok, output = command("bash", "tools/tests/test-app-bootstrap.sh", "transform", chdir: seed)
+  raise "bootstrap template fixture compatibility check failed\n#{output}\n#{instruction}" unless ok
+end
+
 def git(root, *args)
   succeed("git", "-C", root, *args)
 end
@@ -113,8 +118,7 @@ Dir.mktmpdir("bootstrap-fixture-test.") do |temp|
   ok, output = command("ruby", File.join(prose, "tools/tests/lib/bootstrap-fixture.rb"), "check", prose)
   assert(ok, "prose edit incorrectly required refresh: #{output}")
 
-  ok, output = command("bash", "tools/tests/test-app-bootstrap.sh", "transform", chdir: prose)
-  assert(ok, "current fixture is not bootstrap compatible: #{output}")
+  check_compatibility(prose, instruction)
 
   stale = File.join(temp, "stale")
   BootstrapFixture.create(root, stale)
@@ -127,11 +131,15 @@ Dir.mktmpdir("bootstrap-fixture-test.") do |temp|
   File.binwrite(stale_path, JSON.pretty_generate(stale_data))
   broken = File.join(temp, "broken")
   BootstrapFixture.create(stale, broken)
-  ok, output = command("bash", "tools/tests/test-app-bootstrap.sh", "transform", chdir: broken)
-  assert(!ok, "bootstrap-incompatible fixture passed transform")
-  assert(output.include?("required transformation anchor is missing"),
-    "incompatible fixture failed for an unrelated reason: #{output}")
-  puts instruction
+  failure = begin
+    check_compatibility(broken, instruction)
+    nil
+  rescue RuntimeError => error
+    error.message
+  end
+  assert(!failure.nil?, "bootstrap-incompatible fixture passed transform")
+  assert(failure.include?("required transformation anchor is missing") && failure.include?(instruction),
+    "incompatible fixture failure was not explained: #{failure}")
 
   derived = File.join(temp, "derived")
   git(temp, "clone", "--quiet", "--no-local", prose, derived)
