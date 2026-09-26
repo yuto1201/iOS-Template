@@ -287,67 +287,14 @@ if git grep -n -I -E -- 'Supabase|ElevenLabs|Cloudflare|Firebase|PostHog|Mixpane
   exit 1
 fi
 
-python3 - <<'PYTHON'
-from pathlib import Path
-import re
-import subprocess
-
-paths = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
-files = [Path(value.decode()) for value in paths if value]
-token_patterns = (
-    re.compile(rb"ghp_[A-Za-z0-9]{12,}"),
-    re.compile(rb"github_pat_[A-Za-z0-9_]{12,}"),
-    re.compile(rb"glpat-[A-Za-z0-9_-]{12,}"),
-    re.compile(rb"xox[baprs]-[A-Za-z0-9-]{12,}"),
-    re.compile(rb"(?:^|[^A-Za-z0-9])sk-(?:proj-)?[A-Za-z0-9_-]{12,}"),
-    re.compile(rb"sb_secret_[A-Za-z0-9_-]{12,}"),
-    re.compile(rb"AIza[0-9A-Za-z_-]{20,}"),
-    re.compile(rb"AKIA[0-9A-Z]{16}"),
-    re.compile(rb"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
-)
-private_key = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")
-password_assignment = re.compile(rb"(?i)password\s*=\s*[^\s\"']{6,}")
-dedicated_filename = re.compile(rb"Library/Application Support/iOS-Template/secrets/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.(?:p8|pem|key)")
-service_role_allowed = {
-    ".agents/skills/ios-media-assets/scripts/validate-audio.sh",
-    ".agents/skills/ios-media-assets/scripts/validate-transcript.sh",
-    ".agents/skills/ios-media-assets/scripts/validate-visual.sh",
-    ".agents/skills/supabase-ops/SKILL.md",
-    ".agents/skills/supabase-ops/scripts/validate-migrations.sh",
-    "docs/security.md",
-    "docs/superpowers/plans/2026-08-21-integrations-appstore-release.md",
-    "specs/product.md",
-    "tools/install-app-icon.sh",
-    "tools/tests/test-foundation.sh",
-    "tools/tests/test-supabase-skill.sh",
-    "tools/validate-app-icon.sh",
-}
-violations = []
-service_role_paths = set()
-for path in files:
-    try:
-        data = path.read_bytes()
-    except (OSError, IsADirectoryError):
-        continue
-    if b"\0" in data:
-        continue
-    name = path.as_posix()
-    if b"service_role" in data:
-        service_role_paths.add(name)
-    for pattern in token_patterns:
-        if pattern.search(data):
-            violations.append(f"credential token prefix in {name}")
-    if private_key.search(data):
-        violations.append(f"private-key header in {name}")
-    if password_assignment.search(data) and name != "tools/tests/test-visual-review-packet.sh":
-        violations.append(f"password assignment in {name}")
-    if dedicated_filename.search(data):
-        violations.append(f"dedicated secret filename in {name}")
-if service_role_paths != service_role_allowed:
-    violations.append(f"service_role policy occurrence set changed: {sorted(service_role_paths)!r}")
-if violations:
-    raise SystemExit("tracked credential scan failed: " + "; ".join(violations))
-PYTHON
+if ! credential_scan_output=$(bash "$repo_root/tools/tests/test-tracked-credential-scan.sh" --root "$repo_root" 2>&1); then
+  if [[ "$credential_scan_output" == 'tracked credential scan failed:'* ]]; then
+    printf '%s\n' "$credential_scan_output" >&2
+  else
+    printf 'tracked credential scan failed: %s\n' "$credential_scan_output" >&2
+  fi
+  exit 1
+fi
 
 python3 - <<'PYTHON'
 from pathlib import Path

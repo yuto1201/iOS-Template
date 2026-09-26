@@ -499,9 +499,9 @@ func preflightSourceContract(root: URL, manifest: TemplateManifest) throws {
         "\(source)Tests/\(source)Tests.swift": 4,
         "\(source)UITests/\(source)UITests.swift": 3,
         "README.md": 27,
-        "specs/architecture.md": 8,
-        "docs/verification.md": 2,
-        "docs/agent-contracts/review-packet.md": 1,
+        "specs/architecture.md": 9,
+        "docs/verification.md": 3,
+        "docs/agent-contracts/review-packet.md": 2,
     ]
     for (relativePath, expectedCount) in moduleAnchorCounts {
         try requireOccurrenceCount(
@@ -862,12 +862,15 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
     try require("  bundleId: \(identity.bundleId)", count: 1, in: "Config/ownership.yml")
     try require("\"scheme\": \"\(identity.moduleName)\"", count: 1, in: "docs/verification.md")
     try require("tests:\(identity.moduleName)Tests/", count: 1, in: "docs/verification.md")
+    try require("fixture成功を\(identity.moduleName)統合", count: 1, in: "docs/verification.md")
     try require("\"file\": \"\(identity.moduleName)/Settings/NotificationSettings.swift\"", count: 1, in: "docs/agent-contracts/review-packet.md")
+    try require("fixture成功を\(identity.moduleName)統合", count: 1, in: "docs/agent-contracts/review-packet.md")
 
     let architecture = try content("specs/architecture.md")
-    guard identifierOccurrenceCount(of: source, in: architecture) == 2,
+    guard identifierOccurrenceCount(of: source, in: architecture) == 3,
           architecture.contains("`\(source)` は最小の SwiftUI アプリ"),
           architecture.contains("`\(source)`をFeature実装のまま残しません"),
+          architecture.contains("`\(source)`とIdentity bootstrap直後の派生アプリに"),
           architecture.contains("├── \(identity.moduleName)/"),
           architecture.contains("├── \(identity.moduleName)Tests/"),
           architecture.contains("├── \(identity.moduleName)UITests/"),

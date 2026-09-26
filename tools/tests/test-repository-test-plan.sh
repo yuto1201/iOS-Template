@@ -5,7 +5,7 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby
 
 source_repo=$(cd "$(dirname "$0")/../.." && pwd -P)
-ruby -I"$source_repo/tools/lib" -rrepository-test-plan -rfileutils -rtmpdir -rjson <<'RUBY'
+SOURCE_REPO="$source_repo" ruby -I"$source_repo/tools/lib" -rrepository-test-plan -rfileutils -rtmpdir -rjson <<'RUBY'
 module Fixture
   module_function
 
@@ -13,7 +13,7 @@ module Fixture
     IOSTemplate::RepositoryTestPlan.git!(repo, *args).strip
   end
 
-  def manifest(tests: %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh])
+  def manifest(tests: %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh tools/tests/test-tracked-credential-scan.sh])
     {
       "schemaVersion" => 1,
       "headAllPaths" => [],
@@ -24,7 +24,8 @@ module Fixture
         {"domain" => "workflow", "paths" => ["tools/lib/workflow.rb"], "prefixes" => ["docs/workflow/"]}
       ],
       "tests" => tests.map do |path|
-        {"path" => path, "domains" => path.end_with?("alpha.sh") ? %w[repository review] : ["workflow"]}
+        {"path" => path, "domains" => path.end_with?("alpha.sh") ? %w[repository review] :
+          path.end_with?("tracked-credential-scan.sh") ? ["credential-scan"] : ["workflow"]}
       end
     }
   end
@@ -43,6 +44,7 @@ module Fixture
 end
 
 runner = IOSTemplate::RepositoryTestPlan
+source_repo = ENV.fetch("SOURCE_REPO")
 lint_manifest = {
   "schemaVersion" => 1,
   "headAllPaths" => [],
@@ -61,20 +63,67 @@ lint_manifest = {
     {"path" => "tools/tests/test-ios.sh", "domains" => ["ios-verification"]},
     {"path" => "tools/tests/test-prerequisites.sh", "domains" => %w[release-disposition repository-lint workflow-state]},
     {"path" => "tools/tests/test-spec-state.sh", "domains" => %w[repository-lint specification]},
+    {"path" => "tools/tests/test-tracked-credential-scan.sh", "domains" => ["credential-scan"]},
     {"path" => "tools/tests/test-workflow.sh", "domains" => ["workflow-state"]}
   ]
 }
 lint_tests = %w[tools/tests/test-prerequisites.sh tools/tests/test-spec-state.sh]
+scan_test = "tools/tests/test-tracked-credential-scan.sh"
 inventory = lint_manifest.fetch("tests").map { |entry| entry.fetch("path") }
 runner.validate_manifest!(lint_manifest, inventory)
 %w[tools/tests/test-alpha.sh tools/sample.sh].each do |shell_path|
   scope, reason, tests = runner.resolve(lint_manifest, "targeted", [shell_path])
   abort "shell change did not select only the repository test and both lints: #{shell_path}" unless
-    scope == "targeted" && reason.include?("repository-lint") && tests == ["tools/tests/test-alpha.sh", *lint_tests]
+    scope == "targeted" && reason.include?("repository-lint") && tests == ["tools/tests/test-alpha.sh", *lint_tests, scan_test]
 end
 scope, reason, tests = runner.resolve(lint_manifest, "targeted", ["tools/lib/repository-test-plan.rb"])
 abort "non-shell plan changed" unless scope == "targeted" &&
-  reason == "Changed paths resolve to repository-test domains: repository-testing." && tests == ["tools/tests/test-alpha.sh"]
+  reason == "Changed paths resolve to repository-test domains: credential-scan,repository-testing." &&
+  tests == ["tools/tests/test-alpha.sh", scan_test]
+%w[docs/verification.md tools/sample.sh tools/appstore.rb].each do |changed_path|
+  scope, _, tests = runner.resolve(lint_manifest, "targeted", [changed_path])
+  abort "credential scan was not selected for #{changed_path}" unless scope == "targeted" && tests.include?(scan_test)
+end
+missing_scan = Marshal.load(Marshal.dump(lint_manifest))
+missing_scan.fetch("tests").reject! { |entry| entry.fetch("path") == scan_test }
+begin
+  runner.resolve(missing_scan, "targeted", ["docs/verification.md"])
+  abort "change without credential-scan test was accepted"
+rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+  abort "missing scan failed for the wrong reason" unless error.message.include?("credential-scan")
+end
+scan_path_rule = Marshal.load(Marshal.dump(lint_manifest))
+scan_path_rule.fetch("domainRules") << {"domain" => "credential-scan", "paths" => ["docs/verification.md"], "prefixes" => []}
+begin
+  runner.validate_manifest!(scan_path_rule, inventory)
+  abort "credential-scan path rule was accepted"
+rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+  abort "credential-scan path rule failed for the wrong reason" unless error.message.include?("credential-scan must not have a path rule")
+end
+foreign_scan = Marshal.load(Marshal.dump(lint_manifest))
+foreign_scan.fetch("tests").find { |entry| entry.fetch("path") == "tools/tests/test-alpha.sh" }.fetch("domains") << "credential-scan"
+foreign_scan.fetch("tests").find { |entry| entry.fetch("path") == "tools/tests/test-alpha.sh" }.fetch("domains").sort!
+begin
+  runner.validate_manifest!(foreign_scan, inventory)
+  abort "foreign test was assigned credential-scan"
+rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+  abort "foreign credential-scan assignment failed for the wrong reason" unless error.message.include?("test domains are invalid")
+end
+source_manifest = JSON.parse(File.binread(File.join(source_repo, "Config/repository-tests.json")))
+source_tests = source_manifest.fetch("tests").map { |entry| entry.fetch("path") }
+runner.validate_manifest!(source_manifest, source_tests)
+live_content = JSON.parse(File.binread(File.join(source_repo, "Config/template-identity.json"))).fetch("liveContentPaths")
+bootstrap_paths = live_content.reject { |path| path.start_with?("TemplateApp") } +
+  %w[tools/bootstrap-app.swift tools/bootstrap-app.sh Config/template-identity.json]
+bootstrap_paths.each do |changed_path|
+  scope, reason, tests = runner.resolve(source_manifest, "targeted", [changed_path])
+  abort "bootstrap regression was not selected for #{changed_path}" unless scope == "targeted" &&
+    reason.include?("bootstrap-assets") && tests.include?("tools/tests/test-app-bootstrap.sh")
+end
+%w[docs/verification.md tools/bootstrap-app.sh tools/tests/test-appstore-preparation.sh].each do |changed_path|
+  _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
+  abort "source manifest omitted credential scan for #{changed_path}" unless tests.include?(scan_test)
+end
 begin
   runner.resolve(lint_manifest, "targeted", ["tools/sample.sh", "tools/uncovered.sh"])
   abort "uncovered shell path was accepted"
@@ -115,6 +164,7 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   Fixture.git(repo, "config", "user.email", "fixture@example.invalid")
   File.write(File.join(repo, "tools/tests/test-alpha.sh"), "exit 0\n")
   File.write(File.join(repo, "tools/tests/test-beta.sh"), "exit 0\n")
+  File.write(File.join(repo, "tools/tests/test-tracked-credential-scan.sh"), "exit 0\n")
   File.write(File.join(repo, "tools/lib/review-contract.rb"), "BASE = true\n")
   File.write(File.join(repo, "tools/lib/workflow.rb"), "BASE = true\n")
   File.write(File.join(repo, "tools/lib/repository-test-plan.rb"), "PLAN = true\n")
@@ -130,21 +180,21 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   Fixture.git(repo, "commit", "-qm", "review change")
   head = Fixture.git(repo, "rev-parse", "HEAD")
   contract = Fixture.contract(issue: 42)
-  mappings = {"AC-1"=>["tools/tests/test-alpha.sh"], "AC-2"=>["tools/tests/test-alpha.sh"]}
+  mappings = {"AC-1"=>["tools/tests/test-alpha.sh", scan_test], "AC-2"=>["tools/tests/test-alpha.sh"]}
   plan = runner.build(repo: repo, issue: 42, base_sha: base, head_sha: head, contract_bytes: contract, mappings: mappings)
-  abort "single domain did not resolve targeted" unless plan.values_at("requestedScope", "resolvedScope", "testPaths") == ["targeted", "targeted", ["tools/tests/test-alpha.sh"]]
+  abort "single domain did not resolve targeted" unless plan.values_at("requestedScope", "resolvedScope", "testPaths") == ["targeted", "targeted", ["tools/tests/test-alpha.sh", scan_test]]
   runner.validate!(plan, repo: repo, issue: 42, base_sha: base, head_sha: head, contract_bytes: contract)
 
   File.write(File.join(repo, "tools/lib/workflow.rb"), "HEAD = true\n")
   Fixture.git(repo, "add", ".")
   Fixture.git(repo, "commit", "-qm", "multi-domain change")
   multi_domain_head = Fixture.git(repo, "rev-parse", "HEAD")
-  all_mapping = {"AC-1"=>%w[tools/tests/test-alpha.sh tools/tests/test-beta.sh], "AC-2"=>["tools/tests/test-beta.sh"]}
+  all_mapping = {"AC-1"=>["tools/tests/test-alpha.sh", "tools/tests/test-beta.sh", scan_test], "AC-2"=>["tools/tests/test-beta.sh"]}
   multi_domain = runner.build(repo: repo, issue: 42, base_sha: base, head_sha: multi_domain_head,
     contract_bytes: contract, mappings: all_mapping)
   abort "multiple domains did not remain targeted" unless multi_domain["requestedScope"] == "targeted" &&
     multi_domain["resolvedScope"] == "targeted" &&
-    multi_domain["testPaths"] == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh] &&
+    multi_domain["testPaths"] == ["tools/tests/test-alpha.sh", "tools/tests/test-beta.sh", scan_test] &&
     multi_domain["resolutionReason"].include?("review,workflow")
 
   altered = Marshal.load(Marshal.dump(plan))
@@ -189,7 +239,7 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   manifest_broad = runner.build(repo: repo, issue: 42, base_sha: broad_head, head_sha: manifest_head,
     contract_bytes: contract, mappings: mappings)
   abort "manifest change did not remain targeted" unless manifest_broad["resolvedScope"] == "targeted" &&
-    manifest_broad["testPaths"] == ["tools/tests/test-alpha.sh"] &&
+    manifest_broad["testPaths"] == ["tools/tests/test-alpha.sh", scan_test] &&
     manifest_broad["resolutionReason"].include?("repository")
 
   File.write(File.join(repo, "tools/lib/run-repository-tests.rb"), "RUNNER = :changed\n")
@@ -199,14 +249,14 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   runner_broad = runner.build(repo: repo, issue: 42, base_sha: manifest_head, head_sha: runner_head,
     contract_bytes: contract, mappings: mappings)
   abort "runner change did not remain targeted" unless runner_broad["resolvedScope"] == "targeted" &&
-    runner_broad["testPaths"] == ["tools/tests/test-alpha.sh"] &&
+    runner_broad["testPaths"] == ["tools/tests/test-alpha.sh", scan_test] &&
     runner_broad["resolutionReason"].include?("repository")
 
   head_all_contract = Fixture.contract(issue: 42, scope: "head-all")
   explicit_full = runner.build(repo: repo, issue: 42, base_sha: manifest_head, head_sha: runner_head,
     contract_bytes: head_all_contract, mappings: all_mapping)
   abort "explicit head-all did not select the inventory" unless explicit_full["resolvedScope"] == "head-all" &&
-    explicit_full["testPaths"] == %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh]
+    explicit_full["testPaths"] == ["tools/tests/test-alpha.sh", "tools/tests/test-beta.sh", scan_test]
 
   base_head_contract = Fixture.contract(issue: 42, scope: "base-and-head")
   comparison = runner.build(repo: repo, issue: 42, base_sha: unmatched_head, head_sha: broad_head, contract_bytes: base_head_contract, mappings: all_mapping)
@@ -223,14 +273,14 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   empty_domain_manifest.fetch("domainRules").first["paths"] = []
   empty_domain_manifest.fetch("domainRules").first["prefixes"] = []
   begin
-    runner.validate_manifest!(empty_domain_manifest, %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh],
+    runner.validate_manifest!(empty_domain_manifest, %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh tools/tests/test-tracked-credential-scan.sh],
       tracked_paths: runner.tracked_paths(repo, broad_head))
     abort "manifest domain with empty coverage was accepted"
   rescue IOSTemplate::RepositoryTestPlan::PlanError => error
     abort "empty domain failed for an unexpected reason" unless error.message.include?("domain coverage is empty")
   end
 
-  File.write(File.join(repo, "Config/repository-tests.json"), JSON.generate(Fixture.manifest(tests: ["tools/tests/test-alpha.sh"])))
+  File.write(File.join(repo, "Config/repository-tests.json"), JSON.generate(Fixture.manifest(tests: ["tools/tests/test-alpha.sh", scan_test])))
   Fixture.git(repo, "add", ".")
   Fixture.git(repo, "commit", "-qm", "missing manifest test")
   invalid_head = Fixture.git(repo, "rev-parse", "HEAD")
@@ -243,7 +293,7 @@ Dir.mktmpdir("repository-test-plan-") do |scratch|
   invalid_manifest = Fixture.manifest
   invalid_manifest["headAllPaths"] = ["tools/lib/repository-test-plan.rb"]
   begin
-    runner.validate_manifest!(invalid_manifest, %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh],
+    runner.validate_manifest!(invalid_manifest, %w[tools/tests/test-alpha.sh tools/tests/test-beta.sh tools/tests/test-tracked-credential-scan.sh],
       tracked_paths: runner.tracked_paths(repo, invalid_head))
     abort "automatic head-all path was accepted"
   rescue IOSTemplate::RepositoryTestPlan::PlanError => error
@@ -277,6 +327,7 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   Dir[File.join(source, "tools/lib/*.rb")].each { |path| FileUtils.cp(path, File.join(repo, "tools/lib")) }
   File.write(File.join(repo, "tools/tests/test-alpha.sh"), "#!/bin/bash\nexit 0\n")
   File.write(File.join(repo, "tools/tests/test-beta.sh"), "#!/bin/bash\nexit 0\n")
+  File.write(File.join(repo, "tools/tests/test-tracked-credential-scan.sh"), "#!/bin/bash\nexit 0\n")
   FileUtils.chmod(0o755, Dir[File.join(repo, "tools/*.sh")] + Dir[File.join(repo, "tools/tests/*.sh")])
   File.write(File.join(repo, "tools/lib/workflow.rb"), "WORKFLOW = :base\n")
   File.write(File.join(repo, "tools/lib/review.rb"), "REVIEW = :base\n")
@@ -290,7 +341,8 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
     ],
     "tests"=>[
       {"path"=>"tools/tests/test-alpha.sh", "domains"=>["workflow"]},
-      {"path"=>"tools/tests/test-beta.sh", "domains"=>["review"]}
+      {"path"=>"tools/tests/test-beta.sh", "domains"=>["review"]},
+      {"path"=>"tools/tests/test-tracked-credential-scan.sh", "domains"=>["credential-scan"]}
     ]
   }
   File.write(File.join(repo, "Config/repository-tests.json"), JSON.generate(manifest))
@@ -318,7 +370,7 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   contract_bytes = IOSTemplate::IssueContract.canonical_json(contract)
   File.binwrite(File.join(issue_root, "issue-contract.json"), contract_bytes)
   command = [File.join(repo, "tools/run-repository-tests.sh"), "--issue", "82", "--expected-base", base,
-    "--map", "AC-1=tools/tests/test-alpha.sh", "--map", "AC-2=tools/tests/test-alpha.sh"]
+    "--map", "AC-1=tools/tests/test-alpha.sh,tools/tests/test-tracked-credential-scan.sh", "--map", "AC-2=tools/tests/test-alpha.sh"]
   output, error, status = Open3.capture3(*command, chdir: repo)
   abort "planned runner failed: #{error}" unless status.success?
   abort "targeted execution limits were not reported" unless error.include?('"childTimeoutSeconds":300') &&
@@ -332,9 +384,9 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   plan_bytes = File.binread(plan_path)
   plan = JSON.parse(plan_bytes)
   record = JSON.parse(File.binread(record_path))
-  abort "runner did not select one targeted test" unless plan.values_at("resolvedScope", "testPaths") == ["targeted", ["tools/tests/test-alpha.sh"]]
+  abort "runner did not select both targeted tests" unless plan.values_at("resolvedScope", "testPaths") == ["targeted", ["tools/tests/test-alpha.sh", "tools/tests/test-tracked-credential-scan.sh"]]
   abort "schema v3 record differs from plan" unless record.values_at("schemaVersion", "scope") == [3, "targeted"] &&
-    record.fetch("tests").map { |entry| entry.fetch("path") } == plan.fetch("testPaths") && receipt.fetch("total") == 1
+    record.fetch("tests").map { |entry| entry.fetch("path") } == plan.fetch("testPaths") && receipt.fetch("total") == 2
   abort "targeted child timeout differs" unless record.fetch("tests").all? { |entry| entry.fetch("timeoutSeconds") == 300 }
 
   contract_digest = "sha256:#{Digest::SHA256.hexdigest(contract_bytes)}"

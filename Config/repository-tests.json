@@ -60,7 +60,16 @@
     {
       "domain": "bootstrap-assets",
       "paths": [
+        "AGENTS.md",
+        "Config/ownership.yml",
+        "Config/template-identity.json",
+        "README.md",
+        "docs/agent-contracts/review-packet.md",
+        "docs/security.md",
+        "docs/verification.md",
+        "specs/architecture.md",
         "tools/bootstrap-app.sh",
+        "tools/bootstrap-app.swift",
         "tools/install-app-icon.sh",
         "tools/validate-app-icon.sh"
       ],
@@ -87,7 +96,7 @@
     },
     {
       "domain": "foundation",
-      "paths": ["tools/tests/test-foundation.sh"],
+      "paths": ["tools/tests/test-foundation.sh", "tools/tests/test-tracked-credential-scan.sh"],
       "prefixes": []
     },
     {
@@ -399,6 +408,7 @@
     {"path": "tools/tests/test-simulator-resolver.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-spec-state.sh", "domains": ["repository-lint", "specification"]},
     {"path": "tools/tests/test-supabase-skill.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-tracked-credential-scan.sh", "domains": ["credential-scan"]},
     {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["ui-direction"]},
     {"path": "tools/tests/test-verification-contract.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-visual-review"]},

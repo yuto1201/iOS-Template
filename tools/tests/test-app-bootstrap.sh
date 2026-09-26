@@ -322,6 +322,15 @@ PY
   commit_fixture_paths 'test: add unexpected security source anchor' docs/security.md
   expect_bootstrap_rejection_without_mutation 'security anchor count drift' "${garden_notes_arguments[@]}"
 
+  new_safety_fixture architecture-anchor-drift
+  printf '\nTemplateApp\n' >>"$fixture/specs/architecture.md"
+  commit_fixture_paths 'test: add unexpected architecture source anchor' specs/architecture.md
+  expect_bootstrap_rejection_without_mutation 'architecture anchor count drift' "${garden_notes_arguments[@]}"
+  grep -Fq 'required transformation anchor is missing' "$errors" || {
+    echo "architecture drift failed for the wrong reason: $(<"$errors")" >&2
+    exit 1
+  }
+
   invalid_cases=(
     'slash|Garden/Notes|GardenNotes|garden-notes|com.yuto.GardenNotes'
     'dot-dot|Garden Notes|GardenNotes|garden..notes|com.yuto.GardenNotes'
@@ -809,6 +818,8 @@ if [[ "$mode" == "transform" ]]; then
   cp "$root/Config/ownership.yml" "$fixture/Config/ownership.yml"
   cp "$root/tools/tests/test-app-bootstrap.sh" "$fixture/tools/tests/test-app-bootstrap.sh"
   cp "$root/tools/tests/test-foundation.sh" "$fixture/tools/tests/test-foundation.sh"
+  cp "$root/tools/tests/test-tracked-credential-scan.sh" "$fixture/tools/tests/test-tracked-credential-scan.sh"
+  git -C "$fixture" add -- tools/tests/test-tracked-credential-scan.sh
   cp "$root/tools/tests/test-app-icon-workflow.sh" "$fixture/tools/tests/test-app-icon-workflow.sh"
   cp "$root/tools/install-app-icon.sh" "$fixture/tools/install-app-icon.sh"
   cp "$root/tools/validate-app-icon.sh" "$fixture/tools/validate-app-icon.sh"
@@ -865,6 +876,7 @@ if [[ "$mode" == "transform" ]]; then
   ios_3d_skill_hash_before="$(shasum "$fixture/.agents/skills/ios-3d-assets/SKILL.md" | awk '{print $1}')"
   app_bootstrap_test_hash_before="$(shasum "$fixture/tools/tests/test-app-bootstrap.sh" | awk '{print $1}')"
   foundation_test_hash_before="$(shasum "$fixture/tools/tests/test-foundation.sh" | awk '{print $1}')"
+  credential_scan_hash_before="$(shasum "$fixture/tools/tests/test-tracked-credential-scan.sh" | awk '{print $1}')"
   issue_contract_hash_before="$(shasum "$fixture/tools/lib/issue-contract.rb" | awk '{print $1}')"
   issue_contract_test_hash_before="$(shasum "$fixture/tools/tests/test-issue-contract.sh" | awk '{print $1}')"
   ui_direction_test_hash_before="$(shasum "$fixture/tools/tests/test-ui-direction-skill.sh" | awk '{print $1}')"
@@ -925,6 +937,24 @@ PY
   grep -Fqx 'ios-template/garden-notes/elevenlabs/production/api-key' "$fixture/docs/security.md"
   grep -Fqx '~/Library/Application Support/iOS-Template/secrets/${appSlug}/' "$fixture/docs/security.md"
   grep -Fqx '  "file": "GardenNotes/Settings/NotificationSettings.swift",' "$fixture/docs/agent-contracts/review-packet.md"
+  python3 - "$fixture" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+architecture = (root / "specs/architecture.md").read_text()
+verification = (root / "docs/verification.md").read_text()
+review_packet = (root / "docs/agent-contracts/review-packet.md").read_text()
+if architecture.count("TemplateApp") != 3:
+    raise SystemExit("transformed architecture did not retain exactly three template identifiers")
+if architecture.count("`TemplateApp`とIdentity bootstrap直後の派生アプリに") != 1:
+    raise SystemExit("transformed architecture lost the template AdMob boundary")
+for label, content in (("verification", verification), ("review packet", review_packet)):
+    if content.count("fixture成功をGardenNotes統合") != 1:
+        raise SystemExit(f"{label} did not transform the fixture identity exactly once")
+    if "fixture成功をTemplateApp統合" in content:
+        raise SystemExit(f"{label} retained a source fixture identity")
+PY
   grep -Fqx '# Garden Notes agent contract' "$fixture/AGENTS.md" || {
     echo 'AGENTS heading was not transformed with the display name' >&2
     exit 1
@@ -939,6 +969,10 @@ PY
   }
   [[ "$foundation_test_hash_before" == "$(shasum "$fixture/tools/tests/test-foundation.sh" | awk '{print $1}')" && -x "$fixture/tools/tests/test-foundation.sh" ]] || {
     echo 'foundation policy test changed or lost its executable bit during transform' >&2
+    exit 1
+  }
+  [[ "$credential_scan_hash_before" == "$(shasum "$fixture/tools/tests/test-tracked-credential-scan.sh" | awk '{print $1}')" && -x "$fixture/tools/tests/test-tracked-credential-scan.sh" ]] || {
+    echo 'credential scan changed or lost its executable bit during transform' >&2
     exit 1
   }
   [[ "$issue_contract_hash_before" == "$(shasum "$fixture/tools/lib/issue-contract.rb" | awk '{print $1}')" ]] || {
