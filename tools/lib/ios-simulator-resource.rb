@@ -73,16 +73,12 @@ module IOSTemplate
           end
 
           active = state.fetch("allocations").select { |record| ACTIVE_STATUSES.include?(record["status"]) }
-          unmanaged = unmanaged_live_devices(active)
-          unless unmanaged.empty?
-            denial = "unmanaged iOS-Template Simulator use must be resolved before creating another device"
-            next
-          end
           if active.any? { |record| record["sessionId"] == identity.fetch("sessionId") }
             denial = "same session already owns a Simulator allocation"
             next
           end
-          if active.length >= MAX_ALLOCATIONS
+          running_unmanaged = unmanaged_live_devices(active).reject { |device| device["state"] == "Shutdown" }
+          if active.length + running_unmanaged.length >= MAX_ALLOCATIONS
             denial = "Mac-wide iPhone/iPad Simulator allocation limit (#{MAX_ALLOCATIONS}) is in use"
             next
           end
@@ -111,7 +107,7 @@ module IOSTemplate
             "cleanup" => nil,
             "events" => []
           )
-          add_event(record, "reserved", "capacityCount" => active.length + 1)
+          add_event(record, "reserved", "capacityCount" => active.length + running_unmanaged.length + 1)
           state.fetch("allocations") << record
           reservation = snapshot_record(record)
         end
@@ -677,6 +673,7 @@ module IOSTemplate
     def unmanaged_inventory_record(device)
       {
         "udid" => device["udid"], "name" => device["name"], "state" => device["state"],
+        "countsTowardCapacity" => device["state"] != "Shutdown",
         "runtimeIdentifier" => device["runtimeIdentifier"],
         "deviceTypeIdentifier" => device["deviceTypeIdentifier"],
         "dataPath" => device["dataPath"], "dataBytes" => nil,

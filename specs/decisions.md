@@ -547,3 +547,13 @@
 - Decision: [構成 §7.2](architecture.md#72-app-store-connect-api-adapter)に従い、readback済みbuildのWhat to Test（beta build localization）の設定とreadbackを`appstore.distribute_testflight`の責務へ含める。新しいoperationは作らない。
 - Consequence: live操作は従来どおり`release` stage、`full` scope、`strict`、宣言済みoperationとExecutor、必要なユーザー承認を要する。本文は非秘密の公開テキストとして単一argvで渡し、journalにはdigestだけを残す。4000文字はテンプレート側の上限であり、Appleの上限とは主張しない。D-059のConsequenceにある#131のoperation modelとproduction preflight／premergeは、それぞれ#145と#146で実現済みである。
 - Related Issue: #135、#166
+
+## D-062: 停止中の管理外SimulatorをMac共通枠から除外する
+
+- Date: 2026-09-27
+- Status: 確定
+- Supersedes: D-040の管理外の`iOS-Template-` deviceがあると新規作成を一律に止める運用と、§1.5.6の管理外Shutdown deviceの数え方。D-040の管理外deviceを削除しない保護、D-038の最大4台・sessionごと1台・使用後削除は維持する。
+- Context: 派生アプリの旧runnerが残す停止中のdeviceのために、2026-09-22、09-25、09-26、09-27にnative検証が止まった。管理外deviceがShutdownでも一律の拒否が続いていた。
+- Decision: active durable recordを持たない管理外の`iOS-Template-` deviceは保護対象のまま削除・停止・変更しない。状態がexactに`Shutdown`ならMac共通の4枠へ数えず、新規作成を止めない。停止中はCPU／memoryを使わず、disk使用量は作成前の空き容量確認が扱う。`Shutdown`以外の状態は、管理下の予約、active、削除待ち、cleanup-failedと合算して4枠へ数え、到達時は既存の上限messageで新規作成を拒否する。
+- Consequence: 旧runnerはこのallocatorとは無関係に自分のdeviceを起動できるため、起動中の管理外deviceだけを数えるのが強制できる上限である。各派生アプリが共通lifecycleを採用するまでは、一時的な4枠超過があり得る。session 1台、作成前の空き容量確認、所有identityに基づく回収規則は維持する。
+- Related Issue: #178
