@@ -678,9 +678,16 @@ module IOSTemplate
         reject("contract verification cases differ from scope") unless configured.is_a?(Array) &&
           configured.all? { |entry| entry.is_a?(Hash) } && configured.map { |entry| entry["id"] } == expected
       end
-      [verify["cases"], verify.dig("visualEvaluation", "cases")].each do |cases|
+      cases = verify["cases"]
+      reject("verification or visual cases differ from sealed scope") unless cases.is_a?(Array) &&
+        cases.all? { |entry| entry.is_a?(Hash) } && cases.map { |entry| entry["id"] } == expected
+      if DeliveryStage.visual_required?(contract)
+        cases = verify.dig("visualEvaluation", "cases")
         reject("verification or visual cases differ from sealed scope") unless cases.is_a?(Array) &&
           cases.all? { |entry| entry.is_a?(Hash) } && cases.map { |entry| entry["id"] } == expected
+      else
+        reject("verification or visual cases differ from sealed scope") unless
+          verify["visualEvaluation"] == {"status" => "not-applicable", "findings" => []}
       end
     rescue ArgumentError, TypeError => error
       reject(error.message)
