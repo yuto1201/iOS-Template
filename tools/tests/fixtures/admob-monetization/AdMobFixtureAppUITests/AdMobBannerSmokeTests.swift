@@ -105,8 +105,25 @@ final class AdMobBannerSmokeTests: XCTestCase {
             "The fixture must finish the failed load before collapse is asserted."
         )
         XCTAssertFalse(failedCreative.exists)
-        XCTAssertFalse(failedHost.exists)
-        XCTAssertTrue(failedApp.scrollViews["admob.fixture.scroll"].exists)
+        if failedHost.exists {
+            XCTAssertFalse(failedHost.isHittable, "A failed banner must not be hittable.")
+            XCTAssertLessThanOrEqual(
+                failedHost.frame.height,
+                1,
+                "A failed banner must not reserve visible space."
+            )
+        }
+
+        let failedScroll = failedApp.scrollViews["admob.fixture.scroll"]
+        XCTAssertTrue(failedScroll.exists)
+        failedScroll.swipeUp()
+        let failedContentEnd = failedApp.staticTexts["admob.fixture.content-end"]
+        XCTAssertTrue(failedContentEnd.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(
+            failedContentEnd.frame.maxY,
+            failedApp.tabBars.firstMatch.frame.minY + 1,
+            "The collapsed banner must leave the scroll end reachable above the TabView bar."
+        )
     }
 
     private func launchFixture(
