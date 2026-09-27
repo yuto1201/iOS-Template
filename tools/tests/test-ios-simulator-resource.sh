@@ -16,7 +16,7 @@ head_sha="$(git rev-parse HEAD)"
 owner_pid="$$"
 trap 'rm -rf "$scratch"' EXIT
 
-printf '%s\n' '{"sequence":0,"mode":"","devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[]}}' >"$simctl_state"
+printf '%s\n' '{"sequence":0,"mode":"","calls":[],"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[]}}' >"$simctl_state"
 cat >"$fake_xcrun" <<'RUBY'
 #!/usr/bin/ruby --disable-gems
 require "fileutils"
@@ -29,6 +29,10 @@ begin
   state = JSON.parse(File.read(path))
   abort "expected simctl" unless ARGV.shift == "simctl"
   command = ARGV.shift
+  unless command == "list"
+    state.fetch("calls") << {"command" => command, "args" => ARGV.dup}
+    File.write(path, JSON.generate(state))
+  end
   runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
   devices = state.fetch("devices").fetch(runtime)
 
@@ -293,37 +297,101 @@ fi
 grep -Fq 'insufficient free space' "$scratch/space.err"
 [[ "$(device_count)" == 0 ]]
 
-ruby -rjson - "$simctl_state" <<'RUBY'
-path = ARGV.fetch(0)
-state = JSON.parse(File.read(path))
+set_unmanaged() {
+  ruby -rjson -rfileutils - "$simctl_state" "$@" <<'RUBY'
+path, *states = ARGV
+fixture = JSON.parse(File.read(path))
 runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
-udid = "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
-data_path = File.join(File.dirname(path), "data", udid)
-Dir.mkdir(File.join(File.dirname(path), "data")) unless Dir.exist?(File.join(File.dirname(path), "data"))
-Dir.mkdir(data_path)
-state.fetch("devices").fetch(runtime) << {
-  "udid" => udid, "name" => "iOS-Template-unmanaged-device", "state" => "Shutdown",
-  "isAvailable" => true, "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
-  "dataPath" => data_path
+devices = fixture.fetch("devices").fetch(runtime)
+devices.delete_if do |device|
+  next false unless device.fetch("name").start_with?("iOS-Template-unmanaged-")
+  FileUtils.rm_rf(device.fetch("dataPath"))
+  true
+end
+states.each_with_index do |value, index|
+  udid = format("FFFFFFFF-FFFF-FFFF-FFFF-%012X", index + 1)
+  data_path = File.join(File.dirname(path), "data", udid)
+  FileUtils.mkdir_p(data_path)
+  device = {
+    "udid" => udid, "name" => "iOS-Template-unmanaged-#{index + 1}",
+    "isAvailable" => true, "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+    "dataPath" => data_path
+  }
+  device["state"] = value unless value == "MISSING"
+  devices << device
+end
+File.write(path, JSON.generate(fixture))
+RUBY
+  jq '[.devices[][] | select(.name | startswith("iOS-Template-unmanaged-"))] | sort_by(.udid)' "$simctl_state" >"$scratch/unmanaged-snapshot.json"
 }
-File.write(path, JSON.generate(state))
+
+assert_unmanaged_unchanged() {
+  ruby -rjson - "$simctl_state" "$scratch/unmanaged-snapshot.json" <<'RUBY'
+state_path, snapshot_path = ARGV
+state = JSON.parse(File.read(state_path))
+expected = JSON.parse(File.read(snapshot_path))
+actual = state.fetch("devices").values.flatten.select { |device| device.fetch("name").start_with?("iOS-Template-unmanaged-") }.sort_by { |device| device.fetch("udid") }
+abort "unmanaged device identity, state, or data path changed" unless actual == expected
+ids = expected.map { |device| device.fetch("udid") }
+abort "unmanaged data path disappeared" unless expected.all? { |device| Dir.exist?(device.fetch("dataPath")) }
+abort "simctl operation targeted an unmanaged device" if state.fetch("calls").any? { |call| (call.fetch("args") & ids).any? }
 RUBY
+}
+
+set_unmanaged Shutdown
 inventory="$("${manager[@]}" inventory "${common[@]}")"
-[[ "$(jq -r '.protectedUnmanagedDevices | length' <<<"$inventory")" == 1 && "$(device_count)" == 1 ]]
-if allocate protected-session protected-attempt iphone-ja >/dev/null 2>"$scratch/protected.err"; then
-  echo "allocation ignored an unmanaged protected Simulator" >&2; exit 1
+[[ "$(jq -r '.protectedUnmanagedDevices | length' <<<"$inventory")" == 1 ]]
+[[ "$(jq -r '.protectedUnmanagedDevices[0].countsTowardCapacity' <<<"$inventory")" == false ]]
+idle_allocation="$(allocate idle-session idle-attempt iphone-ja)"
+IFS=$'\t' read -r idle_id _ _ <<<"$idle_allocation"
+assert_unmanaged_unchanged
+release_allocation idle-session "$idle_id" >/dev/null
+"${manager[@]}" recover "${common[@]}" >/dev/null
+assert_unmanaged_unchanged
+[[ "$(active_count)" == 0 && "$(device_count)" == 1 ]]
+
+set_unmanaged Booted Booted Booted Booted
+inventory="$("${manager[@]}" inventory "${common[@]}")"
+[[ "$(jq -r '[.protectedUnmanagedDevices[].countsTowardCapacity] | all' <<<"$inventory")" == true ]]
+if allocate four-running four-running iphone-ja >/dev/null 2>"$scratch/four-running.err"; then
+  echo "four running unmanaged devices allowed an allocation" >&2; exit 1
 fi
-grep -Fq 'unmanaged iOS-Template Simulator' "$scratch/protected.err"
-[[ "$(device_count)" == 1 ]] || { echo "inventory or allocation deleted a protected Simulator" >&2; exit 1; }
-ruby -rjson -rfileutils - "$simctl_state" <<'RUBY'
-path = ARGV.fetch(0)
-state = JSON.parse(File.read(path))
-devices = state.fetch("devices").values.flatten
-device = devices.find { |entry| entry["udid"] == "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF" } or abort "fixture device missing"
-FileUtils.rm_rf(device.fetch("dataPath"))
-state.fetch("devices").each_value { |entries| entries.delete_if { |entry| entry["udid"] == device["udid"] } }
-File.write(path, JSON.generate(state))
-RUBY
+grep -Fq 'Mac-wide iPhone/iPad Simulator allocation limit (4) is in use' "$scratch/four-running.err"
+assert_unmanaged_unchanged
+
+set_unmanaged Booted Booted Booted
+three_allocation="$(allocate three-running three-running iphone-ja)"
+IFS=$'\t' read -r three_id _ _ <<<"$three_allocation"
+if allocate fifth-with-three fifth-with-three iphone-ja >/dev/null 2>"$scratch/fifth-with-three.err"; then
+  echo "three running unmanaged devices allowed a second allocation" >&2; exit 1
+fi
+grep -Fq 'Mac-wide iPhone/iPad Simulator allocation limit (4) is in use' "$scratch/fifth-with-three.err"
+release_allocation three-running "$three_id" >/dev/null
+"${manager[@]}" recover "${common[@]}" >/dev/null
+assert_unmanaged_unchanged
+
+for transitional in Booting 'Shutting Down' Unknown MISSING; do
+  set_unmanaged "$transitional" Booted Booted Booted
+  inventory="$("${manager[@]}" inventory "${common[@]}")"
+  [[ "$(jq -r '[.protectedUnmanagedDevices[].countsTowardCapacity] | all' <<<"$inventory")" == true ]]
+  if allocate transitional-session "transitional-${transitional// /-}" iphone-ja >/dev/null 2>"$scratch/transitional.err"; then
+    echo "non-Shutdown unmanaged device did not count toward capacity" >&2; exit 1
+  fi
+  grep -Fq 'Mac-wide iPhone/iPad Simulator allocation limit (4) is in use' "$scratch/transitional.err"
+  assert_unmanaged_unchanged
+done
+
+set_unmanaged Booted Booted Booted
+managed_allocation="$(allocate mixed-session mixed-attempt iphone-ja)"
+IFS=$'\t' read -r managed_id _ _ <<<"$managed_allocation"
+if allocate mixed-second mixed-second iphone-ja >/dev/null 2>"$scratch/mixed.err"; then
+  echo "managed and unmanaged devices exceeded capacity" >&2; exit 1
+fi
+grep -Fq 'Mac-wide iPhone/iPad Simulator allocation limit (4) is in use' "$scratch/mixed.err"
+release_allocation mixed-session "$managed_id" >/dev/null
+"${manager[@]}" recover "${common[@]}" >/dev/null
+assert_unmanaged_unchanged
+set_unmanaged
 
 tampered_root="$scratch/tampered-state"
 mkdir -p "$tampered_root"
