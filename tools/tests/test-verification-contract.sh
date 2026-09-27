@@ -204,6 +204,52 @@ class VerificationContractTest < Minitest::Test
     assert_raises(IOSTemplate::ReviewContract::ValidationError) { IOSTemplate::ReviewContract.validate_evidence_scope!(contract, proof) }
   end
 
+  def test_review_accepts_only_exact_nonvisual_evaluation_for_shape_application_scope
+    contract = parse(scoped_body)
+    contract["deliveryStage"] = {"name"=>"shape", "reason"=>"Primary flow first.", "timeBudgetMinutes"=>120}
+    contract["verification"]["acceptanceMappings"][1]["checks"].delete("visual:iphone-ja")
+    proof = {"changeClassification"=>"application-code", "cases"=>[{"id"=>"iphone-ja"}],
+             "visualEvaluation"=>{"status"=>"not-applicable", "findings"=>[]}}
+
+    IOSTemplate::ReviewContract.validate_evidence_scope!(contract, proof)
+
+    [
+      ->(bad) { bad["cases"] << {"id"=>"ipad-ja"} },
+      ->(bad) { bad["cases"].clear },
+      ->(bad) { bad["visualEvaluation"]["status"] = "passed" },
+      ->(bad) { bad["visualEvaluation"]["cases"] = [{"id"=>"iphone-ja"}] },
+      ->(bad) { bad["visualEvaluation"]["packet"] = {} },
+      ->(bad) { bad.delete("visualEvaluation") }
+    ].each do |mutate|
+      bad = Marshal.load(Marshal.dump(proof))
+      mutate.call(bad)
+      assert_raises(IOSTemplate::ReviewContract::ValidationError) do
+        IOSTemplate::ReviewContract.validate_evidence_scope!(contract, bad)
+      end
+    end
+  end
+
+  def test_review_keeps_visual_case_scope_for_release_application_evidence
+    contract = parse(scoped_body("full", "release", "strict"))
+    contract["deliveryStage"] = {"name"=>"release", "reason"=>"Release proof.", "timeBudgetMinutes"=>120}
+    ids = %w[iphone-en iphone-ja ipad-en ipad-ja]
+    cases = ids.map { |id| {"id"=>id} }
+    proof = {"changeClassification"=>"application-code", "cases"=>cases,
+             "visualEvaluation"=>{"status"=>"passed", "cases"=>cases}}
+
+    IOSTemplate::ReviewContract.validate_evidence_scope!(contract, proof)
+
+    bad = Marshal.load(Marshal.dump(proof))
+    bad["visualEvaluation"]["cases"].pop
+    assert_raises(IOSTemplate::ReviewContract::ValidationError) do
+      IOSTemplate::ReviewContract.validate_evidence_scope!(contract, bad)
+    end
+    proof["visualEvaluation"] = {"status"=>"not-applicable", "findings"=>[]}
+    assert_raises(IOSTemplate::ReviewContract::ValidationError) do
+      IOSTemplate::ReviewContract.validate_evidence_scope!(contract, proof)
+    end
+  end
+
   def test_issue_form_examples_are_consumable_without_rewriting_the_schema
     %w[feature regression release].each do |type|
       form = YAML.load_file(File.join(REPO_ROOT, ".github/ISSUE_TEMPLATE/#{type}.yml"))
