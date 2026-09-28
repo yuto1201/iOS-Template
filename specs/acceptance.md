@@ -165,18 +165,18 @@ authorityは次の三つだけを許可する。`review-finding`は同じIssue�
 
 | Case | Device | Locale | Language |
 | --- | --- | --- | --- |
-| `iphone-en` | 最新の利用可能なiPhone Pro。Pro Maxを除く | `en_US` | `en` |
+| `iphone-en` | 専用iPhone（Device Type iPhone 17、Runtime iOS 27.0） | `en_US` | `en` |
 | `iphone-ja` | 同上 | `ja_JP` | `ja` |
-| `ipad-en` | 最新の利用可能なiPad Air | `en_US` | `en` |
+| `ipad-en` | 専用iPad（Device Type iPad (A16)、Runtime iOS 27.0） | `en_US` | `en` |
 | `ipad-ja` | 同上 | `ja_JP` | `ja` |
 
-`iphone-ja`は1行だけ、`targeted`は表の非空canonical部分集合、`full`は4行すべてを固定順で使う。「最新」はバッチ開始時にインストール済みXcodeから解決して固定し、条件に合うdeviceがなければ`blocked:environment`とする。Claim済みscopeを暗黙に縮小せず、別scope／別Headのmatrixや証拠を流用しない。
+`iphone-ja`は1行だけ、`targeted`は表の非空canonical部分集合、`full`は4行すべてを固定順で使う。専用deviceはTemplateでは`iOS-Template iPhone 17`と`iOS-Template iPad (A16)`、派生アプリでは表示名を前置した同じDevice Type／Runtimeの2台とする（D-063）。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台でなければ`blocked:environment`とする。Claim済みscopeを暗黙に縮小せず、別scope／別Headのmatrixや証拠を流用しない。
 
-AI検証用deviceは必要時作成・最終使用後削除とし、同じMac全体でiPhone／iPad合計最大4台、一つのsessionで原則1台とする。予約、作成済み、Shutdown、削除待ちを数え、作成前にMac共通枠とsession枠を原子的に取得する。満杯時は有限・取消可能に待機し、同一sessionの4条件は作成、検証、証拠保存、削除確認、枠返却を一件ずつ行う。
+AI検証とApp Store撮影は専用2台だけを使い、deviceを作成、clone、rename、削除しない。専用device以外を起動、erase、install、test対象にしない。専用deviceの排他はMac共通resource managerのleaseで取り、起動中のAI検証用deviceは同じMac全体で最大4台、一つのsessionで1台とする。同じdeviceを使うcaseは一件ずつ実行し、満杯または使用中なら有限・取消可能に待機する。
 
-成功、失敗、timeout、cancel、部分作成失敗、強制終了後の孤児をcleanup対象とする。証拠をdevice外へ保存し、exact UDIDとowner／lease／非活動状態を確認してからdeviceとdataを削除し、一覧とdata残留の確認後だけ枠を返す。停止／erase、名前一致、Shutdownだけを削除完了や所有根拠にしない。手動device、他repository／session、使用中、不明なdevice、Runtime、Xcode、共通cache、ユーザーDerivedData、canonical evidenceを保護する。
+各caseの前に専用deviceを停止してeraseし、caseのlocale／languageを設定してから起動する。証拠をdevice外へ保存した後に停止し、成功、失敗、timeout、cancelのいずれでも停止を確認してからleaseを返す。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`で実行し、clone deviceを作らない。手動device、他repository／session、使用中、不明なdevice、Runtime、Xcode、共通cache、ユーザーDerivedData、canonical evidenceを保護する。
 
-容量／memoryが不足すれば4台未満でも新規作成と長時間反復を止める。#93以後のschema v2 matrixはMac共通lease、session上限、孤児回収、容量preflightを使い、実行UDIDと削除receiptをversioned artifactへ固定する。#89は#93への移植元履歴として保持する。旧schema v1の固定UDID matrixと既存証拠はimmutable legacyとして受理し、遡及変換しない。検証／App Store skillsと既存Issue移行は#88の共通consumer境界を使う。
+容量／memoryが不足すれば新規caseと長時間反復を止める。専用device契約のtoolが実装されるまで、canonical native検証とApp Store撮影を実行しない。実装を含まないBaseで封印済みのcontractはnative検証を行えず、native証拠が必要ならsuccessor Issueへ移す。旧schema v1の固定UDID matrix、#93以後のschema v2 matrix、既存証拠はimmutable legacyとして受理し、遡及変換しない。
 
 ## 5. 常設品質ゲート
 

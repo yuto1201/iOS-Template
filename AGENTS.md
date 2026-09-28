@@ -60,9 +60,11 @@ workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guid
 
 UI方向比較のHTMLは選択を助ける作業artifactであり、仕様の正本、pixel仕様、Build／Test／Simulator／画像評価の証拠にはしません。実装は選択した情報階層、主要導線、状態とaccessibility意図をnative SwiftUIへ翻訳します。
 
-- 最新 iPhone Pro（Pro Max を除く）、英語
-- 最新 iPhone Pro（Pro Max を除く）、日本語
-- 最新 iPad Air、英語
-- 最新 iPad Air、日本語
+- 専用 iPhone（iOS 27.0 の iPhone 17）、英語
+- 専用 iPhone（iOS 27.0 の iPhone 17）、日本語
+- 専用 iPad（iOS 27.0 の iPad (A16)）、英語
+- 専用 iPad（iOS 27.0 の iPad (A16)）、日本語
+
+AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17`と`iOS-Template iPad (A16)`、派生アプリは表示名を前置した同じ機種とする。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063。
 
 ユーザーの実機確認は AI の完了条件に含めません。詳細は `docs/verification.md` を参照してください。
