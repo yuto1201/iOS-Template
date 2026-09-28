@@ -179,7 +179,13 @@ until status
 end
 unless status
   signal_group.call(final_signal)
-  _, status = Process.waitpid2(child) if final_signal == "KILL"
+  # The leader may not terminate promptly even after KILL; never wait for it without a deadline.
+  final_deadline = monotonic_now + FINAL_SIGNAL_WAIT_SECONDS
+  until status || monotonic_now >= final_deadline
+    waited = Process.waitpid2(child, Process::WNOHANG)
+    status = waited.last if waited
+    sleep 0.05 unless status
+  end
 end
 # The leader may be gone while members that ignore the delivered signal remain; reclaim them
 # with TERM, grace, and the final signal before reporting.

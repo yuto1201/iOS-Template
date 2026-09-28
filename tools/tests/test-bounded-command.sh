@@ -79,6 +79,12 @@ cat >"$workspace/hang-stubborn.sh" <<'SH'
 printf '%s\n' "$!" >"${BOUNDED_CHILD_PID_FILE:?}"
 /bin/sleep 30
 SH
+cat >"$workspace/stubborn-leader.sh" <<'SH'
+#!/usr/bin/env bash
+trap '' TERM
+printf '%s\n' "$$" >"${BOUNDED_CHILD_PID_FILE:?}"
+exec /bin/sleep 30
+SH
 chmod +x "$workspace"/*.sh
 
 # Normal success and normal failure keep the leader status and record the measured elapsed time.
@@ -142,6 +148,34 @@ kill -0 "$survivor_pid" >/dev/null 2>&1 || fail 'the survivor fixture did not su
 kill -KILL "$survivor_pid" >/dev/null 2>&1 || true
 assert_gone "$survivor_pid" 'survivor fixture cleanup'
 survivor_pid=''
+# A TERM-ignoring leader that outlives grace is killed and the timeout is still reported.
+BOUNDED_CHILD_PID_FILE="$workspace/stubborn-leader.pid" \
+  run_bounded ruby "$bounded" --stage stubborn-leader --timeout-seconds 1 --grace-seconds 1 -- "$workspace/stubborn-leader.sh"
+[[ "$status" -eq 124 ]] || fail "TERM-ignoring leader returned $status"
+assert_gone "$(<"$workspace/stubborn-leader.pid")" 'TERM-ignoring leader after KILL'
+
+# A leader that is still unreaped after the final signal ends the wait at its deadline and fails
+# with the unreclaimed status. The hook only weakens the signal; the waiting logic is unchanged.
+started=$(date +%s)
+BOUNDED_CHILD_PID_FILE="$workspace/unreaped-leader.pid" IOS_TEMPLATE_BOUNDED_COMMAND_TEST_FINAL_SIGNAL=0 \
+  run_bounded ruby "$bounded" --stage unreaped-leader --timeout-seconds 1 --grace-seconds 1 -- "$workspace/stubborn-leader.sh"
+elapsed=$(( $(date +%s) - started ))
+survivor_pid=$(<"$workspace/unreaped-leader.pid")
+[[ "$status" -eq 123 ]] || fail "unreaped leader returned $status"
+[[ "$elapsed" -lt 12 ]] || fail "the post-signal leader wait was not bounded: ${elapsed}s"
+rg -q 'could not reclaim process-group members: stage=unreaped-leader' "$workspace/stderr" || fail 'unreaped leader diagnostic lacks the stage'
+rg -q 'residualMembers=1' "$workspace/stderr" || fail 'unreaped leader diagnostic lacks the surviving count'
+rg -q 'timeoutSeconds=1' "$workspace/stderr" || fail 'unreaped leader diagnostic lacks the timeout'
+kill -0 "$survivor_pid" >/dev/null 2>&1 || fail 'the unreaped leader fixture did not survive the weakened final signal'
+kill -KILL "$survivor_pid" >/dev/null 2>&1 || true
+assert_gone "$survivor_pid" 'unreaped leader fixture cleanup'
+survivor_pid=''
+
+# No leader wait may block without WNOHANG, so every path reaches its deadline and diagnostic.
+if rg -n 'waitpid2?\(child\)' "$bounded"; then
+  fail 'bounded-command.rb waits for the leader without a deadline'
+fi
+
 run_bounded env IOS_TEMPLATE_BOUNDED_COMMAND_TEST_FINAL_SIGNAL=HUP ruby "$bounded" --stage bad-hook --timeout-seconds 5 -- /usr/bin/true
 [[ "$status" -eq 2 ]] || fail "an unknown final-signal hook value returned $status"
 
