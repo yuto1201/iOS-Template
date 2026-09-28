@@ -192,6 +192,7 @@
       ],
       "prefixes": [
         "tools/lib/ios-",
+        "tools/tests/fixtures/simctl/",
         "tools/tests/lib/ios-runner-"
       ]
     },
