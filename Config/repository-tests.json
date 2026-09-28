@@ -338,9 +338,12 @@
         "tools/claim-issue.sh",
         "tools/cleanup-issue.sh",
         "tools/issue-state.sh",
+        "tools/lib/bounded-command.rb",
+        "tools/lib/bounded-command.sh",
         "tools/lib/issue-contract.rb",
         "tools/lib/workflow-json.rb",
         "tools/lib/workflow.sh",
+        "tools/lib/xcode.sh",
         "tools/resume-issue.sh",
         "tools/tests/fixtures/gh"
       ],
