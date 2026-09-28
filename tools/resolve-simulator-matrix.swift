@@ -20,6 +20,18 @@ struct DeviceTypeList: Codable {
     let devicetypes: [DeviceType]
 }
 
+struct DedicatedDevice: Codable {
+    let family: String
+    let name: String
+    let deviceTypeIdentifier: String
+    let runtimeIdentifier: String
+}
+
+struct DedicatedConfig: Codable {
+    let schemaVersion: Int
+    let devices: [DedicatedDevice]
+}
+
 struct RuntimeReference: Codable, Equatable {
     let identifier: String
     let version: String
@@ -49,6 +61,7 @@ struct Matrix: Codable {
 
 struct Arguments {
     let runtimesPath: String
+    let dedicatedConfigPath: String
     let deviceTypesPath: String
     let batchID: String
     let resolvedAt: String
@@ -59,31 +72,31 @@ struct Arguments {
 enum ResolverError: Error {
     case usage
     case unreadableInput(String)
-    case noAvailableIOSRuntime
+    case invalidDedicatedConfig(String)
+    case unavailableRuntime(String)
     case invalidRuntimeVersion(String)
-    case noIPhonePro([String])
-    case noIPadAir([String])
+    case unavailableDeviceType(String)
 
     var message: String {
         switch self {
         case .usage:
-            return "usage: resolve-simulator-matrix.swift --runtimes <path> --device-types <path> --batch-id <id> [--resolved-at <ISO-8601 timestamp>] [--scope iphone-ja|targeted|full] [--case-ids id,id]"
+            return "usage: resolve-simulator-matrix.swift --runtimes <path> --device-types <path> --dedicated-config <path> --batch-id <id> [--resolved-at <ISO-8601 timestamp>] [--scope iphone-ja|targeted|full] [--case-ids id,id]"
         case .unreadableInput(let path):
-            return "blocked:environment: unable to decode simctl JSON input: \(path)"
-        case .noAvailableIOSRuntime:
-            return "blocked:environment: no available iOS Runtime"
+            return "blocked:environment: unable to decode JSON input: \(path)"
+        case .invalidDedicatedConfig(let reason):
+            return "blocked:environment: invalid dedicated Simulator declaration: \(reason)"
+        case .unavailableRuntime(let identifier):
+            return "blocked:environment: declared Runtime is not installed and available: \(identifier)"
         case .invalidRuntimeVersion(let version):
-            return "blocked:environment: invalid available iOS Runtime version: \(version)"
-        case .noIPhonePro(let candidates):
-            return "blocked:environment: no matching iPhone Pro Device Type; candidates: \(candidates.joined(separator: ", "))"
-        case .noIPadAir(let candidates):
-            return "blocked:environment: no matching iPad Air Device Type; candidates: \(candidates.joined(separator: ", "))"
+            return "blocked:environment: invalid declared Runtime version: \(version)"
+        case .unavailableDeviceType(let identifier):
+            return "blocked:environment: declared Device Type is not installed: \(identifier)"
         }
     }
 }
 
 func parseArguments(_ arguments: [String]) throws -> Arguments {
-    guard arguments.count >= 6, arguments.count <= 12, arguments.count.isMultiple(of: 2) else {
+    guard arguments.count >= 8, arguments.count <= 14, arguments.count.isMultiple(of: 2) else {
         throw ResolverError.usage
     }
 
@@ -92,7 +105,7 @@ func parseArguments(_ arguments: [String]) throws -> Arguments {
     while index < arguments.count {
         let flag = arguments[index]
         let value = arguments[index + 1]
-        guard ["--runtimes", "--device-types", "--batch-id", "--resolved-at", "--scope", "--case-ids"].contains(flag),
+        guard ["--runtimes", "--device-types", "--dedicated-config", "--batch-id", "--resolved-at", "--scope", "--case-ids"].contains(flag),
               values[flag] == nil,
               !value.isEmpty else {
             throw ResolverError.usage
@@ -103,6 +116,7 @@ func parseArguments(_ arguments: [String]) throws -> Arguments {
 
     guard let runtimesPath = values["--runtimes"],
           let deviceTypesPath = values["--device-types"],
+          let dedicatedConfigPath = values["--dedicated-config"],
           let batchID = values["--batch-id"] else {
         throw ResolverError.usage
     }
@@ -124,6 +138,7 @@ func parseArguments(_ arguments: [String]) throws -> Arguments {
     }
     return Arguments(
         runtimesPath: runtimesPath,
+        dedicatedConfigPath: dedicatedConfigPath,
         deviceTypesPath: deviceTypesPath,
         batchID: batchID,
         resolvedAt: resolvedAt,
@@ -155,126 +170,45 @@ func numericDotVersionComponents(in value: String) -> [Int]? {
     return parsed.count == components.count ? parsed : nil
 }
 
-func compareSemanticVersions(_ left: [Int], _ right: [Int]) -> ComparisonResult {
-    let count = max(left.count, right.count)
-    for index in 0..<count {
-        let leftComponent = index < left.count ? left[index] : 0
-        let rightComponent = index < right.count ? right[index] : 0
-        if leftComponent != rightComponent {
-            return leftComponent < rightComponent ? .orderedAscending : .orderedDescending
+// Reads the tracked declaration of the two dedicated Simulators (D-063).
+func dedicatedDevices(from path: String) throws -> (iPhone: DedicatedDevice, iPad: DedicatedDevice) {
+    let config = try decode(DedicatedConfig.self, from: path)
+    guard config.schemaVersion == 1 else { throw ResolverError.invalidDedicatedConfig("schemaVersion must be 1") }
+    guard config.devices.map(\.family) == ["iphone", "ipad"] else {
+        throw ResolverError.invalidDedicatedConfig("exactly one iphone and one ipad device must be declared in that order")
+    }
+    let identifierPattern = #"^com\.apple\.CoreSimulator\.(SimRuntime|SimDeviceType)\.[A-Za-z0-9_.-]+$"#
+    for device in config.devices {
+        guard !device.name.isEmpty, !device.name.hasPrefix("iOS-Template-"),
+              device.deviceTypeIdentifier.range(of: identifierPattern, options: .regularExpression) != nil,
+              device.runtimeIdentifier.range(of: identifierPattern, options: .regularExpression) != nil else {
+            throw ResolverError.invalidDedicatedConfig("device \(device.family) has an invalid name or identifier")
         }
     }
-    return .orderedSame
+    guard config.devices[0].name != config.devices[1].name else {
+        throw ResolverError.invalidDedicatedConfig("device names must be unique")
+    }
+    guard config.devices[0].runtimeIdentifier == config.devices[1].runtimeIdentifier else {
+        throw ResolverError.invalidDedicatedConfig("both devices must use the same Runtime")
+    }
+    return (config.devices[0], config.devices[1])
 }
 
-func newestRuntime(from runtimes: [Runtime]) throws -> Runtime {
-    let iOSRuntimePrefix = "com.apple.CoreSimulator.SimRuntime.iOS-"
-    let available = runtimes.filter { $0.isAvailable && $0.identifier.hasPrefix(iOSRuntimePrefix) }
-    guard !available.isEmpty else {
-        throw ResolverError.noAvailableIOSRuntime
+func declaredRuntime(_ identifier: String, from runtimes: [Runtime]) throws -> Runtime {
+    guard let runtime = runtimes.first(where: { $0.identifier == identifier && $0.isAvailable }) else {
+        throw ResolverError.unavailableRuntime(identifier)
     }
-    for runtime in available where numericDotVersionComponents(in: runtime.version) == nil {
+    guard numericDotVersionComponents(in: runtime.version) != nil else {
         throw ResolverError.invalidRuntimeVersion(runtime.version)
     }
-    guard let selected = available.sorted(by: { left, right in
-        let ordering = compareSemanticVersions(
-            numericDotVersionComponents(in: left.version)!,
-            numericDotVersionComponents(in: right.version)!
-        )
-        if ordering == .orderedSame {
-            return left.identifier < right.identifier
-        }
-        return ordering == .orderedDescending
-    }).first else {
-        throw ResolverError.noAvailableIOSRuntime
-    }
-    return selected
+    return runtime
 }
 
-func iPhoneProRank(_ deviceType: DeviceType) -> [Int]? {
-    let pattern = #"^iPhone\s+(.+)\s+Pro$"#
-    guard !deviceType.name.contains("Pro Max"),
-          let expression = try? NSRegularExpression(pattern: pattern),
-          let match = expression.firstMatch(
-              in: deviceType.name,
-              range: NSRange(deviceType.name.startIndex..<deviceType.name.endIndex, in: deviceType.name)
-          ),
-          let range = Range(match.range(at: 1), in: deviceType.name) else {
-        return nil
+func declaredDeviceType(_ identifier: String, from deviceTypes: [DeviceType]) throws -> DeviceType {
+    guard let deviceType = deviceTypes.first(where: { $0.identifier == identifier }) else {
+        throw ResolverError.unavailableDeviceType(identifier)
     }
-    return numericDotVersionComponents(in: String(deviceType.name[range]))
-}
-
-func newestIPhonePro(from deviceTypes: [DeviceType]) throws -> DeviceType {
-    let candidates = deviceTypes.compactMap { deviceType -> (DeviceType, [Int])? in
-        guard let rank = iPhoneProRank(deviceType) else { return nil }
-        return (deviceType, rank)
-    }
-    guard let selected = candidates.sorted(by: { left, right in
-        let ordering = compareSemanticVersions(left.1, right.1)
-        if ordering == .orderedSame {
-            return left.0.identifier < right.0.identifier
-        }
-        return ordering == .orderedDescending
-    }).first?.0 else {
-        throw ResolverError.noIPhonePro(deviceTypes.map(\.name).sorted())
-    }
-    return selected
-}
-
-func firstCapture(in value: String, pattern: String) -> String? {
-    guard let expression = try? NSRegularExpression(pattern: pattern),
-          let match = expression.firstMatch(in: value, range: NSRange(value.startIndex..<value.endIndex, in: value)),
-          let range = Range(match.range(at: 1), in: value) else {
-        return nil
-    }
-    return String(value[range])
-}
-
-func iPadAirRank(_ deviceType: DeviceType) -> (generation: [Int], screen: Int)? {
-    guard deviceType.name.hasPrefix("iPad Air") else {
-        return nil
-    }
-    let generation: [Int]
-    if let chipSource = firstCapture(in: deviceType.name, pattern: #"\(M([0-9]+(?:\.[0-9]+)*)\)"#),
-       var chipGeneration = numericDotVersionComponents(in: chipSource),
-       let chipMajor = chipGeneration.first {
-        let (modelGeneration, overflow) = chipMajor.addingReportingOverflow(4)
-        guard !overflow else { return nil }
-        chipGeneration[0] = modelGeneration
-        generation = chipGeneration
-    } else if let ordinalSource = firstCapture(in: deviceType.name, pattern: #"\(([0-9]+)(?:st|nd|rd|th) generation\)"#),
-              let ordinalGeneration = numericDotVersionComponents(in: ordinalSource) {
-        generation = ordinalGeneration
-    } else {
-        return nil
-    }
-    let screenSource = firstCapture(in: deviceType.name, pattern: #"([0-9]+)-inch"#)
-    guard screenSource == nil || Int(screenSource!) != nil else {
-        return nil
-    }
-    let screen = screenSource.flatMap(Int.init) ?? 0
-    return (generation, screen)
-}
-
-func newestIPadAir(from deviceTypes: [DeviceType]) throws -> DeviceType {
-    let candidates = deviceTypes.compactMap { deviceType -> (DeviceType, [Int], Int)? in
-        guard let rank = iPadAirRank(deviceType) else { return nil }
-        return (deviceType, rank.generation, rank.screen)
-    }
-    guard let selected = candidates.sorted(by: { left, right in
-        let generationOrdering = compareSemanticVersions(left.1, right.1)
-        if generationOrdering != .orderedSame {
-            return generationOrdering == .orderedDescending
-        }
-        if left.2 != right.2 {
-            return left.2 > right.2
-        }
-        return left.0.identifier < right.0.identifier
-    }).first?.0 else {
-        throw ResolverError.noIPadAir(deviceTypes.map(\.name).sorted())
-    }
-    return selected
+    return deviceType
 }
 
 func reference(for deviceType: DeviceType) -> DeviceTypeReference {
@@ -284,11 +218,12 @@ func reference(for deviceType: DeviceType) -> DeviceTypeReference {
 func resolve(_ arguments: Arguments) throws -> Matrix {
     let runtimes = try decode(RuntimeList.self, from: arguments.runtimesPath)
     let deviceTypes = try decode(DeviceTypeList.self, from: arguments.deviceTypesPath)
-    let runtime = try newestRuntime(from: runtimes.runtimes)
+    let dedicated = try dedicatedDevices(from: arguments.dedicatedConfigPath)
+    let runtime = try declaredRuntime(dedicated.iPhone.runtimeIdentifier, from: runtimes.runtimes)
     let needsIPhone = arguments.caseIDs.contains { $0.hasPrefix("iphone-") }
     let needsIPad = arguments.caseIDs.contains { $0.hasPrefix("ipad-") }
-    let iPhoneType = try needsIPhone ? reference(for: newestIPhonePro(from: deviceTypes.devicetypes)) : nil
-    let iPadType = try needsIPad ? reference(for: newestIPadAir(from: deviceTypes.devicetypes)) : nil
+    let iPhoneType = try needsIPhone ? reference(for: declaredDeviceType(dedicated.iPhone.deviceTypeIdentifier, from: deviceTypes.devicetypes)) : nil
+    let iPadType = try needsIPad ? reference(for: declaredDeviceType(dedicated.iPad.deviceTypeIdentifier, from: deviceTypes.devicetypes)) : nil
     let allCases: [MatrixCase] = [
         iPhoneType.map { MatrixCase(id: "iphone-en", family: "iPhone", deviceType: $0, locale: "en_US", language: "en") },
         iPhoneType.map { MatrixCase(id: "iphone-ja", family: "iPhone", deviceType: $0, locale: "ja_JP", language: "ja") },

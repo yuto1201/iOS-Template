@@ -1456,6 +1456,10 @@ func validateSimulatorAllocationEvidence(
     var udids = Set<String>()
     var sessions = Set<String>()
     var attempts = Set<String>()
+    var receiptVersions = Set<Int>()
+    var dedicatedNameByUDID: [String: String] = [:]
+    var dedicatedUDIDByName: [String: String] = [:]
+    var declaredDevices: [String: DedicatedDeviceDeclaration]? = nil
     let gitCommonDirectory = canonicalPath(
         try runGitString(
             ["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -1481,7 +1485,7 @@ func validateSimulatorAllocationEvidence(
             throw ValidationFailure("\(path).allocationId is invalid or duplicated")
         }
         let udid = try requireString(reference["udid"]!, at: "\(path).udid")
-        guard matches(udid, regex: udidPattern), udids.insert(udid).inserted else {
+        guard matches(udid, regex: udidPattern) else {
             throw ValidationFailure("\(path).udid is invalid or duplicated")
         }
         let attemptID = try requireString(reference["attemptId"]!, at: "\(path).attemptId")
@@ -1511,6 +1515,27 @@ func validateSimulatorAllocationEvidence(
         )
         try validateDigest(reference["digest"]!, data: receiptData, at: "\(path).digest")
         let receipt = try readJSONObject(data: receiptData, at: "\(path) receipt")
+        let receiptVersion = try requireInteger(receipt["schemaVersion"] as Any, at: "\(path) receipt.schemaVersion")
+        receiptVersions.insert(receiptVersion)
+        if receiptVersion == 2 {
+            if declaredDevices == nil {
+                declaredDevices = try loadDedicatedDeviceDeclarations(repository: repository)
+            }
+            let deviceName = try validateDedicatedLeaseReceipt(
+                receipt, at: "\(path) receipt", allocationID: allocationID, udid: udid, sessionID: sessionID,
+                attemptID: attemptID, caseID: caseID, matrix: matrix, matrixCase: matrixCase, issue: issue, head: head,
+                repositoryIdentity: expectedRepositoryIdentity, declaredDevices: declaredDevices!
+            )
+            guard dedicatedNameByUDID[udid, default: deviceName] == deviceName,
+                  dedicatedUDIDByName[deviceName, default: udid] == udid else {
+                throw ValidationFailure("\(path) dedicated Simulator name and UDID are inconsistent across cases")
+            }
+            dedicatedNameByUDID[udid] = deviceName
+            dedicatedUDIDByName[deviceName] = udid
+        } else {
+        guard udids.insert(udid).inserted else {
+            throw ValidationFailure("\(path).udid is invalid or duplicated")
+        }
         try requireExactKeys(receipt, [
             "schemaVersion", "allocationId", "status", "sessionId", "repositoryIdentity", "issue",
             "headSha", "batchId", "attemptId", "caseId", "deviceSet", "deviceName", "udid",
@@ -1557,6 +1582,7 @@ func validateSimulatorAllocationEvidence(
         guard cleanupAt >= releasedAt, cleanupAt <= Date().addingTimeInterval(300) else {
             throw ValidationFailure("\(path) receipt cleanup timestamp is invalid")
         }
+        }
         normalized.append([
             "caseId": caseID, "path": recordedPath,
             "digest": "sha256:\(sha256(data: receiptData))", "allocationId": allocationID,
@@ -1566,7 +1592,129 @@ func validateSimulatorAllocationEvidence(
     guard sessions.count == 1, attempts.count == 1 else {
         throw ValidationFailure("simulatorAllocations must belong to one runner session and attempt")
     }
+    guard receiptVersions.count == 1 else {
+        throw ValidationFailure("simulatorAllocations must not mix allocation receipt versions")
+    }
     return normalized
+}
+
+struct DedicatedDeviceDeclaration {
+    let name: String
+    let deviceTypeIdentifier: String
+    let runtimeIdentifier: String
+}
+
+// Reads the tracked dedicated Simulator declaration (D-063) that a dedicated-lease receipt must match.
+func loadDedicatedDeviceDeclarations(repository: TrustedRepository) throws -> [String: DedicatedDeviceDeclaration] {
+    let path = "Config/dedicated-simulators.json"
+    let data = try readBoundRegularFile(
+        rootFileDescriptor: repository.rootFileDescriptor, components: ["Config", "dedicated-simulators.json"], at: path
+    )
+    let config = try readJSONObject(data: data, at: path)
+    try requireExactKeys(config, ["schemaVersion", "devices"], at: path)
+    guard try requireInteger(config["schemaVersion"]!, at: "\(path).schemaVersion") == 1 else {
+        throw ValidationFailure("\(path).schemaVersion must be 1")
+    }
+    let devices = try requireArray(config["devices"]!, at: "\(path).devices")
+    var declarations: [String: DedicatedDeviceDeclaration] = [:]
+    var families: [String] = []
+    for (index, rawDevice) in devices.enumerated() {
+        let at = "\(path).devices[\(index)]"
+        let device = try requireObject(rawDevice, at: at)
+        try requireExactKeys(device, ["family", "name", "deviceTypeIdentifier", "runtimeIdentifier"], at: at)
+        let family = try requireString(device["family"]!, at: "\(at).family")
+        let name = try requireString(device["name"]!, at: "\(at).name")
+        guard !name.hasPrefix("iOS-Template-"), declarations[family] == nil else {
+            throw ValidationFailure("\(at) is not a unique dedicated Simulator declaration")
+        }
+        families.append(family)
+        declarations[family] = DedicatedDeviceDeclaration(
+            name: name,
+            deviceTypeIdentifier: try requireString(device["deviceTypeIdentifier"]!, at: "\(at).deviceTypeIdentifier"),
+            runtimeIdentifier: try requireString(device["runtimeIdentifier"]!, at: "\(at).runtimeIdentifier")
+        )
+    }
+    guard families == ["iphone", "ipad"], declarations["iphone"]!.name != declarations["ipad"]!.name else {
+        throw ValidationFailure("\(path) must declare exactly one iphone and one ipad Simulator with distinct names")
+    }
+    return declarations
+}
+
+// Validates a D-063 dedicated-lease receipt and returns its device name. The device is never deleted,
+// so the receipt proves an erase before the case and a shutdown after it instead of deletion.
+func validateDedicatedLeaseReceipt(
+    _ receipt: JSONObject,
+    at path: String,
+    allocationID: String,
+    udid: String,
+    sessionID: String,
+    attemptID: String,
+    caseID: String,
+    matrix: MatrixInfo,
+    matrixCase: MatrixCaseInfo,
+    issue: Int,
+    head: String,
+    repositoryIdentity: String,
+    declaredDevices: [String: DedicatedDeviceDeclaration]
+) throws -> String {
+    try requireExactKeys(receipt, [
+        "schemaVersion", "kind", "allocationId", "status", "sessionId", "repositoryIdentity", "issue",
+        "headSha", "batchId", "attemptId", "caseId", "deviceSet", "deviceName", "udid",
+        "runtimeIdentifier", "deviceTypeIdentifier", "reservedAt", "preparedAt", "releasedAt",
+        "freeSpace", "preparation", "cleanup"
+    ], at: path)
+    let family = String(caseID.prefix { $0 != "-" })
+    guard let declared = declaredDevices[family],
+          declared.deviceTypeIdentifier == matrixCase.deviceType.identifier,
+          declared.runtimeIdentifier == matrix.runtime.identifier else {
+        throw ValidationFailure("\(path) matrix case does not use the declared dedicated Simulator")
+    }
+    guard try requireString(receipt["kind"]!, at: "\(path).kind") == "dedicated-lease",
+          try requireString(receipt["allocationId"]!, at: "\(path).allocationId") == allocationID,
+          try requireString(receipt["status"]!, at: "\(path).status") == "released",
+          try requireString(receipt["sessionId"]!, at: "\(path).sessionId") == sessionID,
+          try requireString(receipt["repositoryIdentity"]!, at: "\(path).repositoryIdentity") == repositoryIdentity,
+          try requireInteger(receipt["issue"]!, at: "\(path).issue", minimum: 1) == issue,
+          try requireString(receipt["headSha"]!, at: "\(path).headSha") == head,
+          try requireString(receipt["batchId"]!, at: "\(path).batchId") == matrix.batchID,
+          try requireString(receipt["attemptId"]!, at: "\(path).attemptId") == attemptID,
+          try requireString(receipt["caseId"]!, at: "\(path).caseId") == caseID,
+          try requireString(receipt["deviceSet"]!, at: "\(path).deviceSet") == "default",
+          try requireString(receipt["deviceName"]!, at: "\(path).deviceName") == declared.name,
+          try requireString(receipt["udid"]!, at: "\(path).udid") == udid,
+          try requireString(receipt["runtimeIdentifier"]!, at: "\(path).runtimeIdentifier") == matrix.runtime.identifier,
+          try requireString(receipt["deviceTypeIdentifier"]!, at: "\(path).deviceTypeIdentifier") == matrixCase.deviceType.identifier else {
+        throw ValidationFailure("\(path) identity does not match the execution")
+    }
+    let reservedAt = try requireISO8601Date(receipt["reservedAt"]!, at: "\(path).reservedAt")
+    let preparedAt = try requireISO8601Date(receipt["preparedAt"]!, at: "\(path).preparedAt")
+    let releasedAt = try requireISO8601Date(receipt["releasedAt"]!, at: "\(path).releasedAt")
+    guard reservedAt <= preparedAt, preparedAt <= releasedAt, releasedAt <= Date().addingTimeInterval(300) else {
+        throw ValidationFailure("\(path) lease lifecycle timestamps are invalid")
+    }
+    let freeSpace = try requireObject(receipt["freeSpace"]!, at: "\(path).freeSpace")
+    try requireExactKeys(freeSpace, ["beforeLeaseBytes", "afterReleaseBytes"], at: "\(path).freeSpace")
+    _ = try requireInteger(freeSpace["beforeLeaseBytes"]!, at: "\(path).freeSpace.beforeLeaseBytes", minimum: 0)
+    _ = try requireInteger(freeSpace["afterReleaseBytes"]!, at: "\(path).freeSpace.afterReleaseBytes", minimum: 0)
+    let preparation = try requireObject(receipt["preparation"]!, at: "\(path).preparation")
+    try requireExactKeys(preparation, ["status", "erased", "observedAt"], at: "\(path).preparation")
+    guard try requireString(preparation["status"]!, at: "\(path).preparation.status") == "passed",
+          try requireBool(preparation["erased"]!, at: "\(path).preparation.erased"),
+          try requireISO8601Date(preparation["observedAt"]!, at: "\(path).preparation.observedAt") == preparedAt else {
+        throw ValidationFailure("\(path) does not prove the dedicated Simulator was erased before the case")
+    }
+    let cleanup = try requireObject(receipt["cleanup"]!, at: "\(path).cleanup")
+    try requireExactKeys(cleanup, ["status", "reason", "deviceState", "observedAt"], at: "\(path).cleanup")
+    guard try requireString(cleanup["status"]!, at: "\(path).cleanup.status") == "passed",
+          try requireString(cleanup["reason"]!, at: "\(path).cleanup.reason") == "case-complete",
+          try requireString(cleanup["deviceState"]!, at: "\(path).cleanup.deviceState") == "Shutdown" else {
+        throw ValidationFailure("\(path) does not prove the dedicated Simulator was shut down after the case")
+    }
+    let cleanupAt = try requireISO8601Date(cleanup["observedAt"]!, at: "\(path).cleanup.observedAt")
+    guard cleanupAt >= releasedAt, cleanupAt <= Date().addingTimeInterval(300) else {
+        throw ValidationFailure("\(path) cleanup timestamp is invalid")
+    }
+    return declared.name
 }
 
 func loadRunnerSimulatorAllocationEvidence(

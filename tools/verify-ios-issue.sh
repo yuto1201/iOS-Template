@@ -408,15 +408,20 @@ trap release_runner EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Runs one short xcrun probe in its own process group. The bound defaults to 30 seconds so that a
+# loaded host is not mistaken for a failed probe; a timeout returns 124 with the measured elapsed time.
 run_xcrun_bounded() {
-  local output_path="$1" error_path="$2" result=0 iteration
+  local output_path="$1" error_path="$2" result=0 iteration started elapsed
+  local probe_timeout="${IOS_TEMPLATE_PROBE_TIMEOUT_SECONDS:-30}"
   shift 2
+  positive_timeout "$probe_timeout" || return 2
+  started="$(/bin/date +%s)"
   initialize_trusted_environment || return 1
   /usr/bin/env -i "${TRUSTED_BASE_ENV[@]}" DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
     /usr/bin/ruby --disable-gems -e 'Process.setpgrp; exec(*ARGV)' "$TRUSTED_XCRUN" "$@" \
     9>&- >"$output_path" 2>"$error_path" &
   active_probe_pid="$!"
-  for ((iteration = 0; iteration < 100; iteration++)); do
+  for ((iteration = 0; iteration < probe_timeout * 20; iteration++)); do
     if ! /bin/kill -0 "$active_probe_pid" >/dev/null 2>&1; then
       wait "$active_probe_pid" || result="$?"
       active_probe_pid=""
@@ -427,7 +432,8 @@ run_xcrun_bounded() {
   stop_probe_group "$active_probe_pid" || result=125
   active_probe_pid=""
   [[ "$result" -eq 0 ]] || return "$result"
-  IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $stage; elapsedSeconds=5; timeoutSeconds=5"
+  elapsed=$(( $(/bin/date +%s) - started ))
+  IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $stage; elapsedSeconds=$elapsed; timeoutSeconds=$probe_timeout"
   return 124
 }
 
@@ -562,7 +568,7 @@ assert_verification_lock_alive() {
   wait "$lock_holder_pid" >/dev/null 2>&1 || lock_status="$?"
   lock_holder_pid=""
   if [[ "$lock_status" -eq 124 ]]; then
-    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at verification-lock; elapsedSeconds=$verification_timeout_seconds; timeoutSeconds=$verification_timeout_seconds"
+    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at verification-lock; elapsedSeconds=$(( $(/bin/date +%s) - verification_lock_started_at )); timeoutSeconds=$verification_timeout_seconds"
     fail "verification lock expired during verification"
   fi
   fail "verification lock ended during verification"
@@ -589,6 +595,7 @@ IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS="$verification_timeout_seconds" \
 run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-lock-holder \
   --config "$config" --digest "$config_digest" <"$lock_control_fifo" >"$lock_ready_fifo" &
 lock_holder_pid="$!"
+verification_lock_started_at="$(/bin/date +%s)"
 exec 9>"$lock_control_fifo"
 if ! read -r -t "$verification_timeout_seconds" lock_status <"$lock_ready_fifo" || [[ "$lock_status" != "LOCKED" ]]; then
   exec 9>&-
@@ -755,8 +762,14 @@ for index in "${case_indexes[@]}"; do
     [[ "$launch_output" == "$launch_prefix"* && "$launch_pid" =~ ^[1-9][0-9]*$ ]] || case_failed="launch PID"
   fi
   if [[ -z "$case_failed" ]]; then
+    probe_status=0
     run_xcrun_bounded /dev/null "$run_state/$case_id-liveness-error" \
-      simctl spawn "$udid" /bin/kill -0 "$launch_pid" || case_failed="process liveness"
+      simctl spawn "$udid" /bin/kill -0 "$launch_pid" || probe_status=$?
+    if [[ "$probe_status" -eq 124 ]]; then
+      case_failed="process liveness probe timed out"
+    elif [[ "$probe_status" -ne 0 ]]; then
+      case_failed="process liveness"
+    fi
   fi
   if [[ -z "$case_failed" && "$action" == "testIdentifier" ]]; then
     region="${locale#*_}"
@@ -822,8 +835,14 @@ for index in "${case_indexes[@]}"; do
     case_failed="mechanical assertion"
   fi
   if [[ -z "$case_failed" ]]; then
+    probe_status=0
     run_xcrun_bounded /dev/null "$run_state/$case_id-post-check-liveness-error" \
-      simctl spawn "$udid" /bin/kill -0 "$launch_pid" || case_failed="post-check process liveness"
+      simctl spawn "$udid" /bin/kill -0 "$launch_pid" || probe_status=$?
+    if [[ "$probe_status" -eq 124 ]]; then
+      case_failed="post-check process liveness probe timed out"
+    elif [[ "$probe_status" -ne 0 ]]; then
+      case_failed="post-check process liveness"
+    fi
   fi
   [[ -n "$case_failed" ]] || check_system_locale "$case_id" capture || case_failed="system language/locale readback"
   if [[ "$visual_required" == true ]]; then

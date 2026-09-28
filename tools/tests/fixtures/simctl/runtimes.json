@@ -15,7 +15,7 @@
     {
       "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
       "version": "27.0",
-      "isAvailable": false,
+      "isAvailable": true,
       "name": "iOS 27.0"
     },
     {

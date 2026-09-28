@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "devices": [
+    {
+      "family": "iphone",
+      "name": "iOS-Template iPhone 17",
+      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17",
+      "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+    },
+    {
+      "family": "ipad",
+      "name": "iOS-Template iPad (A16)",
+      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPad-A16",
+      "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+    }
+  ]
+}

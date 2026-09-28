@@ -12,23 +12,33 @@ require "timeout"
 module IOSTemplate
   class SimulatorResourceError < StandardError; end
 
+  # Leases the repository's dedicated iPhone and iPad Simulators (D-063). The manager never creates,
+  # clones, renames, or deletes a device: it erases a dedicated device before each lease and shuts
+  # it down when the lease is returned. Legacy per-case allocations written by older managers stay
+  # in state-v1.json; this manager only reads them to count Mac-wide capacity and never changes them.
   class SimulatorResourceManager
-    SCHEMA_VERSION = 1
+    STATE_SCHEMA_VERSION = 1
+    LEASE_SCHEMA_VERSION = 2
+    RECEIPT_KIND = "dedicated-lease"
+    CONFIG_PATH = "Config/dedicated-simulators.json"
+    FAMILIES = %w[iphone ipad].freeze
     MAX_ALLOCATIONS = 4
     DEFAULT_MINIMUM_FREE_BYTES = 8 * 1024 * 1024 * 1024
-    ACTIVE_STATUSES = %w[reserved active deleting cleanup-failed].freeze
+    ACTIVE_STATUSES = %w[reserved active cleanup-failed].freeze
+    LEGACY_ACTIVE_STATUSES = %w[reserved active deleting cleanup-failed].freeze
+    SHUTDOWN_WAIT_SECONDS = 30
     SESSION_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\z/
     BATCH_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9-]{0,63}\z/
     CASE_PATTERN = /\A(?:iphone|ipad)-(?:en|ja)\z/
     ATTEMPT_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\z/
     SHA_PATTERN = /\A[0-9a-f]{40}\z/
     UDID_PATTERN = /\A[0-9A-Fa-f-]{8,64}\z/
-    DEVICE_NAME_PATTERN = /\AiOS-Template-[A-Za-z0-9-]{1,64}-(?:iphone|ipad)-(?:en|ja)-[0-9a-f]{12}\z/
+    DEVICE_NAME_PATTERN = /\A[^\x00-\x1f\x7f]{1,96}\z/
     DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
-    RECORD_KEYS = %w[
-      allocationId allocator attemptId batchId caseId cleanup createdAt dataPath deviceName deviceSet
-      deviceTypeIdentifier events freeSpace headSha integrityDigest issue owner releasedAt repository
-      reservedAt runtimeIdentifier schemaVersion sessionId status udid
+    LEASE_KEYS = %w[
+      allocationId allocator attemptId batchId caseId cleanup deviceName deviceSet deviceTypeIdentifier
+      events family freeSpace headSha integrityDigest issue owner preparation preparedAt releasedAt
+      repository reservedAt runtimeIdentifier schemaVersion sessionId status udid
     ].freeze
 
     def initialize(options)
@@ -57,9 +67,10 @@ module IOSTemplate
 
       loop do
         denial = nil
-        with_state do |state|
+        with_state do |legacy_active, state|
           recover_stale!(state, dry_run: false)
-          existing = state.fetch("allocations").find do |record|
+          leases = state.fetch("leases")
+          existing = leases.find do |record|
             ACTIVE_STATUSES.include?(record["status"]) && same_operation?(record, identity)
           end
           if existing
@@ -68,47 +79,54 @@ module IOSTemplate
               print_receipt(existing)
               return
             end
-            denial = "matching allocation is not safely reusable"
+            denial = "matching lease is not safely reusable"
             next
           end
 
-          active = state.fetch("allocations").select { |record| ACTIVE_STATUSES.include?(record["status"]) }
+          active = leases.select { |record| ACTIVE_STATUSES.include?(record["status"]) }
           if active.any? { |record| record["sessionId"] == identity.fetch("sessionId") }
-            denial = "same session already owns a Simulator allocation"
+            denial = "same session already owns a Simulator lease"
             next
           end
-          running_unmanaged = unmanaged_live_devices(active).reject { |device| device["state"] == "Shutdown" }
-          if active.length + running_unmanaged.length >= MAX_ALLOCATIONS
+          if active.any? { |record| record["deviceName"] == identity.fetch("deviceName") }
+            denial = "dedicated Simulator '#{identity.fetch("deviceName")}' is leased by another run"
+            next
+          end
+          in_use = capacity_in_use(active, legacy_active)
+          if in_use >= MAX_ALLOCATIONS
             denial = "Mac-wide iPhone/iPad Simulator allocation limit (#{MAX_ALLOCATIONS}) is in use"
             next
           end
 
           free_before = available_bytes
           if free_before < minimum_free
-            denial = "insufficient free space for a new Simulator (available=#{free_before}, required=#{minimum_free})"
+            denial = "insufficient free space for a Simulator lease (available=#{free_before}, required=#{minimum_free})"
             next
           end
 
-          allocation_id = SecureRandom.uuid.downcase
-          short_id = allocation_id.delete("-")[0, 12]
+          device = dedicated_live_device!(identity)
+          unless device["state"] == "Shutdown"
+            denial = "dedicated Simulator '#{identity.fetch("deviceName")}' is #{device["state"]} outside a lease"
+            next
+          end
+
           record = identity.merge(
-            "schemaVersion" => SCHEMA_VERSION,
-            "allocationId" => allocation_id,
+            "schemaVersion" => LEASE_SCHEMA_VERSION,
+            "allocationId" => SecureRandom.uuid.downcase,
             "allocator" => process_identity(Process.pid),
             "status" => "reserved",
             "deviceSet" => "default",
-            "deviceName" => "iOS-Template-#{identity.fetch("batchId")}-#{identity.fetch("caseId")}-#{short_id}",
-            "udid" => nil,
-            "dataPath" => nil,
+            "udid" => device.fetch("udid"),
             "reservedAt" => timestamp,
-            "createdAt" => nil,
+            "preparedAt" => nil,
             "releasedAt" => nil,
-            "freeSpace" => {"beforeCreateBytes" => free_before, "afterDeleteBytes" => nil},
+            "freeSpace" => {"beforeLeaseBytes" => free_before, "afterReleaseBytes" => nil},
+            "preparation" => nil,
             "cleanup" => nil,
             "events" => []
           )
-          add_event(record, "reserved", "capacityCount" => active.length + running_unmanaged.length + 1)
-          state.fetch("allocations") << record
+          add_event(record, "reserved", "capacityCount" => in_use + 1, "udid" => device.fetch("udid"))
+          leases << record
           reservation = snapshot_record(record)
         end
         break if reservation
@@ -119,21 +137,19 @@ module IOSTemplate
       end
 
       begin
-        output = run_simctl("create", reservation.fetch("deviceName"),
-                            reservation.fetch("deviceTypeIdentifier"), reservation.fetch("runtimeIdentifier"))
-        udid = output.strip
-        raise SimulatorResourceError, "simctl create returned an invalid UDID" unless UDID_PATTERN.match?(udid)
+        run_simctl("erase", reservation.fetch("udid"))
         record = nil
-        with_state do |state|
+        with_state do |_legacy_active, state|
           current = find_record!(state, reservation.fetch("allocationId"))
           ensure_record_identity!(current, identity)
-          raise SimulatorResourceError, "allocation reservation changed before creation completed" unless current["status"] == "reserved"
-          live = unique_live_device!(current, udid: udid)
-          current["udid"] = udid
-          current["dataPath"] = safe_data_path(live["dataPath"], udid)
+          raise SimulatorResourceError, "lease reservation changed before preparation completed" unless current["status"] == "reserved"
+          live = unique_live_device!(current)
+          raise SimulatorResourceError, "dedicated Simulator is not shut down after erase" unless live["state"] == "Shutdown"
+          observed = timestamp
           current["status"] = "active"
-          current["createdAt"] = timestamp
-          add_event(current, "created", "udid" => udid)
+          current["preparedAt"] = observed
+          current["preparation"] = {"status" => "passed", "erased" => true, "observedAt" => observed}
+          add_event(current, "prepared", "udid" => current.fetch("udid"))
           record = snapshot_record(current)
         end
         write_receipt(record)
@@ -141,15 +157,14 @@ module IOSTemplate
       rescue StandardError => error
         cleanup_error = nil
         begin
-          with_state do |state|
+          with_state do |_legacy_active, state|
             current = find_record!(state, reservation.fetch("allocationId"))
-            adopt_reserved_device!(current)
-            cleanup_record!(current, dry_run: false, reason: "create-failure")
+            cleanup_lease!(current, reason: "prepare-failure")
           end
         rescue StandardError => cleanup_failure
           cleanup_error = cleanup_failure.message
         end
-        message = "blocked:environment: Simulator creation failed: #{error.message}"
+        message = "blocked:environment: dedicated Simulator preparation failed: #{error.message}"
         message += "; cleanup failed: #{cleanup_error}" if cleanup_error
         raise SimulatorResourceError, message
       end
@@ -161,18 +176,18 @@ module IOSTemplate
       validate!(SESSION_PATTERN, session_id, "session")
       record = nil
       failure = nil
-      with_state do |state|
+      with_state do |_legacy_active, state|
         current = find_record!(state, allocation_id)
-        raise SimulatorResourceError, "allocation belongs to another session" unless current["sessionId"] == session_id
+        raise SimulatorResourceError, "lease belongs to another session" unless current["sessionId"] == session_id
         if current["status"] == "released"
           record = snapshot_record(current)
           next
         end
-        raise SimulatorResourceError, "allocation is not releasable" unless ACTIVE_STATUSES.include?(current["status"])
+        raise SimulatorResourceError, "lease is not releasable" unless ACTIVE_STATUSES.include?(current["status"])
         begin
-          cleanup_record!(current, dry_run: false, reason: required("--reason"))
+          cleanup_lease!(current, reason: required("--reason"))
         rescue SimulatorResourceError => error
-          current["cleanup"] = {"status" => "failed", "reason" => error.message, "observedAt" => timestamp}
+          current["cleanup"] = {"status" => "failed", "reason" => error.message, "deviceState" => "unknown", "observedAt" => timestamp}
           add_event(current, "cleanup-failed", "reason" => error.message)
           failure = error
         end
@@ -191,11 +206,11 @@ module IOSTemplate
         raise SimulatorResourceError, "expected state is invalid"
       end
       output = nil
-      with_state(write: false) do |state|
+      with_state(write: false) do |_legacy_active, state|
         record = find_record!(state, allocation_id)
-        raise SimulatorResourceError, "allocation belongs to another session" unless record["sessionId"] == session_id
-        raise SimulatorResourceError, "allocation is not active" unless record["status"] == "active"
-        live = unique_live_device!(record, udid: record.fetch("udid"))
+        raise SimulatorResourceError, "lease belongs to another session" unless record["sessionId"] == session_id
+        raise SimulatorResourceError, "lease is not active" unless record["status"] == "active"
+        live = unique_live_device!(record)
         if expected_state && live["state"] != expected_state
           raise SimulatorResourceError, "target Simulator state does not match the required state"
         end
@@ -206,18 +221,22 @@ module IOSTemplate
 
     def inventory(dry_run: true)
       result = nil
-      with_state(write: !dry_run) do |state|
+      with_state(write: !dry_run) do |legacy_active, state|
         candidates = recover_stale!(state, dry_run: dry_run)
-        active = state.fetch("allocations").select { |record| ACTIVE_STATUSES.include?(record["status"]) }
+        active = state.fetch("leases").select { |record| ACTIVE_STATUSES.include?(record["status"]) }
+        unmanaged = unmanaged_live_devices(legacy_active)
         result = {
-          "schemaVersion" => SCHEMA_VERSION,
+          "schemaVersion" => LEASE_SCHEMA_VERSION,
           "dryRun" => dry_run,
           "observedAt" => timestamp,
           "limit" => MAX_ALLOCATIONS,
+          "capacityInUse" => capacity_in_use(active, legacy_active, unmanaged),
           "activeCount" => active.length,
+          "legacyActiveCount" => legacy_active.length,
           "availableBytes" => available_bytes,
-          "allocations" => state.fetch("allocations").map { |record| inventory_record(record) },
-          "protectedUnmanagedDevices" => unmanaged_live_devices(active).map { |device| unmanaged_inventory_record(device) },
+          "allocations" => state.fetch("leases").map { |record| inventory_record(record) },
+          "legacyAllocations" => legacy_active,
+          "protectedUnmanagedDevices" => unmanaged.map { |device| unmanaged_inventory_record(device) },
           "recoveryCandidates" => candidates
         }
       end
@@ -246,29 +265,83 @@ module IOSTemplate
       validate_identifier!(device_type, "Device Type")
       owner_start = process_start_token(owner_pid)
       raise SimulatorResourceError, "owner process is not active" unless owner_start
-      repository_identity = repository_identity(repository)
+      family = case_id.split("-").first
+      declared = declared_device!(repository, family)
+      unless declared["deviceTypeIdentifier"] == device_type && declared["runtimeIdentifier"] == runtime
+        raise SimulatorResourceError,
+              "blocked:environment: requested #{family} Device Type and Runtime differ from the dedicated Simulator declaration"
+      end
       {
         "sessionId" => session_id,
-        "repository" => {"root" => repository, "identity" => repository_identity},
+        "repository" => {"root" => repository, "identity" => repository_identity(repository)},
         "issue" => issue,
         "headSha" => head_sha,
         "batchId" => batch_id,
         "attemptId" => attempt_id,
         "caseId" => case_id,
+        "family" => family,
+        "deviceName" => declared.fetch("name"),
         "owner" => {"pid" => owner_pid, "startToken" => owner_start},
         "runtimeIdentifier" => runtime,
         "deviceTypeIdentifier" => device_type
       }
     end
 
+    # Reads the tracked dedicated Simulator declaration of the repository under verification.
+    def declared_device!(repository, family)
+      path = File.join(repository, CONFIG_PATH)
+      info = File.lstat(path)
+      unless info.file? && !info.symlink?
+        raise SimulatorResourceError, "blocked:environment: #{CONFIG_PATH} is not a regular file"
+      end
+      config = JSON.parse(File.binread(path, 64 * 1024))
+      devices = config.is_a?(Hash) && config.keys.sort == %w[devices schemaVersion] && config["schemaVersion"] == 1 ? config["devices"] : nil
+      unless devices.is_a?(Array) && devices.length == FAMILIES.length &&
+             devices.map { |entry| entry.is_a?(Hash) ? entry["family"] : nil } == FAMILIES
+        raise SimulatorResourceError, "blocked:environment: #{CONFIG_PATH} must declare exactly one iphone and one ipad Simulator"
+      end
+      devices.each do |entry|
+        unless entry.keys.sort == %w[deviceTypeIdentifier family name runtimeIdentifier] &&
+               DEVICE_NAME_PATTERN.match?(entry["name"].to_s) && !entry["name"].start_with?("iOS-Template-")
+          raise SimulatorResourceError, "blocked:environment: #{CONFIG_PATH} has an invalid device declaration"
+        end
+        validate_identifier!(entry["deviceTypeIdentifier"], "declared Device Type")
+        validate_identifier!(entry["runtimeIdentifier"], "declared Runtime")
+      end
+      raise SimulatorResourceError, "blocked:environment: #{CONFIG_PATH} device names must be unique" unless devices.map { |entry| entry["name"] }.uniq.length == devices.length
+      devices.find { |entry| entry["family"] == family }
+    rescue Errno::ENOENT
+      raise SimulatorResourceError, "blocked:environment: #{CONFIG_PATH} is missing"
+    rescue JSON::ParserError
+      raise SimulatorResourceError, "blocked:environment: #{CONFIG_PATH} is not valid JSON"
+    end
+
+    # Finds the one live device that matches the dedicated declaration by exact name, type, and Runtime.
+    def dedicated_live_device!(identity)
+      name = identity.fetch("deviceName")
+      matches = live_devices.select { |device| device["name"] == name }
+      unless matches.length == 1
+        raise SimulatorResourceError,
+              "blocked:environment: dedicated Simulator '#{name}' must exist exactly once (found #{matches.length})"
+      end
+      device = matches.first
+      unless device["runtimeIdentifier"] == identity.fetch("runtimeIdentifier") &&
+             device["deviceTypeIdentifier"] == identity.fetch("deviceTypeIdentifier") &&
+             device["isAvailable"] != false && UDID_PATTERN.match?(device["udid"].to_s)
+        raise SimulatorResourceError,
+              "blocked:environment: dedicated Simulator '#{name}' does not match its declared Device Type and Runtime or is unavailable"
+      end
+      device
+    end
+
     def same_operation?(record, identity)
-      %w[sessionId issue headSha batchId attemptId caseId runtimeIdentifier deviceTypeIdentifier].all? do |key|
+      %w[sessionId issue headSha batchId attemptId caseId family deviceName runtimeIdentifier deviceTypeIdentifier].all? do |key|
         record[key] == identity[key]
       end && record["repository"] == identity["repository"] && record["owner"] == identity["owner"]
     end
 
     def ensure_record_identity!(record, identity)
-      raise SimulatorResourceError, "allocation identity changed" unless same_operation?(record, identity)
+      raise SimulatorResourceError, "lease identity changed" unless same_operation?(record, identity)
     end
 
     def repository_identity(repository)
@@ -285,132 +358,89 @@ module IOSTemplate
       "sha256:#{Digest::SHA256.hexdigest(common)}"
     end
 
+    def capacity_in_use(active, legacy_active, unmanaged = nil)
+      unmanaged ||= unmanaged_live_devices(legacy_active)
+      active.length + legacy_active.length + unmanaged.count { |device| device["state"] != "Shutdown" }
+    end
+
     def recover_stale!(state, dry_run:)
       candidates = []
-      state.fetch("allocations").each do |record|
+      state.fetch("leases").each do |record|
         next unless ACTIVE_STATUSES.include?(record["status"])
         next if process_active?(record)
-        candidate = {
+        candidates << {
           "allocationId" => record["allocationId"],
           "udid" => record["udid"],
+          "deviceName" => record["deviceName"],
           "sessionId" => record["sessionId"],
           "repositoryIdentity" => record.dig("repository", "identity"),
           "status" => record["status"],
           "reason" => "owner-process-identity-is-not-active"
         }
-        candidates << candidate
         next if dry_run
-        adopt_reserved_device!(record)
-        cleanup_record!(record, dry_run: false, reason: "orphan-recovery")
+        cleanup_lease!(record, reason: "orphan-recovery")
       rescue SimulatorResourceError => error
         record["status"] = "cleanup-failed"
-        record["cleanup"] = {"status" => "failed", "reason" => error.message, "observedAt" => timestamp}
+        record["cleanup"] = {"status" => "failed", "reason" => error.message, "deviceState" => "unknown", "observedAt" => timestamp}
         add_event(record, "cleanup-failed", "reason" => error.message)
       end
       candidates
     end
 
-    def adopt_reserved_device!(record)
-      return if record["udid"]
-      matches = live_devices.select do |device|
-        device["name"] == record["deviceName"] &&
-          device["runtimeIdentifier"] == record["runtimeIdentifier"] &&
-          device["deviceTypeIdentifier"] == record["deviceTypeIdentifier"]
-      end
-      if matches.empty?
-        record["status"] = "released"
-        record["releasedAt"] = timestamp
-        record["cleanup"] = {"status" => "passed", "reason" => "reservation-had-no-device", "observedAt" => timestamp}
-        add_event(record, "released", "reason" => "reservation-had-no-device")
-        return
-      end
-      raise SimulatorResourceError, "reserved allocation device identity is ambiguous" unless matches.length == 1
-      device = matches.first
-      udid = device["udid"]
-      raise SimulatorResourceError, "reserved allocation candidate has an invalid UDID" unless UDID_PATTERN.match?(udid.to_s)
-      record["udid"] = udid
-      record["dataPath"] = safe_data_path(device["dataPath"], udid)
-      add_event(record, "adopted-after-interruption", "udid" => udid)
-    end
-
-    def cleanup_record!(record, dry_run:, reason:)
-      if record["status"] == "released"
-        return
-      end
-      udid = record["udid"]
-      unless udid
-        record["status"] = "released"
-        record["releasedAt"] = timestamp
-        record["cleanup"] = {"status" => "passed", "reason" => "no-device-created", "observedAt" => timestamp}
-        add_event(record, "released", "reason" => "no-device-created")
-        return
-      end
-      live_matches = live_devices.select { |device| device["udid"] == udid }
-      if live_matches.empty?
-        unless dry_run
-          raise SimulatorResourceError, "owned Simulator data path remains after the device disappeared" unless data_path_absent?(record["dataPath"])
-          finish_release!(record, reason: "already-absent")
+    # Shuts the leased dedicated device down and returns the lease. The device is never deleted.
+    def cleanup_lease!(record, reason:)
+      return if record["status"] == "released"
+      udid = record.fetch("udid")
+      matches = live_devices.select { |device| device["udid"] == udid }
+      device_state = "absent"
+      unless matches.empty?
+        raise SimulatorResourceError, "leased Simulator UDID is ambiguous" unless matches.length == 1
+        live = matches.first
+        unless live["name"] == record["deviceName"] &&
+               live["runtimeIdentifier"] == record["runtimeIdentifier"] &&
+               live["deviceTypeIdentifier"] == record["deviceTypeIdentifier"]
+          raise SimulatorResourceError, "leased Simulator live identity does not match its durable lease"
         end
-        return
+        wait_for_shutdown!(udid, live["state"])
+        device_state = "Shutdown"
       end
-      raise SimulatorResourceError, "owned Simulator UDID is ambiguous" unless live_matches.length == 1
-      live = live_matches.first
-      unless live["name"] == record["deviceName"] &&
-             live["runtimeIdentifier"] == record["runtimeIdentifier"] &&
-             live["deviceTypeIdentifier"] == record["deviceTypeIdentifier"]
-        raise SimulatorResourceError, "owned Simulator live identity does not match its durable allocation"
-      end
-      return if dry_run
-      state = live["state"]
-      if state == "Booted"
-        run_simctl("shutdown", udid)
-      elsif state != "Shutdown"
-        raise SimulatorResourceError, "owned Simulator is in an unsafe state for deletion"
-      end
-      record["status"] = "deleting"
-      add_event(record, "deleting", "reason" => reason)
-      run_simctl("delete", udid)
-      remaining = live_devices.select { |device| device["udid"] == udid }
-      raise SimulatorResourceError, "simctl delete returned but the owned Simulator is still listed" unless remaining.empty?
-      raise SimulatorResourceError, "owned Simulator data path remains after simctl delete" unless data_path_absent?(record["dataPath"])
-      finish_release!(record, reason: reason)
+      observed = timestamp
+      record["status"] = "released"
+      record["releasedAt"] = observed
+      record.fetch("freeSpace")["afterReleaseBytes"] = available_bytes
+      record["cleanup"] = {"status" => "passed", "reason" => reason, "deviceState" => device_state, "observedAt" => observed}
+      add_event(record, "released", "reason" => reason, "deviceState" => device_state)
     rescue SimulatorResourceError
       record["status"] = "cleanup-failed"
       raise
     end
 
-    def finish_release!(record, reason:)
-      raise SimulatorResourceError, "owned Simulator data path absence could not be confirmed" unless data_path_absent?(record["dataPath"])
-      free_after = available_bytes
-      record["status"] = "released"
-      record["releasedAt"] = timestamp
-      record.fetch("freeSpace")["afterDeleteBytes"] = free_after
-      record["cleanup"] = {
-        "status" => "passed", "reason" => reason, "deviceAbsent" => true,
-        "dataPathAbsent" => true,
-        "observedAt" => timestamp
-      }
-      add_event(record, "released", "reason" => reason)
+    def wait_for_shutdown!(udid, state)
+      return if state == "Shutdown"
+      begin
+        run_simctl("shutdown", udid)
+      rescue SimulatorResourceError
+        nil
+      end
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + SHUTDOWN_WAIT_SECONDS
+      loop do
+        current = live_devices.find { |device| device["udid"] == udid }
+        return if current.nil? || current["state"] == "Shutdown"
+        if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+          raise SimulatorResourceError, "leased Simulator did not shut down"
+        end
+        sleep 0.2
+      end
     end
 
-    def data_path_absent?(path)
-      return true if path.nil?
-      File.lstat(path)
-      false
-    rescue Errno::ENOENT, Errno::ENOTDIR
-      true
-    rescue SystemCallError
-      raise SimulatorResourceError, "owned Simulator data path absence could not be verified"
-    end
-
-    def unique_live_device!(record, udid:)
-      matches = live_devices.select { |device| device["udid"] == udid }
-      raise SimulatorResourceError, "created Simulator UDID is missing or ambiguous" unless matches.length == 1
+    def unique_live_device!(record)
+      matches = live_devices.select { |device| device["udid"] == record.fetch("udid") }
+      raise SimulatorResourceError, "leased Simulator UDID is missing or ambiguous" unless matches.length == 1
       live = matches.first
       unless live["name"] == record["deviceName"] &&
              live["runtimeIdentifier"] == record["runtimeIdentifier"] &&
              live["deviceTypeIdentifier"] == record["deviceTypeIdentifier"]
-        raise SimulatorResourceError, "created Simulator does not match the durable allocation"
+        raise SimulatorResourceError, "leased Simulator does not match the durable lease"
       end
       live
     end
@@ -432,6 +462,9 @@ module IOSTemplate
     end
 
     def run_simctl(*arguments)
+      if %w[create clone rename delete].include?(arguments.first)
+        raise SimulatorResourceError, "simctl #{arguments.first} is forbidden for dedicated Simulators"
+      end
       command = [@xcrun, "simctl", *arguments]
       environment = {"PATH" => "/usr/bin:/bin", "LANG" => "en_US.UTF-8", "LC_ALL" => "en_US.UTF-8"}
       environment["DEVELOPER_DIR"] = @developer_dir if @developer_dir
@@ -466,89 +499,116 @@ module IOSTemplate
       File.unlink(error_path) if error_path && File.file?(error_path)
     end
 
+    # Lock order: legacy state lock (shared, read-only) first, then the dedicated lease lock.
     def with_state(write: true)
-      lock = secure_open(@lock_path, File::RDWR | File::CREAT, 0o600)
+      legacy_lock = secure_open(@legacy_lock_path, File::RDWR | File::CREAT, 0o600)
       begin
-        raise SimulatorResourceError, "unable to lock Simulator resource state" unless lock.flock(File::LOCK_EX)
-        state = read_state
-        validate_state!(state)
+        raise SimulatorResourceError, "unable to lock legacy Simulator resource state" unless legacy_lock.flock(File::LOCK_SH)
+        lock = secure_open(@lock_path, File::RDWR | File::CREAT, 0o600)
         begin
-          result = yield state
-        rescue StandardError
+          raise SimulatorResourceError, "unable to lock Simulator lease state" unless lock.flock(File::LOCK_EX)
+          legacy_active = read_legacy_active
+          state = read_state
+          validate_state!(state)
+          begin
+            result = yield legacy_active, state
+          rescue StandardError
+            write_state(state) if write
+            raise
+          end
           write_state(state) if write
-          raise
+          result
+        ensure
+          lock.flock(File::LOCK_UN) rescue nil
+          lock.close
         end
-        write_state(state) if write
-        result
       ensure
-        lock.flock(File::LOCK_UN) rescue nil
-        lock.close
+        legacy_lock.flock(File::LOCK_UN) rescue nil
+        legacy_lock.close
       end
+    end
+
+    # Summarizes the active per-case allocations of older managers without validating or changing them.
+    def read_legacy_active
+      return [] unless File.exist?(@legacy_state_path)
+      info = File.lstat(@legacy_state_path)
+      unless info.file? && !info.symlink? && info.uid == Process.uid && info.nlink == 1
+        raise SimulatorResourceError, "legacy Simulator resource state file is unsafe"
+      end
+      state = JSON.parse(File.binread(@legacy_state_path, 16 * 1024 * 1024))
+      records = state.is_a?(Hash) ? state["allocations"] : nil
+      raise SimulatorResourceError, "legacy Simulator resource state is invalid" unless records.is_a?(Array) && records.all? { |record| record.is_a?(Hash) }
+      records.select { |record| LEGACY_ACTIVE_STATUSES.include?(record["status"]) }.map do |record|
+        {
+          "allocationId" => record["allocationId"], "status" => record["status"],
+          "sessionId" => record["sessionId"], "udid" => record["udid"], "deviceName" => record["deviceName"],
+          "runtimeIdentifier" => record["runtimeIdentifier"], "deviceTypeIdentifier" => record["deviceTypeIdentifier"]
+        }
+      end
+    rescue JSON::ParserError => error
+      raise SimulatorResourceError, "legacy Simulator resource state is invalid: #{error.message}"
     end
 
     def read_state
-      return {"schemaVersion" => SCHEMA_VERSION, "allocations" => []} unless File.exist?(@state_path)
+      return {"schemaVersion" => STATE_SCHEMA_VERSION, "leases" => []} unless File.exist?(@state_path)
       info = File.lstat(@state_path)
       unless info.file? && !info.symlink? && info.uid == Process.uid && info.nlink == 1
-        raise SimulatorResourceError, "Simulator resource state file is unsafe"
+        raise SimulatorResourceError, "Simulator lease state file is unsafe"
       end
       JSON.parse(File.binread(@state_path, 16 * 1024 * 1024))
     rescue JSON::ParserError => error
-      raise SimulatorResourceError, "Simulator resource state is invalid: #{error.message}"
+      raise SimulatorResourceError, "Simulator lease state is invalid: #{error.message}"
     end
 
     def validate_state!(state)
-      unless state.is_a?(Hash) && state.keys.sort == %w[allocations schemaVersion] &&
-             state["schemaVersion"] == SCHEMA_VERSION && state["allocations"].is_a?(Array)
-        raise SimulatorResourceError, "Simulator resource state schema is invalid"
+      unless state.is_a?(Hash) && state.keys.sort == %w[leases schemaVersion] &&
+             state["schemaVersion"] == STATE_SCHEMA_VERSION && state["leases"].is_a?(Array)
+        raise SimulatorResourceError, "Simulator lease state schema is invalid"
       end
-      ids = state.fetch("allocations").map do |record|
+      ids = state.fetch("leases").map do |record|
         validate_record!(record)
         record.fetch("allocationId")
       end
-      raise SimulatorResourceError, "Simulator resource state has duplicate allocations" unless ids.uniq.length == ids.length
+      raise SimulatorResourceError, "Simulator lease state has duplicate leases" unless ids.uniq.length == ids.length
     end
 
     def validate_record!(record)
-      raise SimulatorResourceError, "Simulator allocation record is invalid" unless record.is_a?(Hash)
-      unless record.keys.sort == RECORD_KEYS.sort && record["integrityDigest"].to_s.match?(DIGEST_PATTERN)
-        raise SimulatorResourceError, "Simulator allocation record schema is invalid"
+      raise SimulatorResourceError, "Simulator lease record is invalid" unless record.is_a?(Hash)
+      unless record.keys.sort == LEASE_KEYS.sort && record["integrityDigest"].to_s.match?(DIGEST_PATTERN)
+        raise SimulatorResourceError, "Simulator lease record schema is invalid"
       end
       unless record["integrityDigest"] == record_integrity_digest(record)
-        raise SimulatorResourceError, "Simulator allocation record integrity is invalid"
+        raise SimulatorResourceError, "Simulator lease record integrity is invalid"
       end
       validate!(SESSION_PATTERN, record["sessionId"], "record session")
       validate!(BATCH_PATTERN, record["batchId"], "record batch")
       validate!(CASE_PATTERN, record["caseId"], "record case")
       validate!(SHA_PATTERN, record["headSha"], "record Head")
-      validate!(UDID_PATTERN, record["udid"], "record UDID") if record["udid"]
+      validate!(UDID_PATTERN, record["udid"], "record UDID")
       validate!(DEVICE_NAME_PATTERN, record["deviceName"], "record device name")
-      unless record["schemaVersion"] == SCHEMA_VERSION && record["allocationId"].is_a?(String) &&
-             (ACTIVE_STATUSES.include?(record["status"]) || record["status"] == "released")
-        raise SimulatorResourceError, "Simulator allocation status is invalid"
+      unless record["schemaVersion"] == LEASE_SCHEMA_VERSION && record["allocationId"].is_a?(String) &&
+             (ACTIVE_STATUSES.include?(record["status"]) || record["status"] == "released") &&
+             FAMILIES.include?(record["family"]) && record["caseId"].start_with?("#{record["family"]}-")
+        raise SimulatorResourceError, "Simulator lease status is invalid"
       end
-      unless record["schemaVersion"] == SCHEMA_VERSION && record["allocationId"].is_a?(String) &&
-             record["repository"].is_a?(Hash) && record["repository"].keys.sort == %w[identity root] &&
+      unless record["repository"].is_a?(Hash) && record["repository"].keys.sort == %w[identity root] &&
              record.dig("repository", "root").is_a?(String) &&
              record.dig("repository", "identity").to_s.match?(DIGEST_PATTERN) &&
              valid_process_identity?(record["owner"]) && valid_process_identity?(record["allocator"]) &&
              record["deviceSet"] == "default" && record["issue"].is_a?(Integer) && record["issue"].positive? &&
              record["events"].is_a?(Array) && record["freeSpace"].is_a?(Hash) &&
-             record["freeSpace"].keys.sort == %w[afterDeleteBytes beforeCreateBytes] &&
-             record.dig("freeSpace", "beforeCreateBytes").is_a?(Integer) &&
-             (record.dig("freeSpace", "afterDeleteBytes").nil? || record.dig("freeSpace", "afterDeleteBytes").is_a?(Integer))
-        raise SimulatorResourceError, "Simulator allocation identity is invalid"
+             record["freeSpace"].keys.sort == %w[afterReleaseBytes beforeLeaseBytes] &&
+             record.dig("freeSpace", "beforeLeaseBytes").is_a?(Integer) &&
+             (record.dig("freeSpace", "afterReleaseBytes").nil? || record.dig("freeSpace", "afterReleaseBytes").is_a?(Integer))
+        raise SimulatorResourceError, "Simulator lease identity is invalid"
       end
       validate_identifier!(record["runtimeIdentifier"], "record Runtime")
       validate_identifier!(record["deviceTypeIdentifier"], "record Device Type")
-      if record["dataPath"] && safe_data_path(record["dataPath"], record["udid"]) != record["dataPath"]
-        raise SimulatorResourceError, "Simulator allocation data path is invalid"
-      end
     end
 
     def write_state(state)
-      state.fetch("allocations").each { |record| seal_record!(record) }
-      temporary = File.join(@root, ".state-#{SecureRandom.uuid}.json")
+      state.fetch("leases").each { |record| seal_record!(record) }
+      temporary = File.join(@root, ".dedicated-state-#{SecureRandom.uuid}.json")
       data = JSON.pretty_generate(state) + "\n"
       File.open(temporary, File::WRONLY | File::CREAT | File::EXCL | File::NOFOLLOW, 0o600) do |file|
         file.write(data)
@@ -593,14 +653,14 @@ module IOSTemplate
       Dir.mkdir(path, 0o700) unless File.exist?(path)
       info = File.lstat(path)
       unless info.directory? && !info.symlink? && info.uid == Process.uid
-        raise SimulatorResourceError, "allocation receipt directory is unsafe"
+        raise SimulatorResourceError, "lease receipt directory is unsafe"
       end
       File.chmod(0o700, path)
     end
 
     def find_record!(state, allocation_id)
-      matches = state.fetch("allocations").select { |record| record["allocationId"] == allocation_id }
-      raise SimulatorResourceError, "allocation ID is missing or ambiguous" unless matches.length == 1
+      matches = state.fetch("leases").select { |record| record["allocationId"] == allocation_id }
+      raise SimulatorResourceError, "lease ID is missing or ambiguous" unless matches.length == 1
       matches.first
     end
 
@@ -648,20 +708,20 @@ module IOSTemplate
         "sessionId" => record["sessionId"], "repository" => record["repository"],
         "issue" => record["issue"], "headSha" => record["headSha"],
         "batchId" => record["batchId"], "attemptId" => record["attemptId"],
-        "caseId" => record["caseId"], "udid" => record["udid"],
+        "caseId" => record["caseId"], "family" => record["family"], "udid" => record["udid"],
         "deviceName" => record["deviceName"], "runtimeIdentifier" => record["runtimeIdentifier"],
         "deviceTypeIdentifier" => record["deviceTypeIdentifier"],
         "ownerActive" => process_identity_active?(record["owner"]),
-        "allocatorActive" => process_identity_active?(record["allocator"]), "dataPath" => record["dataPath"],
-        "dataBytes" => nil, "dataMeasurement" => "not-measured",
-        "freeSpace" => record["freeSpace"], "cleanup" => record["cleanup"]
+        "allocatorActive" => process_identity_active?(record["allocator"]),
+        "freeSpace" => record["freeSpace"], "preparation" => record["preparation"], "cleanup" => record["cleanup"]
       }
     end
 
-    def unmanaged_live_devices(active_records)
+    # Devices named like the legacy per-case allocations that no legacy durable record owns.
+    def unmanaged_live_devices(legacy_active)
       live_devices.select do |device|
         next false unless device["name"].to_s.start_with?("iOS-Template-")
-        !active_records.any? do |record|
+        !legacy_active.any? do |record|
           (record["udid"] && record["udid"] == device["udid"]) ||
             (record["status"] == "reserved" && record["deviceName"] == device["name"] &&
              record["runtimeIdentifier"] == device["runtimeIdentifier"] &&
@@ -683,7 +743,8 @@ module IOSTemplate
 
     def receipt_record(record)
       {
-        "schemaVersion" => record["schemaVersion"], "allocationId" => record["allocationId"],
+        "schemaVersion" => record["schemaVersion"], "kind" => RECEIPT_KIND,
+        "allocationId" => record["allocationId"],
         "status" => record["status"], "sessionId" => record["sessionId"],
         "repositoryIdentity" => record.dig("repository", "identity"), "issue" => record["issue"],
         "headSha" => record["headSha"], "batchId" => record["batchId"],
@@ -691,9 +752,9 @@ module IOSTemplate
         "deviceSet" => record["deviceSet"], "deviceName" => record["deviceName"],
         "udid" => record["udid"], "runtimeIdentifier" => record["runtimeIdentifier"],
         "deviceTypeIdentifier" => record["deviceTypeIdentifier"],
-        "reservedAt" => record["reservedAt"], "createdAt" => record["createdAt"],
+        "reservedAt" => record["reservedAt"], "preparedAt" => record["preparedAt"],
         "releasedAt" => record["releasedAt"], "freeSpace" => record["freeSpace"],
-        "cleanup" => record["cleanup"]
+        "preparation" => record["preparation"], "cleanup" => record["cleanup"]
       }
     end
 
@@ -718,8 +779,10 @@ module IOSTemplate
       end
       File.chmod(0o700, @root)
       @root = File.realpath(@root)
-      @state_path = File.join(@root, "state-v1.json")
-      @lock_path = File.join(@root, "state-v1.lock")
+      @legacy_state_path = File.join(@root, "state-v1.json")
+      @legacy_lock_path = File.join(@root, "state-v1.lock")
+      @state_path = File.join(@root, "dedicated-v1.json")
+      @lock_path = File.join(@root, "dedicated-v1.lock")
     end
 
     def secure_open(path, flags, mode)
@@ -730,14 +793,6 @@ module IOSTemplate
         end
       end
       File.open(path, flags | File::NOFOLLOW, mode)
-    end
-
-    def safe_data_path(value, udid)
-      return nil if value.nil?
-      unless value.is_a?(String) && value.start_with?("/") && udid && value.include?(udid)
-        raise SimulatorResourceError, "Simulator data path does not match its exact UDID"
-      end
-      value
     end
 
     def required(key)
@@ -767,7 +822,7 @@ module IOSTemplate
     end
 
     def validate_identifier!(value, label)
-      unless value.match?(/\Acom\.apple\.CoreSimulator\.(?:SimRuntime|SimDeviceType)\.[A-Za-z0-9_.-]+\z/)
+      unless value.is_a?(String) && value.match?(/\Acom\.apple\.CoreSimulator\.(?:SimRuntime|SimDeviceType)\.[A-Za-z0-9_.-]+\z/)
         raise SimulatorResourceError, "#{label} identifier is invalid"
       end
     end

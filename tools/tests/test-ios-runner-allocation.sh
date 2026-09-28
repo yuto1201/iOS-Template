@@ -64,9 +64,10 @@ abort "empty flags did not complete the shape stages" unless
 allocations = evidence.fetch("simulatorAllocations")
 abort "empty flags did not use exactly one allocation" unless allocations.length == 1
 receipt = JSON.parse(File.binread(File.join(repository, allocations.first.fetch("path"))))
-abort "empty flags did not clean up its allocation" unless
-  receipt.fetch("status") == "released" && receipt.dig("cleanup", "deviceAbsent") == true &&
-  receipt.dig("cleanup", "dataPathAbsent") == true
+abort "empty flags did not return its dedicated lease" unless
+  receipt.fetch("schemaVersion") == 2 && receipt.fetch("kind") == "dedicated-lease" &&
+  receipt.fetch("status") == "released" && receipt.dig("preparation", "erased") == true &&
+  receipt.dig("cleanup", "deviceState") == "Shutdown"
 RUBY
 assert_no_failed_attempts
 /bin/cp "$scratch/runner-with-adapter-flags.sh" "$runner"
@@ -85,38 +86,43 @@ simctl = commands.select { |fields| fields[0] == "xcrun" && fields[2] == "simctl
 creates = simctl.select { |fields| fields[3] == "create" }
 deletes = simctl.select { |fields| fields[3] == "delete" }
 erases = simctl.select { |fields| fields[3] == "erase" }
-abort "schema v2 runner did not create exactly four sequential devices" unless creates.length == 4
-abort "schema v2 runner did not delete exactly four devices" unless deletes.length == 4
-abort "schema v2 runner used legacy erase" unless erases.empty?
-expected_cases = %w[iphone-en iphone-ja ipad-en ipad-ja]
-abort "allocation order changed" unless creates.map { |fields| expected_cases.find { |id| fields[4].include?("-#{id}-") } } == expected_cases
-expected_udids = (1..4).map { |slot| format("00000000-0000-0000-0000-%012d", slot) }
-abort "delete order changed" unless deletes.map { |fields| fields[4] } == expected_udids
-expected_udids.each_cons(2) do |current, following|
-  delete_index = commands.index { |fields| fields[0] == "xcrun" && fields[2] == "simctl" && fields[3] == "delete" && fields[4] == current }
-  create_index = commands.index { |fields| fields[0] == "xcrun" && fields[2] == "simctl" && fields[3] == "create" && fields[4].include?(following.end_with?("2") ? "-iphone-ja-" : following.end_with?("3") ? "-ipad-en-" : "-ipad-ja-") }
-  abort "next Simulator was created before deletion confirmation" unless delete_index && create_index && delete_index < create_index
+abort "schema v2 runner created a Simulator" unless creates.empty?
+abort "schema v2 runner deleted a Simulator" unless deletes.empty?
+iphone = "00000000-0000-0000-0000-000000000001"
+ipad = "00000000-0000-0000-0000-000000000003"
+abort "schema v2 runner did not erase the dedicated device before each case" unless erases.map { |fields| fields[4] } == [iphone, iphone, ipad, ipad]
+erase_indexes = commands.each_index.select { |index| commands[index][0] == "xcrun" && commands[index][2..3] == %w[simctl erase] }
+erase_indexes.each_cons(2) do |previous, following|
+  device = commands[following][4]
+  next unless commands[previous][4] == device
+  shutdown = commands[previous...following].any? { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl shutdown] && fields[4] == device }
+  abort "the next case erased the dedicated device before the previous case shut it down" unless shutdown
 end
+expected_cases = %w[iphone-en iphone-ja ipad-en ipad-ja]
 
 records = Dir.glob(File.join(batch_directory, "allocation-*.json")).map { |path| JSON.parse(File.read(path)) }
-abort "released allocation evidence is incomplete" unless records.length == 4
-abort "allocation evidence case order/set is wrong" unless records.map { |record| record.fetch("caseId") }.sort == expected_cases.sort
-abort "allocation identity was reused" unless records.map { |record| record.fetch("allocationId") }.uniq.length == 4
-abort "allocation evidence did not prove deletion" unless records.all? do |record|
-  record.fetch("schemaVersion") == 1 && record.fetch("status") == "released" &&
-    record.dig("cleanup", "status") == "passed" && record.dig("cleanup", "deviceAbsent") == true &&
-    record.dig("cleanup", "dataPathAbsent") == true &&
-    record.dig("freeSpace", "beforeCreateBytes").is_a?(Integer) &&
-    record.dig("freeSpace", "afterDeleteBytes").is_a?(Integer)
+abort "released lease evidence is incomplete" unless records.length == 4
+abort "lease evidence case order/set is wrong" unless records.map { |record| record.fetch("caseId") }.sort == expected_cases.sort
+abort "lease identity was reused" unless records.map { |record| record.fetch("allocationId") }.uniq.length == 4
+abort "lease evidence did not prove erase and shutdown" unless records.all? do |record|
+  record.fetch("schemaVersion") == 2 && record.fetch("kind") == "dedicated-lease" && record.fetch("status") == "released" &&
+    record.dig("preparation", "status") == "passed" && record.dig("preparation", "erased") == true &&
+    record.dig("cleanup", "status") == "passed" && record.dig("cleanup", "deviceState") == "Shutdown" &&
+    record.dig("freeSpace", "beforeLeaseBytes").is_a?(Integer) &&
+    record.dig("freeSpace", "afterReleaseBytes").is_a?(Integer)
+end
+abort "leases used the wrong dedicated device" unless records.all? do |record|
+  record.fetch("udid") == (record.fetch("caseId").start_with?("iphone-") ? iphone : ipad) &&
+    record.fetch("deviceName") == (record.fetch("caseId").start_with?("iphone-") ? "Fixture iPhone" : "Fixture iPad")
 end
 abort "one runner used multiple session identities" unless records.map { |record| record.fetch("sessionId") }.uniq.length == 1
 RUBY
 
-[[ -f "$draft" && ! -e "$final" ]] || { echo "schema v2 runner did not preserve draft evidence after deletion" >&2; exit 1; }
+[[ -f "$draft" && ! -e "$final" ]] || { echo "schema v2 runner did not preserve draft evidence after the leases" >&2; exit 1; }
 write_visual approved
 run_finalize
 (cd "$repo" && "$validator_binary" --file "$final" --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha")
-[[ -f "$final" ]] || { echo "schema v2 evidence did not finalize after Simulator deletion" >&2; exit 1; }
+[[ -f "$final" ]] || { echo "schema v2 evidence did not finalize after the leases were returned" >&2; exit 1; }
 assert_no_failed_attempts
 
 allocation_path="$(jq -r '.simulatorAllocations[0].path' "$final")"
@@ -133,6 +139,46 @@ allocations.each do |entry|
   abort "final allocation digest changed" unless entry.fetch("digest") == digest
 end
 RUBY
+# The validator checks dedicated-lease semantics, not only digests: a receipt that names another
+# device or does not prove the shutdown is rejected even when the evidence digest is updated to match.
+expect_rejected_receipt_edit() {
+  local label="$1" expected="$2" edit="$3" final_mode receipt_mode
+  final_mode="$(/usr/bin/stat -f '%Lp' "$final")"
+  receipt_mode="$(/usr/bin/stat -f '%Lp' "$repo/$allocation_path")"
+  /bin/rm -f "$scratch/final-backup.json" "$scratch/receipt-backup.json"
+  /bin/cp "$final" "$scratch/final-backup.json"
+  /bin/cp "$repo/$allocation_path" "$scratch/receipt-backup.json"
+  /bin/chmod 0600 "$final" "$repo/$allocation_path"
+  ruby -rjson -rdigest - "$final" "$repo/$allocation_path" "$edit" <<'RUBY'
+final_path, receipt_path, edit = ARGV
+receipt = JSON.parse(File.read(receipt_path))
+case edit
+when "device-name" then receipt["deviceName"] = "Other iPhone"
+when "not-shut-down" then receipt["cleanup"]["deviceState"] = "Booted"
+end
+File.write(receipt_path, JSON.pretty_generate(receipt) + "\n")
+evidence = JSON.parse(File.read(final_path))
+evidence.fetch("simulatorAllocations")[0]["digest"] = "sha256:#{Digest::SHA256.file(receipt_path).hexdigest}"
+File.write(final_path, JSON.pretty_generate(evidence) + "\n")
+RUBY
+  if (cd "$repo" && "$validator_binary" --file "$final" --expected-issue 42 \
+      --expected-base "$base_sha" --expected-head "$head_sha") >"$scratch/$label.out" 2>"$scratch/$label.err"; then
+    echo "final validator accepted a $label receipt" >&2
+    exit 1
+  fi
+  grep -Fq -- "$expected" "$scratch/$label.err" || {
+    echo "final validator rejected the $label receipt for the wrong reason" >&2; cat "$scratch/$label.err" >&2; exit 1
+  }
+  /bin/cp "$scratch/final-backup.json" "$final"
+  /bin/cp "$scratch/receipt-backup.json" "$repo/$allocation_path"
+  /bin/chmod "$final_mode" "$final"
+  /bin/chmod "$receipt_mode" "$repo/$allocation_path"
+}
+expect_rejected_receipt_edit renamed-device 'identity does not match the execution' device-name
+expect_rejected_receipt_edit running-device 'was shut down after the case' not-shut-down
+(cd "$repo" && "$validator_binary" --file "$final" --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha") ||
+  { echo "restored lease evidence no longer validates" >&2; exit 1; }
+
 ruby - "$repo/$allocation_path" <<'RUBY'
 path = ARGV.fetch(0)
 File.chmod(0o600, path)
@@ -148,18 +194,21 @@ grep -Fq 'digest does not match exact file bytes' "$scratch/allocation-tamper.er
 prepare_repo allocation-v2-failure valid present full 2
 FAKE_RESOURCE_FAILURE=install expect_execute_failure allocation-v2-failure "case iphone-en failed"
 [[ ! -e "$draft" ]] || { echo "failed schema v2 run published successful evidence" >&2; exit 1; }
-if /usr/bin/find "$adapter_state" -maxdepth 1 -type f -name 'allocated-*' -print -quit | /usr/bin/grep -q .; then
-  echo "failed schema v2 run retained its Simulator" >&2; exit 1
-fi
+[[ "$(/bin/cat "$adapter_state/device-state-00000000-0000-0000-0000-000000000001" 2>/dev/null || printf Shutdown)" == Shutdown ]] || {
+  echo "failed schema v2 run left the dedicated iPhone running" >&2; exit 1
+}
 /usr/bin/ruby -rjson - "$fake_log" "$(dirname "$matrix")" <<'RUBY'
 log_path, batch_directory = ARGV
 commands = File.readlines(log_path, chomp: true).map { |line| line.split("\t") }
 creates = commands.count { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl create] }
 deletes = commands.count { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl delete] }
-abort "failed schema v2 case did not delete its sole allocation" unless creates == 1 && deletes == 1
+erases = commands.count { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl erase] }
+abort "failed schema v2 case created or deleted a Simulator" unless creates.zero? && deletes.zero?
+abort "failed schema v2 case did not erase its sole lease once" unless erases == 1
 receipts = Dir.glob(File.join(batch_directory, "allocation-*.json")).map { |path| JSON.parse(File.read(path)) }
-abort "failed schema v2 case did not publish one cleanup receipt" unless receipts.length == 1
-abort "failed schema v2 case was recorded as complete" unless receipts[0].dig("cleanup", "reason") == "case-failed"
+abort "failed schema v2 case did not publish one lease receipt" unless receipts.length == 1
+abort "failed schema v2 case was recorded as complete" unless receipts[0].dig("cleanup", "reason") == "case-failed" &&
+  receipts[0].dig("cleanup", "deviceState") == "Shutdown"
 RUBY
 assert_no_failed_attempts
 
@@ -194,9 +243,9 @@ if wait "$term_job_pid"; then
   echo "TERM-interrupted schema v2 runner unexpectedly succeeded" >&2
   exit 1
 fi
-if /usr/bin/find "$adapter_state" -maxdepth 1 -type f -name 'allocated-*' -print -quit | /usr/bin/grep -q .; then
-  echo "TERM-interrupted schema v2 run retained its Simulator" >&2; exit 1
-fi
+[[ "$(/bin/cat "$adapter_state/device-state-00000000-0000-0000-0000-000000000001" 2>/dev/null || printf Shutdown)" == Shutdown ]] || {
+  echo "TERM-interrupted schema v2 run left the dedicated iPhone running" >&2; exit 1
+}
 /usr/bin/ruby - "$fake_log" <<'RUBY'
 commands = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
 probe = commands.rindex do |fields|
@@ -208,36 +257,34 @@ mutations = commands.drop(probe + 1).select do |fields|
 end
 owned = "00000000-0000-0000-0000-000000000001"
 abort "schema v2 TERM cleanup touched another device" unless mutations.all? { |fields| fields[4] == owned }
-abort "schema v2 TERM cleanup did not shutdown and delete exactly once" unless
+abort "schema v2 TERM cleanup did not shut the dedicated device down exactly once" unless
   mutations.count { |fields| fields[3] == "shutdown" } == 1 &&
-  mutations.count { |fields| fields[3] == "delete" } == 1 &&
-  mutations.none? { |fields| fields[3] == "erase" }
+  mutations.none? { |fields| %w[delete erase].include?(fields[3]) }
 RUBY
 [[ ! -e "$draft" ]] || { echo "TERM-interrupted schema v2 run published a draft" >&2; exit 1; }
 assert_no_failed_attempts
 
 test_stubborn_probe 2 allocation-v2-timeout
 [[ ! -e "$draft" && ! -e "$final" ]] || { echo "timed-out schema v2 run published successful evidence" >&2; exit 1; }
-if /usr/bin/find "$adapter_state" -maxdepth 1 -type f -name 'allocated-*' -print -quit | /usr/bin/grep -q .; then
-  echo "timed-out schema v2 run retained its Simulator" >&2
+[[ "$(/bin/cat "$adapter_state/device-state-00000000-0000-0000-0000-000000000001" 2>/dev/null || printf Shutdown)" == Shutdown ]] || {
+  echo "timed-out schema v2 run left the dedicated iPhone running" >&2
   exit 1
-fi
+}
 /usr/bin/ruby -rjson - "$fake_log" "$(dirname "$matrix")" <<'RUBY'
 log_path, batch_directory = ARGV
 commands = File.readlines(log_path, chomp: true).map { |line| line.split("\t") }
 creates = commands.count { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl create] }
 deletes = commands.count { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl delete] }
 erases = commands.count { |fields| fields[0] == "xcrun" && fields[2..3] == %w[simctl erase] }
-abort "timed-out schema v2 case did not delete its sole allocation" unless creates == 1 && deletes == 1
-abort "timed-out schema v2 case used legacy erase" unless erases.zero?
+abort "timed-out schema v2 case created or deleted a Simulator" unless creates.zero? && deletes.zero?
+abort "timed-out schema v2 case did not erase its sole lease once" unless erases == 1
 receipts = Dir.glob(File.join(batch_directory, "allocation-*.json")).map { |path| JSON.parse(File.read(path)) }
 abort "timed-out schema v2 case did not publish one cleanup receipt" unless receipts.length == 1
 receipt = receipts.fetch(0)
 abort "timed-out schema v2 cleanup was not bound to the failed case" unless
   receipt.fetch("caseId") == "iphone-en" && receipt.dig("cleanup", "reason") == "case-failed" &&
-    receipt.dig("cleanup", "status") == "passed" && receipt.dig("cleanup", "deviceAbsent") == true &&
-    receipt.dig("cleanup", "dataPathAbsent") == true
+    receipt.dig("cleanup", "status") == "passed" && receipt.dig("cleanup", "deviceState") == "Shutdown"
 RUBY
 assert_no_failed_attempts
 
-echo "schema v2 sequential Simulator allocation runner test passed"
+echo "schema v2 dedicated Simulator lease runner test passed"

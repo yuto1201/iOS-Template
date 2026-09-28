@@ -46,27 +46,21 @@ batch_id="${relative%/simulator-matrix.json}"
 }
 
 make_temp matrix_copy destroy-matrix
-make_temp devices_copy destroy-devices
-make_temp udids destroy-udids
 matrix_io --operation read --repo "$repo_root" --batch "$batch_id" --name simulator-matrix.json >"$matrix_copy"
 matrix_schema="$(ruby -rjson -e 'puts JSON.parse(File.binread(ARGV.fetch(0))).fetch("schemaVersion")' "$matrix_copy")"
 if [[ "$matrix_schema" == 2 ]]; then
   ruby tools/validate-simulator-matrix.rb complete "$matrix_copy" "$batch_id"
-  echo "schema v2 matrix contains conditions only; release its versioned allocations through ios-simulator-resource.rb"
+  echo "schema v2 matrix contains conditions only; dedicated Simulator leases are returned through ios-simulator-resource.rb and devices are never deleted"
   exit 0
 fi
 [[ "$matrix_schema" == 1 ]] || {
   echo "blocked:environment: unsupported Simulator matrix schema" >&2
   exit 1
 }
-bounded_run simulator-list-before-destroy "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" xcrun simctl list devices -j >"$devices_copy"
-matrix_io --operation replace --repo "$repo_root" --batch "$batch_id" --source "$devices_copy" --name devices.json
-ruby tools/validate-simulator-matrix.rb complete "$matrix_copy" "$batch_id" "$devices_copy"
-ruby -rjson - "$matrix_copy" >"$udids" <<'RUBY'
+# D-063: verification tools never delete Simulators. Report the legacy batch devices instead.
+ruby tools/validate-simulator-matrix.rb complete "$matrix_copy" "$batch_id"
+ruby -rjson - "$matrix_copy" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
-puts matrix.fetch("cases").map { |entry| entry.fetch("udid") }
+udids = matrix.fetch("cases").map { |entry| entry.fetch("udid") }
+puts "legacy schema v1 matrix Simulators are not deleted by tools (D-063); remove them manually when no longer needed: #{udids.join(" ")}"
 RUBY
-
-while IFS= read -r udid; do
-  bounded_run simulator-delete "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" xcrun simctl delete "$udid"
-done <"$udids"

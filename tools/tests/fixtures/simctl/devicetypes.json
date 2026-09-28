@@ -26,6 +26,11 @@
       "productFamily": "iPad"
     },
     {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-A16",
+      "name": "iPad (A16)",
+      "productFamily": "iPad"
+    },
+    {
       "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Air-11-inch-M2",
       "name": "iPad Air 11-inch (M2)",
       "productFamily": "iPad"

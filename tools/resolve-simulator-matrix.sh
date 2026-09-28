@@ -117,16 +117,19 @@ if [[ "$scope" == targeted ]]; then
   bounded_run simulator-matrix-resolver "${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}" \
     swift tools/resolve-simulator-matrix.swift \
     --runtimes "$runtimes_input" --device-types "$types_input" \
+    --dedicated-config Config/dedicated-simulators.json \
     --batch-id "$batch_id" --scope targeted --case-ids "$requested_case_ids" >"$working_matrix"
 elif [[ "$scope" == iphone-ja ]]; then
   bounded_run simulator-matrix-resolver "${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}" \
     swift tools/resolve-simulator-matrix.swift \
     --runtimes "$runtimes_input" --device-types "$types_input" \
+    --dedicated-config Config/dedicated-simulators.json \
     --batch-id "$batch_id" --scope iphone-ja >"$working_matrix"
 else
   bounded_run simulator-matrix-resolver "${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}" \
     swift tools/resolve-simulator-matrix.swift \
     --runtimes "$runtimes_input" --device-types "$types_input" \
+    --dedicated-config Config/dedicated-simulators.json \
     --batch-id "$batch_id" >"$working_matrix"
 fi
 
