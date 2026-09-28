@@ -127,15 +127,15 @@ D-050対象candidateはDelivery profileによる通常のreview省略経路を�
 
 ### 1.5.6 AI検証用Simulatorの資源契約
 
-全PhaseのAI検証用iPhone／iPad Simulatorは必要時に作成し、最終使用後にdeviceとそのdataを削除する使い捨て資源とする。停止またはeraseだけを削除完了とせず、device一覧とdata残留を確認してから利用枠を返す。成功、失敗、timeout、cancel、部分作成失敗をcleanup対象とし、強制終了で回収できなかったowned deviceはdurable記録から次回起動時に回収する。
+全PhaseのAI検証とApp Store撮影は、repository専用のiPhone 1台とiPad 1台だけを使う（D-063）。Templateは`iOS-Template iPhone 17`（Device Type iPhone 17、Runtime iOS 27.0）と`iOS-Template iPad (A16)`（Device Type iPad (A16)、Runtime iOS 27.0）、派生アプリは表示名を前置した同じDevice Type／Runtimeの2台とする。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台であることを確認する。0台または2台以上なら`blocked:environment`とし、代わりのdeviceを作成・流用しない。専用deviceの作成は、後続Issueが定める明示的な初期設定手順だけで行う。
 
-同じMacの全application、repository、worktree、AI sessionを合計して、iPhone／iPad Simulatorを最大4枠とする。managerが所有するdeviceは作成中の予約、作成済み、一時Shutdown、削除待ちを含めて数える。active durable recordを持たない管理外の`iOS-Template-` deviceは保護対象のままとし、削除・停止・変更しない。その状態がexactに`Shutdown`なら4枠へ数えず、新規作成を止めない。停止中はCPU／memoryを使わず、disk使用量は作成前の空き容量確認が扱う。`Shutdown`以外の状態は4枠へ数える。4枠は上限であって常設poolや稼働目標ではない。一つのsessionが同時に作成・保持できるdeviceは原則1台であり、子process／test workerは親sessionの枠を継承する。例外は対象と理由についてユーザーの明示判断を得るが、Mac全体の4枠上限は引き上げない。
+検証とApp Store撮影はdeviceを作成、clone、rename、削除しない。専用device以外を起動、erase、install、test対象にしない。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`とし、clone deviceを作らない。
 
-作成前にMac共通枠とsession枠を原子的に取得する。5台目または同一sessionの2台目は作成せず、取消可能かつ有限の待機にする。空き容量／memoryが不足する場合は4台未満でも新規作成と長時間検証を止め、現在のユーザー資源を削除して枠を作らない。同一sessionの日本語／英語×iPhone／iPad条件は、device作成、検証、必要証拠のdevice外保存、削除確認、枠返却を一条件ずつ行う。
+専用deviceの排他は、repository lockの内側でMac共通resource managerのleaseとして原子的に取得する。同じMacの全application、repository、worktree、AI sessionを合計して、起動中のAI検証用iPhone／iPad Simulatorを最大4台とし、一つのsessionが同時にleaseできる専用deviceは1台とする。子process／test workerは親sessionの枠を継承する。active durable recordを持たない管理外の`iOS-Template-` deviceは保護対象のままとし、削除・停止・変更しない。その状態がexactに`Shutdown`なら4枠へ数えず、`Shutdown`以外なら数える（D-062）。満杯または同じ専用deviceが使用中なら、取消可能かつ有限の待機にする。空き容量／memoryが不足する場合は新規caseと長時間検証を止め、現在のユーザー資源を削除して枠を作らない。
 
-削除対象は作成記録、exact UDID、repository／worktree／session／run owner、lease、非活動状態を照合できるdeviceだけとする。手動device、他owner、使用中、不明なdeviceを削除せず、名前やShutdown状態だけで所有を推測しない。蓄積済みdeviceはinventoryとdry-runで候補を示し、所有と未使用を証明できる対象だけを回収する。Runtime、Xcode、共通cache、ユーザーのDerivedData、canonical evidenceを一括削除しない。検証前後の空き容量と残留数を記録し、削除失敗は未回収として報告する。
+各caseの前に専用deviceを停止してeraseし、caseのlocale／languageを設定してから起動する。検証と必要証拠のdevice外保存が終わったら停止し、停止を確認してからleaseを返す。同一sessionの日本語／英語×iPhone／iPad条件は、同じdeviceを使うものも含めて一条件ずつ行う。成功、失敗、timeout、cancelのいずれでも停止とlease返却を行い、強制終了で返却できなかったleaseはdurable記録から次回起動時に回収する。手動device、他owner、使用中、不明なdevice、Runtime、Xcode、共通cache、ユーザーのDerivedData、canonical evidenceを一括削除しない。
 
-#93以後の新規matrixはschema v2としてRuntime／Device Type／locale／case順だけを封印し、実行UDIDはcaseごとのversioned allocation記録へ分離する。runnerはrepository lockの内側でMac共通枠を取得し、一台ずつ作成・検証・証拠保全・削除する。旧schema v1の固定UDID matrix、sealed contract、既存証拠は書き換えずlegacy consumerとして維持する。#89は移植元の履歴として保持する。skills、App Store撮影、既存Issue移行も同じ#93 consumerへ接続し、未移行の旧証拠をschema v2の実行結果へ付け替えない。
+専用device契約のtoolが実装されるまで、canonical native検証とApp Store撮影を実行しない。実装を含まないBaseで封印済みのcontractはnative検証を行えず、native証拠が必要ならsuccessor Issueへ移す。旧schema v1の固定UDID matrix、#93以後のschema v2 matrix、sealed contract、既存証拠は書き換えずlegacy consumerとして維持し、新しい実行結果を旧証拠へ付け替えない。
 
 ## 2. Delivery stage
 
@@ -165,7 +165,7 @@ Delivery profileは変更の危険度を表す。
 
 Verification scopeは端末・言語の範囲を表す。
 
-- `shape`は`iphone-ja`。最新利用可能iOSのiPhone Pro（Pro Maxを除く）、`ja_JP` / `ja`の1条件。
+- `shape`は`iphone-ja`。専用iPhone（Device Type iPhone 17、Runtime iOS 27.0）の`ja_JP` / `ja`の1条件。
 - applicationを検証する`harden`は`targeted`。`iphone-en`、`iphone-ja`、`ipad-en`、`ipad-ja`のうち、Issueの変更対象に必要な非空のcanonical部分集合。
 - `release`は`full`。上記4条件を固定順ですべて実行する。
 

@@ -557,3 +557,13 @@
 - Decision: active durable recordを持たない管理外の`iOS-Template-` deviceは保護対象のまま削除・停止・変更しない。状態がexactに`Shutdown`ならMac共通の4枠へ数えず、新規作成を止めない。停止中はCPU／memoryを使わず、disk使用量は作成前の空き容量確認が扱う。`Shutdown`以外の状態は、管理下の予約、active、削除待ち、cleanup-failedと合算して4枠へ数え、到達時は既存の上限messageで新規作成を拒否する。
 - Consequence: 旧runnerはこのallocatorとは無関係に自分のdeviceを起動できるため、起動中の管理外deviceだけを数えるのが強制できる上限である。各派生アプリが共通lifecycleを採用するまでは、一時的な4枠超過があり得る。session 1台、作成前の空き容量確認、所有identityに基づく回収規則は維持する。
 - Related Issue: #178
+
+## D-063: AI検証とApp Store撮影をrepository専用の2台に限定する
+
+- Date: 2026-09-28
+- Status: 確定
+- Supersedes: D-009の最新iPhone Pro／最新iPad Air、D-016のbatch開始時の最新Runtime／device解決、D-040が維持した「caseごとに作成し最終使用後に削除する」資源契約、`specs/architecture.md` §9のApp Store撮影端末を公式要件から別に解決する規則。D-009の日英4条件、D-040のstable session identity・repository lock内のMac共通lease・有限待機・空き容量確認・管理外device保護、D-062の停止中管理外deviceの扱い、schema v1／v2のlegacy受理は維持する。
+- Context: 2026-09-28、他repositoryの並列testがclone deviceを作り続け、Macの1分平均負荷は最大966、swapはほぼ上限に達し、#182のnative検証が失敗して再試行もできなかった。caseごとの作成・削除と他repositoryの残存deviceにより、device数と負荷を予測できない。ユーザーはSimulatorを初期化し、このrepository専用のiOS 27 iPhone 17とiPad (A16)だけを使うことを厳守するよう指示した。あわせて、各検証前のeraseと、派生アプリも各自専用の2台を持つことを選んだ。
+- Decision: 各repositoryはAI検証とApp Store撮影に、専用のiPhone 1台とiPad 1台だけを使う。Templateは`iOS-Template iPhone 17`（Device Type iPhone 17、Runtime iOS 27.0）と`iOS-Template iPad (A16)`（Device Type iPad (A16)、Runtime iOS 27.0）、派生アプリは表示名を前置した同じDevice Type／Runtimeの2台（例：`PayCycle iPhone 17`）とする。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台であることを確認し、0台または2台以上なら`blocked:environment`とする。`iphone-en`／`iphone-ja`は専用iPhone、`ipad-en`／`ipad-ja`は専用iPadを使い、同じdeviceのcaseは一件ずつ実行する。各caseの前に専用deviceを停止・eraseし、caseのlocale／languageを設定して起動し、証拠をdevice外へ保存してから停止する。専用deviceの排他はMac共通resource managerのleaseで取り、起動中のAI検証用deviceはMac全体で最大4台・sessionごと1台とする。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`で実行する。検証とApp Store撮影はdeviceを作成・clone・rename・削除せず、専用device以外を起動・erase・install・test対象にしない。専用deviceの作成は、後続Issueが定める明示的な初期設定手順だけで行う。App Store用画像も専用2台だけで撮影し、公式の必須サイズは確定済みの合成経路で規定canvasへ仕上げる。満たせないサイズがあればupload前に`blocked:user`とする。
+- Consequence: 検証とApp Store撮影のtool（matrix、resource manager、runner、validator、撮影、bootstrap）は後続Issueで専用device契約へ移し、それまでcanonical native検証とApp Store撮影を実行しない。専用device契約を実装していないBaseで封印済みのcontractはnative検証を行えないため、native証拠が必要な場合はsuccessor Issueへ移す（#182を含む）。既存のschema v1／v2 matrix、sealed contract、証拠はimmutable legacyとして受理し、変換や付け替えをしない。device数はrepositoryごとに2台で一定になり、disk消費はeraseで上限が保たれる。
+- Related Issue: #183
