@@ -111,7 +111,8 @@ def transition_allowed?(from, to)
   false
 end
 
-def latest_owned_state_marker(document, current, owner)
+# before: [time, comment index] of a later marker; only strictly earlier markers are candidates.
+def latest_owned_state_marker(document, current, owner, before: nil, with_position: false)
   comments = document.fetch('comments')
   fail_closed('Issue comments are invalid') unless comments.is_a?(Array)
   candidates = []
@@ -140,6 +141,7 @@ def latest_owned_state_marker(document, current, owner)
       else
         next unless marker['resumeState'].nil?
       end
+      next if before && ([marker_time, index] <=> before) >= 0
       candidates << [marker_time, created_at, index, marker]
     rescue JSON::ParserError, ArgumentError
       next
@@ -149,9 +151,25 @@ def latest_owned_state_marker(document, current, owner)
   newest_time = candidates.map(&:first).max
   newest = candidates.select { |entry| entry.first == newest_time }
   fail_closed('owned current-state transition marker history is ambiguous') unless newest.length == 1
-  newest.fetch(0).fetch(3)
+  entry = newest.fetch(0)
+  with_position ? [entry.fetch(3), [entry.fetch(0), entry.fetch(2)]] : entry.fetch(3)
 rescue KeyError
   fail_closed('Issue comments are invalid')
+end
+
+# Walks nested stop states (blocked:* and paused) back through strictly earlier owned markers.
+# Returns [immediate resume state, original non-stop state]. Missing, ambiguous, or cyclic
+# history fails closed without guessing.
+def resume_targets(document, current, owner)
+  marker, position = latest_owned_state_marker(document, current, owner, with_position: true)
+  immediate = marker.fetch('resumeState')
+  state = immediate
+  64.times do
+    return [immediate, state] unless blocked_state?(state) || state == 'paused'
+    marker, position = latest_owned_state_marker(document, state, owner, before: position, with_position: true)
+    state = marker.fetch('resumeState')
+  end
+  fail_closed('nested stop-state history is too deep or cyclic')
 end
 
 def sha(value, name)
@@ -852,8 +870,11 @@ when 'state-from-issue'
 when 'resume-from-comments'
   current, owner = ARGV
   fail_closed('resume-from-comments arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)
-  marker = latest_owned_state_marker(JSON.parse(STDIN.read), current, owner)
-  puts marker.fetch('resumeState')
+  puts resume_targets(JSON.parse(STDIN.read), current, owner).last
+when 'resume-targets-from-comments'
+  current, owner = ARGV
+  fail_closed('resume-targets-from-comments arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)
+  puts resume_targets(JSON.parse(STDIN.read), current, owner).uniq
 when 'latest-state-marker'
   current, owner = ARGV
   fail_closed('latest-state-marker arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)

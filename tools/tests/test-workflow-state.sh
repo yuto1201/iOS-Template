@@ -357,6 +357,44 @@ ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --typ
 assert_fails 'blocked resume without history fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:ops"]'
 
+# Nested stops resume to the immediate stop state or to the original working state. Markers for
+# the same state within one second are ambiguous by design, so the transitions are spaced apart.
+state_transition() {
+  "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$1" --to "$2" >/dev/null
+  sleep 1
+}
+reset_nested_state() {
+  printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+  printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+  cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
+  rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+}
+reset_nested_state
+state_transition approved blocked:dependency
+state_transition blocked:dependency paused
+[[ "$("$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" | jq -r '.resumeState')" == approved ]] ||
+  { echo 'nested pause did not report the original working state' >&2; exit 1; }
+state_transition paused blocked:dependency
+[[ "$("$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" | jq -r '.resumeState')" == approved ]] ||
+  { echo 'a stop re-entered from paused did not report the original working state' >&2; exit 1; }
+state_transition blocked:dependency approved
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+
+reset_nested_state
+state_transition approved blocked:dependency
+state_transition blocked:dependency paused
+state_transition paused approved
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+
+# Missing nested history fails closed instead of guessing the original state.
+reset_nested_state
+state_transition approved blocked:dependency
+state_transition blocked:dependency paused
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments.reject! { |comment| comment.fetch("body").include?(%q("to":"blocked:dependency")) }; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE"
+assert_fails 'nested resume without the original stop marker fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to approved
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+reset_nested_state
+
 if [[ "$scope" == scoped ]]; then
   echo 'PASS: scoped GitHub preflight and revised-contract state boundaries'
   exit 0
