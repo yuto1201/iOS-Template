@@ -25,17 +25,37 @@ escaped_fixture=""
 seed_parent=""
 trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"; [[ -z "$escaped_fixture" ]] || rm -rf "$escaped_fixture"; [[ -z "$seed_parent" ]] || rm -rf "$seed_parent"' EXIT
 
+# A derived repository builds one seed for the whole `all` run and passes it to each suite, which
+# first proves the seed is still a clean repository directory at the same Head.
+verify_shared_seed() {
+  local seed="$1" expected_head="$2"
+  [[ "$seed" == /* && -d "$seed/.git" && ! -L "$seed" ]] || { echo 'shared bootstrap seed is not a repository directory' >&2; exit 1; }
+  [[ -z "$(git -C "$seed" status --porcelain --untracked-files=all)" ]] || { echo 'shared bootstrap seed has local changes' >&2; exit 1; }
+  [[ "$(git -C "$seed" rev-parse HEAD)" == "$expected_head" ]] || { echo 'shared bootstrap seed Head changed' >&2; exit 1; }
+}
 if [[ "$mode" == "all" ]]; then
+  if [[ -f "$source_root/Config/app-identity.json" && ! -L "$source_root/Config/app-identity.json" && -z "${IOS_TEMPLATE_BOOTSTRAP_SEED-}" ]]; then
+    seed_parent="$(mktemp -d -t app-bootstrap-seed.XXXXXX)"
+    IOS_TEMPLATE_BOOTSTRAP_SEED="$(ruby "$source_root/tools/tests/lib/bootstrap-fixture.rb" create "$source_root" "$seed_parent/repository")"
+    IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD="$(git -C "$IOS_TEMPLATE_BOOTSTRAP_SEED" rev-parse HEAD)"
+    export IOS_TEMPLATE_BOOTSTRAP_SEED IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD
+  fi
   for suite in validation transform transaction trunk-default cleanup-failure safety; do
+    [[ -z "${IOS_TEMPLATE_BOOTSTRAP_SEED-}" ]] || verify_shared_seed "$IOS_TEMPLATE_BOOTSTRAP_SEED" "$IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD"
     bash "$0" "$suite"
   done
+  [[ -z "${IOS_TEMPLATE_BOOTSTRAP_SEED-}" ]] || verify_shared_seed "$IOS_TEMPLATE_BOOTSTRAP_SEED" "$IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD"
   echo 'all app bootstrap tests passed'
   exit 0
 fi
-
 if [[ -f "$source_root/Config/app-identity.json" && ! -L "$source_root/Config/app-identity.json" ]]; then
-  seed_parent="$(mktemp -d -t app-bootstrap-seed.XXXXXX)"
-  root="$(ruby "$source_root/tools/tests/lib/bootstrap-fixture.rb" create "$source_root" "$seed_parent/repository")"
+  if [[ -n "${IOS_TEMPLATE_BOOTSTRAP_SEED-}" ]]; then
+    verify_shared_seed "$IOS_TEMPLATE_BOOTSTRAP_SEED" "${IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD-}"
+    root="$IOS_TEMPLATE_BOOTSTRAP_SEED"
+  else
+    seed_parent="$(mktemp -d -t app-bootstrap-seed.XXXXXX)"
+    root="$(ruby "$source_root/tools/tests/lib/bootstrap-fixture.rb" create "$source_root" "$seed_parent/repository")"
+  fi
   cd "$root"
 fi
 
