@@ -106,44 +106,46 @@ resolve_xcode_environment() {
   probe_xcode_environment
 }
 
-run_xcodebuild() {
-  local command_stage="${IOS_TEMPLATE_COMMAND_STAGE:-${stage:-xcodebuild}}"
-  local timeout_seconds="${IOS_TEMPLATE_XCODEBUILD_TIMEOUT_SECONDS:-1200}"
+measured_elapsed_seconds() {
+  local value=""
+  [[ -r "$1" ]] && value="$(/bin/cat "$1" 2>/dev/null)"
+  [[ "$value" =~ ^[0-9]+\.[0-9]{3}$ ]] || value="unmeasured"
+  printf "%s" "$value"
+}
+
+# Runs one trusted Xcode tool under the bounded wrapper and records a diagnostic with the
+# wrapper-measured elapsed time for timeouts and reclaimed or unreclaimed process-group members.
+run_bounded_xcode_tool() {
+  local command_stage=$1 timeout_seconds=$2
+  shift 2
   positive_timeout "$timeout_seconds" || return 2
-  local command_status=0
+  local command_status=0 elapsed_file="" elapsed=""
   IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE=""
+  elapsed_file="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/ios-template-elapsed.XXXXXX")" || return 1
   run_scrubbed DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" /usr/bin/ruby --disable-gems "$BOUNDED_COMMAND_PATH" \
-    --stage "$command_stage" --timeout-seconds "$timeout_seconds" --grace-seconds 5 -- "$XCODEBUILD_PATH" "$@" || command_status=$?
-  if [[ "$command_status" -eq 124 ]]; then
-    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $command_stage; elapsedSeconds=$timeout_seconds; timeoutSeconds=$timeout_seconds"
-  fi
+    --stage "$command_stage" --timeout-seconds "$timeout_seconds" --grace-seconds 5 \
+    --elapsed-file "$elapsed_file" -- "$@" || command_status=$?
+  elapsed="$(measured_elapsed_seconds "$elapsed_file")"
+  /bin/rm -f "$elapsed_file"
+  case "$command_status" in
+    124) IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $command_stage; elapsedSeconds=$elapsed; timeoutSeconds=$timeout_seconds" ;;
+    122) IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="reclaimed residual process-group members at $command_stage; elapsedSeconds=$elapsed; timeoutSeconds=$timeout_seconds" ;;
+    123) IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="could not reclaim process-group members at $command_stage; elapsedSeconds=$elapsed; timeoutSeconds=$timeout_seconds" ;;
+  esac
   return "$command_status"
+}
+
+run_xcodebuild() {
+  run_bounded_xcode_tool "${IOS_TEMPLATE_COMMAND_STAGE:-${stage:-xcodebuild}}" \
+    "${IOS_TEMPLATE_XCODEBUILD_TIMEOUT_SECONDS:-1200}" "$XCODEBUILD_PATH" "$@"
 }
 
 run_xcrun() {
-  local command_stage="${IOS_TEMPLATE_COMMAND_STAGE:-${stage:-xcrun}}"
-  local timeout_seconds="${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}"
-  positive_timeout "$timeout_seconds" || return 2
-  local command_status=0
-  IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE=""
-  run_scrubbed DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" /usr/bin/ruby --disable-gems "$BOUNDED_COMMAND_PATH" \
-    --stage "$command_stage" --timeout-seconds "$timeout_seconds" --grace-seconds 5 -- "$TRUSTED_XCRUN" "$@" || command_status=$?
-  if [[ "$command_status" -eq 124 ]]; then
-    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $command_stage; elapsedSeconds=$timeout_seconds; timeoutSeconds=$timeout_seconds"
-  fi
-  return "$command_status"
+  run_bounded_xcode_tool "${IOS_TEMPLATE_COMMAND_STAGE:-${stage:-xcrun}}" \
+    "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$TRUSTED_XCRUN" "$@"
 }
 
 run_xcode_swift() {
-  local command_stage="${IOS_TEMPLATE_COMMAND_STAGE:-${stage:-swift-validation}}"
-  local timeout_seconds="${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}"
-  positive_timeout "$timeout_seconds" || return 2
-  local command_status=0
-  IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE=""
-  run_scrubbed DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" /usr/bin/ruby --disable-gems "$BOUNDED_COMMAND_PATH" \
-    --stage "$command_stage" --timeout-seconds "$timeout_seconds" --grace-seconds 5 -- "$XCODE_SWIFT_PATH" "$@" || command_status=$?
-  if [[ "$command_status" -eq 124 ]]; then
-    IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $command_stage; elapsedSeconds=$timeout_seconds; timeoutSeconds=$timeout_seconds"
-  fi
-  return "$command_status"
+  run_bounded_xcode_tool "${IOS_TEMPLATE_COMMAND_STAGE:-${stage:-swift-validation}}" \
+    "${IOS_TEMPLATE_SWIFT_TIMEOUT_SECONDS:-600}" "$XCODE_SWIFT_PATH" "$@"
 }
