@@ -214,19 +214,57 @@ class VerificationContractTest < Minitest::Test
     IOSTemplate::ReviewContract.validate_evidence_scope!(contract, proof)
 
     [
-      ->(bad) { bad["cases"] << {"id"=>"ipad-ja"} },
-      ->(bad) { bad["cases"].clear },
-      ->(bad) { bad["visualEvaluation"]["status"] = "passed" },
-      ->(bad) { bad["visualEvaluation"]["cases"] = [{"id"=>"iphone-ja"}] },
-      ->(bad) { bad["visualEvaluation"]["packet"] = {} },
-      ->(bad) { bad.delete("visualEvaluation") }
-    ].each do |mutate|
+      [->(bad) { bad["cases"] << {"id"=>"ipad-ja"} }, CASE_SCOPE_MESSAGE],
+      [->(bad) { bad["cases"].clear }, CASE_SCOPE_MESSAGE],
+      [->(bad) { bad["visualEvaluation"]["status"] = "passed" }, NONVISUAL_MESSAGE],
+      [->(bad) { bad["visualEvaluation"]["cases"] = [{"id"=>"iphone-ja"}] }, NONVISUAL_MESSAGE],
+      [->(bad) { bad["visualEvaluation"]["packet"] = {} }, NONVISUAL_MESSAGE],
+      [->(bad) { bad.delete("visualEvaluation") }, NONVISUAL_MESSAGE]
+    ].each do |mutate, message|
       bad = Marshal.load(Marshal.dump(proof))
       mutate.call(bad)
-      assert_raises(IOSTemplate::ReviewContract::ValidationError) do
+      error = assert_raises(IOSTemplate::ReviewContract::ValidationError) do
         IOSTemplate::ReviewContract.validate_evidence_scope!(contract, bad)
       end
+      assert_includes error.message, message
     end
+  end
+
+  CASE_SCOPE_MESSAGE = "verification or visual cases differ from sealed scope"
+  NONVISUAL_MESSAGE = "nonvisual application evidence must declare exactly not-applicable visual evaluation without findings"
+
+  def harden_contract(visual_mapping:)
+    contract = parse(scoped_body)
+    contract["deliveryStage"] = {"name"=>"harden", "reason"=>"One quality concern.", "timeBudgetMinutes"=>120}
+    contract["verificationScope"] = {"name"=>"targeted", "reason"=>"Only the Japanese iPhone case is affected."}
+    unless visual_mapping
+      contract["verification"]["acceptanceMappings"].each { |mapping| mapping["checks"].reject! { |check| check.start_with?("visual:") } }
+    end
+    contract
+  end
+
+  def test_review_follows_the_harden_visual_mapping_decision
+    cases = IOSTemplate::VerificationScope.case_ids_for_contract(harden_contract(visual_mapping: true)).map { |id| {"id"=>id} }
+    nonvisual = {"changeClassification"=>"application-code", "cases"=>cases,
+                 "visualEvaluation"=>{"status"=>"not-applicable", "findings"=>[]}}
+    visual = {"changeClassification"=>"application-code", "cases"=>cases,
+              "visualEvaluation"=>{"status"=>"passed", "cases"=>cases}}
+
+    without_mapping = harden_contract(visual_mapping: false)
+    refute IOSTemplate::DeliveryStage.visual_required?(without_mapping)
+    IOSTemplate::ReviewContract.validate_evidence_scope!(without_mapping, nonvisual)
+    error = assert_raises(IOSTemplate::ReviewContract::ValidationError) do
+      IOSTemplate::ReviewContract.validate_evidence_scope!(without_mapping, visual)
+    end
+    assert_includes error.message, NONVISUAL_MESSAGE
+
+    with_mapping = harden_contract(visual_mapping: true)
+    assert IOSTemplate::DeliveryStage.visual_required?(with_mapping)
+    IOSTemplate::ReviewContract.validate_evidence_scope!(with_mapping, visual)
+    error = assert_raises(IOSTemplate::ReviewContract::ValidationError) do
+      IOSTemplate::ReviewContract.validate_evidence_scope!(with_mapping, nonvisual)
+    end
+    assert_includes error.message, CASE_SCOPE_MESSAGE
   end
 
   def test_review_keeps_visual_case_scope_for_release_application_evidence

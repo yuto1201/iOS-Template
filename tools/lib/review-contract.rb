@@ -686,7 +686,7 @@ module IOSTemplate
         reject("verification or visual cases differ from sealed scope") unless cases.is_a?(Array) &&
           cases.all? { |entry| entry.is_a?(Hash) } && cases.map { |entry| entry["id"] } == expected
       else
-        reject("verification or visual cases differ from sealed scope") unless
+        reject("nonvisual application evidence must declare exactly not-applicable visual evaluation without findings") unless
           verify["visualEvaluation"] == {"status" => "not-applicable", "findings" => []}
       end
     rescue ArgumentError, TypeError => error
