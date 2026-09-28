@@ -766,7 +766,7 @@ for index in "${case_indexes[@]}"; do
     run_xcrun_bounded /dev/null "$run_state/$case_id-liveness-error" \
       simctl spawn "$udid" /bin/kill -0 "$launch_pid" || probe_status=$?
     if [[ "$probe_status" -eq 124 ]]; then
-      case_failed="process liveness probe timed out"
+      case_failed="process liveness probe timed out (${IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE:-timeout})"
     elif [[ "$probe_status" -ne 0 ]]; then
       case_failed="process liveness"
     fi
@@ -839,7 +839,7 @@ for index in "${case_indexes[@]}"; do
     run_xcrun_bounded /dev/null "$run_state/$case_id-post-check-liveness-error" \
       simctl spawn "$udid" /bin/kill -0 "$launch_pid" || probe_status=$?
     if [[ "$probe_status" -eq 124 ]]; then
-      case_failed="post-check process liveness probe timed out"
+      case_failed="post-check process liveness probe timed out (${IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE:-timeout})"
     elif [[ "$probe_status" -ne 0 ]]; then
       case_failed="post-check process liveness"
     fi
