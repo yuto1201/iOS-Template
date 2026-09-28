@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" rg ruby git shasum xcrun /usr/libexec/PlistBuddy
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 temp_root=$(mktemp -d /tmp/ios-template-admob-test.XXXXXX)
 
