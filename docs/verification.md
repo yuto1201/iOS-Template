@@ -554,6 +554,8 @@ Codex環境でXcodeBuildMCPが利用できる場合、Project、scheme、Simulat
 
 すべての`xcodebuild`／Unit／UI Testは既定1200秒、`xcrun`／`simctl`は180秒、Swift validatorは600秒の有限timeoutを持ちます。各値は正の秒数へ明示overrideできます。timeout wrapperはcommandごとに新しいprocess groupを作り、そのgroupだけへTERM、5秒grace、必要時KILLを送ります。`killall`、Xcode終了、`simctl shutdown all`は行いません。
 
+leaderの終了後もprocess groupを検査します。leaderが正常に終了した場合、残ったmemberが2秒以内に自然終了するのを待ちます。残っていればそのgroupだけへTERM、grace、KILLを送り、exit 122で失敗します。timeout、INT、TERMの後も、groupが空になったことを有界に確認します。KILL後もmemberが残る場合は、どの経路でもexit 123で失敗します。122と123の診断には、`stage`、wrapperが測った`elapsedSeconds`、`residualMembers`（残存数）を含めます。正常終了後の場合は`leaderStatus`、timeout／signal後の場合は`timeoutSeconds`も含めます。`--elapsed-file`を渡すと、wrapperは全経路で実測の経過秒数を書き込みます。`run_xcodebuild`、`run_xcrun`、`run_xcode_swift`はこの値をfailure messageの`elapsedSeconds`へ使い、設定したtimeout値を経過時間として書きません。
+
 timeoutはexit 124と`stage`、`elapsedSeconds`、`timeoutSeconds`を返します。runnerはそのattemptのactive Simulatorをallocation identityで回収し、削除確認後にprivate workspaceとIssue／Head lockを回収します。cleanup失敗時は枠とdurable recordを残し、成功形式の`verify.json`を発行しません。repository runnerは失敗／timeoutをIssue／Head／scope／attemptへ記録し、直接再実行を拒否します。`--retry-after-targeted <前回失敗test>`を指定した一度だけ、そのtestを先に診断実行し、成功時に同じcanonical suiteを再試行します。診断失敗または2回目のsuite失敗後は停止します。
 
 ## 6. 排他制御
