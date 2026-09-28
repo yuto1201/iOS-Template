@@ -409,10 +409,11 @@ for selector in \
     exit 1
   }
 done
-create_count="$(/usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && $4 == "create" { count++ } END { print count + 0 }' "$fake_log")"
+create_count="$(/usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && ($4 == "create" || $4 == "clone" || $4 == "rename") { count++ } END { print count + 0 }' "$fake_log")"
 delete_count="$(/usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && $4 == "delete" { count++ } END { print count + 0 }' "$fake_log")"
-[[ "$create_count" == 1 && "$delete_count" == 1 ]] || {
-  echo 'Application-fixture execute did not create and delete exactly one disposable Simulator' >&2
+erase_targets="$(/usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && $4 == "erase" { print $5 }' "$fake_log")"
+[[ "$create_count" == 0 && "$delete_count" == 0 && "$erase_targets" == 00000000-0000-0000-0000-000000000001 ]] || {
+  echo 'Application-fixture execute did not erase only the dedicated iPhone without creating or deleting a Simulator' >&2
   /bin/cat "$fake_log" >&2
   exit 1
 }
@@ -426,7 +427,7 @@ fi
 }
 if /usr/bin/find "$adapter_state" -maxdepth 1 -type f -name 'allocated-*' -print -quit | /usr/bin/grep -q . ||
    { [[ -d "$adapter_state/data" ]] && /usr/bin/find "$adapter_state/data" -mindepth 1 -print -quit | /usr/bin/grep -q .; }; then
-  echo 'Application-fixture execute retained its disposable Simulator' >&2
+  echo 'Application-fixture execute retained Simulator allocation state' >&2
   exit 1
 fi
 assert_no_failed_attempts

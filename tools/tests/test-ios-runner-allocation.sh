@@ -265,6 +265,15 @@ RUBY
 assert_no_failed_attempts
 
 test_stubborn_probe 2 allocation-v2-timeout
+# Every runner timeout message reports the measured elapsed time, never the configured limit.
+if rg -n 'elapsedSeconds=\$\{?(verification_timeout_seconds|timeout_seconds|IOS_TEMPLATE_PROBE_TIMEOUT_SECONDS)' "$runner"; then
+  echo "runner timeout messages report the configured limit as the elapsed time" >&2
+  exit 1
+fi
+grep -Fq 'elapsedSeconds=$(( $(/bin/date +%s) - verification_lock_started_at ))' "$runner" || {
+  echo "verification lock timeout does not measure its elapsed time" >&2
+  exit 1
+}
 [[ ! -e "$draft" && ! -e "$final" ]] || { echo "timed-out schema v2 run published successful evidence" >&2; exit 1; }
 [[ "$(/bin/cat "$adapter_state/device-state-00000000-0000-0000-0000-000000000001" 2>/dev/null || printf Shutdown)" == Shutdown ]] || {
   echo "timed-out schema v2 run left the dedicated iPhone running" >&2
