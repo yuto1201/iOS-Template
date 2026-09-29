@@ -30,5 +30,6 @@ elevenlabs:
   workspaceId: null
 
 appStore:
-  teamId: null
+  teamId: AUZ2MV247A
   bundleId: null
+  apiKeyType: team-app-manager
