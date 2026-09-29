@@ -51,6 +51,12 @@ service_role_allowed = {
     "tools/validate-app-icon.sh",
 }
 fixture_assignment = b"password=" + b"private-review-value"
+visual_fixture_assignment = b"password=" + b"do-not-print-this-value"
+# Each exemption allows only the exact fixture assignment its test uses.
+password_exemptions = {
+    "tools/tests/test-appstore-preparation.sh": fixture_assignment,
+    "tools/tests/test-visual-review-packet.sh": visual_fixture_assignment,
+}
 
 
 def scan(root, allowed):
@@ -73,8 +79,8 @@ def scan(root, allowed):
                 violations.append(f"credential token prefix in {name}")
         if private_key.search(data):
             violations.append(f"private-key header in {name}")
-        if name != "tools/tests/test-visual-review-packet.sh" and any(
-            match.group(0) != fixture_assignment or name != "tools/tests/test-appstore-preparation.sh"
+        if any(
+            match.group(0) != password_exemptions.get(name)
             for match in password_assignment.finditer(data)
         ):
             violations.append(f"password assignment in {name}")
@@ -108,7 +114,11 @@ def self_test():
         check("tools/tests/test-appstore-preparation.sh", fixture_assignment, None)
         check("tools/tests/test-appstore-preparation.sh", b"password=" + b"other-review-value", "password assignment in tools/tests/test-appstore-preparation.sh")
         check("tools/tests/other.sh", fixture_assignment, "password assignment in tools/tests/other.sh")
-        check("tools/tests/test-visual-review-packet.sh", b"password=" + b"other-review-value", None)
+        check("tools/tests/test-visual-review-packet.sh", visual_fixture_assignment, None)
+        check("tools/tests/test-visual-review-packet.sh", b"password=" + b"other-review-value", "password assignment in tools/tests/test-visual-review-packet.sh")
+        check("tools/tests/test-visual-review-packet.sh", visual_fixture_assignment + b"\n" + b"password=" + b"second-review-value", "password assignment in tools/tests/test-visual-review-packet.sh")
+        check("tools/tests/other.sh", visual_fixture_assignment, "password assignment in tools/tests/other.sh")
+        check("tools/tests/test-appstore-preparation.sh", visual_fixture_assignment, "password assignment in tools/tests/test-appstore-preparation.sh")
         check("tools/tests/other.sh", b"ghp_" + b"A" * 12, "credential token prefix in tools/tests/other.sh")
 
 
