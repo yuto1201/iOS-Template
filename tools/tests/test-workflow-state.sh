@@ -4,7 +4,7 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" rg git jq ruby
 
-[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim ) ) ]] || exit 64
+[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim || "$1" == nested-resume ) ) ]] || exit 64
 scope="${1:-full}"
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-workflow-state.XXXXXX")
@@ -188,188 +188,18 @@ mkdir -p "$artifact_issue"
 
 # `post-claim` runs only the sealed post-Claim regressions (pending recovery and successor
 # transitions) as their own direct test, so a targeted suite reaches them within its per-test limit.
-if [[ "$scope" == post-claim ]]; then
-  ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
-    --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
-    > "$artifact_issue/issue-contract.json"
-  # The explicit fast merge preflight near the end reads the same older canonical records as the full run.
-  merge_evidence=".artifacts/issues/$test_issue/$(git -C "$repo_root" rev-parse HEAD)"
-  mkdir -p "$merge_evidence"
-  printf '{"completedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/verify.json"
-  printf '{"reviewedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/review.json"
-else
-
-# Before Claim there is no sealed contract. Reads and the proposed -> approved
-# transition must be authorized from the freshly read Issue body and exact argv.
-printf '["state:proposed"]' > "$FAKE_GH_LABELS_FILE"
-"$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
-"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from proposed --to approved >/dev/null
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
-assert_fails 'approved to claimed cannot run before Claim seals identity' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
-
-# The pre-Claim six-field durable format remains supported as well.
-cp "$artifact_issue/state.json" "$workspace/preclaim-approved.json"
-cp "$FAKE_GH_COMMENTS_FILE" "$workspace/preclaim-approved-comments.json"
-ruby -rjson -e '
-  state=JSON.parse(File.binread(ARGV[0]))
-  pending=state.reject { |key,_| key=="state" }.merge("schemaVersion"=>1,
-    "issue"=>Integer(ARGV[2]),"repository"=>"yuto1201/iOS-Template","headSha"=>nil)
-  File.binwrite(ARGV[1],JSON.generate(pending.sort.to_h))
-' "$artifact_issue/state.json" "$artifact_issue/state-transition.pending.json" "$test_issue"
-"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to paused >/dev/null
-[[ ! -e "$artifact_issue/state-transition.pending.json" ]]
-"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to approved >/dev/null
-cp "$workspace/preclaim-approved.json" "$artifact_issue/state.json"
-cp "$workspace/preclaim-approved-comments.json" "$FAKE_GH_COMMENTS_FILE"
-
-printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"
-assert_fails 'stale minimal pre-Claim state cannot authorize a post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="claimed"; value["to"]="claimed"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
-assert_fails 'minimal claimed state cannot authorize any unsealed post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="blocked:conflict"; value["from"]="claimed"; value["to"]="blocked:conflict"; value["resumeState"]="claimed"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
-printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
-assert_fails 'matching blocked state with post-Claim history cannot authorize an unsealed live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="approved"; value["to"]="approved"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
-printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
-assert_fails 'stale minimal pre-Claim state cannot authorize a blocked post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
-ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["timestamp"]="not-a-time"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
-assert_fails 'malformed unsealed pre-Claim state cannot authorize a live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-cat > "$artifact_issue/state.json" <<EOF
-{"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$(git -C "$repo_root" rev-parse HEAD)","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"sha256:$(printf '0%.0s' {1..64})"},"state":"approved","previousState":null,"resumeState":null,"executor":"codex"}
-EOF
-assert_fails 'full state without its sealed contract cannot fall back to the live Issue' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-rm -f "$artifact_issue/state.json"
-printf '["state:blocked:review"]' > "$FAKE_GH_LABELS_FILE"
-assert_fails 'post-Claim state without durable evidence cannot recreate live authorization' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
-rm -f "$artifact_issue/state.json" "$artifact_issue/state-transition.pending.json"
-printf '[]' > "$FAKE_GH_COMMENTS_FILE"
-
-ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
-  --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
-  > "$artifact_issue/issue-contract.json"
-
-printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
-rm -f "$artifact_issue/state.json"
-assert_fails 'sealed get rejects a missing full state outside Claim recovery' \
-  "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-[[ ! -e "$artifact_issue/state.json" ]] || { echo 'sealed get downgraded missing full state to a minimal record' >&2; exit 1; }
-printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+# The sealed full approved-state record that the nested-resume regressions start from.
+write_full_approved_state() {
 contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$artifact_issue/issue-contract.json")"
 cat > "$artifact_issue/state.json" <<EOF
 {"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$(git -C "$repo_root" rev-parse HEAD)","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"$contract_digest"},"state":"approved","previousState":null,"resumeState":null,"executor":"codex"}
 EOF
 cp "$artifact_issue/state.json" "$workspace/full-approved-state.json"
+}
 
-# A wrong account must prevent the preflight artifact from being written.
-export FAKE_GH_LOGIN=company-account
-assert_fails 'company GitHub account is rejected' "$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template
-[[ ! -e ".artifacts/issues/$test_issue/github-preflight.json" ]]
-unset FAKE_GH_LOGIN
-
-# Inspect mode is read-only and returns only safe repository identity fields.
-"$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template > "$workspace/preflight-inspect.json"
-assert_json "$workspace/preflight-inspect.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value.keys.sort == %w[account defaultBranch repository url]; abort unless value["account"] == "yuto1201"'
-[[ ! -e ".artifacts/issues/$test_issue/github-preflight.json" ]]
-
-export FAKE_GH_REPO_OWNER=other/iOS-Template
-assert_fails 'repository owner mismatch is rejected' "$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template
-unset FAKE_GH_REPO_OWNER
-
-# Every authenticated Issue read has a fresh exact personal-account/repository
-# preflight. Outside the exact approved -> claimed path, authorization comes
-# from the sealed contract rather than an ambient live-body switch.
-: > "$FAKE_GH_LOG"
-"$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
-ruby -e '
-  lines = File.readlines(ARGV[0], chomp: true)
-  read = lines.index { |line| line.start_with?("issue view ") } or abort "missing Issue read"
-  abort "Issue read lacked immediate fresh preflight" unless lines[(read - 2)...read].any? { |line| line.start_with?("auth status --active") } && lines[(read - 2)...read].any? { |line| line.start_with?("repo view yuto1201/iOS-Template") }
-' "$FAKE_GH_LOG"
-
-cp "$FAKE_GH_ISSUE_BODY" "$workspace/issue-body-valid.md"
-ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.read_issue\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n/, ""); File.write(path,text)' "$FAKE_GH_ISSUE_BODY"
-: > "$FAKE_GH_LOG"
-assert_fails 'approved to claimed rejects a recordless live read-operation removal' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
-! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
-cp "$workspace/issue-body-valid.md" "$FAKE_GH_ISSUE_BODY"
-
-ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.update_issue\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n?/, ""); File.write(path,text)' "$FAKE_GH_ISSUE_BODY"
-: > "$FAKE_GH_LOG"
-assert_fails 'approved to claimed rejects a recordless live update-operation removal' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
-! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
-cp "$workspace/issue-body-valid.md" "$FAKE_GH_ISSUE_BODY"
-
-head_sha=$(git -C "$repo_root" rev-parse HEAD)
-"$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template --issue "$test_issue" --intended-operation github.create_pr --expected-head "$head_sha"
-assert_json ".artifacts/issues/$test_issue/github-preflight.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["issue"] == 424249 && value["headSha"] =~ /\A[0-9a-f]{40}\z/ && value["digest"] =~ /\Asha256:[0-9a-f]{64}\z/; abort if value.to_json.include?("token")'
-
-# A merge preflight has no evidence shortcut: both canonical records must be present and older than the new check.
-merge_evidence=".artifacts/issues/$test_issue/$head_sha"
-mkdir -p "$merge_evidence"
-assert_fails 'merge preflight rejects missing evidence' "$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template --issue "$test_issue" --intended-operation github.merge_pr --expected-head "$head_sha"
-printf '{"completedAt":"2999-01-01T00:00:00Z"}' > "$merge_evidence/verify.json"
-printf '{"reviewedAt":"2999-01-01T00:00:00Z"}' > "$merge_evidence/review.json"
-assert_fails 'merge preflight rejects stale evidence' "$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template --issue "$test_issue" --intended-operation github.merge_pr --expected-head "$head_sha"
-printf '{"completedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/verify.json"
-printf '{"reviewedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/review.json"
-"$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template --issue "$test_issue" --intended-operation github.merge_pr --expected-head "$head_sha" > "$workspace/merge-preflight.json"
-assert_json "$workspace/merge-preflight.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["intendedOperation"] == "github.merge_pr"'
-
-export FAKE_GH_ISSUE_MISSING=1
-assert_fails 'missing issue is rejected' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-unset FAKE_GH_ISSUE_MISSING
-
-printf '["state:not-a-workflow-state"]' > "$FAKE_GH_LABELS_FILE"
-assert_fails 'unknown Issue state label is rejected' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
-printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
-
-assert_fails 'invalid transition is rejected' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to merged
-"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed > "$workspace/transition.json"
-assert_json "$workspace/transition.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["from"] == "approved" && value["to"] == "claimed" && value["executor"] == "codex"'
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:claimed"]'
-assert_json ".artifacts/issues/$test_issue/state.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "claimed" && value["resumeState"].nil?'
-
-# A concurrent state change before edit must stop the requested mutation.
-printf '[]' > "$FAKE_GH_COMMENTS_FILE"
-printf '[]' > "$FAKE_GH_LOG"
-printf '0' > "$FAKE_GH_VIEW_COUNT_FILE"
-printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
-cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
-rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
-export FAKE_GH_RACE_BEFORE_EDIT_VIEW=2
-export FAKE_GH_RACE_BEFORE_EDIT_LABELS='["state:in-progress"]'
-assert_fails 'transition recheck rejects a changed current state' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
-! rg -q '^issue edit ' "$FAKE_GH_LOG"
-unset FAKE_GH_RACE_BEFORE_EDIT_VIEW FAKE_GH_RACE_BEFORE_EDIT_LABELS
-rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
-
-# The postcondition is checked before a marker or local durable state is written.
-printf '[]' > "$FAKE_GH_COMMENTS_FILE"
-printf '0' > "$FAKE_GH_VIEW_COUNT_FILE"
-printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
-cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
-rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
-export FAKE_GH_RACE_AFTER_EDIT_LABELS='["state:in-progress"]'
-assert_fails 'transition post-read rejects a changed result state' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
-assert_json "$FAKE_GH_COMMENTS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])).empty?'
-unset FAKE_GH_RACE_AFTER_EDIT_LABELS
-rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
-
-printf '["state:blocked:ops"]' > "$FAKE_GH_LABELS_FILE"
-printf '[]' > "$FAKE_GH_COMMENTS_FILE"
-rm -f ".artifacts/issues/$test_issue/state.json"
-mkdir -p ".artifacts/issues/$test_issue"
-ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
-  --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
-  > ".artifacts/issues/$test_issue/issue-contract.json"
-assert_fails 'blocked resume without history fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress
-assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:ops"]'
-
+# Nested stop-state resume regressions. The full run executes them in place; the nested-resume mode runs
+# them as their own direct test so a targeted suite reaches them within its per-test limit.
+run_nested_resume_regressions() {
 # Nested stops resume to the immediate stop state or to the original working state. Markers for
 # the same state within one second are ambiguous by design, so the transitions are spaced apart.
 state_transition() {
@@ -512,7 +342,226 @@ done
 two_stop_episodes
 state_transition paused changes-requested
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:changes-requested"]'
+
+# The newest owned marker must enter the current stop state. With an earlier completed pause kept in the
+# history, a missing, corrupted, or foreign entry into the current pause must not reach that older pause.
+two_pause_episodes() {
+  restore_snapshot two-pauses && return 0
+  reset_in_progress_state
+  state_transition in-progress paused
+  state_transition paused in-progress
+  state_transition in-progress paused
+  save_snapshot two-pauses
+}
+for damage in removed corrupted foreign; do
+  two_pause_episodes
+  DAMAGE="$damage" ruby -rjson -e '
+    path = ARGV.fetch(0); comments = JSON.parse(File.read(path))
+    entry = comments.rindex { |comment| comment.fetch("body").include?(%q("to":"paused")) } or abort "missing current pause marker"
+    case ENV.fetch("DAMAGE")
+    when "removed" then comments.delete_at(entry)
+    when "corrupted" then comments[entry]["body"] = comments[entry]["body"].sub(%q("resumeState":"in-progress"), %q("resumeState":"approved"))
+    when "foreign" then comments[entry]["author"] = {"login" => "someone-else"}
+    end
+    File.write(path, JSON.generate(comments))
+  ' "$FAKE_GH_COMMENTS_FILE"
+  assert_fails "a $damage current pause entry cannot reach the earlier pause" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+  assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+done
+two_pause_episodes
+state_transition paused in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
 reset_nested_state
+}
+
+if [[ "$scope" == nested-resume ]]; then
+  ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+    --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+    > "$artifact_issue/issue-contract.json"
+  write_full_approved_state
+  run_nested_resume_regressions
+  echo 'PASS: nested stop-state resume regressions'
+  exit 0
+fi
+if [[ "$scope" == post-claim ]]; then
+  ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+    --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+    > "$artifact_issue/issue-contract.json"
+  # The explicit fast merge preflight near the end reads the same older canonical records as the full run.
+  merge_evidence=".artifacts/issues/$test_issue/$(git -C "$repo_root" rev-parse HEAD)"
+  mkdir -p "$merge_evidence"
+  printf '{"completedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/verify.json"
+  printf '{"reviewedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/review.json"
+else
+
+# Before Claim there is no sealed contract. Reads and the proposed -> approved
+# transition must be authorized from the freshly read Issue body and exact argv.
+printf '["state:proposed"]' > "$FAKE_GH_LABELS_FILE"
+"$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from proposed --to approved >/dev/null
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+assert_fails 'approved to claimed cannot run before Claim seals identity' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+
+# The pre-Claim six-field durable format remains supported as well.
+cp "$artifact_issue/state.json" "$workspace/preclaim-approved.json"
+cp "$FAKE_GH_COMMENTS_FILE" "$workspace/preclaim-approved-comments.json"
+ruby -rjson -e '
+  state=JSON.parse(File.binread(ARGV[0]))
+  pending=state.reject { |key,_| key=="state" }.merge("schemaVersion"=>1,
+    "issue"=>Integer(ARGV[2]),"repository"=>"yuto1201/iOS-Template","headSha"=>nil)
+  File.binwrite(ARGV[1],JSON.generate(pending.sort.to_h))
+' "$artifact_issue/state.json" "$artifact_issue/state-transition.pending.json" "$test_issue"
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to paused >/dev/null
+[[ ! -e "$artifact_issue/state-transition.pending.json" ]]
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to approved >/dev/null
+cp "$workspace/preclaim-approved.json" "$artifact_issue/state.json"
+cp "$workspace/preclaim-approved-comments.json" "$FAKE_GH_COMMENTS_FILE"
+
+printf '["state:claimed"]' > "$FAKE_GH_LABELS_FILE"
+assert_fails 'stale minimal pre-Claim state cannot authorize a post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="claimed"; value["to"]="claimed"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
+assert_fails 'minimal claimed state cannot authorize any unsealed post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="blocked:conflict"; value["from"]="claimed"; value["to"]="blocked:conflict"; value["resumeState"]="claimed"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
+printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
+assert_fails 'matching blocked state with post-Claim history cannot authorize an unsealed live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["state"]="approved"; value["to"]="approved"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
+printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
+assert_fails 'stale minimal pre-Claim state cannot authorize a blocked post-Claim live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value["timestamp"]="not-a-time"; File.binwrite(path,JSON.generate(value))' "$artifact_issue/state.json"
+assert_fails 'malformed unsealed pre-Claim state cannot authorize a live read' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+cat > "$artifact_issue/state.json" <<EOF
+{"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$(git -C "$repo_root" rev-parse HEAD)","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"sha256:$(printf '0%.0s' {1..64})"},"state":"approved","previousState":null,"resumeState":null,"executor":"codex"}
+EOF
+assert_fails 'full state without its sealed contract cannot fall back to the live Issue' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+rm -f "$artifact_issue/state.json"
+printf '["state:blocked:review"]' > "$FAKE_GH_LABELS_FILE"
+assert_fails 'post-Claim state without durable evidence cannot recreate live authorization' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+rm -f "$artifact_issue/state.json" "$artifact_issue/state-transition.pending.json"
+printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+
+ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+  --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > "$artifact_issue/issue-contract.json"
+
+printf '["state:blocked:conflict"]' > "$FAKE_GH_LABELS_FILE"
+rm -f "$artifact_issue/state.json"
+assert_fails 'sealed get rejects a missing full state outside Claim recovery' \
+  "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+[[ ! -e "$artifact_issue/state.json" ]] || { echo 'sealed get downgraded missing full state to a minimal record' >&2; exit 1; }
+printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+write_full_approved_state
+
+# A wrong account must prevent the preflight artifact from being written.
+export FAKE_GH_LOGIN=company-account
+assert_fails 'company GitHub account is rejected' "$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template
+[[ ! -e ".artifacts/issues/$test_issue/github-preflight.json" ]]
+unset FAKE_GH_LOGIN
+
+# Inspect mode is read-only and returns only safe repository identity fields.
+"$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template > "$workspace/preflight-inspect.json"
+assert_json "$workspace/preflight-inspect.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value.keys.sort == %w[account defaultBranch repository url]; abort unless value["account"] == "yuto1201"'
+[[ ! -e ".artifacts/issues/$test_issue/github-preflight.json" ]]
+
+export FAKE_GH_REPO_OWNER=other/iOS-Template
+assert_fails 'repository owner mismatch is rejected' "$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template
+unset FAKE_GH_REPO_OWNER
+
+# Every authenticated Issue read has a fresh exact personal-account/repository
+# preflight. Outside the exact approved -> claimed path, authorization comes
+# from the sealed contract rather than an ambient live-body switch.
+: > "$FAKE_GH_LOG"
+"$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" >/dev/null
+ruby -e '
+  lines = File.readlines(ARGV[0], chomp: true)
+  read = lines.index { |line| line.start_with?("issue view ") } or abort "missing Issue read"
+  abort "Issue read lacked immediate fresh preflight" unless lines[(read - 2)...read].any? { |line| line.start_with?("auth status --active") } && lines[(read - 2)...read].any? { |line| line.start_with?("repo view yuto1201/iOS-Template") }
+' "$FAKE_GH_LOG"
+
+cp "$FAKE_GH_ISSUE_BODY" "$workspace/issue-body-valid.md"
+ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.read_issue\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n/, ""); File.write(path,text)' "$FAKE_GH_ISSUE_BODY"
+: > "$FAKE_GH_LOG"
+assert_fails 'approved to claimed rejects a recordless live read-operation removal' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
+! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
+cp "$workspace/issue-body-valid.md" "$FAKE_GH_ISSUE_BODY"
+
+ruby -e 'path=ARGV.fetch(0); text=File.read(path); text.sub!(/- Operation: github\.update_issue\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n?/, ""); File.write(path,text)' "$FAKE_GH_ISSUE_BODY"
+: > "$FAKE_GH_LOG"
+assert_fails 'approved to claimed rejects a recordless live update-operation removal' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
+! rg -q '^issue edit |^issue comment ' "$FAKE_GH_LOG"
+cp "$workspace/issue-body-valid.md" "$FAKE_GH_ISSUE_BODY"
+
+head_sha=$(git -C "$repo_root" rev-parse HEAD)
+"$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template --issue "$test_issue" --intended-operation github.create_pr --expected-head "$head_sha"
+assert_json ".artifacts/issues/$test_issue/github-preflight.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["issue"] == 424249 && value["headSha"] =~ /\A[0-9a-f]{40}\z/ && value["digest"] =~ /\Asha256:[0-9a-f]{64}\z/; abort if value.to_json.include?("token")'
+
+# A merge preflight has no evidence shortcut: both canonical records must be present and older than the new check.
+merge_evidence=".artifacts/issues/$test_issue/$head_sha"
+mkdir -p "$merge_evidence"
+assert_fails 'merge preflight rejects missing evidence' "$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template --issue "$test_issue" --intended-operation github.merge_pr --expected-head "$head_sha"
+printf '{"completedAt":"2999-01-01T00:00:00Z"}' > "$merge_evidence/verify.json"
+printf '{"reviewedAt":"2999-01-01T00:00:00Z"}' > "$merge_evidence/review.json"
+assert_fails 'merge preflight rejects stale evidence' "$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template --issue "$test_issue" --intended-operation github.merge_pr --expected-head "$head_sha"
+printf '{"completedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/verify.json"
+printf '{"reviewedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/review.json"
+"$repo_root/tools/github-account-preflight.sh" --repo yuto1201/iOS-Template --issue "$test_issue" --intended-operation github.merge_pr --expected-head "$head_sha" > "$workspace/merge-preflight.json"
+assert_json "$workspace/merge-preflight.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["intendedOperation"] == "github.merge_pr"'
+
+export FAKE_GH_ISSUE_MISSING=1
+assert_fails 'missing issue is rejected' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+unset FAKE_GH_ISSUE_MISSING
+
+printf '["state:not-a-workflow-state"]' > "$FAKE_GH_LABELS_FILE"
+assert_fails 'unknown Issue state label is rejected' "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
+printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+
+assert_fails 'invalid transition is rejected' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to merged
+"$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed > "$workspace/transition.json"
+assert_json "$workspace/transition.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["from"] == "approved" && value["to"] == "claimed" && value["executor"] == "codex"'
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:claimed"]'
+assert_json ".artifacts/issues/$test_issue/state.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["state"] == "claimed" && value["resumeState"].nil?'
+
+# A concurrent state change before edit must stop the requested mutation.
+printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+printf '[]' > "$FAKE_GH_LOG"
+printf '0' > "$FAKE_GH_VIEW_COUNT_FILE"
+printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
+rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+export FAKE_GH_RACE_BEFORE_EDIT_VIEW=2
+export FAKE_GH_RACE_BEFORE_EDIT_LABELS='["state:in-progress"]'
+assert_fails 'transition recheck rejects a changed current state' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
+! rg -q '^issue edit ' "$FAKE_GH_LOG"
+unset FAKE_GH_RACE_BEFORE_EDIT_VIEW FAKE_GH_RACE_BEFORE_EDIT_LABELS
+rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+
+# The postcondition is checked before a marker or local durable state is written.
+printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+printf '0' > "$FAKE_GH_VIEW_COUNT_FILE"
+printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
+rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+export FAKE_GH_RACE_AFTER_EDIT_LABELS='["state:in-progress"]'
+assert_fails 'transition post-read rejects a changed result state' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from approved --to claimed
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
+assert_json "$FAKE_GH_COMMENTS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])).empty?'
+unset FAKE_GH_RACE_AFTER_EDIT_LABELS
+rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+
+printf '["state:blocked:ops"]' > "$FAKE_GH_LABELS_FILE"
+printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+rm -f ".artifacts/issues/$test_issue/state.json"
+mkdir -p ".artifacts/issues/$test_issue"
+ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+  --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+  > ".artifacts/issues/$test_issue/issue-contract.json"
+assert_fails 'blocked resume without history fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:ops"]'
+
+[[ "$scope" == scoped ]] || run_nested_resume_regressions
 
 if [[ "$scope" == scoped ]]; then
   echo 'PASS: scoped GitHub preflight and revised-contract state boundaries'

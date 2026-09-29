@@ -170,7 +170,10 @@ end
 # foreign, or corrupted entry never reaches an older, completed stop episode. Missing, ambiguous,
 # discontinuous, or cyclic history fails closed without guessing.
 def resume_targets(document, current, owner)
-  marker, position = latest_owned_state_marker(document, current, owner, with_position: true)
+  # The newest valid owned marker of any state must be the entry into the current stop state; otherwise the
+  # current entry is missing, foreign, or corrupted, and an older stop episode must not stand in for it.
+  marker, position = latest_owned_state_marker(document, nil, owner, with_position: true)
+  fail_closed('newest owned transition marker does not enter the current state') unless marker.fetch('to') == current
   immediate = marker.fetch('resumeState')
   state = immediate
   64.times do
