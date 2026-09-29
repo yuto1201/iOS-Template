@@ -983,6 +983,9 @@ FAKE_SKIP_SWIFT=1 FINAL_GATE_SWAP_TARGET="$final_image" assert_fails 'packet-bou
 grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo 'final image lease fixture did not reach PR refresh' >&2; exit 1; }
 [[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'final lease merged after packet-bound image changed' >&2; exit 1; }
 
+
+fi
+
 # The actual new producer runs both small fixture inventories. This is not
 # evidence that either revision of the real repository's suite has passed.
 cp "$issue_body" "$scratch/pre-revision-issue.md"
@@ -1003,7 +1006,7 @@ review_record="$repo/.artifacts/issues/42/$head_sha/review.json"
 ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["acceptanceAssessment"].each_with_index{|entry,i|entry["evidence"]=["repository-tests.json#acceptanceEvidence/#{i}"]}; File.write(path,JSON.generate(value))' "$review_record"
 write_receipt
 write_preflight
-write_supabase_preflight
+[[ "$scope" == scoped ]] || write_supabase_preflight
 run_gate >/dev/null
 revision_record="$repo/.artifacts/issues/42/$head_sha/repository-tests.json"
 revision_plan="$repo/.artifacts/issues/42/$head_sha/repository-test-plan.json"
@@ -1037,8 +1040,6 @@ run_gate_merge >/dev/null
 [[ $(cat "$FAKE_MERGE_MUTATIONS") == merged ]] || { echo 'valid Base/Head closure did not reach exact merge' >&2; exit 1; }
 cp "$scratch/issue.original.md" "$issue_body"
 rm "$revision_record" "$revision_plan"
-
-fi
 
 # Workflow-only strict changes use their sealed AC-mapped repository subset;
 # this post-D-050 fixture also drives disposition packet, validation,
@@ -1241,7 +1242,7 @@ rm -f "$repo/.artifacts/issues/42/$head_sha/review-packet.json" "$repo/.artifact
 run_gate >/dev/null
 
 if [[ "$scope" == scoped ]]; then
-  echo 'PASS: scoped premerge validates Phase 5 to 6 applicability, every post-cutover disposition consumer, and the explicit fast route'
+  echo 'PASS: scoped premerge validates base-and-head and targeted repository records, Phase 5 to 6 applicability, every post-cutover disposition consumer, and the explicit fast route'
   exit 0
 fi
 
