@@ -78,6 +78,7 @@ App Privacyと審査用の連絡先情報は、この経路でもブラウザの
 
 ### 文書
 
+- `docs/asc-derived-app-adoption.md`
 - `docs/security.md`
 - `docs/agent-contracts/appstore-submission.md`
 - `docs/agent-contracts/testflight-distribution.md`
