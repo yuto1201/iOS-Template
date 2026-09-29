@@ -133,7 +133,7 @@ def latest_owned_state_marker(document, current, owner, before: nil, with_positi
       created_at = Time.iso8601(created_at_raw)
       next unless marker_time.utc.iso8601 == marker['timestamp'] && created_at.utc.iso8601 == created_at_raw
       next unless created_at >= marker_time && created_at - marker_time <= 300
-      next unless marker['to'] == current && transition_allowed?(marker['from'], marker['to'])
+      next unless (current.nil? || marker['to'] == current) && transition_allowed?(marker['from'], marker['to'])
       if blocked_state?(marker['to']) || marker['to'] == 'paused'
         next unless marker['resumeState'] == marker['from']
       elsif blocked_state?(marker['from']) || marker['from'] == 'paused'
@@ -158,15 +158,18 @@ rescue KeyError
 end
 
 # Walks nested stop states (blocked:* and paused) back through strictly earlier owned markers.
-# Returns [immediate resume state, original non-stop state]. Missing, ambiguous, or cyclic
-# history fails closed without guessing.
+# Returns [immediate resume state, original non-stop state]. Each step must be the owned marker
+# immediately before the current one and must enter the stop state being resolved, so a missing,
+# foreign, or corrupted entry never reaches an older, completed stop episode. Missing, ambiguous,
+# discontinuous, or cyclic history fails closed without guessing.
 def resume_targets(document, current, owner)
   marker, position = latest_owned_state_marker(document, current, owner, with_position: true)
   immediate = marker.fetch('resumeState')
   state = immediate
   64.times do
     return [immediate, state] unless blocked_state?(state) || state == 'paused'
-    marker, position = latest_owned_state_marker(document, state, owner, before: position, with_position: true)
+    marker, position = latest_owned_state_marker(document, nil, owner, before: position, with_position: true)
+    fail_closed('nested stop-state history is discontinuous') unless marker.fetch('to') == state
     state = marker.fetch('resumeState')
   end
   fail_closed('nested stop-state history is too deep or cyclic')

@@ -363,15 +363,33 @@ state_transition() {
   "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$1" --to "$2" >/dev/null
   sleep 1
 }
+# Build each stop history once and restore its exact labels, markers, and durable state for every variant.
+save_snapshot() {
+  cp "$FAKE_GH_LABELS_FILE" "$workspace/snapshot-$1.labels"
+  cp "$FAKE_GH_COMMENTS_FILE" "$workspace/snapshot-$1.comments"
+  cp ".artifacts/issues/$test_issue/state.json" "$workspace/snapshot-$1.state"
+}
+restore_snapshot() {
+  [[ -f "$workspace/snapshot-$1.state" ]] || return 1
+  cp "$workspace/snapshot-$1.labels" "$FAKE_GH_LABELS_FILE"
+  cp "$workspace/snapshot-$1.comments" "$FAKE_GH_COMMENTS_FILE"
+  cp "$workspace/snapshot-$1.state" ".artifacts/issues/$test_issue/state.json"
+  rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+}
+nested_approved_stop() {
+  restore_snapshot nested-approved && return 0
+  reset_nested_state
+  state_transition approved blocked:dependency
+  state_transition blocked:dependency paused
+  save_snapshot nested-approved
+}
 reset_nested_state() {
   printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
   printf '[]' > "$FAKE_GH_COMMENTS_FILE"
   cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
   rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 }
-reset_nested_state
-state_transition approved blocked:dependency
-state_transition blocked:dependency paused
+nested_approved_stop
 [[ "$("$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" | jq -r '.resumeState')" == approved ]] ||
   { echo 'nested pause did not report the original working state' >&2; exit 1; }
 state_transition paused blocked:dependency
@@ -380,16 +398,12 @@ state_transition paused blocked:dependency
 state_transition blocked:dependency approved
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
 
-reset_nested_state
-state_transition approved blocked:dependency
-state_transition blocked:dependency paused
+nested_approved_stop
 state_transition paused approved
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
 
 # Missing nested history fails closed instead of guessing the original state.
-reset_nested_state
-state_transition approved blocked:dependency
-state_transition blocked:dependency paused
+nested_approved_stop
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments.reject! { |comment| comment.fetch("body").include?(%q("to":"blocked:dependency")) }; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE"
 assert_fails 'nested resume without the original stop marker fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to approved
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
@@ -405,9 +419,11 @@ reset_in_progress_state() {
   rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 }
 nested_in_progress_stop() {
+  restore_snapshot nested-in-progress && return 0
   reset_in_progress_state
   state_transition in-progress blocked:environment
   state_transition blocked:environment paused
+  save_snapshot nested-in-progress
 }
 nested_in_progress_stop
 state_transition paused blocked:environment
@@ -434,6 +450,40 @@ nested_in_progress_stop
 ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); duplicate = comments.find { |comment| comment.fetch("body").include?(%q("to":"blocked:environment")) }; comments << duplicate.dup; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE"
 assert_fails 'nested resume with two simultaneous stop markers fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+
+# An older, completed stop episode must not stand in for the current episode's entry marker. The
+# completed episode resumed to in-progress; the current one started from changes-requested.
+two_stop_episodes() {
+  restore_snapshot two-episodes && return 0
+  reset_in_progress_state
+  state_transition in-progress blocked:user
+  state_transition blocked:user in-progress
+  printf '["state:changes-requested"]' > "$FAKE_GH_LABELS_FILE"
+  jq -c '.state = "changes-requested" | .previousState = "review-requested" | .from = "review-requested" | .to = "changes-requested"' \
+    "$workspace/full-approved-state.json" > ".artifacts/issues/$test_issue/state.json"
+  state_transition changes-requested blocked:user
+  state_transition blocked:user paused
+  save_snapshot two-episodes
+}
+current_entry='("from":"changes-requested","resumeState":"changes-requested","timestamp"'
+for damage in removed corrupted foreign; do
+  two_stop_episodes
+  DAMAGE="$damage" ENTRY="$current_entry" ruby -rjson -e '
+    path = ARGV.fetch(0); comments = JSON.parse(File.read(path))
+    entry = comments.index { |comment| comment.fetch("body").include?(%q("from":"changes-requested")) && comment.fetch("body").include?(%q("to":"blocked:user")) } or abort "missing current entry marker"
+    case ENV.fetch("DAMAGE")
+    when "removed" then comments.delete_at(entry)
+    when "corrupted" then comments[entry]["body"] = comments[entry]["body"].sub(%q("resumeState":"changes-requested"), %q("resumeState":"approved"))
+    when "foreign" then comments[entry]["author"] = {"login" => "someone-else"}
+    end
+    File.write(path, JSON.generate(comments))
+  ' "$FAKE_GH_COMMENTS_FILE"
+  assert_fails "a $damage current entry marker cannot reach the stale episode" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+  assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+done
+two_stop_episodes
+state_transition paused changes-requested
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:changes-requested"]'
 reset_nested_state
 
 if [[ "$scope" == scoped ]]; then
