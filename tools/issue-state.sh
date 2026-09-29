@@ -208,7 +208,12 @@ resume_state=null
 if workflow_is_blocked "$from" || [[ "$from" == paused ]]; then
   # A nested stop (for example blocked:* -> paused) may resume to its immediate stop state or to the
   # original working state found by walking strictly earlier owned markers.
-  resume_targets=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-targets-from-comments "$from" "$expected_owner" 2>/dev/null || true)
+  # An exact pending replay of this edge may already have published its own marker; resolve the history before it.
+  replay_marker=()
+  if [[ -n "${pending:-}" ]]; then
+    replay_marker=("$(jq -c '{executor, from, resumeState, timestamp, to}' <<< "$pending")")
+  fi
+  resume_targets=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-targets-from-comments "$from" "$expected_owner" ${replay_marker[@]+"${replay_marker[@]}"} 2>/dev/null || true)
   resume_state=$(printf '%s\n' "$resume_targets" | tail -n 1)
   [[ -n "$resume_state" ]] || resume_state=null
   if [[ "$to" != paused && "$to" != superseded ]] && { [[ -z "$resume_targets" ]] || ! printf '%s\n' "$resume_targets" | grep -Fxq -- "$to"; }; then

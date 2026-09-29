@@ -169,10 +169,14 @@ end
 # immediately before the current one and must enter the stop state being resolved, so a missing,
 # foreign, or corrupted entry never reaches an older, completed stop episode. Missing, ambiguous,
 # discontinuous, or cyclic history fails closed without guessing.
-def resume_targets(document, current, owner)
+def resume_targets(document, current, owner, replay: nil)
   # The newest valid owned marker of any state must be the entry into the current stop state; otherwise the
   # current entry is missing, foreign, or corrupted, and an older stop episode must not stand in for it.
   marker, position = latest_owned_state_marker(document, nil, owner, with_position: true)
+  # A retried transition whose own marker was already published resolves the history before that exact marker.
+  if replay && marker == replay
+    marker, position = latest_owned_state_marker(document, nil, owner, before: position, with_position: true)
+  end
   fail_closed('newest owned transition marker does not enter the current state') unless marker.fetch('to') == current
   immediate = marker.fetch('resumeState')
   state = immediate
@@ -885,9 +889,14 @@ when 'resume-from-comments'
   fail_closed('resume-from-comments arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)
   puts resume_targets(JSON.parse(STDIN.read), current, owner).last
 when 'resume-targets-from-comments'
-  current, owner = ARGV
-  fail_closed('resume-targets-from-comments arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)
-  puts resume_targets(JSON.parse(STDIN.read), current, owner).uniq
+  current, owner, replay_json = ARGV
+  fail_closed('resume-targets-from-comments arguments are invalid') unless [2, 3].include?(ARGV.length) && owner&.match?(/\A[A-Za-z0-9-]+\z/)
+  replay = nil
+  if replay_json
+    replay = JSON.parse(replay_json)
+    fail_closed('pending replay marker is invalid') unless replay.is_a?(Hash) && replay.keys.sort == %w[executor from resumeState timestamp to] && replay['from'] == current
+  end
+  puts resume_targets(JSON.parse(STDIN.read), current, owner, replay: replay).uniq
 when 'latest-state-marker'
   current, owner = ARGV
   fail_closed('latest-state-marker arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)

@@ -371,6 +371,26 @@ done
 two_pause_episodes
 state_transition paused in-progress
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
+
+# A resume interrupted after its marker comment was published retries the same pending edge, completes the
+# durable transition, and clears the pending state instead of resolving its own marker as new history.
+replay_after_comment() {
+  local label="$1" from="$2" to="$3"
+  IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT=1 assert_fails "interrupted $label resume" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$from" --to "$to"
+  [[ -e ".artifacts/issues/$test_issue/state-transition.pending.json" ]] || { echo "interrupted $label resume left no pending edge" >&2; exit 1; }
+  state_transition "$from" "$to"
+  assert_json "$FAKE_GH_LABELS_FILE" "abort unless JSON.parse(File.read(ARGV[0])) == [\"state:$to\"]"
+  assert_json ".artifacts/issues/$test_issue/state.json" "abort unless JSON.parse(File.read(ARGV[0]))['state'] == '$to'"
+  [[ ! -e ".artifacts/issues/$test_issue/state-transition.pending.json" ]] || { echo "retried $label resume kept the pending edge" >&2; exit 1; }
+}
+reset_in_progress_state
+state_transition in-progress paused
+replay_after_comment 'paused' paused in-progress
+reset_in_progress_state
+state_transition in-progress blocked:environment
+replay_after_comment 'blocked' blocked:environment in-progress
+nested_in_progress_stop
+replay_after_comment 'nested paused to blocked' paused blocked:environment
 reset_nested_state
 }
 
