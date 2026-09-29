@@ -587,3 +587,13 @@
 - Decision: 採用済みアイコンの差し替えは、初回App Icon Issueとは別のIssueで、installerの明示replace modeだけを使う。callerは現行採用SHA-256を宣言し、新しいimmutable revisionの候補からユーザーが明示選択した`selection.json`と、その選択候補のbytesを渡す。宣言digestの不一致、明示選択でない記録、選択候補以外のsource、過去に採用したrevision（recordのGit履歴に残るものを含む）の再利用、変化のない差し替え、dirty worktreeは、変更前に停止する。差し替え後のrecordはschema 2とし、新しい採用値、`selectionRevision`、直前の採用concept ID／generator／SHA-256を持つ`supersedes`を記録する。ユーザー提供の参照画像を編集入力にする場合は、権利のユーザー確認を必須とし、参照画像をGitへ入れず、SHA-256と`builtin-imagegen-reference-edit`だけを記録する。第三者mark、識別可能な人物の顔、文字を含めない既定条件を維持する。
 - Consequence: 派生アプリはinstallerを迂回せずに後のreleaseでアイコンを変えられ、直前の採用記録をrecordとGit履歴で追跡できる。初回installと同一入力再実行のschema 1出力は変わらない。rejected候補、prompt履歴、参照画像はGitへ入れない。外部サイトやApp Store Connectの掲載アイコンは別Issueで更新する。custom dark／tinted variant、alternate icon、既存派生アプリの実差し替えは対象外とする。
 - Related Issue: #158
+
+## D-066: App Store Connectの認証情報をApple teamごとの名前空間へ置く
+
+- Date: 2026-09-30
+- Status: 確定
+- Supersedes: D-059の認証の置き場所のうち、App Store Connectに限りappSlugごとのKeychainとfile secretの場所を置き換える。App Manager roleのTeam key、固定版`asc`のguarded runner、`run-with-secret.sh`／`run-with-private-key.sh`による子processだけへの受け渡し、Admin role・Individual key・Apple ID・`asc`自身の認証保存を使わないことは維持する。
+- Context: ユーザーは2026-09-29、このMacの全アプリで共通に使うTeam API key（team `AUZ2MV247A`、App Manager role）を一つだけ用意し、その置き場所をユーザースキル`app-store-connect-api`に記録した。これまでのrunnerは`Config/app-identity.json`の`appSlug`から置き場所を計算していたため、共通の一本を読めなかった。
+- Decision: App Store Connectの認証情報は、Apple teamごとの名前空間`apple-team-<teamId>`に置く。Key IDとIssuer IDはKeychain service `ios-template/apple-team-<teamId>/app-store-connect/production/key-id`と`issuer-id`（account `apple-team-<teamId>`）、`.p8`は`~/Library/Application Support/iOS-Template/secrets/apple-team-<teamId>/app-store-connect-production.p8`（directory `0700`、file `0600`）とする。`<teamId>`は`Config/ownership.yml`の`appStore.teamId`（10文字の大文字英数字）から決め、callerの引数や環境変数からは受け取らない。`appStore.apiKeyType`は`team-app-manager`だけを許し、名前空間の解決にはteam IDとこの種類の両方を必須とする。secret wrapperは、この名前空間をApp Store Connectのserviceに限って受理する。appSlugの旧い場所は読まない。
+- Consequence: 同じteamの全アプリが、鍵を複製せずに一本のkeyを使える。Keychainへの値の登録、keyの発行・再発行・失効はユーザーが行う。App Store Connectが表示するkeyのroleがApp Managerと確認されるまで、live認証は行わない。テンプレートの`Config/ownership.yml`への値の記入と、それを検証できるworkflow-onlyのallowlistの拡張は#214で行う。
+- Related Issue: #213

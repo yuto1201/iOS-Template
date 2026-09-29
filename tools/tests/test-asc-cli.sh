@@ -22,15 +22,24 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   repo = File.join(temporary, 'repository')
   FileUtils.mkdir_p(File.join(repo, 'tools/lib'))
   FileUtils.mkdir_p(File.join(repo, 'Config'))
-  %w[install-asc-cli.sh asc-run.sh run-with-secret.sh run-with-private-key.sh lib/asc-cli.rb lib/bounded-command.rb].each do |name|
+  %w[install-asc-cli.sh asc-run.sh run-with-secret.sh run-with-private-key.sh lib/asc-cli.rb lib/bounded-command.rb lib/ownership.rb].each do |name|
     source = File.join(root, 'tools', name)
     check(File.file?(source), "implementation missing: #{name}")
     FileUtils.cp(source, File.join(repo, 'tools', name), preserve: true)
   end
   File.write(File.join(repo, 'Config/app-identity.json'), JSON.generate({'schemaVersion'=>1, 'sourceIdentityVersion'=>1, 'appSlug'=>'asc-fixture', 'displayName'=>'ASC Fixture', 'moduleName'=>'ASCFixture', 'bundleId'=>'com.example.ascfixture'}))
+  # D-066: the credentials belong to the Apple team named in Config/ownership.yml, not to the app slug.
+  ownership_yaml = lambda do |app_store|
+    File.read(File.join(root, 'Config/ownership.yml')).sub(/^appStore:\n(?:  .*\n?)*/) do
+      "appStore:\n" + app_store.map { |field, value| "  #{field}: #{value}\n" }.join
+    end
+  end
+  ownership_path = File.join(repo, 'Config/ownership.yml')
+  team_ownership = ownership_yaml.call('teamId'=>'ABCDE12345', 'bundleId'=>'com.example.ascfixture', 'apiKeyType'=>'team-app-manager')
+  File.write(ownership_path, team_ownership)
   home = File.join(temporary, 'home')
   secret_parent = File.join(home, 'Library', 'Application Support', 'iOS-Template', 'secrets')
-  secret_dir = File.join(secret_parent, 'asc-fixture')
+  secret_dir = File.join(secret_parent, 'apple-team-ABCDE12345')
   FileUtils.mkdir_p(secret_dir)
   File.chmod(0700, secret_parent, secret_dir)
   key = File.join(secret_dir, 'app-store-connect-production.p8')
@@ -213,6 +222,27 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   File.unlink(identity_path)
   invoke.call(runner, read_args, {}, :failure)
   File.binwrite(identity_path, identity_bytes)
+  # Without a 10-character team ID and the App Manager team key type, no secret is read.
+  {
+    'missing key type' => {'teamId'=>'ABCDE12345', 'bundleId'=>'com.example.ascfixture'},
+    'other key type' => {'teamId'=>'ABCDE12345', 'bundleId'=>'com.example.ascfixture', 'apiKeyType'=>'team-admin'},
+    'unset team' => {'teamId'=>'null', 'bundleId'=>'com.example.ascfixture', 'apiKeyType'=>'team-app-manager'},
+    'malformed team' => {'teamId'=>'abcde12345', 'bundleId'=>'com.example.ascfixture', 'apiKeyType'=>'team-app-manager'}
+  }.each do |label, app_store|
+    File.write(ownership_path, ownership_yaml.call(app_store))
+    _, err = invoke.call(runner, read_args, {}, :failure)
+    check(err.include?('team namespace is unavailable'), "#{label} did not stop before reading secrets: #{err}")
+  end
+  File.write(ownership_path, team_ownership)
+  # The per-app location is never read, even when a key sits there.
+  legacy_dir = File.join(secret_parent, 'asc-fixture')
+  FileUtils.mkdir_p(legacy_dir)
+  File.chmod(0700, legacy_dir)
+  FileUtils.cp(key, File.join(legacy_dir, 'app-store-connect-production.p8'), preserve: true)
+  File.rename(secret_dir, secret_dir + '.aside')
+  invoke.call(runner, read_args, {}, :failure)
+  File.rename(secret_dir + '.aside', secret_dir)
+  FileUtils.rm_rf(legacy_dir)
   original_bytes = File.binread(binary)
   ['', 'partial', 'different existing bytes'].each do |bytes|
     File.binwrite(binary, bytes)

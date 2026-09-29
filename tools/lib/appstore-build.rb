@@ -186,8 +186,14 @@ module IOSTemplate
         %w[codex claude].include?(state['executor']) && state.dig('issueContract','path') == contract_path &&
         state.dig('issueContract','digest') == contract_digest && contract.fetch('externalOperations').include?(OPERATION)
       validate_live_issue(contract,state['executor']) unless ENV['IOS_TEMPLATE_TEST_MODE'] == '1'
-      configured = Ownership.provider_identity!(Ownership.parse(regular_bytes(root,'Config/ownership.yml',100_000)), 'app-store')
+      ownership = Ownership.parse(regular_bytes(root,'Config/ownership.yml',100_000))
+      configured = Ownership.provider_identity!(ownership, 'app-store')
       refuse('configured-bundle-mismatch') unless configured['target'] == bundle_id && configured['account'].match?(/\A[A-Z0-9]{10}\z/)
+      begin
+        Ownership.apple_team_namespace!(ownership)
+      rescue Ownership::ValidationError
+        refuse('team-credential-namespace-unavailable')
+      end
       preflight = document(root,"#{base}/provider-preflights/app-store-upload_build.json",100_000)
       expected = {'schemaVersion'=>2,'issue'=>issue,'executor'=>state['executor'],'provider'=>'app-store',
                   'account'=>configured['account'],'target'=>bundle_id,'environment'=>'production',
@@ -390,13 +396,15 @@ module IOSTemplate
       $?.exitstatus || 1
     end
 
-    def xcode(root, stage, slug, *args)
+    # Credentials come from the Apple team namespace of the validated authority (D-066), never the app slug.
+    def xcode(root, stage, team_id, *args)
+      namespace = "apple-team-#{team_id}"
       home = ENV.fetch('HOME')
-      key_path = File.join(home,'Library','Application Support','iOS-Template','secrets',slug,'app-store-connect-production.p8')
-      prefix = "ios-template/#{slug}/app-store-connect/production"
+      key_path = File.join(home,'Library','Application Support','iOS-Template','secrets',namespace,'app-store-connect-production.p8')
+      prefix = "ios-template/#{namespace}/app-store-connect/production"
       wrapper = File.join(TOOL_ROOT,'tools/run-with-private-key.sh')
       secret = File.join(TOOL_ROOT,'tools/run-with-secret.sh')
-      command = [wrapper,'--app',slug,'--file',key_path,'--env','ASC_PRIVATE_KEY_PATH','--',
+      command = [wrapper,'--app',namespace,'--file',key_path,'--env','ASC_PRIVATE_KEY_PATH','--',
         secret,'--service-name',"#{prefix}/key-id",'--env','ASC_KEY_ID','--',
         secret,'--service-name',"#{prefix}/issuer-id",'--env','ASC_ISSUER_ID','--',
         '/usr/bin/ruby','--disable-gems',File.join(TOOL_ROOT,'tools/lib/appstore-build.rb'),'xcode-child',stage,*args]
@@ -584,7 +592,7 @@ module IOSTemplate
           derived = File.join(directory,'DerivedData')
           options = File.join(directory,'ExportOptions.plist')
           write_new(options,export_options(authority['teamId']))
-          archive_status = xcode(root,'archive',app['appSlug'],File.join(root,"#{app['moduleName']}.xcodeproj"),app['moduleName'],archive,derived,authority['teamId'])
+          archive_status = xcode(root,'archive',authority['teamId'],File.join(root,"#{app['moduleName']}.xcodeproj"),app['moduleName'],archive,derived,authority['teamId'])
           unless archive_status.zero?
             append_event(context,'stage-failed','stage'=>'archive','exitStatus'=>archive_status,'timedOut'=>archive_status == 124)
             return {'status'=>'failed','attempt'=>context[:attempt],'releaseReady'=>false}
@@ -593,7 +601,7 @@ module IOSTemplate
           refuse('archive-output-invalid') unless archive_stat.directory? && archive_stat.uid == Process.uid && !archive_stat.symlink?
           append_event(context,'archive-complete')
           export = File.join(directory,'export')
-          export_status = xcode(root,'export',app['appSlug'],archive,export,options,authority['teamId'])
+          export_status = xcode(root,'export',authority['teamId'],archive,export,options,authority['teamId'])
           unless export_status.zero?
             append_event(context,'stage-failed','stage'=>'export','exitStatus'=>export_status,'timedOut'=>export_status == 124)
             return {'status'=>'failed','attempt'=>context[:attempt],'releaseReady'=>false}

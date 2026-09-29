@@ -32,8 +32,11 @@ while [[ $# -gt 0 ]]; do
     *) usage ;;
   esac
 done
-[[ "$service_name" =~ ^ios-template/([a-z0-9]+(-[a-z0-9]+)*)/([a-z0-9]+(-[a-z0-9]+)*)/([a-z0-9]+(-[a-z0-9]+)*)/([a-z0-9]+(-[a-z0-9]+)*)$ ]] || fail 'Service name is not canonical'
+[[ "$service_name" =~ ^ios-template/([a-z0-9]+(-[a-z0-9]+)*|apple-team-[A-Z0-9]{10})/([a-z0-9]+(-[a-z0-9]+)*)/([a-z0-9]+(-[a-z0-9]+)*)/([a-z0-9]+(-[a-z0-9]+)*)$ ]] || fail 'Service name is not canonical'
 app_slug=${BASH_REMATCH[1]}
+service_segment=${BASH_REMATCH[3]}
+# Only App Store Connect uses the shared Apple team namespace (D-066).
+[[ ! "$app_slug" =~ ^apple-team-[A-Z0-9]{10}$ || "$service_segment" == app-store-connect ]] || fail 'Service name is not canonical'
 [[ "$environment_name" =~ ^[A-Z_][A-Z0-9_]*$ ]] || fail 'environment variable name is invalid'
 [[ $# -ge 1 ]] || usage
 command_executable=$1

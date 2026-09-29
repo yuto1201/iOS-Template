@@ -103,6 +103,40 @@ chmod 644 "$private_key"
 assert_fails 'private key mode is too broad' env HOME="$test_home" "$repo_root/tools/run-with-private-key.sh" \
   --app template-app --file "$private_key" --env APP_STORE_CONNECT_PRIVATE_KEY_PATH -- "$private_key_probe"
 
+# D-066: the shared App Store Connect key lives once in the Apple team namespace (a 10-character team ID).
+team_service='ios-template/apple-team-ABCDE12345/app-store-connect/production/key-id'
+: > "$fake_argv"
+printf '%s\n' "$test_secret" | run_secret_store put \
+  --app apple-team-ABCDE12345 --service app-store-connect --environment production --key key-id
+# The probe reads ELEVENLABS_API_KEY; the variable name is the caller's choice.
+team_digest=$(run_with_secret --service-name "$team_service" --env ELEVENLABS_API_KEY -- "$secret_probe")
+[[ "$team_digest" == "$expected_digest" ]] || { echo 'team namespace child received the wrong secret' >&2; exit 1; }
+/usr/bin/tr '\0' '\n' <"$fake_argv" | /usr/bin/grep -Fxq 'apple-team-ABCDE12345' || {
+  echo 'team namespace was not used as the Keychain account' >&2; exit 1
+}
+assert_fails 'team namespace outside App Store Connect (store)' run_secret_store check \
+  --app apple-team-ABCDE12345 --service elevenlabs --environment production --key api-key
+assert_fails 'team namespace outside App Store Connect (run)' run_with_secret \
+  --service-name 'ios-template/apple-team-ABCDE12345/elevenlabs/production/api-key' --env ELEVENLABS_API_KEY -- "$secret_probe"
+for bad_team in apple-team-ABCDE1234 apple-team-ABCDE123456 apple-team-ABCDE1234x; do
+  assert_fails "malformed team namespace $bad_team (store)" run_secret_store check \
+    --app "$bad_team" --service app-store-connect --environment production --key key-id
+  assert_fails "malformed team namespace $bad_team (run)" run_with_secret \
+    --service-name "ios-template/$bad_team/app-store-connect/production/key-id" --env ASC_KEY_ID -- "$secret_probe"
+done
+team_root="$test_home/Library/Application Support/iOS-Template/secrets/apple-team-ABCDE12345"
+mkdir -p "$team_root"
+chmod 700 "$team_root"
+team_key="$team_root/app-store-connect-production.p8"
+printf '%s\n' 'TEAM KEY FIXTURE DATA' > "$team_key"
+chmod 600 "$team_key"
+team_path_digest=$(printf '%s' "$team_key" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')
+team_result=$(HOME="$test_home" "$repo_root/tools/run-with-private-key.sh" \
+  --app apple-team-ABCDE12345 --file "$team_key" --env APP_STORE_CONNECT_PRIVATE_KEY_PATH -- "$private_key_probe")
+[[ "$team_result" == "$team_path_digest 600" ]] || { echo 'team key wrapper returned an unexpected result' >&2; exit 1; }
+assert_fails 'malformed team key namespace' env HOME="$test_home" "$repo_root/tools/run-with-private-key.sh" \
+  --app apple-team-ABCDE1234 --file "$team_key" --env APP_STORE_CONNECT_PRIVATE_KEY_PATH -- "$private_key_probe"
+
 for ignored_path in AuthKey_example.p8 Example.mobileprovision .env .env.production .secrets/staging-key secret-staging/key; do
   git -C "$repo_root" check-ignore -q --no-index -- "$ignored_path" || {
     echo "secret path is not ignored: $ignored_path" >&2
