@@ -300,6 +300,26 @@ dry_run="$("${manager[@]}" recover "${common[@]}" --dry-run)"
 [[ "$(inventory | jq -r --arg id "$orphan_id" '.allocations[] | select(.allocationId == $id) | .cleanup.reason + ":" + .cleanup.deviceState')" == "orphan-recovery:Shutdown" ]] ||
   fail "orphan recovery did not shut the device down"
 
+# Coexistence with repositories that still run the pre-D-063 manager (AC-4). The frozen legacy manager counts
+# only its own state file and running `iOS-Template-` devices, so it cannot see a dedicated lease: with three
+# running legacy devices and the dedicated iPhone leased and running, it still reports free capacity. This
+# manager counts both and refuses the next lease. docs/verification.md records the limit.
+legacy_manager=(ruby tools/tests/fixtures/legacy-simulator-resource/ios-simulator-resource.rb)
+edit_simctl '3.times { |i| devices << {"udid" => "LEGACY-RUN-#{i}", "name" => "iOS-Template-legacy-iphone-ja-#{i}", "state" => "Booted", "isAvailable" => true, "deviceTypeIdentifier" => args[0], "dataPath" => "/fixture/legacy-run-#{i}"} }' "$iphone_type"
+coexist="$(allocate coexist-session coexist-attempt iphone-ja)"
+IFS=$'\t' read -r coexist_id _ _ <<<"$coexist"
+set_device_state "$iphone_udid" Booted
+[[ "$(inventory | jq -r '.capacityInUse')" == 4 ]] || fail "this manager did not count the dedicated lease with the running legacy devices"
+expect_denied 'lease over a full Mac with running legacy devices' 'limit (4) is in use' allocate coexist-next coexist-next-attempt ipad-ja
+legacy_view="$("${legacy_manager[@]}" inventory "${common[@]}")"
+[[ "$(jq -r '[.activeCount, ([.protectedUnmanagedDevices[] | select(.countsTowardCapacity)] | length), .limit] | map(tostring) | join("|")' <<<"$legacy_view")" == "0|3|4" ]] ||
+  fail "the legacy manager view of the Mac-wide capacity changed: $legacy_view"
+jq -e --arg iphone "$iphone_name" --arg ipad "$ipad_name" '[.protectedUnmanagedDevices[] | select(.name == $iphone or .name == $ipad)] | length == 0' <<<"$legacy_view" >/dev/null ||
+  fail "the legacy manager unexpectedly counted a dedicated Simulator"
+release_lease coexist-session "$coexist_id" >/dev/null
+edit_simctl 'devices.reject! { |d| d["udid"].start_with?("LEGACY-RUN-") }'
+assert_no_forbidden_calls
+
 # Tampered lease state is rejected.
 ruby -rjson - "$state_root/dedicated-v1.json" <<'RUBY'
 state = JSON.parse(File.read(ARGV[0]))

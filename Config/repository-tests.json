@@ -192,6 +192,7 @@
       ],
       "prefixes": [
         "tools/lib/ios-",
+        "tools/tests/fixtures/legacy-simulator-resource/",
         "tools/tests/fixtures/simctl/",
         "tools/tests/lib/ios-runner-"
       ]
