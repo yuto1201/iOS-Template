@@ -9,21 +9,32 @@ fail() {
 }
 
 usage() {
-  echo 'usage: install-app-icon.sh --root REPOSITORY --source PNG --concept-id ID --prompt-file FILE --generator builtin-imagegen' >&2
+  echo 'usage: install-app-icon.sh --root REPOSITORY --source PNG --concept-id ID --prompt-file FILE --generator builtin-imagegen|builtin-imagegen-reference-edit [--reference-image FILE --reference-rights user-confirmed] [--replace-accepted sha256:HEX --selection FILE]' >&2
   exit 2
 }
 
 root='' source_file='' concept_id='' prompt_file='' generator=''
-[[ $# -eq 10 ]] || usage
+reference_image='' reference_rights='' replace_accepted='' selection_file=''
+seen=' '
 while [[ $# -gt 0 ]]; do
+  [[ $# -ge 2 && "$seen" != *" $1 "* ]] || usage
+  seen="$seen$1 "
   case "$1" in
-    --root) [[ -z "$root" ]] || usage; root=${2:-}; shift 2 ;;
-    --source) [[ -z "$source_file" ]] || usage; source_file=${2:-}; shift 2 ;;
-    --concept-id) [[ -z "$concept_id" ]] || usage; concept_id=${2:-}; shift 2 ;;
-    --prompt-file) [[ -z "$prompt_file" ]] || usage; prompt_file=${2:-}; shift 2 ;;
-    --generator) [[ -z "$generator" ]] || usage; generator=${2:-}; shift 2 ;;
+    --root) root=$2 ;;
+    --source) source_file=$2 ;;
+    --concept-id) concept_id=$2 ;;
+    --prompt-file) prompt_file=$2 ;;
+    --generator) generator=$2 ;;
+    --reference-image) reference_image=$2 ;;
+    --reference-rights) reference_rights=$2 ;;
+    --replace-accepted) replace_accepted=$2 ;;
+    --selection) selection_file=$2 ;;
     *) usage ;;
   esac
+  shift 2
+done
+for required in --root --source --concept-id --prompt-file --generator; do
+  [[ "$seen" == *" $required "* ]] || usage
 done
 
 [[ "$root" == /* && -d "$root" && ! -L "$root" ]] || fail 'repository root is invalid'
@@ -42,7 +53,34 @@ fi
 [[ "$source_file" == /* && -f "$source_file" && ! -L "$source_file" ]] || fail 'source must be an absolute regular non-symlink file'
 [[ "$prompt_file" == /* && -f "$prompt_file" && ! -L "$prompt_file" ]] || fail 'prompt file must be an absolute regular non-symlink file'
 [[ "$concept_id" =~ ^[a-z][a-z0-9-]{0,63}$ ]] || fail 'concept ID is invalid'
-[[ "$generator" == builtin-imagegen ]] || fail 'generator must be builtin-imagegen'
+case "$generator" in
+  builtin-imagegen)
+    [[ "$seen" != *' --reference-image '* && "$seen" != *' --reference-rights '* ]] || fail 'reference inputs require the builtin-imagegen-reference-edit generator'
+    ;;
+  builtin-imagegen-reference-edit)
+    [[ "$reference_rights" == user-confirmed ]] || fail 'reference image rights must be explicitly confirmed by the user'
+    [[ "$reference_image" == /* && -f "$reference_image" && ! -L "$reference_image" ]] || fail 'reference image must be an absolute regular non-symlink file'
+    ;;
+  *) fail 'generator must be builtin-imagegen or builtin-imagegen-reference-edit' ;;
+esac
+replacing=false
+if [[ "$seen" == *' --replace-accepted '* || "$seen" == *' --selection '* ]]; then
+  [[ "$replace_accepted" =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'replacement must declare the accepted sha256 digest'
+  [[ "$selection_file" == /* && -f "$selection_file" && ! -L "$selection_file" ]] || fail 'replacement requires an absolute regular non-symlink selection file'
+  replacing=true
+fi
+source_raw_digest="sha256:$(/usr/bin/shasum -a 256 "$source_file" | /usr/bin/awk '{print $1}')"
+reference_digest=''
+if [[ -n "$reference_image" ]]; then
+  reference_real="$(cd "$(dirname "$reference_image")" && /bin/pwd -P)/$(basename "$reference_image")"
+  if [[ "$reference_real" == "$root"/* ]]; then
+    reference_relative=${reference_real#"$root"/}
+    ! git -C "$root" ls-files --error-unmatch -- "$reference_relative" >/dev/null 2>&1 || fail 'reference image must not be tracked by Git'
+    git -C "$root" check-ignore -q -- "$reference_relative" || fail 'reference image inside the repository must be ignored by Git'
+  fi
+  reference_digest="sha256:$(/usr/bin/shasum -a 256 "$reference_image" | /usr/bin/awk '{print $1}')"
+  [[ "$reference_digest" != "$source_raw_digest" ]] || fail 'source must be a generated edit, not the reference image itself'
+fi
 
 identity="$root/Config/app-identity.json"
 [[ -f "$identity" && ! -L "$identity" ]] || fail 'complete Identity bootstrap is required first'
@@ -70,8 +108,16 @@ rollback() {
   status=$?
   if [[ "$committed" != true ]]; then
     [[ ! -e "$temporary/original-contents.json" ]] || /bin/cp -f "$temporary/original-contents.json" "$contents"
-    [[ ! -e "$asset" || -e "$temporary/preexisting-asset" ]] || /bin/rm -f "$asset"
-    [[ ! -e "$record" || -e "$temporary/preexisting-record" ]] || /bin/rm -f "$record"
+    if [[ -e "$temporary/original-asset.png" ]]; then
+      /bin/cp -f "$temporary/original-asset.png" "$asset"
+    elif [[ -e "$asset" && ! -e "$temporary/preexisting-asset" ]]; then
+      /bin/rm -f "$asset"
+    fi
+    if [[ -e "$temporary/original-record.json" ]]; then
+      /bin/cp -f "$temporary/original-record.json" "$record"
+    elif [[ -e "$record" && ! -e "$temporary/preexisting-record" ]]; then
+      /bin/rm -f "$record"
+    fi
   fi
   /bin/rm -rf -- "$temporary"
   exit "$status"
@@ -85,7 +131,46 @@ trap rollback EXIT
 "$temporary/inspect-app-icon" prepare "$source_file" "$temporary/AppIcon-1024.png" >/dev/null || fail 'source must be a 1024 x 1024 PNG with no transparent pixels'
 digest="sha256:$(/usr/bin/shasum -a 256 "$temporary/AppIcon-1024.png" | /usr/bin/awk '{print $1}')"
 
-PROMPT="$prompt_file" DISPLAY_NAME="$display_name" CONCEPT_ID="$concept_id" GENERATOR="$generator" MODULE_NAME="$module_name" DIGEST="$digest" /usr/bin/ruby -rjson -e '
+# A replacement binds the caller's declared accepted digest, the user's explicit selection record for a new
+# immutable revision, and the selected candidate bytes before any repository file changes.
+selection_revision='' supersedes='' replacement_mode=''
+if [[ "$replacing" == true ]]; then
+  [[ -f "$record" && ! -L "$record" && -f "$asset" && ! -L "$asset" ]] || fail 'replacement requires an accepted app icon'
+  "$script_directory/validate-app-icon.sh" --root "$root" >/dev/null 2>&1 || fail 'the accepted app icon must validate before replacement'
+  selection_revision=$(SELECTION="$selection_file" SOURCE="$source_file" CONCEPT_ID="$concept_id" SOURCE_DIGEST="$source_raw_digest" /usr/bin/ruby -rjson -e '
+    def refuse(message); warn message; exit 1; end
+    value=JSON.parse(File.binread(ENV.fetch("SELECTION"))) rescue refuse("selection is invalid")
+    refuse("selection schema differs") unless value.is_a?(Hash) && value.keys.sort == %w[candidates revision schemaVersion selectedConceptId selection] && value["schemaVersion"] == 1
+    refuse("selection revision is invalid") unless value["revision"].is_a?(String) && value["revision"].match?(/\A[a-z0-9][a-z0-9-]{0,63}\z/)
+    refuse("selection must record the user explicit choice") unless value["selection"] == "user-explicit"
+    candidates=value["candidates"]
+    refuse("selection candidates are invalid") unless candidates.is_a?(Array) && candidates.length.between?(1,4) && candidates.all?{|entry| entry.is_a?(Hash) && entry.keys.sort == %w[conceptId sha256] && entry["conceptId"].is_a?(String) && entry["conceptId"].match?(/\A[a-z][a-z0-9-]{0,63}\z/) && entry["sha256"].is_a?(String) && entry["sha256"].match?(/\Asha256:[0-9a-f]{64}\z/)}
+    refuse("selection candidates are not unique") unless candidates.map{|entry| entry["conceptId"]}.uniq.length == candidates.length && candidates.map{|entry| entry["sha256"]}.uniq.length == candidates.length
+    selected=candidates.find{|entry| entry["conceptId"] == value["selectedConceptId"]} or refuse("selected concept is not a candidate")
+    refuse("concept ID differs from the explicit selection") unless value["selectedConceptId"] == ENV.fetch("CONCEPT_ID")
+    refuse("source is not the selected candidate") unless selected["sha256"] == ENV.fetch("SOURCE_DIGEST")
+    directory=File.dirname(File.realpath(ENV.fetch("SELECTION")))
+    refuse("source is not stored in the selection revision") unless File.dirname(File.realpath(ENV.fetch("SOURCE"))) == directory && File.basename(directory) == value["revision"]
+    puts value["revision"]
+  ') || fail 'the explicit selection does not bind the source candidate'
+  accepted=$(RECORD="$record" /usr/bin/ruby -rjson -e '
+    value=JSON.parse(File.binread(ENV.fetch("RECORD")))
+    puts JSON.generate({"current"=>{"conceptId"=>value.fetch("conceptId"),"generator"=>value.fetch("generator"),"sha256"=>value.fetch("sha256")},"selectionRevision"=>value["selectionRevision"],"supersedes"=>value["supersedes"]})
+  ') || fail 'accepted app icon record is invalid'
+  if [[ "$(printf '%s' "$accepted" | jq -er '.current.sha256')" == "$replace_accepted" ]]; then
+    replacement_mode=replace
+    supersedes=$(printf '%s' "$accepted" | jq -ce '.current')
+    [[ "$digest" != "$replace_accepted" ]] || fail 'replacement must change the accepted icon'
+    [[ "$(printf '%s' "$accepted" | jq -r '.selectionRevision // ""')" != "$selection_revision" ]] || fail 'replacement must come from a new selection revision'
+  elif [[ "$(printf '%s' "$accepted" | jq -r '.supersedes.sha256? // ""')" == "$replace_accepted" ]]; then
+    replacement_mode=recheck
+    supersedes=$(printf '%s' "$accepted" | jq -ce '.supersedes')
+  else
+    fail 'declared accepted digest differs from the current app icon'
+  fi
+fi
+
+PROMPT="$prompt_file" DISPLAY_NAME="$display_name" CONCEPT_ID="$concept_id" GENERATOR="$generator" MODULE_NAME="$module_name" DIGEST="$digest" REFERENCE_DIGEST="$reference_digest" SELECTION_REVISION="$selection_revision" SUPERSEDES="$supersedes" /usr/bin/ruby -rjson -e '
   def refuse(message); warn message; exit 1; end
   prompt=File.binread(ENV.fetch("PROMPT"))
   refuse("prompt summary is invalid") unless prompt.valid_encoding? && prompt.bytesize.between?(1,4096) && !prompt.match?(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/)
@@ -105,6 +190,14 @@ PROMPT="$prompt_file" DISPLAY_NAME="$display_name" CONCEPT_ID="$concept_id" GENE
     "assetPath"=>"#{ENV.fetch("MODULE_NAME")}/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png",
     "sha256"=>ENV.fetch("DIGEST")
   }
+  reference=ENV.fetch("REFERENCE_DIGEST")
+  supersedes=ENV.fetch("SUPERSEDES")
+  unless reference.empty? && supersedes.empty?
+    value["schemaVersion"]=2
+    value["referenceSha256"]=reference.empty? ? nil : reference
+    value["selectionRevision"]=supersedes.empty? ? nil : ENV.fetch("SELECTION_REVISION")
+    value["supersedes"]=supersedes.empty? ? nil : JSON.parse(supersedes)
+  end
   File.binwrite(ARGV.fetch(0),JSON.generate(value))
 ' "$temporary/app-icon.json" || fail 'prompt summary or record is invalid'
 
@@ -119,6 +212,31 @@ CONTENTS="$contents" /usr/bin/ruby -rjson -e '
   default.first["filename"]="AppIcon-1024.png"
   File.binwrite(ARGV.fetch(0),JSON.pretty_generate(value)+"\n")
 ' "$temporary/Contents.json" || fail 'asset catalog could not be prepared'
+
+if [[ "$replacing" == true ]]; then
+  if [[ "$replacement_mode" == recheck ]]; then
+    if /usr/bin/cmp -s "$record" "$temporary/app-icon.json" && /usr/bin/cmp -s "$asset" "$temporary/AppIcon-1024.png"; then
+      committed=true
+      trap - EXIT
+      /bin/rm -rf -- "$temporary"
+      printf '{"conceptId":"%s","resultRecordPath":"Config/app-icon.json","status":"already-complete"}\n' "$concept_id"
+      exit 0
+    fi
+    fail 'declared accepted digest differs from the current app icon'
+  fi
+  [[ -z "$(git -C "$root" status --porcelain=v1)" ]] || fail 'caller worktree must be clean before replacement'
+  /bin/cp "$asset" "$temporary/original-asset.png"
+  /bin/cp "$record" "$temporary/original-record.json"
+  /bin/mv "$temporary/AppIcon-1024.png" "$asset"
+  /bin/mv "$temporary/Contents.json" "$contents"
+  /bin/mv "$temporary/app-icon.json" "$record"
+  "$script_directory/validate-app-icon.sh" --root "$root" >/dev/null || fail 'replaced app icon did not validate'
+  committed=true
+  trap - EXIT
+  /bin/rm -rf -- "$temporary"
+  printf '{"conceptId":"%s","resultRecordPath":"Config/app-icon.json","status":"replaced","supersedes":"%s"}\n' "$concept_id" "$replace_accepted"
+  exit 0
+fi
 
 if [[ -e "$record" || -L "$record" || -e "$asset" || -L "$asset" ]]; then
   [[ -f "$record" && ! -L "$record" && -f "$asset" && ! -L "$asset" ]] || fail 'existing app icon output is incomplete or unsafe'

@@ -577,3 +577,13 @@
 - Decision: 派生アプリの確定仕様が買い切りの非消耗型商品を明示採用した場合だけ、StoreKit 2の権利境界を有効化する。採用前に商品種別、付与する権利、product ID命名、価格tier、対象storefront、Family Sharing、対象年齢、Offer Code採否を確定し、未決なら`blocked:user`とする。権利はverifiedで失効していないtransactionだけから解決し、pending、取消、unverified、失効済み、アプリ独自の保存値からは付与しない。起動時とforeground復帰時に再確認し、transaction updatesを監視してverified transactionをfinishする。復元とOffer Code redemptionは利用者の明示操作だけで起動し、曖昧な結果から権利を推測しない。広告非表示に使う場合、StoreKit側はAdMobの`adFreeEntitlement`入力と`hasAdFreeEntitlement`注入点へ権利の値だけを渡し、consent、eligibility、広告requestはAdMob側に残す。Debug／UI TestはStoreKit configuration fileとnetwork-free fixtureで検証し、StoreKit Testing、sandbox購入、App Store Connectのproduct状態、審査結果を別の証拠とする。
 - Consequence: 派生アプリは、広告非表示などの買い切り商品を共通の権利判定と責務分離で追加できる。テンプレート本体とbootstrap outputは変えず、StoreKit code、skill、activation tool、validator、StoreKit configuration fileは後続Issueで実装する。source preparationのcode inventoryはStoreKitの使用を検出しないため、その検出は後続Issueとし、それまでIAP項目は利用者の確定値とreadbackで扱う。自動更新subscription、消耗型、server-side検証、独自purchase server、App Store Connectでのproduct作成・価格・税務・契約・IAP審査提出・Offer Code発行は含めない。
 - Related Issue: #159
+
+## D-065: 採用済みアプリアイコンを明示replace modeだけで差し替える
+
+- Date: 2026-09-29
+- Status: 確定
+- Supersedes: None。D-031の初回App Icon Gate、exactly 2案の生成、明示選択、選択済みassetとsanitized recordだけのcommit、UI Direction Gateとの独立性を維持する。
+- Context: D-031は初回の採用だけを定め、採用後の差し替えを定めていなかった。`tools/install-app-icon.sh`は採用済みrecordと異なる入力を常に拒否するため、派生アプリPayCycleは初回release前にユーザー提供画像の編集結果へ差し替える際、installerを迂回して独自のselection記録で対応した。
+- Decision: 採用済みアイコンの差し替えは、初回App Icon Issueとは別のIssueで、installerの明示replace modeだけを使う。callerは現行採用SHA-256を宣言し、新しいimmutable revisionの候補からユーザーが明示選択した`selection.json`と、その選択候補のbytesを渡す。宣言digestの不一致、明示選択でない記録、選択候補以外のsource、同じrevisionの再利用、変化のない差し替え、dirty worktreeは、変更前に停止する。差し替え後のrecordはschema 2とし、新しい採用値、`selectionRevision`、直前の採用concept ID／generator／SHA-256を持つ`supersedes`を記録する。ユーザー提供の参照画像を編集入力にする場合は、権利のユーザー確認を必須とし、参照画像をGitへ入れず、SHA-256と`builtin-imagegen-reference-edit`だけを記録する。第三者mark、識別可能な人物の顔、文字を含めない既定条件を維持する。
+- Consequence: 派生アプリはinstallerを迂回せずに後のreleaseでアイコンを変えられ、直前の採用記録をrecordとGit履歴で追跡できる。初回installと同一入力再実行のschema 1出力は変わらない。rejected候補、prompt履歴、参照画像はGitへ入れない。外部サイトやApp Store Connectの掲載アイコンは別Issueで更新する。custom dark／tinted variant、alternate icon、既存派生アプリの実差し替えは対象外とする。
+- Related Issue: #158

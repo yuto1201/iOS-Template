@@ -115,6 +115,11 @@ grep -Fq 'one centered recognizable subject' "$skill"
 grep -Fq 'no text, initials' "$skill"
 grep -Fq 'new immutable revision' "$skill"
 grep -Fq 'does not satisfy the UI Direction Gate' "$skill"
+grep -Fq 'separate from the initial App Icon Issue' "$skill"
+grep -Fq -- '--replace-accepted' "$skill"
+grep -Fq '"selection":"user-explicit"' "$skill"
+grep -Fq 'explicitly confirms they hold the rights' "$skill"
+grep -Fq 'Keep the reference image outside Git' "$skill"
 
 valid_png="$workspace/valid.png"
 alternate_png="$workspace/alternate.png"
@@ -182,6 +187,153 @@ after=$(git -C "$fixture" status --porcelain=v1 | /usr/bin/shasum -a 256 | /usr/
 accepted_digest=$(/usr/bin/shasum -a 256 "$asset" | /usr/bin/awk '{print $1}')
 assert_fails 'conflicting accepted icon' "$installer" --root "$fixture" --source "$alternate_png" --concept-id concept-b --prompt-file "$prompt_file" --generator builtin-imagegen
 [[ "$(/usr/bin/shasum -a 256 "$asset" | /usr/bin/awk '{print $1}')" == "$accepted_digest" ]] || { echo 'conflicting input replaced the accepted icon' >&2; exit 1; }
+
+# Replacement of an accepted icon requires the declared accepted digest, an explicit selection record in a
+# new immutable revision, the selected candidate bytes, a clean worktree, and rights for any reference image.
+sha_of() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print "sha256:" $1}'; }
+write_selection() {
+  local directory=$1 revision=$2 selected=$3 selection=${4:-user-explicit}
+  shift 4
+  python3 - "$directory/selection.json" "$revision" "$selected" "$selection" "$@" <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+path, revision, selected, selection = sys.argv[1:5]
+candidates = []
+for candidate in sys.argv[5:]:
+    concept = os.path.splitext(os.path.basename(candidate))[0]
+    digest = "sha256:" + hashlib.sha256(open(candidate, "rb").read()).hexdigest()
+    candidates.append({"conceptId": concept, "sha256": digest})
+value = {"schemaVersion": 1, "revision": revision, "candidates": candidates, "selectedConceptId": selected, "selection": selection}
+with open(path, "w", encoding="utf-8") as output:
+    json.dump(value, output)
+PY
+}
+record_field() { jq -c "$2" "$1/Config/app-icon.json"; }
+assert_unchanged() {
+  local fixture=$1 label=$2 expected_asset=$3 expected_record=$4
+  [[ "$(sha_of "$fixture/GardenNotes/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png")" == "$expected_asset" ]] || { echo "$label changed the accepted icon" >&2; exit 1; }
+  [[ "$(sha_of "$fixture/Config/app-icon.json")" == "$expected_record" ]] || { echo "$label changed the accepted record" >&2; exit 1; }
+}
+
+replace_fixture="$workspace/replace-app"
+make_fixture "$replace_fixture"
+"$installer" --root "$replace_fixture" --source "$valid_png" --concept-id concept-a --prompt-file "$prompt_file" --generator builtin-imagegen >/dev/null
+git -C "$replace_fixture" add -A
+git -C "$replace_fixture" commit -qm 'accept concept-a'
+replace_asset="$replace_fixture/GardenNotes/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+replace_record="$replace_fixture/Config/app-icon.json"
+first_digest=$(sha_of "$replace_asset")
+first_record=$(sha_of "$replace_record")
+[[ "$(jq -r '.sha256' "$replace_record")" == "$first_digest" ]] || { echo 'initial record digest differs from the accepted asset' >&2; exit 1; }
+
+revision_two="$workspace/candidates/r2"
+mkdir -p "$revision_two"
+make_png "$revision_two/concept-c.png" 1024 1024 255 120
+make_png "$revision_two/concept-d.png" 1024 1024 255 160
+write_selection "$revision_two" r2 concept-c user-explicit "$revision_two/concept-c.png" "$revision_two/concept-d.png"
+replacement_prompt="$workspace/replacement-prompt.txt"
+printf '%s\n' 'One centered sprout mark on a warm solid background; no text, no mask, no fine detail.' >"$replacement_prompt"
+replace_with() {
+  "$installer" --root "$replace_fixture" --prompt-file "$replacement_prompt" "$@"
+}
+
+assert_fails 'declared digest mismatch' replace_with --source "$revision_two/concept-c.png" --concept-id concept-c --generator builtin-imagegen --replace-accepted "sha256:$(printf '0%.0s' {1..64})" --selection "$revision_two/selection.json"
+grep -Fq 'declared accepted digest differs' "$workspace/stderr" || { echo 'digest mismatch was not explained' >&2; exit 1; }
+assert_unchanged "$replace_fixture" 'declared digest mismatch' "$first_digest" "$first_record"
+assert_fails 'replacement without selection' replace_with --source "$revision_two/concept-c.png" --concept-id concept-c --generator builtin-imagegen --replace-accepted "$first_digest"
+assert_fails 'unselected candidate source' replace_with --source "$revision_two/concept-d.png" --concept-id concept-c --generator builtin-imagegen --replace-accepted "$first_digest" --selection "$revision_two/selection.json"
+grep -Fq 'source is not the selected candidate' "$workspace/stderr" || { echo 'unselected source was not explained' >&2; exit 1; }
+assert_fails 'unselected candidate concept' replace_with --source "$revision_two/concept-d.png" --concept-id concept-d --generator builtin-imagegen --replace-accepted "$first_digest" --selection "$revision_two/selection.json"
+grep -Fq 'concept ID differs from the explicit selection' "$workspace/stderr" || { echo 'unselected concept was not explained' >&2; exit 1; }
+implicit_revision="$workspace/implicit/r2"
+mkdir -p "$implicit_revision"
+cp "$revision_two/concept-c.png" "$implicit_revision/concept-c.png"
+write_selection "$implicit_revision" r2 concept-c assistant-default "$implicit_revision/concept-c.png"
+assert_fails 'implicit selection' replace_with --source "$implicit_revision/concept-c.png" --concept-id concept-c --generator builtin-imagegen --replace-accepted "$first_digest" --selection "$implicit_revision/selection.json"
+grep -Fq 'selection must record the user explicit choice' "$workspace/stderr" || { echo 'implicit selection was not explained' >&2; exit 1; }
+cp "$revision_two/concept-c.png" "$workspace/concept-c.png"
+assert_fails 'source outside the selection revision' replace_with --source "$workspace/concept-c.png" --concept-id concept-c --generator builtin-imagegen --replace-accepted "$first_digest" --selection "$revision_two/selection.json"
+reference_image="$workspace/user-reference.png"
+make_png "$reference_image" 512 512 255 240
+assert_fails 'unconfirmed reference rights' replace_with --source "$revision_two/concept-c.png" --concept-id concept-c --generator builtin-imagegen-reference-edit --reference-image "$reference_image" --replace-accepted "$first_digest" --selection "$revision_two/selection.json"
+grep -Fq 'reference image rights must be explicitly confirmed by the user' "$workspace/stderr" || { echo 'unconfirmed rights were not explained' >&2; exit 1; }
+assert_fails 'assumed reference rights' replace_with --source "$revision_two/concept-c.png" --concept-id concept-c --generator builtin-imagegen-reference-edit --reference-image "$reference_image" --reference-rights assumed --replace-accepted "$first_digest" --selection "$revision_two/selection.json"
+assert_fails 'reference without the edit generator' replace_with --source "$revision_two/concept-c.png" --concept-id concept-c --generator builtin-imagegen --reference-image "$reference_image" --reference-rights user-confirmed --replace-accepted "$first_digest" --selection "$revision_two/selection.json"
+printf '%s\n' dirty >"$replace_fixture/unrelated.txt"
+assert_fails 'dirty replacement' replace_with --source "$revision_two/concept-c.png" --concept-id concept-c --generator builtin-imagegen --replace-accepted "$first_digest" --selection "$revision_two/selection.json"
+grep -Fq 'caller worktree must be clean before replacement' "$workspace/stderr" || { echo 'dirty replacement was not explained' >&2; exit 1; }
+rm "$replace_fixture/unrelated.txt"
+assert_unchanged "$replace_fixture" 'rejected replacement' "$first_digest" "$first_record"
+[[ -z "$(git -C "$replace_fixture" status --porcelain=v1)" ]] || { echo 'rejected replacements left repository changes' >&2; exit 1; }
+
+replaced=$(replace_with --source "$revision_two/concept-c.png" --concept-id concept-c --generator builtin-imagegen --replace-accepted "$first_digest" --selection "$revision_two/selection.json")
+[[ "$replaced" == *'"status":"replaced"'* && "$replaced" == *"\"supersedes\":\"$first_digest\""* ]] || { echo "unexpected replacement result: $replaced" >&2; exit 1; }
+[[ "$(git -C "$replace_fixture" status --porcelain=v1 | sort)" == "$(printf '%s\n' ' M Config/app-icon.json' ' M GardenNotes/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png')" ]] || { echo 'replacement changed files other than the asset and record' >&2; exit 1; }
+second_digest=$(sha_of "$replace_asset")
+[[ "$second_digest" != "$first_digest" ]] || { echo 'replacement did not change the accepted icon' >&2; exit 1; }
+[[ "$(record_field "$replace_fixture" '[.schemaVersion, .conceptId, .generator, .sha256, .selectionRevision, .referenceSha256]')" == "[2,\"concept-c\",\"builtin-imagegen\",\"$second_digest\",\"r2\",null]" ]] || { echo 'replacement record values differ' >&2; exit 1; }
+[[ "$(record_field "$replace_fixture" '.supersedes')" == "{\"conceptId\":\"concept-a\",\"generator\":\"builtin-imagegen\",\"sha256\":\"$first_digest\"}" ]] || { echo 'replacement record does not trace the superseded icon' >&2; exit 1; }
+validation=$("$validator" --root "$replace_fixture")
+[[ "$validation" == *'"status":"valid"'* && "$validation" == *'"conceptId":"concept-c"'* ]] || { echo "unexpected replacement validation: $validation" >&2; exit 1; }
+second_record=$(sha_of "$replace_record")
+rerun=$(replace_with --source "$revision_two/concept-c.png" --concept-id concept-c --generator builtin-imagegen --replace-accepted "$first_digest" --selection "$revision_two/selection.json")
+[[ "$rerun" == *'"status":"already-complete"'* ]] || { echo "replacement rerun was not idempotent: $rerun" >&2; exit 1; }
+assert_unchanged "$replace_fixture" 'replacement rerun' "$second_digest" "$second_record"
+git -C "$replace_fixture" add -A
+git -C "$replace_fixture" commit -qm 'replace with concept-c'
+
+reused_revision="$workspace/reused/r2"
+mkdir -p "$reused_revision"
+cp "$revision_two/concept-d.png" "$reused_revision/concept-d.png"
+write_selection "$reused_revision" r2 concept-d user-explicit "$reused_revision/concept-d.png"
+assert_fails 'reused selection revision' replace_with --source "$reused_revision/concept-d.png" --concept-id concept-d --generator builtin-imagegen --replace-accepted "$second_digest" --selection "$reused_revision/selection.json"
+grep -Fq 'replacement must come from a new selection revision' "$workspace/stderr" || { echo 'reused revision was not explained' >&2; exit 1; }
+assert_unchanged "$replace_fixture" 'reused selection revision' "$second_digest" "$second_record"
+
+revision_three="$workspace/candidates/r3"
+mkdir -p "$revision_three"
+make_png "$revision_three/concept-e.png" 1024 1024 255 90
+write_selection "$revision_three" r3 concept-e user-explicit "$revision_three/concept-e.png"
+cp "$reference_image" "$replace_fixture/tracked-reference.png"
+git -C "$replace_fixture" add tracked-reference.png
+git -C "$replace_fixture" commit -qm 'track a reference by mistake'
+assert_fails 'tracked reference image' replace_with --source "$revision_three/concept-e.png" --concept-id concept-e --generator builtin-imagegen-reference-edit --reference-image "$replace_fixture/tracked-reference.png" --reference-rights user-confirmed --replace-accepted "$second_digest" --selection "$revision_three/selection.json"
+grep -Fq 'reference image must not be tracked by Git' "$workspace/stderr" || { echo 'tracked reference was not explained' >&2; exit 1; }
+git -C "$replace_fixture" rm -q tracked-reference.png
+git -C "$replace_fixture" commit -qm 'remove the tracked reference'
+assert_fails 'reference used as the icon' replace_with --source "$revision_three/concept-e.png" --concept-id concept-e --generator builtin-imagegen-reference-edit --reference-image "$revision_three/concept-e.png" --reference-rights user-confirmed --replace-accepted "$second_digest" --selection "$revision_three/selection.json"
+edited=$(replace_with --source "$revision_three/concept-e.png" --concept-id concept-e --generator builtin-imagegen-reference-edit --reference-image "$reference_image" --reference-rights user-confirmed --replace-accepted "$second_digest" --selection "$revision_three/selection.json")
+[[ "$edited" == *'"status":"replaced"'* ]] || { echo "unexpected reference-edit replacement: $edited" >&2; exit 1; }
+[[ "$(record_field "$replace_fixture" '[.generator, .referenceSha256, .selectionRevision, .supersedes.conceptId, .supersedes.sha256]')" == "[\"builtin-imagegen-reference-edit\",\"$(sha_of "$reference_image")\",\"r3\",\"concept-c\",\"$second_digest\"]" ]] || { echo 'reference-edit record values differ' >&2; exit 1; }
+"$validator" --root "$replace_fixture" >/dev/null
+[[ -z "$(git -C "$replace_fixture" ls-files -- '*reference*')" && ! -e "$replace_fixture/user-reference.png" ]] || { echo 'reference image entered the repository' >&2; exit 1; }
+
+reference_fixture="$workspace/reference-app"
+make_fixture "$reference_fixture"
+assert_fails 'initial reference edit without rights' "$installer" --root "$reference_fixture" --source "$valid_png" --concept-id concept-a --prompt-file "$prompt_file" --generator builtin-imagegen-reference-edit --reference-image "$reference_image"
+[[ ! -e "$reference_fixture/Config/app-icon.json" ]] || { echo 'unconfirmed reference rights wrote a record' >&2; exit 1; }
+"$installer" --root "$reference_fixture" --source "$valid_png" --concept-id concept-a --prompt-file "$prompt_file" --generator builtin-imagegen-reference-edit --reference-image "$reference_image" --reference-rights user-confirmed >/dev/null
+[[ "$(record_field "$reference_fixture" '[.schemaVersion, .generator, .referenceSha256, .selectionRevision, .supersedes]')" == "[2,\"builtin-imagegen-reference-edit\",\"$(sha_of "$reference_image")\",null,null]" ]] || { echo 'initial reference-edit record differs' >&2; exit 1; }
+"$validator" --root "$reference_fixture" >/dev/null
+
+tamper_record() {
+  local label=$1 filter=$2
+  cp "$replace_record" "$workspace/record.backup"
+  jq -c "$filter" "$workspace/record.backup" >"$replace_record"
+  assert_fails "$label" "$validator" --root "$replace_fixture"
+  cp "$workspace/record.backup" "$replace_record"
+}
+tamper_record 'superseded digest equals the accepted icon' '.supersedes.sha256 = .sha256'
+tamper_record 'reference digest without the edit generator' '.generator = "builtin-imagegen"'
+tamper_record 'reference edit without a reference digest' '.referenceSha256 = null'
+tamper_record 'schema 2 without a reference or supersedes' '.generator = "builtin-imagegen" | .referenceSha256 = null | .supersedes = null | .selectionRevision = null'
+tamper_record 'revision without a superseded icon' '.supersedes = null'
+tamper_record 'schema 1 with replacement fields' '.schemaVersion = 1'
+tamper_record 'superseded icon with extra fields' '.supersedes.promptSummary = "kept"'
+"$validator" --root "$replace_fixture" >/dev/null
 
 for case_name in transparent wrong-size; do
   case_fixture="$workspace/$case_name-app"

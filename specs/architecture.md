@@ -71,6 +71,8 @@ Config/app-icon.json
 
 `Config/app-icon.json`はdisplay name、stable concept ID、sanitized prompt summary、generator、寸法、format、asset path、exact SHA-256を持つ非秘密の採用recordとする。preselection／rejected候補、prompt revision、small-size previewは`.artifacts/app-icon/`へ置きGit管理しない。installerは`Config/app-identity.json`からmodule pathを解決し、caller指定pathから別Targetへ書かない。
 
+採用後の差し替えはD-065に従い、初回とは別のIssueでinstallerの明示replace modeだけを使う。replace modeは、callerが宣言した現行採用SHA-256、新revisionのユーザー明示選択record、その選択候補のbytes、clean worktreeが揃う場合だけasset／recordを置き換える。差し替え後のschema 2 recordは、新しい採用値に加えて`selectionRevision`と、直前の採用concept ID／generator／SHA-256を持つ`supersedes`を持つ。ユーザー提供の参照画像を編集入力にする場合は`builtin-imagegen-reference-edit`とし、権利のユーザー確認を必須とし、参照画像をGitへ入れずSHA-256だけを`referenceSha256`へ記録する。初回installのschema 1 recordは変えない。
+
 Asset Catalogへはsystem mask前の正方形かつ不透明な1024 x 1024 PNGをdefault iconとして設定し、既存のdark／tinted appearance entryを削除・置換しない。App Icon Issueは画面階層、navigation、primary-flow interactionを決めないため、その選択はUI Direction Gateの代わりにならない。
 
 ## 3. iOS ソースの初期構成

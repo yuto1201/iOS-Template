@@ -87,6 +87,8 @@ App Icon Issueとは独立なら並行できる。採用するsystem UIのIssue�
 
 最初のユーザー向けUIだけがApp Icon Issueの完了を依存に持つ。選択待ちは`blocked:user`とし、domain、dataその他の独立した非UI作業は継続できる。
 
+採用済みアイコンを後のreleaseで変える場合は、初回App Icon Issueとは別の差し替えIssueで行う。新revisionの候補からユーザーが一案を明示選択し、直前の採用記録を追跡できる形で置き換える。ユーザー提供画像を編集元にする場合は、ユーザーが権利を持つことの明示確認を必須とし、参照画像をGitへ入れない。第三者mark、識別可能な人物の顔、文字を含めない既定条件は差し替えでも維持する。外部サイトやApp Store Connectに掲載したアイコンの更新は、別Issueへ引き継ぐ。
+
 ### 3.3 日本語iPhone優先の機能開発
 
 Identity/bootstrap完了後の通常機能開発は、まず`shape`で日本語iPhoneの主要導線と重要ロジックを操作可能にする。承認された形に必要な英訳、iPad最適化、Dark Mode、Dynamic Type、VoiceOver、44pt、復旧、性能などは、問題ごとの狭い`harden` Issueで進める。`release`で日本語・英語 × iPhone・iPadと提出前品質を完全確認する。最初から文字列管理、可変レイアウト、データ・権限・課金の安全な土台を維持し、最終的な対応範囲は減らさない。

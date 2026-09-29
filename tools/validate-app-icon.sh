@@ -26,10 +26,40 @@ metadata=$(ROOT="$root" IDENTITY="$identity" RECORD="$record" /usr/bin/ruby -rjs
   refuse("app identity schema differs") unless identity.is_a?(Hash) && identity.keys.sort == identity_keys.sort && identity["schemaVersion"] == 1 && identity["sourceIdentityVersion"] == 1
   record=JSON.parse(File.binread(ENV.fetch("RECORD"))) rescue refuse("app icon record is invalid")
   record_keys=%w[assetPath conceptId displayName format generator heightPixels promptSummary schemaVersion sha256 widthPixels]
-  refuse("app icon record schema differs") unless record.is_a?(Hash) && record.keys.sort == record_keys.sort && record["schemaVersion"] == 1
+  replacement_keys=(record_keys+%w[referenceSha256 selectionRevision supersedes]).sort
+  concept_pattern=/\A[a-z][a-z0-9-]{0,63}\z/
+  digest_pattern=/\Asha256:[0-9a-f]{64}\z/
+  generators=%w[builtin-imagegen builtin-imagegen-reference-edit]
+  refuse("app icon record schema differs") unless record.is_a?(Hash)
+  case record["schemaVersion"]
+  when 1
+    refuse("app icon record schema differs") unless record.keys.sort == record_keys.sort
+    refuse("generator is invalid") unless record["generator"] == "builtin-imagegen"
+  when 2
+    # Schema 2 adds the user-provided reference digest and the directly superseded accepted icon.
+    refuse("app icon record schema differs") unless record.keys.sort == replacement_keys
+    refuse("generator is invalid") unless generators.include?(record["generator"])
+    reference=record["referenceSha256"]
+    if record["generator"] == "builtin-imagegen-reference-edit"
+      refuse("reference digest is invalid") unless reference.is_a?(String) && reference.match?(digest_pattern) && reference != record["sha256"]
+    else
+      refuse("reference digest requires the reference-edit generator") unless reference.nil?
+    end
+    superseded=record["supersedes"]
+    revision=record["selectionRevision"]
+    if superseded.nil?
+      refuse("selection revision requires a superseded icon") unless revision.nil?
+      refuse("schema 2 record must add a reference or supersede an accepted icon") if reference.nil?
+    else
+      refuse("superseded icon is invalid") unless superseded.is_a?(Hash) && superseded.keys.sort == %w[conceptId generator sha256] && superseded["conceptId"].is_a?(String) && superseded["conceptId"].match?(concept_pattern) && generators.include?(superseded["generator"]) && superseded["sha256"].is_a?(String) && superseded["sha256"].match?(digest_pattern)
+      refuse("superseded icon must differ from the accepted icon") if superseded["sha256"] == record["sha256"]
+      refuse("selection revision is invalid") unless revision.is_a?(String) && revision.match?(/\A[a-z0-9][a-z0-9-]{0,63}\z/)
+    end
+  else
+    refuse("app icon record schema differs")
+  end
   refuse("display name differs") unless record["displayName"] == identity["displayName"]
-  refuse("concept ID is invalid") unless record["conceptId"].is_a?(String) && record["conceptId"].match?(/\A[a-z][a-z0-9-]{0,63}\z/)
-  refuse("generator is invalid") unless record["generator"] == "builtin-imagegen"
+  refuse("concept ID is invalid") unless record["conceptId"].is_a?(String) && record["conceptId"].match?(concept_pattern)
   prompt=record["promptSummary"]
   refuse("prompt summary is invalid") unless prompt.is_a?(String) && prompt.bytesize.between?(1,4096) && !prompt.match?(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/)
   secret_pattern=/(api[_ -]?key|secret[_ -]?key|service_role|-----begin [a-z ]*private key-----|password\s*=|token\s*=)/i
@@ -37,7 +67,7 @@ metadata=$(ROOT="$root" IDENTITY="$identity" RECORD="$record" /usr/bin/ruby -rjs
   refuse("image metadata differs") unless record["widthPixels"] == 1024 && record["heightPixels"] == 1024 && record["format"] == "png"
   expected_path="#{identity.fetch("moduleName")}/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
   refuse("asset path differs") unless record["assetPath"] == expected_path
-  refuse("sha256 is invalid") unless record["sha256"].is_a?(String) && record["sha256"].match?(/\Asha256:[0-9a-f]{64}\z/)
+  refuse("sha256 is invalid") unless record["sha256"].is_a?(String) && record["sha256"].match?(digest_pattern)
   asset=File.join(ENV.fetch("ROOT"),expected_path)
   refuse("asset is missing or unsafe") unless File.file?(asset) && !File.symlink?(asset) && File.stat(asset).nlink == 1
   refuse("asset escapes repository") unless File.realpath(asset).start_with?(ENV.fetch("ROOT")+File::SEPARATOR)
