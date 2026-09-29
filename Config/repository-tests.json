@@ -62,6 +62,7 @@
       "domain": "bootstrap-assets",
       "paths": [
         "AGENTS.md",
+        "Config/dedicated-simulators.json",
         "Config/ownership.yml",
         "Config/template-identity.json",
         "README.md",
