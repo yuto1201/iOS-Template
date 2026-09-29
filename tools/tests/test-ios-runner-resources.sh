@@ -10,17 +10,34 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ios-runner-fixture.
 prepare_repo case-failure
 FAKE_CASE_MODE=launch-fail expect_execute_failure case-failure "case iphone-ja failed"
 [[ ! -e "$draft" ]] || { echo "case failure published draft" >&2; exit 1; }
-/usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "terminate" && $5 == "00000000-0000-0000-0000-000000000002" {count++} END {exit count >= 2 ? 0 : 1}' "$fake_log" || { echo "case failure did not terminate active app" >&2; exit 1; }
-/usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "erase" && $5 == "00000000-0000-0000-0000-000000000002" {count++} END {exit count >= 2 ? 0 : 1}' "$fake_log" || { echo "launch failure did not reclaim the active Simulator" >&2; exit 1; }
+# iphone-ja runs on the leased dedicated iPhone; after its failed launch the app is terminated and the
+# lease is released by shutting the device down.
+/usr/bin/ruby - "$fake_log" <<'RUBY'
+iphone = "00000000-0000-0000-0000-000000000001"
+lines = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
+simctl = ->(index, command) { lines[index][2] == "simctl" && lines[index][3] == command && lines[index][4] == iphone }
+failed_launch = lines.each_index.select { |index| simctl.call(index, "launch") }.last
+abort "the failing iphone-ja launch was not reached" unless failed_launch
+after = (failed_launch + 1...lines.length)
+abort "case failure did not terminate active app" unless after.any? { |index| simctl.call(index, "terminate") }
+abort "launch failure did not release the leased Simulator" unless after.any? { |index| simctl.call(index, "shutdown") }
+abort "launch failure deleted a Simulator" if lines.any? { |fields| fields[2] == "simctl" && fields[3] == "delete" }
+RUBY
 
 for mode in install screenshot terminate-after-case shutdown-after-case erase-after-case; do
   prepare_repo "resource-failure-$mode"
-  FAKE_RESOURCE_FAILURE="$mode" expect_execute_failure "resource-failure-$mode" "case iphone-en failed"
+  # The iPhone is erased when the next case leases it, so an erase failure after iphone-en surfaces as
+  # the iphone-ja lease failing; every other mode fails inside iphone-en.
+  failed_case=iphone-en failure_message="case iphone-en failed"
+  if [[ "$mode" == erase-after-case ]]; then
+    failed_case=iphone-ja failure_message="case iphone-ja Simulator allocation failed"
+  fi
+  FAKE_RESOURCE_FAILURE="$mode" expect_execute_failure "resource-failure-$mode" "$failure_message"
   assert_no_failed_attempts
   [[ ! -e "$draft" ]] || { echo "resource failure published draft for $mode" >&2; exit 1; }
   failure_file="$(/usr/bin/find "$(dirname "$draft")/failures" -type f -name 'failure-*.json' -print -quit)"
   [[ -n "$failure_file" ]] || { echo "resource failure lacked sanitized failure evidence for $mode" >&2; exit 1; }
-  /usr/bin/ruby -rjson -e 'd = JSON.parse(File.read(ARGV.fetch(0))); abort unless d["status"] == "failed" && d["stage"].start_with?("case-iphone-en") && !d["error"].empty?' "$failure_file"
+  /usr/bin/ruby -rjson -e 'd = JSON.parse(File.read(ARGV.fetch(0))); abort unless d["status"] == "failed" && d["stage"].start_with?("case-#{ARGV.fetch(1)}") && !d["error"].empty?' "$failure_file" "$failed_case"
   if /usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && $4 == "delete" {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
     echo "resource cleanup deleted a Simulator for $mode" >&2; exit 1
   fi

@@ -3819,106 +3819,6 @@ func validateRunnerSystemLocale(
     }
 }
 
-func validateRunnerSimulators(
-    configPath: String,
-    expectedDigest: String,
-    devicesPath: String,
-    targetCaseID: String?,
-    expectedState: String?
-) throws -> String? {
-    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
-    let attemptRoot = try requireString(config["attemptRoot"]!, at: "runner config attemptRoot")
-    guard devicesPath.hasPrefix(attemptRoot + "/simulator-devices-"), devicesPath.hasSuffix(".json") else {
-        throw ValidationFailure("Simulator ownership snapshot path is invalid")
-    }
-    let batchID = try requireString(config["batchId"]!, at: "runner config batchId")
-    guard matches(batchID, regex: batchPattern) else {
-        throw ValidationFailure("runner config batch identity is invalid")
-    }
-    let runtime = try requireObject(config["runtime"]!, at: "runner config runtime")
-    try requireExactKeys(runtime, ["identifier", "version"], at: "runner config runtime")
-    let runtimeIdentifier = try requireString(runtime["identifier"]!, at: "runner config runtime.identifier")
-    _ = try requireString(runtime["version"]!, at: "runner config runtime.version")
-    let configuredCases = try requireArray(config["cases"]!, at: "runner config cases")
-    let expectedIDs = try runnerConfigCaseIDs(config)
-    guard configuredCases.count == expectedIDs.count else {
-        throw ValidationFailure("runner config Simulator ownership set is incomplete")
-    }
-
-    let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-    guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
-    defer { close(temporary) }
-    let components = try relativeComponents(String(devicesPath.dropFirst("/tmp/".count)), at: "Simulator ownership snapshot")
-    let devicesData = try readBoundRegularFile(
-        rootFileDescriptor: temporary, components: components, at: "Simulator ownership snapshot"
-    )
-    let liveRoot = try readJSONObject(data: devicesData, at: "Simulator ownership snapshot")
-    let devicesByRuntime = try requireObject(liveRoot["devices"]!, at: "Simulator ownership snapshot.devices")
-    var liveDevices: [(runtime: String, value: JSONObject)] = []
-    for (liveRuntime, rawDevices) in devicesByRuntime {
-        for (index, rawDevice) in try requireArray(rawDevices, at: "Simulator ownership snapshot.devices.\(liveRuntime)").enumerated() {
-            liveDevices.append((
-                runtime: liveRuntime,
-                value: try requireObject(rawDevice, at: "Simulator ownership snapshot.devices.\(liveRuntime)[\(index)]")
-            ))
-        }
-    }
-
-    var normalized: [String: String] = [:]
-    var seenUDIDs = Set<String>()
-    var seenNames = Set<String>()
-    for (index, rawCase) in configuredCases.enumerated() {
-        let path = "runner config cases[\(index)]"
-        let entry = try requireObject(rawCase, at: path)
-        try requireExactKeys(
-            entry,
-            ["id", "locale", "language", "udid", "name", "deviceType", "action", "value"],
-            at: path
-        )
-        let id = try requireString(entry["id"]!, at: "\(path).id")
-        guard id == expectedIDs[index] else {
-            throw ValidationFailure("runner config Simulator cases are not canonical")
-        }
-        let udid = try requireString(entry["udid"]!, at: "\(path).udid")
-        let name = try requireString(entry["name"]!, at: "\(path).name")
-        guard matches(udid, regex: udidPattern), seenUDIDs.insert(udid).inserted,
-              name == "iOS-Template-\(batchID)-\(id)", seenNames.insert(name).inserted else {
-            throw ValidationFailure("runner config Simulator ownership is invalid")
-        }
-        let deviceType = try requireObject(entry["deviceType"]!, at: "\(path).deviceType")
-        try requireExactKeys(deviceType, ["identifier", "name"], at: "\(path).deviceType")
-        let typeIdentifier = try requireString(deviceType["identifier"]!, at: "\(path).deviceType.identifier")
-        _ = try requireString(deviceType["name"]!, at: "\(path).deviceType.name")
-
-        let udidMatches = liveDevices.filter { ($0.value["udid"] as? String) == udid }
-        let nameMatches = liveDevices.filter { ($0.value["name"] as? String) == name }
-        guard udidMatches.count == 1, nameMatches.count == 1 else {
-            throw ValidationFailure("dedicated Simulator identity is missing or ambiguous")
-        }
-        let live = udidMatches[0]
-        guard live.runtime == runtimeIdentifier,
-              try requireString(live.value["name"]!, at: "live Simulator name") == name,
-              try requireString(live.value["deviceTypeIdentifier"]!, at: "live Simulator device type") == typeIdentifier,
-              try requireBool(live.value["isAvailable"]!, at: "live Simulator availability") else {
-            throw ValidationFailure("dedicated Simulator identity does not match the sealed matrix")
-        }
-        normalized[id] = try requireString(live.value["state"]!, at: "live Simulator state")
-    }
-    if let targetCaseID {
-        guard let state = normalized[targetCaseID] else {
-            throw ValidationFailure("target Simulator is outside the sealed ownership set")
-        }
-        if let expectedState, state != expectedState {
-            throw ValidationFailure("target Simulator state does not match the required state")
-        }
-        return state
-    }
-    guard expectedState == nil else {
-        throw ValidationFailure("Simulator state expectation requires a target")
-    }
-    return nil
-}
-
 func sealRunnerPNG(
     configPath: String,
     expectedDigest: String,
@@ -7200,31 +7100,6 @@ do {
         try validateRunnerSystemLocale(
             configPath: arguments[2], expectedDigest: arguments[4], caseID: arguments[6], phase: arguments[8]
         )
-    } else if arguments.first == "--runner-check-simulators" {
-        guard arguments.count == 7 || arguments.count == 9 || arguments.count == 11,
-              arguments[1] == "--config", arguments[3] == "--digest", arguments[5] == "--devices" else {
-            throw ValidationFailure("invalid runner Simulator ownership arguments")
-        }
-        var target: String?
-        var expectedState: String?
-        if arguments.count >= 9 {
-            guard arguments[7] == "--target" else {
-                throw ValidationFailure("invalid runner Simulator target argument")
-            }
-            target = arguments[8]
-        }
-        if arguments.count == 11 {
-            guard arguments[9] == "--expected-state" else {
-                throw ValidationFailure("invalid runner Simulator state argument")
-            }
-            expectedState = arguments[10]
-        }
-        if let state = try validateRunnerSimulators(
-            configPath: arguments[2], expectedDigest: arguments[4], devicesPath: arguments[6],
-            targetCaseID: target, expectedState: expectedState
-        ) {
-            print(state)
-        }
     } else if arguments.first == "--runner-finalize" {
         guard arguments.count == 11 else { throw ValidationFailure("invalid runner finalization arguments") }
         var values: [String: String] = [:]

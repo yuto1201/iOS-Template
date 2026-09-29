@@ -76,7 +76,14 @@ begin
     device["erased"] = device.fetch("erased", 0) + 1
     File.write(path, JSON.generate(state))
   when "shutdown"
-    find.call(ARGV.fetch(0))["state"] = "Shutdown"
+    target = find.call(ARGV.fetch(0))
+    if state["mode"] == "shutdown-vanishes"
+      # The device leaves the list before any Shutdown can be observed.
+      state.fetch("devices").each_value { |entries| entries.delete(target) }
+      (state["hidden"] ||= []) << target
+    else
+      target["state"] = "Shutdown"
+    end
     File.write(path, JSON.generate(state))
   when "create", "clone", "delete", "rename"
     abort "forbidden simctl #{command}"
@@ -318,6 +325,22 @@ jq -e --arg iphone "$iphone_name" --arg ipad "$ipad_name" '[.protectedUnmanagedD
   fail "the legacy manager unexpectedly counted a dedicated Simulator"
 release_lease coexist-session "$coexist_id" >/dev/null
 edit_simctl 'devices.reject! { |d| d["udid"].start_with?("LEGACY-RUN-") }'
+assert_no_forbidden_calls
+
+# A device that disappears while cleanup waits for its Shutdown is never recorded as shut down. The lease
+# is returned as explicitly unverified, release fails, and the receipt cannot pass the runner validator,
+# which accepts only cleanup status passed with deviceState Shutdown.
+vanish="$(allocate vanish-session vanish-attempt iphone-ja)"
+IFS=$'\t' read -r vanish_id _ vanish_receipt <<<"$vanish"
+set_device_state "$iphone_udid" Booted
+edit_simctl 'state["mode"] = "shutdown-vanishes"'
+expect_denied 'release after the device disappeared' 'disappeared before its Shutdown was observed' release_lease vanish-session "$vanish_id"
+[[ "$(jq -r '[.status, .cleanup.status, .cleanup.deviceState] | join("|")' "$vanish_receipt")" == "released|unverified|absent" ]] ||
+  fail "a disappeared device produced shutdown proof: $(jq -c '.cleanup' "$vanish_receipt")"
+[[ "$(inventory | jq -r --arg id "$vanish_id" '.allocations[] | select(.allocationId == $id) | .status + ":" + .cleanup.status + ":" + .cleanup.deviceState')" == "released:unverified:absent" ]] ||
+  fail "the durable lease recorded a Shutdown that was never observed"
+[[ "$(active_count)" == 0 ]] || fail "an unverified cleanup kept the lease active"
+edit_simctl 'state.delete("hidden").each { |d| d["state"] = "Shutdown"; devices << d }; state["mode"] = ""'
 assert_no_forbidden_calls
 
 # Tampered lease state is rejected.

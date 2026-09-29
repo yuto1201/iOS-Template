@@ -110,7 +110,8 @@ mutations = lines.drop(probe + 1).select do |fields|
 end
 active = "00000000-0000-0000-0000-000000000001"
 abort "TERM cleanup touched a Simulator outside the active owned case" unless mutations.all? { |fields| fields[4] == active }
-abort "TERM cleanup did not reclaim exactly the active owned Simulator" unless mutations.count { |fields| fields[3] == "shutdown" } == 1 && mutations.count { |fields| fields[3] == "erase" } == 1
+# Releasing the dedicated lease shuts the device down once; it is erased only when the next case leases it.
+abort "TERM cleanup did not release exactly the active leased Simulator" unless mutations.count { |fields| fields[3] == "shutdown" } == 1 && mutations.none? { |fields| %w[erase delete].include?(fields[3]) }
 abort "TERM cleanup deleted an owned Simulator" if mutations.any? { |fields| fields[3] == "delete" }
 RUBY
 [[ ! -e "$draft" ]] || { echo "TERM-interrupted runner published a draft" >&2; exit 1; }

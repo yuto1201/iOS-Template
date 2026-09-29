@@ -148,19 +148,22 @@ simctl = after_build.select { |fields| fields[0] == "xcrun" && fields[2] == "sim
 allowed_cleanup = simctl.all? do |fields|
   case fields[3]
   when "list"
-    fields[4..] == ["devices", "--json"]
+    # The lease manager's read-only device list.
+    fields[4..] == ["devices", "-j"]
   when "terminate"
     fields[4] == owned && fields[5] == "com.example.TemplateApp"
-  when "shutdown", "erase"
+  when "shutdown"
     fields[4] == owned
   else
     false
   end
 end
 abort "worktree mutation reached non-cleanup Simulator commands" unless allowed_cleanup
-abort "worktree mutation did not reclaim the Build destination" unless
-  simctl.any? { |fields| fields[3] == "shutdown" && fields[4] == owned } &&
-  simctl.any? { |fields| fields[3] == "erase" && fields[4] == owned }
+# The dedicated lease is erased before Build and only shut down on release; it is never deleted.
+abort "the Build destination was not erased before Build" unless
+  lines.take(build).any? { |fields| fields[0] == "xcrun" && fields[2] == "simctl" && fields[3] == "erase" && fields[4] == owned }
+abort "worktree mutation did not release the Build destination" unless
+  simctl.any? { |fields| fields[3] == "shutdown" && fields[4] == owned }
 RUBY
 
 prepare_repo intermediate-project-symlink

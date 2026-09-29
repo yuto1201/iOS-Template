@@ -476,6 +476,22 @@ cat >"$adapter_bin/xcrun" <<'SH'
 set -euo pipefail
 state_dir="@STATE_DIR@" fake_log="@FAKE_LOG@"
 state() { [[ -f "$state_dir/$1" ]] && /bin/cat "$state_dir/$1" || true; }
+# Names the case running on a leased dedicated device. One device serves both languages of its
+# family, so the language the runner wrote selects the case.
+case_on() {
+  local family language
+  case "$1" in
+    00000000-0000-0000-0000-000000000001) family=iphone ;;
+    00000000-0000-0000-0000-000000000003) family=ipad ;;
+    *) return 0 ;;
+  esac
+  case "$(state "system-language-$1")" in
+    en-US) language=en ;;
+    ja-JP) language=ja ;;
+    *) return 0 ;;
+  esac
+  printf '%s-%s' "$family" "$language"
+}
 if [[ "$(state application_fixture)" == 1 ]]; then
   app_name=AdMobFixtureApp
   bundle_identifier=com.example.admobfixture
@@ -729,8 +745,8 @@ RUBY
   launch)
     [[ "${4-}" == "$bundle_identifier" ]] || { echo 'wrong launch bundle identifier' >&2; exit 1; }
     /usr/bin/awk -F '\t' -v udid="${3-}" '$3 == "simctl" && $4 == "terminate" && $5 == udid {seen=1} END {exit seen ? 0 : 1}' "$fake_log" || { echo 'launch lacked pre-termination' >&2; exit 1; }
-    [[ "$(state case_mode)" != launch-fail || "${3-}" != "00000000-0000-0000-0000-000000000002" ]] || { echo 'configured launch failure' >&2; exit 1; }
-    [[ "$(state case_mode)" != late-fail || "${3-}" != "00000000-0000-0000-0000-000000000004" ]] || { echo 'configured late launch failure' >&2; exit 1; }
+    [[ "$(state case_mode)" != launch-fail || "$(case_on "${3-}")" != iphone-ja ]] || { echo 'configured launch failure' >&2; exit 1; }
+    [[ "$(state case_mode)" != late-fail || "$(case_on "${3-}")" != ipad-ja ]] || { echo 'configured late launch failure' >&2; exit 1; }
     launch_pid=4321
     [[ "$(state case_mode)" != pid-replacement || ! -e "$state_dir/ui-ran-iphone-en" || "${3-}" != "00000000-0000-0000-0000-000000000001" ]] || launch_pid=9876
     printf '%s: %s\n' "${4-}" "$launch_pid"
@@ -811,7 +827,7 @@ RUBY
     [[ ! -f "$spawn_count_file" ]] || spawn_count="$(/bin/cat "$spawn_count_file")"
     spawn_count=$((spawn_count + 1))
     printf '%s\n' "$spawn_count" >"$spawn_count_file"
-    [[ "$(state case_mode)" != crash || "${3-}" != "00000000-0000-0000-0000-000000000002" ]] || exit 1
+    [[ "$(state case_mode)" != crash || "$(case_on "${3-}")" != iphone-ja ]] || exit 1
     [[ "$(state case_mode)" != post-ui-crash || "${3-}" != "00000000-0000-0000-0000-000000000001" || "$spawn_count" -lt 2 ]] || exit 1
     ;;
   io)
@@ -949,7 +965,7 @@ RUBY
 }
 
 write_matrix() {
-  /usr/bin/ruby -rjson -rtime - "$1" "$fake_developer" "${2:-full}" "${3:-1}" <<'RUBY'
+  /usr/bin/ruby -rjson -rtime - "$1" "$fake_developer" "${2:-full}" "${3:-2}" <<'RUBY'
 path, developer, scope, schema_text = ARGV
 schema = Integer(schema_text, 10)
 rows = [
@@ -978,7 +994,7 @@ RUBY
 }
 
 prepare_repo() {
-  local label="$1" contract_mode="${2:-valid}" head_directory="${3:-present}" scope="${4:-full}" matrix_schema="${5:-1}"
+  local label="$1" contract_mode="${2:-valid}" head_directory="${3:-present}" scope="${4:-full}" matrix_schema="${5:-2}"
   repo="$scratch/$label/repository"
   mkdir -p "$repo/TemplateApp.xcodeproj" "$repo/docs" "$repo/Sources" "$repo/Config" "$repo/tools/tests"
   repo="$(cd "$repo" && pwd -P)"
@@ -1098,7 +1114,7 @@ RUBY
 }
 
 prepare_application_fixture_repo() {
-  local label="$1" matrix_schema="${2:-1}"
+  local label="$1" matrix_schema="${2:-2}"
   prepare_repo "$label" valid present shape "$matrix_schema"
   git -C "$repo" rm -q -- docs/head.md
   mkdir -p "$repo/.agents/skills/admob-monetization" "$repo/.claude/skills" \
@@ -1441,7 +1457,7 @@ RUBY
 }
 
 test_stubborn_probe() {
-  local matrix_schema="${1:-1}" label="${2:-stubborn-probe-timeout}"
+  local matrix_schema="${1:-2}" label="${2:-stubborn-probe-timeout}"
   prepare_repo "$label" valid present full "$matrix_schema"
   FAKE_CASE_MODE=stubborn-probe run_execute >"$scratch/stubborn-probe.stdout" 2>"$scratch/stubborn-probe.stderr" &
   stubborn_runner_pid=$!

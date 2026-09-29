@@ -159,7 +159,9 @@ module IOSTemplate
         begin
           with_state do |_legacy_active, state|
             current = find_record!(state, reservation.fetch("allocationId"))
-            cleanup_lease!(current, reason: "prepare-failure")
+            if cleanup_lease!(current, reason: "prepare-failure") == "unverified"
+              raise SimulatorResourceError, "leased Simulator disappeared before its Shutdown was observed"
+            end
           end
         rescue StandardError => cleanup_failure
           cleanup_error = cleanup_failure.message
@@ -185,7 +187,9 @@ module IOSTemplate
         end
         raise SimulatorResourceError, "lease is not releasable" unless ACTIVE_STATUSES.include?(current["status"])
         begin
-          cleanup_lease!(current, reason: required("--reason"))
+          if cleanup_lease!(current, reason: required("--reason")) == "unverified"
+            failure = SimulatorResourceError.new("leased Simulator disappeared before its Shutdown was observed")
+          end
         rescue SimulatorResourceError => error
           current["cleanup"] = {"status" => "failed", "reason" => error.message, "deviceState" => "unknown", "observedAt" => timestamp}
           add_event(current, "cleanup-failed", "reason" => error.message)
@@ -388,49 +392,59 @@ module IOSTemplate
     end
 
     # Shuts the leased dedicated device down and returns the lease. The device is never deleted.
+    # Cleanup passes only on an observed Shutdown of the exact leased identity. A device that is
+    # absent, or disappears before that observation, releases the lease as explicitly unverified
+    # so no receipt claims a Shutdown that was never seen. Returns the cleanup status.
     def cleanup_lease!(record, reason:)
-      return if record["status"] == "released"
-      udid = record.fetch("udid")
-      matches = live_devices.select { |device| device["udid"] == udid }
-      device_state = "absent"
-      unless matches.empty?
-        raise SimulatorResourceError, "leased Simulator UDID is ambiguous" unless matches.length == 1
-        live = matches.first
-        unless live["name"] == record["deviceName"] &&
-               live["runtimeIdentifier"] == record["runtimeIdentifier"] &&
-               live["deviceTypeIdentifier"] == record["deviceTypeIdentifier"]
-          raise SimulatorResourceError, "leased Simulator live identity does not match its durable lease"
-        end
-        wait_for_shutdown!(udid, live["state"])
-        device_state = "Shutdown"
-      end
+      return record.dig("cleanup", "status") if record["status"] == "released"
+      device_state = observed_shutdown_state!(record)
+      status = device_state == "Shutdown" ? "passed" : "unverified"
       observed = timestamp
       record["status"] = "released"
       record["releasedAt"] = observed
       record.fetch("freeSpace")["afterReleaseBytes"] = available_bytes
-      record["cleanup"] = {"status" => "passed", "reason" => reason, "deviceState" => device_state, "observedAt" => observed}
+      record["cleanup"] = {"status" => status, "reason" => reason, "deviceState" => device_state, "observedAt" => observed}
       add_event(record, "released", "reason" => reason, "deviceState" => device_state)
+      status
     rescue SimulatorResourceError
       record["status"] = "cleanup-failed"
       raise
     end
 
-    def wait_for_shutdown!(udid, state)
-      return if state == "Shutdown"
+    # Returns "Shutdown" once the exact leased device is observed shut down, or "absent" when it is
+    # not listed. An ambiguous UDID, a changed identity, or a timeout raises.
+    def observed_shutdown_state!(record)
+      live = leased_live_device(record)
+      return "absent" if live.nil?
+      return "Shutdown" if live["state"] == "Shutdown"
       begin
-        run_simctl("shutdown", udid)
+        run_simctl("shutdown", record.fetch("udid"))
       rescue SimulatorResourceError
         nil
       end
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + SHUTDOWN_WAIT_SECONDS
       loop do
-        current = live_devices.find { |device| device["udid"] == udid }
-        return if current.nil? || current["state"] == "Shutdown"
+        live = leased_live_device(record)
+        return "absent" if live.nil?
+        return "Shutdown" if live["state"] == "Shutdown"
         if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
           raise SimulatorResourceError, "leased Simulator did not shut down"
         end
         sleep 0.2
       end
+    end
+
+    def leased_live_device(record)
+      matches = live_devices.select { |device| device["udid"] == record.fetch("udid") }
+      return nil if matches.empty?
+      raise SimulatorResourceError, "leased Simulator UDID is ambiguous" unless matches.length == 1
+      live = matches.first
+      unless live["name"] == record["deviceName"] &&
+             live["runtimeIdentifier"] == record["runtimeIdentifier"] &&
+             live["deviceTypeIdentifier"] == record["deviceTypeIdentifier"]
+        raise SimulatorResourceError, "leased Simulator live identity does not match its durable lease"
+      end
+      live
     end
 
     def unique_live_device!(record)

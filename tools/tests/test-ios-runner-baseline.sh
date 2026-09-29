@@ -18,29 +18,34 @@ abort "runner config did not seal the batch identity" unless config.fetch("batch
 abort "runner config did not seal the runtime identity" unless config.fetch("runtime") == {
   "identifier" => "com.apple.CoreSimulator.SimRuntime.iOS-26-5", "version" => "26.5"
 }
-expected = %w[iphone-en iphone-ja ipad-en ipad-ja].map { |id| "iOS-Template-runner-fixture-#{id}" }
-abort "runner config did not seal dedicated Simulator names" unless config.fetch("cases").map { |entry| entry.fetch("name") } == expected
+abort "runner config did not seal the case order" unless config.fetch("cases").map { |entry| entry.fetch("id") } == %w[iphone-en iphone-ja ipad-en ipad-ja]
+abort "runner config fixed a device instead of leasing the dedicated one" if config.fetch("cases").any? { |entry| entry.key?("udid") || entry.key?("name") }
 abort "runner config did not seal Device Type identities" unless config.fetch("cases").all? do |entry|
   entry.fetch("deviceType").keys.sort == %w[identifier name]
 end
 RUBY
 /usr/bin/ruby - "$fake_log" <<'RUBY'
 lines = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
-owned = (1..4).map { |slot| format("00000000-0000-0000-0000-%012d", slot) }
+# Both iPhone cases lease the one dedicated iPhone, and both iPad cases the one dedicated iPad.
+iphone = "00000000-0000-0000-0000-000000000001"
+ipad = "00000000-0000-0000-0000-000000000003"
+leased = [iphone, iphone, ipad, ipad]
 simctl = lines.each_index.select { |index| lines[index][0] == "xcrun" && lines[index][2] == "simctl" }
+abort "runner created, cloned, renamed, or deleted a Simulator" if simctl.any? { |index| %w[create clone rename delete].include?(lines[index][3]) }
 erase = simctl.select { |index| lines[index][3] == "erase" }
-abort "runner did not perform exact startup, post-unit, and per-case erase" unless erase.length == 9
-abort "startup erase did not cover the exact four-device set" unless erase.first(4).map { |index| lines[index][4] } == owned
+abort "runner did not erase the leased dedicated device once before each case" unless erase.map { |index| lines[index][4] } == leased
 build = lines.index { |fields| fields[0] == "xcodebuild" && fields.last == "build-for-testing" }
 unit = lines.index { |fields| fields[0] == "xcodebuild" && fields.last == "test-without-building" && fields.any? { |field| field.include?("TemplateAppTests/UnitSmokeTests") } }
-abort "startup reclamation did not precede Build" unless erase.first(4).all? { |index| index < build }
-abort "post-unit reclamation did not precede first UI case" unless erase[4] > unit && lines[erase[4]][4] == owned[0]
-owned.each_with_index do |udid, offset|
-  screenshot = lines.index { |fields| fields[0] == "xcrun" && fields[2] == "simctl" && fields[3] == "io" && fields[4] == udid }
-  final_terminate = lines.each_index.select { |index| lines[index][0] == "xcrun" && lines[index][2] == "simctl" && lines[index][3] == "terminate" && lines[index][4] == udid }.last
-  shutdown = lines.each_index.select { |index| lines[index][0] == "xcrun" && lines[index][2] == "simctl" && lines[index][3] == "shutdown" && lines[index][4] == udid }.last
-  final_erase = erase[5 + offset]
-  abort "case resource reclamation order is invalid for #{udid}" unless screenshot < final_terminate && final_terminate < shutdown && shutdown < final_erase
+abort "the first lease was not prepared before Build" unless erase.first < build
+abort "a second lease was prepared before the unit test" unless erase[1] > unit
+screenshots = simctl.select { |index| lines[index][3] == "io" }
+abort "screenshots did not run on the leased devices in case order" unless screenshots.map { |index| lines[index][4] } == leased
+leased.each_with_index do |udid, offset|
+  terminate = simctl.find { |index| index > screenshots[offset] && lines[index][3] == "terminate" && lines[index][4] == udid }
+  shutdown = terminate && simctl.find { |index| index > terminate && lines[index][3] == "shutdown" && lines[index][4] == udid }
+  abort "case #{offset} did not terminate and shut down its leased device after the screenshot" unless shutdown
+  next if offset == leased.length - 1
+  abort "case #{offset + 1} was leased before case #{offset} was shut down" unless shutdown < erase[offset + 1]
 end
 unrelated = "00000000-0000-0000-0000-999999999999"
 abort "runner mutated an unrelated Simulator" if lines.any? do |fields|
@@ -95,12 +100,10 @@ test_count="$(awk -F '\t' '$1 == "xcodebuild" && $0 ~ /\ttest-without-building$/
 }
 /usr/bin/ruby - "$fake_log" "$fake_developer" <<'RUBY'
 path = ARGV.fetch(0)
-case_for = {
-  "00000000-0000-0000-0000-000000000001" => "iphone-en",
-  "00000000-0000-0000-0000-000000000002" => "iphone-ja",
-  "00000000-0000-0000-0000-000000000003" => "ipad-en",
-  "00000000-0000-0000-0000-000000000004" => "ipad-ja"
-}
+# Each lease erases its device, so an erase starts the next case in the sealed order.
+case_order = %w[iphone-en iphone-ja ipad-en ipad-ja]
+leased = {"iphone" => "00000000-0000-0000-0000-000000000001", "ipad" => "00000000-0000-0000-0000-000000000003"}
+current = -1
 actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequence|
   fields = line.split("\t")
   next unless fields[1] == "DEVELOPER_DIR=#{ARGV.fetch(1)}"
@@ -118,7 +121,9 @@ actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequen
         sequence << "unit-test"
       else
         udid = fields.fetch(fields.index("-destination") + 1).split("id=", 2).last
-        sequence << "#{case_for.fetch(udid)}-ui-test"
+        case_id = case_order.fetch(current)
+        raise "UI test for #{case_id} did not use its leased device" unless udid == leased.fetch(case_id.split("-").first)
+        sequence << "#{case_id}-ui-test"
       end
       next
     end
@@ -140,10 +145,12 @@ actual = File.readlines(path, chomp: true).each_with_object([]) do |line, sequen
     next
   elsif fields[0] == "xcrun" && fields[2] == "simctl"
     command = fields.fetch(3)
+    current += 1 if command == "erase"
     next if %w[list shutdown erase].include?(command)
-    udid = fields.fetch(4)
+    case_id = case_order.fetch(current)
+    raise "#{case_id} #{command} did not use its leased device" unless fields.fetch(4) == leased.fetch(case_id.split("-").first)
     label = command == "io" ? "screenshot" : command
-    sequence << "#{case_for.fetch(udid)}-#{label}"
+    sequence << "#{case_id}-#{label}"
     next
   end
 end

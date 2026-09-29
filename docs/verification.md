@@ -133,7 +133,7 @@ Claim／Resume後のIssue worktreeから、[ios-verifyのlocked command](../.age
 }
 ```
 
-この値はschema v2の形式例です。versionとDevice Typeは、専用deviceの宣言とそのバッチで取得した一覧から決まります。schema v2は条件だけを封印し、UDIDやdevice名を持ちません。resolverはmatrix作成時にSimulatorを作成しません。runnerは各caseの直前に専用deviceをleaseし、managerがそのdeviceを停止してeraseします。既存のschema v1はcaseごとの`udid`を持つlegacy matrixとしてbytesを変更せず再検証でき、新規matrixへ変換しません。
+この値はschema v2の形式例です。versionとDevice Typeは、専用deviceの宣言とそのバッチで取得した一覧から決まります。schema v2は条件だけを封印し、UDIDやdevice名を持ちません。resolverはmatrix作成時にSimulatorを作成しません。runnerは各caseの直前に専用deviceをleaseし、managerがそのdeviceを停止してeraseします。既存のschema v1はcaseごとの`udid`を持つlegacy matrixとしてbytesを変更せず再検証でき、新規matrixへ変換しません。schema v1のmatrixでは新しい実行を開始できず、runnerはSimulator操作とleaseの前に拒否します。
 
 ### 3.1 Simulatorのシステム言語と地域
 
@@ -149,7 +149,7 @@ runnerはrepository lockを先に取得し、その内側で`tools/lib/ios-simul
 
 stable `IOS_TEMPLATE_SIMULATOR_SESSION_ID`はwrapperから子processへ継承します。repository、worktree、Issue、Headが変わっても、同じsessionが2つ目のleaseを持つことはありません。同じ専用deviceの同時leaseも拒否します。Mac全体の4枠へは、専用deviceのlease、旧managerが`state-v1.json`へ記録した有効な割り当て、起動中の管理外`iOS-Template-` deviceを合算して数えます。旧状態fileは数えるために読むだけで、変更しません。反対に、旧toolのままのrepositoryで動く旧managerは、自分の状態fileと起動中の`iOS-Template-` deviceだけを数え、専用leaseと専用deviceを数えません。そのため、専用deviceのlease中にそのrepositoryが割り当てると、Mac全体で4台を超えることがあります。この制約は、各repositoryが新しいmanagerへ移るまで残ります（D-062、D-063）。待機は既定60秒で取消可能です。既定では対象volumeに8 GiB以上の空きがない場合、leaseを`blocked:environment`で止めます。
 
-lease直後に、managerは専用deviceをeraseし、完了を記録してからrunnerへ返します。eraseに失敗した場合はleaseを返し、成功扱いにしません。`release`はdeviceを停止し、停止を確認してからleaseを返します。receiptは`schemaVersion: 2`、`kind: dedicated-lease`で、eraseの証明（`preparation`）と停止の証明（`cleanup.deviceState: Shutdown`）を持ちます。通常終了、Test失敗、timeout、INT／TERMでは、exit cleanupがactive leaseだけを返します。SIGKILLやMac再起動で残ったleaseは、次回runner開始時にowner PIDとprocess start identityを照合し、deviceを停止して返します。旧managerのschema v1 receiptと削除証明は変更せず、既存の証拠をそのまま検証できます。
+lease直後に、managerは専用deviceをeraseし、完了を記録してからrunnerへ返します。eraseに失敗した場合はleaseを返し、成功扱いにしません。`release`はdeviceを停止し、停止を確認してからleaseを返します。停止を観測する前にdeviceが一覧から消えた場合は、`cleanup.status: unverified`、`deviceState: absent`としてleaseを返し、`release`自体は失敗します。この場合は停止の証明にならず、runnerは成功形式の証拠を公開しません。receiptは`schemaVersion: 2`、`kind: dedicated-lease`で、eraseの証明（`preparation`）と停止の証明（`cleanup.deviceState: Shutdown`）を持ちます。通常終了、Test失敗、timeout、INT／TERMでは、exit cleanupがactive leaseだけを返します。SIGKILLやMac再起動で残ったleaseは、次回runner開始時にowner PIDとprocess start identityを照合し、deviceを停止して返します。旧managerのschema v1 receiptと削除証明は変更せず、既存の証拠をそのまま検証できます。
 
 read-only inventoryは次で確認できます。
 
@@ -332,11 +332,11 @@ production entrypointはprivileged modeのabsolute `/bin/bash -p` で起動し�
 
 Build productはlocked attempt内のDerivedData `Build/Products` 配下にあるregular app directoryだけを候補にし、Bundle IDとBundle executableを検証します。runnerはbundle tree全体をdescriptor-boundに再帰走査し、symlink、special file、別uid、複数hardlinkを拒否してprivate `StagedApp`へcopy、seal、fsyncします。tree digestはrecord type、path、content length/contentをlength-prefixして構造とbytesを一意に固定します。各install直前にstaged tree、Bundle ID、executableを再読してdigest一致を要求するため、Build productやstaged pathの置換をinstallへ持ち込めません。
 
-sealed configはbatch ID、matrix schema、Runtime identifier/version、要求scopeの1case／targeted部分集合／4case、Device Type identifier/nameを固定します。schema v2ではUDIDとdevice名をconfigへ固定せず、最初のBuild直前に1件目を作成してBuildとUnit Testへ使い、そのまま1件目のUI caseへ渡します。以後は前caseの削除確認後にだけ次caseを作成します。device名は`iOS-Template-${batchId}-${caseId}-${allocationPrefix}`とし、Mac共通stateへrepository identity、Issue、Head、batch、attempt、session、owner／allocator process identity、Runtime、Device Type、exact UDID、data pathを記録します。schema v1はsealed matrixのexact UDIDを検証してeraseするlegacy経路を維持し、bytesや意味を変えません。
+sealed configはbatch ID、matrix schema、Runtime identifier/version、要求scopeの1case／targeted部分集合／4case、Device Type identifier/nameを固定します。schema v2ではUDIDとdevice名をconfigへ固定せず、最初のBuild直前に1件目のcaseの専用deviceをleaseしてBuildとUnit Testへ使い、そのまま1件目のUI caseへ渡します。以後は前caseのreleaseで停止を確認した後にだけ次caseをleaseします。対象は`Config/dedicated-simulators.json`が宣言する専用deviceだけで、Mac共通stateへrepository identity、Issue、Head、batch、attempt、session、owner／allocator process identity、Runtime、Device Type、exact UDIDを記録します。schema v1の固定UDID matrixは既存証拠の検証、中断した公開の回復、finalizationにだけ使います。runnerは新しい実行をSimulator操作の前に拒否し（D-063）、matrixのbytesや意味は変えません。
 
 各case直前にlive Git Head、tracked Head inventory/bytes/flags、sealed config、canonical contract/matrix、source/project digestとactive allocationのlive identityを再検証します。その後allocationのexact UDIDをbootし、bootstatus、install、exact language/localeでlaunch、bounded liveness、contractの機械checkを直列実行します。visual-requiredのcaseだけScreenshotを取得します。`testIdentifier`はunique case xcresultを使うexact `-only-testing`です。shapeでは主要導線のSmoke Testを必須とし、`launch-succeeded`だけでは代用しません。
 
-case成功はexact UI結果、locale relaunch、process identity/liveness、visual-requiredならdecodable PNGを確認し、対象Bundle IDだけをterminateします。その後、owned deviceのshutdown/delete、一覧不在、data path不在、終了時空き容量を記録し、sanitized allocation receiptをbatch artifactへno-replace保存してから成功を確定します。通常failure／TERMは記録したactive caseだけを回収します。cleanup失敗は元のTest結果と分けてfailureへ記録し、枠を保持したまま成功形式の証拠を公開しません。正式証拠へpartial attemptをmergeしません。
+case成功はexact UI結果、locale relaunch、process identity/liveness、visual-requiredならdecodable PNGを確認し、対象Bundle IDだけをterminateします。その後、leaseした専用deviceの停止を観測し、終了時空き容量を記録して、sanitized allocation receiptをbatch artifactへno-replace保存してから成功を確定します。deviceは削除しません。通常failure／TERMは記録したactive caseだけを回収します。cleanup失敗は元のTest結果と分けてfailureへ記録し、枠を保持したまま成功形式の証拠を公開しません。正式証拠へpartial attemptをmergeしません。
 
 visual-required成功時はScreenshotとcanonical `verify-draft.json`を一つのno-replace transactionで公開します。非visual shape／hardenはdraftを作らず、mechanical case、Build、Test、`not release-ready`理由を持つcanonical `verify.json`を検証後にatomic publishします。どちらもcontract順序とcurrent Headをpublication直前に再検証します。以下のdraft schema例はvisual-required release用です。
 
@@ -491,7 +491,7 @@ Issue/current Head identityを確立した後のrange、tracked Head不一致、
 }
 ```
 
-`schemaVersion: 1` のapplication変更で必須となるfieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、Issue contract path/digest、matrix path/digest、execution route、Xcode、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。matrix schema v2では`simulatorAllocations`も必須で、matrixと同じcase順にallocation artifactのpath/digest、allocation ID、実行UDID、attempt、sessionを持ちます。validatorは各receiptのexact bytes、Issue／Head／batch、Runtime／Device Type、作成・削除時刻、削除後のdevice/data不在、作成前／削除後の空き容量を再検証します。matrix schema v1ではこのfieldを持たせません。GitHubとproviderのpreflightは外部操作直前の証拠なのでverify.jsonへ含めず、pre-merge gateが別artifactとして検査します。
+`schemaVersion: 1` のapplication変更で必須となるfieldは、上の例にある `status`、`changeClassification`、`reason`、IssueとSHA、Issue contract path/digest、matrix path/digest、execution route、Xcode、Build、Tests、cases、visual evaluation、acceptance evidence、completed timeです。matrix schema v2では`simulatorAllocations`も必須で、matrixと同じcase順にallocation artifactのpath/digest、allocation ID、実行UDID、attempt、sessionを持ちます。validatorは各receiptのexact bytes、Issue／Head／batch、Runtime／Device Typeを再検証します。専用lease receipt（receipt schema 2）ではcase前のeraseと、case後に観測した`Shutdown`を要求し、`unverified`などpassed以外のcleanupを拒否します。旧managerのreceipt（receipt schema 1）では作成・削除時刻、削除後のdevice/data不在、作成前／削除後の空き容量を再検証します。matrix schema v1ではこのfieldを持たせません。GitHubとproviderのpreflightは外部操作直前の証拠なのでverify.jsonへ含めず、pre-merge gateが別artifactとして検査します。
 
 application変更のmatrixはbatch lifecycleが完成させたexact schemaです。top-levelは`schemaVersion`、`batchId`、`resolvedAt`、`xcode`、`runtime`、`cases`と任意の`scope`だけを持ちます。省略は`full`、`scope: iphone-ja`は1件で、nullや未知値は拒否します。schema v2 caseは`id`、`family`、`deviceType`、`locale`、`language`だけを持ち、contract・Evidenceとexact順序で一致させます。schema v1 caseだけがlegacyの`udid`を追加で持ちます。
 
