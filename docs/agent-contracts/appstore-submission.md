@@ -30,11 +30,12 @@ Unconfirmed; treat each as unavailable until a run shows otherwise:
 
 One-time setup, done by the user:
 
-1. An Account Holder or Admin creates the team's distribution signing. The same applies to an App Manager given access to Certificates, Identifiers & Profiles in Users and Access. Use either route.
+1. An Account Holder or Admin creates the team's distribution signing. Per the role permissions table, an App Manager given access to Certificates, Identifiers & Profiles in Users and Access can also create the certificate and profile. Use either route.
    - In Certificates, Identifiers & Profiles, create the Apple Distribution certificate and the App Store Connect provisioning profile for the app's explicit App ID.
    - Or, signed in to Xcode with that account, distribute one archive through the Organizer with automatic signing. Xcode then manages the distribution profile, and cloud-signs when no local certificate exists.
-2. When a capability such as iCloud is first added, the same role enables it on the App ID and completes the capability's additional steps. It then regenerates, or lets Xcode regenerate, the profiles that became invalid.
-3. Afterwards, `tools/export-appstore-build.sh` archives, exports, and uploads with the App Manager team key through the fixed `appstore.upload_build` route. The first run after setup is the check that the key can use this signing without creating anything. Unconfirmed points stay unconfirmed until that run passes.
+2. When a capability such as iCloud is first added, only an Account Holder or Admin enables it on the App ID and completes the capability's additional steps. The profiles that became invalid are regenerated only after that. If the user preparing the release does not hold one of those roles, stop the Issue as `blocked:user` and hand the capability change to an Account Holder or Admin before any profile is regenerated.
+3. Before the first `tools/export-appstore-build.sh` run, and after every capability change, the user confirms in Certificates, Identifiers & Profiles two things. The team's distribution certificate exists. A distribution profile for the app's explicit App ID with its current capabilities exists. If either cannot be confirmed, stop the Issue as `blocked:user`.
+4. The tool then archives, exports, and uploads with the App Manager team key through the fixed `appstore.upload_build` route. A passing run shows only that those steps succeeded. `-allowProvisioningUpdates` can create and update certificates and profiles, so a pass does not show that nothing was created. Every unconfirmed point above stays unconfirmed. Never use the fixed upload route to test whether the key can create signing assets.
 
 If archive or export fails because a distribution certificate, a profile, or a profile entitlement is missing, stop the Issue as `blocked:user` and point the user to the steps above. Do not switch to an Admin key, Apple ID sign-in, manual signing, or `asc signing` commands. Never display, log, or commit certificate private keys, provisioning profiles, or API key values. The key stays where [the security procedure](../security.md#固定版ascの利用) places it.
 
