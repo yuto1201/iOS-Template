@@ -464,6 +464,21 @@ ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); du
 assert_fails 'nested resume with two simultaneous stop markers fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
 
+# Stop-entry markers in the same second as the paused marker, one before it and one after it in the comment
+# array, are ambiguous whatever their positions.
+nested_in_progress_stop
+ruby -rjson -e '
+  path = ARGV.fetch(0); comments = JSON.parse(File.read(path))
+  pause_time = comments.find { |comment| comment.fetch("body").include?(%q("to":"paused")) }.fetch("body")[/"timestamp":"([^"]+)"/, 1]
+  entry = comments.find { |comment| comment.fetch("body").include?(%q("to":"blocked:environment")) }
+  entry["body"] = entry["body"].sub(/"timestamp":"[^"]+"/, %Q("timestamp":"#{pause_time}"))
+  entry["createdAt"] = pause_time
+  comments << entry.dup
+  File.write(path, JSON.generate(comments))
+' "$FAKE_GH_COMMENTS_FILE"
+assert_fails 'same-second stop entries around the paused marker fail closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+
 # An older, completed stop episode must not stand in for the current episode's entry marker. The
 # completed episode resumed to in-progress; the current one started from changes-requested.
 two_stop_episodes() {

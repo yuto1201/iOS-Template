@@ -141,7 +141,14 @@ def latest_owned_state_marker(document, current, owner, before: nil, with_positi
       else
         next unless marker['resumeState'].nil?
       end
-      next if before && ([marker_time, index] <=> before) >= 0
+      if before
+        before_time, before_index = before
+        next if index == before_index
+        # A predecessor must be strictly earlier in time. Another owned marker in the same second makes the
+        # order unknowable, whatever its position in the comment array, so the history fails closed.
+        fail_closed('owned transition marker history has simultaneous entries') if marker_time == before_time
+        next if marker_time > before_time
+      end
       candidates << [marker_time, created_at, index, marker]
     rescue JSON::ParserError, ArgumentError
       next

@@ -378,7 +378,7 @@ Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approve
 
 各遷移commentには機械可読markerとして `from`、`to`、`resumeState`、executor、timestampを保存します。markerは `Config/ownership.yml` の個人GitHub loginが投稿したcommentだけを信頼し、comment author、marker timestamp、comment作成時刻、合法な遷移履歴を結び付けます。第三者または不正なmarkerを除外した最新の有効markerをtimestampで決定し、同時刻に複数の有効候補があれば推測せず失敗します。`blocked:*` または`paused`へ入るときの`resumeState`は遷移前状態です。復帰時は `issue-state.sh transition --from <current> --to <resumeState>` を明示実行してから `resume-issue.sh` でlocal stateを再構築します。`resume-issue.sh` 自体はlabelを変更しません。存在しない場合は推測せず`blocked:conflict`にします。ローカル`state.json`にも同じfieldsを保存し、失われた場合はGitHub commentから再構築します。
 
-停止状態から別の停止状態へ入った場合（例：`in-progress → blocked:environment → paused`）、markerの`resumeState`は直前の停止状態です。再開先は、所有者の有効markerを厳密に古いものへ一つずつ遡り、最初に見つかった停止状態以外の状態（この例では`in-progress`）とします。遡る各段では、直前の所有者markerがその停止状態への入口でなければなりません。現在の停止の入口markerが欠けている、壊れている、または第三者のものである場合に、それより前に完了した別の停止へ遡ることはありません。`issue-state.sh get`はこの元の状態を`resumeState`として返します。停止状態からの遷移は、直前の停止状態へ戻る場合と、元の状態へ直接再開する場合の両方を許可します。従来どおりの`paused`と`superseded`への遷移を除き、それ以外は`blocked:conflict`にします。遡る途中で履歴の欠落、第三者marker、同じ状態への同時刻の複数候補、不正な遷移、循環が見つかった場合は推測せず`blocked:conflict`にします。
+停止状態から別の停止状態へ入った場合（例：`in-progress → blocked:environment → paused`）、markerの`resumeState`は直前の停止状態です。再開先は、所有者の有効markerを厳密に古いものへ一つずつ遡り、最初に見つかった停止状態以外の状態（この例では`in-progress`）とします。遡る各段では、直前の所有者markerがその停止状態への入口でなければなりません。現在の停止の入口markerが欠けている、壊れている、または第三者のものである場合に、それより前に完了した別の停止へ遡ることはありません。`issue-state.sh get`はこの元の状態を`resumeState`として返します。停止状態からの遷移は、直前の停止状態へ戻る場合と、元の状態へ直接再開する場合の両方を許可します。従来どおりの`paused`と`superseded`への遷移を除き、それ以外は`blocked:conflict`にします。遡る各段の直前markerは時刻が厳密に前でなければならず、同じ秒に別の所有者markerがあればコメントの並び順にかかわらず順序を決められないものとして扱います。遡る途中で履歴の欠落、第三者marker、同時刻の複数候補、不正な遷移、循環が見つかった場合は推測せず`blocked:conflict`にします。
 
 中断状態:
 
