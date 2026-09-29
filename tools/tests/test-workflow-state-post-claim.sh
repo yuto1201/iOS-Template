@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
+require_test_commands "$0" rg git jq ruby
+
 # The post-Claim pending-recovery and successor-transition regressions of the workflow state test run
 # here as a direct test, so a targeted suite reaches them while test-workflow-state.sh runs scoped.
 # Bash 3.2 can report success after an unbound variable when an EXIT trap runs, so the run must also
