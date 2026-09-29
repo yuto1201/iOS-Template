@@ -57,7 +57,7 @@ For a reference-image edit, replace the generator with `builtin-imagegen-referen
 
 Replace an accepted icon for a later release only through its own replacement Issue, separate from the initial App Icon Issue. Updating an icon published elsewhere, such as a Web-AppLibrary listing or App Store Connect, is a separate handoff Issue.
 
-1. Generate candidates for a new immutable revision under `.artifacts/app-icon/<revision>/` as described in Generate and select. Never reuse the revision that produced the current icon.
+1. Generate candidates for a new immutable revision under `.artifacts/app-icon/<revision>/` as described in Generate and select. Never reuse a revision that produced the current or any earlier accepted icon.
 2. After the user explicitly selects one stable concept ID, write `selection.json` beside those candidates. List each shown candidate with the SHA-256 of its local bytes:
 
 ```json
@@ -77,4 +77,4 @@ tools/install-app-icon.sh \
   --selection "/absolute/path/.artifacts/app-icon/<revision>/selection.json"
 ```
 
-The installer first validates the accepted icon. Before changing any file, it refuses a declared digest that differs from the current record, a selection that is not `user-explicit`, a source that is not the selected candidate stored in that revision, an unchanged icon, a reused selection revision, and a dirty worktree. The resulting schema 2 record keeps the new accepted values, `selectionRevision`, and `supersedes` with the previous concept ID, generator, and SHA-256; Git history keeps earlier records. Rerunning the same replacement reports `already-complete`. Then validate, inspect the previews, verify, and commit the replaced PNG and record as in Integrate.
+The installer first validates the accepted icon. Before changing any file, it refuses a declared digest that differs from the current record, a selection that is not `user-explicit`, a source that is not the selected candidate stored in that revision, an unchanged icon, a selection revision that any committed version of `Config/app-icon.json` already accepted, and a dirty worktree. The resulting schema 2 record keeps the new accepted values, `selectionRevision`, and `supersedes` with the previous concept ID, generator, and SHA-256; Git history keeps earlier records. Rerunning the same replacement reports `already-complete`. Then validate, inspect the previews, verify, and commit the replaced PNG and record as in Integrate.

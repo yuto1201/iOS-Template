@@ -310,6 +310,16 @@ edited=$(replace_with --source "$revision_three/concept-e.png" --concept-id conc
 [[ "$(record_field "$replace_fixture" '[.generator, .referenceSha256, .selectionRevision, .supersedes.conceptId, .supersedes.sha256]')" == "[\"builtin-imagegen-reference-edit\",\"$(sha_of "$reference_image")\",\"r3\",\"concept-c\",\"$second_digest\"]" ]] || { echo 'reference-edit record values differ' >&2; exit 1; }
 "$validator" --root "$replace_fixture" >/dev/null
 [[ -z "$(git -C "$replace_fixture" ls-files -- '*reference*')" && ! -e "$replace_fixture/user-reference.png" ]] || { echo 'reference image entered the repository' >&2; exit 1; }
+git -C "$replace_fixture" add -A
+git -C "$replace_fixture" commit -qm 'replace with concept-e'
+
+# A revision accepted before the current one stays used: r2 was accepted, then superseded by r3.
+third_digest=$(sha_of "$replace_asset")
+third_record=$(sha_of "$replace_record")
+assert_fails 'earlier selection revision reuse' replace_with --source "$revision_two/concept-c.png" --concept-id concept-c --generator builtin-imagegen --replace-accepted "$third_digest" --selection "$revision_two/selection.json"
+grep -Fq 'replacement must come from a new selection revision' "$workspace/stderr" || { echo 'earlier revision reuse was not explained' >&2; exit 1; }
+assert_unchanged "$replace_fixture" 'earlier selection revision reuse' "$third_digest" "$third_record"
+[[ -z "$(git -C "$replace_fixture" status --porcelain=v1)" ]] || { echo 'earlier revision reuse left repository changes' >&2; exit 1; }
 
 reference_fixture="$workspace/reference-app"
 make_fixture "$reference_fixture"

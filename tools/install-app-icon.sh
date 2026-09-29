@@ -162,6 +162,20 @@ if [[ "$replacing" == true ]]; then
     supersedes=$(printf '%s' "$accepted" | jq -ce '.current')
     [[ "$digest" != "$replace_accepted" ]] || fail 'replacement must change the accepted icon'
     [[ "$(printf '%s' "$accepted" | jq -r '.selectionRevision // ""')" != "$selection_revision" ]] || fail 'replacement must come from a new selection revision'
+    # Each accepted replacement commits its record, so the record's Git history names every revision
+    # that was ever accepted, not only the current one.
+    used_revisions=$(ROOT="$root" /usr/bin/ruby -rjson -e '
+      root=ENV.fetch("ROOT")
+      commits=IO.popen(["git","-C",root,"log","--format=%H","--","Config/app-icon.json"],&:read)
+      exit 1 unless $?.success?
+      commits.split.each do |commit|
+        blob=IO.popen(["git","-C",root,"show","#{commit}:Config/app-icon.json"],err: File::NULL,&:read)
+        next unless $?.success?
+        revision=(JSON.parse(blob)["selectionRevision"] rescue nil)
+        puts revision if revision.is_a?(String)
+      end
+    ') || fail 'accepted app icon history could not be read'
+    ! /usr/bin/grep -Fxq -- "$selection_revision" <<<"$used_revisions" || fail 'replacement must come from a new selection revision'
   elif [[ "$(printf '%s' "$accepted" | jq -r '.supersedes.sha256? // ""')" == "$replace_accepted" ]]; then
     replacement_mode=recheck
     supersedes=$(printf '%s' "$accepted" | jq -ce '.supersedes')
