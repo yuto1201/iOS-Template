@@ -434,6 +434,28 @@ write_review
 write_preflight
 run_gate > "$scratch/revision-gate.json"
 jq -e --arg head "$head_sha" '.status == "passed" and .headSha == $head' "$scratch/revision-gate.json" >/dev/null
+# Merge-state updates keep a revision-bound durable state in canonical bytes, so the
+# revision validation, the gate and cleanup's state validation still accept it.
+assert_canonical_state() {
+  ruby -rjson -e '
+    def canonical(v); v.is_a?(Hash) ? v.keys.sort.to_h{|key|[key,canonical(v[key])]} : v.is_a?(Array) ? v.map{|entry|canonical(entry)} : v end
+    bytes=File.binread(ARGV.fetch(0)); abort "revision-bound state is not canonical after #{ARGV.fetch(1)}" unless bytes == JSON.generate(canonical(JSON.parse(bytes)))
+  ' "$repo/.artifacts/issues/42/state.json" "$1"
+}
+merge_state="$issue_worktree/tools/lib/merge-state.rb"
+cp "$repo/.artifacts/issues/42/state.json" "$scratch/revision-state.bound.json"
+ruby -rjson -e '
+  def canonical(v); v.is_a?(Hash) ? v.keys.sort.to_h{|key|[key,canonical(v[key])]} : v.is_a?(Array) ? v.map{|entry|canonical(entry)} : v end
+  path=ARGV.fetch(0); value=JSON.parse(File.binread(path)); value.delete("pullRequest"); File.binwrite(path,JSON.generate(canonical(value)))
+' "$repo/.artifacts/issues/42/state.json"
+ruby "$merge_state" persist-pr "$issue_worktree" yuto1201/iOS-Template 42 57 >/dev/null
+assert_canonical_state persist-pr
+run_gate >/dev/null
+ruby "$merge_state" mark-merged "$issue_worktree" yuto1201/iOS-Template 42 57 "$head_sha" "$(timestamp 5)" >/dev/null
+assert_canonical_state mark-merged
+jq -e '.state == "merged" and .pullRequest == 57 and (.issueContractRevision.revision == 2)' "$repo/.artifacts/issues/42/state.json" >/dev/null
+ruby "$merge_state" validate-primary "$repo" yuto1201/iOS-Template 42 >/dev/null
+cp "$scratch/revision-state.bound.json" "$repo/.artifacts/issues/42/state.json"
 revision_record_relative=$(jq -er '.issueContractRevision.path' "$repo/.artifacts/issues/42/state.json")
 revision_record="$repo/$revision_record_relative"
 cp "$revision_record" "$scratch/revision-record.valid.json"

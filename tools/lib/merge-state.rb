@@ -196,6 +196,14 @@ ensure
   handles&.reverse_each { |handle| handle.close unless handle.closed? }
 end
 
+def canonical_state_value(value)
+  case value
+  when Hash then value.keys.sort.to_h { |key| [key, canonical_state_value(value.fetch(key))] }
+  when Array then value.map { |entry| canonical_state_value(entry) }
+  else value
+  end
+end
+
 def atomic_update_state(identity, guard: nil)
   handles = DescriptorFiles.open_components(identity.fetch("primaryRoot"), [".artifacts", "issues", identity.fetch("issue").to_s])
   directory = handles.last
@@ -215,7 +223,8 @@ def atomic_update_state(identity, guard: nil)
   guard&.call
   value = JSON.parse(bytes)
   yield value
-  published_bytes = JSON.generate(value)
+  # Revision-bound Issues validate durable state as canonical bytes, so every update keeps sorted keys.
+  published_bytes = JSON.generate(canonical_state_value(value))
   guard&.call
   published_stat = DescriptorFiles.atomic_replace_at(directory, "state.json", published_bytes, bytes, original_stat)
   if guard
