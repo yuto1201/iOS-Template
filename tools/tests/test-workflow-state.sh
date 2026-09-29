@@ -395,6 +395,47 @@ assert_fails 'nested resume without the original stop marker fails closed' "$rep
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
 reset_nested_state
 
+# The same nested stops from a claimed working state: in-progress -> blocked:environment -> paused ->
+# blocked:environment returns to in-progress, and only a resume target, paused or superseded may leave.
+reset_in_progress_state() {
+  printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
+  printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+  jq -c '.state = "in-progress" | .previousState = "claimed" | .from = "claimed" | .to = "in-progress"' \
+    "$workspace/full-approved-state.json" > ".artifacts/issues/$test_issue/state.json"
+  rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+}
+nested_in_progress_stop() {
+  reset_in_progress_state
+  state_transition in-progress blocked:environment
+  state_transition blocked:environment paused
+}
+nested_in_progress_stop
+state_transition paused blocked:environment
+[[ "$("$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" | jq -r '.resumeState')" == in-progress ]] ||
+  { echo 'a stop re-entered from paused did not report in-progress' >&2; exit 1; }
+state_transition blocked:environment in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
+
+nested_in_progress_stop
+state_transition paused in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
+
+nested_in_progress_stop
+assert_fails 'a nested stop cannot leave to a state that is not a resume target' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to verify-passed
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+
+# A marker from another account is not history, and two newest candidates at the same time are ambiguous.
+nested_in_progress_stop
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments.each { |comment| comment["author"] = {"login" => "someone-else"} if comment.fetch("body").include?(%q("to":"blocked:environment")) }; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE"
+assert_fails 'nested resume ignores a third-party stop marker and fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+
+nested_in_progress_stop
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); duplicate = comments.find { |comment| comment.fetch("body").include?(%q("to":"blocked:environment")) }; comments << duplicate.dup; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE"
+assert_fails 'nested resume with two simultaneous stop markers fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+reset_nested_state
+
 if [[ "$scope" == scoped ]]; then
   echo 'PASS: scoped GitHub preflight and revised-contract state boundaries'
   exit 0
