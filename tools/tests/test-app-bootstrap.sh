@@ -32,6 +32,7 @@ verify_shared_seed() {
   [[ "$seed" == /* && -d "$seed/.git" && ! -L "$seed" ]] || { echo 'shared bootstrap seed is not a repository directory' >&2; exit 1; }
   [[ -z "$(git -C "$seed" status --porcelain --untracked-files=all)" ]] || { echo 'shared bootstrap seed has local changes' >&2; exit 1; }
   [[ "$(git -C "$seed" rev-parse HEAD)" == "$expected_head" ]] || { echo 'shared bootstrap seed Head changed' >&2; exit 1; }
+  [[ ! -e "$seed/Config/app-identity.json" && ! -L "$seed/Config/app-identity.json" ]] || { echo 'shared bootstrap seed no longer has the template identity' >&2; exit 1; }
 }
 if [[ "$mode" == "all" ]]; then
   if [[ -f "$source_root/Config/app-identity.json" && ! -L "$source_root/Config/app-identity.json" && -z "${IOS_TEMPLATE_BOOTSTRAP_SEED-}" ]]; then

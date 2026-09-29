@@ -168,6 +168,13 @@ Dir.mktmpdir("bootstrap-fixture-test.") do |temp|
   ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => "0" * 40},
     "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
   assert(!ok && output.include?("shared bootstrap seed Head changed"), "a shared seed at another Head was used: #{output}")
+  File.write(File.join(shared, "Config/app-identity.json"), File.read(File.join(derived, "Config/app-identity.json")))
+  git(shared, "add", "Config/app-identity.json")
+  git(shared, "-c", "user.name=Bootstrap Test", "-c", "user.email=bootstrap-test@example.invalid", "-c", "commit.gpgsign=false",
+    "commit", "--quiet", "-m", "test: bootstrapped seed")
+  ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => git(shared, "rev-parse", "HEAD").strip},
+    "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
+  assert(!ok && output.include?("shared bootstrap seed no longer has the template identity"), "a bootstrapped shared seed was used: #{output}")
 end
 
 # A template-only change under any frozen source directory selects this fixture regression.
