@@ -2629,7 +2629,9 @@ func validateWorkflowPath(_ path: String) throws {
     guard !releaseOrStorePath || localDeliveryToolPaths.contains(path) else {
         throw ValidationFailure("workflow-only diff contains a release or App Store path: \(path)")
     }
-    let exact: Set<String> = ["README.md", "AGENTS.md", "Config/repository-tests.json"]
+    // The dedicated Simulator declaration (D-063) is non-secret verification configuration, like the
+    // repository test manifest, and is owned by the verification tools that read it.
+    let exact: Set<String> = ["README.md", "AGENTS.md", "Config/dedicated-simulators.json", "Config/repository-tests.json"]
     let prefixes = ["tools/", "docs/", "specs/", ".agents/", ".codex/", ".claude/", ".github/"]
     guard exact.contains(path) || localDeliveryToolPaths.contains(path) || prefixes.contains(where: { path.hasPrefix($0) }) else {
         throw ValidationFailure("workflow-only path is not allowlisted: \(path)")
