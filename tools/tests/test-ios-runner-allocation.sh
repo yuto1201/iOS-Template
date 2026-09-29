@@ -248,8 +248,9 @@ fi
 }
 /usr/bin/ruby - "$fake_log" <<'RUBY'
 commands = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
+# The liveness probe runs on the host (#215).
 probe = commands.rindex do |fields|
-  fields[0] == "xcrun" && fields[2..3] == %w[simctl spawn] && fields[5] == "/bin/kill"
+  fields[0] == "host" && fields[1] == "kill" && fields[2] == "-0"
 end
 abort "schema v2 TERM probe was not recorded" unless probe
 mutations = commands.drop(probe + 1).select do |fields|
