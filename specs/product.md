@@ -116,6 +116,18 @@ DebugはGoogle公式demo identifierのみ、UI Testはネットワークと実SD
 
 AdMob Consoleでのaccount／app／ad unit作成、契約・支払・税務情報、consent message公開、app-ads.txt公開、production identifier取得、App Store Connectの保存／提出はこの採用に含めない。それぞれに明示的なIssue contract、設定済みaccount／target、必要なユーザー承認とreadbackを要求する。決定の経緯は[D-057](decisions.md#d-057-広告収益化を非trackingの条件付きadmob統合として採用する)を参照する。
 
+### 4.2 条件付きStoreKit非消耗型権利
+
+StoreKitとIn-App Purchaseは全アプリの標準依存にせず、派生アプリの確定仕様が買い切りの非消耗型商品（例: 広告非表示）を明示採用した場合だけ有効化する。採用前に、商品種別、付与する権利、product IDの命名、価格tier、対象storefront、Family Sharingの可否、対象年齢、Offer Codeを使うかどうかを確定する。これらが未決または矛盾する間は、source／projectを変更せず`blocked:user`とする。
+
+購入済みとする根拠は、StoreKit 2がverifiedと判定し、失効していないtransactionだけとする。pending、利用者による取消、unverified、失効済みのtransactionは購入済みにしない。アプリ独自の保存値を権利の正本にせず、起動時とforeground復帰時にcurrent entitlementを再確認し、transaction updatesを継続して監視する。確認できない場合や、購入・復元・Offer Code redemptionの成否が曖昧な場合は、権利を推測して付与しない。
+
+復元（App Store sync）とOffer Code redemption sheetは、利用者が明示的に操作した場合だけ起動する。起動、画面表示、ネットワーク回復などを契機に自動実行しない。
+
+広告非表示に使う場合、StoreKit側は広告非表示権利のsource of truthだけを提供する。広告のconsent、表示対象画面、eligibility判定は[条件付きAdMob収益化](#41-条件付きadmob収益化)の側に残し、StoreKit側から広告SDKの初期化やrequestを行わない。
+
+Debug／UI TestはStoreKit configuration fileとnetwork-free fixtureで決定的に検証する。StoreKit Testingの成功、sandboxでの購入、App Store Connectのproduct状態、審査結果は別の証拠とし、一つの成功から他を推測しない。App Store Connectでのproduct作成、価格、税務、契約、IAP審査提出、Offer Code発行はこの採用に含めず、それぞれに明示的なIssue contract、設定済みaccount／target、必要なユーザー承認とreadbackを要求する。自動更新subscription、消耗型、server-sideのtransaction検証、独自purchase serverは、新しいDecisionとIssueで明示承認しない限り含めない。決定の経緯は[D-064](decisions.md#d-064-非消耗型の買い切り権利を条件付きstorekit-2境界として定める)を参照する。
+
 ## 5. 音声素材方針
 
 テキスト読み上げ、スピーチ変換・文字起こし、効果音、音声分離、音楽、画像、動画が受け入れ条件に必要な場合、CodexまたはClaudeが共有のElevenLabsメディアスキルを使用します。

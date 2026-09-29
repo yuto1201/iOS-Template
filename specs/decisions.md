@@ -567,3 +567,13 @@
 - Decision: 各repositoryはAI検証とApp Store撮影に、専用のiPhone 1台とiPad 1台だけを使う。Templateは`iOS-Template iPhone 17`（Device Type iPhone 17、Runtime iOS 27.0）と`iOS-Template iPad (A16)`（Device Type iPad (A16)、Runtime iOS 27.0）、派生アプリは表示名を前置した同じDevice Type／Runtimeの2台（例：`PayCycle iPhone 17`）とする。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台であることを確認し、0台または2台以上なら`blocked:environment`とする。`iphone-en`／`iphone-ja`は専用iPhone、`ipad-en`／`ipad-ja`は専用iPadを使い、同じdeviceのcaseは一件ずつ実行する。各caseの前に専用deviceを停止・eraseし、caseのlocale／languageを設定して起動し、証拠をdevice外へ保存してから停止する。専用deviceの排他はMac共通resource managerのleaseで取り、起動中のAI検証用deviceはMac全体で最大4台・sessionごと1台とする。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`で実行する。検証とApp Store撮影はdeviceを作成・clone・rename・削除せず、専用device以外を起動・erase・install・test対象にしない。専用deviceの作成は、後続Issueが定める明示的な初期設定手順だけで行う。App Store用画像も専用2台だけで撮影し、公式の必須サイズは確定済みの合成経路で規定canvasへ仕上げる。満たせないサイズがあればupload前に`blocked:user`とする。
 - Consequence: 検証とApp Store撮影のtool（matrix、resource manager、runner、validator、撮影、bootstrap）は後続Issueで専用device契約へ移し、それまでcanonical native検証とApp Store撮影を実行しない。専用device契約を実装していないBaseで封印済みのcontractはnative検証を行えないため、native証拠が必要な場合はsuccessor Issueへ移す（#182を含む）。既存のschema v1／v2 matrix、sealed contract、証拠はimmutable legacyとして受理し、変換や付け替えをしない。device数はrepositoryごとに2台で一定になり、disk消費はeraseで上限が保たれる。
 - Related Issue: #183
+
+## D-064: 非消耗型の買い切り権利を条件付きStoreKit 2境界として定める
+
+- Date: 2026-09-29
+- Status: 確定
+- Supersedes: None。D-057の条件付きAdMob統合と、広告非表示権利をAdMob外のsource of truthから受け取る前提、D-059のApp Store Connect操作境界を維持する。
+- Context: 派生アプリでは広告非表示などの買い切り商品が想定されるが、テンプレートには購入、復元、Offer Code、権利判定の契約がなかった。条件付きAdMob統合は広告非表示権利を外部から注入される値として受け取るだけで、その正本を定めていない。
+- Decision: 派生アプリの確定仕様が買い切りの非消耗型商品を明示採用した場合だけ、StoreKit 2の権利境界を有効化する。採用前に商品種別、付与する権利、product ID命名、価格tier、対象storefront、Family Sharing、対象年齢、Offer Code採否を確定し、未決なら`blocked:user`とする。権利はverifiedで失効していないtransactionだけから解決し、pending、取消、unverified、失効済み、アプリ独自の保存値からは付与しない。起動時とforeground復帰時に再確認し、transaction updatesを監視してverified transactionをfinishする。復元とOffer Code redemptionは利用者の明示操作だけで起動し、曖昧な結果から権利を推測しない。広告非表示に使う場合、StoreKit側はAdMobの`adFreeEntitlement`入力と`hasAdFreeEntitlement`注入点へ権利の値だけを渡し、consent、eligibility、広告requestはAdMob側に残す。Debug／UI TestはStoreKit configuration fileとnetwork-free fixtureで検証し、StoreKit Testing、sandbox購入、App Store Connectのproduct状態、審査結果を別の証拠とする。
+- Consequence: 派生アプリは、広告非表示などの買い切り商品を共通の権利判定と責務分離で追加できる。テンプレート本体とbootstrap outputは変えず、StoreKit code、skill、activation tool、validator、StoreKit configuration fileは後続Issueで実装する。source preparationのcode inventoryはStoreKitの使用を検出しないため、その検出は後続Issueとし、それまでIAP項目は利用者の確定値とreadbackで扱う。自動更新subscription、消耗型、server-side検証、独自purchase server、App Store Connectでのproduct作成・価格・税務・契約・IAP審査提出・Offer Code発行は含めない。
+- Related Issue: #159

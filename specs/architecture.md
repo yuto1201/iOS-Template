@@ -237,6 +237,26 @@ offline fixtureの成功、Google demo smokeの成功、AdMob Consoleのremote s
 
 実装は#130（pinned installerとguarded runner）、#145（operation model）、#146（production preflightとpremerge）、#132（§9.2のselective save）、#133（build upload）、#134（release sectionのAPI移行）、#135（TestFlight配信）の順に分ける。#134が完了するまでは、既存のauthenticated browser section workflowだけが完全releaseの実行経路である。この節と[D-059](decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)は契約の確定だけを行い、adapterのinstall、実装、live API成功を主張しない。
 
+### 7.3 条件付きStoreKit非消耗型権利境界
+
+テンプレート本体とIdentity bootstrap直後の派生アプリに、StoreKit code、product ID、StoreKit configuration file、購入／復元UIを含めない。[プロダクト方針 §4.2](product.md#42-条件付きstorekit非消耗型権利)の採用入力が確定した派生アプリだけが、専用Issueで有効化する。未採用時のbootstrap outputとXcode projectを不変とする。
+
+有効化後のapplication境界は、次の責務を注入可能な一つのentitlement layerへ集める。
+
+- **現在の権利**: `Transaction.currentEntitlements`のうち、verifiedで`revocationDate`を持たないtransactionだけから、採用したproduct IDの権利を解決する。起動時の初回確認とforeground復帰時に再計算し、UserDefaultsなどアプリ独自の保存値を正本にしない。初回確認が終わる前の状態は未確定とし、購入済みとも未購入とも確定しない。
+- **更新の監視とfinish**: 起動直後から`Transaction.updates`を監視する。verified transactionは権利へ反映してからfinishし、unverified transactionは権利へ反映しない。返金やFamily Sharing停止による失効は、届いた時点で権利から外す。finishの扱いを含む細部は、後続実装Issueが実行時のApple公式sourceで再確認して記録する。
+- **購入**: `Product.purchase()`の結果のうち、verifiedのsuccessだけを権利とする。unverifiedのsuccess、pending（Ask to Buyなど）、userCancelled、errorでは権利を付与せず、pendingの後の結果は`Transaction.updates`で扱う。
+- **復元とOffer Code**: `AppStore.sync()`とOffer Code redemption sheetは、利用者が明示的に操作したときだけ起動する。完了後はcurrent entitlementを読み直し、失敗、取消、不明な結果から権利を推測しない。Offer Codeを採用しないアプリはredemptionの入口を持たない。
+- **Family Sharing**: 採用入力でFamily Sharingを有効にした商品だけ、family-sharedのtransactionを権利に含める。
+
+広告非表示に使う場合、entitlement layerの名前を[§7.1](#71-条件付きadmob統合境界)の有効化入力`adFreeEntitlement`の`source`へ記録し、AdMob runtimeへ注入する`hasAdFreeEntitlement`の値を返すことだけを担う。consent、表示対象画面、eligibility、広告request、collapseはAdMob側の責務のまま変えない。起動時は初回の権利確認が終わるまで、AdMobの初回eligibility評価を始めない。権利の付与や失効はAdMob側の次のeligibility評価へ反映され、表示とcollapseはAdMob側の契約に従う。#112のAdMob境界、#101の法務ページ引き継ぎ、#110のsource preparationの責務と権限は、この境界で広げない。
+
+Unit Test／UI TestはStoreKit configuration fileとStoreKit Testingのnetwork-free sessionで、verifiedの購入、pending、取消、unverified、失効、復元、Offer Codeの各状態を決定的に再現する。StoreKit Testingの成功、sandbox購入、App Store Connectのproduct状態、審査結果は別々の証拠とし、ローカル成功をproductの存在、価格、配信可否、審査通過に読み替えない。
+
+[#110のread-only source preparation](#91-原稿の正本と登録準備)は、IAPのproduct ID、種別、価格、territory、availability、restore、Offer Code適用可否を、確定仕様、StoreKit実装とtestの証拠、observed productionの状態から得る入力として扱う。現行のsource preparationのcode inventoryはAdMob／UMPの使用だけを検出し、StoreKitの使用を検出しない。この検出の追加は後続Issueとし、それまでIAP項目は利用者の確定値とreadbackだけで扱う。App Store Connectでのproduct作成、価格、税務、契約、IAP審査提出、Offer Code発行はこの境界の外である。
+
+この節と[D-064](decisions.md#d-064-非消耗型の買い切り権利を条件付きstorekit-2境界として定める)は契約の確定だけを行う。StoreKit code、skill、activation tool、validator、StoreKit configuration fileと、そのBuild／Test／Simulatorの証拠は、後続Issueのcurrent-Head成果が揃うまで未実装・未検証である。
+
 ## 8. Supabase構成
 
 Supabaseを採用したアプリだけ、次を作成します。

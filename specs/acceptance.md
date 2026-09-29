@@ -252,3 +252,15 @@ AppLibrary法務ページへの引き継ぎは、次を満たす。
 - [ ] `Info.plist`のGoogle Mobile Ads App ID／SKAdNetworkItems、resolved SDK／privacy manifest／signature、アプリの`PrivacyInfo.xcprivacy`、実装data use、App Store申告の差異を同一candidateで検出する。#110のread-only source preparationはdriftを報告できるが、provider実装、remote設定、App Store Connect保存／提出、release-readyを実行または証明しない。
 - [ ] offline fixture、Google demo smoke、AdMob Console remote state、productionのApp Store readiness／配信状態が個別に報告され、一つの成功から他の完了、収益発生、審査通過を推測しない。
 - [ ] AdMob Consoleのaccount／app／ad unit作成、契約・支払・税務、consent message／app-ads.txt公開、production identifier取得、App Store Connect保存／提出は、個別のoperation／Executor／account／target／必要なユーザー承認／readbackなしに実行されない。#101の法務ページ引き継ぎも広告設定、公開承認、App Store操作への権限を拡張しない。
+
+## 10. 条件付きStoreKit非消耗型権利
+
+[プロダクト方針 §4.2](product.md#42-条件付きstorekit非消耗型権利)と[構成 §7.3](architecture.md#73-条件付きstorekit非消耗型権利境界)を正本とする。この節は後続実装Issueのend-state受け入れ条件を固定するものであり、仕様Issueの完了だけで下記を実装済み・検証済みとしない。各項は対応する後続Issueのcurrent-Head成果とstage別証拠が揃った場合だけ完了とする。
+
+- [ ] 未採用のテンプレート本体とbootstrap outputに、StoreKit code、product ID、StoreKit configuration file、購入／復元UIが追加されず、有効化しない生成結果が不変である。
+- [ ] 有効化は商品種別、付与する権利、product ID命名、価格tier、対象storefront、Family Sharing、対象年齢、Offer Code採否を入力とし、未決・欠落・矛盾は変更前に`blocked:user`で拒否する。
+- [ ] 権利はverifiedかつ未失効のtransactionだけから解決され、pending、userCancelled、unverified、失効済み、アプリ独自の保存値からは付与されない。起動時とforeground復帰時の再確認、`Transaction.updates`の監視、verified transactionのfinishが接続されている。
+- [ ] 復元とOffer Code redemptionは利用者の明示操作だけで起動し、失敗、取消、曖昧な結果から権利を推測しない。Offer Codeを採用しないアプリはredemptionの入口を持たない。
+- [ ] 広告非表示に使う場合、entitlement layerはAdMobの`adFreeEntitlement`入力と`hasAdFreeEntitlement`注入点だけへ接続し、consent、eligibility、広告request、collapseの責務を変えない。起動時は初回の権利確認が終わるまで広告eligibilityの初回評価を始めない。
+- [ ] Debug／UI TestはStoreKit configuration fileとnetwork-free fixtureで各状態を決定的に検証し、StoreKit Testing、sandbox購入、App Store Connectのproduct状態、審査結果を別々に報告する。
+- [ ] App Store Connectでのproduct作成、価格、税務、契約、IAP審査提出、Offer Code発行は、個別のoperation／Executor／account／target／必要なユーザー承認／readbackなしに実行されない。
