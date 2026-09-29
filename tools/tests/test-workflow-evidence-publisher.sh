@@ -319,6 +319,17 @@ printf '%s\n' 'adopted image bytes' >"$repo/App Store/screenshots/iphone-ja.png"
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 expect_rejection adopted-appstore-asset 'workflow-only diff contains a release or App Store path: App Store/screenshots/iphone-ja.png'
 
+prepare_fixture dedicated-simulator-declaration
+/bin/mkdir -p "$repo/Config"
+printf '%s\n' '{"schemaVersion":1,"devices":[]}' >"$repo/Config/dedicated-simulators.json"
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- Config/dedicated-simulators.json
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]] || { echo 'workflow publisher rejected the dedicated Simulator declaration' >&2; exit 1; }
+
 prepare_fixture signing-configuration
 /bin/mkdir -p "$repo/Config"
 printf '%s\n' 'DEVELOPMENT_TEAM = EXAMPLE' >"$repo/Config/Signing.xcconfig"

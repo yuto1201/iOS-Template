@@ -179,6 +179,7 @@
     {
       "domain": "ios-verification",
       "paths": [
+        "Config/dedicated-simulators.json",
         "tools/destroy-simulator-matrix.sh",
         "tools/lib/delivery-stage.rb",
         "tools/lib/verification-scope.rb",
@@ -191,6 +192,8 @@
       ],
       "prefixes": [
         "tools/lib/ios-",
+        "tools/tests/fixtures/legacy-simulator-resource/",
+        "tools/tests/fixtures/simctl/",
         "tools/tests/lib/ios-runner-"
       ]
     },

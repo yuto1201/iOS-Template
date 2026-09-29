@@ -409,10 +409,11 @@ for selector in \
     exit 1
   }
 done
-create_count="$(/usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && $4 == "create" { count++ } END { print count + 0 }' "$fake_log")"
+create_count="$(/usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && ($4 == "create" || $4 == "clone" || $4 == "rename") { count++ } END { print count + 0 }' "$fake_log")"
 delete_count="$(/usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && $4 == "delete" { count++ } END { print count + 0 }' "$fake_log")"
-[[ "$create_count" == 1 && "$delete_count" == 1 ]] || {
-  echo 'Application-fixture execute did not create and delete exactly one disposable Simulator' >&2
+erase_targets="$(/usr/bin/awk -F '\t' '$1 == "xcrun" && $3 == "simctl" && $4 == "erase" { print $5 }' "$fake_log")"
+[[ "$create_count" == 0 && "$delete_count" == 0 && "$erase_targets" == 00000000-0000-0000-0000-000000000001 ]] || {
+  echo 'Application-fixture execute did not erase only the dedicated iPhone without creating or deleting a Simulator' >&2
   /bin/cat "$fake_log" >&2
   exit 1
 }
@@ -426,12 +427,13 @@ fi
 }
 if /usr/bin/find "$adapter_state" -maxdepth 1 -type f -name 'allocated-*' -print -quit | /usr/bin/grep -q . ||
    { [[ -d "$adapter_state/data" ]] && /usr/bin/find "$adapter_state/data" -mindepth 1 -print -quit | /usr/bin/grep -q .; }; then
-  echo 'Application-fixture execute retained its disposable Simulator' >&2
+  echo 'Application-fixture execute retained Simulator allocation state' >&2
   exit 1
 fi
 assert_no_failed_attempts
 
-prepare_application_fixture_repo application-fixture-final-project
+# Existing schema-v1 evidence stays readable after D-063, so the binding check runs on legacy bytes.
+prepare_application_fixture_repo application-fixture-final-project 1
 write_mismatched_application_fixture_evidence
 if (cd "$repo" && "$validator_binary" --file ".artifacts/issues/42/$head_sha/verify.json" \
     --expected-issue 42 --expected-base "$base_sha" --expected-head "$head_sha") \
@@ -461,13 +463,19 @@ for mode in absent missing-unit-test missing-case missing-action both-actions mi
   [[ ! -s "$fake_log" ]] || { echo "invalid contract reached Xcode for $mode" >&2; cat "$fake_log" >&2; exit 1; }
 done
 
-for mode in wrong duplicate missing unavailable wrong-type wrong-runtime; do
-  prepare_repo "simulator-identity-$mode"
-  FAKE_SIMULATOR_IDENTITY_MODE="$mode" expect_execute_failure "simulator-identity-$mode" "dedicated Simulator ownership validation failed"
-  if /usr/bin/awk -F '\t' '($1 == "xcodebuild" && ($0 ~ /build-for-testing$/ || $0 ~ /test-without-building$/)) || ($1 == "xcrun" && $3 == "simctl" && ($4 == "shutdown" || $4 == "erase" || $4 == "delete")) {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
-    echo "invalid full-set Simulator identity reached Xcode or destructive mutation for $mode" >&2; exit 1
+# D-063: a valid schema-v1 matrix still names fixed non-dedicated devices, so it must stop
+# before any Simulator command, lease, or Build even when those devices exist and are healthy.
+for scope in full shape; do
+  prepare_repo "legacy-matrix-$scope" valid present "$scope" 1
+  expect_execute_failure "legacy-matrix-$scope" "schema-v1 Simulator matrices cannot start new verification"
+  if /usr/bin/awk -F '\t' '$1 == "xcodebuild" || ($1 == "xcrun" && $3 == "simctl") {found=1} END {exit found ? 0 : 1}' "$fake_log"; then
+    echo "schema-v1 $scope matrix reached Xcode or a Simulator operation" >&2; cat "$fake_log" >&2; exit 1
   fi
-  [[ ! -e "$draft" ]] || { echo "invalid Simulator identity published draft for $mode" >&2; exit 1; }
+  [[ ! -e "$draft" ]] || { echo "schema-v1 $scope matrix published a draft" >&2; exit 1; }
+  legacy_failure="$(/usr/bin/find "$(dirname "$draft")/failures" -type f -name 'failure-*.json' -print -quit)"
+  [[ -n "$legacy_failure" ]] || { echo "schema-v1 $scope rejection did not publish failure evidence" >&2; exit 1; }
+  /usr/bin/ruby -rjson -e 'd = JSON.parse(File.read(ARGV.fetch(0))); abort unless d["stage"] == "simulator-ownership"' "$legacy_failure"
+  assert_no_failed_attempts
 done
 
 prepare_repo dirty-range

@@ -11,13 +11,20 @@ AppleLanguages=fr-FR AppleLocale=fr_FR LANGUAGE=fr run_execute
 [[ -f "$draft" ]] || { echo 'system locale success lacked draft' >&2; exit 1; }
 /usr/bin/ruby - "$fake_log" <<'RUBY'
 rows = File.readlines(ARGV.fetch(0)).map { |line| line.chomp.split("\t").drop(2) }
-ids = (1..4).map { |n| "00000000-0000-0000-0000-%012d" % n }
+# Both iPhone cases lease the one dedicated iPhone and both iPad cases the one dedicated iPad. Each lease
+# erases its device, so each erase opens the next case in the sealed order.
+iphone = "00000000-0000-0000-0000-000000000001"
+ipad = "00000000-0000-0000-0000-000000000003"
+leased = [iphone, iphone, ipad, ipad]
 preferences = rows.select { |r| r[0,2] == %w[simctl spawn] && r[3] == "defaults" }
 abort "runner did not apply Simulator system preferences" unless preferences.length == 16
-abort "preferences touched an unowned Simulator" unless preferences.all? { |r| ids.include?(r[2]) }
-ids.each_with_index do |udid, index|
+abort "preferences touched an unowned Simulator" unless preferences.all? { |r| [iphone, ipad].include?(r[2]) }
+erases = rows.each_index.select { |i| rows[i][0,2] == %w[simctl erase] }
+abort "each case was not leased by an erase of its dedicated device" unless erases.map { |i| rows[i][2] } == leased
+leased.each_with_index do |udid, index|
   language, locale = index.even? ? %w[en-US en_US] : %w[ja-JP ja_JP]
-  commands = rows.select { |r| r[0] == "simctl" && r[2] == udid }
+  segment_end = erases[index + 1] || rows.length
+  commands = rows[erases[index]...segment_end].select { |r| r[0] == "simctl" && r[2] == udid }
   language_write = commands.index(["simctl", "spawn", udid, "defaults", "write", "-g", "AppleLanguages", "-array", language])
   locale_write = commands.index(["simctl", "spawn", udid, "defaults", "write", "-g", "AppleLocale", "-string", locale])
   abort "system preferences were not derived from the matrix" unless language_write && locale_write

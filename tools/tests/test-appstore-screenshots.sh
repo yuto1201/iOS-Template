@@ -154,10 +154,9 @@ write_valid_fixture
 ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].find{|e| e["family"]=="iphone-6.9"}["deviceType"]="iPhone 17 Pro"; File.binwrite(p,JSON.generate(v))' "$raw/manifest.json"
 assert_failure 'required Pro Max capture' 'deviceType'
 
-# Exercise deterministic Simulator capture through the shared resource manager
-# and a fake xcrun adapter. The pinned fixture intentionally makes the 6.9-inch
-# family Pro-Max-only. Each locale/family is allocated and deleted before the
-# next one, so one session never holds two devices.
+# D-063: capture may use only the repository's dedicated Simulators. Until the capture tool
+# leases them by platform (#192), a requirements Device Type or Runtime that differs from
+# Config/dedicated-simulators.json stops capture before any Simulator is booted, created, or deleted.
 fake_bin="$workspace/fake-bin"; mkdir -p "$fake_bin"
 fake_png="$workspace/fake.png"; write_png "$fake_png" 1260 2736 2 77
 fake_ipad_png="$workspace/fake-ipad.png"; write_png "$fake_ipad_png" 2064 2752 2 78
@@ -239,56 +238,23 @@ RUBY
 chmod +x "$fake_bin/xcrun"
 mkdir -p "$workspace/Fake.app"
 capture_root="$workspace/captured"
+set +e
 FAKE_XCRUN_LOG="$fake_log" FAKE_SIMCTL_STATE="$fake_state" FAKE_PNG="$fake_png" FAKE_IPAD_PNG="$fake_ipad_png" \
   IOS_TEMPLATE_SIMULATOR_SESSION_ID=appstore-test-session IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE=1 \
   IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT="$resource_state" IOS_TEMPLATE_APPSTORE_XCRUN="$fake_bin/xcrun" \
   "$capture" --requirements "$requirements" --states "$states" --app-path "$workspace/Fake.app" \
   --bundle-id com.yuto.TemplateApp --source-sha "$source_sha" --build-digest "$build_digest" \
-  --runtime "$runtime" --output-root "$capture_root" --issue 88 --batch-id appstore-test >/dev/null
-ruby -rjson -e '
-  value=JSON.parse(File.binread(ARGV.fetch(0))); abort "capture cases" unless value.fetch("cases").length==4
-  iphone=value.fetch("cases").find{|entry| entry.fetch("family")=="iphone-6.9"}
-  abort "Pro Max not resolved" unless iphone.fetch("deviceType")=="iPhone 17 Pro Max"
-' "$capture_root/manifest.json"
-[[ "$(find "$capture_root/simulator-allocations" -type f -name 'allocation-*.json' | wc -l | tr -d ' ')" == 4 ]] || {
-  echo 'released allocation receipts were not preserved' >&2; exit 1
-}
-ruby -rjson -e '
-  files=Dir.glob(File.join(ARGV.fetch(0),"allocation-*.json")); abort "receipt count" unless files.length==4
-  files.each do |path|
-    value=JSON.parse(File.binread(path))
-    abort "allocation not released" unless value.fetch("status")=="released" && value.dig("cleanup","status")=="passed"
-  end
-' "$capture_root/simulator-allocations"
-ruby -e '
-  active=0; maximum=0; creates=deletes=0
-  File.readlines(ARGV.fetch(0),chomp:true).each do |line|
-    if line.start_with?("simctl create ") then active+=1; creates+=1; maximum=[maximum,active].max
-    elsif line.start_with?("simctl delete ") then active-=1; deletes+=1; abort "delete without create" if active.negative?
-    end
-  end
-  abort "not sequential" unless creates==4 && deletes==4 && active.zero? && maximum==1
-' "$fake_log"
-[[ "$(jq '[.devices[] | .[]] | length' "$fake_state")" == 0 ]] || { echo 'fake Simulator device leaked after capture' >&2; exit 1; }
-! rg -q '^simctl erase ' "$fake_log" || { echo 'capture used erase instead of exact resource release' >&2; exit 1; }
-rg -q 'status_bar .*--time 9:41' "$fake_log" || { echo 'fixed status bar was not applied' >&2; exit 1; }
-rg -q -- '-AppleLanguages.*en' "$fake_log" || { echo 'English launch arguments are missing' >&2; exit 1; }
-rg -q -- '-AppleLanguages.*ja' "$fake_log" || { echo 'Japanese launch arguments are missing' >&2; exit 1; }
-
-# A capture failure must still release and delete the exact owned device.
-failure_root="$workspace/capture-failure"
-set +e
-FAKE_XCRUN_LOG="$fake_log" FAKE_SIMCTL_STATE="$fake_state" FAKE_PNG="$fake_png" FAKE_IPAD_PNG="$fake_ipad_png" \
-  FAKE_FAIL_SCREENSHOT=1 IOS_TEMPLATE_SIMULATOR_SESSION_ID=appstore-failure-session \
-  IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE=1 IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT="$resource_state" \
-  IOS_TEMPLATE_APPSTORE_XCRUN="$fake_bin/xcrun" \
-  "$capture" --requirements "$requirements" --states "$states" --app-path "$workspace/Fake.app" \
-  --bundle-id com.yuto.TemplateApp --source-sha "$source_sha" --build-digest "$build_digest" \
-  --runtime "$runtime" --output-root "$failure_root" --issue 88 --batch-id appstore-failure \
-  >"$workspace/failure.out" 2>"$workspace/failure.err"
-failure_status=$?
+  --runtime "$runtime" --output-root "$capture_root" --issue 88 --batch-id appstore-test \
+  >"$workspace/capture.out" 2>"$workspace/capture.err"
+capture_status=$?
 set -e
-[[ "$failure_status" -ne 0 && ! -e "$failure_root" ]] || { echo 'failed capture published output' >&2; exit 1; }
-[[ "$(jq '[.devices[] | .[]] | length' "$fake_state")" == 0 ]] || { echo 'failed capture leaked its Simulator' >&2; exit 1; }
+[[ "$capture_status" -ne 0 && ! -e "$capture_root" ]] || { echo 'capture outside the dedicated Simulators published output' >&2; exit 1; }
+grep -Fq 'blocked:environment: requested iphone Device Type and Runtime differ from the dedicated Simulator declaration' "$workspace/capture.err" || {
+  echo "capture outside the dedicated Simulators failed for another reason: $(<"$workspace/capture.err")" >&2; exit 1
+}
+! rg -q '^simctl (create|clone|rename|delete|erase|boot|install|launch|io) ' "$fake_log" || {
+  echo 'capture changed a Simulator before the dedicated declaration check' >&2; exit 1
+}
+[[ "$(jq '[.devices[] | .[]] | length' "$fake_state")" == 0 ]] || { echo 'capture created a Simulator' >&2; exit 1; }
 
-echo 'PASS: App Store screenshots require exact images, deterministic locales, sequential managed Simulators, cleanup, and release-only device families'
+echo 'PASS: App Store screenshots require exact images, deterministic locales, and release-only device families, and capture stops outside the dedicated Simulators'

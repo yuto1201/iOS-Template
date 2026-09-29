@@ -126,14 +126,14 @@ matrix = {
   "batchId" => arguments.fetch(batch_index + 1),
   "resolvedAt" => "2026-08-21T12:00:00+09:00",
   "runtime" => {
-    "identifier" => "com.apple.CoreSimulator.SimRuntime.iOS-10-3",
-    "version" => "10.3"
+    "identifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+    "version" => "27.0"
   },
   "cases" => [
-    ["iphone-en", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro", "iPhone 10 Pro", "en_US", "en"],
-    ["iphone-ja", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro", "iPhone 10 Pro", "ja_JP", "ja"],
-    ["ipad-en", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "iPad Air 13-inch (M3)", "en_US", "en"],
-    ["ipad-ja", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3", "iPad Air 13-inch (M3)", "ja_JP", "ja"]
+    ["iphone-en", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-17", "iPhone 17", "en_US", "en"],
+    ["iphone-ja", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-17", "iPhone 17", "ja_JP", "ja"],
+    ["ipad-en", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-A16", "iPad (A16)", "en_US", "en"],
+    ["ipad-ja", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-A16", "iPad (A16)", "ja_JP", "ja"]
   ].map do |id, family, identifier, name, locale, language|
     {"id" => id, "family" => family, "deviceType" => {"identifier" => identifier, "name" => name}, "locale" => locale, "language" => language}
   end

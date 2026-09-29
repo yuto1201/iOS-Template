@@ -48,9 +48,10 @@ abort "final must have only Japanese iPhone" unless final["cases"].map { |entry|
 abort "visual must have only Japanese iPhone" unless final["visualEvaluation"]["cases"].map { |entry| entry["id"] } == ["iphone-ja"]
 commands = File.readlines(ARGV.fetch(1)).map { |line| line.chomp.split("\t") }
 screenshots = commands.select { |fields| fields[2..3] == ["simctl", "io"] }
-abort "must capture exactly one screenshot" unless screenshots.length == 1 && screenshots.first[4].end_with?("000002")
+# The Japanese iPhone case runs on the one dedicated iPhone.
+abort "must capture exactly one screenshot" unless screenshots.length == 1 && screenshots.first[4].end_with?("000001")
 mutations = commands.select { |fields| fields[2] == "simctl" && !%w[list].include?(fields[3]) }
-abort "touched an English or iPad Simulator" unless mutations.all? { |fields| fields[4] == "00000000-0000-0000-0000-000000000002" }
+abort "touched an English or iPad Simulator" unless mutations.all? { |fields| fields[4] == "00000000-0000-0000-0000-000000000001" }
 puts "scoped runner: 1 case, 1 screenshot, 1 visual case; no English/iPad Simulator operations"
 RUBY
 prepare_repo scoped-mismatch valid present iphone-ja
@@ -79,7 +80,7 @@ grep -Fq 'elapsedSeconds=' "$scratch/shape-timeout.stderr"
 /usr/bin/ruby - "$fake_log" <<'RUBY'
 lines = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
 mutations = lines.select { |fields| fields[0] == "xcrun" && fields[2] == "simctl" && %w[terminate shutdown erase delete].include?(fields[3]) }
-owned = "00000000-0000-0000-0000-000000000002"
+owned = "00000000-0000-0000-0000-000000000001"
 abort "timeout cleanup touched a Simulator outside the invocation-owned shape case" unless mutations.all? { |fields| fields[4] == owned }
 abort "timeout cleanup did not reclaim the invocation-owned Simulator" unless mutations.any? { |fields| fields[3] == "shutdown" } && mutations.any? { |fields| fields[3] == "erase" }
 RUBY

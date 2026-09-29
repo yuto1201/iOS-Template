@@ -88,7 +88,7 @@ Phase 5で問題を見つけた場合は、問題別のRegression／harden Issue
 
 既存アプリの緊急修正は、現在も適用可能な目的、Identity、UI方向、基盤を理由付きで再利用し、影響するPhaseから開始します。毎回App IconやHTML比較をやり直しませんが、Issue／Branch／PR、対象Test、安全確認、必要review、外部操作承認は省略しません。
 
-AI検証用Simulatorは必要時に作成し、使用後にdeviceとdataを削除します。同じMac全体でiPhone／iPad合計最大4台、sessionごと原則1台とし、一つのsessionのmatrixは作成、検証、証拠保存、削除確認、枠返却を逐次行います。#93の共有枠、所有lease、異常終了回収、容量preflightをrunner、検証skill、App Store撮影へ共通接続します。#89は#93への移植元履歴として保持します。手動deviceや不明なdeviceを削除せず、resource managerを通らない旧経路を共通上限対応済みと報告しません。
+AI検証用Simulatorは、repository専用のiPhone 1台とiPad 1台だけを使います（D-063）。deviceを作成、clone、rename、削除しません。同じMac全体で起動中のiPhone／iPadは合計最大4台、sessionごと1台です。一つのsessionのmatrixは、専用deviceのlease、erase、検証、証拠保存、停止確認、lease返却を一条件ずつ行います。#93の共有枠、所有lease、異常終了回収、容量preflightは専用deviceのleaseへ引き継ぎ、runnerと検証skillへ接続します。App Store撮影は後続Issueで同じleaseへ移すまで実行しません。手動deviceや不明なdeviceを削除せず、resource managerを通らない旧経路を共通上限対応済みと報告しません。
 
 #### Phase recordとIssue binding
 
@@ -497,7 +497,7 @@ Closes #42
 ## Verification
 - Head SHA: 0123456789abcdef0123456789abcdef01234567
 - Unit tests: 24 passed
-- UI matrix: iPhone Pro en/ja, iPad Air en/ja passed
+- UI matrix: dedicated iPhone 17 en/ja, dedicated iPad (A16) en/ja passed
 - Evidence digest: 9f42c7...
 
 ## Opposite-model review
