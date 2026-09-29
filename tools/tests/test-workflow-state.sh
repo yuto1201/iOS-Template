@@ -4,7 +4,7 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" rg git jq ruby
 
-[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim ) ) ]] || exit 64
 scope="${1:-full}"
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-workflow-state.XXXXXX")
@@ -185,6 +185,19 @@ rg -Fq '"executor":"claude"' "$workspace/claude-marker.txt" || { echo 'Claude st
 
 cd "$repo_root"
 mkdir -p "$artifact_issue"
+
+# `post-claim` runs only the sealed post-Claim regressions (pending recovery and successor
+# transitions) as their own direct test, so a targeted suite reaches them within its per-test limit.
+if [[ "$scope" == post-claim ]]; then
+  ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+    --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+    > "$artifact_issue/issue-contract.json"
+  # The explicit fast merge preflight near the end reads the same older canonical records as the full run.
+  merge_evidence=".artifacts/issues/$test_issue/$(git -C "$repo_root" rev-parse HEAD)"
+  mkdir -p "$merge_evidence"
+  printf '{"completedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/verify.json"
+  printf '{"reviewedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/review.json"
+else
 
 # Before Claim there is no sealed contract. Reads and the proposed -> approved
 # transition must be authorized from the freshly read Issue body and exact argv.
@@ -489,6 +502,7 @@ reset_nested_state
 if [[ "$scope" == scoped ]]; then
   echo 'PASS: scoped GitHub preflight and revised-contract state boundaries'
   exit 0
+fi
 fi
 
 # Once Claim has created the full Task 4 identity record, every Task 2
