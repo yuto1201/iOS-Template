@@ -4,7 +4,7 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" rg git jq ruby
 
-[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim || "$1" == nested-resume ) ) ]] || exit 64
 scope="${1:-full}"
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-workflow-state.XXXXXX")
@@ -186,6 +186,234 @@ rg -Fq '"executor":"claude"' "$workspace/claude-marker.txt" || { echo 'Claude st
 cd "$repo_root"
 mkdir -p "$artifact_issue"
 
+# `post-claim` runs only the sealed post-Claim regressions (pending recovery and successor
+# transitions) as their own direct test, so a targeted suite reaches them within its per-test limit.
+# The sealed full approved-state record that the nested-resume regressions start from.
+write_full_approved_state() {
+contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$artifact_issue/issue-contract.json")"
+cat > "$artifact_issue/state.json" <<EOF
+{"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$(git -C "$repo_root" rev-parse HEAD)","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"$contract_digest"},"state":"approved","previousState":null,"resumeState":null,"executor":"codex"}
+EOF
+cp "$artifact_issue/state.json" "$workspace/full-approved-state.json"
+}
+
+# Nested stop-state resume regressions. The full run executes them in place; the nested-resume mode runs
+# them as their own direct test so a targeted suite reaches them within its per-test limit.
+run_nested_resume_regressions() {
+# Nested stops resume to the immediate stop state or to the original working state. Markers for
+# the same state within one second are ambiguous by design, so the transitions are spaced apart.
+state_transition() {
+  "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$1" --to "$2" >/dev/null
+  sleep 1
+}
+# Build each stop history once and restore its exact labels, markers, and durable state for every variant.
+save_snapshot() {
+  cp "$FAKE_GH_LABELS_FILE" "$workspace/snapshot-$1.labels"
+  cp "$FAKE_GH_COMMENTS_FILE" "$workspace/snapshot-$1.comments"
+  cp ".artifacts/issues/$test_issue/state.json" "$workspace/snapshot-$1.state"
+}
+restore_snapshot() {
+  [[ -f "$workspace/snapshot-$1.state" ]] || return 1
+  cp "$workspace/snapshot-$1.labels" "$FAKE_GH_LABELS_FILE"
+  cp "$workspace/snapshot-$1.comments" "$FAKE_GH_COMMENTS_FILE"
+  cp "$workspace/snapshot-$1.state" ".artifacts/issues/$test_issue/state.json"
+  rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+}
+nested_approved_stop() {
+  restore_snapshot nested-approved && return 0
+  reset_nested_state
+  state_transition approved blocked:dependency
+  state_transition blocked:dependency paused
+  save_snapshot nested-approved
+}
+reset_nested_state() {
+  printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
+  printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+  cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
+  rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+}
+nested_approved_stop
+[[ "$("$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" | jq -r '.resumeState')" == approved ]] ||
+  { echo 'nested pause did not report the original working state' >&2; exit 1; }
+state_transition paused blocked:dependency
+[[ "$("$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" | jq -r '.resumeState')" == approved ]] ||
+  { echo 'a stop re-entered from paused did not report the original working state' >&2; exit 1; }
+state_transition blocked:dependency approved
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+
+nested_approved_stop
+state_transition paused approved
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved"]'
+
+# Missing nested history fails closed instead of guessing the original state.
+nested_approved_stop
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments.reject! { |comment| comment.fetch("body").include?(%q("to":"blocked:dependency")) }; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE"
+assert_fails 'nested resume without the original stop marker fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to approved
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+reset_nested_state
+
+# The same nested stops from a claimed working state: in-progress -> blocked:environment -> paused ->
+# blocked:environment returns to in-progress, and only a resume target, paused or superseded may leave.
+reset_in_progress_state() {
+  printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
+  printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+  jq -c '.state = "in-progress" | .previousState = "claimed" | .from = "claimed" | .to = "in-progress"' \
+    "$workspace/full-approved-state.json" > ".artifacts/issues/$test_issue/state.json"
+  rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+}
+nested_in_progress_stop() {
+  restore_snapshot nested-in-progress && return 0
+  reset_in_progress_state
+  state_transition in-progress blocked:environment
+  state_transition blocked:environment paused
+  save_snapshot nested-in-progress
+}
+nested_in_progress_stop
+state_transition paused blocked:environment
+[[ "$("$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" | jq -r '.resumeState')" == in-progress ]] ||
+  { echo 'a stop re-entered from paused did not report in-progress' >&2; exit 1; }
+state_transition blocked:environment in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
+
+nested_in_progress_stop
+state_transition paused in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
+
+nested_in_progress_stop
+assert_fails 'a nested stop cannot leave to a state that is not a resume target' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to verify-passed
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+
+# A marker from another account is not history, and two newest candidates at the same time are ambiguous.
+nested_in_progress_stop
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); comments.each { |comment| comment["author"] = {"login" => "someone-else"} if comment.fetch("body").include?(%q("to":"blocked:environment")) }; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE"
+assert_fails 'nested resume ignores a third-party stop marker and fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+
+nested_in_progress_stop
+ruby -rjson -e 'path = ARGV.fetch(0); comments = JSON.parse(File.read(path)); duplicate = comments.find { |comment| comment.fetch("body").include?(%q("to":"blocked:environment")) }; comments << duplicate.dup; File.write(path, JSON.generate(comments))' "$FAKE_GH_COMMENTS_FILE"
+assert_fails 'nested resume with two simultaneous stop markers fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+
+# Stop-entry markers in the same second as the paused marker, one before it and one after it in the comment
+# array, are ambiguous whatever their positions.
+nested_in_progress_stop
+ruby -rjson -e '
+  path = ARGV.fetch(0); comments = JSON.parse(File.read(path))
+  pause_time = comments.find { |comment| comment.fetch("body").include?(%q("to":"paused")) }.fetch("body")[/"timestamp":"([^"]+)"/, 1]
+  entry = comments.find { |comment| comment.fetch("body").include?(%q("to":"blocked:environment")) }
+  entry["body"] = entry["body"].sub(/"timestamp":"[^"]+"/, %Q("timestamp":"#{pause_time}"))
+  entry["createdAt"] = pause_time
+  comments << entry.dup
+  File.write(path, JSON.generate(comments))
+' "$FAKE_GH_COMMENTS_FILE"
+assert_fails 'same-second stop entries around the paused marker fail closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+
+# An older, completed stop episode must not stand in for the current episode's entry marker. The
+# completed episode resumed to in-progress; the current one started from changes-requested.
+two_stop_episodes() {
+  restore_snapshot two-episodes && return 0
+  reset_in_progress_state
+  state_transition in-progress blocked:user
+  state_transition blocked:user in-progress
+  printf '["state:changes-requested"]' > "$FAKE_GH_LABELS_FILE"
+  jq -c '.state = "changes-requested" | .previousState = "review-requested" | .from = "review-requested" | .to = "changes-requested"' \
+    "$workspace/full-approved-state.json" > ".artifacts/issues/$test_issue/state.json"
+  state_transition changes-requested blocked:user
+  state_transition blocked:user paused
+  save_snapshot two-episodes
+}
+current_entry='("from":"changes-requested","resumeState":"changes-requested","timestamp"'
+for damage in removed corrupted foreign; do
+  two_stop_episodes
+  DAMAGE="$damage" ENTRY="$current_entry" ruby -rjson -e '
+    path = ARGV.fetch(0); comments = JSON.parse(File.read(path))
+    entry = comments.index { |comment| comment.fetch("body").include?(%q("from":"changes-requested")) && comment.fetch("body").include?(%q("to":"blocked:user")) } or abort "missing current entry marker"
+    case ENV.fetch("DAMAGE")
+    when "removed" then comments.delete_at(entry)
+    when "corrupted" then comments[entry]["body"] = comments[entry]["body"].sub(%q("resumeState":"changes-requested"), %q("resumeState":"approved"))
+    when "foreign" then comments[entry]["author"] = {"login" => "someone-else"}
+    end
+    File.write(path, JSON.generate(comments))
+  ' "$FAKE_GH_COMMENTS_FILE"
+  assert_fails "a $damage current entry marker cannot reach the stale episode" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+  assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+done
+two_stop_episodes
+state_transition paused changes-requested
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:changes-requested"]'
+
+# The newest owned marker must enter the current stop state. With an earlier completed pause kept in the
+# history, a missing, corrupted, or foreign entry into the current pause must not reach that older pause.
+two_pause_episodes() {
+  restore_snapshot two-pauses && return 0
+  reset_in_progress_state
+  state_transition in-progress paused
+  state_transition paused in-progress
+  state_transition in-progress paused
+  save_snapshot two-pauses
+}
+for damage in removed corrupted foreign; do
+  two_pause_episodes
+  DAMAGE="$damage" ruby -rjson -e '
+    path = ARGV.fetch(0); comments = JSON.parse(File.read(path))
+    entry = comments.rindex { |comment| comment.fetch("body").include?(%q("to":"paused")) } or abort "missing current pause marker"
+    case ENV.fetch("DAMAGE")
+    when "removed" then comments.delete_at(entry)
+    when "corrupted" then comments[entry]["body"] = comments[entry]["body"].sub(%q("resumeState":"in-progress"), %q("resumeState":"approved"))
+    when "foreign" then comments[entry]["author"] = {"login" => "someone-else"}
+    end
+    File.write(path, JSON.generate(comments))
+  ' "$FAKE_GH_COMMENTS_FILE"
+  assert_fails "a $damage current pause entry cannot reach the earlier pause" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress
+  assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:conflict"]'
+done
+two_pause_episodes
+state_transition paused in-progress
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:in-progress"]'
+
+# A resume interrupted after its marker comment was published retries the same pending edge, completes the
+# durable transition, and clears the pending state instead of resolving its own marker as new history.
+replay_after_comment() {
+  local label="$1" from="$2" to="$3"
+  IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT=1 assert_fails "interrupted $label resume" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$from" --to "$to"
+  [[ -e ".artifacts/issues/$test_issue/state-transition.pending.json" ]] || { echo "interrupted $label resume left no pending edge" >&2; exit 1; }
+  state_transition "$from" "$to"
+  assert_json "$FAKE_GH_LABELS_FILE" "abort unless JSON.parse(File.read(ARGV[0])) == [\"state:$to\"]"
+  assert_json ".artifacts/issues/$test_issue/state.json" "abort unless JSON.parse(File.read(ARGV[0]))['state'] == '$to'"
+  [[ ! -e ".artifacts/issues/$test_issue/state-transition.pending.json" ]] || { echo "retried $label resume kept the pending edge" >&2; exit 1; }
+}
+reset_in_progress_state
+state_transition in-progress paused
+replay_after_comment 'paused' paused in-progress
+reset_in_progress_state
+state_transition in-progress blocked:environment
+replay_after_comment 'blocked' blocked:environment in-progress
+nested_in_progress_stop
+replay_after_comment 'nested paused to blocked' paused blocked:environment
+reset_nested_state
+}
+
+if [[ "$scope" == nested-resume ]]; then
+  ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+    --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+    > "$artifact_issue/issue-contract.json"
+  write_full_approved_state
+  run_nested_resume_regressions
+  echo 'PASS: nested stop-state resume regressions'
+  exit 0
+fi
+if [[ "$scope" == post-claim ]]; then
+  ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+    --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+    > "$artifact_issue/issue-contract.json"
+  # The explicit fast merge preflight near the end reads the same older canonical records as the full run.
+  merge_evidence=".artifacts/issues/$test_issue/$(git -C "$repo_root" rev-parse HEAD)"
+  mkdir -p "$merge_evidence"
+  printf '{"completedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/verify.json"
+  printf '{"reviewedAt":"2000-01-01T00:00:00Z"}' > "$merge_evidence/review.json"
+else
+
 # Before Claim there is no sealed contract. Reads and the proposed -> approved
 # transition must be authorized from the freshly read Issue body and exact argv.
 printf '["state:proposed"]' > "$FAKE_GH_LABELS_FILE"
@@ -244,11 +472,7 @@ assert_fails 'sealed get rejects a missing full state outside Claim recovery' \
   "$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue"
 [[ ! -e "$artifact_issue/state.json" ]] || { echo 'sealed get downgraded missing full state to a minimal record' >&2; exit 1; }
 printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
-contract_digest="sha256:$(ruby -rdigest -e 'print Digest::SHA256.file(ARGV.fetch(0)).hexdigest' "$artifact_issue/issue-contract.json")"
-cat > "$artifact_issue/state.json" <<EOF
-{"schemaVersion":1,"issue":$test_issue,"repository":"yuto1201/iOS-Template","branch":"codex/$test_issue-workflow-state","worktree":".worktrees/$test_issue-workflow-state","baseSha":"$(git -C "$repo_root" rev-parse HEAD)","primaryImplementer":"codex","issueContract":{"path":".artifacts/issues/$test_issue/issue-contract.json","digest":"$contract_digest"},"state":"approved","previousState":null,"resumeState":null,"executor":"codex"}
-EOF
-cp "$artifact_issue/state.json" "$workspace/full-approved-state.json"
+write_full_approved_state
 
 # A wrong account must prevent the preflight artifact from being written.
 export FAKE_GH_LOGIN=company-account
@@ -357,9 +581,12 @@ ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --typ
 assert_fails 'blocked resume without history fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:ops"]'
 
+[[ "$scope" == scoped ]] || run_nested_resume_regressions
+
 if [[ "$scope" == scoped ]]; then
   echo 'PASS: scoped GitHub preflight and revised-contract state boundaries'
   exit 0
+fi
 fi
 
 # Once Claim has created the full Task 4 identity record, every Task 2

@@ -111,7 +111,8 @@ def transition_allowed?(from, to)
   false
 end
 
-def latest_owned_state_marker(document, current, owner)
+# before: [time, comment index] of a later marker; only strictly earlier markers are candidates.
+def latest_owned_state_marker(document, current, owner, before: nil, with_position: false)
   comments = document.fetch('comments')
   fail_closed('Issue comments are invalid') unless comments.is_a?(Array)
   candidates = []
@@ -132,13 +133,21 @@ def latest_owned_state_marker(document, current, owner)
       created_at = Time.iso8601(created_at_raw)
       next unless marker_time.utc.iso8601 == marker['timestamp'] && created_at.utc.iso8601 == created_at_raw
       next unless created_at >= marker_time && created_at - marker_time <= 300
-      next unless marker['to'] == current && transition_allowed?(marker['from'], marker['to'])
+      next unless (current.nil? || marker['to'] == current) && transition_allowed?(marker['from'], marker['to'])
       if blocked_state?(marker['to']) || marker['to'] == 'paused'
         next unless marker['resumeState'] == marker['from']
       elsif blocked_state?(marker['from']) || marker['from'] == 'paused'
         next unless marker['to'] == 'superseded' || marker['to'] == 'paused' || marker['resumeState'] == marker['to']
       else
         next unless marker['resumeState'].nil?
+      end
+      if before
+        before_time, before_index = before
+        next if index == before_index
+        # A predecessor must be strictly earlier in time. Another owned marker in the same second makes the
+        # order unknowable, whatever its position in the comment array, so the history fails closed.
+        fail_closed('owned transition marker history has simultaneous entries') if marker_time == before_time
+        next if marker_time > before_time
       end
       candidates << [marker_time, created_at, index, marker]
     rescue JSON::ParserError, ArgumentError
@@ -149,9 +158,35 @@ def latest_owned_state_marker(document, current, owner)
   newest_time = candidates.map(&:first).max
   newest = candidates.select { |entry| entry.first == newest_time }
   fail_closed('owned current-state transition marker history is ambiguous') unless newest.length == 1
-  newest.fetch(0).fetch(3)
+  entry = newest.fetch(0)
+  with_position ? [entry.fetch(3), [entry.fetch(0), entry.fetch(2)]] : entry.fetch(3)
 rescue KeyError
   fail_closed('Issue comments are invalid')
+end
+
+# Walks nested stop states (blocked:* and paused) back through strictly earlier owned markers.
+# Returns [immediate resume state, original non-stop state]. Each step must be the owned marker
+# immediately before the current one and must enter the stop state being resolved, so a missing,
+# foreign, or corrupted entry never reaches an older, completed stop episode. Missing, ambiguous,
+# discontinuous, or cyclic history fails closed without guessing.
+def resume_targets(document, current, owner, replay: nil)
+  # The newest valid owned marker of any state must be the entry into the current stop state; otherwise the
+  # current entry is missing, foreign, or corrupted, and an older stop episode must not stand in for it.
+  marker, position = latest_owned_state_marker(document, nil, owner, with_position: true)
+  # A retried transition whose own marker was already published resolves the history before that exact marker.
+  if replay && marker == replay
+    marker, position = latest_owned_state_marker(document, nil, owner, before: position, with_position: true)
+  end
+  fail_closed('newest owned transition marker does not enter the current state') unless marker.fetch('to') == current
+  immediate = marker.fetch('resumeState')
+  state = immediate
+  64.times do
+    return [immediate, state] unless blocked_state?(state) || state == 'paused'
+    marker, position = latest_owned_state_marker(document, nil, owner, before: position, with_position: true)
+    fail_closed('nested stop-state history is discontinuous') unless marker.fetch('to') == state
+    state = marker.fetch('resumeState')
+  end
+  fail_closed('nested stop-state history is too deep or cyclic')
 end
 
 def sha(value, name)
@@ -852,8 +887,16 @@ when 'state-from-issue'
 when 'resume-from-comments'
   current, owner = ARGV
   fail_closed('resume-from-comments arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)
-  marker = latest_owned_state_marker(JSON.parse(STDIN.read), current, owner)
-  puts marker.fetch('resumeState')
+  puts resume_targets(JSON.parse(STDIN.read), current, owner).last
+when 'resume-targets-from-comments'
+  current, owner, replay_json = ARGV
+  fail_closed('resume-targets-from-comments arguments are invalid') unless [2, 3].include?(ARGV.length) && owner&.match?(/\A[A-Za-z0-9-]+\z/)
+  replay = nil
+  if replay_json
+    replay = JSON.parse(replay_json)
+    fail_closed('pending replay marker is invalid') unless replay.is_a?(Hash) && replay.keys.sort == %w[executor from resumeState timestamp to] && replay['from'] == current
+  end
+  puts resume_targets(JSON.parse(STDIN.read), current, owner, replay: replay).uniq
 when 'latest-state-marker'
   current, owner = ARGV
   fail_closed('latest-state-marker arguments are invalid') unless ARGV.length == 2 && owner&.match?(/\A[A-Za-z0-9-]+\z/)

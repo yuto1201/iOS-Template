@@ -206,8 +206,17 @@ fi
 # mutate labels. A partly applied remote label is not a new transition.
 resume_state=null
 if workflow_is_blocked "$from" || [[ "$from" == paused ]]; then
-  resume_state=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-from-comments "$from" "$expected_owner" 2>/dev/null || true)
-  if [[ "$to" != paused && "$to" != superseded && ( -z "$resume_state" || "$to" != "$resume_state" ) ]]; then
+  # A nested stop (for example blocked:* -> paused) may resume to its immediate stop state or to the
+  # original working state found by walking strictly earlier owned markers.
+  # An exact pending replay of this edge may already have published its own marker; resolve the history before it.
+  replay_marker=()
+  if [[ -n "${pending:-}" ]]; then
+    replay_marker=("$(jq -c '{executor, from, resumeState, timestamp, to}' <<< "$pending")")
+  fi
+  resume_targets=$(printf '%s' "$issue_json" | ruby "$json_tool" resume-targets-from-comments "$from" "$expected_owner" ${replay_marker[@]+"${replay_marker[@]}"} 2>/dev/null || true)
+  resume_state=$(printf '%s\n' "$resume_targets" | tail -n 1)
+  [[ -n "$resume_state" ]] || resume_state=null
+  if [[ "$to" != paused && "$to" != superseded ]] && { [[ -z "$resume_targets" ]] || ! printf '%s\n' "$resume_targets" | grep -Fxq -- "$to"; }; then
     conflict=blocked:conflict
     conflict_record=$(prepare_state "$conflict" "$from" "$conflict" null)
     from_document=$(require_current_state "$from")
@@ -219,6 +228,7 @@ if workflow_is_blocked "$from" || [[ "$from" == paused ]]; then
     echo 'blocked resume history is missing or ambiguous; moved to blocked:conflict' >&2
     exit 1
   fi
+  [[ "$to" == paused || "$to" == superseded ]] || resume_state=$to
 fi
 if workflow_is_blocked "$to" || [[ "$to" == paused ]]; then resume_state=$from; fi
 
