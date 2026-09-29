@@ -225,6 +225,7 @@
         "Config/ownership.yml",
         "docs/security.md",
         "tools/github-account-preflight.sh",
+        "tools/lib/ownership.rb",
         "tools/provider-preflight.sh"
       ],
       "prefixes": [
