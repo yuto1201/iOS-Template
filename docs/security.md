@@ -119,6 +119,8 @@ Identity bootstrap済みのアプリでは、Team keyのApp Manager roleを使�
 
 `--output json`はrunnerが強制し、その他のcommand／flag、web、auth、signing、workflow実行、telemetry設定は拒否します。live実行には引き続きrelease／full／strict、宣言済みoperation／Executor、account／target確認と必要な承認が必要です。この基盤だけではproduction preflightやlive操作を承認しません。
 
+派生アプリがこの経路を取り込む手順は、[派生アプリへのasc経路の取り込み](asc-derived-app-adoption.md)にあります。
+
 `tools/tests/test-asc-cli.sh`はfake binaryと一時HOMEだけを使い、network／実Keychainを利用しません。`IOS_TEMPLATE_TEST_MODE=1`時だけpin、install root、release directory、security executableとtimeoutのtest overrideを許可し、pathは絶対・非symlinkを要求します。本番modeではtest overrideの存在を拒否します。
 
 ## 7. 漏えい時

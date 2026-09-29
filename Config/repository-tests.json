@@ -15,6 +15,7 @@
         ".agents/skills/submit-appstore-release/scripts/record-section.sh",
         ".claude/skills/save-appstore-metadata",
         "docs/agent-contracts/appstore-submission.md",
+        "docs/asc-derived-app-adoption.md",
         "docs/goldie.md",
         "tools/build-appstore-screenshot-set.sh",
         "tools/capture-appstore-screenshots.sh",
