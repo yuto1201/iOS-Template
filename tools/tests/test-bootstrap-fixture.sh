@@ -156,6 +156,34 @@ Dir.mktmpdir("bootstrap-fixture-test.") do |temp|
   previous = snapshot(derived)
   succeed("bash", "tools/tests/test-app-bootstrap.sh", "all", chdir: derived)
   assert(snapshot(derived) == previous, "committed derived suite mutated repository")
+
+  # A shared seed with local changes or another Head is refused before any suite uses it.
+  shared = BootstrapFixture.create(derived, File.join(temp, "shared-seed"))
+  shared_head = git(shared, "rev-parse", "HEAD").strip
+  File.write(File.join(shared, "README.md"), "local change\n", mode: "a")
+  ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => shared_head},
+    "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
+  assert(!ok && output.include?("shared bootstrap seed has local changes"), "a dirty shared seed was used: #{output}")
+  git(shared, "checkout", "-q", "--", "README.md")
+  ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => "0" * 40},
+    "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
+  assert(!ok && output.include?("shared bootstrap seed Head changed"), "a shared seed at another Head was used: #{output}")
+  File.write(File.join(shared, "Config/app-identity.json"), File.read(File.join(derived, "Config/app-identity.json")))
+  git(shared, "add", "Config/app-identity.json")
+  git(shared, "-c", "user.name=Bootstrap Test", "-c", "user.email=bootstrap-test@example.invalid", "-c", "commit.gpgsign=false",
+    "commit", "--quiet", "-m", "test: bootstrapped seed")
+  ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => git(shared, "rev-parse", "HEAD").strip},
+    "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
+  assert(!ok && output.include?("shared bootstrap seed no longer has the template identity"), "a bootstrapped shared seed was used: #{output}")
+end
+
+# A template-only change under any frozen source directory selects this fixture regression.
+require File.join(root, "tools/lib/repository-test-plan")
+manifest = JSON.parse(File.read(File.join(root, "Config/repository-tests.json")))
+identity = JSON.parse(File.read(File.join(root, "Config/template-identity.json")))
+identity.fetch("renamePaths").map { |path| path.split("/").first }.uniq.each do |directory|
+  _, _, tests = IOSTemplate::RepositoryTestPlan.resolve(manifest, "targeted", ["#{directory}/fixture-change.txt"])
+  assert(tests.include?("tools/tests/test-bootstrap-fixture.sh"), "a change under #{directory}/ did not select the fixture regression")
 end
 assert(snapshot(root) == before, "fixture regression mutated source HEAD, status, tracked files, or identity")
 puts "bootstrap fixture tests passed"
