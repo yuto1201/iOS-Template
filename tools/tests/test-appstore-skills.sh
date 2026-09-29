@@ -7,6 +7,28 @@ require_test_commands "$0" rg git jq ruby swift swiftc /usr/bin/xcrun
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-appstore-skills.XXXXXX")
 trap 'rm -rf -- "$workspace"' EXIT
+
+# The derived-app adoption guide lists exact template paths. Every listed path must exist here.
+check_adoption_paths() {
+  ruby -e '
+    root, doc = ARGV
+    text = File.read(doc, encoding: "UTF-8")
+    section = text[/^## 取り込むpath\n(.*?)(?=^## |\z)/m, 1] or abort "adoption path section is missing"
+    paths = section.scan(/^- `([^`]+)`$/).flatten
+    abort "adoption path list is empty" if paths.empty?
+    abort "adoption paths repeat" unless paths.uniq.length == paths.length
+    missing = paths.reject { |path| File.exist?(File.join(root, path)) || File.symlink?(File.join(root, path)) }
+    abort "adoption paths are missing: #{missing.join(", ")}" unless missing.empty?
+  ' "$repo_root" "$1"
+}
+check_adoption_paths "$repo_root/docs/asc-derived-app-adoption.md"
+mutated_adoption="$workspace/asc-derived-app-adoption.md"
+ruby -e 'text = File.read(ARGV[0], encoding: "UTF-8"); File.write(ARGV[1], text.sub("- `tools/asc-run.sh`\n", "- `tools/asc-run.sh`\n- `tools/asc-missing.sh`\n"))' \
+  "$repo_root/docs/asc-derived-app-adoption.md" "$mutated_adoption"
+if check_adoption_paths "$mutated_adoption" 2>/dev/null; then
+  echo 'adoption path check accepted a path that does not exist' >&2
+  exit 1
+fi
 prepare_skill="$repo_root/.agents/skills/prepare-appstore-assets"
 submit_skill="$repo_root/.agents/skills/submit-appstore-release"
 goldie_skill="$repo_root/.agents/skills/goldie"
