@@ -27,6 +27,11 @@ module IOSTemplate
       "elevenlabs" => %w[accountId workspaceId],
       "appStore" => %w[teamId bundleId]
     }.freeze
+    # App Store Connect credentials live once per Apple team (D-066). `apiKeyType` records the key kind;
+    # an ownership file without it stays valid for other providers but cannot resolve the team namespace.
+    APP_STORE_OPTIONAL_KEYS = %w[apiKeyType].freeze
+    APP_STORE_KEY_TYPE = "team-app-manager"
+    APPLE_TEAM_ID = /\A[A-Z0-9]{10}\z/
 
     module_function
 
@@ -35,6 +40,9 @@ module IOSTemplate
       exact_keys!(value, TOP_LEVEL_KEYS, "ownership")
       refuse("ownership.schemaVersion must be 2") unless value["schemaVersion"] == 2
       SECTION_KEYS.each do |section, keys|
+        if section == "appStore" && value[section].is_a?(Hash) && value[section].key?("apiKeyType")
+          keys += APP_STORE_OPTIONAL_KEYS
+        end
         exact_keys!(value[section], keys, "ownership.#{section}")
         value.fetch(section).each do |field, entry|
           refuse("ownership.#{section}.#{field} must be a string or null") unless entry.nil? || entry.is_a?(String)
@@ -42,6 +50,8 @@ module IOSTemplate
         end
       end
       refuse("ownership.github.login must be configured") if value.dig("github", "login").nil?
+      key_type = value.dig("appStore", "apiKeyType")
+      refuse("ownership.appStore.apiKeyType must be #{APP_STORE_KEY_TYPE}") unless key_type.nil? || key_type == APP_STORE_KEY_TYPE
       value
     rescue Psych::Exception => error
       refuse("ownership is invalid YAML: #{error.message}")
@@ -56,6 +66,17 @@ module IOSTemplate
       account = validate_identifier!(value.dig(section, account_field), "ownership.#{section}.#{account_field}")
       target = validate_identifier!(value.dig(section, target_field), "ownership.#{section}.#{target_field}")
       {"account" => account, "target" => target}
+    end
+
+    # Returns the Keychain and file-secret namespace of the Apple team that owns the App Store Connect key.
+    def apple_team_namespace!(value)
+      team = value.dig("appStore", "teamId")
+      refuse("ownership.appStore.teamId is not configured") if team.nil?
+      refuse("ownership.appStore.teamId must be a 10-character Apple team ID") unless team.is_a?(String) && team.match?(APPLE_TEAM_ID)
+      unless value.dig("appStore", "apiKeyType") == APP_STORE_KEY_TYPE
+        refuse("ownership.appStore.apiKeyType must be #{APP_STORE_KEY_TYPE}")
+      end
+      "apple-team-#{team}"
     end
 
     def exact_keys!(value, keys, at)

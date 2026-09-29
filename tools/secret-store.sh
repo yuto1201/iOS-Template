@@ -39,9 +39,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ "$operation" == put || "$operation" == check ]] || usage
-for segment in "$app_slug" "$service_segment" "$environment_segment" "$key_segment"; do
+for segment in "$service_segment" "$environment_segment" "$key_segment"; do
   [[ "$segment" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail 'namespace segments must be lowercase kebab-case'
 done
+# An app slug, or for App Store Connect only, the Apple team namespace of the shared key (D-066).
+[[ "$app_slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] ||
+  [[ "$service_segment" == app-store-connect && "$app_slug" =~ ^apple-team-[A-Z0-9]{10}$ ]] ||
+  fail 'namespace segments must be lowercase kebab-case'
 
 service_name="ios-template/$app_slug/$service_segment/$environment_segment/$key_segment"
 umask 077

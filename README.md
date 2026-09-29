@@ -12,7 +12,7 @@ Foundation は利用可能です。最小の SwiftUI アプリ、Unit/UI Test、
 
 `tools/install-asc-cli.sh`は`Config/asc-cli.json`の固定版ascをchecksum照合後にrepository外へ配置します。利用時は`tools/asc-run.sh --operation appstore.inspect_app -- apps list`を入口とし、起動ごとにversion／digestを確認、JSON出力と120秒上限を強制します。現在は4種類の読取commandだけに対応しています。
 
-秘密は[security手順](docs/security.md#固定版ascの利用)に従い、Key ID／Issuer IDをアプリ別Keychainへ、Team keyの`.p8`を専用ディレクトリ直下の`app-store-connect-production.p8`へ置きます。runnerは既存wrapperから子process envへだけ渡し、ascのHOME／configを隔離して出力をredactします。`tools/tests/test-asc-cli.sh`はfake binaryによるoffline回帰です。基盤の検証成功は実install、live API、release readinessを証明せず、production preflightとlive実行の権限確認は別途必要です。
+秘密は[security手順](docs/security.md#固定版ascの利用)に従い、Key ID／Issuer IDをApple teamごとのKeychainへ、Team keyの`.p8`をteamの専用ディレクトリ直下の`app-store-connect-production.p8`へ、teamごとに一度だけ置きます。runnerは既存wrapperから子process envへだけ渡し、ascのHOME／configを隔離して出力をredactします。`tools/tests/test-asc-cli.sh`はfake binaryによるoffline回帰です。基盤の検証成功は実install、live API、release readinessを証明せず、production preflightとlive実行の権限確認は別途必要です。
 
 TestFlight group配信とbeta app review提出の条件は[TestFlight配信契約](docs/agent-contracts/testflight-distribution.md)を参照してください。
 

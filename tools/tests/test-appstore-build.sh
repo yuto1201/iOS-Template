@@ -54,7 +54,7 @@ identity = {'schemaVersion'=>1,'sourceIdentityVersion'=>1,'displayName'=>'Garden
 write(project, 'Config/app-identity.json', identity)
 FileUtils.cp(File.join(root,'Config/Public.xcconfig'), write(project,'Config/Public.xcconfig',''))
 ownership = YAML.safe_load(File.binread(File.join(root,'Config/ownership.yml')), permitted_classes: [], aliases: false)
-ownership['appStore'] = {'teamId'=>'TEAM123456','bundleId'=>'com.example.garden'}
+ownership['appStore'] = {'teamId'=>'TEAM123456','bundleId'=>'com.example.garden','apiKeyType'=>'team-app-manager'}
 write(project, 'Config/ownership.yml', YAML.dump(ownership))
 pbx = File.binread(File.join(root,'TemplateApp.xcodeproj/project.pbxproj')).gsub('com.yuto.TemplateApp','com.example.garden').gsub('TemplateApp','GardenNotes').gsub('CURRENT_PROJECT_VERSION = 1;','CURRENT_PROJECT_VERSION = 7;')
 write(project, 'GardenNotes.xcodeproj/project.pbxproj', pbx)
@@ -148,7 +148,8 @@ preflight['digest'] = digest(preflight)
 write(project,preflight_path,preflight)
 
 secret_parent = File.join(home,'Library','Application Support','iOS-Template','secrets')
-secret_dir = File.join(secret_parent,'garden-notes')
+# D-066: the key belongs to the Apple team namespace, not to the app slug.
+secret_dir = File.join(secret_parent,'apple-team-TEAM123456')
 FileUtils.mkdir_p(secret_dir)
 File.chmod(0700,secret_parent,secret_dir)
 key_path = write(secret_dir,'app-store-connect-production.p8',"synthetic private key\n")
@@ -156,6 +157,8 @@ File.chmod(0600,key_path)
 security = write(scratch,'fake-security',<<~'FAKE')
   #!/usr/bin/ruby
   name = ARGV[ARGV.index('-s')+1]
+  abort 'wrong credential namespace' unless ARGV[ARGV.index('-a')+1] == 'apple-team-TEAM123456' &&
+    name.start_with?('ios-template/apple-team-TEAM123456/app-store-connect/production/')
   value = name.end_with?('/key-id') ? 'fixture-key-133' : name.end_with?('/issuer-id') ? 'fixture-issuer-133' : nil
   abort unless value
   puts value
@@ -327,6 +330,23 @@ assert_prearchive_block.call('Release bundle mismatch',base_args)
 File.binwrite(pbx_path,original_pbx)
 git(project,'add','GardenNotes.xcodeproj/project.pbxproj')
 git(project,'-c','core.hooksPath=/dev/null','commit','-q','-m','Restore synthetic bundle')
+head = git(project,'rev-parse','HEAD')
+
+# Without the App Manager team key type, the team namespace is unavailable and nothing is archived.
+ownership_path = File.join(project,'Config/ownership.yml')
+original_ownership = File.binread(ownership_path)
+untyped = YAML.safe_load(original_ownership, permitted_classes: [], aliases: false)
+untyped['appStore'].delete('apiKeyType')
+File.binwrite(ownership_path,YAML.dump(untyped))
+git(project,'add','Config/ownership.yml')
+git(project,'-c','core.hooksPath=/dev/null','commit','-q','-m','Synthetic untyped App Store key')
+head = git(project,'rev-parse','HEAD')
+base_args = ['--project-root',project,'--issue','42','--head-sha',head,'--version','1.0','--build-number','7']
+reset.call
+assert_prearchive_block.call('missing App Store key type',base_args)
+File.binwrite(ownership_path,original_ownership)
+git(project,'add','Config/ownership.yml')
+git(project,'-c','core.hooksPath=/dev/null','commit','-q','-m','Restore App Store key type')
 head = git(project,'rev-parse','HEAD')
 base_args = ['--project-root',project,'--issue','42','--head-sha',head,'--version','1.0','--build-number','7']
 File.binwrite(pbx_path,original_pbx.gsub('CODE_SIGN_STYLE = Automatic;','CODE_SIGN_STYLE = Manual;'))

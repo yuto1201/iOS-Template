@@ -9,6 +9,7 @@ require 'open3'
 require 'fiddle'
 require 'uri'
 require 'yaml'
+require_relative 'ownership'
 
 module AscCLI
   class Refused < StandardError; end
@@ -466,6 +467,14 @@ module AscCLI
     slug
   end
 
+  # The one App Store Connect key of the Apple team in Config/ownership.yml (D-066). Callers cannot supply it.
+  def credential_namespace
+    ownership = IOSTemplate::Ownership.parse(read_regular(File.join(ROOT, 'Config/ownership.yml'), 100_000))
+    IOSTemplate::Ownership.apple_team_namespace!(ownership)
+  rescue IOSTemplate::Ownership::ValidationError => error
+    refuse("App Store Connect team namespace is unavailable: #{error.message}")
+  end
+
   def bounded(config, command)
     ['/usr/bin/ruby', '--disable-gems', File.join(__dir__, 'bounded-command.rb'), '--stage', 'asc-cli', '--timeout-seconds', config.fetch(:timeout).to_s, '--grace-seconds', '1', '--'] + command
   end
@@ -473,12 +482,13 @@ module AscCLI
   def run(config, args)
     command_arguments(args)
     binary_bytes(config)
-    slug = app_slug
-    private_key = File.join(config.fetch(:home), 'Library', 'Application Support', 'iOS-Template', 'secrets', slug, 'app-store-connect-production.p8')
+    app_slug
+    namespace = credential_namespace
+    private_key = File.join(config.fetch(:home), 'Library', 'Application Support', 'iOS-Template', 'secrets', namespace, 'app-store-connect-production.p8')
     secret_wrapper = File.join(ROOT, 'tools/run-with-secret.sh')
-    command = [secret_wrapper, '--service-name', "ios-template/#{slug}/app-store-connect/production/key-id", '--env', 'ASC_KEY_ID', '--',
-               secret_wrapper, '--service-name', "ios-template/#{slug}/app-store-connect/production/issuer-id", '--env', 'ASC_ISSUER_ID', '--',
-               File.join(ROOT, 'tools/run-with-private-key.sh'), '--app', slug, '--file', private_key, '--env', 'ASC_PRIVATE_KEY_PATH', '--',
+    command = [secret_wrapper, '--service-name', "ios-template/#{namespace}/app-store-connect/production/key-id", '--env', 'ASC_KEY_ID', '--',
+               secret_wrapper, '--service-name', "ios-template/#{namespace}/app-store-connect/production/issuer-id", '--env', 'ASC_ISSUER_ID', '--',
+               File.join(ROOT, 'tools/run-with-private-key.sh'), '--app', namespace, '--file', private_key, '--env', 'ASC_PRIVATE_KEY_PATH', '--',
                '/usr/bin/ruby', '--disable-gems', File.expand_path(__FILE__), 'exec-child'] + args
     # Real HOME is retained ONLY for the existing secret wrappers. All ambient
     # ASC/proxy/debug/Ruby/shell settings are excluded before entering the chain.

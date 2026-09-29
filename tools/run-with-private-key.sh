@@ -25,7 +25,8 @@ while [[ $# -gt 0 ]]; do
     *) usage ;;
   esac
 done
-[[ "$app_slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail 'app slug is invalid'
+# An app slug, or the Apple team namespace that holds the shared App Store Connect key (D-066).
+[[ "$app_slug" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ || "$app_slug" =~ ^apple-team-[A-Z0-9]{10}$ ]] || fail 'app slug is invalid'
 [[ "$environment_name" =~ ^[A-Z_][A-Z0-9_]*$ ]] || fail 'environment variable name is invalid'
 [[ "${HOME:-}" == /* ]] || fail 'HOME must be an absolute directory'
 [[ "$private_key_file" == /* && "$private_key_file" == *.p8 && -f "$private_key_file" && ! -L "$private_key_file" ]] || fail 'private key must be a physical absolute .p8 file'

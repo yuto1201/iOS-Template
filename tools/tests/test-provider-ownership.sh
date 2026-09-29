@@ -100,4 +100,32 @@ write_fixture
 printf '\nunknown: true\n' >>"$workspace/ownership.yml"
 assert_fails 'unknown ownership field' read_provider supabase
 
+# D-066: the App Store Connect key type is optional in the schema, limited to the App Manager team key,
+# and required, with a 10-character team ID, before the Apple team credential namespace resolves.
+namespace_of() {
+  ruby -I"$repo_root/tools/lib" -rownership -e '
+    value = IOSTemplate::Ownership.parse(File.binread(ARGV.fetch(0)))
+    puts IOSTemplate::Ownership.apple_team_namespace!(value)
+  ' "$workspace/ownership.yml"
+}
+write_app_store() {
+  write_fixture
+  ruby -e 'path, team, extra = ARGV; text = File.read(path).sub(/^  teamId: PERSONALTEAM$/, "  teamId: #{team}"); File.write(path, text + extra)' \
+    "$workspace/ownership.yml" "$1" "$2"
+}
+write_app_store ABCDE12345 $'  apiKeyType: team-app-manager\n'
+[[ "$(namespace_of)" == apple-team-ABCDE12345 ]] || { echo 'team credential namespace was not resolved' >&2; exit 1; }
+[[ "$(read_provider app-store)" == '{"account":"ABCDE12345","target":"com.yuto1201.personal"}' ]] || {
+  echo 'key type changed the App Store provider identity' >&2; exit 1
+}
+write_app_store ABCDE12345 ''
+read_provider app-store >/dev/null || { echo 'ownership without a key type no longer parses' >&2; exit 1; }
+assert_fails 'team namespace without a key type' namespace_of
+write_app_store ABCDE12345 $'  apiKeyType: team-admin\n'
+assert_fails 'key type other than the App Manager team key' read_provider app-store
+write_app_store PERSONALTEAM $'  apiKeyType: team-app-manager\n'
+assert_fails 'team namespace with a malformed team ID' namespace_of
+write_app_store abcde12345 $'  apiKeyType: team-app-manager\n'
+assert_fails 'team namespace with a lowercase team ID' namespace_of
+
 echo 'PASS: provider ownership schema maps exact configured account and target identifiers independently of model identity'

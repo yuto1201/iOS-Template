@@ -115,25 +115,27 @@ testは`Config/repository-tests.json`の同じdomainへ登録します。testは
 
 ## ownershipの設定
 
-派生アプリの`Config/ownership.yml`の`appStore`へ、そのアプリのTeam IDとBundle IDを書きます。どちらも秘密ではありません。未設定（`null`）のままでは、preflightもlive操作も通りません。
+派生アプリの`Config/ownership.yml`の`appStore`へ、そのアプリのTeam ID、Bundle ID、キーの種類（`apiKeyType: team-app-manager`）を書きます。どれも秘密ではありません。未設定（`null`）のままでは、preflightもlive操作も通りません。
 
 ## 認証情報
 
 ユーザーが用意するのは、App Store ConnectのTeam API keyで、roleはApp Managerです。team keyを作れるのは、Account HolderとAdminだけです。
 
-認証情報の置き場所と名前は、appSlugごとに次のとおりです。値はこの文書にもrepositoryにも書きません。
+認証情報は、アプリごとではなくApple teamごとに一度だけ置きます（D-066）。同じteamの派生アプリは、同じ一本のkeyを共有し、鍵を複製しません。名前は次のとおりで、`<teamId>`は`Config/ownership.yml`の`appStore.teamId`です。値はこの文書にもrepositoryにも書きません。
 
 - **Key ID:** Keychainのgeneric password。
-  - service: `ios-template/<appSlug>/app-store-connect/production/key-id`
-  - account: `<appSlug>`
+  - service: `ios-template/apple-team-<teamId>/app-store-connect/production/key-id`
+  - account: `apple-team-<teamId>`
 - **Issuer ID:** Keychainのgeneric password。
-  - service: `ios-template/<appSlug>/app-store-connect/production/issuer-id`
-  - account: `<appSlug>`
-- **秘密鍵（`.p8`）:** `~/Library/Application Support/iOS-Template/secrets/<appSlug>/app-store-connect-production.p8`
+  - service: `ios-template/apple-team-<teamId>/app-store-connect/production/issuer-id`
+  - account: `apple-team-<teamId>`
+- **秘密鍵（`.p8`）:** `~/Library/Application Support/iOS-Template/secrets/apple-team-<teamId>/app-store-connect-production.p8`
   - directoryは`0700`、fileは`0600`とする。
   - repositoryからのsymlinkは作らない。
 
-Keychainへの登録は、ユーザーが`tools/secret-store.sh put --app <appSlug> --service app-store-connect --environment production --key key-id`（`issuer-id`も同じ）で行います。値は標準入力から1行で渡し、コマンドの引数には書きません。AIは秘密の値を入力、表示、記録しません。
+`Config/ownership.yml`の`appStore`には、team ID、bundle ID、キーの種類（`apiKeyType: team-app-manager`）を書きます。team IDかキーの種類が欠けると、runnerは秘密を読む前に止まります。
+
+Keychainへの登録は、ユーザーが`tools/secret-store.sh put --app apple-team-<teamId> --service app-store-connect --environment production --key key-id`（`issuer-id`も同じ）で行います。値は標準入力から1行で渡し、コマンドの引数には書きません。AIは秘密の値を入力、表示、記録しません。
 
 配布用の証明書とprofileは、別に一度だけ用意が要ります。手順と、Appleの公式文書で確かめられなかった点は、`docs/agent-contracts/appstore-submission.md`「One-time distribution signing setup」を見てください。
 

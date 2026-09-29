@@ -40,6 +40,8 @@ ios-template/template-app/cloudflare/production/api-token
 ios-template/template-app/elevenlabs/production/api-key
 ```
 
+App Store Connectは例外です。一本のTeam keyをこのMacの全アプリで共通に使うため、`${appSlug}`の代わりにApple teamごとの名前空間`apple-team-<teamId>`を使います（D-066）。詳しくは「固定版ascの利用」を見てください。
+
 ファイル形式が必須の場合だけ、次へ保存します。
 
 ```text
@@ -101,13 +103,13 @@ CodexとClaudeのどちらも、秘密値を読み取って表示する操作、
 
 App Store Connectのmulti-line `.p8` private keyはKeychainの1行secret interfaceへ入れません。リポジトリ外の専用ディレクトリへ`0600`で保存し、認可済み実行モデルが必要な子processへ渡す間だけ使用します。Key IDとIssuer IDはKeychainまたは公開ownership設定へ分けます。
 
-[固定版`asc` adapter](../specs/architecture.md#72-app-store-connect-api-adapter)では、Team keyのApp Manager roleだけを使います。Key IDとIssuer IDは`ios-template/${appSlug}/app-store-connect/production/`配下のKeychain generic passwordから、`.p8`は上記の専用ディレクトリから、guarded runnerが起動する子processのenvへだけ渡します。`asc auth login`、`asc`自身のKeychain保存、`~/.asc/`やrepository内`.asc/`のconfig、web session、Apple IDのpassword／2FAは使いません。runnerはtelemetryを無効化し、stdout／stderrをredactし、Key ID、Issuer ID、private keyとその値hashをartifact、Issue、PR、log、promptへ残しません。
+[固定版`asc` adapter](../specs/architecture.md#72-app-store-connect-api-adapter)では、Team keyのApp Manager roleだけを使います。Key IDとIssuer IDは`ios-template/apple-team-<teamId>/app-store-connect/production/`配下のKeychain generic password（account `apple-team-<teamId>`）から、`.p8`は`~/Library/Application Support/iOS-Template/secrets/apple-team-<teamId>/`から、guarded runnerが起動する子processのenvへだけ渡します。`asc auth login`、`asc`自身のKeychain保存、`~/.asc/`やrepository内`.asc/`のconfig、web session、Apple IDのpassword／2FAは使いません。runnerはtelemetryを無効化し、stdout／stderrをredactし、Key ID、Issuer ID、private keyとその値hashをartifact、Issue、PR、log、promptへ残しません。
 
 ### 固定版ascの利用
 
 `tools/install-asc-cli.sh`は`Config/asc-cli.json`の固定releaseをHTTPSで取得し、checksum fileとbinaryのSHA-256を照合して、repository外の`~/Library/Application Support/iOS-Template/tools/asc/<version>/asc`へ排他的に配置します。同じbytesは再利用し、異なる既存fileやsymlinkを上書きしません。更新は別Issueでpinを変更します。
 
-Identity bootstrap済みのアプリでは、Team keyのApp Manager roleを使い、Keychainの上記命名に従う`app-store-connect/production/key-id`と`issuer-id`、アプリの専用秘密ディレクトリ直下の`app-store-connect-production.p8`を準備します。runnerは`Config/app-identity.json`の`appSlug`から固定pathを計算し、既存secret wrapperを実HOMEで連鎖させます。任意の秘密pathや資格情報をCLI flagで渡しません。最内側のhelperだけが空の一時HOMEとcwd、固定PATH、telemetry無効、Keychain bypass、存在しないconfig path、JSON出力、Team key設定を構成し、秘密を子process envへ渡します。起動ごとのversion／digest照合、120秒の上限、両出力のredactionを強制します。
+Identity bootstrap済みのアプリでは、Team keyのApp Manager roleを使います。Key IDとIssuer IDはKeychainの`ios-template/apple-team-<teamId>/app-store-connect/production/key-id`と`issuer-id`、`.p8`はteamの専用秘密ディレクトリ直下の`app-store-connect-production.p8`に、teamごとに一度だけ置きます。runnerは`Config/ownership.yml`の`appStore.teamId`（10文字の大文字英数字）と`appStore.apiKeyType: team-app-manager`から固定pathを計算し、どちらかが欠けるか不正なら秘密を読む前に止まります。appSlugの旧い場所は読みません。そのうえで既存secret wrapperを実HOMEで連鎖させます。任意の秘密pathや資格情報をCLI flagで渡しません。最内側のhelperだけが空の一時HOMEとcwd、固定PATH、telemetry無効、Keychain bypass、存在しないconfig path、JSON出力、Team key設定を構成し、秘密を子process envへ渡します。起動ごとのversion／digest照合、120秒の上限、両出力のredactionを強制します。
 
 使用例は`tools/asc-run.sh --operation appstore.inspect_app -- apps list --bundle-id com.example.app`です。runnerはoperationごとに次のsubcommandだけを許可し、subcommandごとにflagと値の形式も固定します。一覧は`tools/lib/asc-cli.rb`の`OPERATIONS`と一致し、`tools/tests/test-asc-cli.sh`がその一致を検査します。
 
