@@ -402,9 +402,9 @@ trap release_runner EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Runs one short xcrun probe in its own process group. The bound defaults to 30 seconds so that a
+# Runs one short probe (an absolute trusted command) in its own process group. The bound defaults to 30 seconds so that a
 # loaded host is not mistaken for a failed probe; a timeout returns 124 with the measured elapsed time.
-run_xcrun_bounded() {
+run_bounded_probe() {
   local output_path="$1" error_path="$2" result=0 iteration started elapsed
   local probe_timeout="${IOS_TEMPLATE_PROBE_TIMEOUT_SECONDS:-30}"
   shift 2
@@ -412,7 +412,7 @@ run_xcrun_bounded() {
   started="$(/bin/date +%s)"
   initialize_trusted_environment || return 1
   /usr/bin/env -i "${TRUSTED_BASE_ENV[@]}" DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
-    /usr/bin/ruby --disable-gems -e 'Process.setpgrp; exec(*ARGV)' "$TRUSTED_XCRUN" "$@" \
+    /usr/bin/ruby --disable-gems -e 'Process.setpgrp; exec(*ARGV)' "$@" \
     9>&- >"$output_path" 2>"$error_path" &
   active_probe_pid="$!"
   for ((iteration = 0; iteration < probe_timeout * 20; iteration++)); do
@@ -429,6 +429,12 @@ run_xcrun_bounded() {
   elapsed=$(( $(/bin/date +%s) - started ))
   IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE="timed out at $stage; elapsedSeconds=$elapsed; timeoutSeconds=$probe_timeout"
   return 124
+}
+
+run_xcrun_bounded() {
+  local output_path="$1" error_path="$2"
+  shift 2
+  run_bounded_probe "$output_path" "$error_path" "$TRUSTED_XCRUN" "$@"
 }
 
 capture_simulator_identities() {
@@ -698,8 +704,9 @@ for index in "${case_indexes[@]}"; do
   fi
   if [[ -z "$case_failed" ]]; then
     probe_status=0
-    run_xcrun_bounded /dev/null "$run_state/$case_id-liveness-error" \
-      simctl spawn "$udid" /bin/kill -0 "$launch_pid" || probe_status=$?
+    # The app is a host process; iOS 27 runtimes have no /bin/kill to spawn inside the device (#215).
+    run_bounded_probe /dev/null "$run_state/$case_id-liveness-error" \
+      "$TRUSTED_KILL" -0 "$launch_pid" || probe_status=$?
     if [[ "$probe_status" -eq 124 ]]; then
       case_failed="process liveness probe timed out (${IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE:-timeout})"
     elif [[ "$probe_status" -ne 0 ]]; then
@@ -759,8 +766,9 @@ for index in "${case_indexes[@]}"; do
     fi
     if [[ -z "$case_failed" ]]; then
       current_process_file="$run_state/$case_id-current-process"
-      if run_xcrun_bounded "$current_process_file" "$run_state/$case_id-current-process-error" \
-          simctl spawn "$udid" /bin/ps -ww -p "$launch_pid" -o comm=; then
+      # The host path must be the executable inside this dedicated device's installed container.
+      if run_bounded_probe "$current_process_file" "$run_state/$case_id-current-process-error" \
+          "$TRUSTED_PS" -ww -p "$launch_pid" -o comm=; then
         [[ "$(/bin/cat "$current_process_file")" == "$installed_app_container/$app_executable" ]] || case_failed="current application identity"
       else
         case_failed="current application identity"
@@ -771,8 +779,8 @@ for index in "${case_indexes[@]}"; do
   fi
   if [[ -z "$case_failed" ]]; then
     probe_status=0
-    run_xcrun_bounded /dev/null "$run_state/$case_id-post-check-liveness-error" \
-      simctl spawn "$udid" /bin/kill -0 "$launch_pid" || probe_status=$?
+    run_bounded_probe /dev/null "$run_state/$case_id-post-check-liveness-error" \
+      "$TRUSTED_KILL" -0 "$launch_pid" || probe_status=$?
     if [[ "$probe_status" -eq 124 ]]; then
       case_failed="post-check process liveness probe timed out (${IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE:-timeout})"
     elif [[ "$probe_status" -ne 0 ]]; then

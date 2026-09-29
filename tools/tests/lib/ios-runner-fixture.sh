@@ -166,6 +166,8 @@ validator_binary="$scratch/validate-verify-json"
 /usr/bin/sed -i '' \
   -e "s|^TRUSTED_XCODE_SELECT=.*|TRUSTED_XCODE_SELECT=\"$adapter_bin/xcode-select\"|" \
   -e "s|^TRUSTED_XCRUN=.*|TRUSTED_XCRUN=\"$adapter_bin/xcrun\"|" \
+  -e "s|^TRUSTED_KILL=.*|TRUSTED_KILL=\"$adapter_bin/host-kill\"|" \
+  -e "s|^TRUSTED_PS=.*|TRUSTED_PS=\"$adapter_bin/host-ps\"|" \
   -e "s|^PREFERRED_DEVELOPER_DIR=.*|PREFERRED_DEVELOPER_DIR=\"$fake_developer\"|" \
   "$test_source/tools/lib/xcode.sh"
 
@@ -515,11 +517,14 @@ else
 fi
 for variable in "${!GIT_@}"; do echo "xcrun environment retained $variable" >&2; exit 1; done
 [[ -z "${TOOLCHAINS-}${SDKROOT-}" ]] || { echo 'xcrun environment was not scrubbed' >&2; exit 1; }
-{
-  printf 'xcrun\tDEVELOPER_DIR=%s' "${DEVELOPER_DIR-}"
-  printf '\t%s' "$@"
-  printf '\n'
-} >>"$fake_log"
+# A host process probe (#215) logs itself and only borrows the fake device's process model below.
+if [[ "${FAKE_HOST_PROBE-}" != 1 ]]; then
+  {
+    printf 'xcrun\tDEVELOPER_DIR=%s' "${DEVELOPER_DIR-}"
+    printf '\t%s' "$@"
+    printf '\n'
+  } >>"$fake_log"
+fi
 if [[ "${1-}" == xcresulttool ]]; then
   result_path="" previous=""
   for argument in "$@"; do
@@ -744,6 +749,7 @@ RUBY
     ;;
   launch)
     [[ "${4-}" == "$bundle_identifier" ]] || { echo 'wrong launch bundle identifier' >&2; exit 1; }
+    printf '%s\n' "${3-}" >"$state_dir/launch-udid"
     /usr/bin/awk -F '\t' -v udid="${3-}" '$3 == "simctl" && $4 == "terminate" && $5 == udid {seen=1} END {exit seen ? 0 : 1}' "$fake_log" || { echo 'launch lacked pre-termination' >&2; exit 1; }
     [[ "$(state case_mode)" != launch-fail || "$(case_on "${3-}")" != iphone-ja ]] || { echo 'configured launch failure' >&2; exit 1; }
     [[ "$(state case_mode)" != late-fail || "$(case_on "${3-}")" != ipad-ja ]] || { echo 'configured late launch failure' >&2; exit 1; }
@@ -816,6 +822,12 @@ RUBY
          [[ "${3-}" == "00000000-0000-0000-0000-000000000003" && -e "$state_dir/ui-ran-ipad-en" ]]; then
         container_root=ContainersAfterUI
       fi
+      case "$(state case_mode):${3-}" in
+        ps-other-executable:00000000-0000-0000-0000-000000000001)
+          printf '%s\n' "/Users/fixture/$container_root/${3-}/$app_name.app/Other"; exit 0 ;;
+        ps-other-device:00000000-0000-0000-0000-000000000001)
+          printf '%s\n' "/Users/fixture/$container_root/00000000-0000-0000-0000-000000000003/$app_name.app/$app_name"; exit 0 ;;
+      esac
       printf '%s\n' "/Users/fixture/$container_root/${3-}/$app_name.app/$app_name"
       exit 0
     fi
@@ -833,7 +845,7 @@ RUBY
   io)
     [[ "${4-}" == screenshot ]] || { echo 'expected screenshot' >&2; exit 1; }
     [[ "$(state resource_failure)" != screenshot || "${3-}" != "00000000-0000-0000-0000-000000000001" ]] || exit 1
-    /usr/bin/awk -F '\t' -v udid="${3-}" '$3 == "simctl" && $4 == "spawn" && $5 == udid && $6 == "/bin/kill" && $7 == "-0" {seen=1} END {exit seen ? 0 : 1}' "$fake_log" || { echo 'screenshot lacked liveness probe' >&2; exit 1; }
+    /usr/bin/awk -F '\t' '$1 == "host" && $2 == "kill" && $3 == "-0" {seen=1} END {exit seen ? 0 : 1}' "$fake_log" || { echo 'screenshot lacked liveness probe' >&2; exit 1; }
     mkdir -p "$(dirname "${5-}")"
     if [[ "$(state png_mode)" == corrupt ]]; then
       printf 'not-a-png' >"${5-}"
@@ -851,11 +863,30 @@ esac
 SH
 chmod +x "$adapter_bin/xcrun"
 
-for adapter in "$adapter_bin/xcode-select" "$adapter_bin/xcrun" \
+# Host process probes (#215). Each logs as `host` and reuses the fake device process model for the
+# device of the latest launch, so the runner's host checks see the same fake PIDs and containers.
+for probe in kill ps; do
+  /usr/bin/sed "s|@PROBE@|$probe|g" >"$adapter_bin/host-$probe" <<'SH'
+#!/bin/bash -p
+set -euo pipefail
+state_dir="@STATE_DIR@" fake_log="@FAKE_LOG@"
+{
+  printf 'host\t@PROBE@'
+  printf '\t%s' "$@"
+  printf '\n'
+} >>"$fake_log"
+udid="$(/bin/cat "$state_dir/launch-udid" 2>/dev/null || true)"
+[[ -n "$udid" ]] || { echo 'host probe ran before any launch' >&2; exit 1; }
+FAKE_HOST_PROBE=1 exec "@ADAPTER_BIN@/xcrun" simctl spawn "$udid" /bin/@PROBE@ "$@"
+SH
+  chmod +x "$adapter_bin/host-$probe"
+done
+
+for adapter in "$adapter_bin/xcode-select" "$adapter_bin/xcrun" "$adapter_bin/host-kill" "$adapter_bin/host-ps" \
   "$fake_developer/usr/bin/xcodebuild" \
   "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend"; do
   /usr/bin/sed -i '' -e "s|@STATE_DIR@|$adapter_state|g" -e "s|@FAKE_LOG@|$fake_log|g" \
-    -e "s|@VALIDATOR_BINARY@|$validator_binary|g" "$adapter"
+    -e "s|@VALIDATOR_BINARY@|$validator_binary|g" -e "s|@ADAPTER_BIN@|$adapter_bin|g" "$adapter"
 done
 
 repo="" base_sha="" head_sha="" contract="" matrix="" draft="" visual="" final=""
@@ -1076,7 +1107,7 @@ prepare_repo() {
   /bin/rm -f "$adapter_state"/publication-kill-after-*
   /bin/rm -f "$adapter_state"/stubborn-probe-*
   /bin/rm -f "$adapter_state"/term-blocked-probe-* "$adapter_state/term-blocked-runner-pid" "$adapter_state/term-cleanup-before-probe-stop"
-  /bin/rm -f "$adapter_state"/device-state-* "$adapter_state"/erase-count-*
+  /bin/rm -f "$adapter_state"/device-state-* "$adapter_state"/erase-count-* "$adapter_state/launch-udid"
   /bin/rm -f "$adapter_state"/allocated-* "$adapter_state"/device-name-* "$adapter_state"/device-type-*
   /bin/rm -rf "$adapter_state/data" "$adapter_state/cleanup-observation"
   /bin/rm -f "$adapter_state"/system-language-* "$adapter_state"/system-locale-* "$adapter_state"/active-system-*

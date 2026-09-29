@@ -2,6 +2,10 @@
 
 TRUSTED_XCODE_SELECT="/usr/bin/xcode-select"
 TRUSTED_XCRUN="/usr/bin/xcrun"
+# Simulator apps run as host processes. iOS 27 runtimes ship no /bin/kill or /bin/ps, so the
+# runner checks application processes with these host tools (#215).
+TRUSTED_KILL="/bin/kill"
+TRUSTED_PS="/bin/ps"
 PREFERRED_DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 if [[ -n "${BASH_VERSION-}" ]]; then
   XCODE_SOURCE_PATH="${BASH_SOURCE[0]}"

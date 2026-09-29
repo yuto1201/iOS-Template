@@ -56,9 +56,16 @@ assert_no_failed_attempts
 for case_id in iphone-en iphone-ja ipad-en ipad-ja; do
   [[ -f "$(dirname "$draft")/$case_id/screenshot.png" ]] || { echo "cleanup removed canonical screenshot" >&2; exit 1; }
 done
-/usr/bin/awk -F '\t' '$3 == "simctl" && $4 == "spawn" && $5 == "00000000-0000-0000-0000-000000000001" && $6 == "/bin/kill" && $8 == "9876" {found=1} END {exit found ? 0 : 1}' "$fake_log" || {
+/usr/bin/awk -F '\t' '$1 == "host" && $2 == "kill" && $3 == "-0" && $4 == "9876" {found=1} END {exit found ? 0 : 1}' "$fake_log" || {
   echo "runner did not probe the reacquired UI application PID" >&2; exit 1
 }
+
+# The host process identity must be this dedicated device's installed executable (#215).
+for mode in ps-other-executable ps-other-device; do
+  prepare_repo "identity-$mode"
+  FAKE_CASE_MODE="$mode" expect_execute_failure "identity-$mode" "case iphone-en failed: current application identity"
+  [[ ! -e "$draft" ]] || { echo "process identity failure published draft for $mode" >&2; exit 1; }
+done
 
 prepare_repo app-plist-symlink
 FAKE_BUILD_MODE=plist-symlink expect_execute_failure app-plist-symlink "built application"

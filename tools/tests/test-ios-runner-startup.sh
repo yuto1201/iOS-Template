@@ -100,9 +100,9 @@ if [[ "$term_probe_pgid" =~ ^[1-9][0-9]*$ ]] && /bin/kill -0 -- "-$term_probe_pg
 fi
 /usr/bin/ruby - "$fake_log" <<'RUBY'
 lines = File.readlines(ARGV.fetch(0), chomp: true).map { |line| line.split("\t") }
+# The liveness probe runs on the host (#215).
 probe = lines.rindex do |fields|
-  fields[0] == "xcrun" && fields[2] == "simctl" && fields[3] == "spawn" &&
-    fields[4] == "00000000-0000-0000-0000-000000000001" && fields[5] == "/bin/kill"
+  fields[0] == "host" && fields[1] == "kill" && fields[2] == "-0"
 end
 abort "TERM cleanup did not log its blocked probe" unless probe
 mutations = lines.drop(probe + 1).select do |fields|
