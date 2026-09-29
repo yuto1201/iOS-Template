@@ -278,6 +278,23 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
     invoke.call(installer, [], {name=>link}, :failure)
     File.unlink(link)
   end
+  # docs/security.md lists every allowlisted subcommand of each operation. Drift in either direction fails.
+  documented_allowlist = lambda do |text|
+    section = text[/^### 固定版ascの利用\n(.*?)(?=^## |^### |\z)/m, 1] or return nil
+    section.scan(/^- `(appstore\.[a-z_]+)`: (.+)$/).to_h do |operation, list|
+      [operation, list.split('、').map { |item| item.strip.delete_prefix('`').delete_suffix('`') }.sort]
+    end
+  end
+  implemented_allowlist = AscCLI::OPERATIONS.to_h { |operation, table| [operation, table.keys.map { |words| words.join(' ') }.sort] }
+  security_text = File.read(File.join(root, 'docs/security.md'), encoding: 'UTF-8')
+  check(documented_allowlist.call(security_text) == implemented_allowlist, 'docs/security.md asc allowlist differs from AscCLI::OPERATIONS')
+  dropped = security_text.sub('、`review status`', '')
+  check(dropped != security_text && documented_allowlist.call(dropped) != implemented_allowlist, 'a subcommand missing from the documented allowlist was not detected')
+  read_only = '`apps list`、`apps info view`、`versions list`、`bundle-ids list`'
+  added = security_text.sub(read_only, "#{read_only}、`builds upload`")
+  check(added != security_text && documented_allowlist.call(added) != implemented_allowlist, 'a subcommand documented but not implemented was not detected')
+  implementation_only = implemented_allowlist.merge('appstore.inspect_app' => (implemented_allowlist.fetch('appstore.inspect_app') + ['review submit']).sort)
+  check(documented_allowlist.call(security_text) != implementation_only, 'a subcommand implemented but not documented was not detected')
   puts "PASS: asc installer/runner #{count} cases (fake binary, offline only)"
 end
 RUBY

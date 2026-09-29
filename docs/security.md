@@ -109,7 +109,15 @@ App Store Connectのmulti-line `.p8` private keyはKeychainの1行secret interfa
 
 Identity bootstrap済みのアプリでは、Team keyのApp Manager roleを使い、Keychainの上記命名に従う`app-store-connect/production/key-id`と`issuer-id`、アプリの専用秘密ディレクトリ直下の`app-store-connect-production.p8`を準備します。runnerは`Config/app-identity.json`の`appSlug`から固定pathを計算し、既存secret wrapperを実HOMEで連鎖させます。任意の秘密pathや資格情報をCLI flagで渡しません。最内側のhelperだけが空の一時HOMEとcwd、固定PATH、telemetry無効、Keychain bypass、存在しないconfig path、JSON出力、Team key設定を構成し、秘密を子process envへ渡します。起動ごとのversion／digest照合、120秒の上限、両出力のredactionを強制します。
 
-使用例は`tools/asc-run.sh --operation appstore.inspect_app -- apps list --bundle-id com.example.app`です。現在のallowlistは`apps list`、`apps info view --app <id>`、`versions list --app <id>`、`bundle-ids list`の読取subsetだけです。`--output json`はrunnerが強制し、その他のcommand／flag、web、auth、signing、workflow実行、telemetry設定は拒否します。live実行には引き続きrelease／full／strict、宣言済みoperation／Executor、account／target確認と必要な承認が必要です。この基盤だけではproduction preflightやlive操作を承認しません。
+使用例は`tools/asc-run.sh --operation appstore.inspect_app -- apps list --bundle-id com.example.app`です。runnerはoperationごとに次のsubcommandだけを許可し、subcommandごとにflagと値の形式も固定します。一覧は`tools/lib/asc-cli.rb`の`OPERATIONS`と一致し、`tools/tests/test-asc-cli.sh`がその一致を検査します。
+
+- `appstore.inspect_app`: `apps list`、`apps info view`、`versions list`、`bundle-ids list`
+- `appstore.update_metadata`: `apps list`、`apps info view`、`versions list`、`bundle-ids list`、`builds list`、`builds info`、`localizations list`、`localizations update`、`versions update`、`categories list`、`categories set`、`screenshots list`、`screenshots upload`
+- `appstore.upload_build`: `apps list`、`builds upload`、`builds list`、`builds info`
+- `appstore.submit_review`: `apps list`、`bundle-ids list`、`versions list`、`builds list`、`builds info`、`versions attach-build`、`review submit`、`review status`
+- `appstore.distribute_testflight`: `apps list`、`builds list`、`builds info`、`builds test-notes list`、`builds test-notes view`、`builds test-notes create`、`testflight groups list`、`builds add-groups`、`testflight review submissions list`、`testflight review submit`
+
+`--output json`はrunnerが強制し、その他のcommand／flag、web、auth、signing、workflow実行、telemetry設定は拒否します。live実行には引き続きrelease／full／strict、宣言済みoperation／Executor、account／target確認と必要な承認が必要です。この基盤だけではproduction preflightやlive操作を承認しません。
 
 `tools/tests/test-asc-cli.sh`はfake binaryと一時HOMEだけを使い、network／実Keychainを利用しません。`IOS_TEMPLATE_TEST_MODE=1`時だけpin、install root、release directory、security executableとtimeoutのtest overrideを許可し、pathは絶対・非symlinkを要求します。本番modeではtest overrideの存在を拒否します。
 
