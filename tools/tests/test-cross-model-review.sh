@@ -422,6 +422,15 @@ assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0]))
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:changes-requested"]'
 
 reset_review_requested
+export FAKE_REVIEWER_MODE=warning
+write_result approved
+assert_fails 'a warning before the reviewer JSON is rejected, not cleaned' run_review
+[[ ! -e "$artifact_root/review.json" && ! -e "$artifact_root/review-receipt.json" ]] || { echo 'a warning-prefixed review published an artifact' >&2; exit 1; }
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:review"]'
+# The logged invocation spans several lines because the prompt is multiline; check the whole entry.
+[[ "$(cat "$FAKE_REVIEWER_LOG")" == *'--strict-mcp-config --mcp-config {"mcpServers":{}} --allowedTools Read'* ]] || { echo 'Claude reviewer did not use an empty strict MCP configuration' >&2; exit 1; }
+
+reset_review_requested
 export FAKE_REVIEWER_MODE=malformed
 printf '{not json' > "$workspace/result.json"
 export FAKE_REVIEWER_RESULT="$workspace/result.json"
