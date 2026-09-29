@@ -26,6 +26,8 @@ cp "$repo_root/tools/run-repository-tests.sh" "$repo/tools/"
 cp "$repo_root/tools/record-release-disposition.sh" "$repo/tools/"
 mkdir -p "$repo/tools/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/tools/tests/test-gate-probe.sh"
+# Every changed path also selects the repository's credential scan, so the fixture manifest declares it.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/tools/tests/test-tracked-credential-scan.sh"
 cp "$repo_root/tools/render-pr-body.sh" "$repo/tools/"
 cp -R "$repo_root/tools/lib" "$repo/tools/"
 cp -R "$repo_root/.agents" "$repo/"
@@ -43,7 +45,7 @@ PHASE_RECORD="$repo/Config/releases/premerge-v1/phase-records/phase6.json" ruby 
   File.binwrite(ENV.fetch("PHASE_RECORD"),bytes)
 '
 cat > "$repo/Config/repository-tests.json" <<'JSON'
-{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"gate","paths":["README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]}]}
+{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"gate","paths":["README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]},{"path":"tools/tests/test-tracked-credential-scan.sh","domains":["credential-scan"]}]}
 JSON
 printf '.artifacts\n' > "$repo/.gitignore"
 printf 'fixture\n' > "$repo/README.md"
@@ -981,6 +983,9 @@ FAKE_SKIP_SWIFT=1 FINAL_GATE_SWAP_TARGET="$final_image" assert_fails 'packet-bou
 grep -Fq 'pr view 57 --repo yuto1201/iOS-Template' "$FAKE_GH_LOG" || { echo 'final image lease fixture did not reach PR refresh' >&2; exit 1; }
 [[ ! -s "$FAKE_MERGE_MUTATIONS" ]] || { echo 'final lease merged after packet-bound image changed' >&2; exit 1; }
 
+
+fi
+
 # The actual new producer runs both small fixture inventories. This is not
 # evidence that either revision of the real repository's suite has passed.
 cp "$issue_body" "$scratch/pre-revision-issue.md"
@@ -989,8 +994,8 @@ canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 write_verify
 (cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
-  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh \
-  --base-map AC-2=tools/tests/test-gate-probe.sh) >/dev/null
+  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh,tools/tests/test-tracked-credential-scan.sh \
+  --base-map AC-2=tools/tests/test-gate-probe.sh,tools/tests/test-tracked-credential-scan.sh) >/dev/null
 review_at=$(timestamp 1)
 transition_at=$(timestamp 2)
 preflight_at=$(timestamp 3)
@@ -1001,7 +1006,7 @@ review_record="$repo/.artifacts/issues/42/$head_sha/review.json"
 ruby -rjson -e 'path=ARGV.fetch(0); value=JSON.parse(File.read(path)); value["acceptanceAssessment"].each_with_index{|entry,i|entry["evidence"]=["repository-tests.json#acceptanceEvidence/#{i}"]}; File.write(path,JSON.generate(value))' "$review_record"
 write_receipt
 write_preflight
-write_supabase_preflight
+[[ "$scope" == scoped ]] || write_supabase_preflight
 run_gate >/dev/null
 revision_record="$repo/.artifacts/issues/42/$head_sha/repository-tests.json"
 revision_plan="$repo/.artifacts/issues/42/$head_sha/repository-test-plan.json"
@@ -1036,8 +1041,6 @@ run_gate_merge >/dev/null
 cp "$scratch/issue.original.md" "$issue_body"
 rm "$revision_record" "$revision_plan"
 
-fi
-
 # Workflow-only strict changes use their sealed AC-mapped repository subset;
 # this post-D-050 fixture also drives disposition packet, validation,
 # publication, rendering, and pre-merge consumers with one item per category.
@@ -1046,7 +1049,7 @@ contract_at=$(timestamp -240)
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 (cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
-  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh \
+  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh,tools/tests/test-tracked-credential-scan.sh \
   --map AC-3=tools/tests/test-gate-probe.sh) >/dev/null
 VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" COMPLETED_AT="$(timestamp 0)" ruby -rjson -e '
   evidence=["AC-1","AC-2","AC-3"].each_with_index.map{|id,index|{"id"=>id,"status"=>"passed","evidence"=>["repository-tests.json#acceptanceEvidence/#{index}"]}}
@@ -1218,22 +1221,29 @@ cp "$scratch/issue.original.md" "$issue_body"
 rm "$workflow_record" "$workflow_plan" "$applicability_record"
 rm -rf "$repo/.artifacts/issues/41"
 
-if [[ "$scope" == scoped ]]; then
-  echo 'PASS: scoped premerge validates Phase 5 to 6 applicability and every post-cutover disposition consumer'
-  exit 0
-fi
-
 # Explicit fast accepts the same current-Head and account gates without any
 # opposite-model artifact. Rebuild the exact live contract so stale strict
-# review files cannot accidentally authorize this route.
+# review files cannot accidentally authorize this route. Refresh the fixture
+# times in their original order so a slow run cannot date verification before
+# the resealed contract.
+contract_at=$(timestamp -240)
+verify_at=$(timestamp -180)
+transition_at=$(timestamp -60)
+preflight_at=$(timestamp -30)
 ruby -e 'path=ARGV.fetch(0); text=File.binread(path); marker="## External operations\n"; replacement="## Delivery profile\n\n- Profile: fast\n- Reason: Non-UI low-risk documentation fixture.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 HEAD="$head_sha" BASE="$base_sha" DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'puts JSON.generate({"schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template", "branch" => "codex/42-gate-evidence", "worktree" => ".worktrees/42-gate-evidence", "baseSha" => ENV.fetch("BASE"), "primaryImplementer" => "codex", "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "state" => "approved-for-merge", "previousState" => "verify-passed", "resumeState" => nil, "executor" => "codex", "headSha" => ENV.fetch("HEAD"), "pullRequest" => 57, "from" => "verify-passed", "to" => "approved-for-merge", "transitionedAt" => ENV.fetch("TRANSITIONED_AT")})' > "$repo/.artifacts/issues/42/state.json"
 write_verify
 write_preflight
-write_supabase_preflight
+# Only the full mode enables the Supabase operation in the fixture contract.
+[[ "$scope" == scoped ]] || write_supabase_preflight
 rm -f "$repo/.artifacts/issues/42/$head_sha/review-packet.json" "$repo/.artifacts/issues/42/$head_sha/review.diff" "$repo/.artifacts/issues/42/$head_sha/review.json" "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
 run_gate >/dev/null
+
+if [[ "$scope" == scoped ]]; then
+  echo 'PASS: scoped premerge validates base-and-head and targeted repository records, Phase 5 to 6 applicability, every post-cutover disposition consumer, and the explicit fast route'
+  exit 0
+fi
 
 echo 'PASS: gate binds caller identity, live Issue, descriptor snapshots, review, provider, and GitHub preflight evidence'
