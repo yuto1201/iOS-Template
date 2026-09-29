@@ -26,6 +26,8 @@ cp "$repo_root/tools/run-repository-tests.sh" "$repo/tools/"
 cp "$repo_root/tools/record-release-disposition.sh" "$repo/tools/"
 mkdir -p "$repo/tools/tests"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/tools/tests/test-gate-probe.sh"
+# Every changed path also selects the repository's credential scan, so the fixture manifest declares it.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/tools/tests/test-tracked-credential-scan.sh"
 cp "$repo_root/tools/render-pr-body.sh" "$repo/tools/"
 cp -R "$repo_root/tools/lib" "$repo/tools/"
 cp -R "$repo_root/.agents" "$repo/"
@@ -43,7 +45,7 @@ PHASE_RECORD="$repo/Config/releases/premerge-v1/phase-records/phase6.json" ruby 
   File.binwrite(ENV.fetch("PHASE_RECORD"),bytes)
 '
 cat > "$repo/Config/repository-tests.json" <<'JSON'
-{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"gate","paths":["README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]}]}
+{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"gate","paths":["README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]},{"path":"tools/tests/test-tracked-credential-scan.sh","domains":["credential-scan"]}]}
 JSON
 printf '.artifacts\n' > "$repo/.gitignore"
 printf 'fixture\n' > "$repo/README.md"
@@ -989,8 +991,8 @@ canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 write_verify
 (cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
-  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh \
-  --base-map AC-2=tools/tests/test-gate-probe.sh) >/dev/null
+  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh,tools/tests/test-tracked-credential-scan.sh \
+  --base-map AC-2=tools/tests/test-gate-probe.sh,tools/tests/test-tracked-credential-scan.sh) >/dev/null
 review_at=$(timestamp 1)
 transition_at=$(timestamp 2)
 preflight_at=$(timestamp 3)
@@ -1046,7 +1048,7 @@ contract_at=$(timestamp -240)
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
 (cd "$issue_worktree" && tools/run-repository-tests.sh --issue 42 --expected-base "$base_sha" \
-  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh \
+  --map AC-1=tools/tests/test-gate-probe.sh --map AC-2=tools/tests/test-gate-probe.sh,tools/tests/test-tracked-credential-scan.sh \
   --map AC-3=tools/tests/test-gate-probe.sh) >/dev/null
 VERIFY="$repo/.artifacts/issues/42/$head_sha/verify.json" CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" COMPLETED_AT="$(timestamp 0)" ruby -rjson -e '
   evidence=["AC-1","AC-2","AC-3"].each_with_index.map{|id,index|{"id"=>id,"status"=>"passed","evidence"=>["repository-tests.json#acceptanceEvidence/#{index}"]}}
@@ -1225,7 +1227,13 @@ fi
 
 # Explicit fast accepts the same current-Head and account gates without any
 # opposite-model artifact. Rebuild the exact live contract so stale strict
-# review files cannot accidentally authorize this route.
+# review files cannot accidentally authorize this route. Refresh the fixture
+# times in their original order so a slow run cannot date verification before
+# the resealed contract.
+contract_at=$(timestamp -240)
+verify_at=$(timestamp -180)
+transition_at=$(timestamp -60)
+preflight_at=$(timestamp -30)
 ruby -e 'path=ARGV.fetch(0); text=File.binread(path); marker="## External operations\n"; replacement="## Delivery profile\n\n- Profile: fast\n- Reason: Non-UI low-risk documentation fixture.\n\n#{marker}"; text.sub!(marker,replacement) or abort; File.binwrite(path,text)' "$issue_body"
 canonical_contract > "$repo/.artifacts/issues/42/issue-contract.json"
 contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contract.json" | awk '{print $1}')"
