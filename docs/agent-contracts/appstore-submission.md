@@ -8,6 +8,36 @@ This contract separates offline drafts, selective metadata saves, release readin
 
 Archive and export use automatic signing with the Team ID and App Store Connect API key for provisioning updates. Certificate or profile creation, revocation, synchronization, manual signing, Apple ID sign-in, and `asc signing` commands are outside this entrypoint. The guarded runner checks for an existing version/build before upload. After one upload call, a bounded readback requires one exact iOS build, including the build ID, marketing version, build number, platform, and `VALID` processing state. A failed, invalid, timed-out, or ambiguous result is not success. `--resume-attempt <id>` verifies the same Head and IPA digest and rereads the remote build; it never repeats an issued upload. This tool does not establish release readiness or submit the build for review.
 
+### One-time distribution signing setup
+
+The template never creates, revokes, or synchronizes certificates or provisioning profiles (D-059). The user prepares distribution signing once before the first archive, and again after an App ID capability changes. This section states only what Apple's documentation says. The pages below were checked on 2026-09-29, and `man xcodebuild` on Xcode 27.0. Where the documentation is silent or disagrees, the point is marked unconfirmed.
+
+Confirmed facts:
+
+- Distribution certificates belong to the team. The [certificates overview](https://developer.apple.com/help/account/certificates/certificates-overview/) says only the Account Holder or Admin role can create them. The [role permissions table](https://developer.apple.com/help/account/access/roles/) also allows App Manager to create and revoke distribution certificates and to create and delete distribution provisioning profiles. That permission requires access to Certificates, Identifiers & Profiles, granted in Users and Access.
+- An App Store Connect provisioning profile is created in Certificates, Identifiers & Profiles by the Account Holder or Admin. With automatic signing, Xcode manages distribution profiles ([Create an App Store provisioning profile](https://developer.apple.com/help/account/provisioning-profiles/create-an-app-store-provisioning-profile/)).
+- Enabling an App ID capability requires the Account Holder or Admin. It makes every provisioning profile that uses that App ID invalid, and those profiles must be regenerated. iCloud, App Groups, push notifications, Sign in with Apple, Apple Pay, and Data protection need additional steps ([Enable app capabilities](https://developer.apple.com/help/account/identifiers/enable-app-capabilities/)).
+- A team API key gets one role, chosen when it is generated. Key roles are the same as user roles. Only the Account Holder or Admin can generate team keys, and the access level can't be edited afterwards ([Creating API keys](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api), [App Store Connect API](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api/)).
+- With `-allowProvisioningUpdates`, `xcodebuild` creates and updates profiles, App IDs, and certificates for automatically signed targets. `-authenticationKeyPath`, `-authenticationKeyID`, and `-authenticationKeyIssuerID` make it authenticate with that App Store Connect key.
+- In Xcode 13 or later, the Organizer archive and distribution workflow cloud-signs for distribution when no local signing certificate is found. Cloud-managed certificates rotate automatically ([Cloud-managed certificates](https://developer.apple.com/help/account/certificates/cloud-managed-certificates/)).
+- [Upload builds](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/) lists App Manager among the roles that can upload, and says the API's JWTs can be used to upload. The role permissions table marks upload for App Manager as requiring access to Certificates, Identifiers & Profiles.
+
+Unconfirmed; treat each as unavailable until a run shows otherwise:
+
+- Whether a team API key with the App Manager role can have access to Certificates, Identifiers & Profiles. The documentation describes choosing only a role for a team key.
+- Whether `xcodebuild -allowProvisioningUpdates` with that key can create a distribution certificate or an App Store profile, or can cloud-sign an export.
+- Whether the upload condition in the role permissions table applies to a team key.
+
+One-time setup, done by the user:
+
+1. An Account Holder or Admin creates the team's distribution signing. The same applies to an App Manager given access to Certificates, Identifiers & Profiles in Users and Access. Use either route.
+   - In Certificates, Identifiers & Profiles, create the Apple Distribution certificate and the App Store Connect provisioning profile for the app's explicit App ID.
+   - Or, signed in to Xcode with that account, distribute one archive through the Organizer with automatic signing. Xcode then manages the distribution profile, and cloud-signs when no local certificate exists.
+2. When a capability such as iCloud is first added, the same role enables it on the App ID and completes the capability's additional steps. It then regenerates, or lets Xcode regenerate, the profiles that became invalid.
+3. Afterwards, `tools/export-appstore-build.sh` archives, exports, and uploads with the App Manager team key through the fixed `appstore.upload_build` route. The first run after setup is the check that the key can use this signing without creating anything. Unconfirmed points stay unconfirmed until that run passes.
+
+If archive or export fails because a distribution certificate, a profile, or a profile entitlement is missing, stop the Issue as `blocked:user` and point the user to the steps above. Do not switch to an Admin key, Apple ID sign-in, manual signing, or `asc signing` commands. Never display, log, or commit certificate private keys, provisioning profiles, or API key values. The key stays where [the security procedure](../security.md#固定版ascの利用) places it.
+
 ## Source inventory and registration preparation
 
 This section defines the source requirements of #53 and [architecture §9.1](../../specs/architecture.md#91-原稿の正本と登録準備). The read-only entrypoint is `tools/prepare-appstore-sources.sh --project-root /absolute/physical/app/root`; its [versioned format](<../../App Store/metadata/preparation-format.md>) defines source, proof, supplied-observation and migration boundaries. Exit 0 means modeled sources are prepared, exit 1 reports unresolved or deferred fields, and exit 2 rejects unsafe or changing input. It neither fetches remote observations nor registers, saves or submits anything. All current remote-write scripts retain their authority, immutable release-package and ordered submission gates. Implementation and current-Head verification belong to [#110](https://github.com/yuto1201/iOS-Template/issues/110); #62 remains preserved source history, and #52 specifies the separate future save route below. Registration mutation still needs its own explicit implementation/operation contract and approvals.
