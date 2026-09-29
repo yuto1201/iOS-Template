@@ -271,7 +271,7 @@ IOSTemplate::ReviewContract.validate!(
 
 ## 6. 呼び出し
 
-- Codex primary -> Claudeを非対話read-onlyで呼ぶ。利用者のuser／project MCP serverを読み込まないよう、`--strict-mcp-config`と空の`--mcp-config`（`{"mcpServers":{}}`）で起動する。stdoutにwarningなどが混ざった場合は、部分抽出や清掃をせず`blocked:review`とする
+- Codex primary -> Claudeを非対話read-onlyで呼ぶ。利用者のuser／project MCP serverを読み込まないよう、`--strict-mcp-config`と空の`--mcp-config`（`{"mcpServers":{}}`）で起動する。確認根拠は、Claude Code CLI 2.1.283の`claude --help`と公式の[CLI reference](https://code.claude.com/docs/en/cli-reference)である。`--strict-mcp-config`は`--mcp-config`で渡したMCP serverだけを使い、他のMCP構成を無視し、`--mcp-config`はJSON文字列からMCP serverを読み込む。stdoutにwarningなどが混ざった場合は、部分抽出や清掃をせず`blocked:review`とする
 - Claude primary -> Codexをread-only sandboxで呼ぶ
 - exactなユーザー承認宣言を持つCodex primary -> `cursor-grok-4.6-xhigh`を固定Cursor `ask` launcherで非対話read-only呼び出しする
 - Timeout: 10分
