@@ -1220,11 +1220,6 @@ cp "$scratch/issue.original.md" "$issue_body"
 rm "$workflow_record" "$workflow_plan" "$applicability_record"
 rm -rf "$repo/.artifacts/issues/41"
 
-if [[ "$scope" == scoped ]]; then
-  echo 'PASS: scoped premerge validates Phase 5 to 6 applicability and every post-cutover disposition consumer'
-  exit 0
-fi
-
 # Explicit fast accepts the same current-Head and account gates without any
 # opposite-model artifact. Rebuild the exact live contract so stale strict
 # review files cannot accidentally authorize this route. Refresh the fixture
@@ -1240,8 +1235,14 @@ contract_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/issue-contra
 HEAD="$head_sha" BASE="$base_sha" DIGEST="$contract_digest" TRANSITIONED_AT="$transition_at" ruby -rjson -e 'puts JSON.generate({"schemaVersion" => 1, "issue" => 42, "repository" => "yuto1201/iOS-Template", "branch" => "codex/42-gate-evidence", "worktree" => ".worktrees/42-gate-evidence", "baseSha" => ENV.fetch("BASE"), "primaryImplementer" => "codex", "issueContract" => {"path" => ".artifacts/issues/42/issue-contract.json", "digest" => ENV.fetch("DIGEST")}, "state" => "approved-for-merge", "previousState" => "verify-passed", "resumeState" => nil, "executor" => "codex", "headSha" => ENV.fetch("HEAD"), "pullRequest" => 57, "from" => "verify-passed", "to" => "approved-for-merge", "transitionedAt" => ENV.fetch("TRANSITIONED_AT")})' > "$repo/.artifacts/issues/42/state.json"
 write_verify
 write_preflight
-write_supabase_preflight
+# Only the full mode enables the Supabase operation in the fixture contract.
+[[ "$scope" == scoped ]] || write_supabase_preflight
 rm -f "$repo/.artifacts/issues/42/$head_sha/review-packet.json" "$repo/.artifacts/issues/42/$head_sha/review.diff" "$repo/.artifacts/issues/42/$head_sha/review.json" "$repo/.artifacts/issues/42/$head_sha/review-receipt.json"
 run_gate >/dev/null
+
+if [[ "$scope" == scoped ]]; then
+  echo 'PASS: scoped premerge validates Phase 5 to 6 applicability, every post-cutover disposition consumer, and the explicit fast route'
+  exit 0
+fi
 
 echo 'PASS: gate binds caller identity, live Issue, descriptor snapshots, review, provider, and GitHub preflight evidence'
