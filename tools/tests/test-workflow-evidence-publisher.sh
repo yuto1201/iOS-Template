@@ -330,6 +330,17 @@ rebind_head_artifacts "$previous_head"
 published="$(run_publisher)"
 [[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]] || { echo 'workflow publisher rejected the dedicated Simulator declaration' >&2; exit 1; }
 
+prepare_fixture template-identity-manifest
+/bin/mkdir -p "$repo/Config"
+printf '%s\n' '{"schemaVersion":1,"liveContentPaths":["Config/dedicated-simulators.json"]}' >"$repo/Config/template-identity.json"
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- Config/template-identity.json
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]] || { echo 'workflow publisher rejected the template identity manifest' >&2; exit 1; }
+
 prepare_fixture signing-configuration
 /bin/mkdir -p "$repo/Config"
 printf '%s\n' 'DEVELOPMENT_TEAM = EXAMPLE' >"$repo/Config/Signing.xcconfig"
