@@ -38,10 +38,16 @@ printf '#!/usr/bin/env bash\nexit 0\n' >"$primary/tools/tests/test-renderer-prob
 chmod +x "$primary/tools/tests/test-renderer-probe.sh"
 printf '%s\n' '{}' >"$primary/TemplateApp.xcodeproj/project.pbxproj"
 printf '%s\n' '# Initial' >"$primary/docs/initial.md"
+# Dedicated Simulator declaration (D-063) that schema-v2 lease receipts must match.
+mkdir -p "$primary/Config"
+ruby -rjson -e 'File.write(ARGV.fetch(0), JSON.pretty_generate({"schemaVersion"=>1,"devices"=>[
+  {"family"=>"iphone","name"=>"Fixture iPhone","deviceTypeIdentifier"=>"com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro","runtimeIdentifier"=>"com.apple.CoreSimulator.SimRuntime.iOS-26-5"},
+  {"family"=>"ipad","name"=>"Fixture iPad","deviceTypeIdentifier"=>"com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3","runtimeIdentifier"=>"com.apple.CoreSimulator.SimRuntime.iOS-26-5"}
+]}) + "\n")' "$primary/Config/dedicated-simulators.json"
 git -C "$primary" init -q
 git -C "$primary" config user.name 'Renderer Test'
 git -C "$primary" config user.email 'renderer@example.invalid'
-git -C "$primary" add -- tools docs TemplateApp.xcodeproj
+git -C "$primary" add -- tools docs TemplateApp.xcodeproj Config
 git -C "$primary" commit -q -m initial
 printf '%s\n' '# Base' >"$primary/docs/base.md"
 git -C "$primary" add -- docs/base.md
@@ -427,6 +433,92 @@ mv "$head_dir" "$head_dir.real"; ln -s "$head.real" "$head_dir"
 expect_refusal symlinked-head
 grep -Fq 'descriptor' "$scratch/symlinked-head.err" || { echo 'symlink component refusal was not explicit' >&2; exit 1; }
 rm "$head_dir"; mv "$head_dir.real" "$head_dir"
+
+# Legacy fixed-UDID evidence cannot claim dedicated Simulator leases.
+expect_verify_mutation legacy-matrix-allocations 'v["simulatorAllocations"]=[]'
+restore_application
+
+# Canonical native evidence from the dedicated Simulators (D-063) freezes a
+# schema-v2 matrix and binds one released lease receipt per case.
+cp "$draft" "$scratch/draft.good"
+# The validator identifies the repository by its Foundation-canonical Git common directory.
+common_dir=$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir)
+canonical_common_dir=$(/usr/bin/swift -e 'import Foundation; print(URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath().standardizedFileURL.path)' "$common_dir")
+MATRIX="$matrix" VERIFY="$verify" DRAFT="$draft" REPOSITORY="$worktree" HEAD="$head" COMMON_DIR="$canonical_common_dir" ruby -rjson -rdigest <<'RUBY'
+matrix_path = ENV.fetch("MATRIX")
+matrix = JSON.parse(File.read(matrix_path))
+matrix["schemaVersion"] = 2
+matrix.fetch("cases").each { |entry| entry.delete("udid") }
+File.write(matrix_path, JSON.pretty_generate(matrix) + "\n")
+matrix_digest = "sha256:#{Digest::SHA256.file(matrix_path).hexdigest}"
+repository_identity = "sha256:#{Digest::SHA256.hexdigest(ENV.fetch("COMMON_DIR"))}"
+batch = matrix.fetch("batchId")
+udids = {"iPhone" => "00000000-0000-0000-0000-000000000001", "iPad" => "00000000-0000-0000-0000-000000000003"}
+names = {"iPhone" => "Fixture iPhone", "iPad" => "Fixture iPad"}
+allocations = matrix.fetch("cases").each_with_index.map do |entry, index|
+  id = entry.fetch("id")
+  allocation = format("00000000-0000-4000-8000-%012d", index + 1)
+  path = ".artifacts/batches/#{batch}/allocation-#{id}-#{allocation.upcase}.json"
+  receipt = {
+    "schemaVersion" => 2, "kind" => "dedicated-lease", "allocationId" => allocation, "status" => "released",
+    "sessionId" => "renderer-session", "repositoryIdentity" => repository_identity, "issue" => 42,
+    "headSha" => ENV.fetch("HEAD"), "batchId" => batch, "attemptId" => "attempt-aaaaaaaa", "caseId" => id,
+    "deviceSet" => "default", "deviceName" => names.fetch(entry.fetch("family")), "udid" => udids.fetch(entry.fetch("family")),
+    "runtimeIdentifier" => matrix.dig("runtime", "identifier"), "deviceTypeIdentifier" => entry.dig("deviceType", "identifier"),
+    "reservedAt" => "2026-08-21T03:05:00Z", "preparedAt" => "2026-08-21T03:05:01Z", "releasedAt" => "2026-08-21T03:20:00Z",
+    "freeSpace" => {"beforeLeaseBytes" => 20_000_000_000, "afterReleaseBytes" => 19_900_000_000},
+    "preparation" => {"status" => "passed", "erased" => true, "observedAt" => "2026-08-21T03:05:01Z"},
+    "cleanup" => {"status" => "passed", "reason" => "case-complete", "deviceState" => "Shutdown", "observedAt" => "2026-08-21T03:20:00Z"}
+  }
+  bytes = JSON.generate(receipt)
+  File.binwrite(File.join(ENV.fetch("REPOSITORY"), path), bytes)
+  {"caseId" => id, "path" => path, "digest" => "sha256:#{Digest::SHA256.hexdigest(bytes)}", "allocationId" => allocation,
+   "udid" => receipt.fetch("udid"), "attemptId" => receipt.fetch("attemptId"), "sessionId" => receipt.fetch("sessionId")}
+end
+[ENV.fetch("VERIFY"), ENV.fetch("DRAFT")].each do |path|
+  document = JSON.parse(File.read(path))
+  document["matrixDigest"] = matrix_digest
+  document["simulatorAllocations"] = allocations
+  File.write(path, JSON.pretty_generate(document) + "\n")
+end
+RUBY
+rm -f "$packet"
+(
+  cd "$worktree"
+  /usr/bin/swift tools/validate-verify-json.swift --visual-packet --issue 42 --expected-base "$base" --draft ".artifacts/issues/42/$head/verify-draft.json" --output ".artifacts/issues/42/$head/visual-packet.json" >/dev/null
+)
+EVIDENCE="$verify" PACKET="$packet" ruby -rjson -rdigest -e '
+path=ENV.fetch("EVIDENCE");value=JSON.parse(File.read(path));packet=JSON.parse(File.read(ENV.fetch("PACKET")));
+value["visualEvaluation"]={"status"=>"passed","packet"=>{"path"=>".artifacts/issues/42/#{value.fetch("headSha")}/visual-packet.json","digest"=>"sha256:#{Digest::SHA256.file(ENV.fetch("PACKET")).hexdigest}"},"cases"=>packet.fetch("cases").map{|entry|{"id"=>entry.fetch("id"),"images"=>entry.fetch("images").map{|image|{"state"=>image.fetch("state"),"path"=>image.fetch("path"),"digest"=>image.fetch("digest"),"status"=>"passed","findings"=>[]}}}},"findings"=>[]};File.write(path,JSON.pretty_generate(value)+"\n")'
+seal_review
+allocation_body=$(run_renderer) || { echo 'schema-v2 dedicated-lease evidence was not rendered' >&2; exit 1; }
+allocation_matrix_digest="sha256:$(shasum -a 256 "$matrix" | awk '{print $1}')"
+for expected in \
+  'Verify status: `passed`' \
+  "Matrix digest: \`$allocation_matrix_digest\`" \
+  'iPhone Pro / Japanese (`iphone-ja`): `passed`' \
+  'iPad Air / Japanese (`ipad-ja`): `passed`' \
+  'None for this Issue.'
+do
+  grep -Fq "$expected" <<<"$allocation_body" || { echo "missing schema-v2 PR body evidence: $expected" >&2; exit 1; }
+done
+cp "$verify" "$scratch/verify.allocations"
+
+# Accepting the lease receipts does not open the schema to other fields.
+VERIFY="$verify" ruby -rjson -e 'p=ENV.fetch("VERIFY");v=JSON.parse(File.read(p));v["unexpectedEvidence"]=true;File.write(p,JSON.generate(v))'
+expect_refusal allocation-unknown-key
+grep -Fq 'verify.json schema is incomplete' "$scratch/allocation-unknown-key.err" || { echo 'unknown verify.json key was not refused by the exact schema' >&2; exit 1; }
+cp "$scratch/verify.allocations" "$verify"
+
+# The canonical validator, not the renderer, proves each receipt's bytes.
+receipt="$worktree/$(jq -r '.simulatorAllocations[0].path' "$verify")"
+cp "$receipt" "$scratch/receipt.good"
+printf ' ' >>"$receipt"
+expect_refusal allocation-receipt-corruption
+grep -Fq 'canonical Verify validation failed' "$scratch/allocation-receipt-corruption.err" || { echo 'corrupt lease receipt was not refused by the canonical validator' >&2; exit 1; }
+cp "$scratch/receipt.good" "$receipt"
+cp "$scratch/draft.good" "$draft"
+restore_application
 
 # Documentation-only evidence remains valid without visual artifacts.
 VERIFY="$verify" ruby -rjson -e '
