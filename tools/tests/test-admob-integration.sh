@@ -293,6 +293,11 @@ if grep -Rq 'banner\.adSize = ' "$derived/GardenNotes/AdMob"; then
   fail 'provider must not combine adSize auto-reload with an explicit duplicate load'
 fi
 grep -Rq 'privacyOptionsEntry = "settings.privacy"' "$derived/GardenNotes/AdMob" || fail 'confirmed privacy-options entry was not generated'
+grep -Fxq '    static let adFreeEntitlementSource = "entitlements.hasAdFreeAccess"' "$derived/GardenNotes/AdMob/AdMobConfiguration.swift" ||
+  fail 'the entitlement source is not one valid Swift string literal'
+grep -Rq 'func invalidateEligibility()' "$derived/GardenNotes/AdMob" || fail 'eligibility changes cannot invalidate banner hosts'
+grep -Rq 'self.gate.accepts(token)' "$derived/GardenNotes/AdMob/AdaptiveBannerHost.swift" || fail 'host accepts callbacks from suppressed generations'
+grep -Rq 'stateDidChange = nil' "$derived/GardenNotes/AdMob/GoogleMobileAdsProvider.swift" || fail 'detached hosts keep receiving SDK callbacks'
 
 provider_modules="$temp_root/provider-modules"
 mkdir -p "$provider_modules"
@@ -305,9 +310,12 @@ xcrun swiftc -emit-module -parse-as-library -module-name UserMessagingPlatform \
   -target arm64-apple-ios26.5-simulator -sdk "$sdk_path" \
   -emit-module-path "$provider_modules/UserMessagingPlatform.swiftmodule" \
   "$fixture/ProviderStubs/UserMessagingPlatform.swift"
+# The generated configuration, runtime, host, and provider must compile together as one module.
 xcrun swiftc -typecheck -target arm64-apple-ios26.5-simulator \
   -sdk "$sdk_path" -I "$provider_modules" \
+  "$derived/GardenNotes/AdMob/AdMobConfiguration.swift" \
   "$derived/GardenNotes/AdMob/AdMobCore.swift" \
+  "$derived/GardenNotes/AdMob/AdaptiveBannerHost.swift" \
   "$derived/GardenNotes/AdMob/GoogleMobileAdsProvider.swift"
 
 record="$derived/Config/admob-activation.json"

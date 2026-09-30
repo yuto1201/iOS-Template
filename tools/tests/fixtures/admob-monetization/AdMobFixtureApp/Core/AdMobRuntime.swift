@@ -132,6 +132,10 @@ final class AdMobRuntimeCoordinator: ObservableObject {
 
     @Published private(set) var isPrivacyOptionsRequired = false
     @Published private(set) var consentRevision = 0
+    @Published private(set) var eligibilityRevision = 0
+
+    /// A consent or eligibility change starts a new banner request generation.
+    var requestGeneration: Int { consentRevision + eligibilityRevision }
 
     init(
         consent: any AdMobConsentCoordinating,
@@ -171,6 +175,12 @@ final class AdMobRuntimeCoordinator: ObservableObject {
         }
     }
 
+    /// Call when an eligibility input changes, such as a verified ad-free entitlement. Banner hosts that
+    /// are visible or still preparing prepare again and collapse when the placement is no longer eligible.
+    func invalidateEligibility() {
+        eligibilityRevision += 1
+    }
+
     func prepare(
         context: AdMobPlacementContext,
         containerWidth: CGFloat,
@@ -180,10 +190,7 @@ final class AdMobRuntimeCoordinator: ObservableObject {
             return .collapsed(.invalidContainerWidth)
         }
 
-        switch eligibility.isEligible(context: context) {
-        case .eligible:
-            break
-        case let .ineligible(reason):
+        if let reason = ineligibility(for: context) {
             return .collapsed(reason)
         }
 
@@ -197,6 +204,11 @@ final class AdMobRuntimeCoordinator: ObservableObject {
             return .collapsed(.consentUnavailable)
         }
 
+        // Eligibility can change while consent was being gathered; check again before the SDK starts.
+        if let reason = ineligibility(for: context) {
+            return .collapsed(reason)
+        }
+
         if sdkStartTask == nil {
             sdk.configurePrivacy(.nonTracking)
             sdkStartTask = Task { @MainActor [sdk] in
@@ -204,7 +216,21 @@ final class AdMobRuntimeCoordinator: ObservableObject {
             }
         }
         await sdkStartTask?.value
+
+        // And once more after the SDK start, immediately before the caller requests an ad.
+        if let reason = ineligibility(for: context) {
+            return .collapsed(reason)
+        }
         return .loading
+    }
+
+    private func ineligibility(for context: AdMobPlacementContext) -> AdMobBannerCollapseReason? {
+        switch eligibility.isEligible(context: context) {
+        case .eligible:
+            return nil
+        case let .ineligible(reason):
+            return reason
+        }
     }
 
     func presentPrivacyOptions(
@@ -226,5 +252,30 @@ final class AdMobRuntimeCoordinator: ObservableObject {
         if refreshBannerHosts {
             consentRevision += 1
         }
+    }
+}
+
+/// Accepts banner states only from a host's active request generation, so a late SDK callback cannot
+/// reopen a banner that consent or eligibility already suppressed.
+@MainActor
+final class AdMobBannerStateGate {
+    private var activeToken = 0
+    private var isOpen = false
+
+    /// Starts a new generation and returns the token its callbacks must present.
+    func open() -> Int {
+        activeToken += 1
+        isOpen = true
+        return activeToken
+    }
+
+    /// Ends the current generation. Callbacks holding an earlier token are rejected from now on.
+    func close() {
+        activeToken += 1
+        isOpen = false
+    }
+
+    func accepts(_ token: Int) -> Bool {
+        isOpen && token == activeToken
     }
 }

@@ -36,9 +36,11 @@ final class AdMobIntegrationTests: XCTestCase {
         XCTAssertEqual(first, .loading)
         XCTAssertEqual(repeated, .loading)
         XCTAssertEqual(resized, .loading)
+        // Eligibility is checked before consent, after consent, and after the SDK start of each preparation.
         XCTAssertEqual(
             allowed.events.values,
-            ["consent", "eligibility", "privacy", "sdk-start", "eligibility", "eligibility"]
+            ["consent", "eligibility", "eligibility", "privacy", "sdk-start", "eligibility"]
+                + Array(repeating: "eligibility", count: 6)
         )
         XCTAssertEqual(allowed.consent.updateCount, 1)
         XCTAssertEqual(allowed.sdk.startCount, 1)
@@ -182,6 +184,89 @@ final class AdMobIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(failedState, .collapsed(.loadFailed))
         XCTAssertEqual(failedRenderer.loadCount, 1)
+
+        // A verified ad-free entitlement acquired while a banner is visible starts a new generation,
+        // and the next preparation collapses the banner.
+        let entitled = makeSystem()
+        let entitledVisible = await entitled.runtime.prepare(
+            context: .home, containerWidth: 390, presentingViewController: nil
+        )
+        XCTAssertEqual(entitledVisible, .loading)
+        let generationBefore = entitled.runtime.requestGeneration
+        entitled.eligibility.hasAdFreeEntitlement = true
+        entitled.runtime.invalidateEligibility()
+        XCTAssertEqual(entitled.runtime.eligibilityRevision, 1)
+        XCTAssertEqual(entitled.runtime.requestGeneration, generationBefore + 1)
+        let entitledCollapsed = await entitled.runtime.prepare(
+            context: .home, containerWidth: 390, presentingViewController: nil
+        )
+        XCTAssertEqual(entitledCollapsed, .collapsed(.userHasAdFreeEntitlement))
+
+        // Entitlement acquired while consent is suspended: no SDK start and no ad request follow.
+        let consentPending = SuspendingConsent()
+        let consentEligibility = EligibilitySpy(events: EventRecorder(), hasAdFreeEntitlement: false)
+        let consentSDK = SDKStarterSpy(events: EventRecorder())
+        let consentRuntime = AdMobRuntimeCoordinator(
+            consent: consentPending, eligibility: consentEligibility, sdk: consentSDK
+        )
+        let duringConsent = Task { @MainActor in
+            await consentRuntime.prepare(context: .home, containerWidth: 390, presentingViewController: nil)
+        }
+        try await waitUntil { consentPending.isWaiting }
+        consentEligibility.hasAdFreeEntitlement = true
+        consentPending.resume(with: AdMobConsentSnapshot(canRequestAds: true, isPrivacyOptionsRequired: false))
+        let stateAfterConsent = await duringConsent.value
+        XCTAssertEqual(stateAfterConsent, .collapsed(.userHasAdFreeEntitlement))
+        XCTAssertEqual(consentSDK.startCount, 0)
+
+        // Entitlement acquired while the SDK start is suspended: the preparation still collapses.
+        let sdkPending = SuspendingSDKStarter()
+        let sdkEligibility = EligibilitySpy(events: EventRecorder(), hasAdFreeEntitlement: false)
+        let sdkRuntime = AdMobRuntimeCoordinator(
+            consent: ConsentSpy(
+                events: EventRecorder(),
+                initialSnapshot: AdMobConsentSnapshot(canRequestAds: true, isPrivacyOptionsRequired: false),
+                privacySnapshot: AdMobConsentSnapshot(canRequestAds: true, isPrivacyOptionsRequired: false)
+            ),
+            eligibility: sdkEligibility,
+            sdk: sdkPending
+        )
+        let duringStart = Task { @MainActor in
+            await sdkRuntime.prepare(context: .home, containerWidth: 390, presentingViewController: nil)
+        }
+        try await waitUntil { sdkPending.isWaiting }
+        sdkEligibility.hasAdFreeEntitlement = true
+        sdkPending.resume()
+        let stateAfterStart = await duringStart.value
+        XCTAssertEqual(stateAfterStart, .collapsed(.userHasAdFreeEntitlement))
+
+        // A late SDK callback from a suppressed generation cannot reopen the host, while callbacks of
+        // the next legitimate generation still apply.
+        let gate = AdMobBannerStateGate()
+        var hostState = AdMobBannerState.loading
+        let deliver: (Int, AdMobBannerState) -> Void = { token, next in
+            if gate.accepts(token) { hostState = next }
+        }
+        let creative = AdMobBannerState.visible(size: CGSize(width: 390, height: 60))
+        let suppressed = gate.open()
+        gate.close()
+        hostState = .collapsed(.consentUnavailable)
+        deliver(suppressed, creative)
+        XCTAssertEqual(hostState, .collapsed(.consentUnavailable))
+        let reopened = gate.open()
+        deliver(reopened, creative)
+        XCTAssertEqual(hostState, creative)
+        deliver(suppressed, .collapsed(.loadFailed))
+        XCTAssertEqual(hostState, creative)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<10_000 {
+            if condition() { return }
+            await Task.yield()
+        }
+        XCTFail("The suspended dependency was never reached.")
+        throw CancellationError()
     }
 
     private func makeSystem(
@@ -212,6 +297,7 @@ final class AdMobIntegrationTests: XCTestCase {
             runtime: runtime,
             events: events,
             consent: consent,
+            eligibility: eligibility,
             sdk: sdk
         )
     }
@@ -233,6 +319,7 @@ private struct TestSystem {
     let runtime: AdMobRuntimeCoordinator
     let events: EventRecorder
     let consent: ConsentSpy
+    let eligibility: EligibilitySpy
     let sdk: SDKStarterSpy
 }
 
@@ -283,7 +370,7 @@ private final class ConsentSpy: AdMobConsentCoordinating {
 @MainActor
 private final class EligibilitySpy: AdMobEligibilityChecking {
     private let events: EventRecorder
-    private let hasAdFreeEntitlement: Bool
+    var hasAdFreeEntitlement: Bool
 
     init(events: EventRecorder, hasAdFreeEntitlement: Bool) {
         self.events = events
@@ -320,5 +407,47 @@ private final class SDKStarterSpy: AdMobSDKStarting {
     func start() async {
         startCount += 1
         events.append("sdk-start")
+    }
+}
+
+@MainActor
+private final class SuspendingConsent: AdMobConsentCoordinating {
+    private var continuation: CheckedContinuation<AdMobConsentSnapshot, Never>?
+
+    var isWaiting: Bool { continuation != nil }
+
+    func updateAndPresentIfRequired(
+        from viewController: UIViewController?
+    ) async throws -> AdMobConsentSnapshot {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func presentPrivacyOptions(
+        from viewController: UIViewController?
+    ) async throws -> AdMobConsentSnapshot {
+        AdMobConsentSnapshot(canRequestAds: true, isPrivacyOptionsRequired: false)
+    }
+
+    func resume(with snapshot: AdMobConsentSnapshot) {
+        continuation?.resume(returning: snapshot)
+        continuation = nil
+    }
+}
+
+@MainActor
+private final class SuspendingSDKStarter: AdMobSDKStarting {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    var isWaiting: Bool { continuation != nil }
+
+    func configurePrivacy(_ configuration: AdMobPrivacyConfiguration) {}
+
+    func start() async {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
     }
 }

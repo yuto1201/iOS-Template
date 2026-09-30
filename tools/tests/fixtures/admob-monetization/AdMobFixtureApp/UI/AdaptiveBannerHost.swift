@@ -15,7 +15,7 @@ struct AdaptiveBannerHost: View {
                 renderer: renderer,
                 placement: placement,
                 containerWidth: proxy.size.width,
-                consentRevision: runtime.consentRevision,
+                requestGeneration: runtime.requestGeneration,
                 state: $state
             )
         }
@@ -49,7 +49,7 @@ private struct AdaptiveBannerContainer: UIViewRepresentable {
     let renderer: any AdMobBannerRendering
     let placement: AdMobPlacementContext
     let containerWidth: CGFloat
-    let consentRevision: Int
+    let requestGeneration: Int
     @Binding var state: AdMobBannerState
 
     func makeCoordinator() -> Coordinator {
@@ -76,12 +76,13 @@ private struct AdaptiveBannerContainer: UIViewRepresentable {
             let placement: AdMobPlacementContext
             let pixelWidth: Int
             let rendererID: ObjectIdentifier
-            let consentRevision: Int
+            let requestGeneration: Int
         }
 
         private var state: Binding<AdMobBannerState>
         private var task: Task<Void, Never>?
         private var lastKey: PreparationKey?
+        private let gate = AdMobBannerStateGate()
         private weak var renderer: (any AdMobBannerRendering)?
 
         init(state: Binding<AdMobBannerState>) {
@@ -97,11 +98,13 @@ private struct AdaptiveBannerContainer: UIViewRepresentable {
                 placement: parent.placement,
                 pixelWidth: Int((width * 2).rounded()),
                 rendererID: ObjectIdentifier(parent.renderer),
-                consentRevision: parent.consentRevision
+                requestGeneration: parent.requestGeneration
             )
             guard key != lastKey else { return }
             lastKey = key
             task?.cancel()
+            // Callbacks from the previous request generation can no longer change this host.
+            gate.close()
 
             let rootViewController = topViewController(from: containerView.window?.rootViewController)
             task = Task { @MainActor [weak self] in
@@ -119,14 +122,16 @@ private struct AdaptiveBannerContainer: UIViewRepresentable {
                     return
                 }
 
+                let token = self.gate.open()
                 parent.renderer.attach(
                     to: containerView,
                     context: parent.placement,
                     containerWidth: width,
-                    requestGeneration: parent.consentRevision,
+                    requestGeneration: parent.requestGeneration,
                     rootViewController: rootViewController
                 ) { [weak self] nextState in
-                    self?.state.wrappedValue = nextState
+                    guard let self, self.gate.accepts(token) else { return }
+                    self.state.wrappedValue = nextState
                 }
             }
         }
@@ -134,6 +139,7 @@ private struct AdaptiveBannerContainer: UIViewRepresentable {
         func dismantle(containerView: UIView) {
             task?.cancel()
             task = nil
+            gate.close()
             renderer?.detach(from: containerView)
         }
 

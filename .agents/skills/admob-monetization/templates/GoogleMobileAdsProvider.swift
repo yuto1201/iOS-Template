@@ -71,6 +71,7 @@ final class GoogleMobileAdsBannerRenderer: NSObject, AdMobBannerRendering, AdSiz
     private var lastRequestKey: RequestKey?
     private var lastState: AdMobBannerState = .idle
     private var stateDidChange: ((AdMobBannerState) -> Void)?
+    private weak var callbackOwner: UIView?
 
     func attach(
         to containerView: UIView,
@@ -98,6 +99,7 @@ final class GoogleMobileAdsBannerRenderer: NSObject, AdMobBannerRendering, AdSiz
                 mount(bannerView, in: containerView)
             }
             self.stateDidChange = stateDidChange
+            callbackOwner = containerView
             stateDidChange(lastState)
             return
         }
@@ -113,6 +115,7 @@ final class GoogleMobileAdsBannerRenderer: NSObject, AdMobBannerRendering, AdSiz
         mount(banner, in: containerView)
 
         self.stateDidChange = stateDidChange
+        callbackOwner = containerView
         lastRequestKey = requestKey
         lastState = .loading
         stateDidChange(.loading)
@@ -120,8 +123,14 @@ final class GoogleMobileAdsBannerRenderer: NSObject, AdMobBannerRendering, AdSiz
     }
 
     func detach(from containerView: UIView) {
-        guard bannerView?.superview === containerView else { return }
-        bannerView?.removeFromSuperview()
+        if bannerView?.superview === containerView {
+            bannerView?.removeFromSuperview()
+        }
+        // A detached host no longer receives SDK callbacks, so a late load cannot reopen it.
+        if callbackOwner === containerView {
+            stateDidChange = nil
+            callbackOwner = nil
+        }
     }
 
     func bannerViewDidReceiveAd(_ bannerView: BannerView) {

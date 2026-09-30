@@ -4,7 +4,7 @@ enum ActivatedAdMobConfiguration {
     static let activationInputDigest = "__ACTIVATION_INPUT_DIGEST__"
     static let includedScreens: Set<String> = __INCLUDED_SCREENS__
     static let excludedScreens: Set<String> = __EXCLUDED_SCREENS__
-    static let adFreeEntitlementSource = "__ENTITLEMENT_SOURCE__"
+    static let adFreeEntitlementSource = __ENTITLEMENT_SOURCE__
     static let minimumAudienceAge = __MINIMUM_AGE__
     static let privacyOptionsEntry = "__PRIVACY_OPTIONS_ENTRY__"
 
