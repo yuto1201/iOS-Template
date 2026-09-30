@@ -1,0 +1,487 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		AD0000010000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AD0000100000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AD0000200000000000000001;
+			remoteInfo = AdMobFixtureApp;
+		};
+		AD0000010000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AD0000100000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AD0000200000000000000001;
+			remoteInfo = AdMobFixtureApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		AD0000030000000000000001 /* AdMobFixtureApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AdMobFixtureApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AD0000030000000000000002 /* AdMobFixtureAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AdMobFixtureAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AD0000030000000000000003 /* AdMobFixtureAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AdMobFixtureAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		AD0000040000000000000001 /* AdMobFixtureApp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AdMobFixtureApp;
+			sourceTree = "<group>";
+		};
+		AD0000040000000000000002 /* AdMobFixtureAppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AdMobFixtureAppTests;
+			sourceTree = "<group>";
+		};
+		AD0000040000000000000003 /* AdMobFixtureAppUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AdMobFixtureAppUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AD0000050000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AD0000050000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AD0000050000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AD0000060000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				AD0000040000000000000001 /* AdMobFixtureApp */,
+				AD0000040000000000000002 /* AdMobFixtureAppTests */,
+				AD0000040000000000000003 /* AdMobFixtureAppUITests */,
+				AD0000060000000000000002 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AD0000060000000000000002 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AD0000030000000000000001 /* AdMobFixtureApp.app */,
+				AD0000030000000000000002 /* AdMobFixtureAppTests.xctest */,
+				AD0000030000000000000003 /* AdMobFixtureAppUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AD0000200000000000000001 /* AdMobFixtureApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AD0000300000000000000001 /* Build configuration list for PBXNativeTarget "AdMobFixtureApp" */;
+			buildPhases = (
+				AD0000070000000000000001 /* Sources */,
+				AD0000050000000000000001 /* Frameworks */,
+				AD0000080000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AD0000040000000000000001 /* AdMobFixtureApp */,
+			);
+			name = AdMobFixtureApp;
+			packageProductDependencies = (
+			);
+			productName = AdMobFixtureApp;
+			productReference = AD0000030000000000000001 /* AdMobFixtureApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AD0000200000000000000002 /* AdMobFixtureAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AD0000300000000000000002 /* Build configuration list for PBXNativeTarget "AdMobFixtureAppTests" */;
+			buildPhases = (
+				AD0000070000000000000002 /* Sources */,
+				AD0000050000000000000002 /* Frameworks */,
+				AD0000080000000000000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AD0000090000000000000001 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AD0000040000000000000002 /* AdMobFixtureAppTests */,
+			);
+			name = AdMobFixtureAppTests;
+			packageProductDependencies = (
+			);
+			productName = AdMobFixtureAppTests;
+			productReference = AD0000030000000000000002 /* AdMobFixtureAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		AD0000200000000000000003 /* AdMobFixtureAppUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AD0000300000000000000003 /* Build configuration list for PBXNativeTarget "AdMobFixtureAppUITests" */;
+			buildPhases = (
+				AD0000070000000000000003 /* Sources */,
+				AD0000050000000000000003 /* Frameworks */,
+				AD0000080000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AD0000090000000000000002 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AD0000040000000000000003 /* AdMobFixtureAppUITests */,
+			);
+			name = AdMobFixtureAppUITests;
+			packageProductDependencies = (
+			);
+			productName = AdMobFixtureAppUITests;
+			productReference = AD0000030000000000000003 /* AdMobFixtureAppUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AD0000100000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					AD0000200000000000000001 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					AD0000200000000000000002 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = AD0000200000000000000001;
+					};
+					AD0000200000000000000003 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = AD0000200000000000000001;
+					};
+				};
+			};
+			buildConfigurationList = AD0000300000000000000004 /* Build configuration list for PBXProject "AdMobFixtureApp" */;
+			developmentRegion = ja;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				ja,
+				en,
+				Base,
+			);
+			mainGroup = AD0000060000000000000001;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = AD0000060000000000000002 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AD0000200000000000000001 /* AdMobFixtureApp */,
+				AD0000200000000000000002 /* AdMobFixtureAppTests */,
+				AD0000200000000000000003 /* AdMobFixtureAppUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AD0000080000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AD0000080000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AD0000080000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AD0000070000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AD0000070000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AD0000070000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AD0000090000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AD0000200000000000000001 /* AdMobFixtureApp */;
+			targetProxy = AD0000010000000000000001 /* PBXContainerItemProxy */;
+		};
+		AD0000090000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AD0000200000000000000001 /* AdMobFixtureApp */;
+			targetProxy = AD0000010000000000000002 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AD0000400000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		AD0000400000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AD0000410000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "AdMob Fixture";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yuto1201.IOSTemplateAdMobFixture;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AD0000410000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "AdMob Fixture";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yuto1201.IOSTemplateAdMobFixture;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		AD0000420000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yuto1201.IOSTemplateAdMobFixtureTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AdMobFixtureApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AdMobFixtureApp";
+			};
+			name = Debug;
+		};
+		AD0000420000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yuto1201.IOSTemplateAdMobFixtureTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AdMobFixtureApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AdMobFixtureApp";
+			};
+			name = Release;
+		};
+		AD0000430000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yuto1201.IOSTemplateAdMobFixtureUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AdMobFixtureApp;
+			};
+			name = Debug;
+		};
+		AD0000430000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yuto1201.IOSTemplateAdMobFixtureUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AdMobFixtureApp;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AD0000300000000000000001 /* Build configuration list for PBXNativeTarget "AdMobFixtureApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AD0000410000000000000001 /* Debug */,
+				AD0000410000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AD0000300000000000000002 /* Build configuration list for PBXNativeTarget "AdMobFixtureAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AD0000420000000000000001 /* Debug */,
+				AD0000420000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AD0000300000000000000003 /* Build configuration list for PBXNativeTarget "AdMobFixtureAppUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AD0000430000000000000001 /* Debug */,
+				AD0000430000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AD0000300000000000000004 /* Build configuration list for PBXProject "AdMobFixtureApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AD0000400000000000000001 /* Debug */,
+				AD0000400000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AD0000100000000000000001 /* Project object */;
+}

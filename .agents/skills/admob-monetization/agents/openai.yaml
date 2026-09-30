@@ -1,0 +1,4 @@
+interface:
+  display_name: "AdMob Monetization"
+  short_description: "Activate a consent-gated non-tracking AdMob banner"
+  default_prompt: "Use $admob-monetization to activate and validate the approved AdMob banner integration for this derived iOS app."

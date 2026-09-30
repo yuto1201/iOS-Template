@@ -4,6 +4,20 @@
   "headAllPrefixes": [],
   "domainRules": [
     {
+      "domain": "admob-monetization",
+      "paths": [
+        ".claude/skills/admob-monetization",
+        "tools/activate-admob-integration.sh",
+        "tools/lib/admob-activation.rb",
+        "tools/tests/test-admob-integration.sh",
+        "tools/validate-admob-integration.sh"
+      ],
+      "prefixes": [
+        ".agents/skills/admob-monetization/",
+        "tools/tests/fixtures/admob-monetization/"
+      ]
+    },
+    {
       "domain": "appstore",
       "paths": [
         ".agents/skills/goldie/SKILL.md",
@@ -359,6 +373,7 @@
     }
   ],
   "tests": [
+    {"path": "tools/tests/test-admob-integration.sh", "domains": ["admob-monetization"]},
     {"path": "tools/tests/test-app-bootstrap.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-appstore-build.sh", "domains": ["appstore"]},

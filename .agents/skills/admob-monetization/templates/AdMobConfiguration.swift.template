@@ -1,0 +1,22 @@
+import Foundation
+
+enum ActivatedAdMobConfiguration {
+    static let activationInputDigest = "__ACTIVATION_INPUT_DIGEST__"
+    static let includedScreens: Set<String> = __INCLUDED_SCREENS__
+    static let excludedScreens: Set<String> = __EXCLUDED_SCREENS__
+    static let adFreeEntitlementSource = __ENTITLEMENT_SOURCE__
+    static let minimumAudienceAge = __MINIMUM_AGE__
+    static let privacyOptionsEntry = "__PRIVACY_OPTIONS_ENTRY__"
+
+    #if DEBUG
+    static let appID = "__DEBUG_APP_ID__"
+    static let bannerID = "__DEBUG_BANNER_ID__"
+    #else
+    static let appID = "__RELEASE_APP_ID__"
+    static let bannerID = "__RELEASE_BANNER_ID__"
+    #endif
+
+    static func placement(for screenID: String) -> AdMobPlacementContext {
+        AdMobPlacementContext(screenID: screenID, adUnitID: bannerID)
+    }
+}
