@@ -2631,10 +2631,12 @@ func validateWorkflowPath(_ path: String) throws {
     }
     // The dedicated Simulator declaration (D-063) is non-secret verification configuration, like the
     // repository test manifest, and is owned by the verification tools that read it. The template identity
-    // manifest is non-secret configuration of the bootstrap tool that reads it.
+    // manifest is non-secret configuration of the bootstrap tool that reads it. Config/ownership.yml
+    // (#214) binds external operations to non-secret account and target identifiers; a change to it still
+    // needs the strict opposite-model review and the pre-merge gate like every workflow-only change.
     let exact: Set<String> = [
-        "README.md", "AGENTS.md", "Config/dedicated-simulators.json", "Config/repository-tests.json",
-        "Config/template-identity.json"
+        "README.md", "AGENTS.md", "Config/dedicated-simulators.json", "Config/ownership.yml",
+        "Config/repository-tests.json", "Config/template-identity.json"
     ]
     let prefixes = ["tools/", "docs/", "specs/", ".agents/", ".codex/", ".claude/", ".github/"]
     guard exact.contains(path) || localDeliveryToolPaths.contains(path) || prefixes.contains(where: { path.hasPrefix($0) }) else {

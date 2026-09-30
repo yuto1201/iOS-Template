@@ -1346,8 +1346,9 @@ elevenlabs:
   workspaceId: null
 
 appStore:
-  teamId: null
+  teamId: AUZ2MV247A
   bundleId: com.yuto.GardenNotes
+  apiKeyType: team-app-manager
 """
 if actual != expected:
     raise SystemExit(f"unexpected ownership content: {actual!r}")
