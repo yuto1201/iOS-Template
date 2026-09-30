@@ -155,7 +155,11 @@ verify_digest = "sha256:#{Digest::SHA256.hexdigest(verify_bytes)}"
 contract_required = %w[schemaVersion issue repository goal specAnchors acceptanceCriteria dependencies externalOperations externalOperationDetailsDigest fetchedAt]
 reject("Issue contract schema is incomplete") unless contract.is_a?(Hash) && (contract.keys - contract_required - ["verification", "deliveryStage", "deliveryProfile", "verificationScope"]).empty? && contract_required.all? { |key| contract.key?(key) }
 delivery_stage = IOSTemplate::DeliveryStage.explicit?(contract) ? IOSTemplate::DeliveryStage.effective_name(contract) : "legacy"
-exact_keys!(verify, %w[schemaVersion status changeClassification reason issue baseSha headSha issueContract matrixFile matrixDigest executionRoute xcode build tests cases visualEvaluation acceptanceEvidence completedAt], "verify.json")
+verify_keys = %w[schemaVersion status changeClassification reason issue baseSha headSha issueContract matrixFile matrixDigest executionRoute xcode build tests cases visualEvaluation acceptanceEvidence completedAt]
+# Schema-v2 native evidence also binds its dedicated Simulator lease receipts.
+# The canonical validator below proves them against the frozen matrix.
+verify_keys += ["simulatorAllocations"] if verify.is_a?(Hash) && verify.key?("simulatorAllocations")
+exact_keys!(verify, verify_keys, "verify.json")
 reject("contract identity mismatch") unless contract.is_a?(Hash) && contract["schemaVersion"] == 1 && contract["issue"] == issue
 reject("contract repository is invalid") unless contract["repository"].is_a?(String) && contract["repository"].match?(%r{\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z})
 reject("contract operation-details digest is invalid") unless contract["externalOperationDetailsDigest"].is_a?(String) && contract["externalOperationDetailsDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
