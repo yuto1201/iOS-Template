@@ -31,7 +31,7 @@ cp -R "$repo_root/tools/lib" "$repo/tools/"
 cp -R "$repo_root/.agents" "$repo/"
 cp -R "$repo_root/specs" "$repo/"
 cp "$repo_root/Config/ownership.yml" "$repo/Config/"
-ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; text.sub!("appStore:\n  teamId: null\n  bundleId: null","appStore:\n  teamId: PERSONALTEAM\n  bundleId: com.yuto1201.personal") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; text.sub!(/appStore:\n  teamId: [^\n]*\n  bundleId: null/,"appStore:\n  teamId: PERSONALTEAM\n  bundleId: com.yuto1201.personal") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
 mkdir -p "$repo/Config/releases/premerge-v1/phase-records"
 PHASE_RECORD="$repo/Config/releases/premerge-v1/phase-records/phase6.json" ruby -I "$repo/tools/lib" -rworkflow-release-phase -e '
   bytes=IOSTemplate::ReleasePhase.create(release_identifier:"premerge-v1",revision:1,scope:["workflow"],goal:"Validate release workflow gates.",actor:"yuto1201",reason:"Start the fixture release.",recorded_at:"2026-09-15T08:00:00Z")
