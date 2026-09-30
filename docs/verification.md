@@ -287,6 +287,8 @@ contractで指定されたexact 1条件／targeted部分集合／4条件それ�
 
 shapeは`testIdentifier`による主要導線Smokeを必須とし、単なるlaunch assertionだけでは完了しません。`fast`と純粋な文書変更はSimulator検証を`not-applicable`とします。
 
+`testIdentifier` caseの任意の`relaunchArguments`は、UI Test成功後、Screenshot前の再起動にだけlocale引数の後から順に付けます。宣言のないcaseは従来の起動と証拠のままです。秘密を含む値はcontractで拒否します。アプリ側のtest hookは`#if DEBUG`等でRelease buildから除外することを推奨します。
+
 UI Direction Gateを通したshapeでは、HTMLのDOMやCSSではなく、確定仕様に採用した情報階層、主要task、navigation、代表stateをnative画面とSmoke Testで確認します。HTMLを開けること、HTML screenshotが似ていること、digestが一致することだけではcase成功にしません。
 
 ### Stage D: AI visual evaluation（visual-requiredのみ）
@@ -308,6 +310,7 @@ releaseでは主開発モデルが一次評価し、反対モデルレビュー�
 ### Stage D.1: 二段階の証拠公開
 
 visual-required application検証は実行と視覚承認を分けます。非visualのshape／hardenは同じrunnerがBuild、Unit、mechanical caseを完了後、`executionRoute: xcodebuild-stage`、`visualEvaluation.status: not-applicable`のfinal evidenceを直接atomic publishします。visual-requiredのharden／releaseだけがScreenshotとdraftを公開し、visual承認後にfinalizeします。
+visual-requiredの`relaunchArguments`は宣言caseにだけdraft、final、visual packetへ同じ配列を記録し、sealed contract digestとvisual packetへ束縛します。nonvisual evidenceには記録しません。
 historical evidence表記の`tests:TemplateAppTests/NotificationSettingsTests`はbootstrapのlive identity anchorとしてだけ保持します。Task 4 contractの`acceptanceMappings.checks`ではこの表記を許可せず、`stage:unit-tests`と実行済みcase referenceを使います。
 
 ```bash

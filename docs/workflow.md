@@ -261,7 +261,7 @@ Claim済みで`deliveryStage`を持たない旧snapshotへfieldを補完せず�
 
 application検証を実行するIssueは任意の`Verification`節へ、次の例のように完全なJSON objectを記載します。生のJSONまたは単一の`json` code fenceを使い、外側の`verification` wrapperは書きません。`tools/validate-issue-body.sh`とClaimが同じ`tools/lib/issue-contract.rb`で入力を検証し、canonical snapshotの`verification`へ格納します。Feature／Regression formにも入力欄があります。Configや環境変数から暗黙の既定値を補わず、このIssue本文だけを入力の正本とします。
 
-許可するkeyは`bundleIdentifier`、`unitTestIdentifier`、scopeで定まるfixed 1件／targeted部分集合／fixed 4件の`cases`、受け入れ条件と同じ順の`acceptanceMappings`だけです。`shape`のcaseは操作を確認する`testIdentifier`を必須とします。各caseは`testIdentifier`またはexact `{"kind":"launch-succeeded"}`の一方だけを持ちます。
+許可するkeyは`bundleIdentifier`、`unitTestIdentifier`、scopeで定まるfixed 1件／targeted部分集合／fixed 4件の`cases`、受け入れ条件と同じ順の`acceptanceMappings`だけです。`shape`のcaseは操作を確認する`testIdentifier`を必須とします。各caseは`testIdentifier`またはexact `{"kind":"launch-succeeded"}`の一方だけを持ちます。`testIdentifier`のcaseには、Screenshot前の再起動にだけ渡す任意の`relaunchArguments`を宣言できます。
 
 documentation-only Issueでは節を省略するか、`Not applicable`／GitHub空欄の`_No response_`にします。この場合、従来のsnapshot bytesに`verification`を追加しません。空のJSON、空節、部分設定を「省略」には読み替えません。`fast`へapplication Verificationを指定することも拒否します。application実行時のobject不在は、引き続きBuild前に失敗します。
 

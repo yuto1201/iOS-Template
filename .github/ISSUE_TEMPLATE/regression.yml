@@ -96,7 +96,7 @@ body:
     id: verification
     attributes:
       label: Verification
-      description: "For application verification, provide this complete JSON object with real app/test identifiers and explicit checks for every AC in order. When `Application-fixture binding:` is present, the runner project must exactly equal its committed nested `project` and mappings must not contain `visual:` checks, preserving the `xcodebuild-stage` route; the binding does not create a workflow-only route or weaken Build/Test evidence. Omit for documentation-only, fast, or workflow-only Issues. The placeholder is an example, not proof of your ACs. See docs/workflow.md."
+      description: "For application verification, provide this complete JSON object with real app/test identifiers and explicit checks for every AC in order. A testIdentifier case may optionally declare relaunchArguments for the screenshot relaunch. When `Application-fixture binding:` is present, the runner project must exactly equal its committed nested `project` and mappings must not contain `visual:` checks, preserving the `xcodebuild-stage` route; the binding does not create a workflow-only route or weaken Build/Test evidence. Omit for documentation-only, fast, or workflow-only Issues. The placeholder is an example, not proof of your ACs. See docs/workflow.md."
       placeholder: |
         {
           "bundleIdentifier": "com.example.ExampleApp",

@@ -5,7 +5,7 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git jq ruby swift
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
-[[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
+[[ $# == 0 || ( $# == 1 && ( "$1" == full || "$1" == scoped ) ) ]] || exit 64
 scope="${1:-full}"
 case_ids=(iphone-en iphone-ja ipad-en ipad-ja)
 [[ "$scope" != scoped ]] || case_ids=(iphone-ja)
@@ -106,8 +106,8 @@ matrix["scope"] = "iphone-ja"; matrix["cases"].select! { |entry| entry["id"] == 
 File.write(contract_path, JSON.generate(contract)); File.write(matrix_path, JSON.generate(matrix))
 RUBY
 fi
-ruby -rjson - "$contract" <<'RUBY'
-path = ARGV.fetch(0)
+ruby -rjson - "$contract" "$scope" <<'RUBY'
+path, scope = ARGV
 contract = JSON.parse(File.binread(path))
 binding = {
   "releaseIdentifier"=>"renderer-v1", "revision"=>1, "phase"=>6, "scope"=>["application"],
@@ -117,6 +117,7 @@ binding = {
 }
 canonical = ->(value) { value.is_a?(Hash) ? value.keys.sort.to_h { |key| [key, canonical.call(value.fetch(key))] } : value }
 contract.fetch("acceptanceCriteria").last["text"] = "Release-phase binding: #{JSON.generate(canonical.call(binding))}"
+contract.fetch("verification").fetch("cases").fetch(0)["relaunchArguments"] = ["-verify-mode", "ready"] if scope == "full"
 File.binwrite(path, JSON.generate(contract))
 RUBY
 ruby -I "$primary/tools/lib" -rjson -rissue-contract - "$contract" <<'RUBY'
@@ -153,11 +154,13 @@ puts digest.hexdigest
 RUBY
 )
 
-ruby -rjson - "$fixtures/passed.json" "$verify" "$base" "$head" "$contract_digest" "$matrix_digest" "$source_tree_digest" <<'RUBY'
-source, destination, base, head, contract, matrix, tree = ARGV
+ruby -rjson - "$fixtures/passed.json" "$verify" "$base" "$head" "$contract_digest" "$matrix_digest" "$source_tree_digest" "$scope" <<'RUBY'
+source, destination, base, head, contract, matrix, tree, scope = ARGV
 text = File.read(source)
 {"BASE_SHA"=>base,"HEAD_SHA"=>head,"CONTRACT_DIGEST"=>contract,"MATRIX_DIGEST"=>matrix,"SOURCE_TREE_DIGEST"=>tree}.each { |key, value| text = text.gsub(key, value) }
-File.write(destination, JSON.pretty_generate(JSON.parse(text)) + "\n")
+value = JSON.parse(text)
+value.fetch("cases").fetch(0)["relaunchArguments"] = ["-verify-mode", "ready"] if scope == "full"
+File.write(destination, JSON.pretty_generate(value) + "\n")
 RUBY
 
 canonical_root=$(/usr/bin/swift -e 'import Foundation; print(URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath().standardizedFileURL.path)' "$worktree")
@@ -176,7 +179,7 @@ draft = {
   "schemaVersion"=>1,"status"=>"awaiting-visual-review","issue"=>42,"baseSha"=>final.fetch("baseSha"),"headSha"=>final.fetch("headSha"),
   "issueContract"=>final.fetch("issueContract"),"matrixFile"=>final.fetch("matrixFile"),"matrixDigest"=>final.fetch("matrixDigest"),
   "executionRoute"=>"xcodebuild-simctl","xcode"=>final.fetch("xcode"),"build"=>final.fetch("build"),"tests"=>final.fetch("tests"),
-  "cases"=>ids.map.with_index { |id,index| image=File.join(root,id,"screenshot.png"); {"id"=>id,"status"=>"passed","screenshot"=>"#{id}/screenshot.png","screenshotDigest"=>"sha256:#{Digest::SHA256.file(image).hexdigest}","mechanicalCheck"=>actions[index].key?("testIdentifier") ? "test:#{actions[index].fetch('testIdentifier')}" : "assertion:launch-succeeded"} },
+  "cases"=>ids.map.with_index { |id,index| image=File.join(root,id,"screenshot.png"); entry={"id"=>id,"status"=>"passed","screenshot"=>"#{id}/screenshot.png","screenshotDigest"=>"sha256:#{Digest::SHA256.file(image).hexdigest}","mechanicalCheck"=>actions[index].key?("testIdentifier") ? "test:#{actions[index].fetch('testIdentifier')}" : "assertion:launch-succeeded"}; entry["relaunchArguments"]=actions[index]["relaunchArguments"] if actions[index].key?("relaunchArguments"); entry },
   "acceptanceEvidence"=>final.fetch("acceptanceEvidence").map { |entry| {"id"=>entry.fetch("id"),"evidence"=>entry.fetch("evidence").reject { |check| check.start_with?("visual:") }} },
   "workspaceArtifacts"=>{"derivedDataPath"=>"#{ENV.fetch("WORKSPACE")}/DerivedData","buildResultBundlePath"=>"#{ENV.fetch("WORKSPACE")}/Build.xcresult","testResultBundlePath"=>"#{ENV.fetch("WORKSPACE")}/Tests.xcresult"},
   "executionCompletedAt"=>"2026-08-21T12:30:00+09:00"
@@ -293,6 +296,7 @@ expect_refusal() {
 }
 
 body=$(run_renderer)
+[[ "$body" == *'Closes #42'* ]] || { echo 'PR body was not rendered with relaunchArguments evidence' >&2; exit 1; }
 for locale_profile in unset C POSIX en_US.UTF-8; do
   locale_command=(env -u LANG -u LC_ALL -u LC_CTYPE)
   if [[ "$locale_profile" != unset ]]; then
@@ -559,6 +563,6 @@ fast_body=$(run_renderer)
 grep -Fq 'Not required by this non-release, non-strict contract.' <<<"$fast_body" || { echo 'fast PR body did not record the review waiver' >&2; exit 1; }
 
 echo 'PASS: PR body readiness is bound to canonical current visual evidence and documentation-only validation remains available'
-if [[ "$scope" != scoped ]]; then
+if [[ "$scope" != scoped && $# == 0 ]]; then
   bash "$source_root/tools/tests/test-render-pr-body.sh" scoped
 fi

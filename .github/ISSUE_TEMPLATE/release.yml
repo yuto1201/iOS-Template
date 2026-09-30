@@ -92,7 +92,7 @@ body:
     id: verification
     attributes:
       label: Verification
-      description: Replace every identifier and AC mapping with the candidate's complete four-case integration and visual checks.
+      description: Replace every identifier and AC mapping with the candidate's complete four-case integration and visual checks. A testIdentifier case may optionally declare relaunchArguments for the screenshot relaunch.
       placeholder: |
         {
           "bundleIdentifier": "com.example.ExampleApp",

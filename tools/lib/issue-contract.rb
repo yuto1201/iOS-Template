@@ -598,13 +598,20 @@ module IOSTemplate
       if cases.is_a?(Array) && cases.length == case_ids.length
         cases.each_with_index do |entry, index|
           unless entry.is_a?(Hash) && entry["id"] == case_ids[index] &&
-                 [%w[id testIdentifier], %w[assertion id]].include?(entry.keys.sort)
+                 [%w[id testIdentifier], %w[id relaunchArguments testIdentifier], %w[assertion id]].include?(entry.keys.sort)
             failures << "Verification cases must have exact scoped ordered IDs and exactly one testIdentifier or assertion"
             next
           end
           if entry.key?("testIdentifier")
             unless entry["testIdentifier"].is_a?(String) && entry["testIdentifier"].match?(TEST_IDENTIFIER)
               failures << "Verification case testIdentifier is invalid"
+            end
+            if entry.key?("relaunchArguments")
+              arguments = entry["relaunchArguments"]
+              unless arguments.is_a?(Array) && (1..16).cover?(arguments.length) &&
+                     arguments.all? { |argument| valid_relaunch_argument?(argument, value["bundleIdentifier"], entry["testIdentifier"]) }
+                failures << "Verification case relaunchArguments must contain 1-16 safe strings"
+              end
             end
           elsif entry["assertion"] != {"kind" => "launch-succeeded"}
             failures << "Verification assertion must be exactly launch-succeeded"
@@ -648,6 +655,16 @@ module IOSTemplate
         required = VERIFICATION_CASE_IDS.map { |id| "visual:#{id}" }
         failures << "release Verification must require visual evidence for every case" unless (required - all_checks).empty?
       end
+    end
+
+    def valid_relaunch_argument?(argument, bundle_identifier, test_identifier)
+      argument.is_a?(String) && (1..256).cover?(argument.length) &&
+        !argument.match?(/[\u0000-\u001f\u007f]/) &&
+        !argument.match?(/\A-Apple(?:Languages|Locale)/i) &&
+        !argument.start_with?("--") &&
+        argument != bundle_identifier && argument != test_identifier &&
+        !argument.match?(/(secret|token|passw(or)?d|api[-_]?key|bearer|private[-_]?key|credential)/i) &&
+        !argument.match?(/[A-Za-z0-9+\/=\-_]{32,}/)
     end
 
     def parse_delivery_profile(lines, headings, failures)
