@@ -329,7 +329,7 @@ ruby -ryaml -rjson -e '
   abort "unexpected Vercel team" unless data.dig("vercel", "teamId") == "team_ANEUn6gVL8dccPaY08wkvxFt" && data.dig("vercel", "teamSlug") == "yuto16" && data.dig("vercel", "plan") == "hobby"
   abort "Vercel projectId must be null" unless data.dig("vercel", "projectId").nil?
   %w[accountId workspaceId].each { |key| abort "ElevenLabs #{key} must be null" unless data.dig("elevenlabs", key).nil? }
-  abort "App Store teamId must be null" unless data.dig("appStore", "teamId").nil?
+  abort "unexpected App Store team" unless data.dig("appStore", "teamId") == "AUZ2MV247A" && data.dig("appStore", "apiKeyType") == "team-app-manager"
   if File.exist?("Config/app-identity.json")
     identity = JSON.parse(File.read("Config/app-identity.json"))
     abort "unexpected app identity schema version" unless identity["schemaVersion"] == 1
