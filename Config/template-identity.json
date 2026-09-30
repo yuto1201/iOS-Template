@@ -26,6 +26,7 @@
     "AGENTS.md",
     "README.md",
     "Config/ownership.yml",
+    "Config/dedicated-simulators.json",
     "specs/architecture.md",
     "docs/verification.md",
     "docs/security.md",

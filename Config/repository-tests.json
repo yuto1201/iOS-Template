@@ -76,6 +76,7 @@
       "domain": "bootstrap-assets",
       "paths": [
         "AGENTS.md",
+        "Config/dedicated-simulators.json",
         "Config/ownership.yml",
         "Config/template-identity.json",
         "README.md",
@@ -200,6 +201,7 @@
         "tools/lib/verification-scope.rb",
         "tools/resolve-simulator-matrix.sh",
         "tools/resolve-simulator-matrix.swift",
+        "tools/setup-dedicated-simulators.sh",
         "tools/validate-simulator-matrix.rb",
         "tools/validate-verify-json.swift",
         "tools/verify-ios-issue.sh",
@@ -436,6 +438,7 @@
     {"path": "tools/tests/test-review-sealing.sh", "domains": ["review-evidence-sealing"]},
     {"path": "tools/tests/test-review-shared-artifacts.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-secret-store.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-setup-dedicated-simulators.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-simulator-lifecycle.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-simulator-resolver.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-spec-state.sh", "domains": ["repository-lint", "specification"]},

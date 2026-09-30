@@ -465,11 +465,71 @@ func expectedLiveContentPaths(manifest: TemplateManifest) -> Set<String> {
         "AGENTS.md",
         "README.md",
         "Config/ownership.yml",
+        "Config/dedicated-simulators.json",
         "specs/architecture.md",
         "docs/verification.md",
         "docs/security.md",
         "docs/agent-contracts/review-packet.md",
     ]
+}
+
+let templateSimulatorPrefix = "iOS-Template "
+let dedicatedSimulatorsPath = "Config/dedicated-simulators.json"
+
+// Returns the template's two dedicated Simulator names after proving each appears exactly once as a name value.
+func templateDedicatedSimulatorNames(in content: String) throws -> [String] {
+    guard let data = content.data(using: .utf8),
+          let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          Set(value.keys) == ["schemaVersion", "devices"],
+          value["schemaVersion"] as? Int == 1,
+          let devices = value["devices"] as? [[String: Any]],
+          devices.count == 2 else {
+        throw BootstrapError.missingAnchor
+    }
+    let names = devices.compactMap { $0["name"] as? String }
+    guard names.count == 2,
+          Set(names).count == 2,
+          Set(devices.compactMap { $0["family"] as? String }) == ["iphone", "ipad"],
+          names.allSatisfy({ $0.hasPrefix(templateSimulatorPrefix) && $0.count > templateSimulatorPrefix.count }),
+          names.allSatisfy({ countOccurrences(of: "\"name\": \"\($0)\"", in: content) == 1 }),
+          countOccurrences(of: "iOS-Template", in: content) == 2 else {
+        throw BootstrapError.missingAnchor
+    }
+    return names
+}
+
+func jsonStringLiteral(_ value: String) throws -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.withoutEscapingSlashes]
+    guard let data = try? encoder.encode(value),
+          let literal = String(data: data, encoding: .utf8) else {
+        throw BootstrapError.writeFailed
+    }
+    return literal
+}
+
+// Derived apps own the same Device Type and Runtime under names prefixed with their display name (D-063).
+func transformDedicatedSimulators(_ identity: AppIdentity, in path: URL) throws {
+    guard let content = try? String(contentsOf: path, encoding: .utf8) else {
+        throw BootstrapError.missingAnchor
+    }
+    guard identity.displayName != String(templateSimulatorPrefix.dropLast()),
+          !identity.displayName.hasPrefix("iOS-Template-") else {
+        throw BootstrapError.invalidIdentity
+    }
+    var transformed = content
+    for name in try templateDedicatedSimulatorNames(in: content) {
+        let suffix = String(name.dropFirst(templateSimulatorPrefix.count))
+        transformed = transformed.replacingOccurrences(
+            of: "\"name\": \"\(name)\"",
+            with: "\"name\": \(try jsonStringLiteral("\(identity.displayName) \(suffix)"))"
+        )
+    }
+    do {
+        try transformed.write(to: path, atomically: true, encoding: .utf8)
+    } catch {
+        throw BootstrapError.writeFailed
+    }
 }
 
 func requireOccurrenceCount(_ needle: String, equals expected: Int, in path: URL) throws {
@@ -581,6 +641,10 @@ func preflightSourceContract(root: URL, manifest: TemplateManifest) throws {
         equals: 1,
         in: safePath("Config/ownership.yml", under: root)
     )
+    guard let simulators = try? String(contentsOf: safePath(dedicatedSimulatorsPath, under: root), encoding: .utf8) else {
+        throw BootstrapError.missingAnchor
+    }
+    _ = try templateDedicatedSimulatorNames(in: simulators)
 }
 
 func transformArchitecture(_ identity: AppIdentity, manifest: TemplateManifest, in path: URL) throws {
@@ -705,6 +769,7 @@ func transformContent(root: URL, manifest: TemplateManifest, identity: AppIdenti
     try replaceExactly("template-app", with: identity.appSlug, in: security, minimumCount: 3)
     try replaceOwnershipBundleID(identity.bundleId, in: try safePath("Config/ownership.yml", under: root))
     try replaceFirstAgentContractHeading(identity.displayName, in: try safePath("AGENTS.md", under: root))
+    try transformDedicatedSimulators(identity, in: try safePath(dedicatedSimulatorsPath, under: root))
     try insertDisplayName(identity.displayName, bundleID: identity.bundleId, inPBXProj: pbxproj)
 }
 
@@ -876,6 +941,22 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
           architecture.contains("├── \(identity.moduleName)UITests/"),
           architecture.contains("├── \(identity.moduleName).xcodeproj/"),
           architecture.contains("\(identity.moduleName)/\n├── \(identity.moduleName)App.swift") else {
+        throw BootstrapError.missingAnchor
+    }
+
+    let simulators = try content(dedicatedSimulatorsPath)
+    guard let simulatorData = simulators.data(using: .utf8),
+          let simulatorValue = try? JSONSerialization.jsonObject(with: simulatorData) as? [String: Any],
+          let simulatorDevices = simulatorValue["devices"] as? [[String: Any]],
+          simulatorDevices.count == 2 else {
+        throw BootstrapError.missingAnchor
+    }
+    let simulatorNames = simulatorDevices.compactMap { $0["name"] as? String }
+    guard simulatorNames.count == 2,
+          Set(simulatorNames).count == 2,
+          simulatorNames.allSatisfy({
+              $0.hasPrefix("\(identity.displayName) ") && $0.count > identity.displayName.count + 1
+          }) else {
         throw BootstrapError.missingAnchor
     }
 

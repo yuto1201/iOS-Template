@@ -128,6 +128,24 @@ print(digest.hexdigest())
 PY
 }
 
+# The derived declaration keeps the source bytes except the two name values, which gain the display name.
+expect_dedicated_simulator_names() {
+  local repository="$1" display_name="$2"
+  ruby -rjson - "$root/Config/dedicated-simulators.json" "$repository/Config/dedicated-simulators.json" "$display_name" <<'RUBY' || {
+source_path, transformed_path, display_name = ARGV
+source = File.read(source_path)
+expected = JSON.parse(source)["devices"].map { |device| device["name"] }.inject(source) do |text, name|
+  text.sub(%Q("name": "#{name}"), %Q("name": #{JSON.generate(name.sub(/\AiOS-Template /, "#{display_name} "))}))
+end
+transformed = File.read(transformed_path)
+names = JSON.parse(transformed)["devices"].map { |device| device["name"] }
+abort "derived declaration differs" unless transformed == expected && names == ["#{display_name} iPhone 17", "#{display_name} iPad (A16)"]
+RUBY
+    echo "bootstrap did not name the dedicated Simulators for $display_name" >&2
+    exit 1
+  }
+}
+
 new_safety_fixture() {
   local label="$1"
   fixture="$(mktemp -d -t "app-bootstrap-${label}.XXXXXX")"
@@ -380,6 +398,8 @@ PY
     'source-slug-no-op|Garden Notes|GardenNotes|template-app|com.yuto.GardenNotes'
     'source-bundle-no-op|Garden Notes|GardenNotes|garden-notes|com.yuto.TemplateApp'
     'exact-source-identity|TemplateApp|TemplateApp|template-app|com.yuto.TemplateApp'
+    'template-simulator-names|iOS-Template|TemplateNotes|template-notes|com.yuto.TemplateNotes'
+    'protected-simulator-prefix|iOS-Template-Notes|TemplateNotes|template-notes|com.yuto.TemplateNotes'
   )
   for row in "${invalid_cases[@]}"; do
     IFS='|' read -r label invalid_display invalid_module invalid_slug invalid_bundle <<<"$row"
@@ -483,6 +503,22 @@ PY
   rm -rf "$fixture"
   fixture=''
 
+  new_safety_fixture quoted-display-name
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" \
+      --display-name 'Garden "Q" Notes' \
+      --module-name 'GardenQNotes' \
+      --app-slug 'garden-q-notes' \
+      --bundle-id 'com.yuto.GardenQNotes'
+  ) >"$output" 2>"$errors"; then
+    echo "quoted display-name bootstrap failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  expect_dedicated_simulator_names "$fixture" 'Garden "Q" Notes'
+  rm -rf "$fixture"
+  fixture=''
+
   new_safety_fixture source-substring
   if ! (
     cd "$fixture"
@@ -540,6 +576,7 @@ PY
   }
   grep -Fqx '├── GardenNotes/' "$fixture/specs/architecture.md"
   grep -Fqx 'GardenNotes/' "$fixture/specs/architecture.md"
+  expect_dedicated_simulator_names "$fixture" 'Garden Notes'
 
   if ! swift "$root/tools/bootstrap-app.swift" audit \
     --root "$fixture" \
