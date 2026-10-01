@@ -760,4 +760,37 @@ supabase-ops
 ui-direction
 PROTECTED_SKILLS
 
+REPO_ROOT="$repo_root" /usr/bin/ruby -I"$repo_root/tools/lib" -rjson -rissue-contract <<'RUBY'
+baseline = JSON.parse(File.binread(File.join(ENV.fetch("REPO_ROOT"), "tools/tests/fixtures/verify/issue-contract.json")))
+validate = ->(document) { IOSTemplate::IssueContract.validate_snapshot!(document, issue: 42, repository: "yuto1201/iOS-Template") }
+copy = ->(document) { Marshal.load(Marshal.dump(document)) }
+validate.call(baseline)
+accepted = copy.call(baseline)
+accepted.fetch("verification").fetch("cases").fetch(0)["relaunchArguments"] = ["-verify-mode", "ready state"]
+validate.call(accepted)
+
+reject = lambda do |label, argument, assertion: false|
+  candidate = copy.call(baseline)
+  selected = candidate.fetch("verification").fetch("cases").fetch(assertion ? 1 : 0)
+  selected["relaunchArguments"] = argument
+  begin
+    validate.call(candidate)
+    abort "accepted invalid relaunchArguments: #{label}"
+  rescue IOSTemplate::IssueContract::ValidationError => error
+    abort "wrong rejection for #{label}: #{error.message}" unless error.message.include?("Verification case")
+  end
+end
+
+reject.call("assertion case", ["-verify-mode"], assertion: true)
+{
+  "nonarray" => "-verify-mode", "empty array" => [], "17 arguments" => Array.new(17, "ok"),
+  "nonstrings" => [3], "empty string" => [""], "257 characters" => ["a:" * 128 + "b"],
+  "newline" => ["a\nb"], "NUL" => ["a\0b"],
+  "AppleLanguages" => ["-AppleLanguages"], "AppleLocale" => ["-applelocale=ja"],
+  "simctl option" => ["--foo"], "bundle ID" => ["com.example.TemplateApp"],
+  "test identifier" => ["TemplateAppUITests/SmokeTests/testLaunch"], "secret" => ["token=abc"],
+  "opaque string" => ["a" * 32]
+}.each { |label, argument| reject.call(label, argument) }
+RUBY
+
 echo 'PASS: Issue forms, Definition of Ready validator, PR template, labels, and model-neutral label sync'

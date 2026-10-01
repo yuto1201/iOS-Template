@@ -238,6 +238,10 @@ config_value() {
   run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-config \
     --config "$config" --digest "$config_digest" --get "$1"
 }
+config_lines() {
+  run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-config \
+    --config "$config" --digest "$config_digest" --get-lines "$1"
+}
 config_check() {
   run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-config \
     --config "$config" --digest "$config_digest" --check >/dev/null
@@ -662,6 +666,11 @@ for index in "${case_indexes[@]}"; do
   language="$(config_value cases.$index.language)"
   action="$(config_value cases.$index.action)"
   action_value="$(config_value cases.$index.value)"
+  relaunch_arguments=()
+  config_lines "cases.$index.relaunchArguments" >"$run_state/$case_id-relaunch-arguments"
+  while IFS= read -r relaunch_argument; do
+    relaunch_arguments+=("$relaunch_argument")
+  done <"$run_state/$case_id-relaunch-arguments"
   stage="case-$case_id"
   case_failed=""
   active_case_id="$case_id"
@@ -747,7 +756,7 @@ for index in "${case_indexes[@]}"; do
     fi
     if [[ -z "$case_failed" ]]; then
       run_xcrun simctl terminate "$udid" "$bundle_identifier" >/dev/null 2>&1 || true
-      launch_output="$(run_xcrun simctl launch "$udid" "$bundle_identifier" -AppleLanguages "($language)" -AppleLocale "$locale" 2>/dev/null)" || case_failed="UI relaunch"
+      launch_output="$(run_xcrun simctl launch "$udid" "$bundle_identifier" -AppleLanguages "($language)" -AppleLocale "$locale" ${relaunch_arguments[@]+"${relaunch_arguments[@]}"} 2>/dev/null)" || case_failed="UI relaunch"
     fi
     if [[ -z "$case_failed" ]]; then
       launch_prefix="$bundle_identifier: "

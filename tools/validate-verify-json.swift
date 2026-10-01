@@ -32,6 +32,10 @@ let bundleIdentifierPattern = try! NSRegularExpression(
 let testIdentifierPattern = try! NSRegularExpression(
     pattern: "^[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_.-]*(\\(\\))?$"
 )
+let relaunchSecretPattern = try! NSRegularExpression(
+    pattern: "(secret|token|passw(or)?d|api[-_]?key|bearer|private[-_]?key|credential)", options: [.caseInsensitive]
+)
+let relaunchOpaquePattern = try! NSRegularExpression(pattern: "[A-Za-z0-9+/=_-]{32,}")
 let iso8601Pattern = try! NSRegularExpression(
     pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
 )
@@ -851,6 +855,7 @@ struct VerificationCaseInfo {
     let id: String
     let action: String
     let value: String
+    let relaunchArguments: [String]?
 }
 
 struct VerificationInfo {
@@ -996,6 +1001,41 @@ func validateApplicationFixtureBinding(_ criteria: [AcceptanceCriterion]) throws
     )
 }
 
+func validateRelaunchArguments(
+    _ value: Any, bundleIdentifier: String, testIdentifier: String, at path: String
+) throws -> [String] {
+    let arguments = try requireStringArray(value, at: path)
+    guard (1...16).contains(arguments.count) else {
+        throw ValidationFailure("\(path) must contain 1-16 strings")
+    }
+    for (index, argument) in arguments.enumerated() {
+        let lowercased = argument.lowercased()
+        let range = NSRange(argument.startIndex..<argument.endIndex, in: argument)
+        guard (1...256).contains(argument.unicodeScalars.count),
+              !argument.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }),
+              !lowercased.hasPrefix("-applelanguages"), !lowercased.hasPrefix("-applelocale"),
+              !argument.hasPrefix("--"), argument != bundleIdentifier, argument != testIdentifier,
+              relaunchSecretPattern.firstMatch(in: argument, range: range) == nil,
+              relaunchOpaquePattern.firstMatch(in: argument, range: range) == nil else {
+            throw ValidationFailure("\(path)[\(index)] is not a safe relaunch argument")
+        }
+    }
+    return arguments
+}
+
+func requireMatchingRelaunchArguments(_ entry: JSONObject, expected: [String]?, at path: String) throws {
+    guard let expected else {
+        guard entry["relaunchArguments"] == nil else {
+            throw ValidationFailure("\(path).relaunchArguments is not declared in the contract")
+        }
+        return
+    }
+    guard let value = entry["relaunchArguments"],
+          try requireStringArray(value, at: "\(path).relaunchArguments") == expected else {
+        throw ValidationFailure("\(path).relaunchArguments does not match the contract")
+    }
+}
+
 func validateOptionalVerification(_ value: Any, acceptanceIDs: [String], expectedIDs: [String], deliveryStage: DeliveryStageInfo) throws -> VerificationInfo {
     let verification = try requireObject(value, at: "issueContract.verification")
     try requireExactKeys(
@@ -1022,26 +1062,35 @@ func validateOptionalVerification(_ value: Any, acceptanceIDs: [String], expecte
         let entry = try requireObject(rawCase, at: path)
         let keys = Set(entry.keys)
         let testKeys: Set<String> = ["id", "testIdentifier"]
+        let testRelaunchKeys: Set<String> = ["id", "testIdentifier", "relaunchArguments"]
         let assertionKeys: Set<String> = ["id", "assertion"]
-        guard keys == testKeys || keys == assertionKeys else {
+        guard keys == testKeys || keys == testRelaunchKeys || keys == assertionKeys else {
             throw ValidationFailure("\(path) must contain exactly one of testIdentifier or assertion")
         }
         guard try requireString(entry["id"]!, at: "\(path).id") == expectedIDs[index] else {
             throw ValidationFailure("issueContract.verification.cases must contain the exact staged ordered case IDs")
         }
-        if keys == testKeys {
+        if keys == testKeys || keys == testRelaunchKeys {
             let identifier = try requireString(entry["testIdentifier"]!, at: "\(path).testIdentifier")
             guard matches(identifier, regex: testIdentifierPattern) else {
                 throw ValidationFailure("\(path).testIdentifier must be Target/Class/testMethod with optional trailing ()")
             }
-            return VerificationCaseInfo(id: expectedIDs[index], action: "testIdentifier", value: identifier)
+            let relaunchArguments = try entry["relaunchArguments"].map {
+                try validateRelaunchArguments($0, bundleIdentifier: bundleIdentifier, testIdentifier: identifier, at: "\(path).relaunchArguments")
+            }
+            return VerificationCaseInfo(
+                id: expectedIDs[index], action: "testIdentifier", value: identifier,
+                relaunchArguments: relaunchArguments
+            )
         } else {
             let assertion = try requireObject(entry["assertion"]!, at: "\(path).assertion")
             try requireExactKeys(assertion, ["kind"], at: "\(path).assertion")
             guard try requireString(assertion["kind"]!, at: "\(path).assertion.kind") == "launch-succeeded" else {
                 throw ValidationFailure("\(path).assertion.kind is not supported")
             }
-            return VerificationCaseInfo(id: expectedIDs[index], action: "assertion", value: "launch-succeeded")
+            return VerificationCaseInfo(
+                id: expectedIDs[index], action: "assertion", value: "launch-succeeded", relaunchArguments: nil
+            )
         }
     }
     let allowedChecks = ["stage:build", "stage:unit-tests"] +
@@ -2384,6 +2433,7 @@ struct EvidenceCase {
 func validateApplicationCases(
     _ value: Any,
     matrixCaseIDs: [String],
+    verificationCases: [VerificationCaseInfo],
     issue: Int,
     head: String,
     repository: TrustedRepository
@@ -2397,7 +2447,11 @@ func validateApplicationCases(
     for (index, rawCase) in cases.enumerated() {
         let path = "cases[\(index)]"
         let entry = try requireObject(rawCase, at: path)
-        try requireExactKeys(entry, ["id", "status", "screenshot", "screenshotDigest"], at: path)
+        let relaunchArguments = verificationCases[index].relaunchArguments
+        var keys: Set<String> = ["id", "status", "screenshot", "screenshotDigest"]
+        if relaunchArguments != nil { keys.insert("relaunchArguments") }
+        try requireExactKeys(entry, keys, at: path)
+        try requireMatchingRelaunchArguments(entry, expected: relaunchArguments, at: path)
         let id = try requireString(entry["id"]!, at: "\(path).id")
         guard seenIDs.insert(id).inserted else {
             throw ValidationFailure("cases contain duplicate ID \(id)")
@@ -3224,6 +3278,9 @@ func runnerSnapshot(options: RunnerSnapshotOptions) throws -> Data {
             value["udid"] = udid
             value["name"] = "iOS-Template-\(batchID)-\(matrixCase.id)"
         }
+        if let relaunchArguments = action.relaunchArguments {
+            value["relaunchArguments"] = relaunchArguments
+        }
         return value
     }
     let mappings: [[String: Any]] = contract.acceptanceIDs.enumerated().map { index, id in
@@ -3736,6 +3793,25 @@ func runnerConfigValue(configPath: String, expectedDigest: String, keyPath: Stri
         throw ValidationFailure("runner config value is not a safe scalar")
     }
     return string
+}
+
+func runnerConfigLines(configPath: String, expectedDigest: String, keyPath: String) throws -> [String] {
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
+    var value: Any = config
+    for component in keyPath.split(separator: ".").map(String.init) {
+        if let object = value as? JSONObject, let next = object[component] {
+            value = next
+        } else if let array = value as? [Any], let index = Int(component), array.indices.contains(index) {
+            value = array[index]
+        } else {
+            return []
+        }
+    }
+    let lines = try requireStringArray(value, at: "runner config lines")
+    guard lines.allSatisfy({ !$0.contains("\n") && !$0.contains("\r") }) else {
+        throw ValidationFailure("runner config lines must not contain newlines")
+    }
+    return lines
 }
 
 func verifyRunnerXcode(
@@ -4732,13 +4808,17 @@ func publishRunnerDraft(_ options: RunnerDraftOptions) throws -> String {
             throw ValidationFailure("screenshot changed after durable capture")
         }
         screenshotData.append(data)
-        draftCases.append([
+        var draftCase: [String: Any] = [
             "id": id,
             "status": "passed",
             "screenshot": "\(id)/screenshot.png",
             "screenshotDigest": "sha256:\(sha256(data: data))",
             "mechanicalCheck": action == "testIdentifier" ? "test:\(actionValue)" : "assertion:launch-succeeded"
-        ])
+        ]
+        if let relaunchArguments = entry["relaunchArguments"] {
+            draftCase["relaunchArguments"] = relaunchArguments
+        }
+        draftCases.append(draftCase)
     }
     let configuredMappings = try requireArray(config["acceptanceMappings"]!, at: "runner config acceptanceMappings")
     let executionMappings: [[String: Any]] = try configuredMappings.map { value in
@@ -5136,8 +5216,11 @@ func validateCanonicalRunnerDraft(
     var screenshotData: [Data] = []
     for (index, value) in draftCases.enumerated() {
         let entry = try requireObject(value, at: "draft case")
-        try requireExactKeys(entry, ["id", "status", "screenshot", "screenshotDigest", "mechanicalCheck"], at: "draft case")
         let expectedCase = verification.cases[index]
+        var keys: Set<String> = ["id", "status", "screenshot", "screenshotDigest", "mechanicalCheck"]
+        if expectedCase.relaunchArguments != nil { keys.insert("relaunchArguments") }
+        try requireExactKeys(entry, keys, at: "draft case")
+        try requireMatchingRelaunchArguments(entry, expected: expectedCase.relaunchArguments, at: "draft case")
         let expectedCheck = expectedCase.action == "testIdentifier"
             ? "test:\(expectedCase.value)" : "assertion:launch-succeeded"
         guard try requireString(entry["id"]!, at: "draft case id") == matrix.caseIDs[index],
@@ -5318,10 +5401,14 @@ func finalizeRunnerEvidence(_ options: RunnerFinalizeOptions) throws -> String {
     let visual = validatedVisual.object
     let finalCases: [[String: Any]] = try matrix.caseIDs.enumerated().map { index, id in
         let draftEntry = try requireObject(draftCases[index], at: "draft case")
-        return [
+        var finalCase: [String: Any] = [
             "id": id, "status": "passed", "screenshot": "\(id)/screenshot.png",
             "screenshotDigest": try requireString(draftEntry["screenshotDigest"]!, at: "draft screenshotDigest")
         ]
+        if let relaunchArguments = verification.cases[index].relaunchArguments {
+            finalCase["relaunchArguments"] = relaunchArguments
+        }
+        return finalCase
     }
     let finalAcceptance: [[String: Any]] = contract.acceptanceIDs.enumerated().map { index, id in
         ["id": id, "status": "passed", "evidence": verification.acceptanceMappings[index]]
@@ -5560,7 +5647,11 @@ func validateCanonicalVisualPacket(
     for (caseIndex, raw) in rawCases.enumerated() {
         let path = "visual packet cases[\(caseIndex)]"
         let entry = try requireObject(raw, at: path)
-        try requireExactKeys(entry, ["id", "family", "deviceType", "runtime", "locale", "language", "images"], at: path)
+        let relaunchArguments = draft.verification.cases[caseIndex].relaunchArguments
+        var keys: Set<String> = ["id", "family", "deviceType", "runtime", "locale", "language", "images"]
+        if relaunchArguments != nil { keys.insert("relaunchArguments") }
+        try requireExactKeys(entry, keys, at: path)
+        try requireMatchingRelaunchArguments(entry, expected: relaunchArguments, at: path)
         let expected = draft.matrix.cases[caseIndex]
         let device = try requireObject(entry["deviceType"]!, at: "\(path).deviceType")
         try requireExactKeys(device, ["identifier", "name"], at: "\(path).deviceType")
@@ -5692,11 +5783,12 @@ func createVisualReviewPacketCanonical(
     for (index, rawCase) in draftCases.enumerated() {
         let path = "draft cases[\(index)]"
         let entry = try requireObject(rawCase, at: path)
-        try requireExactKeys(
-            entry, ["id", "status", "screenshot", "screenshotDigest", "mechanicalCheck"], at: path
-        )
         let matrixCase = matrix.cases[index]
         let verificationCase = verification.cases[index]
+        var keys: Set<String> = ["id", "status", "screenshot", "screenshotDigest", "mechanicalCheck"]
+        if verificationCase.relaunchArguments != nil { keys.insert("relaunchArguments") }
+        try requireExactKeys(entry, keys, at: path)
+        try requireMatchingRelaunchArguments(entry, expected: verificationCase.relaunchArguments, at: path)
         let expectedMechanical = verificationCase.action == "testIdentifier"
             ? "test:\(verificationCase.value)" : "assertion:launch-succeeded"
         guard try requireString(entry["id"]!, at: "\(path).id") == matrixCase.id,
@@ -5778,7 +5870,7 @@ func createVisualReviewPacketCanonical(
                 "height": dimensions.height
             ])
         }
-        packetCases.append([
+        var packetCase: [String: Any] = [
             "id": matrixCase.id,
             "family": matrixCase.family,
             "deviceType": [
@@ -5792,7 +5884,11 @@ func createVisualReviewPacketCanonical(
             "locale": matrixCase.locale,
             "language": matrixCase.language,
             "images": images
-        ])
+        ]
+        if let relaunchArguments = verificationCase.relaunchArguments {
+            packetCase["relaunchArguments"] = relaunchArguments
+        }
+        packetCases.append(packetCase)
     }
 
     let acceptance = try requireArray(draft["acceptanceEvidence"]!, at: "draft acceptanceEvidence")
@@ -6684,7 +6780,7 @@ func validate(options: Options) throws {
         }
         if contract.visualRequired {
             try validateApplicationCases(
-                root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
+                root["cases"]!, matrixCaseIDs: matrix.caseIDs, verificationCases: verification.cases, issue: issue,
                 head: headSha, repository: repository
             )
         } else {
@@ -6782,7 +6878,7 @@ func validate(options: Options) throws {
             }
             if contract.visualRequired {
                 try validateApplicationCases(
-                    root["cases"]!, matrixCaseIDs: matrix.caseIDs, issue: issue,
+                    root["cases"]!, matrixCaseIDs: matrix.caseIDs, verificationCases: verification.cases, issue: issue,
                     head: headSha, repository: repository
                 )
                 let currentDraft = try validateCanonicalRunnerDraft(
@@ -7039,6 +7135,11 @@ do {
         }
         if arguments.count == 7, arguments[5] == "--get" {
             print(try runnerConfigValue(configPath: arguments[2], expectedDigest: arguments[4], keyPath: arguments[6]))
+        } else if arguments.count == 7, arguments[5] == "--get-lines" {
+            let lines = try runnerConfigLines(
+                configPath: arguments[2], expectedDigest: arguments[4], keyPath: arguments[6]
+            )
+            FileHandle.standardOutput.write(Data(lines.map { $0 + "\n" }.joined().utf8))
         } else if arguments.count == 6, arguments[5] == "--check" {
             _ = try readSealedRunnerConfig(configPath: arguments[2], expectedDigest: arguments[4])
         } else {
