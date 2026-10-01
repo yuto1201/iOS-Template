@@ -43,7 +43,7 @@ alias_path="$repo_root/.claude/skills/admob-monetization"
 [[ -L "$alias_path" ]] || fail 'Claude skill alias must be a symlink'
 [[ "$(readlink "$alias_path")" == '../../.agents/skills/admob-monetization' ]] || fail 'Claude skill alias target is wrong'
 [[ -f "$repo_root/.agents/skills/admob-monetization/SKILL.md" ]] || fail 'AdMob skill entrypoint is missing'
-head -20 "$repo_root/.agents/skills/admob-monetization/SKILL.md" | grep -q '^name: admob-monetization$' || fail 'skill frontmatter name is missing'
+head -20 "$repo_root/.agents/skills/admob-monetization/SKILL.md" | grep '^name: admob-monetization$' >/dev/null || fail 'skill frontmatter name is missing'
 
 fixture="$repo_root/tools/tests/fixtures/admob-monetization"
 [[ -f "$fixture/AdMobFixtureApp.xcodeproj/project.pbxproj" ]] || fail 'tracked fixture project is missing'
