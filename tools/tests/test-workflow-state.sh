@@ -399,7 +399,7 @@ superseded_marker_count() {
   ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).count { |comment| comment.fetch("body").include?(%q("to":"superseded")) }' "$FAKE_GH_COMMENTS_FILE"
 }
 close_count() {
-  rg -c '^issue close ' "$FAKE_GH_LOG" || true
+  rg -c '^issue close ' "$FAKE_GH_LOG" || echo 0
 }
 paused_before_superseded() {
   reset_in_progress_state
