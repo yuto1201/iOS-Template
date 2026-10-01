@@ -391,6 +391,57 @@ state_transition in-progress blocked:environment
 replay_after_comment 'blocked' blocked:environment in-progress
 nested_in_progress_stop
 replay_after_comment 'nested paused to blocked' paused blocked:environment
+
+# Moving to superseded closes the GitHub Issue as not planned after its label and marker, and only then
+# writes the durable state. A failed close stops before state.json, and the same edge then completes once.
+export FAKE_GH_ISSUE_STATE_FILE="$workspace/issue-state.txt"
+superseded_marker_count() {
+  ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).count { |comment| comment.fetch("body").include?(%q("to":"superseded")) }' "$FAKE_GH_COMMENTS_FILE"
+}
+close_count() {
+  rg -c '^issue close ' "$FAKE_GH_LOG" || true
+}
+paused_before_superseded() {
+  reset_in_progress_state
+  printf 'OPEN' > "$FAKE_GH_ISSUE_STATE_FILE"
+  : > "$FAKE_GH_LOG"
+  state_transition in-progress paused
+  ! rg -q '^issue close |--json state' "$FAKE_GH_LOG" || { echo 'a transition other than superseded touched the Issue open state' >&2; exit 1; }
+  comments_before=$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).length' "$FAKE_GH_COMMENTS_FILE")
+  : > "$FAKE_GH_LOG"
+}
+
+paused_before_superseded
+state_transition paused superseded
+[[ "$(cat "$FAKE_GH_ISSUE_STATE_FILE")" == CLOSED ]] || { echo 'superseded Issue was not closed' >&2; exit 1; }
+rg -qx "issue close $test_issue --repo yuto1201/iOS-Template --reason not planned" "$FAKE_GH_LOG" ||
+  { echo 'superseded Issue was not closed as not planned' >&2; exit 1; }
+[[ "$(close_count)" == 1 ]] || { echo 'superseded Issue was closed more than once' >&2; exit 1; }
+[[ "$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0])).length' "$FAKE_GH_COMMENTS_FILE")" == "$((comments_before + 1))" ]] ||
+  { echo 'closing the superseded Issue added a comment beyond its state marker' >&2; exit 1; }
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:superseded"]'
+assert_json ".artifacts/issues/$test_issue/state.json" "abort unless JSON.parse(File.read(ARGV[0]))['state'] == 'superseded'"
+
+paused_before_superseded
+FAKE_GH_CLOSE_FAIL=1 assert_fails 'a failed close does not complete the superseded transition' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to superseded
+assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:superseded"]'
+assert_json ".artifacts/issues/$test_issue/state.json" "abort unless JSON.parse(File.read(ARGV[0]))['state'] == 'paused'"
+[[ "$(cat "$FAKE_GH_ISSUE_STATE_FILE")" == OPEN && "$(superseded_marker_count)" == 1 ]] ||
+  { echo 'a failed close changed the open state or lost the superseded marker' >&2; exit 1; }
+[[ -e ".artifacts/issues/$test_issue/state-transition.pending.json" ]] || { echo 'a failed close left no pending edge' >&2; exit 1; }
+sleep 1
+state_transition paused superseded
+[[ "$(cat "$FAKE_GH_ISSUE_STATE_FILE")" == CLOSED && "$(superseded_marker_count)" == 1 && "$(close_count)" == 2 ]] ||
+  { echo 'the rerun did not close the superseded Issue once without a duplicate marker' >&2; exit 1; }
+assert_json ".artifacts/issues/$test_issue/state.json" "abort unless JSON.parse(File.read(ARGV[0]))['state'] == 'superseded'"
+[[ ! -e ".artifacts/issues/$test_issue/state-transition.pending.json" ]] || { echo 'the rerun kept the pending edge' >&2; exit 1; }
+
+paused_before_superseded
+printf 'CLOSED' > "$FAKE_GH_ISSUE_STATE_FILE"
+state_transition paused superseded
+[[ "$(close_count)" == 0 ]] || { echo 'an already closed superseded Issue was closed again' >&2; exit 1; }
+assert_json ".artifacts/issues/$test_issue/state.json" "abort unless JSON.parse(File.read(ARGV[0]))['state'] == 'superseded'"
+unset FAKE_GH_ISSUE_STATE_FILE
 reset_nested_state
 }
 

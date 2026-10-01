@@ -26,6 +26,12 @@ if [[ "${1:-}" == "issue" && "${2:-}" == "view" ]]; then
     printf 'Could not resolve to an Issue\n' >&2
     exit 1
   fi
+  if [[ " $* " == *" --json state "* ]]; then
+    state=OPEN
+    [[ -z "${FAKE_GH_ISSUE_STATE_FILE:-}" || ! -f "$FAKE_GH_ISSUE_STATE_FILE" ]] || state=$(cat "$FAKE_GH_ISSUE_STATE_FILE")
+    printf '{"state":"%s"}\n' "$state"
+    exit 0
+  fi
   labels_file=${FAKE_GH_LABELS_FILE:?FAKE_GH_LABELS_FILE is required}
   comments_file=${FAKE_GH_COMMENTS_FILE:?FAKE_GH_COMMENTS_FILE is required}
   issue_number=${3:?Issue number is required}
@@ -90,6 +96,15 @@ if [[ "${1:-}" == "issue" && "${2:-}" == "edit" ]]; then
   if [[ -n "${FAKE_GH_RACE_AFTER_EDIT_LABELS:-}" ]]; then
     printf '%s' "$FAKE_GH_RACE_AFTER_EDIT_LABELS" > "$labels_file"
   fi
+  exit 0
+fi
+
+if [[ "${1:-}" == "issue" && "${2:-}" == "close" ]]; then
+  if [[ "${FAKE_GH_CLOSE_FAIL:-0}" == "1" ]]; then
+    printf 'injected Issue close failure\n' >&2
+    exit 1
+  fi
+  [[ -z "${FAKE_GH_ISSUE_STATE_FILE:-}" ]] || printf 'CLOSED' > "$FAKE_GH_ISSUE_STATE_FILE"
   exit 0
 fi
 
