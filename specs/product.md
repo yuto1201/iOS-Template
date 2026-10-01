@@ -138,6 +138,14 @@ storeを開けないときは、自動削除、別fileへの置換、空storeで
 
 最初の公開（TestFlightまたはApp Store）後に初めてmodelを変更する前に、versioned schemaとmigration planを導入し、旧schemaの永続化fixtureから開くmigration testをそのIssueの完了条件にする。TemplateApp自体にはSwiftDataやsample modelを追加しない。決定の経緯は[D-067](decisions.md#d-067-swiftdataを選んだ派生アプリのデータ非破壊境界を定める)を参照する。
 
+### 4.4 条件付きローカル通知
+
+ローカル通知は全アプリの標準依存にせず、派生アプリの確定仕様が期日リマインダー等として明示採用した場合だけ使う。採用前に、通知の目的、発火条件、既定のon／off、permissionを求める画面と操作、表示してよい情報を確定する。未決または矛盾する間はsourceを変更せず`blocked:user`とする。
+
+permissionは起動直後に要求せず、利用者が通知を有効にする操作をしたときだけ要求する。未決定、拒否、許可を区別して表示し、拒否された後はシステム設定のアプリ通知画面への導線だけを出す。予約はアプリが所有するrequest identifierのprefixに限って削除・再登録し、所有外のrequestに触れない。OSのpending上限（Apple公式の現行値を作業時に確認する）から所有外のrequestを差し引いた範囲で予約し、入りきらない分は部分予約として報告する。同時の再予約要求は結合し、時刻とtimezone／calendarの変更時に再計算する。lock screenに出る本文へ金額、個人情報、秘密を含めない。
+
+ローカル通知はSystem Experiences Planningの5面に含めない独立した条件付き能力であり、D-051の対象を変えない。remote push、通知service extension、Live Activities／Widgetはこの採用に含めない。決定の経緯は[D-068](decisions.md#d-068-ローカル通知を派生アプリの明示採用時だけ使う条件付き能力として定める)を参照する。
+
 ## 5. 音声素材方針
 
 テキスト読み上げ、スピーチ変換・文字起こし、効果音、音声分離、音楽、画像、動画が受け入れ条件に必要な場合、CodexまたはClaudeが共有のElevenLabsメディアスキルを使用します。
