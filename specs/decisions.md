@@ -613,3 +613,19 @@
   - データ消失と誤変換は、既存の公開blockerであるデータ消失と同じ扱いにする。
 - Consequence: TemplateAppへSwiftData、service layer、sample modelを追加しない（使われない層を作らない既存方針を維持する）。Supabase同期、backup／export、CloudKit同期の設計と、既存派生アプリのmigration実装はこのDecisionの対象外とし、必要になった時点で別Issueとする。
 - Related Issue: #161
+
+## D-068: ローカル通知を派生アプリの明示採用時だけ使う条件付き能力として定める
+
+- Date: 2026-10-02
+- Status: 確定
+- Supersedes: なし。全アプリへ通知を先回り導入しない方針（`specs/product.md` §8）は維持し、明示採用した派生アプリが守る境界だけを加える。D-051のSystem Experiences Planningの5面は変更しない。
+- Context: 期日リマインダーなど端末内のローカル通知を使う派生アプリでは、起動直後のpermission要求、拒否状態の誤表示、所有外のrequestの一括削除、OSのpending上限の見落とし、lock screenへの金額や個人情報の表示、実OS permission dialogに依存するtestといった誤りが繰り返されやすい。
+- Decision: ローカル通知は全アプリの標準依存にせず、派生アプリの確定仕様が明示採用した場合だけ使う条件付き能力とする。採用するアプリは次を守る。
+  - 採用条件: 通知の目的、発火条件、既定のon／off、permissionを求める画面と操作、表示してよい情報を確定する。未決または矛盾する間はsourceを変更せず`blocked:user`とする。
+  - permission: 起動直後には要求せず、利用者が通知を有効にする操作をしたときだけ要求する。未決定（notDetermined）、拒否（denied）、許可（authorized等）を区別して表示し、拒否された後はシステム設定のアプリ通知画面への導線だけを出す。要求の失敗を成功に読み替えない。
+  - 予約管理: アプリが所有するrequest identifierのprefixだけを削除・再登録し、所有外のrequestに触れない。pending requestのOS上限はApple公式の現行値を作業時に確認し、所有外のrequestを差し引いた範囲で予約する。入りきらない分は部分予約として報告する。同時に起きた再予約要求は一つに結合し、進行中の登録を中断しない。時刻と、timezone／calendarの変更時に予約を再計算する規則を持つ。
+  - 表示内容: lock screenに出る通知の本文へ、金額、個人情報、秘密を含めない。
+  - test: 通知centerをprotocolにし、Unit／UI Testはnetwork-freeでOS permissionに依存しないfixture centerを使う。実OS permission dialogの成功を通常フローの合格条件にしない。
+  - System Experiences Planningとの関係: ローカル通知は、Widget、Live Activities、Dynamic Island、Controls、Siri／App Intentsの5面に含めない独立した条件付き能力とする。D-051の対象は変更しない。
+- Consequence: 通知code、skill、tool、TemplateAppは変更しない。remote push（APNs）、通知service extension、Live Activities／Widgetの設計は対象外とし、必要になった時点で別のDecisionとIssueで扱う。
+- Related Issue: #160

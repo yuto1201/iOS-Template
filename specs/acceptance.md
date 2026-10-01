@@ -183,6 +183,7 @@ AI検証とApp Store撮影は専用2台だけを使い、deviceを作成、clone
 - Build warningを新規に増やさず、失敗Testを削除／Skipして成功扱いにしない。
 - ユーザーデータ、保存互換性、重要な金額／日時／認証／課金ロジックをstageに関係なく守る。
 - 永続化storeを使う保存ロジックは、保存と再open後の内容確認Testを全stageで必須とする。store open失敗時の削除・置換・空store起動、保存失敗の握りつぶし、migrationでの消失・誤変換は、公開blockerのデータ消失として扱う（[D-067](decisions.md#d-067-swiftdataを選んだ派生アプリのデータ非破壊境界を定める)）。
+- ローカル通知を採用したアプリのUnit／UI Testは、OS permissionに依存しないfixture centerを使い、実OS permission dialogの成功を合格条件にしない。lock screenに出る通知本文へ金額、個人情報、秘密を含めない（[D-068](decisions.md#d-068-ローカル通知を派生アプリの明示採用時だけ使う条件付き能力として定める)）。
 - String Catalog等の安定したkey、可変layout、iPad target、既存英語resourceを初期から壊さない。
 - 認証情報、個人情報、設定外account識別子を証拠へ含めない。
 - 外部操作の成功は実応答から確認し、推測で記録しない。
