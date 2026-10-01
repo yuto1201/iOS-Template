@@ -120,8 +120,20 @@ destinations.each do |raw_destination|
     result << [index, match[1].length, match[2]]
   end
 
-  # A decision log has no document Status. Each Decision carries its own `- Status:` line, and template
-  # decisions (D-###) and derived-app decisions (A-###) live in separate logs (D-069).
+  document_title = headings.find { |_, level, _| level == 1 }
+  document_end = if document_title
+    next_heading = headings.find { |index, _, _| index > document_title[0] }
+    next_heading ? next_heading[0] : lines.length
+  elsif headings.empty?
+    lines.length
+  else
+    headings.first[0]
+  end
+  document_indices = (0...document_end)
+  document_statuses = canonical_statuses(visible_lines, document_indices)
+  # A Decision in a decision log carries its own Status line. Template decisions (D-###) and derived-app
+  # decisions (A-###) live in separate logs (D-069). A legacy log without a per-Decision Status falls back
+  # to its document Status.
   decision_prefix = {"decisions.md" => "D", "app-decisions.md" => "A"}[spec_path.basename.to_s] if
     spec_path.dirname.basename.to_s == "specs"
   if decision_prefix
@@ -141,26 +153,15 @@ destinations.each do |raw_destination|
     end
     decision_end = headings.find { |index, level, _| index > decision[0] && level <= 2 }&.first || lines.length
     decision_statuses = (decision[0]...decision_end).each_with_object([]) do |index, statuses|
-      match = visible_lines[index]&.match(/\A- Status:[ \t]*(.*?)[ \t]*\z/u)
+      match = visible_lines[index]&.match(/\A(?:- )?Status:[ \t]*(.*?)[ \t]*\z/u)
       statuses << [index, match[1]] if match
     end
+    decision_statuses = document_statuses if decision_statuses.empty?
     if (failure = status_failure("decision", decision_statuses, destination))
       failures << failure
     end
     next
   end
-
-  document_title = headings.find { |_, level, _| level == 1 }
-  document_end = if document_title
-    next_heading = headings.find { |index, _, _| index > document_title[0] }
-    next_heading ? next_heading[0] : lines.length
-  elsif headings.empty?
-    lines.length
-  else
-    headings.first[0]
-  end
-  document_indices = (0...document_end)
-  document_statuses = canonical_statuses(visible_lines, document_indices)
   if (failure = status_failure("document", document_statuses, destination))
     failures << failure
     next

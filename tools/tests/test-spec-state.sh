@@ -447,9 +447,19 @@ EOF
 cat > "$fixture_dir/specs/decisions.md" <<'EOF'
 # Decisions
 
+Status: 確定
+
 ## A-900: Misplaced app decision
 
 - Status: 確定
+
+## D-031: Legacy plain status
+
+Status: 確定
+
+## D-032: Legacy without its own status
+
+- Record: The document Status applies.
 EOF
 write_issue app-decision "$fixture_dir/specs/app-decisions.md#a-001-confirmed-app-decision"
 expect_ready app-decision
@@ -459,6 +469,11 @@ write_issue template-id-in-app-log "$fixture_dir/specs/app-decisions.md#d-900-mi
 expect_rejected template-id-in-app-log '(A-### expected)'
 write_issue app-id-in-template-log "$fixture_dir/specs/decisions.md#a-900-misplaced-app-decision"
 expect_rejected app-id-in-template-log '(D-### expected)'
+# A legacy log keeps working: a plain Status line, or the document Status when a Decision has none.
+write_issue legacy-plain-status "$fixture_dir/specs/decisions.md#d-031-legacy-plain-status"
+expect_ready legacy-plain-status
+write_issue legacy-document-status "$fixture_dir/specs/decisions.md#d-032-legacy-without-its-own-status"
+expect_ready legacy-document-status
 
 printf '%s\n' 'No specification reference.' > "$fixture_dir/unlinked.md"
 expect_rejected unlinked 'Issue body has no local Markdown specification reference'
