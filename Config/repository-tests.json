@@ -173,6 +173,11 @@
       "prefixes": []
     },
     {
+      "domain": "ios-runner-relaunch",
+      "paths": ["tools/tests/test-ios-runner-relaunch.sh"],
+      "prefixes": []
+    },
+    {
       "domain": "ios-runner-resources",
       "paths": ["tools/tests/test-ios-runner-resources.sh"],
       "prefixes": []
@@ -413,6 +418,7 @@
     {"path": "tools/tests/test-ios-runner-recovery-before-rename.sh", "domains": ["ios-runner-recovery"]},
     {"path": "tools/tests/test-ios-runner-recovery-final.sh", "domains": ["ios-runner-recovery"]},
     {"path": "tools/tests/test-ios-runner-recovery.sh", "domains": ["ios-runner-recovery"]},
+    {"path": "tools/tests/test-ios-runner-relaunch.sh", "domains": ["ios-runner-relaunch"]},
     {"path": "tools/tests/test-ios-runner-resources.sh", "domains": ["ios-runner-resources"]},
     {"path": "tools/tests/test-ios-runner-startup.sh", "domains": ["ios-runner-startup"]},
     {"path": "tools/tests/test-ios-runner-system-locale.sh", "domains": ["ios-runner-system-locale"]},
