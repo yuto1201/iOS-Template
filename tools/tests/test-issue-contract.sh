@@ -125,6 +125,12 @@ assert_fails 'an approval reference without an external operation is rejected' "
 write_feature_issue "$workspace/no-approval-operation-with-reference.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'Approval reference: #73'
 assert_fails 'an approval reference mismatching all no operations is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/no-approval-operation-with-reference.md"
 
+# A derived-app decision ID (A-###, D-069) is an approval reference; an acceptance criterion ID is not.
+write_feature_issue "$workspace/app-decision-approval.md" $'- Operation: supabase.apply_migrations\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approved by the user in A-003.'
+"$repo_root/tools/validate-issue-body.sh" "$workspace/app-decision-approval.md"
+write_feature_issue "$workspace/acceptance-id-approval.md" $'- Operation: supabase.apply_migrations\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approved in AC-3.'
+assert_fails 'an acceptance criterion ID is not an approval reference' "$repo_root/tools/validate-issue-body.sh" "$workspace/acceptance-id-approval.md"
+
 write_feature_issue "$workspace/normal-repo-operation.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.'
 "$repo_root/tools/validate-issue-body.sh" "$workspace/normal-repo-operation.md"
 

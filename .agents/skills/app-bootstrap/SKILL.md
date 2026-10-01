@@ -71,6 +71,8 @@ The setup tool reads `Config/dedicated-simulators.json`, which bootstrap renamed
 8. Let the Issue's selected executor verify the configured personal GitHub account, push only the Issue Branch, create the PR, compare the reviewed/verified Head SHA, Squash Merge, confirm Issue closure, delete the merged remote Branch, and clean up the local Branch/worktree.
 9. Create the dependent App Icon Issue from the confirmed app purpose/direction and Identity. Use [`app-icon`](../app-icon/SKILL.md) to generate exactly two simple candidates, obtain one explicit user selection, and install the selected icon before the first user-facing UI `shape`. This selection does not satisfy or bypass `ui-direction`; independent non-UI work may proceed while selection is pending.
 
+After the bootstrap, record the app's first app-specific decision in a new `specs/app-decisions.md` as `A-001`, and keep appending app decisions there as `A-###`. Do not add app decisions to `specs/decisions.md`; its `D-###` entries stay the template's decisions (D-069).
+
 Codex and Claude may both perform the local and authenticated steps. Every authenticated GitHub operation must use the account and target checks in [`docs/AUTHORITY.md`](../../../docs/AUTHORITY.md) and the shared `external-ops` skill.
 
 Remote repository rename and Bundle ID registration are separate authenticated operations. The bootstrap command does not perform or authorize them.
