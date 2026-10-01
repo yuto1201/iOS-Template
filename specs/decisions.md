@@ -597,3 +597,19 @@
 - Decision: App Store Connectの認証情報は、Apple teamごとの名前空間`apple-team-<teamId>`に置く。Key IDとIssuer IDはKeychain service `ios-template/apple-team-<teamId>/app-store-connect/production/key-id`と`issuer-id`（account `apple-team-<teamId>`）、`.p8`は`~/Library/Application Support/iOS-Template/secrets/apple-team-<teamId>/app-store-connect-production.p8`（directory `0700`、file `0600`）とする。`<teamId>`は`Config/ownership.yml`の`appStore.teamId`（10文字の大文字英数字）から決め、callerの引数や環境変数からは受け取らない。`appStore.apiKeyType`は`team-app-manager`だけを許し、名前空間の解決にはteam IDとこの種類の両方を必須とする。secret wrapperは、この名前空間をApp Store Connectのserviceに限って受理する。appSlugの旧い場所は読まない。
 - Consequence: 同じteamの全アプリが、鍵を複製せずに一本のkeyを使える。Keychainへの値の登録、keyの発行・再発行・失効はユーザーが行う。App Store Connectが表示するkeyのroleがApp Managerと確認されるまで、live認証は行わない。テンプレートの`Config/ownership.yml`への値の記入と、それを検証できるworkflow-onlyのallowlistの拡張は#214で行う。
 - Related Issue: #213
+
+## D-067: SwiftDataを選んだ派生アプリのデータ非破壊境界を定める
+
+- Date: 2026-10-01
+- Status: 確定
+- Supersedes: なし。`specs/product.md` §4のデータ方針と、`specs/development-stages.md` §4の「ユーザーデータを破壊せず、保存形式の互換性を守る」を、SwiftDataについて具体化する。
+- Context: 端末内だけで成立する派生アプリはSwiftDataを選べるが、storeを開けないときの扱い、保存失敗の表面化、schema変更の順序が決まっていなかった。storeを開けないときに削除、別fileへの置換、空storeでの起動をすると、利用者のデータが黙って失われる。最初の公開後にversioned schemaなしでmodelを変えると、既存のstoreを開けない、または誤変換する。
+- Decision: SwiftDataを採用する派生アプリは、stageに関係なく次を守る。
+  - container: store URLを明示する。同期の採用が確定するまでCloudKit連携を明示的に無効にする。同期が必要ならSupabaseを標準とする既存方針に従う。Unit／UI Testはin-memoryまたは一時directoryのcontainerを使い、利用者のstoreを開かない。
+  - store open失敗: 自動削除、別fileへの置換、空storeでの黙った起動をしない。再試行できる復旧画面を表示し、失敗原因の分類だけをsanitizedに記録する。store内容、個人情報、file pathは記録しない。
+  - 保存: 保存する時機を明示し、保存失敗を利用者へ表面化する。失敗時はその操作だけを取り消せる単位を持ち、context全体を無差別にrollbackしない。保存失敗を注入できるtest境界を持つ。
+  - schema変更: 最初の公開（TestFlightまたはApp Store）後に初めてmodelを変更する前に、versioned schemaとmigration planを導入する。旧schemaの永続化fixtureから開くmigration testを、そのIssueの完了条件にする。
+  - 検証: 重要な保存logicは、永続化storeへ保存し、containerを閉じて再openした後に内容を確かめるtestで検証する。Delivery stageの`shape`でも省略しない。
+  - データ消失と誤変換は、既存の公開blockerであるデータ消失と同じ扱いにする。
+- Consequence: TemplateAppへSwiftData、service layer、sample modelを追加しない（使われない層を作らない既存方針を維持する）。Supabase同期、backup／export、CloudKit同期の設計と、既存派生アプリのmigration実装はこのDecisionの対象外とし、必要になった時点で別Issueとする。
+- Related Issue: #161

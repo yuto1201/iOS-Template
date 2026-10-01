@@ -130,6 +130,14 @@ StoreKitとIn-App Purchaseは全アプリの標準依存にせず、派生アプ
 
 Debug／UI TestはStoreKit configuration fileとnetwork-free fixtureで決定的に検証する。StoreKit Testingの成功、sandboxでの購入、App Store Connectのproduct状態、審査結果は別の証拠とし、一つの成功から他を推測しない。App Store Connectでのproduct作成、価格、税務、契約、IAP審査提出、Offer Code発行はこの採用に含めず、それぞれに明示的なIssue contract、設定済みaccount／target、必要なユーザー承認とreadbackを要求する。自動更新subscription、消耗型、server-sideのtransaction検証、独自purchase serverは、新しいDecisionとIssueで明示承認しない限り含めない。決定の経緯は[D-064](decisions.md#d-064-非消耗型の買い切り権利を条件付きstorekit-2境界として定める)を参照する。
 
+### 4.3 SwiftDataによる端末内永続化
+
+端末内だけで成立する派生アプリがSwiftDataを選んだ場合は、利用者のデータを黙って失わないことを優先する。store URLを明示し、同期の採用が確定するまでCloudKit連携を明示的に無効にする。同期が必要ならSupabaseを標準とする。Unit／UI Testはin-memoryまたは一時directoryのcontainerを使う。
+
+storeを開けないときは、自動削除、別fileへの置換、空storeでの起動をせず、再試行できる復旧画面を表示する。記録するのは失敗原因の分類だけとし、store内容、個人情報、file pathを含めない。保存する時機を明示し、保存失敗は利用者へ表面化する。失敗時はその操作だけを取り消し、context全体を無差別にrollbackしない。
+
+最初の公開（TestFlightまたはApp Store）後に初めてmodelを変更する前に、versioned schemaとmigration planを導入し、旧schemaの永続化fixtureから開くmigration testをそのIssueの完了条件にする。TemplateApp自体にはSwiftDataやsample modelを追加しない。決定の経緯は[D-067](decisions.md#d-067-swiftdataを選んだ派生アプリのデータ非破壊境界を定める)を参照する。
+
 ## 5. 音声素材方針
 
 テキスト読み上げ、スピーチ変換・文字起こし、効果音、音声分離、音楽、画像、動画が受け入れ条件に必要な場合、CodexまたはClaudeが共有のElevenLabsメディアスキルを使用します。
