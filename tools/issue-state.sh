@@ -180,6 +180,20 @@ finish_pending() {
   [[ "${IOS_TEMPLATE_STATE_FAIL_AFTER_DURABLE:-0}" != 1 ]] || { echo 'injected failure after durable state' >&2; exit 97; }
   ruby "$json_tool" finish-state-transition-pending "$pending_path" "$pending_signature" "$pending"
 }
+# A superseded Issue is closed as not planned once its label and marker are applied. The label, markers,
+# and sealed contract stay as history, and a rerun of the same edge does not close it twice.
+close_superseded_issue() {
+  [[ "$to" == superseded ]] || return 0
+  local issue_state
+  issue_state=$(gh issue view "$issue" --repo "$repo" --json state | jq -er '.state | strings') || { echo 'superseded Issue state could not be read' >&2; exit 1; }
+  case "$issue_state" in
+    CLOSED) return 0 ;;
+    OPEN) ;;
+    *) echo "superseded Issue has an unknown GitHub state: $issue_state" >&2; exit 1 ;;
+  esac
+  workflow_github_preflight "$repo_root" "$repo" "$issue" github.update_issue || { echo 'GitHub account preflight failed before closing the superseded Issue' >&2; exit 1; }
+  gh issue close "$issue" --repo "$repo" --reason "not planned" >/dev/null || { echo 'superseded Issue could not be closed' >&2; exit 1; }
+}
 
 preauthorized_from_document=''
 if [[ -e "$pending_path" || -L "$pending_path" ]]; then
@@ -259,6 +273,7 @@ if [[ "$current" == "$to" ]]; then
     post_marker "$issue_json" "$marker"
     [[ "${IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT:-0}" != 1 ]] || { echo 'injected failure after state comment' >&2; exit 97; }
   fi
+  close_superseded_issue
   require_transition_head
   result=$(write_state "$transition_record")
   finish_pending
@@ -281,6 +296,7 @@ require_transition_head
 marker=$(ruby "$json_tool" state-marker "$from" "$to" "$resume_state" "$timestamp" "$state_executor")
 post_marker "$to_document" "$marker"
 [[ "${IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT:-0}" != 1 ]] || { echo 'injected failure after state comment' >&2; exit 97; }
+close_superseded_issue
 require_transition_head
 result=$(write_state "$transition_record")
 finish_pending

@@ -141,9 +141,9 @@ ruby tools/lib/workflow-release-phase-cli.rb validate \
 - `proposed`／未Claimの`approved`: 現行spec、successor依存、phase record、expected write-setを本文へ反映し、`validate-issue-body.sh`、GitHub更新、readbackの順で確認してからClaimする。
 - `claimed`／`in-progress`／検証以降: sealed contractを直接編集しない。既存契約のまま完了するか、目的を変えない許可範囲だけ#38の追記型revision経路を使う。`Release-phase binding:` identityは保護対象なので後付けせず、phase-awareな続きは新Issueへ分ける。
 - `paused`／`blocked:*`: 移行だけを理由に無断再開しない。所有者の明示判断と記録済み`resumeState`に従い、旧contractを保持して再開するか、履歴を残してsuccessorへ置き換える。
-- `superseded`／`done`: immutable historyとして保持する。旧Issueを再利用せず、successor番号と理由をactive IssueのDependenciesへ記録する。
+- `superseded`／`done`: immutable historyとして保持する。旧Issueを再利用せず、successor番号と理由をactive IssueのDependenciesへ記録する。`superseded`へ遷移したIssueはGitHub上で`not planned`としてcloseされるが、`done`とは扱わない。
 
-optionalな非公開機能をrelease全体のblockerへ昇格させません。successorへ置換した依存は旧Issueをcloseし直したり完了扱いせず、履歴として明記します。
+optionalな非公開機能をrelease全体のblockerへ昇格させません。successorへ置換した依存は、`superseded`遷移でcloseされた旧Issueを完了扱いせず、履歴として明記します。
 
 #### Phase 5から6への証拠適用
 
@@ -374,7 +374,7 @@ proposed
 
 `in-progress -> verify-passed` だけは、canonical Issue worktreeの現在値を明示する `tools/issue-state.sh transition ... --head-sha ${HEAD_SHA}` が必須です。遷移処理はdurable stateのBranch/worktreeとGit top-level/common directory、current Head、raw Branch refをGitHub mutation前、各remote step後、durable write直前に再照合し、一致したHeadを`state.json`へ保存します。Primary checkoutからHeadを推測しません。他の遷移で`--head-sha`は拒否します。
 
-Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approved-for-merge` から `in-progress` へ戻し、検証とレビューをやり直します。これらの遷移は古い`headSha`を削除し、次の`in-progress -> verify-passed`で明示した現在Headへ置き換えます。それ以降のforward遷移は同じ`headSha`を保持します。`done` と `superseded` は終端状態です。
+Head SHAが変わった場合、`verify-passed`、`changes-requested`、`approved-for-merge` から `in-progress` へ戻し、検証とレビューをやり直します。これらの遷移は古い`headSha`を削除し、次の`in-progress -> verify-passed`で明示した現在Headへ置き換えます。それ以降のforward遷移は同じ`headSha`を保持します。`done` と `superseded` は終端状態です。`superseded`への遷移は、`state:superseded` labelとstate markerを反映した後にGitHub Issueを`not planned`でcloseし、その後に`state.json`を書きます。closeに失敗した遷移は成功と報告せず、同じ`--from`／`--to`の再実行がmarkerを重ねずにcloseを完了します。既にclosedのIssueは再度closeしません。labelとstate markerとsealed contractは履歴として残り、closeされた`superseded`のIssueを`done`とは扱いません。
 
 各遷移commentには機械可読markerとして `from`、`to`、`resumeState`、executor、timestampを保存します。markerは `Config/ownership.yml` の個人GitHub loginが投稿したcommentだけを信頼し、comment author、marker timestamp、comment作成時刻、合法な遷移履歴を結び付けます。第三者または不正なmarkerを除外した最新の有効markerをtimestampで決定し、同時刻に複数の有効候補があれば推測せず失敗します。`blocked:*` または`paused`へ入るときの`resumeState`は遷移前状態です。復帰時は `issue-state.sh transition --from <current> --to <resumeState>` を明示実行してから `resume-issue.sh` でlocal stateを再構築します。`resume-issue.sh` 自体はlabelを変更しません。存在しない場合は推測せず`blocked:conflict`にします。ローカル`state.json`にも同じfieldsを保存し、失われた場合はGitHub commentから再構築します。
 
