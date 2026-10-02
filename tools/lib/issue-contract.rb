@@ -930,7 +930,7 @@ module IOSTemplate
     end
 
     def approval_reference?(value)
-      value.match?(/(?:https?:\/\/\S+|\B#\d+\b|\bD-\d+\b|\bapproval(?:\s+reference)?\s*:\s*\S+)/i)
+      value.match?(/(?:https?:\/\/\S+|\B#\d+\b|\b[DA]-\d+\b|\bapproval(?:\s+reference)?\s*:\s*\S+)/i)
     end
 
     def normalize_approval_reference(value)

@@ -629,3 +629,18 @@
   - System Experiences Planningとの関係: ローカル通知は、Widget、Live Activities、Dynamic Island、Controls、Siri／App Intentsの5面に含めない独立した条件付き能力とする。D-051の対象は変更しない。
 - Consequence: 通知code、skill、tool、TemplateAppは変更しない。remote push（APNs）、通知service extension、Live Activities／Widgetの設計は対象外とし、必要になった時点で別のDecisionとIssueで扱う。
 - Related Issue: #160
+
+## D-069: 派生アプリのDecisionを`specs/app-decisions.md`の`A-###`に分ける
+
+- Date: 2026-10-02
+- Status: 確定
+- Supersedes: なし。既存のテンプレートDecision（`D-001`以降）の番号と本文は変更しない。
+- Context: テンプレートと派生アプリは、どちらも同じ`specs/decisions.md`へ`D-###`を連番で追記してきた。そのため派生アプリの生成後は、同じIDが別の決定を指す（例: 派生アプリPayCycleの`D-030`〜`D-039`は、テンプレートの同じ番号と全件が別内容）。テンプレートの`AGENTS.md`やtoolは「D-030 cutover」「D-059」などを規則として参照し、その文書は派生アプリへ引き継がれる。
+- Decision:
+  - テンプレートのDecisionは、`specs/decisions.md`の`D-###`だけとする。テンプレート所有の文書とtool（`AGENTS.md`、`docs/`、`specs/`の既存節、`.agents/skills/`、`tools/`）が`D-###`で参照するのは、派生アプリの中でも常にテンプレートDecisionである。
+  - 派生アプリ固有のDecisionは、`specs/app-decisions.md`へ`A-###`（`A-001`から連番）で追記する。派生アプリは`specs/decisions.md`へ新しいDecisionを追加しない。
+  - 候補の別prefixと別fileのうち別fileを選び、そのfileの中では別prefixの`A-###`を使う。理由は二つある。テンプレート更新の取り込みで`specs/decisions.md`の末尾へテンプレートDecisionを足しても、アプリ固有の追記と同じfileの上で衝突しない。IDのprefixが違うので、本文やIssueの参照からどちらのDecisionかが一意に分かる。
+  - 書式は`spec-workflow`の`templates/decision.md`と同じとし、各Decisionの`- Status:`をそのDecisionの状態とする。spec state checkerは、Issueが`specs/decisions.md`の`D-###`または`specs/app-decisions.md`の`A-###`へ張ったリンクを、そのDecisionの`- Status:`で判定する。fileとprefixの取り違えは拒否する。Issueのapproval参照は`D-###`と`A-###`の両方を受け付ける。
+  - テンプレート更新を取り込むときは、テンプレート側で増えた`D-###`を、番号を変えずに追記順のまま`specs/decisions.md`の末尾へ加える。`specs/app-decisions.md`には触れない。
+- Consequence: Identity bootstrap後の派生アプリは、最初のアプリ固有Decisionを記録するときに`specs/app-decisions.md`を作り、`A-001`から始める。既に`specs/decisions.md`へアプリ固有の`D-###`を追記した派生アプリのrenumberや移行はこのDecisionでは行わず、各アプリのテンプレート同期Issueで扱う。テンプレート更新を自動で同期するtoolは追加しない。
+- Related Issue: #162

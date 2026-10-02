@@ -131,6 +131,37 @@ destinations.each do |raw_destination|
   end
   document_indices = (0...document_end)
   document_statuses = canonical_statuses(visible_lines, document_indices)
+  # A Decision in a decision log carries its own Status line. Template decisions (D-###) and derived-app
+  # decisions (A-###) live in separate logs (D-069). A legacy log without a per-Decision Status falls back
+  # to its document Status.
+  decision_prefix = {"decisions.md" => "D", "app-decisions.md" => "A"}[spec_path.basename.to_s] if
+    spec_path.dirname.basename.to_s == "specs"
+  if decision_prefix
+    if raw_anchor.nil? || raw_anchor.empty?
+      failures << "decision log reference must name one Decision: #{destination}"
+      next
+    end
+    anchor = URI::DEFAULT_PARSER.unescape(raw_anchor).downcase
+    decision = headings.find { |_, level, title| level == 2 && heading_slug(title) == anchor }
+    unless decision
+      failures << "missing referenced specification anchor: #{destination}"
+      next
+    end
+    unless decision[2].match?(/\A#{decision_prefix}-\d+:/)
+      failures << "decision ID does not belong to #{spec_path.basename} (#{decision_prefix}-### expected): #{destination}"
+      next
+    end
+    decision_end = headings.find { |index, level, _| index > decision[0] && level <= 2 }&.first || lines.length
+    decision_statuses = (decision[0]...decision_end).each_with_object([]) do |index, statuses|
+      match = visible_lines[index]&.match(/\A(?:- )?Status:[ \t]*(.*?)[ \t]*\z/u)
+      statuses << [index, match[1]] if match
+    end
+    decision_statuses = document_statuses if decision_statuses.empty?
+    if (failure = status_failure("decision", decision_statuses, destination))
+      failures << failure
+    end
+    next
+  end
   if (failure = status_failure("document", document_statuses, destination))
     failures << failure
     next

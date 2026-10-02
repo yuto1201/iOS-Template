@@ -10,7 +10,8 @@
 | [architecture.md](./architecture.md) | リポジトリ構造、責務、条件付きモジュール |
 | [acceptance.md](./acceptance.md) | テンプレートとIssueの完了条件 |
 | [development-stages.md](./development-stages.md) | リリース単位の6開発フェーズ、日本語iPhone優先の開発順序、仕上げ、検証範囲と移行境界 |
-| [decisions.md](./decisions.md) | 確定した判断と変更理由 |
+| [decisions.md](./decisions.md) | テンプレートの確定した判断（`D-###`）と変更理由 |
+| `app-decisions.md` | 派生アプリだけが作る、アプリ固有の判断（`A-###`）。テンプレートには置かない |
 
 ## 判断の状態
 
@@ -41,6 +42,8 @@
 
 1. 変更理由、影響する受け入れ条件、移行方法を整理する。
 2. ユーザーと相談し、状態を確定する。
-3. `decisions.md` に新しい決定を追加する。過去の行を黙って書き換えない。
+3. 新しい決定を追加する。テンプレートでは`decisions.md`へ`D-###`、派生アプリでは`app-decisions.md`へ`A-###`として追記する。過去の行を黙って書き換えない。テンプレート所有の文書とtoolの`D-###`は、常にテンプレートの決定を指す（[D-069](./decisions.md#d-069-派生アプリのdecisionをspecsapp-decisionsmdのa-に分ける)）。
 4. 関連仕様と Issue を更新する。
 5. 実装 Issue を開始する。
+
+派生アプリがテンプレート更新を取り込むときは、テンプレートで増えた`D-###`を番号を変えずに追記順のまま`decisions.md`の末尾へ加える。`app-decisions.md`は変更しない。

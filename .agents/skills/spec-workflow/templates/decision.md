@@ -1,3 +1,4 @@
+<!-- Template decisions use D-XXX in specs/decisions.md; derived-app decisions use A-XXX in specs/app-decisions.md (D-069). -->
 ## D-XXX: Decision title
 
 - Date: YYYY-MM-DD

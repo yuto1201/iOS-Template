@@ -421,6 +421,60 @@ RUBY
 # reuse while the assertions above verify the user-facing consumers.
 ruby tools/lib/workflow-release-phase-test.rb
 
+# A Decision reference resolves that Decision's own `- Status:` line, and template (D-###) and derived-app
+# (A-###) decisions must each stay in their own log (D-069).
+write_issue template-decision 'specs/decisions.md#d-069-派生アプリのdecisionをspecsapp-decisionsmdのa-に分ける'
+expect_ready template-decision
+write_issue decision-log-only 'specs/decisions.md'
+expect_rejected decision-log-only 'decision log reference must name one Decision'
+mkdir -p "$fixture_dir/specs"
+cat > "$fixture_dir/specs/app-decisions.md" <<'EOF'
+# App decisions
+
+## A-001: Confirmed app decision
+
+- Date: 2026-10-02
+- Status: 確定
+
+## A-002: Proposed app decision
+
+- Status: 提案
+
+## D-900: Misplaced template decision
+
+- Status: 確定
+EOF
+cat > "$fixture_dir/specs/decisions.md" <<'EOF'
+# Decisions
+
+Status: 確定
+
+## A-900: Misplaced app decision
+
+- Status: 確定
+
+## D-031: Legacy plain status
+
+Status: 確定
+
+## D-032: Legacy without its own status
+
+- Record: The document Status applies.
+EOF
+write_issue app-decision "$fixture_dir/specs/app-decisions.md#a-001-confirmed-app-decision"
+expect_ready app-decision
+write_issue app-decision-proposed "$fixture_dir/specs/app-decisions.md#a-002-proposed-app-decision"
+expect_rejected app-decision-proposed 'decision is not confirmed (提案)'
+write_issue template-id-in-app-log "$fixture_dir/specs/app-decisions.md#d-900-misplaced-template-decision"
+expect_rejected template-id-in-app-log '(A-### expected)'
+write_issue app-id-in-template-log "$fixture_dir/specs/decisions.md#a-900-misplaced-app-decision"
+expect_rejected app-id-in-template-log '(D-### expected)'
+# A legacy log keeps working: a plain Status line, or the document Status when a Decision has none.
+write_issue legacy-plain-status "$fixture_dir/specs/decisions.md#d-031-legacy-plain-status"
+expect_ready legacy-plain-status
+write_issue legacy-document-status "$fixture_dir/specs/decisions.md#d-032-legacy-without-its-own-status"
+expect_ready legacy-document-status
+
 printf '%s\n' 'No specification reference.' > "$fixture_dir/unlinked.md"
 expect_rejected unlinked 'Issue body has no local Markdown specification reference'
 
