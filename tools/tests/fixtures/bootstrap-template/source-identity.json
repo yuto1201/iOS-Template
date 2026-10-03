@@ -1950,7 +1950,7 @@
     {
       "path": "docs/verification.md",
       "mode": "100644",
-      "sha256": "0cb38d69ec1db2374d5f0adf1459947eb15628ee5706de2219ac84a87542f484",
+      "sha256": "50e7aa6c56fa393b8ec91a6dd7db36546a53594d13e2d5b8e18209b5f6a93825",
       "lines": [
         "# iOS verification",
         "",
@@ -2120,7 +2120,7 @@
         "",
         "Phase 6のスクリーンショットは通常の4条件application verificationとは別のdisplay-family成果物です。iPhone 6.9-inchの装飾・編集はGoldieを標準参照とし、`goldie/ja/`と`goldie/en-US/`を別config／raw／flow／outputとして扱います。iPadはGoldie対象外なので`tools/capture-appstore-screenshots.sh`へrouteし、iPhone画像を拡大しません。既存画像の見出し、背景、frame、font、順序だけの変更は再撮影しません。",
         "",
-        "新規raw撮影は`tools/with-ios-simulator-lock.sh`の内側で同じMac共通resource managerを使用します。D-063により、撮影toolを専用deviceへ移す後続Issueが完了するまで、新規raw撮影は実行しません。移行後も撮影はlocale／familyごとに専用deviceを一台ずつleaseし、画像とsanitized receiptをdevice外へ保存して停止を確認してから次の条件へ進みます。失敗、timeout、INT／TERMも同じrelease経路を通し、cleanup失敗は枠とdurable recordを残して成功扱いしません。fake `xcrun`によるrepository testはこの順序とcleanupの回帰であり、実画像品質の証拠ではありません。",
+        "新規raw撮影は`tools/with-ios-simulator-lock.sh`の内側で`tools/capture-appstore-screenshots.sh`を実行し、同じMac共通resource managerを使用します。撮影はlocale／familyごとにplatformの専用deviceを一台ずつleaseし（lease前にerase、release時にshutdown）、画像とsanitized receiptをdevice外へ保存して停止を確認してから次の条件へ進みます。D-070により専用deviceはApp Storeの必須画像サイズの機種なので、撮影画像を合成や切り抜きなしで使い、manifestへは各familyのApple公式の機種名と実際の画像サイズを記録します。宣言と異なるRuntimeやfamilyに対応しない専用deviceでは、Simulatorを変更する前に停止します。Goldieの`capture`は専用deviceを選べないため使わず、撮影結果をGoldieへimportします。失敗、timeout、INT／TERMも同じrelease経路を通し、cleanup失敗は枠とdurable recordを残して成功扱いしません。fake `xcrun`によるrepository testはこの順序とcleanupの回帰であり、実画像品質の証拠ではありません。",
         "",
         "Goldie／capture成功はPhase 5 full proof、`evidence-applicability.json`、visual audit、release-auditor、package seal、App Store account／target preflight、upload、submitの代用ではありません。`reuse`は元のPhase 5証拠が同じcandidate／contextへ適用可能という意味だけで、新たに実行したと報告しません。",
         "",
@@ -2572,7 +2572,7 @@
     {
       "path": "specs/architecture.md",
       "mode": "100644",
-      "sha256": "ebddbb915545bf649a3fa684da541c0f41ed7b7952229c6e1f06b2e359821f9b",
+      "sha256": "4d1efef2169f8ff7138b24b095f8de42ecffa3fc8d36fe3545eefba1ce48924e",
       "lines": [
         "# テンプレート構成",
         "",
@@ -2857,7 +2857,7 @@
         "",
         "`App Store/` のテキストと構造はコミットします。生成途中の秘密、認証セッション、未加工の個人データは置きません。スクリーンショットは、提出対象として採用された最終版だけを管理します。",
         "",
-        "App Store用スクリーンショットも、通常検証と同じrepository専用の2台（D-063）だけで撮影します。公式の必須画像サイズは、確定済みの合成経路（Goldieなど）で規定canvasへ仕上げて満たします。満たせないサイズがある場合は、upload前に`blocked:user`とします。",
+        "App Store用スクリーンショットも、通常検証と同じrepository専用の2台（D-063）だけで撮影します。2台はApp Storeの必須画像サイズ（iPhone 6.9-inch、iPad 13-inch）の機種なので（D-070）、撮影画像はそのまま必須サイズを満たし、合成や切り抜きを必要としません。必須サイズに合わない画像は、撮影toolが保存前に拒否し、upload前の画像判定でも受け入れません。",
         "",
         "### 9.1 原稿の正本と登録準備",
         "",

@@ -1,25 +1,30 @@
-# Capture with Argent
+# Capture and Argent flows
+
+In iOS-Template, Goldie does not capture. Raw screenshots come from
+`tools/capture-appstore-screenshots.sh` on the repository's dedicated Simulators
+and are imported into Goldie for styling.
+
+## Why Goldie capture is not used
+
+Goldie 0.3.1's `capture` has no explicit iOS UDID override. It selects the first
+Simulator named exactly `iPhone 17 Pro Max` in the newest matching installed iOS
+runtime, changes locale/appearance and **reinstalls the app, clearing its data**.
+iOS-Template captures only on its dedicated Simulators (D-063), named
+`<display name> iPhone 17 Pro Max` and `<display name> iPad Pro 13-inch (M5)`
+(D-070), so Goldie's selector never resolves to them. Do not run Goldie `capture`
+or preview recording, pass an invented `--udid` option, rename a device, or create
+a device that matches Goldie's selector.
+
+The repository tool reaches each screenshot state through the launch arguments in
+`App Store/screenshots/states.json`, not through Argent flows. The rest of this
+page is reference for a future route that can drive a dedicated Simulator.
+
+## Argent reference
 
 Goldie ships an Argent CLI. Read its installed `--help` before new tool calls;
 MCP is optional. Discover visible labels and accessibility IDs with the live
 Simulator tools, then author `.argent/flows/store-*.yaml`. Do not guess selectors.
 Use synthetic demo data and no logged-in personal/production accounts.
-
-## Device ownership before capture
-
-Goldie 0.3.1's `capture` has no explicit iOS UDID override. It selects the first
-Simulator named `iPhone 17 Pro Max` in the newest matching installed iOS runtime,
-changes locale/appearance and **reinstalls the app, clearing its data**. It does
-not guarantee this device is disposable. Don't pass an invented `--udid` option,
-rename an existing user device, or silently install into the selected default.
-
-Prefer the repository's owned-device capture tool and import its raw outputs into
-Goldie. When direct Goldie capture is requested, first resolve the exact candidate
-from `xcrun simctl list devices available --json` using the installed version's
-selection rule. It may run only if that candidate was created for this task and
-its UDID is recorded as owned. If a user-owned device would be selected, use the
-owned-UDID Argent CLI/simctl capture route and the import recipe instead. Shut down
-or delete only a device created by the current task. Keep existing devices intact.
 
 Do not disable global Argent flags silently. Inspect `argent flags`; if needed,
 record/restore the specific prior value, and avoid changes while another task uses
@@ -45,12 +50,14 @@ steps:
   not reset records created by earlier scenes. Use idempotent demo setup or owned
   app reset and import independently captured scenes when that is required.
 - End with `await idle`. Goldie takes the final screenshot itself.
-- Run a failing flow on its owned UDID before retrying the whole pipeline. The CLI
-  already retries one launch-handshake failure; don't add unbounded retries.
+- Run a failing flow on its leased dedicated UDID before retrying the whole
+  pipeline. The CLI already retries one launch-handshake failure; don't add
+  unbounded retries.
 
 ## Videos, only when requested
 
-Add a `kind: "preview"` scene with segments `{id, flow, holdSeconds}`. The first
+Preview recording uses Goldie `capture`, so it is unavailable on the dedicated
+Simulators. For reference: add a `kind: "preview"` scene with segments `{id, flow, holdSeconds}`. The first
 segment launches, later ones may declare `executionPrerequisite` describing the
 previous final state. Check continuity and deliberate pacing. `capture` also
 records all preview segments present in config; use a screenshot-only config when

@@ -166,7 +166,7 @@ ruby tools/lib/ios-simulator-resource.rb recover --dry-run
 
 Phase 6のスクリーンショットは通常の4条件application verificationとは別のdisplay-family成果物です。iPhone 6.9-inchの装飾・編集はGoldieを標準参照とし、`goldie/ja/`と`goldie/en-US/`を別config／raw／flow／outputとして扱います。iPadはGoldie対象外なので`tools/capture-appstore-screenshots.sh`へrouteし、iPhone画像を拡大しません。既存画像の見出し、背景、frame、font、順序だけの変更は再撮影しません。
 
-新規raw撮影は`tools/with-ios-simulator-lock.sh`の内側で同じMac共通resource managerを使用します。D-063により、撮影toolを専用deviceへ移す後続Issueが完了するまで、新規raw撮影は実行しません。移行後も撮影はlocale／familyごとに専用deviceを一台ずつleaseし、画像とsanitized receiptをdevice外へ保存して停止を確認してから次の条件へ進みます。失敗、timeout、INT／TERMも同じrelease経路を通し、cleanup失敗は枠とdurable recordを残して成功扱いしません。fake `xcrun`によるrepository testはこの順序とcleanupの回帰であり、実画像品質の証拠ではありません。
+新規raw撮影は`tools/with-ios-simulator-lock.sh`の内側で`tools/capture-appstore-screenshots.sh`を実行し、同じMac共通resource managerを使用します。撮影はlocale／familyごとにplatformの専用deviceを一台ずつleaseし（lease前にerase、release時にshutdown）、画像とsanitized receiptをdevice外へ保存して停止を確認してから次の条件へ進みます。D-070により専用deviceはApp Storeの必須画像サイズの機種なので、撮影画像を合成や切り抜きなしで使い、manifestへは各familyのApple公式の機種名と実際の画像サイズを記録します。宣言と異なるRuntimeやfamilyに対応しない専用deviceでは、Simulatorを変更する前に停止します。Goldieの`capture`は専用deviceを選べないため使わず、撮影結果をGoldieへimportします。失敗、timeout、INT／TERMも同じrelease経路を通し、cleanup失敗は枠とdurable recordを残して成功扱いしません。fake `xcrun`によるrepository testはこの順序とcleanupの回帰であり、実画像品質の証拠ではありません。
 
 Goldie／capture成功はPhase 5 full proof、`evidence-applicability.json`、visual audit、release-auditor、package seal、App Store account／target preflight、upload、submitの代用ではありません。`reuse`は元のPhase 5証拠が同じcandidate／contextへ適用可能という意味だけで、新たに実行したと報告しません。
 
