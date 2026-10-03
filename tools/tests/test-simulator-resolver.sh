@@ -95,8 +95,6 @@ dedicated_types="$scratch/devicetypes-a16.json"
 ruby -rjson - "$fixtures/devicetypes.json" "$dedicated_types" <<'RUBY'
 source, destination = ARGV
 document = JSON.parse(File.read(source))
-document["devicetypes"] << {"identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max", "name" => "iPhone 17 Pro Max", "productFamily" => "iPhone"}
-document["devicetypes"] << {"identifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB", "name" => "iPad Pro 13-inch (M5)", "productFamily" => "iPad"}
 File.write(destination, JSON.generate(document))
 RUBY
 run_resolver "$available_runtimes" "$dedicated_types" Config/dedicated-simulators.json
