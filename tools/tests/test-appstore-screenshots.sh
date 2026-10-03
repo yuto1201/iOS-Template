@@ -154,77 +154,83 @@ write_valid_fixture
 ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].find{|e| e["family"]=="iphone-6.9"}["deviceType"]="iPhone 17 Pro"; File.binwrite(p,JSON.generate(v))' "$raw/manifest.json"
 assert_failure 'required Pro Max capture' 'deviceType'
 
-# D-063: capture may use only the repository's dedicated Simulators. Until the capture tool
-# leases them by platform (#192), a requirements Device Type or Runtime that differs from
-# Config/dedicated-simulators.json stops capture before any Simulator is booted, created, or deleted.
+# D-063/D-070: capture leases only the dedicated Simulator that Config/dedicated-simulators.json
+# declares for each platform and records the Apple model name of its family. The unmodified fixture
+# lists iPhone Air and iPad Air (M4) first and a user-owned iPhone Air is installed, so selecting by
+# the requirements order would capture on another device.
+dedicated_config="$repo_root/Config/dedicated-simulators.json"
+capture_runtime=$(jq -er '.devices[0].runtimeIdentifier' "$dedicated_config")
+iphone_name=$(jq -er '.devices[] | select(.family == "iphone") | .name' "$dedicated_config")
+ipad_name=$(jq -er '.devices[] | select(.family == "ipad") | .name' "$dedicated_config")
+iphone_type=$(jq -er '.devices[] | select(.family == "iphone") | .deviceTypeIdentifier' "$dedicated_config")
+ipad_type=$(jq -er '.devices[] | select(.family == "ipad") | .deviceTypeIdentifier' "$dedicated_config")
+capture_requirements="$workspace/capture-requirements.json"
+/bin/cp "$repo_root/tools/tests/fixtures/appstore/requirements.json" "$capture_requirements"
 fake_bin="$workspace/fake-bin"; mkdir -p "$fake_bin"
-fake_png="$workspace/fake.png"; write_png "$fake_png" 1260 2736 2 77
-fake_ipad_png="$workspace/fake-ipad.png"; write_png "$fake_ipad_png" 2064 2752 2 78
+# Each locale/family gets distinct bytes because the set builder rejects duplicate images.
+fake_pngs="$workspace/fake-png"
+write_png "$fake_pngs/en-US-iphone-6.9.png" 1320 2868 2 77
+write_png "$fake_pngs/ja-iphone-6.9.png" 1320 2868 2 78
+write_png "$fake_pngs/en-US-ipad-13.png" 2064 2752 2 79
+write_png "$fake_pngs/ja-ipad-13.png" 2064 2752 2 80
 fake_log="$workspace/xcrun.log"
 fake_state="$workspace/simctl-state.json"
 resource_state="$workspace/resource-state"
-printf '%s\n' '{"sequence":0,"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[]}}' > "$fake_state"
+user_udid=00000000-0000-0000-0000-000000000003
+ruby -rjson -e '
+  runtime, iphone_name, iphone_type, ipad_name, ipad_type, user_udid = ARGV
+  device = lambda do |udid, name, type|
+    {"udid" => udid, "name" => name, "state" => "Shutdown", "isAvailable" => true, "deviceTypeIdentifier" => type}
+  end
+  puts JSON.generate("devices" => {runtime => [
+    device.call("00000000-0000-0000-0000-000000000001", iphone_name, iphone_type),
+    device.call("00000000-0000-0000-0000-000000000002", ipad_name, ipad_type),
+    device.call(user_udid, "iPhone Air", "com.apple.CoreSimulator.SimDeviceType.iPhone-Air")
+  ]})
+' "$capture_runtime" "$iphone_name" "$iphone_type" "$ipad_name" "$ipad_type" "$user_udid" > "$fake_state"
 cat > "$fake_bin/xcrun" <<'RUBY'
 #!/usr/bin/ruby --disable-gems
 require "fileutils"
 require "json"
 
 state_path = ENV.fetch("FAKE_SIMCTL_STATE")
-log_path = ENV.fetch("FAKE_XCRUN_LOG")
-File.open(log_path, "a", 0o600) { |file| file.puts(ARGV.join(" ")) }
+File.open(ENV.fetch("FAKE_XCRUN_LOG"), "a", 0o600) { |file| file.puts(ARGV.join(" ")) }
 abort "expected simctl" unless ARGV.shift == "simctl"
 command = ARGV.shift
-runtime = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 
 lock = File.open(state_path + ".lock", File::RDWR | File::CREAT, 0o600)
 lock.flock(File::LOCK_EX)
 begin
   state = JSON.parse(File.binread(state_path))
-  devices = state.fetch("devices").fetch(runtime)
+  devices = state.fetch("devices").values.flatten
+  target = lambda { devices.find { |entry| entry.fetch("udid") == ARGV.fetch(0) } or abort "missing #{command} target" }
   case command
   when "list"
     case ARGV
     when %w[-j devicetypes]
       puts JSON.generate("devicetypes" => [
+        {"name" => "iPhone Air", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-Air"},
         {"name" => "iPhone 17 Pro Max", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max"},
-        {"name" => "iPad Air (M4)", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Air-M4-13-inch"}
+        {"name" => "iPad Air 13-inch (M4)", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M4"},
+        {"name" => "iPad Pro 13-inch (M5)", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB"}
       ])
     when %w[devices -j]
       puts JSON.generate("devices" => state.fetch("devices"))
     else
       abort "unexpected list arguments"
     end
-  when "create"
-    name, device_type, requested_runtime = ARGV
-    abort "invalid create" unless ARGV.length == 3 && requested_runtime == runtime
-    state["sequence"] += 1
-    udid = format("00000000-0000-0000-0000-%012d", state.fetch("sequence"))
-    data_path = File.join(File.dirname(state_path), "data", udid)
-    FileUtils.mkdir_p(data_path)
-    devices << {
-      "udid" => udid, "name" => name, "state" => "Shutdown", "isAvailable" => true,
-      "deviceTypeIdentifier" => device_type, "dataPath" => data_path
-    }
-    File.binwrite(state_path, JSON.generate(state))
-    puts udid
   when "boot"
-    device = devices.find { |entry| entry.fetch("udid") == ARGV.fetch(0) } or abort "missing boot target"
-    device["state"] = "Booted"
+    target.call["state"] = "Booted"
     File.binwrite(state_path, JSON.generate(state))
   when "shutdown"
-    device = devices.find { |entry| entry.fetch("udid") == ARGV.fetch(0) } or abort "missing shutdown target"
-    device["state"] = "Shutdown"
+    target.call["state"] = "Shutdown"
     File.binwrite(state_path, JSON.generate(state))
-  when "delete"
-    device = devices.find { |entry| entry.fetch("udid") == ARGV.fetch(0) } or abort "missing delete target"
-    FileUtils.rm_rf(device.fetch("dataPath"))
-    devices.delete(device)
-    File.binwrite(state_path, JSON.generate(state))
+  when "erase"
+    abort "erase requires a shut down device" unless target.call["state"] == "Shutdown"
   when "io"
     abort "configured screenshot failure" if ENV["FAKE_FAIL_SCREENSHOT"] == "1"
     destination = ARGV.fetch(-1)
-    source = destination.include?("/ipad-13/") ? ENV.fetch("FAKE_IPAD_PNG") : ENV.fetch("FAKE_PNG")
-    FileUtils.cp(source, destination)
+    FileUtils.cp(File.join(ENV.fetch("FAKE_PNG_DIR"), destination.split("/")[-3, 2].join("-") + ".png"), destination)
   when "bootstatus", "status_bar", "install", "launch", "terminate", "uninstall"
     # Deterministic no-op fixture commands.
   else
@@ -237,24 +243,109 @@ end
 RUBY
 chmod +x "$fake_bin/xcrun"
 mkdir -p "$workspace/Fake.app"
-capture_root="$workspace/captured"
-set +e
-FAKE_XCRUN_LOG="$fake_log" FAKE_SIMCTL_STATE="$fake_state" FAKE_PNG="$fake_png" FAKE_IPAD_PNG="$fake_ipad_png" \
-  IOS_TEMPLATE_SIMULATOR_SESSION_ID=appstore-test-session IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE=1 \
-  IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT="$resource_state" IOS_TEMPLATE_APPSTORE_XCRUN="$fake_bin/xcrun" \
-  "$capture" --requirements "$requirements" --states "$states" --app-path "$workspace/Fake.app" \
-  --bundle-id com.yuto.TemplateApp --source-sha "$source_sha" --build-digest "$build_digest" \
-  --runtime "$runtime" --output-root "$capture_root" --issue 88 --batch-id appstore-test \
-  >"$workspace/capture.out" 2>"$workspace/capture.err"
-capture_status=$?
-set -e
-[[ "$capture_status" -ne 0 && ! -e "$capture_root" ]] || { echo 'capture outside the dedicated Simulators published output' >&2; exit 1; }
-grep -Fq 'blocked:environment: requested iphone Device Type and Runtime differ from the dedicated Simulator declaration' "$workspace/capture.err" || {
-  echo "capture outside the dedicated Simulators failed for another reason: $(<"$workspace/capture.err")" >&2; exit 1
-}
-! rg -q '^simctl (create|clone|rename|delete|erase|boot|install|launch|io) ' "$fake_log" || {
-  echo 'capture changed a Simulator before the dedicated declaration check' >&2; exit 1
-}
-[[ "$(jq '[.devices[] | .[]] | length' "$fake_state")" == 0 ]] || { echo 'capture created a Simulator' >&2; exit 1; }
 
-echo 'PASS: App Store screenshots require exact images, deterministic locales, and release-only device families, and capture stops outside the dedicated Simulators'
+run_capture() {
+  local session=$1 output=$2 requirements_file=$3 runtime_id=$4
+  shift 4
+  env FAKE_XCRUN_LOG="$fake_log" FAKE_SIMCTL_STATE="$fake_state" FAKE_PNG_DIR="$fake_pngs" "$@" \
+    IOS_TEMPLATE_SIMULATOR_SESSION_ID="$session" IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE=1 \
+    IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT="$resource_state" IOS_TEMPLATE_APPSTORE_XCRUN="$fake_bin/xcrun" \
+    "$capture" --requirements "$requirements_file" --states "$states" --app-path "$workspace/Fake.app" \
+    --bundle-id com.yuto.TemplateApp --source-sha "$source_sha" --build-digest "$build_digest" \
+    --runtime "$runtime_id" --output-root "$output" --issue 88 --batch-id appstore-test \
+    >"$workspace/capture.out" 2>"$workspace/capture.err"
+}
+
+assert_dedicated_devices_intact() {
+  ruby -rjson -e '
+    devices = JSON.parse(File.binread(ARGV.fetch(0))).fetch("devices").values.flatten
+    abort "capture changed the installed Simulators" unless devices.length == 3 && devices.all? { |entry| entry["state"] == "Shutdown" }
+  ' "$fake_state" || exit 1
+  ! rg -q '^simctl (create|clone|rename|delete) ' "$fake_log" || { echo 'capture created or deleted a Simulator' >&2; exit 1; }
+  ! rg -qF "$user_udid" "$fake_log" || { echo 'capture used a Simulator outside the dedicated declaration' >&2; exit 1; }
+}
+
+assert_capture_blocked() {
+  local label=$1 expected=$2 requirements_file=$3 runtime_id=$4 output="$workspace/blocked-capture"
+  : > "$fake_log"
+  if run_capture "appstore-blocked-session" "$output" "$requirements_file" "$runtime_id"; then
+    echo "expected blocked capture: $label" >&2; exit 1
+  fi
+  [[ ! -e "$output" ]] || { echo "blocked capture published output: $label" >&2; exit 1; }
+  grep -Fq "blocked:environment: $expected" "$workspace/capture.err" || {
+    echo "blocked capture failed for another reason: $label: $(<"$workspace/capture.err")" >&2; exit 1
+  }
+  ! rg -qv '^simctl list -j devicetypes$' "$fake_log" || { echo "blocked capture changed a Simulator: $label" >&2; exit 1; }
+}
+
+assert_capture_blocked 'Runtime outside the declaration' '--runtime differs from the dedicated iphone Simulator declaration' \
+  "$capture_requirements" "$runtime"
+ipad_air_only="$workspace/ipad-air-requirements.json"
+ruby -rjson -e '
+  value = JSON.parse(File.binread(ARGV.fetch(0)))
+  value.fetch("screenshots").fetch("requiredFamilies").find { |entry| entry.fetch("id") == "ipad-13" }["deviceTypes"] = ["iPad Air (M4)"]
+  File.binwrite(ARGV.fetch(1), JSON.generate(value))
+' "$capture_requirements" "$ipad_air_only"
+assert_capture_blocked 'dedicated device outside the family' \
+  'the dedicated ipad Simulator (iPad Pro 13-inch (M5)) is not a ipad-13 App Store device type' "$ipad_air_only" "$capture_runtime"
+assert_dedicated_devices_intact
+
+# A capture failure releases the exact lease and leaves the dedicated device shut down.
+: > "$fake_log"
+failure_root="$workspace/capture-failure"
+if run_capture appstore-failure-session "$failure_root" "$capture_requirements" "$capture_runtime" FAKE_FAIL_SCREENSHOT=1; then
+  echo 'capture succeeded after a screenshot failure' >&2; exit 1
+fi
+[[ ! -e "$failure_root" ]] || { echo 'failed capture published output' >&2; exit 1; }
+assert_dedicated_devices_intact
+
+: > "$fake_log"
+capture_root="$workspace/captured"
+run_capture appstore-test-session "$capture_root" "$capture_requirements" "$capture_runtime" || {
+  echo "dedicated capture failed: $(<"$workspace/capture.err")" >&2; exit 1
+}
+assert_dedicated_devices_intact
+ruby -rjson -e '
+  value = JSON.parse(File.binread(ARGV.fetch(0)))
+  abort "capture runtime" unless value.fetch("runtime") == ARGV.fetch(1)
+  expected = {"iphone-6.9" => ["iPhone 17 Pro Max", 1320, 2868], "ipad-13" => ["iPad Pro (M5)", 2064, 2752]}
+  cases = value.fetch("cases")
+  abort "capture cases" unless cases.map { |entry| entry.values_at("locale", "family") }.sort == [%w[en-US ipad-13], %w[en-US iphone-6.9], %w[ja ipad-13], %w[ja iphone-6.9]]
+  cases.each do |entry|
+    abort "capture device or size for #{entry["family"]}" unless entry.values_at("deviceType", "width", "height") == expected.fetch(entry.fetch("family"))
+  end
+' "$capture_root/manifest.json" "$capture_runtime"
+ruby -rjson -e '
+  files = Dir.glob(File.join(ARGV.fetch(0), "allocation-*.json"))
+  abort "receipt count" unless files.length == 4
+  files.each do |path|
+    value = JSON.parse(File.binread(path))
+    abort "lease is not a released dedicated lease" unless value.fetch("kind") == "dedicated-lease" &&
+      value.fetch("status") == "released" && value.dig("cleanup", "status") == "passed" &&
+      [ARGV.fetch(1), ARGV.fetch(2)].include?(value.fetch("deviceName"))
+  end
+' "$capture_root/simulator-allocations" "$iphone_name" "$ipad_name"
+[[ "$(rg -c '^simctl erase ' "$fake_log")" == 4 ]] || { echo 'each locale/family lease did not erase its dedicated device' >&2; exit 1; }
+rg -q 'status_bar .*--time 9:41' "$fake_log" || { echo 'fixed status bar was not applied' >&2; exit 1; }
+rg -q -- '-AppleLanguages \(en\)' "$fake_log" && rg -q -- '-AppleLanguages \(ja\)' "$fake_log" || {
+  echo 'English or Japanese launch arguments are missing' >&2; exit 1
+}
+
+# The existing set builder accepts the dedicated capture unchanged.
+capture_review="$workspace/capture-review.json"
+ruby -rjson -e '
+  manifest = JSON.parse(File.binread(ARGV.fetch(0)))
+  checks = manifest.fetch("cases").map do |entry|
+    {"locale" => entry["locale"], "family" => entry["family"], "state" => entry["state"], "path" => entry["path"],
+     "digest" => entry["digest"], "safeArea" => "passed", "textClipping" => "passed",
+     "truthfulRepresentation" => "passed", "localeParity" => "passed"}
+  end
+  File.binwrite(ARGV.fetch(1), JSON.generate({"schemaVersion" => 1, "sourceSha" => manifest["sourceSha"],
+    "buildDigest" => manifest["buildDigest"], "visualReviewStatus" => "passed",
+    "releaseAuditor" => {"status" => "approved", "model" => "release-auditor"}, "cases" => checks}))
+' "$capture_root/manifest.json" "$capture_review"
+result=$("$builder" --raw-root "$capture_root" --output-root "$workspace/capture-final" --requirements "$capture_requirements" \
+  --review "$capture_review" --source-sha "$source_sha" --runtime "$capture_runtime" --build-digest "$build_digest")
+[[ "$result" == *'"status":"ready"'* ]] || { echo "the set builder rejected the dedicated capture: $result" >&2; exit 1; }
+
+echo 'PASS: App Store screenshots require exact images, deterministic locales, and release-only device families, and capture leases only the dedicated Simulators'
