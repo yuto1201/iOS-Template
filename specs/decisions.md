@@ -644,3 +644,13 @@
   - テンプレート更新を取り込むときは、テンプレート側で増えた`D-###`を、番号を変えずに追記順のまま`specs/decisions.md`の末尾へ加える。`specs/app-decisions.md`には触れない。
 - Consequence: Identity bootstrap後の派生アプリは、最初のアプリ固有Decisionを記録するときに`specs/app-decisions.md`を作り、`A-001`から始める。既に`specs/decisions.md`へアプリ固有の`D-###`を追記した派生アプリのrenumberや移行はこのDecisionでは行わず、各アプリのテンプレート同期Issueで扱う。テンプレート更新を自動で同期するtoolは追加しない。
 - Related Issue: #162
+
+## D-070: 専用SimulatorをApp Storeの必須画像サイズの機種にする
+
+- Date: 2026-10-03
+- Status: 確定
+- Supersedes: D-063のうち専用deviceの機種の選択だけを置き換える。専用はiPhone 1台とiPad 1台だけ、AI検証とApp Store撮影の両方に使う、exact name・Device Type・Runtimeでちょうど1台を確認する、作成・clone・rename・削除をしない、各caseの前にeraseする、`-parallel-testing-enabled NO`で実行する、派生アプリは表示名を前置した同じ機種を持つ、という規則は維持する。
+- Context: D-063の専用device（iPhone 17、iPad (A16)）の画面は1206×2622と1640×2360で、App Storeの必須画像サイズ（iPhone 6.9-inch、iPad 13-inch）と一致しない。そのため専用deviceで撮ったApp Store用画像は、合成なしでは提出できず、画像判定でも撮影元の機種がApp Store要件の端末にないとして弾かれた（#192）。
+- Decision: Templateの専用deviceを、`iOS-Template iPhone 17 Pro Max`（Device Type iPhone 17 Pro Max、1320×2868）と`iOS-Template iPad Pro 13-inch (M5)`（Device Type iPad Pro 13-inch (M5)、2064×2752）に置き換える。Runtimeはどちらも iOS 27.0 とする。派生アプリは表示名を前置した同じ機種（例：`PayCycle iPhone 17 Pro Max`）とする。AI検証もこの2台で行うため、標準サイズのiPhoneでの検証は行わない。
+- Consequence: App Store用画像を専用deviceから合成なしで撮影できる。新しい2台は`tools/setup-dedicated-simulators.sh`で作成し、旧2台（`iOS-Template iPhone 17`、`iOS-Template iPad (A16)`）はAIが削除せず、ユーザーが削除する。派生アプリへの適用は各アプリのテンプレート同期Issueで行う。App Store撮影toolと画像判定の対応は#192で行う。
+- Related Issue: #233

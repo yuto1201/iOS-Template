@@ -127,7 +127,7 @@ D-050対象candidateはDelivery profileによる通常のreview省略経路を�
 
 ### 1.5.6 AI検証用Simulatorの資源契約
 
-全PhaseのAI検証とApp Store撮影は、repository専用のiPhone 1台とiPad 1台だけを使う（D-063）。Templateは`iOS-Template iPhone 17`（Device Type iPhone 17、Runtime iOS 27.0）と`iOS-Template iPad (A16)`（Device Type iPad (A16)、Runtime iOS 27.0）、派生アプリは表示名を前置した同じDevice Type／Runtimeの2台とする。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台であることを確認する。0台または2台以上なら`blocked:environment`とし、代わりのdeviceを作成・流用しない。専用deviceの作成は、後続Issueが定める明示的な初期設定手順だけで行う。
+全PhaseのAI検証とApp Store撮影は、repository専用のiPhone 1台とiPad 1台だけを使う（D-063、D-070）。Templateは`iOS-Template iPhone 17 Pro Max`（Device Type iPhone 17 Pro Max、Runtime iOS 27.0）と`iOS-Template iPad Pro 13-inch (M5)`（Device Type iPad Pro 13-inch (M5)、Runtime iOS 27.0）、派生アプリは表示名を前置した同じDevice Type／Runtimeの2台とする。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台であることを確認する。0台または2台以上なら`blocked:environment`とし、代わりのdeviceを作成・流用しない。専用deviceの作成は、後続Issueが定める明示的な初期設定手順だけで行う。
 
 検証とApp Store撮影はdeviceを作成、clone、rename、削除しない。専用device以外を起動、erase、install、test対象にしない。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`とし、clone deviceを作らない。
 
@@ -165,7 +165,7 @@ Delivery profileは変更の危険度を表す。
 
 Verification scopeは端末・言語の範囲を表す。
 
-- `shape`は`iphone-ja`。専用iPhone（Device Type iPhone 17、Runtime iOS 27.0）の`ja_JP` / `ja`の1条件。
+- `shape`は`iphone-ja`。専用iPhone（Device Type iPhone 17 Pro Max、Runtime iOS 27.0）の`ja_JP` / `ja`の1条件。
 - applicationを検証する`harden`は`targeted`。`iphone-en`、`iphone-ja`、`ipad-en`、`ipad-ja`のうち、Issueの変更対象に必要な非空のcanonical部分集合。
 - `release`は`full`。上記4条件を固定順ですべて実行する。
 

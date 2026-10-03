@@ -497,7 +497,7 @@ Closes #42
 ## Verification
 - Head SHA: 0123456789abcdef0123456789abcdef01234567
 - Unit tests: 24 passed
-- UI matrix: dedicated iPhone 17 en/ja, dedicated iPad (A16) en/ja passed
+- UI matrix: dedicated iPhone 17 Pro Max en/ja, dedicated iPad Pro 13-inch (M5) en/ja passed
 - Evidence digest: 9f42c7...
 
 ## Opposite-model review

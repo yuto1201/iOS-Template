@@ -3,14 +3,14 @@
   "devices": [
     {
       "family": "iphone",
-      "name": "iOS-Template iPhone 17",
-      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17",
+      "name": "iOS-Template iPhone 17 Pro Max",
+      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max",
       "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
     },
     {
       "family": "ipad",
-      "name": "iOS-Template iPad (A16)",
-      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPad-A16",
+      "name": "iOS-Template iPad Pro 13-inch (M5)",
+      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
       "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
     }
   ]
