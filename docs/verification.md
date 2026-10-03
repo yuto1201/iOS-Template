@@ -78,7 +78,7 @@ review packet schema v2は`releaseDisposition`と`releaseDispositionFile`を一�
 
 1. 使用するXcodeを確認する。必要な場合は `DEVELOPER_DIR` をコマンド単位で指定する。
 2. Xcode versionとbuildを記録する。
-3. `Config/dedicated-simulators.json`が宣言する専用deviceのRuntimeを選ぶ。Templateの宣言はiOS 27.0の`iOS-Template iPhone 17`と`iOS-Template iPad (A16)`で、D-063に従う。
+3. `Config/dedicated-simulators.json`が宣言する専用deviceのRuntimeを選ぶ。Templateの宣言はiOS 27.0の`iOS-Template iPhone 17 Pro Max`と`iOS-Template iPad Pro 13-inch (M5)`で、D-063とD-070に従う。
 4. iPhone caseには宣言したiPhoneのDevice Typeを使う。最新機種を探し直さない。
 5. scopeがiPad caseを含む場合だけ、宣言したiPadのDevice Typeを使う。
 6. `full`は4行、`iphone-ja`は日本語iPhoneの1行、`targeted`はIssueで宣言したcanonical部分集合を作る。
@@ -125,10 +125,10 @@ Claim／Resume後のIssue worktreeから、[ios-verifyのlocked command](../.age
     "version": "27.0"
   },
   "cases": [
-    {"id": "iphone-en", "family": "iPhone", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17", "name": "iPhone 17"}, "locale": "en_US", "language": "en"},
-    {"id": "iphone-ja", "family": "iPhone", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17", "name": "iPhone 17"}, "locale": "ja_JP", "language": "ja"},
-    {"id": "ipad-en", "family": "iPad", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-A16", "name": "iPad (A16)"}, "locale": "en_US", "language": "en"},
-    {"id": "ipad-ja", "family": "iPad", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-A16", "name": "iPad (A16)"}, "locale": "ja_JP", "language": "ja"}
+    {"id": "iphone-en", "family": "iPhone", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max", "name": "iPhone 17 Pro Max"}, "locale": "en_US", "language": "en"},
+    {"id": "iphone-ja", "family": "iPhone", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max", "name": "iPhone 17 Pro Max"}, "locale": "ja_JP", "language": "ja"},
+    {"id": "ipad-en", "family": "iPad", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB", "name": "iPad Pro 13-inch (M5)"}, "locale": "en_US", "language": "en"},
+    {"id": "ipad-ja", "family": "iPad", "deviceType": {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB", "name": "iPad Pro 13-inch (M5)"}, "locale": "ja_JP", "language": "ja"}
   ]
 }
 ```

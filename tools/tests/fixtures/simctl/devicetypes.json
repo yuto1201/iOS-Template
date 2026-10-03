@@ -6,6 +6,11 @@
       "productFamily": "iPhone"
     },
     {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max",
+      "name": "iPhone 17 Pro Max",
+      "productFamily": "iPhone"
+    },
+    {
       "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-10-Pro",
       "name": "iPhone 10 Pro",
       "productFamily": "iPhone"
@@ -28,6 +33,11 @@
     {
       "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-A16",
       "name": "iPad (A16)",
+      "productFamily": "iPad"
+    },
+    {
+      "identifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
+      "name": "iPad Pro 13-inch (M5)",
       "productFamily": "iPad"
     },
     {

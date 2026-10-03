@@ -9,10 +9,10 @@ tool="$repo_root/tools/setup-dedicated-simulators.sh"
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/ios-template-dedicated-setup-test.XXXXXX")"
 trap 'rm -rf -- "$workspace"' EXIT
 
-iphone_name='iOS-Template iPhone 17'
-ipad_name='iOS-Template iPad (A16)'
-iphone_type='com.apple.CoreSimulator.SimDeviceType.iPhone-17'
-ipad_type='com.apple.CoreSimulator.SimDeviceType.iPad-A16'
+iphone_name='iOS-Template iPhone 17 Pro Max'
+ipad_name='iOS-Template iPad Pro 13-inch (M5)'
+iphone_type='com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max'
+ipad_type='com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB'
 runtime='com.apple.CoreSimulator.SimRuntime.iOS-27-0'
 
 mkdir -p "$workspace/bin"
@@ -108,7 +108,7 @@ run_tool
 ruby -rjson -e 'abort "rerun did not report present devices" unless JSON.parse(File.read(ARGV[0]))["devices"].all? { |entry| entry["status"] == "present" }' "$state/stdout"
 assert_only_list_and_create
 
-prepare partial "$iphone_name|$iphone_type|$runtime|true" "iPhone 17|$iphone_type|$runtime|true"
+prepare partial "$iphone_name|$iphone_type|$runtime|true" "iPhone 17 Pro Max|$iphone_type|$runtime|true"
 run_tool
 [[ "$(creates)" == 1 && "$(device_count "$iphone_name")" == 1 && "$(device_count "$ipad_name")" == 1 ]] || { echo 'partial setup did not create only the missing device' >&2; exit 1; }
 grep -Fxq "simctl create $ipad_name $ipad_type $runtime" "$state/calls.log"
@@ -129,10 +129,10 @@ assert_blocked 'unavailable device' "a Simulator named '$iphone_name' does not m
 sed 's/iOS-27-0/iOS-99-0/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/missing-runtime.json"
 prepare missing-runtime
 assert_blocked 'missing Runtime' 'declared Runtime com.apple.CoreSimulator.SimRuntime.iOS-99-0 is not installed' --config "$workspace/missing-runtime.json"
-sed 's/iPad-A16/iPad-Z99/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/missing-type.json"
+sed 's/iPad-Pro-13-inch-M5-12GB/iPad-Z99/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/missing-type.json"
 prepare missing-type
 assert_blocked 'missing Device Type' 'declared Device Type com.apple.CoreSimulator.SimDeviceType.iPad-Z99 is not available' --config "$workspace/missing-type.json"
-sed 's/"iOS-Template iPhone 17"/"iOS-Template-shared"/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/protected-name.json"
+sed 's/"iOS-Template iPhone 17 Pro Max"/"iOS-Template-shared"/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/protected-name.json"
 prepare protected-name
 assert_blocked 'protected name' 'Simulator declaration name is invalid' --config "$workspace/protected-name.json"
 ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["devices"].pop; File.write(ARGV[1], JSON.generate(value))' \
@@ -151,6 +151,6 @@ assert_only_list_and_create
 
 skill="$repo_root/.agents/skills/app-bootstrap/SKILL.md"
 grep -Fq 'tools/setup-dedicated-simulators.sh' "$skill" || { echo 'app-bootstrap skill does not run the setup tool' >&2; exit 1; }
-grep -Fq '`<display name> iPhone 17` and `<display name> iPad (A16)`' "$skill" || { echo 'app-bootstrap skill does not name the derived devices' >&2; exit 1; }
+grep -Fq '`<display name> iPhone 17 Pro Max` and `<display name> iPad Pro 13-inch (M5)`' "$skill" || { echo 'app-bootstrap skill does not name the derived devices' >&2; exit 1; }
 
 echo 'dedicated Simulator setup tests passed'

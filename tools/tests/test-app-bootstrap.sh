@@ -139,7 +139,7 @@ expected = JSON.parse(source)["devices"].map { |device| device["name"] }.inject(
 end
 transformed = File.read(transformed_path)
 names = JSON.parse(transformed)["devices"].map { |device| device["name"] }
-abort "derived declaration differs" unless transformed == expected && names == ["#{display_name} iPhone 17", "#{display_name} iPad (A16)"]
+abort "derived declaration differs" unless transformed == expected && names == ["#{display_name} iPhone 17 Pro Max", "#{display_name} iPad Pro 13-inch (M5)"]
 RUBY
     echo "bootstrap did not name the dedicated Simulators for $display_name" >&2
     exit 1
