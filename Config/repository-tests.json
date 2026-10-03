@@ -43,6 +43,7 @@
         "tools/validate-appstore-package.sh"
       ],
       "prefixes": [
+        ".agents/skills/goldie/references/",
         ".agents/skills/prepare-appstore-assets/templates/",
         "App Store/",
         "tools/lib/appstore-"
