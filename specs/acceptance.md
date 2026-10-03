@@ -170,7 +170,7 @@ authorityは次の三つだけを許可する。`review-finding`は同じIssue�
 | `ipad-en` | 専用iPad（Device Type iPad Pro 13-inch (M5)、Runtime iOS 27.0） | `en_US` | `en` |
 | `ipad-ja` | 同上 | `ja_JP` | `ja` |
 
-`iphone-ja`は1行だけ、`targeted`は表の非空canonical部分集合、`full`は4行すべてを固定順で使う。専用deviceはTemplateでは`iOS-Template iPhone 17 Pro Max`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリでは表示名を前置した同じDevice Type／Runtimeの2台とする（D-063）。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台でなければ`blocked:environment`とする。Claim済みscopeを暗黙に縮小せず、別scope／別Headのmatrixや証拠を流用しない。
+`iphone-ja`は1行だけ、`targeted`は表の非空canonical部分集合、`full`は4行すべてを固定順で使う。専用deviceはTemplateでは`iOS-Template iPhone 17 Pro Max`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリでは表示名を前置した同じDevice Type／Runtimeの2台とする（D-063、D-070）。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台でなければ`blocked:environment`とする。Claim済みscopeを暗黙に縮小せず、別scope／別Headのmatrixや証拠を流用しない。
 
 AI検証とApp Store撮影は専用2台だけを使い、deviceを作成、clone、rename、削除しない。専用device以外を起動、erase、install、test対象にしない。専用deviceの排他はMac共通resource managerのleaseで取り、起動中のAI検証用deviceは同じMac全体で最大4台、一つのsessionで1台とする。同じdeviceを使うcaseは一件ずつ実行し、満杯または使用中なら有限・取消可能に待機する。
 
