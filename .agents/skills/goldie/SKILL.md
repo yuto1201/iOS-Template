@@ -19,10 +19,12 @@ or updating. This is a local asset workflow, not App Store Connect submission.
 - **Existing screenshots / styling:** inspect the provided real app images, use the
   import procedure below, then `frame` → `manifest` → `verify`. Do not recapture
   for a headline, background, frame, layout, order, or font-only change.
-- **New capture:** read [capture and flows](references/flows.md). Use real app UI,
-  synthetic demo content and an explicitly owned disposable Simulator.
-- **Preview video:** add preview segments only when requested. Screenshot requests
-  do not imply videos; do not use `all` as the default command.
+- **New capture:** capture with the repository tool on the dedicated Simulators,
+  then import (see [capture and flows](references/flows.md)). Use real app UI and
+  synthetic demo content.
+- **Preview video:** Goldie records previews through its own `capture`, which cannot
+  reach the dedicated Simulators. Report preview video as unavailable instead of
+  recording on another device. Screenshot requests do not imply videos.
 
 Respect a user's named platform and previously selected scope. Infer App Store
 for a native iOS-only project. Ask about platforms only if genuinely unresolved.
@@ -36,16 +38,19 @@ verification and does not complete a Phase exit, release audit, package seal,
 upload, or submit operation. A sealed Issue without `Release-phase binding:` is
 `legacy-unbound`; do not add or infer a phase record merely to use Goldie.
 
-Every new native capture runs under `tools/with-ios-simulator-lock.sh` and uses
-`tools/lib/ios-simulator-resource.rb` for the Mac-wide four-device cap, one-device
-session limit, exact owned-device deletion, data-path confirmation, and durable
-recovery. Prefer `tools/capture-appstore-screenshots.sh` followed by the import
-recipe because Goldie 0.3.1 has no explicit UDID selector. Direct Goldie capture
-is allowed only after its installed selection rule resolves to the exact active
-allocation owned by this inherited session. Preserve images and diagnostics
-outside the device, release it, and verify the released allocation receipt before
-rendering or moving to another locale/family. Failure, timeout, and interruption
-use the same release path; never erase or delete a user or other-owner device.
+Every new native capture runs `tools/capture-appstore-screenshots.sh` under
+`tools/with-ios-simulator-lock.sh`. It leases only the repository's dedicated
+iPhone and iPad Simulators through `tools/lib/ios-simulator-resource.rb` (D-063),
+which erases the device before each lease and shuts it down on release without
+creating or deleting a device. Since D-070 those devices are the App Store display
+sizes, so raw captures are already at the required pixel size; never crop, scale,
+or composite them. Import the raw iPhone images with the recipe below.
+
+Do not run Goldie's own `capture`. Goldie 0.3.1 has no UDID selector, picks the
+first Simulator named exactly `iPhone 17 Pro Max` (never the dedicated
+`<display name> iPhone 17 Pro Max`), and reinstalls the app there. Preserve images
+and diagnostics outside the device and verify the released lease receipts before
+rendering. Never boot, erase, or install into a user or other-owner device.
 
 ## Runtime
 
@@ -64,7 +69,7 @@ Use the repository's finite-timeout/process-ownership wrappers when available.
 Read existing Goldie config/design/flows first. In iOS-Template, derive app identity,
 copy and intended screen order from `App Store/metadata/`, confirmed specs and the
 actual app. Do not infer release readiness from a filename or the newest DerivedData.
-For capture, build the exact requested Head into an owned Release simulator build.
+For capture, build the exact requested Head into a Release simulator build.
 
 Start from [assets/goldie.config.ts](assets/goldie.config.ts). Supply the environment
 inputs described in `references/config.md`; replace scene IDs/flows and copy with

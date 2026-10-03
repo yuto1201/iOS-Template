@@ -41,6 +41,8 @@ repository_root=$(cd "$repository_root" && /bin/pwd -P)
 [[ "$(git -C "$repository_root" rev-parse HEAD)" == "$source_sha" ]] || { echo 'source SHA differs from the capture worktree Head' >&2; exit 1; }
 resource_manager="$capture_script_dir/lib/ios-simulator-resource.rb"
 [[ -f "$resource_manager" && ! -L "$resource_manager" ]] || { echo 'Simulator resource manager is unavailable' >&2; exit 1; }
+dedicated_config="$repository_root/Config/dedicated-simulators.json"
+[[ -f "$dedicated_config" && ! -L "$dedicated_config" ]] || { echo 'blocked:environment: Config/dedicated-simulators.json is not a regular file' >&2; exit 1; }
 
 resource_test_mode=${IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE:-0}
 resource_test_flags=()
@@ -116,7 +118,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 bounded_run appstore-simulator-inventory "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl list -j devicetypes > "$staging/inventory.json"
-REQUIREMENTS="$requirements" STATES="$states" INVENTORY="$staging/inventory.json" PLAN="$staging/plan.json" ruby <<'RUBY'
+REQUIREMENTS="$requirements" STATES="$states" INVENTORY="$staging/inventory.json" PLAN="$staging/plan.json" \
+DEDICATED="$dedicated_config" RUNTIME="$runtime" ruby <<'RUBY'
 require "json"
 
 requirements=JSON.parse(File.binread(ENV.fetch("REQUIREMENTS")))
@@ -138,15 +141,31 @@ state_entries.each do |entry|
     entry["id"].is_a?(String) && entry["id"].match?(/\A[a-z0-9-]+\z/) &&
     entry["launchArguments"].is_a?(Array) && entry["launchArguments"].all?{|arg| arg.is_a?(String) && !arg.empty? && !arg.match?(/[\r\n\0]/)}
 end
-available=(inventory["devicetypes"].is_a?(Array) ? inventory["devicetypes"] : []).to_h{|entry| [entry["name"],entry["identifier"]]}
+# D-063/D-070: capture only on the dedicated Simulator that Config/dedicated-simulators.json declares for
+# each platform, never on another installed Device Type listed by the requirements.
+type_names=(inventory["devicetypes"].is_a?(Array) ? inventory["devicetypes"] : []).select{|entry| entry.is_a?(Hash)}.to_h{|entry| [entry["identifier"],entry["name"]]}
+dedicated=JSON.parse(File.binread(ENV.fetch("DEDICATED")))
+declared=(dedicated.is_a?(Hash) && dedicated["devices"].is_a?(Array) ? dedicated["devices"] : []).select{|entry| entry.is_a?(Hash)}.group_by{|entry| entry["family"]}
 families=requirements.dig("screenshots","requiredFamilies")
 abort "screenshot requirements are invalid" unless families.is_a?(Array) && !families.empty?
 devices=families.map do |family|
-  names=family["deviceTypes"]
-  abort "device types are missing for #{family["id"]}" unless names.is_a?(Array) && !names.empty?
-  selected=names.find{|name| available[name].is_a?(String)}
-  abort "no installed Simulator device type satisfies #{family["id"]}" unless selected
-  {"family"=>family.fetch("id"),"deviceType"=>selected,"deviceTypeIdentifier"=>available.fetch(selected)}
+  apple_names=family["deviceTypes"]
+  abort "device types are missing for #{family["id"]}" unless apple_names.is_a?(Array) && !apple_names.empty?
+  platform=family["platform"]
+  matches=declared.fetch(platform, [])
+  abort "blocked:environment: no dedicated Simulator is declared for #{platform}" unless matches.length==1 && matches[0]["deviceTypeIdentifier"].is_a?(String)
+  device=matches[0]
+  abort "blocked:environment: --runtime differs from the dedicated #{platform} Simulator declaration" unless device["runtimeIdentifier"]==ENV.fetch("RUNTIME")
+  name=type_names[device["deviceTypeIdentifier"]]
+  abort "blocked:environment: the dedicated #{platform} Device Type is not installed" unless name.is_a?(String)
+  # Apple names a model without the screen size that its Simulator Device Type carries, so iPad Pro
+  # 13-inch (M5) is listed as iPad Pro (M5) in the 13-inch family. Drop only the family's own size.
+  size=family.fetch("id")[/-([0-9.]+)\z/,1]
+  candidates=[name]
+  candidates << name.sub(" #{size}-inch ", " ") if size && name.include?(" #{size}-inch ")
+  apple_name=apple_names.find{|entry| candidates.include?(entry)}
+  abort "blocked:environment: the dedicated #{platform} Simulator (#{name}) is not a #{family["id"]} App Store device type" unless apple_name
+  {"family"=>family.fetch("id"),"deviceType"=>apple_name,"deviceTypeIdentifier"=>device.fetch("deviceTypeIdentifier")}
 end
 cases=[]
 locales.each do |locale|

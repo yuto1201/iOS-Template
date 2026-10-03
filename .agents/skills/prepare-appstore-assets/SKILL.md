@@ -43,7 +43,7 @@ The following preconditions apply only when continuing from source preparation i
 
 Use [`goldie`](../goldie/SKILL.md) as the standard Phase 6 presentation workflow for iPhone 6.9-inch App Store images. Keep `goldie/ja/` and `goldie/en-US/` as separate configs, raw inputs, flows, and disposable outputs. Existing real screenshots that need only headline, background, frame, font, layout, or order changes are imported and rendered without recapture.
 
-For new raw capture, acquire one inherited session through `tools/with-ios-simulator-lock.sh`; all device creation must flow through `tools/lib/ios-simulator-resource.rb`. Prefer the repository-owned capture tool and import its iPhone raw images into Goldie because Goldie 0.3.1 cannot select an exact UDID. If direct Goldie capture is explicitly requested, use it only when the device its installed selector will choose is the exact active allocation owned by this session; otherwise fall back to owned capture plus import. Save screenshots and diagnostics outside the device, then require the released allocation receipt before continuing.
+For new raw capture, acquire one inherited session through `tools/with-ios-simulator-lock.sh` and run the repository capture tool. It leases only the dedicated iPhone and iPad Simulators declared in `Config/dedicated-simulators.json` through `tools/lib/ios-simulator-resource.rb` and never creates, clones, renames, or deletes a device. Since D-070 those devices are the App Store display sizes, so captures are used at their native size without cropping or compositing. Import the iPhone raw images into Goldie. Do not run Goldie's own `capture`: Goldie 0.3.1 selects a device by name and cannot reach a dedicated Simulator. Save screenshots and diagnostics outside the device, then require the released lease receipts before continuing.
 
 Goldie does not support iPad. Route iPad capture through `tools/capture-appstore-screenshots.sh`; never stretch an iPhone export. The repository capture is invoked under the shared lock and captures all required locale/family conditions sequentially:
 
@@ -56,13 +56,13 @@ tools/with-ios-simulator-lock.sh --timeout 0 -- \
     --issue "$ISSUE" --batch-id "$BATCH_ID"
 ```
 
-The Mac-wide cap remains four iPhone/iPad allocations total and one allocation per session. Four conditions are create/capture/save/delete sequences, not a four-device pool. Failure, timeout, or interruption must release the exact owned allocation; a cleanup failure is reported and remains blocked for durable recovery. Do not erase, reuse, or delete user/other-owner devices.
+Each locale/family condition leases its platform's dedicated Simulator, which is erased before the lease and shut down on release, and the conditions run one after another. The tool records the Apple model name of each display family and the actual image size, and refuses a dedicated device or Runtime that does not match the requirements before any Simulator changes. Failure, timeout, or interruption must release the exact lease; a cleanup failure is reported and remains blocked for durable recovery. Never boot, erase, install into, or delete a user or other-owner device.
 
 ## Prepare the source package
 
 1. Derive `metadata/`, localized English and Japanese copy, `privacy/data-use.yml`, review notes, and release notes from observable app behavior and confirmed specifications. Do not invent marketing, privacy, account-deletion, or legal claims.
 2. Draft privacy policy, terms, and support text from the same facts. For a first publication, stop until the user confirms the legal documents and an approval receipt is available. Mark their exact `Status: Confirmed`; an AI or release auditor cannot supply this approval. If public pages are required, complete the legal-page handoff above and bind the live verification record before treating their URLs as ready.
-3. Follow the Phase 6 screenshot routing above. Use Goldie for reviewed iPhone presentation and the repository capture path for iPad; do not reuse the ordinary verification matrix when Apple requires another display family such as Pro Max. Preserve exact source/build provenance across imported and rendered images.
+3. Follow the Phase 6 screenshot routing above. Use Goldie for reviewed iPhone presentation and the repository capture path for iPad. Preserve exact source/build provenance across imported and rendered images.
 4. Have the visual evaluator inspect every raw image for safe area, clipping, truthfulness, ordering, and English/Japanese parity. Then obtain `release-auditor` approval for the exact source SHA, build digest, package digest, privacy/legal declarations, and screenshots.
 5. Assemble final screenshots with `tools/build-appstore-screenshot-set.sh`. Never stretch or silently transform them.
 6. Validate the complete package with `tools/validate-appstore-package.sh --require-fresh`.

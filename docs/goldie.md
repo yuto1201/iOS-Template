@@ -22,15 +22,17 @@ Codexには、たとえば次のように依頼できます。
 最終画像だけを既存の `App Store/screenshots/` 準備手順へ渡します。
 
 GoldieはPhase 6のiPhone 6.9インチ用presentation経路です。新規raw撮影は
-`tools/with-ios-simulator-lock.sh`の同一session内で
-`tools/lib/ios-simulator-resource.rb`が割り当てた1台だけを使います。Goldie 0.3.1は
-exact UDIDを指定できないため、標準は`tools/capture-appstore-screenshots.sh`で
-owned deviceから撮影してlocale別にimportする経路です。直接captureはGoldieが選ぶ
-deviceと現在のallocationが完全一致する場合だけ許可します。画像と診断を端末外へ
-保存後、deviceとdataの削除receiptを確認してから次の条件へ進みます。
+`tools/with-ios-simulator-lock.sh`の内側で`tools/capture-appstore-screenshots.sh`を
+実行し、`tools/lib/ios-simulator-resource.rb`がleaseするrepository専用の2台だけを
+使います（D-063）。leaseの前にeraseし、終了時にshutdownし、端末を作成・削除しません。
+D-070により専用の2台はApp Storeの必須画像サイズの機種なので、撮影画像を合成や
+切り抜きなしで使い、locale別にGoldieへimportします。Goldie 0.3.1の`capture`は
+UDIDを指定できず、名前が`iPhone 17 Pro Max`の端末を選んでappを再installするため、
+preview動画を含めて使いません。画像と診断を端末外へ保存し、leaseの解除receiptを
+確認してから次の条件へ進みます。
 
-現在のGoldieはiPhone 6.9インチ向けです。iPadは既存のApp Store撮影手順を使い、
-同じsessionで日英・iPhone・iPadを一台ずつ作成／撮影／削除します。
+現在のGoldieはiPhone 6.9インチ向けです。iPadは同じ撮影toolで専用iPadを使い、
+日英・iPhone・iPadの各条件を一つずつ撮影します。
 Goldieの成功は、ネイティブアプリの検証、法務確認、提出パッケージの封印や
 App Store審査完了の代わりにはなりません。
 
