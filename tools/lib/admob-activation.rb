@@ -26,6 +26,18 @@ module IOSTemplate
     UMP_RELEASE_URL = "https://github.com/googleads/swift-package-manager-google-user-messaging-platform/releases/tag/3.1.0"
     DEBUG_APP_ID = "ca-app-pub-3940256099942544~1458002511"
     DEBUG_BANNER_ID = "ca-app-pub-3940256099942544/2435281174"
+    DEMO_PUBLISHER = "3940256099942544"
+    OFFICIAL_SNAPSHOT_PATH = ".agents/skills/admob-monetization/references/official-snapshot.json"
+    OFFICIAL_MAX_AGE_DAYS = 30
+    # The network-free UI-test route lives only in the fixture; activated app sources must never carry it.
+    FIXTURE_ROUTE_MARKERS = /--fixture-|OfflineAdMob|OfflineBannerRenderer|OfflineConsentCoordinator|ProviderStubs/
+    # Each class is reported only from evidence supplied for that class, never inferred from another.
+    EVIDENCE_DEFAULTS = {
+      "offlineFixture" => "not-run",
+      "googleDemoSmoke" => "not-run",
+      "admobRemote" => "unverified",
+      "productionRelease" => "unverified",
+    }.freeze
     REQUIRED_GOOGLE_GUIDES = %w[
       https://developers.google.com/admob/ios/banner
       https://developers.google.com/admob/ios/privacy
@@ -268,7 +280,7 @@ module IOSTemplate
       app_match = nonempty_string!(identifiers.dig("release", "appId"), "identifiers.release.appId", pattern: /\Aca-app-pub-(\d{16})~\d{10}\z/).match(/\Aca-app-pub-(\d{16})~/)
       banner_match = nonempty_string!(identifiers.dig("release", "bannerUnitId"), "identifiers.release.bannerUnitId", pattern: /\Aca-app-pub-(\d{16})\/\d{10}\z/).match(/\Aca-app-pub-(\d{16})\//)
       fail!("Release identifiers must belong to the same publisher") unless app_match[1] == banner_match[1]
-      fail!("Release identifiers must not use Google's demo publisher") if app_match[1] == "3940256099942544"
+      fail!("Release identifiers must not use Google's demo publisher") if app_match[1] == DEMO_PUBLISHER
       binding = identifiers.dig("release", "binding")
       exact_keys!(binding, %w[bundleId configuration readbackSource verifiedAt], "identifiers.release.binding")
       fail!("Release identifier binding must match the target Bundle ID") unless binding["bundleId"] == identity["bundleId"]
@@ -619,15 +631,36 @@ module IOSTemplate
       outputs
     end
 
-    def validate_plist!(path, expected_app_id)
+    # Compares the plist with the recorded activation input itself, so editing a plist together with the
+    # record's file digests still fails.
+    def validate_plist!(path, expected_app_id, expected_networks)
       bytes = capture!("/usr/bin/plutil", "-convert", "json", "-o", "-", path)
       value = JSON.parse(bytes)
-      fail!("#{File.basename(path)} has the wrong GADApplicationIdentifier") unless value["GADApplicationIdentifier"] == expected_app_id
+      fail!("#{File.basename(path)} GADApplicationIdentifier differs from the activation record") unless value["GADApplicationIdentifier"] == expected_app_id
       fail!("#{File.basename(path)} must not declare ATT usage") if value.key?("NSUserTrackingUsageDescription")
-      networks = Array(value["SKAdNetworkItems"]).map { |entry| entry["SKAdNetworkIdentifier"] }
-      fail!("#{File.basename(path)} is missing Google's SKAdNetwork identifier") unless networks.include?("cstr6suwn9.skadnetwork")
+      networks = Array(value["SKAdNetworkItems"]).map { |entry| entry.is_a?(Hash) ? entry["SKAdNetworkIdentifier"] : nil }
+      fail!("#{File.basename(path)} SKAdNetworkItems differ from the activation record") unless networks.sort == expected_networks.sort && networks.uniq.length == networks.length
     rescue JSON::ParserError
       fail!("#{File.basename(path)} could not be parsed")
+    end
+
+    # Reads the one DEBUG/Release identifier block of the generated configuration and checks both branches
+    # against the recorded input: Debug holds only Google's demo pair, Release only the app's own pair.
+    def validate_configuration_identifiers!(bytes, input)
+      blocks = bytes.scan(/^[ \t]*#if DEBUG\n(.*?)^[ \t]*#else\n(.*?)^[ \t]*#endif[ \t]*$/m)
+      fail!("AdMobConfiguration.swift must declare exactly one DEBUG/Release identifier block") unless blocks.length == 1
+      debug_block, release_block = blocks.first
+      {
+        "Debug" => [debug_block, input.dig("identifiers", "debug")],
+        "Release" => [release_block, input.dig("identifiers", "release")],
+      }.each do |label, (block, expected)|
+        app_ids = block.scan(/static let appID = "([^"]*)"/).flatten
+        banner_ids = block.scan(/static let bannerID = "([^"]*)"/).flatten
+        unless app_ids == [expected.fetch("appId")] && banner_ids == [expected.fetch("bannerUnitId")]
+          fail!("#{label} identifiers in AdMobConfiguration.swift differ from the activation record")
+        end
+      end
+      fail!("Release identifiers must not use Google's demo publisher") if release_block.include?(DEMO_PUBLISHER)
     end
 
     def validate_activated(root)
@@ -686,14 +719,17 @@ module IOSTemplate
       fail!("project must use configuration-specific Info.plist sources") unless project.include?("#{module_name}/AdMob/Info-Debug.plist") && project.include?("#{module_name}/AdMob/Info-Release.plist")
       capture!("/usr/bin/plutil", "-convert", "json", "-o", "-", project_path)
 
-      validate_plist!(File.join(root, "#{module_name}/AdMob/Info-Debug.plist"), DEBUG_APP_ID)
-      release_id = File.binread(File.join(root, "#{module_name}/AdMob/Info-Release.plist"))[/<key>GADApplicationIdentifier<\/key>\s*<string>([^<]+)<\/string>/, 1]
-      fail!("Release Info.plist must not use the demo App ID") unless release_id && release_id != DEBUG_APP_ID
-      validate_plist!(File.join(root, "#{module_name}/AdMob/Info-Release.plist"), release_id)
+      networks = activation_input.fetch("skAdNetworkIdentifiers")
+      release_app_id = activation_input.dig("identifiers", "release", "appId")
+      validate_plist!(File.join(root, "#{module_name}/AdMob/Info-Debug.plist"), DEBUG_APP_ID, networks)
+      validate_plist!(File.join(root, "#{module_name}/AdMob/Info-Release.plist"), release_app_id, networks)
+      fail!("Release Info.plist must not use Google's demo publisher") if release_app_id.include?(DEMO_PUBLISHER)
 
       source_bytes = %w[AdMobConfiguration.swift AdMobCore.swift AdaptiveBannerHost.swift GoogleMobileAdsProvider.swift].map do |name|
         File.binread(File.join(root, module_name, "AdMob", name))
       end.join("\n")
+      validate_configuration_identifiers!(File.binread(File.join(root, module_name, "AdMob", "AdMobConfiguration.swift")), activation_input)
+      fail!("activated sources must not contain the network-free UI-test fixture route") if source_bytes.match?(FIXTURE_ROUTE_MARKERS)
       fail!("activated configuration is not bound to the canonical input") unless source_bytes.include?("activationInputDigest = \"#{record.fetch('inputDigest')}\"")
       fail!("activated sources must not invoke AppTrackingTransparency") if source_bytes.match?(/ATTrackingManager|requestTrackingAuthorization|AppTrackingTransparency/)
       fail!("activated provider must disable publisher first-party ID") unless source_bytes.include?("setPublisherFirstPartyIDEnabled(false)")
@@ -806,13 +842,220 @@ module IOSTemplate
       end
     end
 
+    def readiness_now
+      override = ENV["IOS_TEMPLATE_ADMOB_READINESS_NOW"]
+      return Time.now.utc unless override
+
+      Time.iso8601(override).utc
+    rescue ArgumentError
+      fail!("IOS_TEMPLATE_ADMOB_READINESS_NOW must be an ISO-8601 timestamp")
+    end
+
+    def age_status(checked_at, now)
+      age_days = ((now - Time.iso8601(checked_at)) / 86_400).floor
+      [age_days, age_days > OFFICIAL_MAX_AGE_DAYS ? "recheck-required" : "current"]
+    end
+
+    # The dated official snapshot that ships with the skill; absent or malformed means unverified.
+    def official_snapshot(root)
+      path = File.join(root, OFFICIAL_SNAPSHOT_PATH)
+      return nil unless File.file?(path) && !File.symlink?(path)
+
+      value = JSON.parse(File.binread(path))
+      exact_keys!(value, %w[checkedAt dataDisclosure googleMobileAds schemaVersion skAdNetwork ump], "official snapshot")
+      fail!("official snapshot schema is unsupported") unless value["schemaVersion"] == 1
+      Time.iso8601(nonempty_string!(value["checkedAt"], "official snapshot checkedAt"))
+      %w[googleMobileAds ump].each do |key|
+        exact_keys!(value[key], %w[latestVersion sourceURL], "official snapshot #{key}")
+        version_parts(value.dig(key, "latestVersion"), "official snapshot #{key}.latestVersion")
+        nonempty_string!(value.dig(key, "sourceURL"), "official snapshot #{key}.sourceURL", pattern: %r{\Ahttps://})
+      end
+      exact_keys!(value["skAdNetwork"], %w[identifiers sourceURL], "official snapshot skAdNetwork")
+      sorted_unique_strings!(value.dig("skAdNetwork", "identifiers"), "official snapshot skAdNetwork.identifiers", pattern: /\A[a-z0-9]{10}\.skadnetwork\z/)
+      nonempty_string!(value.dig("skAdNetwork", "sourceURL"), "official snapshot skAdNetwork.sourceURL", pattern: %r{\Ahttps://developers\.google\.com/})
+      exact_keys!(value["dataDisclosure"], %w[collectedData sourceURL], "official snapshot dataDisclosure")
+      sorted_unique_strings!(value.dig("dataDisclosure", "collectedData"), "official snapshot dataDisclosure.collectedData")
+      nonempty_string!(value.dig("dataDisclosure", "sourceURL"), "official snapshot dataDisclosure.sourceURL", pattern: %r{\Ahttps://developers\.google\.com/})
+      value
+    rescue JSON::ParserError, ArgumentError
+      fail!("official snapshot is malformed")
+    end
+
+    def active_xcode_version
+      capture_bounded!(15, "/usr/bin/xcodebuild", "-version")[/\AXcode (\d+(?:\.\d+){1,2})\b/, 1]
+    rescue Error
+      nil
+    end
+
+    def sdk_status(pinned, snapshot_entry)
+      return {"pinnedVersion" => pinned, "latestObservedVersion" => nil, "status" => "unverified"} unless snapshot_entry
+
+      latest = snapshot_entry.fetch("latestVersion")
+      comparison = compare_versions(version_parts(pinned, "pinned version"), version_parts(latest, "latest version"))
+      status = comparison.zero? ? "current" : (comparison.negative? ? "update-available" : "ahead-of-snapshot")
+      {"pinnedVersion" => pinned, "latestObservedVersion" => latest, "sourceURL" => snapshot_entry.fetch("sourceURL"), "status" => status}
+    end
+
+    # The app's own privacy manifest. Its declared tracking must match the non-tracking route.
+    def app_privacy_manifest(root, module_name)
+      paths = Dir.glob(File.join(root, module_name, "**", "PrivacyInfo.xcprivacy")).reject { |path| File.symlink?(path) }.sort
+      return {"status" => "missing"} if paths.empty?
+      return {"status" => "ambiguous", "paths" => paths.map { |path| path.delete_prefix(root + "/") }} unless paths.length == 1
+
+      value = JSON.parse(capture!("/usr/bin/plutil", "-convert", "json", "-o", "-", paths.first))
+      tracking = value["NSPrivacyTracking"]
+      domains = Array(value["NSPrivacyTrackingDomains"])
+      collected = Array(value["NSPrivacyCollectedDataTypes"]).map { |entry| entry.is_a?(Hash) ? entry["NSPrivacyCollectedDataType"] : nil }.compact.sort.uniq
+      {
+        "status" => tracking == true || !domains.empty? ? "tracking-inconsistent" : "present",
+        "path" => paths.first.delete_prefix(root + "/"),
+        "tracking" => tracking == true,
+        "collectedDataTypes" => collected,
+      }
+    rescue JSON::ParserError
+      {"status" => "unreadable", "path" => paths.first.delete_prefix(root + "/")}
+    end
+
+    # SDK privacy manifests and signatures are checked only in a supplied resolved-package tree. Xcode
+    # verifies the xcframework signatures when it builds; this reports only that the files are present.
+    def sdk_privacy_manifests(source_packages)
+      return {"status" => "unverified", "reason" => "no resolved package tree was supplied"} unless source_packages
+
+      root = File.expand_path(source_packages)
+      fail!("--source-packages must be an existing directory") unless File.directory?(root) && !File.symlink?(root)
+      packages = %w[GoogleMobileAds UserMessagingPlatform].map do |name|
+        frameworks = Dir.glob(File.join(root, "**", "#{name}.xcframework")).reject { |path| File.symlink?(path) }.sort
+        next {"name" => name, "status" => "not-found"} if frameworks.empty?
+        next {"name" => name, "status" => "ambiguous"} unless frameworks.length == 1
+
+        framework = frameworks.first
+        slices = Dir.children(framework).select { |entry| File.directory?(File.join(framework, entry)) && entry != "_CodeSignature" }.sort
+        manifests = slices.all? { |slice| !Dir.glob(File.join(framework, slice, "**", "PrivacyInfo.xcprivacy")).empty? }
+        signed = File.file?(File.join(framework, "_CodeSignature", "CodeResources"))
+        status = if slices.empty? || !manifests then "privacy-manifest-missing"
+                 elsif !signed then "signature-missing"
+                 else "present"
+                 end
+        {"name" => name, "status" => status, "slices" => slices.length}
+      end
+      {"status" => packages.all? { |entry| entry["status"] == "present" } ? "present" : "mismatch", "packages" => packages}
+    end
+
+    # Optional explicit evidence, one entry per class. Unknown classes, statuses, or embedded AdMob
+    # identifiers are rejected so a report never carries production IDs.
+    def evidence_classes(path, now)
+      supplied = {}
+      if path
+        bytes = File.binread(File.expand_path(path))
+        fail!("evidence must not contain AdMob identifiers") if bytes.include?("ca-app-pub-")
+        value = JSON.parse(bytes)
+        exact_keys!(value, %w[classes schemaVersion], "evidence")
+        fail!("evidence schemaVersion must be 1") unless value["schemaVersion"] == 1
+        classes = value["classes"]
+        fail!("evidence classes must be an object") unless classes.is_a?(Hash)
+        classes.each do |name, entry|
+          fail!("unknown evidence class: #{name}") unless EVIDENCE_DEFAULTS.key?(name)
+          exact_keys!(entry, %w[recordedAt status summary], "evidence #{name}")
+          fail!("evidence #{name} status must be passed or failed") unless %w[passed failed].include?(entry["status"])
+          recorded = Time.iso8601(nonempty_string!(entry["recordedAt"], "evidence #{name} recordedAt"))
+          fail!("evidence #{name} recordedAt must not be in the future") if recorded > now + 300
+          nonempty_string!(entry["summary"], "evidence #{name} summary")
+          fail!("evidence #{name} summary is too long") if entry["summary"].length > 200
+          supplied[name] = entry
+        end
+      end
+      EVIDENCE_DEFAULTS.to_h do |name, default|
+        entry = supplied[name]
+        [name, entry ? entry.slice("recordedAt", "status", "summary").merge("source" => "supplied") : {"source" => "none", "status" => default}]
+      end
+    rescue Errno::ENOENT, Errno::EISDIR
+      fail!("evidence file could not be read")
+    rescue JSON::ParserError, ArgumentError
+      fail!("evidence is malformed")
+    end
+
+    def readiness(root, source_packages: nil, evidence_path: nil)
+      root = resolve_root(root)
+      record = validate_activated(root)
+      now = readiness_now
+      input = record.fetch("activationInput")
+      identity = identity_at(root)
+      snapshot = official_snapshot(root)
+      sources = input.fetch("officialSources")
+      sources_age, sources_status = age_status(sources.fetch("checkedAt"), now)
+      gma = sources.fetch("googleMobileAds")
+
+      active = active_xcode_version
+      xcode_status = if active.nil? then "unverified"
+                     elsif compare_versions(version_parts(active, "active Xcode"), version_parts(gma.fetch("minimumXcode"), "minimumXcode")) == -1 then "below-minimum"
+                     else "supported"
+                     end
+
+      networks = input.fetch("skAdNetworkIdentifiers")
+      sk_ad_network = if snapshot
+                        official = snapshot.dig("skAdNetwork", "identifiers")
+                        missing = official - networks
+                        extra = networks - official
+                        {"status" => missing.empty? && extra.empty? ? "match" : "drift", "missingFromApp" => missing, "notInOfficialList" => extra, "sourceURL" => snapshot.dig("skAdNetwork", "sourceURL")}
+                      else
+                        {"status" => "unverified"}
+                      end
+
+      snapshot_status = snapshot ? age_status(snapshot.fetch("checkedAt"), now) : [nil, "unverified"]
+      privacy = input.fetch("privacyDeclaration")
+      report = {
+        "schemaVersion" => 1,
+        "status" => "reported",
+        "activation" => "valid",
+        "inputDigest" => record.fetch("inputDigest"),
+        "releaseReadiness" => "not-proven",
+        "sdk" => {
+          "googleMobileAds" => sdk_status(PACKAGE_VERSION, snapshot && snapshot["googleMobileAds"]),
+          "ump" => sdk_status(UMP_VERSION, snapshot && snapshot["ump"]),
+          "deploymentTarget" => input.fetch("deploymentTarget"),
+          "minimumIOS" => gma.fetch("minimumIOS"),
+          "minimumXcode" => gma.fetch("minimumXcode"),
+          "activeXcode" => active,
+          "xcodeStatus" => xcode_status,
+        },
+        "officialSources" => {
+          "checkedAt" => sources.fetch("checkedAt"),
+          "ageDays" => sources_age,
+          "status" => sources_status,
+          "googleGuides" => sources.fetch("googleGuides"),
+          "appleGuides" => sources.fetch("appleGuides"),
+          "snapshotCheckedAt" => snapshot && snapshot["checkedAt"],
+          "snapshotStatus" => snapshot_status.last,
+        },
+        "infoPlist" => {
+          "debugAppId" => "google-demo",
+          "releaseAppId" => "matches-record",
+          "skAdNetwork" => sk_ad_network,
+        },
+        "privacy" => {
+          "appPrivacyManifest" => app_privacy_manifest(root, identity.fetch("moduleName")),
+          "appStoreDataUse" => {
+            "status" => "matches-record",
+            "sourcePath" => privacy.fetch("sourcePath"),
+            "reviewedAt" => privacy.fetch("reviewedAt"),
+            "dataUseCategories" => privacy.fetch("dataUseCategories"),
+            "googleDisclosure" => snapshot ? snapshot.fetch("dataDisclosure") : nil,
+          },
+          "sdkPrivacyManifests" => sdk_privacy_manifests(source_packages),
+        },
+        "evidence" => evidence_classes(evidence_path, now),
+      }
+      puts canonical_json(report)
+    end
+
     def parse_cli(argv)
       command = argv.shift
-      fail!("command must be apply or validate") unless %w[apply validate].include?(command)
+      fail!("command must be apply, validate, or readiness") unless %w[apply validate readiness].include?(command)
+      allowed = {"apply" => %w[--root --input], "validate" => %w[--root], "readiness" => %w[--root --source-packages --evidence]}.fetch(command)
       options = {}
       until argv.empty?
         flag = argv.shift
-        fail!("unexpected argument: #{flag}") unless %w[--root --input].include?(flag)
+        fail!("unexpected argument: #{flag}") unless allowed.include?(flag)
         fail!("duplicate option: #{flag}") if options.key?(flag)
         value = argv.shift
         fail!("missing value for #{flag}") unless value && !value.empty?
@@ -820,7 +1063,6 @@ module IOSTemplate
       end
       fail!("--root is required") unless options["--root"]
       fail!("--input is required for apply") if command == "apply" && !options["--input"]
-      fail!("--input is not allowed for validate") if command == "validate" && options["--input"]
       [command, options]
     end
 
@@ -828,6 +1070,8 @@ module IOSTemplate
       command, options = parse_cli(argv)
       if command == "apply"
         apply(options.fetch("--root"), options.fetch("--input"))
+      elsif command == "readiness"
+        readiness(options.fetch("--root"), source_packages: options["--source-packages"], evidence_path: options["--evidence"])
       else
         root = resolve_root(options.fetch("--root"))
         record = validate_activated(root)
