@@ -327,6 +327,29 @@ if missing:
     raise SystemExit(f"README lacks conditional integration and release guidance: {missing!r}")
 PYTHON
 
+# docs/README.md states the current dedicated devices, asc operations, and team-scoped key location.
+python3 - <<'PYTHON'
+import json
+import re
+from pathlib import Path
+
+readme = Path("docs/README.md").read_text()
+devices = json.loads(Path("Config/dedicated-simulators.json").read_text())["devices"]
+for device in devices:
+    model = re.sub(r"\A.*?(?=iPhone|iPad)", "", device["name"])
+    if model not in readme:
+        raise SystemExit(f"docs/README.md does not name the dedicated device {model!r}")
+operations = re.findall(r"^    '(appstore\.[a-z_]+)' => \{", Path("tools/lib/asc-cli.rb").read_text(), re.M)
+if not operations or f"{len(operations)}種類" not in readme or any(f"`{name}`" not in readme for name in operations):
+    raise SystemExit(f"docs/README.md must list the asc operations {operations!r}")
+key_path = "secrets/apple-team-<teamId>/app-store-connect-production.p8"
+if key_path not in readme or "apple-team-<teamId>" not in Path("docs/security.md").read_text():
+    raise SystemExit("docs/README.md must name the team-scoped App Store Connect key path")
+for stale in ("Pro Max を除く", "iPad Air", "4種類の読取command", "secrets/${appSlug}/"):
+    if stale in readme:
+        raise SystemExit(f"docs/README.md keeps a stale fact: {stale!r}")
+PYTHON
+
 ruby -ryaml -rjson -e '
   data = YAML.safe_load(File.read("Config/ownership.yml"), permitted_classes: [], aliases: false)
   abort "unexpected schema version" unless data["schemaVersion"] == 2

@@ -26,7 +26,7 @@ tools/tests/test-foundation.sh
 
 Issueには、成熟度を表す`shape`／`harden`／`release`のDelivery stageとTime budget、危険度を表す`fast`／`standard`／`strict`のdelivery profileを別々に指定します。shapeはBuild・重要Unit Test・日本語iPhone 1条件のSmoke、hardenは対象Testと指定caseだけ、releaseは従来の完全検証です。`strict`または`release`だけがblockingな反対モデルレビューを要求します。stage未指定の既存contractは従来のprofile／scope gateを維持し、profile未指定はstrict、検証範囲未指定はfullとして扱います。以下はrelease/full検証の手順例です。
 
-Foundationやdelivery gate自体は`strict`です。Build と Test は、インストール済み Xcode から [標準 Simulator マトリクス](./verification.md#3-固定されるmatrix)を解決し、Issue バッチ内で固定して実行します。次は Foundation 検証で使うコマンド形です。`TEMPLATE_IPHONE_UDID` と `TEMPLATE_IPAD_UDID` には、`Config/dedicated-simulators.json`が宣言するrepository専用の2台（iOS 27.0の`iOS-Template iPhone 17 Pro Max`と`iOS-Template iPad Pro 13-inch (M5)`）のUDIDを指定します。
+Foundationやdelivery gate自体は`strict`です。Build と Test は、インストール済み Xcode から [標準 Simulator マトリクス](./verification.md#3-固定されるmatrix)を解決し、Issue バッチ内で固定して実行します。次は Foundation 検証で使うコマンド形です。`TEMPLATE_IPHONE_UDID` と `TEMPLATE_IPAD_UDID` には、`Config/dedicated-simulators.json`が宣言するrepository専用の2台（iOS 27.0のiPhone 17 Pro MaxとiPad Pro 13-inch (M5)）のUDIDを指定します。Templateでは`iOS-Template iPhone 17 Pro Max`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリでは表示名を前置した同じ機種です。
 
 ```sh
 TEMPLATE_IPHONE_UDID="<dedicated-iPhone-17-Pro-Max-UDID>"
