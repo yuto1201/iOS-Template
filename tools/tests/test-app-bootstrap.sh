@@ -71,7 +71,7 @@ set_clone_default_for_detached_root() {
 fixture_hash() {
   {
     find TemplateApp TemplateAppTests TemplateAppUITests TemplateApp.xcodeproj Config specs docs -type f -print
-    printf '%s\n' AGENTS.md README.md
+    printf '%s\n' AGENTS.md
   } | LC_ALL=C sort | while IFS= read -r path; do
     shasum "$path"
   done | shasum | awk '{print $1}'
@@ -335,7 +335,7 @@ import sys
 
 path = Path(sys.argv[1])
 manifest = json.loads(path.read_text())
-manifest["liveContentPaths"].remove("README.md")
+manifest["liveContentPaths"].remove("docs/README.md")
 manifest["liveContentPaths"].append("docs/security.md")
 path.write_text(json.dumps(manifest, indent=2) + "\n")
 PY
@@ -538,7 +538,7 @@ PY
     echo "audit rejected a valid identity containing the source name: $(<"$errors")" >&2
     exit 1
   fi
-  printf '\nTemplateApp\n' >>"$fixture/README.md"
+  printf '\nTemplateApp\n' >>"$fixture/docs/README.md"
   set +e
   swift "$root/tools/bootstrap-app.swift" audit \
     --root "$fixture" \
@@ -893,7 +893,7 @@ if [[ "$mode" == "transform" ]]; then
   git clone --no-local "$root" "$fixture" >/dev/null
   set_clone_default_for_detached_root "$fixture"
   git -C "$fixture" checkout -b codex/test-bootstrap >/dev/null
-  cp "$root/README.md" "$fixture/README.md"
+  cp "$root/docs/README.md" "$fixture/docs/README.md"
   cp "$root/Config/ownership.yml" "$fixture/Config/ownership.yml"
   cp "$root/tools/tests/test-app-bootstrap.sh" "$fixture/tools/tests/test-app-bootstrap.sh"
   cp "$root/tools/tests/test-foundation.sh" "$fixture/tools/tests/test-foundation.sh"
@@ -1123,7 +1123,7 @@ contracts = {
         "UI Issueの3 field `UI verification`はlive guidance",
         "現在Head",
     ),
-    "README.md": (
+    "docs/README.md": (
         "### App icon",
         "System Experiences Planning Gate",
         ".agents/skills/app-icon/SKILL.md",
@@ -1220,8 +1220,8 @@ contracts = {
         "Ambiguity fails closed into the gate",
     ),
     ".agents/skills/ios-3d-assets/SKILL.md": (
-        "exact model identifier `gpt-6-astra`",
-        "blocked:environment",
+        "### Standard route: Tripo in the browser",
+        "reasoning effort `xhigh`",
         "RealityKit",
     ),
     ".agents/skills/plan-issue-batch/SKILL.md": (

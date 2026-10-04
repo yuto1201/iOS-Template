@@ -352,6 +352,26 @@ rebind_head_artifacts "$previous_head"
 published="$(run_publisher)"
 [[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]] || { echo 'workflow publisher rejected the account ownership binding' >&2; exit 1; }
 
+# D-075: a workflow-only change may move the legacy root README.md into docs/, but never edit a root README.md.
+prepare_fixture legacy-root-readme-move
+/bin/mkdir -p "$repo/docs"
+/usr/bin/git -C "$repo" mv README.md docs/README.md
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]] || { echo 'workflow publisher rejected moving the legacy root README.md' >&2; exit 1; }
+
+prepare_fixture root-readme-edit
+printf '%s\n' '# edited' >>"$repo/README.md"
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- README.md
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+expect_rejection root-readme-edit 'workflow-only diff may only delete the legacy root README.md'
+
 prepare_fixture signing-configuration
 /bin/mkdir -p "$repo/Config"
 printf '%s\n' 'DEVELOPMENT_TEAM = EXAMPLE' >"$repo/Config/Signing.xcconfig"

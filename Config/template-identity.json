@@ -24,7 +24,7 @@
     "TemplateAppTests/TemplateAppTests.swift",
     "TemplateAppUITests/TemplateAppUITests.swift",
     "AGENTS.md",
-    "README.md",
+    "docs/README.md",
     "Config/ownership.yml",
     "Config/dedicated-simulators.json",
     "specs/architecture.md",

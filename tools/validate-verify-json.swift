@@ -2153,7 +2153,7 @@ func validateApplicationFixtureDiff(
     }
     let fixturePrefix = binding.fixtureRoot + "/"
     let skillPrefix = binding.skillRoot + "/"
-    let exactRegularPaths = Set(binding.toolPaths + ["README.md", "Config/repository-tests.json"])
+    let exactRegularPaths = Set(binding.toolPaths + ["docs/README.md", "Config/repository-tests.json"])
     var index = 0
     while index < fields.count {
         guard index + 1 < fields.count,
@@ -2515,6 +2515,10 @@ func validateMechanicalApplicationCases(
     }
 }
 
+// D-075 keeps AGENTS.md as the only document at the repository root; the root readme moved to
+// docs/README.md. A change may still delete a legacy root README.md, but never add or edit one.
+let legacyRootReadmePath = "README.md"
+
 func validateDocumentationPath(_ path: String) throws {
     guard let data = path.data(using: .utf8), String(data: data, encoding: .utf8) == path else {
         throw ValidationFailure("documentation-only diff contains a non-UTF-8 path")
@@ -2527,7 +2531,7 @@ func validateDocumentationPath(_ path: String) throws {
     guard components.allSatisfy({ !$0.hasPrefix(".") }) else {
         throw ValidationFailure("documentation-only diff contains an unusual hidden path")
     }
-    let allowed = path == "README.md" || path == "AGENTS.md" || (
+    let allowed = path == "AGENTS.md" || (
         components.count >= 2 &&
         (components[0] == "docs" || components[0] == "specs") &&
         components.last!.hasSuffix(".md")
@@ -2579,7 +2583,13 @@ func validateDocumentationDiff(expectedBase: String, expectedHead: String) throw
         guard modesAreAllowed else {
             throw ValidationFailure("documentation-only diff contains a type or mode change")
         }
-        try validateDocumentationPath(path)
+        if path == legacyRootReadmePath {
+            guard status == "D" else {
+                throw ValidationFailure("documentation-only diff may only delete the legacy root README.md")
+            }
+        } else {
+            try validateDocumentationPath(path)
+        }
         index += 2
     }
 }
@@ -2689,7 +2699,7 @@ func validateWorkflowPath(_ path: String) throws {
     // (#214) binds external operations to non-secret account and target identifiers; a change to it still
     // needs the strict opposite-model review and the pre-merge gate like every workflow-only change.
     let exact: Set<String> = [
-        "README.md", "AGENTS.md", "Config/dedicated-simulators.json", "Config/ownership.yml",
+        "AGENTS.md", "Config/dedicated-simulators.json", "Config/ownership.yml",
         "Config/repository-tests.json", "Config/template-identity.json"
     ]
     let prefixes = ["tools/", "docs/", "specs/", ".agents/", ".codex/", ".claude/", ".github/"]
@@ -2747,7 +2757,13 @@ func validateWorkflowDiff(expectedBase: String, expectedHead: String) throws {
         let metadata = header.dropFirst().split(separator: " ").map(String.init)
         guard metadata.count == 5 else { throw ValidationFailure("Git raw diff contains malformed metadata") }
         let oldMode = metadata[0], newMode = metadata[1], status = metadata[4]
-        try validateWorkflowPath(path)
+        if path == legacyRootReadmePath {
+            guard status == "D" else {
+                throw ValidationFailure("workflow-only diff may only delete the legacy root README.md")
+            }
+        } else {
+            try validateWorkflowPath(path)
+        }
         let regularMode = (status == "A" && oldMode == "000000" && ["100644", "100755"].contains(newMode)) ||
             (status == "D" && ["100644", "100755"].contains(oldMode) && newMode == "000000") ||
             (status == "M" && oldMode == newMode && ["100644", "100755"].contains(oldMode))

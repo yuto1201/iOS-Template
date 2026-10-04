@@ -53,8 +53,9 @@ make_case() {
   git init -b main "$CASE_PRIMARY" >/dev/null
   git -C "$CASE_PRIMARY" config user.name Fixture
   git -C "$CASE_PRIMARY" config user.email fixture@example.invalid
-  printf 'base\n' >"$CASE_PRIMARY/README.md"
-  git -C "$CASE_PRIMARY" add README.md && git -C "$CASE_PRIMARY" commit -m base >/dev/null
+  mkdir -p "$CASE_PRIMARY/docs"
+  printf 'base\n' >"$CASE_PRIMARY/docs/README.md"
+  git -C "$CASE_PRIMARY" add docs/README.md && git -C "$CASE_PRIMARY" commit -m base >/dev/null
   CASE_BASE=$(git -C "$CASE_PRIMARY" rev-parse HEAD)
   git -C "$CASE_PRIMARY" remote add origin "$CASE_REMOTE"
   git -C "$CASE_PRIMARY" push origin main >/dev/null
@@ -108,8 +109,8 @@ EOF
   CASE_BASE=$(git -C "$CASE_WORKTREE" rev-parse HEAD)
   git -C "$CASE_PRIMARY" merge --ff-only "$branch" >/dev/null
   git -C "$CASE_PRIMARY" push origin main >/dev/null
-  printf 'documentation change\n' >> "$CASE_WORKTREE/README.md"
-  git -C "$CASE_WORKTREE" add README.md && git -C "$CASE_WORKTREE" commit -m documentation >/dev/null
+  printf 'documentation change\n' >> "$CASE_WORKTREE/docs/README.md"
+  git -C "$CASE_WORKTREE" add docs/README.md && git -C "$CASE_WORKTREE" commit -m documentation >/dev/null
   CASE_HEAD=$(git -C "$CASE_WORKTREE" rev-parse HEAD)
   mkdir -p "$CASE_PRIMARY/.artifacts/issues/$issue/$CASE_HEAD"
   CONTRACT="$CASE_PRIMARY/.artifacts/issues/$issue/issue-contract.json" ruby -rjson -rdigest -e '

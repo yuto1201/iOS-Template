@@ -45,15 +45,16 @@ PHASE_RECORD="$repo/Config/releases/premerge-v1/phase-records/phase6.json" ruby 
   File.binwrite(ENV.fetch("PHASE_RECORD"),bytes)
 '
 cat > "$repo/Config/repository-tests.json" <<'JSON'
-{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"gate","paths":["README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]},{"path":"tools/tests/test-tracked-credential-scan.sh","domains":["credential-scan"]}]}
+{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"gate","paths":["docs/README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-gate-probe.sh","domains":["gate"]},{"path":"tools/tests/test-tracked-credential-scan.sh","domains":["credential-scan"]}]}
 JSON
 printf '.artifacts\n' > "$repo/.gitignore"
-printf 'fixture\n' > "$repo/README.md"
-git -C "$repo" add .gitignore README.md Config tools .agents specs
+mkdir -p "$repo/docs"
+printf 'fixture\n' > "$repo/docs/README.md"
+git -C "$repo" add .gitignore docs/README.md Config tools .agents specs
 git -C "$repo" commit -m 'base' >/dev/null
 base_sha=$(git -C "$repo" rev-parse HEAD)
-printf 'documentation change\n' >> "$repo/README.md"
-git -C "$repo" add README.md
+printf 'documentation change\n' >> "$repo/docs/README.md"
+git -C "$repo" add docs/README.md
 git -C "$repo" commit -m 'documentation change' >/dev/null
 head_sha=$(git -C "$repo" rev-parse HEAD)
 phase6_record_digest="sha256:$(shasum -a 256 "$repo/Config/releases/premerge-v1/phase-records/phase6.json" | awk '{print $1}')"
@@ -142,7 +143,7 @@ write_review() {
   verdict=${1:-approved}
   packet_digest="sha256:$(shasum -a 256 "$repo/.artifacts/issues/42/$head_sha/review-packet.json" | awk '{print $1}')"
   VERDICT="$verdict" REVIEWER="$reviewer_model" REVIEW_PACKET_DIGEST="$packet_digest" ISSUE_CONTRACT_DIGEST="$contract_digest" HEAD="$head_sha" BASE="$base_sha" REVIEWED_AT="$review_at" CONTRACT="$repo/.artifacts/issues/42/issue-contract.json" ruby -rjson -e '
-    findings = ENV.fetch("VERDICT") == "approved" ? [] : [{"severity" => "high", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "blocking", "evidence" => "fixture", "requiredChange" => "fix"}]
+    findings = ENV.fetch("VERDICT") == "approved" ? [] : [{"severity" => "high", "category" => "correctness", "file" => "docs/README.md", "line" => 1, "title" => "blocking", "evidence" => "fixture", "requiredChange" => "fix"}]
     ids=JSON.parse(File.binread(ENV.fetch("CONTRACT"))).fetch("acceptanceCriteria").map{|entry|entry.fetch("id")}
     assessments = ids.map { |id| {"id" => id, "status" => ENV.fetch("VERDICT") == "approved" ? "supported" : "unsupported", "evidence" => ["verify.json#acceptanceEvidence"]} }
     puts JSON.generate({"schemaVersion" => 2, "issue" => 42, "reviewerModel" => ENV.fetch("REVIEWER"), "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContractDigest" => ENV.fetch("ISSUE_CONTRACT_DIGEST"), "reviewPacketDigest" => ENV.fetch("REVIEW_PACKET_DIGEST"), "verdict" => ENV.fetch("VERDICT"), "findings" => findings, "acceptanceAssessment" => assessments, "reviewedAt" => ENV.fetch("REVIEWED_AT")})
@@ -777,7 +778,7 @@ write_review
 ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["unexpected"] = true; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
 assert_fails 'review result schema extension is rejected' run_gate
 write_review
-ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["findings"] = [{"severity" => "low", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "nonblocking", "evidence" => "fixture", "requiredChange" => "clarify"}, {"severity" => "low", "category" => "maintainability", "file" => "README.md", "line" => 1, "title" => "another nonblocking improvement", "evidence" => "fixture", "requiredChange" => "consider later"}]; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
+ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["findings"] = [{"severity" => "low", "category" => "correctness", "file" => "docs/README.md", "line" => 1, "title" => "nonblocking", "evidence" => "fixture", "requiredChange" => "clarify"}, {"severity" => "low", "category" => "maintainability", "file" => "docs/README.md", "line" => 1, "title" => "another nonblocking improvement", "evidence" => "fixture", "requiredChange" => "consider later"}]; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
 write_receipt
 run_gate >/dev/null
 "$issue_worktree/tools/render-pr-body.sh" --issue 42 --head-sha "$head_sha" > "$scratch/pr-body-low.md"
@@ -785,7 +786,7 @@ grep -Fq 'Blocking findings: `0`' "$scratch/pr-body-low.md"
 grep -Fq 'Non-blocking findings: `2`' "$scratch/pr-body-low.md"
 for severity in critical high medium; do
   write_review
-  SEVERITY="$severity" ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["findings"] = [{"severity" => ENV.fetch("SEVERITY"), "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "blocking", "evidence" => "fixture", "requiredChange" => "fix"}]; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
+  SEVERITY="$severity" ruby -rjson -e 'path = ARGV.fetch(0); value = JSON.parse(File.binread(path)); value["findings"] = [{"severity" => ENV.fetch("SEVERITY"), "category" => "correctness", "file" => "docs/README.md", "line" => 1, "title" => "blocking", "evidence" => "fixture", "requiredChange" => "fix"}]; File.binwrite(path, JSON.generate(value))' "$repo/.artifacts/issues/42/$head_sha/review.json"
   write_receipt
   assert_fails "approved review with $severity finding is rejected" run_gate
 done

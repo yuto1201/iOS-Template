@@ -103,7 +103,7 @@ require_all('skill Issue splitting', skill, [
 
 contracts = {
   'AGENTS.md' => ['ios-system-experiences', '主要Feature Issue'],
-  'README.md' => ['System Experiences Planning Gate', 'adopt-now', 'blocked:user'],
+  'docs/README.md' => ['System Experiences Planning Gate', 'adopt-now', 'blocked:user'],
   'specs/product.md' => ['System Experiences Planning Gate', 'mandatory evaluation', 'optional adoption'],
   'specs/architecture.md' => ['System Experiences設計境界', '共有domain action', 'extension process'],
   'specs/acceptance.md' => ['System Experiences Planning Gate', '5面', '部分blocking'],

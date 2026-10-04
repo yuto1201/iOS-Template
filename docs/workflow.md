@@ -72,9 +72,9 @@ Identity bootstrap後、主要Feature Issueの計画またはClaimより前に�
 
 ### 2.3 3D authoring route
 
-ClaudeとCodexは通常のIssueを同じworkflowで担当します。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更だけは[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteし、Codexのexact model `gpt-6-astra`がauthoringします。Claudeまたは別のCodex modelがIssueを担当している場合も、3D asset bytesのauthoring部分だけを同モデルへ依頼します。
+ClaudeとCodexは通常のIssueを同じworkflowで担当します。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteします。標準はユーザーまたはClaudeがブラウザでTripoを操作して作る経路で、簡単なモデルや即効性を求める場合だけClaudeまたはCodexの`gpt-6-astra`（reasoning effort `xhigh`）に依頼します（D-071）。
 
-`gpt-6-astra`を利用できない場合は`blocked:environment`とし、Claudeや別modelへfallbackしません。要件整理、受領済みassetの統合、決定論的なformat validation、RealityKit実装、Build／Test、視覚確認、reviewはClaudeまたはCodexが継続できます。Issue／PR証拠へexact authoring modelを記録し、確認できない生成物を承認済み3D成果として扱いません。
+Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、Claudeはユーザーのログイン済みsessionで生成とダウンロードの操作だけを行います。どの経路の成果も、決定論的なformat validation、統合、RealityKit実装、Build／Test、視覚確認、reviewを経てから受け入れます。Issue／PR証拠へauthoringの経路を記録し、経路を確認できない生成物を承認済み3D成果として扱いません。
 
 ### 2.4 リリース単位の6Phase gate
 
@@ -304,7 +304,7 @@ Claimはexact six keys、key順、route／schema、`tools/tests/fixtures/`配下
 
 このrouteを利用するIssueは#121と#122を直接`Dependencies`へ記載し、承認またはClaimの直前に両Issueが`state:done`であることを確認します。どちらかが未完了なら`blocked:dependency`としてClaimせず、仕様やparserの一部だけをruntime routeの稼働証拠にしません。
 
-実装差分はbindingで特定したfixture root、skill root、exact tool paths、routeが固定する同名Claude symlink、repository root `README.md`、`Config/repository-tests.json`だけへ閉じます。`skillRoot/application-fixture.json`はprefixを除くcanonical binding JSONと改行なしでexact一致するregular `100644` ownership markerです。Baseにmarker以外のfixture root／skill root配下、宣言toolまたは同名Claude aliasが既にあれば同じBase markerを必須とし、新規providerならBase markerを拒否してHeadでprovider surfaceと同時に追加します。Headでは`skillRoot/SKILL.md`、全toolのregular mode、Claude aliasの`120000` modeとexact targetを差分の有無にかかわらず確認します。これにより既存coreやfixtureをprovider名へ見せかける後付けmarkerを拒否します。
+実装差分はbindingで特定したfixture root、skill root、exact tool paths、routeが固定する同名Claude symlink、`docs/README.md`、`Config/repository-tests.json`だけへ閉じます。`skillRoot/application-fixture.json`はprefixを除くcanonical binding JSONと改行なしでexact一致するregular `100644` ownership markerです。Baseにmarker以外のfixture root／skill root配下、宣言toolまたは同名Claude aliasが既にあれば同じBase markerを必須とし、新規providerならBase markerを拒否してHeadでprovider surfaceと同時に追加します。Headでは`skillRoot/SKILL.md`、全toolのregular mode、Claude aliasの`120000` modeとexact targetを差分の有無にかかわらず確認します。これにより既存coreやfixtureをprovider名へ見せかける後付けmarkerを拒否します。
 
 `Config/repository-tests.json`を変更するときは、Baseの`schemaVersion`、`headAllPaths`、`headAllPrefixes`、既存domain rule、既存test objectをHeadでexact保持します。canonicalなprovider domain名とsafeな許可path／prefixへ閉じた新domain rule、および宣言済みprovider testだけを追加し、新domainごとに対応testを要求します。path escape、既存entryの削除、再分類、path拡張、command／arguments／domain変更ではrouteを使用できません。
 

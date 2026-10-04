@@ -9,7 +9,7 @@ struct LinkFailure {
 
 func markdownFiles(in root: String) -> [String] {
     let fileManager = FileManager.default
-    var files = ["README.md", "AGENTS.md"].filter { fileManager.fileExists(atPath: $0) }
+    var files = ["AGENTS.md"].filter { fileManager.fileExists(atPath: $0) }
 
     for directory in ["specs", "docs"] where fileManager.fileExists(atPath: directory) {
         guard let enumerator = fileManager.enumerator(atPath: directory) else { continue }

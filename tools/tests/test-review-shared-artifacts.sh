@@ -202,7 +202,7 @@ write_finding() {
     File.binwrite(path, JSON.generate(value))
   ' "$workspace/result.json" "$1"
 }
-for finding_file in README.md verify.json iphone-en.png ".artifacts/issues/$issue/$head_sha/iphone-en.png"; do
+for finding_file in docs/README.md verify.json iphone-en.png ".artifacts/issues/$issue/$head_sha/iphone-en.png"; do
   write_finding "$finding_file"
   "$linked/tools/validate-review-result.sh" --primary codex --packet "$packet_relative" --result "$workspace/result.json" > "$workspace/validated-finding.json"
   ruby -rjson -e 'abort unless JSON.parse(File.read(ARGV[0])) == JSON.parse(File.read(ARGV[1]))' "$workspace/result.json" "$workspace/validated-finding.json"

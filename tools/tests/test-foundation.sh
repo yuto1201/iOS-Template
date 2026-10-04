@@ -14,7 +14,7 @@ git_dir=$(git rev-parse --absolute-git-dir)
 
 required_files=(
   AGENTS.md
-  README.md
+  docs/README.md
   specs/product.md
   specs/architecture.md
   specs/acceptance.md
@@ -141,6 +141,18 @@ for file in "${required_files[@]}"; do
   fi
 done
 
+# D-075: AGENTS.md is the only document at the repository root, and AGENTS.md itself carries the
+# root-document rule and the user-approval rule for its own changes.
+if [[ -e README.md || -L README.md ]] || git ls-files --error-unmatch README.md >/dev/null 2>&1; then
+  echo "the repository root must not have README.md; use docs/README.md (D-075)" >&2
+  exit 1
+fi
+for rule in \
+  'リポジトリのルートに置く文書は`AGENTS.md`だけとし、`README.md`を置かない。`README.md`はフォルダ内の説明が必要な場合（例：`docs/README.md`）だけに使う。' \
+  '`AGENTS.md`を書き換えるときは、変更する文面をユーザーに示し、merge前に必ず承認を得て、その承認をIssueのコメントに記録する。'; do
+  grep -Fq -- "- $rule" AGENTS.md || { echo "AGENTS.md lacks the D-075 rule: $rule" >&2; exit 1; }
+done
+
 xcode_library="$repo_root/tools/lib/xcode.sh"
 zsh_bounded_command=$(/bin/zsh -c 'source "$1"; print -r -- "$BOUNDED_COMMAND_PATH"' xcode-library "$xcode_library")
 [[ "$zsh_bounded_command" == "$repo_root/tools/lib/bounded-command.rb" ]] || {
@@ -166,7 +178,7 @@ ruby -rjson -e '
 '
 
 model_neutral_authority_files=(
-  README.md
+  docs/README.md
   AGENTS.md
   .agents/skills/app-bootstrap/SKILL.md
   .agents/skills/plan-issue-batch/SKILL.md
@@ -299,7 +311,7 @@ fi
 python3 - <<'PYTHON'
 from pathlib import Path
 
-readme = Path("README.md").read_text()
+readme = Path("docs/README.md").read_text()
 required = (
     "### App icon",
     ".agents/skills/app-icon/SKILL.md",
@@ -372,7 +384,7 @@ RUBY
 python3 - <<'PYTHON'
 from pathlib import Path
 
-for path in (Path(".agents/skills/app-bootstrap/SKILL.md"), Path("README.md")):
+for path in (Path(".agents/skills/app-bootstrap/SKILL.md"), Path("docs/README.md")):
     content = path.read_text()
     lines = {line.strip() for line in content.splitlines()}
     missing = []
@@ -389,7 +401,7 @@ for path in (Path(".agents/skills/app-bootstrap/SKILL.md"), Path("README.md")):
     if "git add" in content:
         raise SystemExit(f"{path} must not stage bootstrap output during inspection")
 
-readme = Path("README.md").read_text()
+readme = Path("docs/README.md").read_text()
 if ".artifacts/DerivedData" in readme:
     raise SystemExit("README uses repository-local DerivedData")
 if "mktemp -d /tmp/ios-template-derived-data.XXXXXX" not in readme:

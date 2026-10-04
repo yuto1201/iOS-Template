@@ -80,7 +80,7 @@
         "Config/dedicated-simulators.json",
         "Config/ownership.yml",
         "Config/template-identity.json",
-        "README.md",
+        "docs/README.md",
         "docs/agent-contracts/review-packet.md",
         "docs/security.md",
         "docs/verification.md",
@@ -93,6 +93,7 @@
       "prefixes": [
         ".agents/skills/app-bootstrap/",
         ".agents/skills/app-icon/",
+        ".agents/skills/ios-3d-assets/",
         ".agents/skills/ios-media-assets/"
       ]
     },
@@ -318,7 +319,7 @@
       "domain": "specification",
       "paths": [
         "AGENTS.md",
-        "README.md",
+        "docs/README.md",
         "docs/agent-contracts/review-packet.md",
         "docs/verification.md",
         "docs/workflow.md"
@@ -405,6 +406,7 @@
     {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-evidence-applicability.sh", "domains": ["evidence-applicability", "release-disposition"]},
     {"path": "tools/tests/test-foundation.sh", "domains": ["foundation"]},
+    {"path": "tools/tests/test-ios-3d-assets-skill.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-ios-evidence.sh", "domains": ["ios-evidence-exhaustive"]},
     {"path": "tools/tests/test-ios-runner-allocation.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-ios-runner-baseline.sh", "domains": ["ios-verification"]},

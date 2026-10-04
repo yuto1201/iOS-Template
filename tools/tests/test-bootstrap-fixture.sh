@@ -160,11 +160,11 @@ Dir.mktmpdir("bootstrap-fixture-test.") do |temp|
   # A shared seed with local changes or another Head is refused before any suite uses it.
   shared = BootstrapFixture.create(derived, File.join(temp, "shared-seed"))
   shared_head = git(shared, "rev-parse", "HEAD").strip
-  File.write(File.join(shared, "README.md"), "local change\n", mode: "a")
+  File.write(File.join(shared, "AGENTS.md"), "local change\n", mode: "a")
   ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => shared_head},
     "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
   assert(!ok && output.include?("shared bootstrap seed has local changes"), "a dirty shared seed was used: #{output}")
-  git(shared, "checkout", "-q", "--", "README.md")
+  git(shared, "checkout", "-q", "--", "AGENTS.md")
   ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => "0" * 40},
     "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
   assert(!ok && output.include?("shared bootstrap seed Head changed"), "a shared seed at another Head was used: #{output}")

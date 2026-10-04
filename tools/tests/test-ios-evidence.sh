@@ -101,6 +101,10 @@ prepare_fixture() {
     rename)
       printf '%s\n' '# Rename' >"$fixture_root/docs/rename.md"
       ;;
+    delete-root-readme)
+      printf '%s\n' '# Legacy root readme' >"$fixture_root/README.md"
+      git -C "$fixture_root" add -- README.md
+      ;;
   esac
   git -C "$fixture_root" add -- docs
   git -C "$fixture_root" commit -q -m base
@@ -127,6 +131,9 @@ prepare_fixture() {
       ;;
     gitlink)
       git -C "$fixture_root" update-index --add --cacheinfo 160000,"$base_sha",docs/submodule.md
+      ;;
+    delete-root-readme)
+      git -C "$fixture_root" rm -q -- README.md
       ;;
     *)
       echo "unknown fixture change kind: $change_kind" >&2
@@ -942,12 +949,21 @@ mv "$fixture_root/.artifacts/issues/42/$head_sha/verify.json" "$fixture_root/.ar
 ln -s real-verify.json "$fixture_root/.artifacts/issues/42/$head_sha/verify.json"
 expect_linked_failure linked-per-file-symlink "verify.json is unavailable or contains a symbolic link" "$linked_worktree"
 
-for allowed_path in README.md AGENTS.md docs/allowed.md specs/allowed.md; do
+for allowed_path in AGENTS.md docs/README.md docs/allowed.md specs/allowed.md; do
   label="allowed-$(printf '%s' "$allowed_path" | tr '/.' '--')"
   prepare_fixture "$label" passed.json normal "$allowed_path"
   make_documentation_only
   run_validator
 done
+
+# D-075: the root keeps AGENTS.md as its only document; a legacy root README.md may only be deleted.
+prepare_fixture allowed-legacy-root-readme-deletion passed.json delete-root-readme
+make_documentation_only
+run_validator
+
+prepare_fixture disallowed-root-readme passed.json normal README.md
+make_documentation_only
+expect_failure disallowed-root-readme "documentation-only diff may only delete the legacy root README.md"
 
 prepare_fixture disallowed-root-markdown passed.json normal OTHER.md
 make_documentation_only
