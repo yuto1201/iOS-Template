@@ -1,8 +1,8 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 2.1
-Date: 2026-09-17
+Version: 2.2
+Date: 2026-10-04
 
 ## 1. 目的
 
@@ -44,11 +44,11 @@ ClaudeとCodexは一般の仕様化、実装、検証、レビュー、設定済
 
 ### 3.1 新しいアプリの開始順序
 
-テンプレートから新しいリポジトリを作成した後は、機能開発より先に次の順序を完了します。
+新しいアプリのリポジトリは、このMacで`iOS-Template`をGitの履歴ごとコピーして作成します。GitHubのテンプレート機能は想定しません。ユーザーが渡す設計書と仕様書を基にアプリ固有の仕様を確定し、作成時にコピー元のテンプレートの基準commitを記録します（[D-073](decisions.md#d-073-新しいアプリはこのmacでios-templateを履歴ごとコピーして作る)）。作成手順は、このMacのユーザースキルとして用意します。作成した後は、機能開発より先に次の順序を完了します。
 
 1. アプリの目的、対象ユーザー、中心的な価値と雰囲気をアプリ固有仕様へ確定し、Identity入力として表示名、Swift モジュール名、アプリ Slug、Bundle IDの4値を確定する。Deployment TargetはIdentity入力とは別のアプリ仕様として確定する。
 2. Identity Bootstrap Issue と専用 Branch/worktree を作成する。
-3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換する。
+3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換し、`tools/setup-dedicated-simulators.sh`でそのリポジトリ専用のSimulator（`<表示名> iPhone 17 Pro Max`と`<表示名> iPad Pro 13-inch (M5)`）を作成する。
 4. Build、Test、標準Simulatorマトリクス、反対モデルレビュー、Squash Mergeを完了する。
 5. Identity Bootstrapに依存するApp Icon IssueとSystem Experiences Planning Issueを作成する。両Issueはwrite-setが独立すれば並行できる。前者は同じ確定briefから画像生成したシンプルな2案を提示し、ユーザーが明示選択した1案だけをAppIconへ組み込む。
 6. System Experiences Planning IssueでWidget、Live Activities、Dynamic Island、Controls、Siri／App Intentsの5面を個別評価し、各面を`adopt-now`、`defer`、`not-applicable`、`blocked:user`へ分類する。主要Feature Issueの計画・Claim前に結果を確定し、採用面のfoundation／surface実装依存を作る。
@@ -67,7 +67,9 @@ cutover後にClaimするIdentity bootstrapと純粋な非UI作業はnot-applicab
 
 route宣言の導入cutoverは`2026-09-06T00:31:41Z`である。封印済みcontractの`fetchedAt`がこれより前で、Acceptance criterion本文がexact `UI-direction route:` prefixで始まる宣言候補がゼロの場合だけpre-D-030 legacyとし、routeやHTMLを遡及要求せず元の封印済みAC／spec／evidenceを検証する。cutover前でも候補が一つ以上あれば通常検証へ進み、候補がexactly oneで許可routeと非空Scope／Reasonを持つ完全な宣言でなければrejectする。cutoverと同時刻以降のcontractとcutover後のpre-Claim Issueにも同じexactly-one／完全性を必須とする。legacy contractは変更・再封印せず、prefix外のroute語は候補や非legacy判定に使わない。
 
-テンプレートリポジトリ自身には将来の実アプリ名を固定しません。GitHub上のリポジトリ名はテンプレートからリポジトリを作成するときに決め、bootstrapツールは認証済みリモート名変更を行いません。
+テンプレートリポジトリ自身には将来の実アプリ名を固定しません。GitHub上のリポジトリ名はテンプレートをコピーしてリポジトリを作成するときに決め、bootstrapツールは認証済みリモート名変更を行いません。
+
+テンプレートの更新は、既存のリポジトリとテンプレートを未適用のリポジトリへ、差分レポートと承認済みの適用計画で取り込みます。計画の承認は原則ユーザーが行い、ユーザーが指定したときだけCodexが行います。取り込みではIdentity変換を再適用し、アプリ側の変更を上書きせず、取り込み先専用のSimulatorを保ちます（[D-074](decisions.md#d-074-テンプレート更新を差分レポートと承認済みの計画で取り込む)）。
 
 ### 3.1.1 System Experiences Planning Gate
 
@@ -161,9 +163,9 @@ permissionは起動直後に要求せず、利用者が通知を有効にする�
 
 ### 5.1 3Dモデル制作方針
 
-3Dモデル、mesh、material、rig、animationの新規作成、生成、または形状・構造を変えるrevisionは、共有の[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)を使用し、Codexのexact model `gpt-6-astra`だけがauthoringする。作業をClaudeまたは別のCodex modelが開始した場合は、authoring部分を`gpt-6-astra`へ依頼する。exact modelを利用できない場合は別modelへfallbackせず`blocked:environment`として停止する。
+3Dモデルを使う場合は、ユーザーまたはClaudeがブラウザでTripoを操作して作成します。ログイン、プランや課金の変更、認証情報の入力はユーザーが行い、Claudeはユーザーのログイン済みsessionで生成とダウンロードの操作だけを行います。簡単なモデルや即効性を求める場合は、ClaudeまたはCodexの`gpt-6-astra`（reasoning effort `xhigh`）に依頼します。3D作業は共有の[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteします（[D-071](decisions.md#d-071-3dモデルはtripoで作り簡単なものはclaudeまたはcodex-gpt-6-astraに依頼する)）。
 
-ClaudeとCodexの一般開発方針は維持する。Claudeや別のCodex modelは、3D要件・制約の仕様化、参照資料の整理、受領済みassetのアプリ統合、GLB／USDZ等の決定論的検証、RealityKit実装、Build／Test、視覚確認、レビューを担当できる。ただし3D asset bytesを生成・編集した主体として扱わない。3Dを含むIssue／PR証拠にはauthoring modelのexact identifierを記録し、確認できない生成物をこの経路の成果として承認しない。
+どの経路で作ったassetも、GLB／USDZ等の形式検証、アプリへの統合、RealityKit実装、Build／Test、視覚確認、レビューは従来どおり行います。3Dを含むIssue／PR証拠には、authoringの経路（Tripo、Claude、`gpt-6-astra`）を記録し、経路を確認できない生成物を成果として承認しません。
 
 ## 6. App Store 方針
 
@@ -187,10 +189,10 @@ ClaudeとCodexの一般開発方針は維持する。Claudeや別のCodex model�
 - `app.yutodev.com` はAppLibraryのアプリ一覧の入口とする。開発したアプリを一覧へ掲載し、そこから各アプリのWebサイトへ案内する。そのアプリサイト内にプライバシーポリシーと利用規約を用意し、必要なサポート情報も案内する。
 - Webページの公開・デプロイ管理はVercelへ統一する。Cloudflareはドメイン・DNS管理に使用し、Cloudflare Pagesは使わない。AppLibraryのVercel移行は別作業であり、この方針の記録を移行完了の証拠にしない。
 - 各アプリの `App Store/` は申請情報・法務原稿の正本として維持する。申請準備でプライバシーポリシーや利用規約の作成・更新が必要になったら、この方針に従い、実装とデータ利用実態に合う原稿をアプリサイトの公開版へ反映する。必要文書とEULAの扱いは、その時点のApple要件とアプリの機能・課金方式を確認して判断する。
-- **配置は未決・ユーザー指定待ち**。AppLibraryは開発中のため、各アプリサイトと法務ページのリポジトリ内配置、URLパス、ルーティング、Vercel project、対応言語別の公開URLは、ユーザーから詳細が伝えられた後に確定する。一覧のドメインだけからこれらを推測せず、固定ディレクトリ、ファイル名、サブドメインを先回りして決めない。
-- 配置が未決でも、独立した通常のアプリ開発、データ利用の棚卸し、法務原稿の下書きは継続できる。公開先の確定を必要とする公開・申請作業は、該当Issueを `blocked:user` として確認を求める。仮URL、一覧トップURL、ローカルファイルを正式な法務ページURLとして登録しない。
+- 法務ページの公開URLは、プライバシーポリシーを`https://app.yutodev.com/apps/<appSlug>/privacy/`、利用規約を`/apps/<appSlug>/terms/`、サポートを`/apps/<appSlug>/support/`とする。`<appSlug>`は`Config/app-identity.json`の`appSlug`（例：`sublog`）で、日本語と英語は同じページ内で切り替え、言語ごとに別のURLを作らない（[D-072](decisions.md#d-072-法務ページをappyutodevcomappsappslugの下に置く)）。Web-AppLibrary内のファイル配置、Vercel project、ルーティングの実装はWeb側で決める。
+- 公開前でも、独立した通常のアプリ開発、データ利用の棚卸し、法務原稿の下書きは継続できる。仮URL、一覧トップURL、ローカルファイルを正式な法務ページURLとして登録しない。
 - 公開・申請前に、ユーザーが指定した各ページの公開URL、ログイン不要での到達性、公開本文と確認済み原稿・プライバシー申告の一致、アプリ内リンクと申請情報の整合を確認する。初回の法務内容に対するユーザー承認は引き続き必須で、この公開方針への合意を法務本文への承認として扱わない。
-- 配置と原稿が確定したら、アプリrepositoryから`yuto1201/Web-AppLibrary`向けに、source Issue／Head、英語・日本語のsupport／privacy／terms原稿とdigest、実装・データ利用・広告・課金の事実、承認済みroute、期待する返却値を含むcopy-ready Issue本文を生成する。作成前にopen／closed Issueを重複確認し、許可されたaccount／target／operationで一度だけ作成してtitle／body／URL／stateをreadbackする。ユーザーがWeb実装AIへのprompt転送と法務本文・公開の最終承認を行う。
+- 原稿が確定したら、アプリrepositoryから`yuto1201/Web-AppLibrary`向けに、掲載する内容を記載した作成依頼Issueとして、source Issue／Head、英語・日本語のsupport／privacy／terms原稿とdigest、実装・データ利用・広告・課金の事実、承認済みroute、期待する返却値を含むcopy-ready Issue本文を生成する。作成前にopen／closed Issueを重複確認し、許可されたaccount／target／operationで一度だけ作成してtitle／body／URL／stateをreadbackする。ユーザーがWeb実装AIへのprompt転送と法務本文・公開の最終承認を行う。
 - Web実装からの返却はdeployment reference、Web Issue、ユーザー操作参照、公開URLとsource digestを固定し、公開host／route、ログイン不要のHTTP 200、確認済み本文、locale、同一言語内のsupport／privacy／terms相互linkをlive検証する。fixture検証はtool regressionに限定し、App Store証拠にしない。live検証済みの結果だけを申請準備・提出へ引き継ぐ。
 - この方針はAppLibraryの編集・移行・デプロイ、DNS変更、App Store提出を単独で認可しない。実操作は対象リポジトリの規則、確定した配置、設定済み個人アカウント／target、Issue contractと必要な承認に従う。既存のoperation allowlistや検証gateは変更しない。
 

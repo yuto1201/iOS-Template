@@ -654,3 +654,75 @@
 - Decision: Templateの専用deviceを、`iOS-Template iPhone 17 Pro Max`（Device Type iPhone 17 Pro Max、1320×2868）と`iOS-Template iPad Pro 13-inch (M5)`（Device Type iPad Pro 13-inch (M5)、2064×2752）に置き換える。Runtimeはどちらも iOS 27.0 とする。派生アプリは表示名を前置した同じ機種（例：`PayCycle iPhone 17 Pro Max`）とする。AI検証もこの2台で行うため、標準サイズのiPhoneでの検証は行わない。
 - Consequence: App Store用画像を専用deviceから合成なしで撮影できる。新しい2台は`tools/setup-dedicated-simulators.sh`で作成し、旧2台（`iOS-Template iPhone 17`、`iOS-Template iPad (A16)`）はAIが削除せず、ユーザーが削除する。派生アプリへの適用は各アプリのテンプレート同期Issueで行う。App Store撮影toolと画像判定の対応は#192で行う。
 - Related Issue: #233
+
+## D-071: 3DモデルはTripoで作り、簡単なものはClaudeまたはCodex gpt-6-astraに依頼する
+
+- Date: 2026-10-04
+- Status: 確定
+- Supersedes: D-032のうち、3D asset bytesのauthoringをCodexの`gpt-6-astra`だけに限る部分、Claudeをauthoring主体にしない部分、`gpt-6-astra`が使えないときに`blocked:environment`で止める部分を置き換える。3D作業を共有の`ios-3d-assets` skillへrouteすること、ClaudeとCodexの一般開発での同等権限、3Dを含むIssue／PR証拠へauthoringの経路を記録することは維持する。
+- Context: D-032は3Dモデル制作をCodexの`gpt-6-astra`だけに任せていた。ユーザーは2026-10-04に、3Dモデルを使う場合の標準をブラウザで操作するTripoとし、簡単なモデルや即効性を求める場合はClaudeまたは`gpt-6-astra`に依頼する方針を決めた。
+- Decision:
+  - 3Dモデルを使う場合は、ユーザーまたはClaudeがブラウザでTripoを操作して作成する。ログイン、プランや課金の変更、認証情報の入力はユーザーが行う。Claudeはユーザーのログイン済みsessionで生成とダウンロードの操作だけを行い、購入やアカウント設定の変更はしない。
+  - 簡単なモデルや即効性を求める場合は、ClaudeまたはCodexの`gpt-6-astra`（reasoning effort `xhigh`）に依頼する。
+  - どの経路で作ったassetも、形式検証、アプリへの統合、Build／Test、視覚確認は従来どおり行い、Issue／PR証拠にauthoringの経路（Tripo、Claude、`gpt-6-astra`）を記録する。
+- Consequence: `AGENTS.md`の3Dの規則と`ios-3d-assets` skillは、後続のIssueで改める。D-032の経路を前提にした手順は、そのIssueまで新しい方針と食い違ったまま残る。
+- Related Issue: #240
+
+## D-072: 法務ページを`app.yutodev.com/apps/<appSlug>/`の下に置く
+
+- Date: 2026-10-04
+- Status: 確定
+- Supersedes: product.md 6.1節の「配置は未決・ユーザー指定待ち」を置き換える。D-026の公開先方針、D-055のIssue引き継ぎと公開後の検証、初回の法務本文へのユーザー承認、既存のrelease gateは維持する。
+- Context: product.md 6.1節は、各アプリサイトと法務ページのURLパス、言語別の公開URLを、ユーザーが詳細を伝えるまで未決としていた。ユーザーは2026-10-04に、プライバシーポリシーのURLを`https://app.yutodev.com/apps/<アプリ名>/privacy/`とし、利用規約とサポートも同じ形で置き、日本語と英語を同じページ内で切り替える方針を決めた。
+- Decision:
+  - プライバシーポリシーは`https://app.yutodev.com/apps/<appSlug>/privacy/`、利用規約は`/apps/<appSlug>/terms/`、サポートは`/apps/<appSlug>/support/`に置く。`<appSlug>`は`Config/app-identity.json`の`appSlug`（例：`sublog`）とする。
+  - 日本語と英語は同じページ内で切り替え、言語ごとに別のURLを作らない。
+  - 各ページの作成は、掲載する内容（確定した日本語と英語の原稿、digest、アプリの事実、期待する返却値）を記載した作成依頼Issueを`yuto1201/Web-AppLibrary`へ起票して行う。
+- Consequence: 法務handoff toolは、言語ごとに別のrouteを要求して重複を拒否する現在の規則を、後続のIssueで改める。公開後の検証は、同じページで日本語と英語の両方の本文を確認する。Web側の実装、deploy、DNSは、このrepositoryから行わない。
+- Related Issue: #240
+
+## D-073: 新しいアプリは、このMacで`iOS-Template`を履歴ごとコピーして作る
+
+- Date: 2026-10-04
+- Status: 確定
+- Supersedes: product.md 3.1節の、GitHubのテンプレート機能で新しいリポジトリを作る前提を置き換える。Identity bootstrap、App Icon、System Experiences Planning、UI Direction Gateの順序と、専用Simulatorの規則（D-063、D-070）は維持する。
+- Context: これまでの派生アプリは、GitHubのテンプレート機能で作られたため、テンプレートと共通の履歴を持たず、どのテンプレートの版から作られたかも記録されていない。そのため、テンプレートの更新をどこから取り込めばよいかを特定できない。ユーザーは2026-10-04に、GitHubのテンプレート機能を想定せず、このMacから設計書や仕様書を渡して、`iOS-Template`をコピーして新しいアプリを作る方針を決めた。
+- Decision:
+  - 新しいアプリのリポジトリは、このMacで`iOS-Template`をGitの履歴ごとコピーして作る。GitHubのテンプレート機能（generate）は想定しない。
+  - ユーザーが渡す設計書と仕様書を基に、アプリ固有の仕様を確定する。
+  - 作成時に、コピー元のテンプレートの基準commitを記録し、Identity bootstrapを行い、そのリポジトリ専用のSimulator（`<表示名> iPhone 17 Pro Max`と`<表示名> iPad Pro 13-inch (M5)`）を`tools/setup-dedicated-simulators.sh`で作成する。
+  - GitHubへのリポジトリ作成とpushは、設定済みのアカウントで、そのアプリのIssueの外部操作として行う。
+  - 作成手順は、このMacのユーザースキルとして用意し、テンプレートのrepositoryには置かない。
+- Consequence: 履歴ごとコピーしたアプリは、テンプレートとの共通の履歴と基準commitを持つので、テンプレート更新の取り込み（D-074）で基準からの差分を正確に追える。GitHubのテンプレート機能で作った既存の派生アプリは共通の履歴を持たないため、取り込みでは基準が不明として扱う。基準commitの記録形式はD-074の実装Issueで確定し、ユーザースキルはその後に作る。
+- Related Issue: #240
+
+## D-074: テンプレート更新を、差分レポートと承認済みの計画で取り込む
+
+- Date: 2026-10-04
+- Status: 確定
+- Supersedes: D-069のうち「テンプレート更新を自動で同期するtoolは追加しない」の部分を置き換える。派生アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ分けること、テンプレートの`D-###`を番号を変えずに`specs/decisions.md`の末尾へ加えること、既存の`D-###`を使う派生アプリの移行を各アプリのテンプレート同期Issueで扱うことは維持する。
+- Context: 2026-10-04時点の派生アプリ（`iOS-PayCycle`、`iOS-HinokoPocket`、`iOS-SimplePomo`、`iOS-GoshuinPocket`）は、テンプレートから91〜96コミット遅れ、テンプレートのファイルの157〜174個を持っていない。手作業の取り込みでは、Identity変換された名前が戻る、テンプレート用の専用Simulatorを指す、アプリ固有の変更を上書きする、決定事項の番号が衝突する、といった誤りが起きやすい。ユーザーは、テンプレート更新を取り込む機能を作り、差分レポートと適用計画を見てから承認する方針を決めた。
+- Decision:
+  - 取り込みの対象は、テンプレートから作った既存のリポジトリと、テンプレートを未適用のリポジトリとする。
+  - テンプレートの全trackedファイルを、テンプレートが持つもの、Identity変換されるもの、アプリが持つもの、両方が混ざるもの、テンプレート専用、に分類して記録し、取り込み先が基づくテンプレートの基準commitを記録する。
+  - 取り込みは次の順に行う。
+    1. 取り込み先へ書き込まずに、差分レポートと適用計画を作る。
+    2. 適用計画の承認を得る。原則はユーザーが承認する。ユーザーが指定したときだけ、Codexが計画を確認して承認する。
+    3. 承認された項目だけを、取り込み先の作業ブランチへ適用する。
+  - Identity変換されるファイルは、取り込み先のIdentityで変換を再適用してから比べて書き込み、元の名前が残らないことを検査する。アプリ側で変えたファイルとアプリが持つファイルは上書きしない。
+  - 取り込み先の専用Simulatorは、そのリポジトリ専用の2台（D-063、D-070）を厳守し、テンプレート用の端末を指す変更を入れない。
+  - 取り込み先は、差分レポート、計画の承認、適用、検証、mergeを、そのリポジトリの1つのテンプレート同期Issueとして進める。
+- Consequence: 所有区分、基準commitの記録、差分レポートと計画は一つ目の実装Issue、承認と適用は二つ目の実装Issueで作る。実在する派生アプリへの取り込みは、各アプリのテンプレート同期Issueで行う。
+- Related Issue: #240
+
+## D-075: ルートには`AGENTS.md`だけを置き、`AGENTS.md`の書き換えには承認を得る
+
+- Date: 2026-10-04
+- Status: 確定
+- Supersedes: architecture.mdのルート構成のうち、ルートに`README.md`を置く部分を置き換える。`CLAUDE.md`を作らないこと（D-003）は維持する。
+- Context: ルートの`README.md`と`AGENTS.md`に、似た説明が分かれて書かれていた。`AGENTS.md`はCodexとClaudeの共通規則であり、意図しない書き換えはすべての作業へ影響する。ユーザーは2026-10-04に、ルート文書の配置と`AGENTS.md`の書き換えの扱いを決めた。
+- Decision:
+  - リポジトリのルートには`AGENTS.md`を置き、`README.md`は置かない。`README.md`は、フォルダ内で説明が必要な場合（例：`docs/README.md`）だけに使う。
+  - `AGENTS.md`を書き換えるときは、変更する文面をユーザーに示し、merge前に必ず承認を得て、その承認をIssueに記録する。
+- Consequence: ルートの`README.md`を`docs/README.md`へ移し、その参照を揃える作業と、`AGENTS.md`へこの規則を書く作業は、後続のIssueで行う。そのIssueでの`AGENTS.md`の変更も、この規則に従ってユーザーの承認を得る。
+- Related Issue: #240
