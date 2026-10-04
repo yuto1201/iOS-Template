@@ -9,6 +9,8 @@ module IOSTemplate
         "admob" => /AdMob|GoogleMobileAds|Google-Mobile-Ads|googleads-mobile-ios/i,
         "ump" => /UserMessagingPlatform|user-messaging-platform|GoogleUserMessagingPlatform|\bUMP\b/i
       }.freeze
+      # Written by the admob-monetization activation tool in a derived app that adopted AdMob.
+      ADMOB_ACTIVATION_RECORD = "Config/admob-activation.json"
       SDK_DECLARATION_IDS = {
         "admob" => %w[admob googlemobileads google-mobile-ads google-mobile-ads-sdk googleads-mobile-ios],
         "ump" => %w[ump usermessagingplatform user-messaging-platform google-user-messaging-platform]
@@ -166,6 +168,42 @@ module IOSTemplate
         accepted.include?(canonical_declaration(declared))
       end
 
+      # Reconciles an AdMob adoption with the App Store privacy answers. The generic SDK-marker check already
+      # requires AdMob and UMP in thirdPartySDKs; this adds what the activation record itself recorded.
+      # It reports drift only and never turns a prepared row into privacy proof or readiness.
+      def admob_privacy_reasons(collects_data, tracking, data_types)
+        record_present = @paths.include?(ADMOB_ACTIVATION_RECORD)
+        return [] unless record_present || @detected.include?("admob") || @detected.include?("ump")
+
+        reasons = []
+        reasons << "admob-collects-data-required" unless collects_data == true
+        return reasons unless record_present
+
+        record = @sources.document(ADMOB_ACTIVATION_RECORD)
+        # Check each level's type before reading into it, so a malformed record is a reason, not a crash.
+        input = record.is_a?(Hash) && record["status"] == "activated" ? record["activationInput"] : nil
+        privacy = input.is_a?(Hash) ? input["privacyDeclaration"] : nil
+        categories = privacy.is_a?(Hash) ? privacy["dataUseCategories"] : nil
+        unless categories.is_a?(Array) && !categories.empty? && categories.all? { |category| category.is_a?(String) && category.match?(/\A[a-z0-9]+(?:-[a-z0-9]+)*\z/) } &&
+            [true, false].include?(privacy["appStoreTracking"]) && privacy["sourcePath"].is_a?(String) &&
+            privacy["sourceDigest"].is_a?(String) && privacy["sourceDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
+          return reasons << "admob-activation-record-unresolved"
+        end
+        reasons << "admob-tracking-declaration-inconsistent" unless tracking == privacy["appStoreTracking"]
+        declared_types = data_types.is_a?(Array) ? data_types : []
+        # Activation records use kebab-case category ids; App Store data types use upper snake case.
+        categories.map { |category| category.tr("-", "_").upcase }.each do |data_type|
+          reasons << "admob-data-type-missing:#{data_type}" unless declared_types.include?(data_type)
+        end
+        reviewed = @sources.read(privacy["sourcePath"])
+        unless reviewed && privacy["sourceDigest"] == "sha256:#{Digest::SHA256.hexdigest(reviewed)}"
+          reasons << "admob-privacy-review-stale"
+        end
+        reasons
+      rescue InvalidInput
+        reasons << "admob-activation-record-unresolved"
+      end
+
       def run
         module_name = @values.call(IDENTITY, "moduleName")
         raise InvalidInput, "code-module-unresolved" unless module_name.is_a?(String) && module_name.match?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
@@ -232,6 +270,7 @@ module IOSTemplate
         end
         collects_data = @values.call(PRIVACY, "collectsData")
         tracking = @values.call(PRIVACY, "tracking")
+        @reasons.concat(admob_privacy_reasons(collects_data, tracking, data_types))
         @reasons.concat(@privacy_manifest_reasons)
         if @privacy_manifest_tracking && tracking != true || @privacy_manifest_collects_data && collects_data != true
           @reasons << "privacy-manifest-declaration-inconsistent"
