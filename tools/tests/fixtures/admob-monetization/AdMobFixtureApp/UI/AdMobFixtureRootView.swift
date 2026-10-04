@@ -15,7 +15,7 @@ struct AdMobFixtureRootView: View {
         }
         .accessibilityIdentifier("admob.fixture.tabs")
         .task {
-            await system.runtime.bootstrapConsent(from: nil)
+            await system.settleConsent()
         }
     }
 }
@@ -29,6 +29,7 @@ private struct FixtureHomeView: View {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     FixtureHeader()
                     FixtureBannerStatus(renderer: system.renderer)
+                    FixtureConsentStatus(system: system)
                     FixtureInformationCard(
                         title: "オフライン検証",
                         detail: "通信せずに広告枠の配置と状態遷移を確認します。",
@@ -99,10 +100,21 @@ private struct FixtureBannerStatus: View {
     }
 }
 
+private struct FixtureConsentStatus: View {
+    @ObservedObject var system: AdMobFixtureSystem
+
+    var body: some View {
+        Text(system.isConsentSettled ? "同意確認: 完了" : "同意確認: 確認中")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("admob.fixture.consent-status")
+    }
+}
+
 private struct FixtureHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("日本語 iPhone フィクスチャ")
+            Text("日本語フィクスチャ")
                 .font(.title2.bold())
                 .accessibilityIdentifier("admob.fixture.home-title")
 

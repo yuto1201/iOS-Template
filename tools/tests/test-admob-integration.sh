@@ -56,6 +56,7 @@ cmp -s "$repo_root/.agents/skills/admob-monetization/templates/AdMobCore.swift" 
 cmp -s "$repo_root/.agents/skills/admob-monetization/templates/AdaptiveBannerHost.swift" "$fixture/AdMobFixtureApp/UI/AdaptiveBannerHost.swift" || fail 'fixture must compile the exact production adaptive host'
 grep -q 'testConsentEligibilityAndRequestDeduplication' "$fixture/AdMobFixtureAppTests/AdMobIntegrationTests.swift" || fail 'fixture unit selector drifted'
 grep -q 'testJapaneseBannerPlacement' "$fixture/AdMobFixtureAppUITests/AdMobBannerSmokeTests.swift" || fail 'fixture UI selector drifted'
+grep -q 'func testJapanesePadBannerPlacement' "$fixture/AdMobFixtureAppUITests/AdMobBannerSmokeTests.swift" || fail 'fixture iPad UI selector drifted'
 if rg -n 'GoogleMobileAds|UserMessagingPlatform|XCRemoteSwiftPackageReference' "$fixture/AdMobFixtureApp.xcodeproj" "$fixture/AdMobFixtureApp" >/dev/null; then
   fail 'tracked fixture must remain network-free'
 fi
