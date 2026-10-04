@@ -681,10 +681,17 @@ trap 'rm -rf -- "$fixture_dir" "$ignore_probe_root"' EXIT
 printf '%s\n' '# Target' > "$fixture_dir/target.md"
 printf '%s\n' '[Target](target.md)' > "$fixture_dir/valid.md"
 printf '%s\n' '[Missing](missing.md)' > "$fixture_dir/invalid.md"
+printf '%s\n' '[Target](target.md)' '```diff' '+[Quoted](missing.md)' '```' > "$fixture_dir/fenced.md"
+printf '%s\n' '```' 'code' '```' '[Missing](missing.md)' > "$fixture_dir/after-fence.md"
 
 swift tools/check-markdown-links.swift "$fixture_dir/valid.md"
 if swift tools/check-markdown-links.swift "$fixture_dir/invalid.md" >/dev/null 2>&1; then
   echo "Markdown link checker accepted a missing local target" >&2
+  exit 1
+fi
+swift tools/check-markdown-links.swift "$fixture_dir/fenced.md" || { echo "Markdown link checker followed a link inside a fenced code block" >&2; exit 1; }
+if swift tools/check-markdown-links.swift "$fixture_dir/after-fence.md" >/dev/null 2>&1; then
+  echo "Markdown link checker ignored a missing target after a closed fence" >&2
   exit 1
 fi
 
