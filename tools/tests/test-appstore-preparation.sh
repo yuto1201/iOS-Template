@@ -798,6 +798,71 @@ description = report.fetch("fields").find { |row| row["fieldId"] == "description
 abort "new implementation file did not invalidate feature claims" unless description["state"] == "draft" && description["reasons"].include?("stale-derive-evidence")
 File.unlink(ads_file)
 privacy_check.call("original inventory restored", "confirmed")
+
+# An AdMob activation record is reconciled with the App Store privacy answers it recorded.
+admob_record_path = File.join(project, "Config/admob-activation.json")
+admob_privacy = privacy_values.merge(
+  "collectsData" => true, "dataTypes" => ["ADVERTISING_DATA", "DEVICE_ID"], "thirdPartySDKs" => ["google-mobile-ads", "ump"]
+)
+write_admob_record = lambda do |categories: ["advertising-data", "device-id"], tracking: false, status: "activated", digest: nil|
+  digest ||= "sha256:#{Digest::SHA256.file(privacy_file).hexdigest}"
+  record = {
+    "schemaVersion" => 1, "status" => status,
+    "activationInput" => {
+      "privacyDeclaration" => {
+        "appStoreTracking" => tracking, "dataUseCategories" => categories, "reviewedAt" => Time.now.utc.iso8601,
+        "sourceDigest" => digest, "sourcePath" => privacy_relative
+      },
+      "officialSources" => {
+        "googleMobileAds" => {"packageURL" => "https://github.com/googleads/swift-package-manager-google-mobile-ads.git"},
+        "ump" => {"packageURL" => "https://github.com/googleads/swift-package-manager-google-user-messaging-platform.git"}
+      }
+    }
+  }
+  File.write(admob_record_path, JSON.generate(record))
+end
+admob_reasons = lambda do |label|
+  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+  abort "#{label}: unexpected status or diagnostics" unless status.exitstatus == 1 && stderr.empty?
+  report = JSON.parse(stdout)
+  abort "#{label}: invented readiness" unless report["releaseReady"] == false && report["remoteMutations"] == []
+  report.fetch("fields").find { |row| row["fieldId"] == "privacy.collectsData" }["reasons"]
+end
+expect_admob = lambda do |label, expected, unexpected = []|
+  reasons = admob_reasons.call(label)
+  missing = expected - reasons
+  leaked = reasons & unexpected
+  abort "#{label}: expected #{missing}, got #{reasons}" unless missing.empty?
+  abort "#{label}: unexpected #{leaked}" unless leaked.empty?
+end
+
+write_admob_record.call
+expect_admob.call("AdMob activation over the old no-data answers",
+  ["admob-collects-data-required", "sdk-declaration-missing:admob", "sdk-declaration-missing:ump",
+   "admob-data-type-missing:ADVERTISING_DATA", "admob-data-type-missing:DEVICE_ID"],
+  ["admob-privacy-review-stale"])
+File.write(privacy_file, YAML.dump(admob_privacy))
+expect_admob.call("answers changed after the recorded privacy review", ["admob-privacy-review-stale"])
+write_admob_record.call
+all_admob = ["admob-collects-data-required", "admob-tracking-declaration-inconsistent", "admob-privacy-review-stale",
+  "admob-activation-record-unresolved", "admob-data-type-missing:ADVERTISING_DATA", "admob-data-type-missing:DEVICE_ID",
+  "sdk-declaration-missing:admob", "sdk-declaration-missing:ump", "privacy-declaration-inconsistent"]
+expect_admob.call("answers that match the activation record", [], all_admob)
+File.write(privacy_file, YAML.dump(admob_privacy.merge("dataTypes" => ["DEVICE_ID"])))
+write_admob_record.call
+expect_admob.call("a recorded data-use category missing from the answers", ["admob-data-type-missing:ADVERTISING_DATA"],
+  ["admob-data-type-missing:DEVICE_ID", "admob-privacy-review-stale"])
+File.write(privacy_file, YAML.dump(admob_privacy.merge("tracking" => true)))
+write_admob_record.call
+expect_admob.call("tracking answer differs from the non-tracking activation", ["admob-tracking-declaration-inconsistent"])
+File.write(privacy_file, YAML.dump(admob_privacy))
+write_admob_record.call(status: "draft")
+expect_admob.call("an unactivated record", ["admob-activation-record-unresolved"])
+write_admob_record.call(categories: [])
+expect_admob.call("a record without data-use categories", ["admob-activation-record-unresolved"])
+File.unlink(admob_record_path)
+File.write(privacy_file, YAML.dump(privacy_values))
+privacy_check.call("non-AdMob inventory is unchanged after the record is removed", "confirmed")
 privacy_manifest = File.join(project, "GardenNotes/PrivacyInfo.xcprivacy")
 privacy_manifest_document = {
   "NSPrivacyTracking" => true,
