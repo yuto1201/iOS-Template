@@ -581,6 +581,28 @@ module IOSTemplate
       File.chmod(0o644, path)
     end
 
+    # The generated configuration is a pure function of the template and the recorded input, so validation
+    # can require the exact bytes instead of reading values out of Swift source.
+    def render_configuration(templates, input)
+      release = input.dig("identifiers", "release")
+      debug = input.dig("identifiers", "debug")
+      render_template(
+        File.join(templates, "AdMobConfiguration.swift.template"),
+        {
+          "__ACTIVATION_INPUT_DIGEST__" => digest(canonical_json(input)),
+          "__DEBUG_APP_ID__" => debug.fetch("appId"),
+          "__DEBUG_BANNER_ID__" => debug.fetch("bannerUnitId"),
+          "__RELEASE_APP_ID__" => release.fetch("appId"),
+          "__RELEASE_BANNER_ID__" => release.fetch("bannerUnitId"),
+          "__INCLUDED_SCREENS__" => swift_array(input.dig("placement", "includedScreens")),
+          "__EXCLUDED_SCREENS__" => swift_array(input.dig("placement", "excludedScreens")),
+          "__ENTITLEMENT_SOURCE__" => swift_string(input.dig("adFreeEntitlement", "source")),
+          "__MINIMUM_AGE__" => input.dig("audience", "minimumAge").to_s,
+          "__PRIVACY_OPTIONS_ENTRY__" => input.dig("placement", "privacyOptionsEntry"),
+        }
+      )
+    end
+
     def build_outputs(stage_root, input, identity, project_relative, original_project, source_head_sha)
       templates = template_root(stage_root)
       required_templates = %w[
@@ -593,48 +615,20 @@ module IOSTemplate
       end
 
       module_name = identity.fetch("moduleName")
-      release = input.dig("identifiers", "release")
-      debug = input.dig("identifiers", "debug")
-      common = {
-        "__ACTIVATION_INPUT_DIGEST__" => digest(canonical_json(input)),
-        "__DEBUG_APP_ID__" => debug.fetch("appId"),
-        "__DEBUG_BANNER_ID__" => debug.fetch("bannerUnitId"),
-        "__RELEASE_APP_ID__" => release.fetch("appId"),
-        "__RELEASE_BANNER_ID__" => release.fetch("bannerUnitId"),
-        "__INCLUDED_SCREENS__" => swift_array(input.dig("placement", "includedScreens")),
-        "__EXCLUDED_SCREENS__" => swift_array(input.dig("placement", "excludedScreens")),
-        "__ENTITLEMENT_SOURCE__" => swift_string(input.dig("adFreeEntitlement", "source")),
-        "__MINIMUM_AGE__" => input.dig("audience", "minimumAge").to_s,
-        "__PRIVACY_OPTIONS_ENTRY__" => input.dig("placement", "privacyOptionsEntry"),
-        "__SKADNETWORK_ITEMS__" => plist_network_items(input.fetch("skAdNetworkIdentifiers")),
-      }
+      network_items = plist_network_items(input.fetch("skAdNetworkIdentifiers"))
 
       outputs = {}
       outputs["#{module_name}/AdMob/AdMobCore.swift"] = File.binread(File.join(templates, "AdMobCore.swift"))
       outputs["#{module_name}/AdMob/AdaptiveBannerHost.swift"] = File.binread(File.join(templates, "AdaptiveBannerHost.swift"))
       outputs["#{module_name}/AdMob/GoogleMobileAdsProvider.swift"] = File.binread(File.join(templates, "GoogleMobileAdsProvider.swift"))
-      outputs["#{module_name}/AdMob/AdMobConfiguration.swift"] = render_template(
-        File.join(templates, "AdMobConfiguration.swift.template"),
-        common.slice(
-          "__ACTIVATION_INPUT_DIGEST__",
-          "__DEBUG_APP_ID__",
-          "__DEBUG_BANNER_ID__",
-          "__RELEASE_APP_ID__",
-          "__RELEASE_BANNER_ID__",
-          "__INCLUDED_SCREENS__",
-          "__EXCLUDED_SCREENS__",
-          "__ENTITLEMENT_SOURCE__",
-          "__MINIMUM_AGE__",
-          "__PRIVACY_OPTIONS_ENTRY__"
-        )
-      )
+      outputs["#{module_name}/AdMob/AdMobConfiguration.swift"] = render_configuration(templates, input)
       outputs["#{module_name}/AdMob/Info-Debug.plist"] = render_template(
         File.join(templates, "Info-Debug.plist.template"),
-        common.slice("__DEBUG_APP_ID__", "__SKADNETWORK_ITEMS__")
+        {"__DEBUG_APP_ID__" => input.dig("identifiers", "debug", "appId"), "__SKADNETWORK_ITEMS__" => network_items}
       )
       outputs["#{module_name}/AdMob/Info-Release.plist"] = render_template(
         File.join(templates, "Info-Release.plist.template"),
-        common.slice("__RELEASE_APP_ID__", "__SKADNETWORK_ITEMS__")
+        {"__RELEASE_APP_ID__" => input.dig("identifiers", "release", "appId"), "__SKADNETWORK_ITEMS__" => network_items}
       )
       outputs[project_relative] = mutate_project(original_project, identity)
 
@@ -767,7 +761,12 @@ module IOSTemplate
       source_bytes = %w[AdMobConfiguration.swift AdMobCore.swift AdaptiveBannerHost.swift GoogleMobileAdsProvider.swift].map do |name|
         File.binread(File.join(root, module_name, "AdMob", name))
       end.join("\n")
-      validate_configuration_identifiers!(File.binread(File.join(root, module_name, "AdMob", "AdMobConfiguration.swift")), activation_input)
+      configuration = File.binread(File.join(root, module_name, "AdMob", "AdMobConfiguration.swift"))
+      validate_configuration_identifiers!(configuration, activation_input)
+      repository_relative_file!(root, ".agents/skills/admob-monetization/templates/AdMobConfiguration.swift.template", "activation template AdMobConfiguration.swift.template")
+      unless configuration == render_configuration(template_root(root), activation_input)
+        fail!("AdMobConfiguration.swift differs from the configuration rendered from the activation record")
+      end
       fail!("activated sources must not contain the network-free UI-test fixture route") if source_bytes.match?(FIXTURE_ROUTE_MARKERS)
       fail!("activated configuration is not bound to the canonical input") unless source_bytes.include?("activationInputDigest = \"#{record.fetch('inputDigest')}\"")
       fail!("activated sources must not invoke AppTrackingTransparency") if source_bytes.match?(/ATTrackingManager|requestTrackingAuthorization|AppTrackingTransparency/)

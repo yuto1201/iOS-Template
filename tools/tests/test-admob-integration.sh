@@ -427,6 +427,17 @@ tamper_with_digest release-config-demo GardenNotes/AdMob/AdMobConfiguration.swif
 tamper_with_digest debug-config-production GardenNotes/AdMob/AdMobConfiguration.swift \
   'ca-app-pub-3940256099942544/2435281174' 'ca-app-pub-1234567890123456/0987654321' \
   'Debug identifiers in AdMobConfiguration.swift differ from the activation record'
+# A declaration that keeps the recorded literal but computes another identifier at runtime still fails,
+# because the whole configuration must equal its render from the template and the recorded input.
+tamper_with_digest release-config-expression GardenNotes/AdMob/AdMobConfiguration.swift \
+  '"ca-app-pub-1234567890123456/0987654321"' '"ca-app-pub-1234567890123456/0987654321".replacingOccurrences(of: "0987654321", with: "0000000001")' \
+  'AdMobConfiguration.swift differs from the configuration rendered from the activation record'
+tamper_with_digest debug-config-expression GardenNotes/AdMob/AdMobConfiguration.swift \
+  '"ca-app-pub-3940256099942544/2435281174"' '"ca-app-pub-3940256099942544/2435281174" + ""' \
+  'AdMobConfiguration.swift differs from the configuration rendered from the activation record'
+tamper_with_digest config-placement-override GardenNotes/AdMob/AdMobConfiguration.swift \
+  'adUnitID: bannerID)' 'adUnitID: "ca-app-pub-1234567890123456/0000000002") // bannerID' \
+  'AdMobConfiguration.swift differs from the configuration rendered from the activation record'
 tamper_with_digest skadnetwork-extra GardenNotes/AdMob/Info-Release.plist \
   '<string>cstr6suwn9.skadnetwork</string>' '<string>cstr6suwn9.skadnetwork</string></dict><dict><key>SKAdNetworkIdentifier</key><string>4fzdc2evr5.skadnetwork</string>' \
   'Info-Release.plist SKAdNetworkItems differ from the activation record'
