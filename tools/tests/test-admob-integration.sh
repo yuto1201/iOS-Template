@@ -451,6 +451,7 @@ sk = value.dig("infoPlist", "skAdNetwork")
 abort "SKAdNetwork drift not reported" unless sk["status"] == "drift" && sk["missingFromApp"].length == 49 && sk["notInOfficialList"].empty?
 abort "privacy manifest" unless value.dig("privacy", "appPrivacyManifest", "status") == "missing"
 abort "data use" unless value.dig("privacy", "appStoreDataUse", "dataUseCategories") == ["advertising-data", "device-id"]
+abort "data use without a manifest must stay unverified" unless value.dig("privacy", "appStoreDataUse", "manifestConsistency", "status") == "unverified"
 abort "SDK manifests must stay unverified" unless value.dig("privacy", "sdkPrivacyManifests", "status") == "unverified"
 expected = {"offlineFixture" => "not-run", "googleDemoSmoke" => "not-run", "admobRemote" => "unverified", "productionRelease" => "unverified"}
 abort "evidence defaults" unless value["evidence"].transform_values { |entry| entry["status"] } == expected &&
@@ -458,23 +459,47 @@ abort "evidence defaults" unless value["evidence"].transform_values { |entry| en
 abort "report leaked an AdMob identifier" if File.binread(ARGV.fetch(0)).include?("ca-app-pub-")
 RUBY
 
-aged=$(ruby -rtime -e 'puts (Time.iso8601(ARGV[0]) + 40 * 86_400).utc.iso8601' "$checked_at")
-IOS_TEMPLATE_ADMOB_READINESS_NOW="$aged" readiness | grep -q '"status":"recheck-required"' || fail 'stale official sources were not reported'
+# Freshness compares elapsed seconds: exactly 30 days is current, one second later needs a recheck.
+for offset in "$((30 * 86400)):current" "$((30 * 86400 + 1)):recheck-required" "$((40 * 86400)):recheck-required"; do
+  now=$(ruby -rtime -e 'puts (Time.iso8601(ARGV[0]) + Integer(ARGV[1])).utc.iso8601' "$checked_at" "${offset%%:*}")
+  IOS_TEMPLATE_ADMOB_READINESS_NOW="$now" readiness | ruby -rjson -e '
+    status = JSON.parse(STDIN.read).dig("officialSources", "status")
+    abort "official sources at +#{ARGV[0]}s were #{status}, expected #{ARGV[1]}" unless status == ARGV[1]
+  ' "${offset%%:*}" "${offset#*:}"
+done
 
 manifest="$derived/GardenNotes/PrivacyInfo.xcprivacy"
 write_manifest() {
+  local tracking=$1 type entries=''
+  shift
+  for type in "$@"; do
+    entries+="<dict><key>NSPrivacyCollectedDataType</key><string>$type</string></dict>"
+  done
   cat >"$manifest" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>NSPrivacyTracking</key><$1/>
-<key>NSPrivacyCollectedDataTypes</key><array><dict><key>NSPrivacyCollectedDataType</key><string>NSPrivacyCollectedDataTypeDeviceID</string></dict></array>
+<key>NSPrivacyTracking</key><$tracking/>
+<key>NSPrivacyCollectedDataTypes</key><array>$entries</array>
 </dict></plist>
 PLIST
 }
-write_manifest false
+# The manifest's collected data types are compared with the recorded categories (advertising-data, device-id).
+assert_consistency() {
+  readiness | ruby -rjson -e '
+    value = JSON.parse(STDIN.read).dig("privacy", "appStoreDataUse", "manifestConsistency")
+    expected = JSON.parse(ARGV.fetch(0))
+    abort "manifest consistency #{value}, expected #{expected}" unless expected.all? { |key, entry| value[key] == entry }
+  ' "$1"
+}
+write_manifest false NSPrivacyCollectedDataTypeDeviceID
 readiness | ruby -rjson -e 'v = JSON.parse(STDIN.read).dig("privacy", "appPrivacyManifest"); abort "manifest #{v}" unless v["status"] == "present" && v["collectedDataTypes"] == ["NSPrivacyCollectedDataTypeDeviceID"]'
-write_manifest true
+assert_consistency '{"status":"drift","missingFromManifest":["advertising-data"],"notInRecord":[],"unmappedManifestTypes":[]}'
+write_manifest false NSPrivacyCollectedDataTypeDeviceID NSPrivacyCollectedDataTypeAdvertisingData
+assert_consistency '{"status":"match","missingFromManifest":[],"notInRecord":[],"unmappedManifestTypes":[],"unknownRecordCategories":[]}'
+write_manifest false NSPrivacyCollectedDataTypeDeviceID NSPrivacyCollectedDataTypeAdvertisingData NSPrivacyCollectedDataTypeCrashData NSPrivacyCollectedDataTypeUnknownKind
+assert_consistency '{"status":"drift","missingFromManifest":[],"notInRecord":["crash-data"],"unmappedManifestTypes":["NSPrivacyCollectedDataTypeUnknownKind"]}'
+write_manifest true NSPrivacyCollectedDataTypeDeviceID NSPrivacyCollectedDataTypeAdvertisingData
 readiness | grep -q '"status":"tracking-inconsistent"' || fail 'a tracking privacy manifest was not reported'
 rm -f "$manifest"
 

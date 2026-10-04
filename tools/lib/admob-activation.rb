@@ -38,6 +38,45 @@ module IOSTemplate
       "admobRemote" => "unverified",
       "productionRelease" => "unverified",
     }.freeze
+    # Apple's NSPrivacyCollectedDataType values (Bundle Resources documentation, checked 2026-10-04) mapped
+    # to the kebab-case App Store data-use category ids that activation records use.
+    PRIVACY_MANIFEST_DATA_TYPES = {
+      "NSPrivacyCollectedDataTypeName" => "name",
+      "NSPrivacyCollectedDataTypeEmailAddress" => "email-address",
+      "NSPrivacyCollectedDataTypePhoneNumber" => "phone-number",
+      "NSPrivacyCollectedDataTypePhysicalAddress" => "physical-address",
+      "NSPrivacyCollectedDataTypeOtherUserContactInfo" => "other-user-contact-info",
+      "NSPrivacyCollectedDataTypeHealth" => "health",
+      "NSPrivacyCollectedDataTypeFitness" => "fitness",
+      "NSPrivacyCollectedDataTypePaymentInfo" => "payment-info",
+      "NSPrivacyCollectedDataTypeCreditInfo" => "credit-info",
+      "NSPrivacyCollectedDataTypeOtherFinancialInfo" => "other-financial-info",
+      "NSPrivacyCollectedDataTypePreciseLocation" => "precise-location",
+      "NSPrivacyCollectedDataTypeCoarseLocation" => "coarse-location",
+      "NSPrivacyCollectedDataTypeSensitiveInfo" => "sensitive-info",
+      "NSPrivacyCollectedDataTypeContacts" => "contacts",
+      "NSPrivacyCollectedDataTypeEmailsOrTextMessages" => "emails-or-text-messages",
+      "NSPrivacyCollectedDataTypePhotosorVideos" => "photos-or-videos",
+      "NSPrivacyCollectedDataTypeAudioData" => "audio-data",
+      "NSPrivacyCollectedDataTypeGameplayContent" => "gameplay-content",
+      "NSPrivacyCollectedDataTypeCustomerSupport" => "customer-support",
+      "NSPrivacyCollectedDataTypeOtherUserContent" => "other-user-content",
+      "NSPrivacyCollectedDataTypeBrowsingHistory" => "browsing-history",
+      "NSPrivacyCollectedDataTypeSearchHistory" => "search-history",
+      "NSPrivacyCollectedDataTypeUserID" => "user-id",
+      "NSPrivacyCollectedDataTypeDeviceID" => "device-id",
+      "NSPrivacyCollectedDataTypePurchaseHistory" => "purchase-history",
+      "NSPrivacyCollectedDataTypeProductInteraction" => "product-interaction",
+      "NSPrivacyCollectedDataTypeAdvertisingData" => "advertising-data",
+      "NSPrivacyCollectedDataTypeOtherUsageData" => "other-usage-data",
+      "NSPrivacyCollectedDataTypeCrashData" => "crash-data",
+      "NSPrivacyCollectedDataTypePerformanceData" => "performance-data",
+      "NSPrivacyCollectedDataTypeOtherDiagnosticData" => "other-diagnostic-data",
+      "NSPrivacyCollectedDataTypeEnvironmentScanning" => "environment-scanning",
+      "NSPrivacyCollectedDataTypeHands" => "hands",
+      "NSPrivacyCollectedDataTypeHead" => "head",
+      "NSPrivacyCollectedDataTypeOtherDataTypes" => "other-data-types",
+    }.freeze
     REQUIRED_GOOGLE_GUIDES = %w[
       https://developers.google.com/admob/ios/banner
       https://developers.google.com/admob/ios/privacy
@@ -851,9 +890,30 @@ module IOSTemplate
       fail!("IOS_TEMPLATE_ADMOB_READINESS_NOW must be an ISO-8601 timestamp")
     end
 
+    # Freshness compares elapsed seconds; the floored day count is only for display.
     def age_status(checked_at, now)
-      age_days = ((now - Time.iso8601(checked_at)) / 86_400).floor
-      [age_days, age_days > OFFICIAL_MAX_AGE_DAYS ? "recheck-required" : "current"]
+      elapsed = now - Time.iso8601(checked_at)
+      [(elapsed / 86_400).floor, elapsed > OFFICIAL_MAX_AGE_DAYS * 86_400 ? "recheck-required" : "current"]
+    end
+
+    # Compares the app privacy manifest's collected data types with the recorded App Store data-use
+    # categories through the explicit table. Without a readable manifest the comparison is unverified.
+    def data_use_consistency(manifest, categories)
+      types = manifest["collectedDataTypes"]
+      return {"status" => "unverified", "reason" => "app privacy manifest is #{manifest.fetch('status')}"} unless types
+
+      unmapped = types.reject { |type| PRIVACY_MANIFEST_DATA_TYPES.key?(type) }
+      declared = types.map { |type| PRIVACY_MANIFEST_DATA_TYPES[type] }.compact.sort.uniq
+      unknown = categories.reject { |category| PRIVACY_MANIFEST_DATA_TYPES.value?(category) }
+      missing = categories - declared - unknown
+      extra = declared - categories
+      {
+        "status" => [unmapped, unknown, missing, extra].all?(&:empty?) ? "match" : "drift",
+        "missingFromManifest" => missing,
+        "notInRecord" => extra,
+        "unmappedManifestTypes" => unmapped,
+        "unknownRecordCategories" => unknown,
+      }
     end
 
     # The dated official snapshot that ships with the skill; absent or malformed means unverified.
@@ -1003,6 +1063,7 @@ module IOSTemplate
 
       snapshot_status = snapshot ? age_status(snapshot.fetch("checkedAt"), now) : [nil, "unverified"]
       privacy = input.fetch("privacyDeclaration")
+      manifest = app_privacy_manifest(root, identity.fetch("moduleName"))
       report = {
         "schemaVersion" => 1,
         "status" => "reported",
@@ -1033,12 +1094,13 @@ module IOSTemplate
           "skAdNetwork" => sk_ad_network,
         },
         "privacy" => {
-          "appPrivacyManifest" => app_privacy_manifest(root, identity.fetch("moduleName")),
+          "appPrivacyManifest" => manifest,
           "appStoreDataUse" => {
-            "status" => "matches-record",
+            "sourceDigestStatus" => "matches-record",
             "sourcePath" => privacy.fetch("sourcePath"),
             "reviewedAt" => privacy.fetch("reviewedAt"),
             "dataUseCategories" => privacy.fetch("dataUseCategories"),
+            "manifestConsistency" => data_use_consistency(manifest, privacy.fetch("dataUseCategories")),
             "googleDisclosure" => snapshot ? snapshot.fetch("dataDisclosure") : nil,
           },
           "sdkPrivacyManifests" => sdk_privacy_manifests(source_packages),
