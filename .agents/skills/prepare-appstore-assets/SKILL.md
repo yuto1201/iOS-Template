@@ -25,9 +25,9 @@ Independent text preparation can continue before complete release inputs exist. 
 
 ## Legal-page handoff
 
-When confirmed support, privacy, or terms sources need public AppLibrary pages, follow the [legal-page handoff contract](templates/legal-page-handoff.md) and `tools/prepare-appstore-legal-handoff.sh`. Generate a copy-ready Issue for exactly `yuto1201/Web-AppLibrary`, perform duplicate search and authenticated creation/readback only under the source Issue's declared GitHub operation, then leave prompt forwarding and legal/publication approval to the user. This workflow does not edit or deploy the Web repository.
+When confirmed support, privacy, or terms sources need public AppLibrary pages, follow the [legal-page handoff contract](templates/legal-page-handoff.md) and `tools/prepare-appstore-legal-handoff.sh`. The pages live at `https://app.yutodev.com/apps/<appSlug>/support/`, `/privacy/`, and `/terms/` (D-072), with `<appSlug>` from `Config/app-identity.json`; each page carries both its Japanese and English text, so there is one URL per page, not per language. Generate a copy-ready Issue for exactly `yuto1201/Web-AppLibrary`, perform duplicate search and authenticated creation/readback only under the source Issue's declared GitHub operation, then leave prompt forwarding and legal/publication approval to the user. This workflow does not edit or deploy the Web repository.
 
-Before URL fields or release readiness may consume the result, require a live `publication-verification.json` whose exact source/route digests, Web Issue, user actions, HTTP 200 responses, approved text, locale, and interlinks were verified. A `fixture-validated` result is not App Store evidence and is not App Store eligible.
+Before URL fields or release readiness may consume the result, require a live `publication-verification.json` whose exact source digests for both languages, D-072 URLs, Web Issue, user actions, HTTP 200 responses, approved Japanese and English text on each page, and interlinks were verified. A `fixture-validated` result is not App Store evidence and is not App Store eligible.
 
 ## Preconditions
 

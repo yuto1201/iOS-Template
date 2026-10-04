@@ -12,6 +12,15 @@ require "uri"
 
 module AppStoreLegalHandoff
   TARGET_REPOSITORY = "yuto1201/Web-AppLibrary"
+  # D-072: every app's legal pages live at https://app.yutodev.com/apps/<appSlug>/<kind>/, and one page
+  # carries both its Japanese and English text. The slug comes from the bootstrapped app identity.
+  WEB_HOST = "app.yutodev.com"
+  APP_IDENTITY_PATH = "Config/app-identity.json"
+  APP_IDENTITY_KEYS = %w[appSlug bundleId displayName moduleName schemaVersion sourceIdentityVersion].freeze
+  APP_SLUG_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/
+  TEMPLATE_APP_SLUG = "template-app"
+  REQUEST_SCHEMA_VERSION = 2
+  PUBLICATION_SCHEMA_VERSION = 2
   KINDS = %w[support privacy terms].freeze
   LOCALES = %w[en-US ja].freeze
   SECRET_PATTERN = /(-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+\S+|\b(?:api[_-]?key|access[_-]?token|password)\s*[:=]\s*\S+)/i
@@ -146,27 +155,29 @@ module AppStoreLegalHandoff
     fail!("public responses contain duplicate URLs") unless response_map.length == responses.length
 
     page_results = publication.fetch("pages").map do |page|
-      key = page.values_at("locale", "kind")
-      expected = expected_pages.fetch(key)
+      kind = page.fetch("kind")
+      expected = expected_pages.fetch(kind)
       response = response_map.fetch(page.fetch("url")) { fail!("public response missing for #{page.fetch("url")}") }
-      validate_public_response!(response, page.fetch("url"), request.fetch("webHost"))
-      source_text = context.fetch(:documents).fetch(key).fetch(:text)
-      content_matches!(source_text, response.fetch("body"), page.fetch("url"))
-      sibling_urls = expected_pages.select { |(locale, _kind), _value| locale == page.fetch("locale") }
-                                   .values.map { |value| value.fetch(:url) } - [page.fetch("url")]
+      validate_public_response!(response, page.fetch("url"), WEB_HOST)
+      # Both languages share this one URL, so the same body must carry every approved locale's text.
+      LOCALES.each do |locale|
+        source_text = context.fetch(:documents).fetch([locale, kind]).fetch(:text)
+        content_matches!(source_text, response.fetch("body"), "#{page.fetch("url")} (#{locale})")
+      end
+      sibling_urls = expected_pages.values.map { |value| value.fetch(:url) } - [page.fetch("url")]
       links = absolute_links(response.fetch("body"), page.fetch("url"))
       missing_links = sibling_urls.reject { |url| links.include?(url) }
       fail!("public page interlink is missing for #{missing_links.join(", ")}") unless missing_links.empty?
       {
-        "kind" => page.fetch("kind"), "locale" => page.fetch("locale"), "url" => expected.fetch(:url),
-        "sourceDigest" => page.fetch("sourceDigest"), "httpStatus" => 200,
+        "kind" => kind, "url" => expected.fetch(:url), "locales" => LOCALES,
+        "sourceDigests" => page.fetch("sourceDigests"), "httpStatus" => 200,
         "contentMatched" => true, "interlinks" => sibling_urls.sort
       }
-    end.sort_by { |entry| [LOCALES.index(entry.fetch("locale")), KINDS.index(entry.fetch("kind"))] }
+    end.sort_by { |entry| KINDS.index(entry.fetch("kind")) }
 
     output = safe_new_output(root, options.fetch("output"), "publication verification output")
     result = {
-      "schemaVersion" => 1,
+      "schemaVersion" => PUBLICATION_SCHEMA_VERSION,
       "handoffId" => request.fetch("handoffId"),
       "status" => fixture_mode ? "fixture-validated" : "verified",
       "appStoreEligible" => !fixture_mode,
@@ -184,7 +195,10 @@ module AppStoreLegalHandoff
 
   def validate_request(root, request)
     exact_keys!(request, %w[schemaVersion handoffId source app webHost locales facts documents routes expectedReturn], "request")
-    fail!("request schemaVersion must be 1") unless request.fetch("schemaVersion") == 1
+    unless request.fetch("schemaVersion") == REQUEST_SCHEMA_VERSION
+      fail!("request schemaVersion must be #{REQUEST_SCHEMA_VERSION}: D-072 places Japanese and English on one route per page")
+    end
+    identity = app_identity(root)
     identifier!(request.fetch("handoffId"), "request.handoffId")
     source = object!(request.fetch("source"), "request.source")
     exact_keys!(source, %w[repository issue headSha], "request.source")
@@ -195,9 +209,10 @@ module AppStoreLegalHandoff
     exact_keys!(app, %w[name bundleId platforms], "request.app")
     nonempty!(app.fetch("name"), "request.app.name")
     fail!("request.app.bundleId is invalid") unless app.fetch("bundleId").match?(/\A[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\z/)
+    fail!("request.app.bundleId differs from #{APP_IDENTITY_PATH}") unless app.fetch("bundleId") == identity.fetch("bundleId")
     platforms = string_array!(app.fetch("platforms"), "request.app.platforms")
     fail!("request.app.platforms must contain only iOS and iPadOS") unless (platforms - %w[iOS iPadOS]).empty?
-    validate_host!(request.fetch("webHost"))
+    fail!("request.webHost must be #{WEB_HOST} (D-072)") unless request.fetch("webHost") == WEB_HOST
     locales = string_array!(request.fetch("locales"), "request.locales")
     fail!("request.locales must be exactly en-US and ja") unless locales == LOCALES
     validate_facts!(request.fetch("facts"))
@@ -208,7 +223,7 @@ module AppStoreLegalHandoff
     routes = array!(request.fetch("routes"), "request.routes")
     expected_pairs = LOCALES.product(KINDS)
     fail!("request.documents must contain every locale/kind exactly once") unless pair_list(documents, "documents") == expected_pairs
-    fail!("request.routes must contain every locale/kind exactly once") unless pair_list(routes, "routes") == expected_pairs
+    fail!("request.routes must contain every page kind exactly once") unless kind_list(routes, "request.routes") == KINDS
 
     document_map = {}
     documents.each_with_index do |document, index|
@@ -226,17 +241,15 @@ module AppStoreLegalHandoff
       document_map[document.values_at("locale", "kind")] = {text: text, path: relative(root, source_path)}
     end
 
-    route_paths = []
     routes.each_with_index do |route, index|
       path = "request.routes[#{index}]"
-      exact_keys!(route, %w[kind locale path approvalReference], path)
-      approval_reference!(route.fetch("approvalReference"), "#{path}.approvalReference")
-      route_value = route.fetch("path")
-      validate_route!(route_value, "#{path}.path")
-      route_paths << route_value
+      exact_keys!(route, %w[kind path], path)
+      expected = route_path(identity.fetch("appSlug"), route.fetch("kind"))
+      unless route.fetch("path") == expected
+        fail!("#{path}.path must be #{expected} for appSlug #{identity.fetch("appSlug")} (D-072)")
+      end
     end
-    fail!("request.routes contains duplicate paths") unless route_paths.uniq.length == route_paths.length
-    {documents: document_map}
+    {documents: document_map, identity: identity}
   end
 
   def validate_facts!(facts)
@@ -275,7 +288,9 @@ module AppStoreLegalHandoff
 
   def validate_publication!(publication, request, request_bytes, prompt_bytes, issue_record)
     exact_keys!(publication, %w[schemaVersion handoffId requestDigest promptDigest webIssueURL deploymentReference userActions pages], "publication return")
-    fail!("publication return schemaVersion must be 1") unless publication.fetch("schemaVersion") == 1
+    unless publication.fetch("schemaVersion") == PUBLICATION_SCHEMA_VERSION
+      fail!("publication return schemaVersion must be #{PUBLICATION_SCHEMA_VERSION}")
+    end
     fail!("publication return handoffId differs") unless publication.fetch("handoffId") == request.fetch("handoffId")
     fail!("publication return requestDigest differs") unless publication.fetch("requestDigest") == digest(request_bytes)
     fail!("publication return promptDigest differs") unless publication.fetch("promptDigest") == digest(prompt_bytes)
@@ -292,22 +307,55 @@ module AppStoreLegalHandoff
     end
     pages = array!(publication.fetch("pages"), "publication return.pages")
     expected = expected_page_map(request)
-    fail!("publication return pages differ from requested pages") unless pair_list(pages, "publication pages") == LOCALES.product(KINDS)
+    fail!("publication return pages differ from requested pages") unless kind_list(pages, "publication return.pages") == KINDS
     pages.each_with_index do |page, index|
       path = "publication return.pages[#{index}]"
-      exact_keys!(page, %w[kind locale url sourceDigest], path)
-      page_expected = expected.fetch(page.values_at("locale", "kind"))
-      fail!("#{path}.url differs from approved route") unless page.fetch("url") == page_expected.fetch(:url)
-      fail!("#{path}.sourceDigest differs from approved source") unless page.fetch("sourceDigest") == page_expected.fetch(:digest)
+      exact_keys!(page, %w[kind url sourceDigests], path)
+      page_expected = expected.fetch(page.fetch("kind"))
+      fail!("#{path}.url differs from the D-072 route") unless page.fetch("url") == page_expected.fetch(:url)
+      digests = object!(page.fetch("sourceDigests"), "#{path}.sourceDigests")
+      exact_keys!(digests, LOCALES, "#{path}.sourceDigests")
+      fail!("#{path}.sourceDigests differ from approved sources") unless digests == page_expected.fetch(:digests)
     end
   end
 
+  # One public page per kind; its sourceDigests name the approved text of every locale on that page.
   def expected_page_map(request)
     documents = request.fetch("documents").to_h { |item| [item.values_at("locale", "kind"), item] }
     request.fetch("routes").to_h do |route|
-      key = route.values_at("locale", "kind")
-      [key, {url: "https://#{request.fetch("webHost")}#{route.fetch("path")}", digest: documents.fetch(key).fetch("digest")}]
+      kind = route.fetch("kind")
+      digests = LOCALES.to_h { |locale| [locale, documents.fetch([locale, kind]).fetch("digest")] }
+      [kind, {url: "https://#{WEB_HOST}#{route.fetch("path")}", digests: digests}]
     end
+  end
+
+  def route_path(app_slug, kind)
+    "/apps/#{app_slug}/#{kind}/"
+  end
+
+  def app_identity(root)
+    path = safe_input(root, APP_IDENTITY_PATH, APP_IDENTITY_PATH)
+    identity = parse_object(File.binread(path), APP_IDENTITY_PATH)
+    exact_keys!(identity, APP_IDENTITY_KEYS, APP_IDENTITY_PATH)
+    unless identity.fetch("schemaVersion") == 1 && identity.fetch("sourceIdentityVersion") == 1
+      fail!("#{APP_IDENTITY_PATH} versions are unsupported")
+    end
+    slug = string!(identity.fetch("appSlug"), "#{APP_IDENTITY_PATH}.appSlug")
+    fail!("#{APP_IDENTITY_PATH}.appSlug is invalid") unless slug.bytesize <= 50 && slug.match?(APP_SLUG_PATTERN)
+    fail!("#{APP_IDENTITY_PATH}.appSlug is still the template slug") if slug == TEMPLATE_APP_SLUG
+    string!(identity.fetch("bundleId"), "#{APP_IDENTITY_PATH}.bundleId")
+    identity
+  end
+
+  def kind_list(items, label)
+    kinds = items.map.with_index do |item, index|
+      item = object!(item, "#{label}[#{index}]")
+      kind = string!(item.fetch("kind") { fail!("#{label}[#{index}].kind is missing") }, "#{label}[#{index}].kind")
+      fail!("#{label}[#{index}].kind is unsupported") unless KINDS.include?(kind)
+      kind
+    end
+    fail!("#{label} contains duplicate kinds") unless kinds.uniq.length == kinds.length
+    kinds.sort_by { |kind| KINDS.index(kind) }
   end
 
   def render_prompt(request, context)
@@ -320,10 +368,11 @@ module AppStoreLegalHandoff
     lines << ""
     lines << "## Goal"
     lines << ""
-    lines << "Publish the confirmed support, privacy, and terms pages for #{request.dig("app", "name")} at the approved routes below. Use 1 Issue = 1 Branch = 1 PR and preserve the source text and locale identity."
+    lines << "Publish the confirmed support, privacy, and terms pages for #{request.dig("app", "name")} at the fixed URLs below. Each page shows its Japanese and English text on the same page with an in-page language switch; do not create a separate URL per language. Use 1 Issue = 1 Branch = 1 PR and preserve the source text."
     lines << ""
     lines << "## Confirmed app facts"
     lines << ""
+    lines << "- App slug: `#{context.fetch(:identity).fetch("appSlug")}`"
     lines << "- Bundle ID: `#{request.dig("app", "bundleId")}`"
     lines << "- Platforms: #{request.dig("app", "platforms").join(", ")}"
     request.dig("facts", "features").each { |value| lines << "- Feature: #{value}" }
@@ -337,40 +386,46 @@ module AppStoreLegalHandoff
     lines << ""
     lines << "The user forwards this prompt to the Web implementation agent and retains final approval of legal text and publication. AI review, this Issue, and a deployment do not grant that approval. Do not publish until the user's approval references are recorded."
     lines << ""
-    lines << "## Approved routes and exact source text"
+    lines << "## Pages and exact source text"
     lines << ""
     request.fetch("routes").each do |route|
-      key = route.values_at("locale", "kind")
-      source = request.fetch("documents").find { |item| item.values_at("locale", "kind") == key }
-      lines << "### #{route.fetch("locale")} / #{route.fetch("kind")}"
+      kind = route.fetch("kind")
+      lines << "### #{kind}"
       lines << ""
-      lines << "- Route: `https://#{request.fetch("webHost")}#{route.fetch("path")}`"
-      lines << "- Source: `#{context.fetch(:documents).fetch(key).fetch(:path)}`"
-      lines << "- Source digest: `#{source.fetch("digest")}`"
-      lines << "- Source approval: #{source.fetch("approvalReference")}"
-      lines << "- Route approval: #{route.fetch("approvalReference")}"
+      lines << "- URL: `https://#{WEB_HOST}#{route.fetch("path")}`"
+      lines << "- Languages on this page: #{LOCALES.join(", ")}"
       lines << ""
-      lines << "```markdown"
-      lines << context.fetch(:documents).fetch(key).fetch(:text).rstrip
-      lines << "```"
-      lines << ""
+      LOCALES.each do |locale|
+        key = [locale, kind]
+        source = request.fetch("documents").find { |item| item.values_at("locale", "kind") == key }
+        lines << "#### #{kind} / #{locale}"
+        lines << ""
+        lines << "- Source: `#{context.fetch(:documents).fetch(key).fetch(:path)}`"
+        lines << "- Source digest: `#{source.fetch("digest")}`"
+        lines << "- Source approval: #{source.fetch("approvalReference")}"
+        lines << ""
+        lines << "```markdown"
+        lines << context.fetch(:documents).fetch(key).fetch(:text).rstrip
+        lines << "```"
+        lines << ""
+      end
     end
     lines << "## Acceptance checks"
     lines << ""
-    lines << "- Every URL returns HTTP 200 without authentication or an account."
-    lines << "- Every public page matches its approved source text and locale."
-    lines << "- Each locale's support, privacy, and terms pages link to the other two pages in that locale."
+    lines << "- Every URL returns HTTP 200 without authentication or an account, at exactly the URL above with no redirect."
+    lines << "- Each page contains both its approved Japanese and English source text, with a language switch on the same page."
+    lines << "- Each of the support, privacy, and terms pages links to the other two pages."
     lines << "- Read the created Issue back from exactly `#{TARGET_REPOSITORY}` before implementation starts."
     lines << ""
     lines << "## Expected return contract"
     lines << ""
-    lines << "Return the deployment reference, the six exact public URLs with source digests, the Web-AppLibrary Issue URL, and the user's prompt-forward/publication approval references. Do not return credentials or authenticated transcripts."
+    lines << "Return the deployment reference, the three exact public URLs with the source digests of both languages for each page, the Web-AppLibrary Issue URL, and the user's prompt-forward/publication approval references. Do not return credentials or authenticated transcripts."
     lines << ""
     lines.join("\n")
   end
 
   def fetch_public_page(url)
-    validate_public_url!(url, URI.parse(url).host)
+    validate_public_url!(url, WEB_HOST)
     Tempfile.create("legal-page") do |file|
       command = ["/usr/bin/curl", "--silent", "--show-error", "--fail", "--max-time", "20", "--connect-timeout", "10", "--output", file.path, "--write-out", "%{http_code}\n%{url_effective}", url]
       stdout, stderr, status = Open3.capture3(*command)
@@ -422,19 +477,6 @@ module AppStoreLegalHandoff
     end
     fail!("#{label} contains duplicate locale/kind pairs") unless pairs.uniq.length == pairs.length
     pairs.sort_by { |locale, kind| [LOCALES.index(locale), KINDS.index(kind)] }
-  end
-
-  def validate_route!(value, label)
-    value = string!(value, label)
-    uri = URI.parse(value)
-    fail!("#{label} must be an absolute path without query or fragment") unless value.start_with?("/") && uri.host.nil? && uri.query.nil? && uri.fragment.nil?
-    fail!("#{label} contains unsafe path syntax") if value.include?("%") || value.include?("\\") || value.include?("//")
-    fail!("#{label} contains unsafe path components") if Pathname.new(value).each_filename.any? { |part| part == "." || part == ".." }
-  end
-
-  def validate_host!(host)
-    host = string!(host, "request.webHost")
-    fail!("request.webHost is invalid") unless host.match?(/\A(?=.{1,253}\z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\z/)
   end
 
   def validate_public_url!(value, host)
