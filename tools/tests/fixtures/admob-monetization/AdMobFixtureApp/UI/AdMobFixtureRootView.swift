@@ -15,7 +15,7 @@ struct AdMobFixtureRootView: View {
         }
         .accessibilityIdentifier("admob.fixture.tabs")
         .task {
-            await system.runtime.bootstrapConsent(from: nil)
+            await system.settleConsent()
         }
     }
 }
@@ -25,53 +25,66 @@ private struct FixtureHomeView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    FixtureHeader()
-                    FixtureBannerStatus(renderer: system.renderer)
-                    FixtureInformationCard(
-                        title: "オフライン検証",
-                        detail: "通信せずに広告枠の配置と状態遷移を確認します。",
-                        systemImage: "wifi.slash"
-                    )
-                    FixtureInformationCard(
-                        title: "同意を先に確認",
-                        detail: "広告リクエストより前に同意情報と対象条件を評価します。",
-                        systemImage: "checkmark.shield"
-                    )
-                    FixtureInformationCard(
-                        title: "重複リクエストを防止",
-                        detail: "再描画やタブ再選択でも同じ広告を再要求しません。",
-                        systemImage: "arrow.triangle.2.circlepath"
-                    )
-                    FixtureInformationCard(
-                        title: "Safe area を確保",
-                        detail: "コンテンツの末尾を広告枠の下へ隠しません。",
-                        systemImage: "rectangle.inset.filled"
-                    )
-                    FixtureInformationCard(
-                        title: "表示幅へ追従",
-                        detail: "画面から提案された幅でバナーの高さを更新します。",
-                        systemImage: "arrow.left.and.right"
-                    )
-                    FixtureContentEnd()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        FixtureHeader()
+                        FixtureBannerStatus(renderer: system.renderer)
+                        FixtureConsentStatus(system: system)
+                        FixtureInformationCard(
+                            title: "オフライン検証",
+                            detail: "通信せずに広告枠の配置と状態遷移を確認します。",
+                            systemImage: "wifi.slash"
+                        )
+                        FixtureInformationCard(
+                            title: "同意を先に確認",
+                            detail: "広告リクエストより前に同意情報と対象条件を評価します。",
+                            systemImage: "checkmark.shield"
+                        )
+                        FixtureInformationCard(
+                            title: "重複リクエストを防止",
+                            detail: "再描画やタブ再選択でも同じ広告を再要求しません。",
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+                        FixtureInformationCard(
+                            title: "Safe area を確保",
+                            detail: "コンテンツの末尾を広告枠の下へ隠しません。",
+                            systemImage: "rectangle.inset.filled"
+                        )
+                        FixtureInformationCard(
+                            title: "表示幅へ追従",
+                            detail: "画面から提案された幅でバナーの高さを更新します。",
+                            systemImage: "arrow.left.and.right"
+                        )
+                        FixtureContentEnd()
+                            .id(FixtureContentEnd.scrollID)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
-            }
-            .scrollIndicators(.visible)
-            .accessibilityIdentifier("admob.fixture.scroll")
-            .navigationTitle("広告配置テスト")
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                AdaptiveBannerHost(
-                    runtime: system.runtime,
-                    renderer: system.renderer,
-                    placement: AdMobPlacementContext(
-                        screenID: "home",
-                        adUnitID: "offline-banner"
+                .scrollIndicators(.visible)
+                .accessibilityIdentifier("admob.fixture.scroll")
+                .navigationTitle("広告配置テスト")
+                .toolbar {
+                    // UI tests jump to the end here: synthesized swipes do not scroll an iPhone in landscape.
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("末尾へ移動") {
+                            proxy.scrollTo(FixtureContentEnd.scrollID, anchor: .bottom)
+                        }
+                        .accessibilityIdentifier("admob.fixture.scroll-to-end")
+                    }
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    AdaptiveBannerHost(
+                        runtime: system.runtime,
+                        renderer: system.renderer,
+                        placement: AdMobPlacementContext(
+                            screenID: "home",
+                            adUnitID: "offline-banner"
+                        )
                     )
-                )
-                .accessibilityIdentifier("admob.fixture.banner-host")
+                    .accessibilityIdentifier("admob.fixture.banner-host")
+                }
             }
         }
     }
@@ -99,10 +112,21 @@ private struct FixtureBannerStatus: View {
     }
 }
 
+private struct FixtureConsentStatus: View {
+    @ObservedObject var system: AdMobFixtureSystem
+
+    var body: some View {
+        Text(system.isConsentSettled ? "同意確認: 完了" : "同意確認: 確認中")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("admob.fixture.consent-status")
+    }
+}
+
 private struct FixtureHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("日本語 iPhone フィクスチャ")
+            Text("日本語フィクスチャ")
                 .font(.title2.bold())
                 .accessibilityIdentifier("admob.fixture.home-title")
 
@@ -142,6 +166,8 @@ private struct FixtureInformationCard: View {
 }
 
 private struct FixtureContentEnd: View {
+    static let scrollID = "admob.fixture.content-end"
+
     var body: some View {
         Text("コンテンツの末尾")
             .font(.footnote)

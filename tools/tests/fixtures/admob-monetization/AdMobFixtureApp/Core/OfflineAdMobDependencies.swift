@@ -166,10 +166,17 @@ final class OfflineBannerRenderer: AdMobBannerRendering, ObservableObject {
 final class AdMobFixtureSystem: ObservableObject {
     let runtime: AdMobRuntimeCoordinator
     let renderer: OfflineBannerRenderer
+    /// Becomes true once consent has been gathered, so UI tests can wait before asserting a collapse.
+    @Published private(set) var isConsentSettled = false
 
     init(runtime: AdMobRuntimeCoordinator, renderer: OfflineBannerRenderer) {
         self.runtime = runtime
         self.renderer = renderer
+    }
+
+    func settleConsent() async {
+        _ = await runtime.bootstrapConsent(from: nil)
+        isConsentSettled = true
     }
 }
 
@@ -180,6 +187,7 @@ enum AdMobFixtureRuntimeFactory {
     ) -> AdMobFixtureSystem {
         let consentDenied = arguments.contains("--fixture-consent-denied")
         let shouldFail = arguments.contains("--fixture-banner-failure")
+        let hasAdFreeEntitlement = arguments.contains("--fixture-ad-free")
         let consent = OfflineConsentCoordinator(
             initialSnapshot: AdMobConsentSnapshot(
                 canRequestAds: !consentDenied,
@@ -193,7 +201,7 @@ enum AdMobFixtureRuntimeFactory {
             eligibility: ConfiguredAdMobEligibilityChecker(
                 includedScreens: ["home"],
                 excludedScreens: ["settings"],
-                hasAdFreeEntitlement: { false }
+                hasAdFreeEntitlement: { hasAdFreeEntitlement }
             ),
             sdk: sdk
         )

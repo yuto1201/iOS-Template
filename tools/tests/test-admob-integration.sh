@@ -56,6 +56,7 @@ cmp -s "$repo_root/.agents/skills/admob-monetization/templates/AdMobCore.swift" 
 cmp -s "$repo_root/.agents/skills/admob-monetization/templates/AdaptiveBannerHost.swift" "$fixture/AdMobFixtureApp/UI/AdaptiveBannerHost.swift" || fail 'fixture must compile the exact production adaptive host'
 grep -q 'testConsentEligibilityAndRequestDeduplication' "$fixture/AdMobFixtureAppTests/AdMobIntegrationTests.swift" || fail 'fixture unit selector drifted'
 grep -q 'testJapaneseBannerPlacement' "$fixture/AdMobFixtureAppUITests/AdMobBannerSmokeTests.swift" || fail 'fixture UI selector drifted'
+grep -q 'func testJapanesePadBannerPlacement' "$fixture/AdMobFixtureAppUITests/AdMobBannerSmokeTests.swift" || fail 'fixture iPad UI selector drifted'
 if rg -n 'GoogleMobileAds|UserMessagingPlatform|XCRemoteSwiftPackageReference' "$fixture/AdMobFixtureApp.xcodeproj" "$fixture/AdMobFixtureApp" >/dev/null; then
   fail 'tracked fixture must remain network-free'
 fi
@@ -381,6 +382,177 @@ cp "$core" "$temp_root/AdMobCore.swift"
 printf '\n// drift\n' >>"$core"
 expect_failure drift "$repo_root/tools/validate-admob-integration.sh" --root "$derived"
 cp "$temp_root/AdMobCore.swift" "$core"
+"$repo_root/tools/validate-admob-integration.sh" --root "$derived" >/dev/null
+
+# The validator compares on-disk identifiers, SKAdNetwork items, and sources with the recorded input
+# itself, so an edit that also rewrites the record's file digest still fails.
+configuration="$derived/GardenNotes/AdMob/AdMobConfiguration.swift"
+for path in "$record" "$release_plist" "$debug_plist" "$configuration" "$core"; do
+  cp "$path" "$temp_root/$(basename "$path").pristine"
+done
+restore_activation() {
+  for path in "$record" "$release_plist" "$debug_plist" "$configuration" "$core"; do
+    cp "$temp_root/$(basename "$path").pristine" "$path"
+  done
+}
+tamper_with_digest() {
+  local label=$1 relative=$2 pattern=$3 replacement=$4 expected=$5
+  ruby -rdigest -rjson - "$derived" "$relative" "$pattern" "$replacement" "$record" <<'RUBY'
+root, relative, pattern, replacement, record_path = ARGV
+path = File.join(root, relative)
+bytes = File.binread(path)
+changed = bytes.sub(pattern, replacement)
+abort "tamper pattern not found: #{pattern}" if changed == bytes
+File.binwrite(path, changed)
+value = JSON.parse(File.binread(record_path))
+value["fileDigests"][relative] = Digest::SHA256.hexdigest(changed)
+File.binwrite(record_path, JSON.generate(value) + "\n")
+RUBY
+  expect_failure "$label" "$repo_root/tools/validate-admob-integration.sh" --root "$derived"
+  grep -Fq "$expected" "$temp_root/$label.stderr" || fail "$label failed for another reason: $(<"$temp_root/$label.stderr")"
+  restore_activation
+}
+tamper_with_digest release-plist-app-id GardenNotes/AdMob/Info-Release.plist \
+  'ca-app-pub-1234567890123456~1234567890' 'ca-app-pub-1234567890123456~1111111111' \
+  'Info-Release.plist GADApplicationIdentifier differs from the activation record'
+tamper_with_digest release-plist-demo GardenNotes/AdMob/Info-Release.plist \
+  'ca-app-pub-1234567890123456~1234567890' 'ca-app-pub-3940256099942544~1458002511' \
+  'Info-Release.plist GADApplicationIdentifier differs from the activation record'
+tamper_with_digest release-config-unit GardenNotes/AdMob/AdMobConfiguration.swift \
+  'ca-app-pub-1234567890123456/0987654321' 'ca-app-pub-1234567890123456/0000000001' \
+  'Release identifiers in AdMobConfiguration.swift differ from the activation record'
+tamper_with_digest release-config-demo GardenNotes/AdMob/AdMobConfiguration.swift \
+  'ca-app-pub-1234567890123456/0987654321' 'ca-app-pub-3940256099942544/2435281174' \
+  'Release identifiers in AdMobConfiguration.swift differ from the activation record'
+tamper_with_digest debug-config-production GardenNotes/AdMob/AdMobConfiguration.swift \
+  'ca-app-pub-3940256099942544/2435281174' 'ca-app-pub-1234567890123456/0987654321' \
+  'Debug identifiers in AdMobConfiguration.swift differ from the activation record'
+# A declaration that keeps the recorded literal but computes another identifier at runtime still fails,
+# because the whole configuration must equal its render from the template and the recorded input.
+tamper_with_digest release-config-expression GardenNotes/AdMob/AdMobConfiguration.swift \
+  '"ca-app-pub-1234567890123456/0987654321"' '"ca-app-pub-1234567890123456/0987654321".replacingOccurrences(of: "0987654321", with: "0000000001")' \
+  'AdMobConfiguration.swift differs from the configuration rendered from the activation record'
+tamper_with_digest debug-config-expression GardenNotes/AdMob/AdMobConfiguration.swift \
+  '"ca-app-pub-3940256099942544/2435281174"' '"ca-app-pub-3940256099942544/2435281174" + ""' \
+  'AdMobConfiguration.swift differs from the configuration rendered from the activation record'
+tamper_with_digest config-placement-override GardenNotes/AdMob/AdMobConfiguration.swift \
+  'adUnitID: bannerID)' 'adUnitID: "ca-app-pub-1234567890123456/0000000002") // bannerID' \
+  'AdMobConfiguration.swift differs from the configuration rendered from the activation record'
+tamper_with_digest skadnetwork-extra GardenNotes/AdMob/Info-Release.plist \
+  '<string>cstr6suwn9.skadnetwork</string>' '<string>cstr6suwn9.skadnetwork</string></dict><dict><key>SKAdNetworkIdentifier</key><string>4fzdc2evr5.skadnetwork</string>' \
+  'Info-Release.plist SKAdNetworkItems differ from the activation record'
+tamper_with_digest fixture-route GardenNotes/AdMob/AdMobCore.swift \
+  'import Foundation' "import Foundation
+// let failure = ProcessInfo.processInfo.arguments.contains(\"--fixture-banner-failure\")" \
+  'activated sources must not contain the network-free UI-test fixture route'
+"$repo_root/tools/validate-admob-integration.sh" --root "$derived" >/dev/null
+
+# The readiness report validates first, then reports facts, freshness, drift, and independent evidence
+# classes without ever claiming release readiness.
+readiness() { "$repo_root/tools/validate-admob-integration.sh" --root "$derived" --readiness "$@"; }
+readiness >"$temp_root/readiness.json"
+ruby -rjson - "$temp_root/readiness.json" <<'RUBY'
+value = JSON.parse(File.binread(ARGV.fetch(0)))
+abort "readiness status" unless value["status"] == "reported" && value["activation"] == "valid" && value["releaseReadiness"] == "not-proven"
+abort "SDK update not reported" unless value.dig("sdk", "googleMobileAds", "status") == "update-available" &&
+  value.dig("sdk", "googleMobileAds", "pinnedVersion") == "13.10.0" && value.dig("sdk", "ump", "status") == "current"
+abort "Xcode status" unless %w[supported unverified].include?(value.dig("sdk", "xcodeStatus"))
+abort "fresh sources" unless value.dig("officialSources", "status") == "current"
+sk = value.dig("infoPlist", "skAdNetwork")
+abort "SKAdNetwork drift not reported" unless sk["status"] == "drift" && sk["missingFromApp"].length == 49 && sk["notInOfficialList"].empty?
+abort "privacy manifest" unless value.dig("privacy", "appPrivacyManifest", "status") == "missing"
+abort "data use" unless value.dig("privacy", "appStoreDataUse", "dataUseCategories") == ["advertising-data", "device-id"]
+abort "data use without a manifest must stay unverified" unless value.dig("privacy", "appStoreDataUse", "manifestConsistency", "status") == "unverified"
+abort "SDK manifests must stay unverified" unless value.dig("privacy", "sdkPrivacyManifests", "status") == "unverified"
+expected = {"offlineFixture" => "not-run", "googleDemoSmoke" => "not-run", "admobRemote" => "unverified", "productionRelease" => "unverified"}
+abort "evidence defaults" unless value["evidence"].transform_values { |entry| entry["status"] } == expected &&
+  value["evidence"].values.all? { |entry| entry["source"] == "none" }
+abort "report leaked an AdMob identifier" if File.binread(ARGV.fetch(0)).include?("ca-app-pub-")
+RUBY
+
+# Freshness compares elapsed seconds: exactly 30 days is current, one second later needs a recheck.
+for offset in "$((30 * 86400)):current" "$((30 * 86400 + 1)):recheck-required" "$((40 * 86400)):recheck-required"; do
+  now=$(ruby -rtime -e 'puts (Time.iso8601(ARGV[0]) + Integer(ARGV[1])).utc.iso8601' "$checked_at" "${offset%%:*}")
+  IOS_TEMPLATE_ADMOB_READINESS_NOW="$now" readiness | ruby -rjson -e '
+    status = JSON.parse(STDIN.read).dig("officialSources", "status")
+    abort "official sources at +#{ARGV[0]}s were #{status}, expected #{ARGV[1]}" unless status == ARGV[1]
+  ' "${offset%%:*}" "${offset#*:}"
+done
+
+manifest="$derived/GardenNotes/PrivacyInfo.xcprivacy"
+write_manifest() {
+  local tracking=$1 type entries=''
+  shift
+  for type in "$@"; do
+    entries+="<dict><key>NSPrivacyCollectedDataType</key><string>$type</string></dict>"
+  done
+  cat >"$manifest" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>NSPrivacyTracking</key><$tracking/>
+<key>NSPrivacyCollectedDataTypes</key><array>$entries</array>
+</dict></plist>
+PLIST
+}
+# The manifest's collected data types are compared with the recorded categories (advertising-data, device-id).
+assert_consistency() {
+  readiness | ruby -rjson -e '
+    value = JSON.parse(STDIN.read).dig("privacy", "appStoreDataUse", "manifestConsistency")
+    expected = JSON.parse(ARGV.fetch(0))
+    abort "manifest consistency #{value}, expected #{expected}" unless expected.all? { |key, entry| value[key] == entry }
+  ' "$1"
+}
+write_manifest false NSPrivacyCollectedDataTypeDeviceID
+readiness | ruby -rjson -e 'v = JSON.parse(STDIN.read).dig("privacy", "appPrivacyManifest"); abort "manifest #{v}" unless v["status"] == "present" && v["collectedDataTypes"] == ["NSPrivacyCollectedDataTypeDeviceID"]'
+assert_consistency '{"status":"drift","missingFromManifest":["advertising-data"],"notInRecord":[],"unmappedManifestTypes":[]}'
+write_manifest false NSPrivacyCollectedDataTypeDeviceID NSPrivacyCollectedDataTypeAdvertisingData
+assert_consistency '{"status":"match","missingFromManifest":[],"notInRecord":[],"unmappedManifestTypes":[],"unknownRecordCategories":[]}'
+write_manifest false NSPrivacyCollectedDataTypeDeviceID NSPrivacyCollectedDataTypeAdvertisingData NSPrivacyCollectedDataTypeCrashData NSPrivacyCollectedDataTypeUnknownKind
+assert_consistency '{"status":"drift","missingFromManifest":[],"notInRecord":["crash-data"],"unmappedManifestTypes":["NSPrivacyCollectedDataTypeUnknownKind"]}'
+write_manifest true NSPrivacyCollectedDataTypeDeviceID NSPrivacyCollectedDataTypeAdvertisingData
+readiness | grep -q '"status":"tracking-inconsistent"' || fail 'a tracking privacy manifest was not reported'
+rm -f "$manifest"
+
+evidence="$temp_root/evidence.json"
+printf '%s\n' "{\"schemaVersion\":1,\"classes\":{\"googleDemoSmoke\":{\"status\":\"passed\",\"recordedAt\":\"$checked_at\",\"summary\":\"Debug demo banner rendered on the dedicated iPhone\"}}}" >"$evidence"
+readiness --evidence "$evidence" | ruby -rjson -e '
+  evidence = JSON.parse(STDIN.read).fetch("evidence")
+  abort "supplied class" unless evidence["googleDemoSmoke"].values_at("status", "source") == ["passed", "supplied"]
+  others = evidence.reject { |name, _| name == "googleDemoSmoke" }
+  abort "another class was inferred" unless others.values.all? { |entry| entry["source"] == "none" } &&
+    others.transform_values { |entry| entry["status"] } == {"offlineFixture" => "not-run", "admobRemote" => "unverified", "productionRelease" => "unverified"}
+'
+for bad in \
+  '{"schemaVersion":1,"classes":{"liveRevenue":{"status":"passed","recordedAt":"2026-01-01T00:00:00Z","summary":"x"}}}' \
+  '{"schemaVersion":1,"classes":{"googleDemoSmoke":{"status":"skipped","recordedAt":"2026-01-01T00:00:00Z","summary":"x"}}}' \
+  '{"schemaVersion":1,"classes":{"admobRemote":{"status":"passed","recordedAt":"2026-01-01T00:00:00Z","summary":"unit ca-app-pub-1234567890123456/0987654321"}}}'; do
+  printf '%s\n' "$bad" >"$evidence"
+  expect_failure bad-evidence readiness --evidence "$evidence"
+done
+
+packages="$temp_root/source-packages/artifacts"
+for name in GoogleMobileAds UserMessagingPlatform; do
+  for slice in ios-arm64 ios-arm64_x86_64-simulator; do
+    mkdir -p "$packages/$name/$name.xcframework/$slice/$name.framework"
+    printf '%s\n' '<plist/>' >"$packages/$name/$name.xcframework/$slice/$name.framework/PrivacyInfo.xcprivacy"
+  done
+done
+mkdir -p "$packages/GoogleMobileAds/GoogleMobileAds.xcframework/_CodeSignature"
+printf '%s\n' 'signed' >"$packages/GoogleMobileAds/GoogleMobileAds.xcframework/_CodeSignature/CodeResources"
+readiness --source-packages "$temp_root/source-packages" | ruby -rjson -e '
+  value = JSON.parse(STDIN.read).dig("privacy", "sdkPrivacyManifests")
+  statuses = value["packages"].to_h { |entry| [entry["name"], entry["status"]] }
+  abort "unsigned UMP not reported: #{value}" unless value["status"] == "mismatch" && statuses == {"GoogleMobileAds" => "present", "UserMessagingPlatform" => "signature-missing"}
+'
+mkdir -p "$packages/UserMessagingPlatform/UserMessagingPlatform.xcframework/_CodeSignature"
+printf '%s\n' 'signed' >"$packages/UserMessagingPlatform/UserMessagingPlatform.xcframework/_CodeSignature/CodeResources"
+readiness --source-packages "$temp_root/source-packages" | grep -q '"sdkPrivacyManifests":{"packages":\[[^]]*\],"status":"present"}' ||
+  fail 'signed SDK packages with privacy manifests were not reported present'
+
+printf '\n// drift\n' >>"$core"
+expect_failure readiness-after-drift readiness
+restore_activation
 "$repo_root/tools/validate-admob-integration.sh" --root "$derived" >/dev/null
 
 [[ "$(sha256_file "$repo_root/TemplateApp.xcodeproj/project.pbxproj")" == "$template_project_digest" ]] || fail 'root TemplateApp project changed'
