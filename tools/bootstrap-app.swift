@@ -463,7 +463,7 @@ func expectedLiveContentPaths(manifest: TemplateManifest) -> Set<String> {
         "\(manifest.source.module)Tests/\(manifest.source.module)Tests.swift",
         "\(manifest.source.module)UITests/\(manifest.source.module)UITests.swift",
         "AGENTS.md",
-        "README.md",
+        "docs/README.md",
         "Config/ownership.yml",
         "Config/dedicated-simulators.json",
         "specs/architecture.md",
@@ -558,7 +558,7 @@ func preflightSourceContract(root: URL, manifest: TemplateManifest) throws {
         "\(source)/ContentView.swift": 1,
         "\(source)Tests/\(source)Tests.swift": 4,
         "\(source)UITests/\(source)UITests.swift": 3,
-        "README.md": 27,
+        "docs/README.md": 19,
         "specs/architecture.md": 9,
         "docs/verification.md": 3,
         "docs/agent-contracts/review-packet.md": 2,
@@ -739,7 +739,7 @@ func transformContent(root: URL, manifest: TemplateManifest, identity: AppIdenti
         "\(manifest.source.module)/ContentView.swift",
         "\(manifest.source.module)Tests/\(manifest.source.module)Tests.swift",
         "\(manifest.source.module)UITests/\(manifest.source.module)UITests.swift",
-        "README.md",
+        "docs/README.md",
         "docs/verification.md",
         "docs/agent-contracts/review-packet.md",
     ]
@@ -876,7 +876,7 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
         localizationPath,
         unitPath,
         uiPath,
-        "README.md",
+        "docs/README.md",
         "docs/verification.md",
         "docs/agent-contracts/review-packet.md",
     ]
@@ -922,8 +922,8 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
     try require("\"\(identity.appSlug).welcome-title\"", count: 1, in: uiPath)
 
     try require("# \(identity.displayName) agent contract", count: 1, in: "AGENTS.md")
-    try require("-project \(identity.moduleName).xcodeproj", count: 6, in: "README.md")
-    try require("-scheme \(identity.moduleName)", count: 6, in: "README.md")
+    try require("-project \(identity.moduleName).xcodeproj", count: 5, in: "docs/README.md")
+    try require("-scheme \(identity.moduleName)", count: 5, in: "docs/README.md")
     try require("  bundleId: \(identity.bundleId)", count: 1, in: "Config/ownership.yml")
     try require("\"scheme\": \"\(identity.moduleName)\"", count: 1, in: "docs/verification.md")
     try require("tests:\(identity.moduleName)Tests/", count: 1, in: "docs/verification.md")

@@ -179,7 +179,7 @@ reviewer_sandbox /bin/cat "$artifact_issue_physical/$head_sha/review-packet.json
 reviewer_sandbox /bin/cat "$artifact_contract_physical" >/dev/null
 reviewer_sandbox /bin/cat "$artifact_head_physical/review.diff" >/dev/null
 reviewer_sandbox /bin/cat "$artifact_head_physical/verify.json" >/dev/null
-reviewer_sandbox /bin/cat "$repo_root/README.md" >/dev/null
+reviewer_sandbox /bin/cat "$repo_root/docs/README.md" >/dev/null
 mkdir -p "$artifact_sibling_physical"
 printf 'must-not-be-readable-by-reviewer\n' > "$artifact_sibling_physical/sentinel"
 mkdir -p "$artifact_stale_head_physical"
@@ -236,7 +236,7 @@ write_result() {
   local verdict=$1 reviewer=${2:-claude} result="$workspace/result.json"
   RESULT="$result" VERDICT="$verdict" REVIEWER="$reviewer" ISSUE="$issue" BASE="$base_sha" HEAD="$head_sha" DIGEST="$contract_digest" ruby -rjson -e '
     assessment = {"id" => "AC-1", "status" => (ENV.fetch("VERDICT") == "approved" ? "supported" : "unsupported"), "evidence" => ["verify.json#acceptanceEvidence/0"]}
-    findings = ENV.fetch("VERDICT") == "approved" ? [] : [{"severity" => "high", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "Fix required", "evidence" => "fixture", "requiredChange" => "fix it"}]
+    findings = ENV.fetch("VERDICT") == "approved" ? [] : [{"severity" => "high", "category" => "correctness", "file" => "docs/README.md", "line" => 1, "title" => "Fix required", "evidence" => "fixture", "requiredChange" => "fix it"}]
     File.write(ENV.fetch("RESULT"), JSON.generate({"schemaVersion" => 1, "issue" => ENV.fetch("ISSUE").to_i, "reviewerModel" => ENV.fetch("REVIEWER"), "baseSha" => ENV.fetch("BASE"), "headSha" => ENV.fetch("HEAD"), "verifySha" => ENV.fetch("HEAD"), "issueContractDigest" => ENV.fetch("DIGEST"), "verdict" => ENV.fetch("VERDICT"), "findings" => findings, "acceptanceAssessment" => [assessment], "reviewedAt" => "2026-08-24T00:01:00Z"}))
   '
   export FAKE_REVIEWER_RESULT="$result"
@@ -389,10 +389,10 @@ echo 'PASS: Codex exact scaffold, ordered multi-AC evidence, v1/v2 identity, pub
 # RED was observed with the previous assertion while the production tool was absent.
 export FAKE_REVIEWER_MODE=approved
 write_result approved
-LOW_FINDING='[{"severity":"low","category":"correctness","file":"README.md","line":1,"title":"Nonblocking improvement","evidence":"fixture","requiredChange":"clarify later"}]' RESULT="$workspace/result.json" ruby -rjson -e 'path = ENV.fetch("RESULT"); value = JSON.parse(File.read(path)); value["findings"] = JSON.parse(ENV.fetch("LOW_FINDING")); File.write(path, JSON.generate(value))'
+LOW_FINDING='[{"severity":"low","category":"correctness","file":"docs/README.md","line":1,"title":"Nonblocking improvement","evidence":"fixture","requiredChange":"clarify later"}]' RESULT="$workspace/result.json" ruby -rjson -e 'path = ENV.fetch("RESULT"); value = JSON.parse(File.read(path)); value["findings"] = JSON.parse(ENV.fetch("LOW_FINDING")); File.write(path, JSON.generate(value))'
 reset_review_requested
 run_review
-assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["verdict"] == "approved" && value["headSha"] =~ /\A[0-9a-f]{40}\z/ && value["findings"] == [{"severity" => "low", "category" => "correctness", "file" => "README.md", "line" => 1, "title" => "Nonblocking improvement", "evidence" => "fixture", "requiredChange" => "clarify later"}]'
+assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["verdict"] == "approved" && value["headSha"] =~ /\A[0-9a-f]{40}\z/ && value["findings"] == [{"severity" => "low", "category" => "correctness", "file" => "docs/README.md", "line" => 1, "title" => "Nonblocking improvement", "evidence" => "fixture", "requiredChange" => "clarify later"}]'
 ISSUE="$issue" HEAD="$head_sha" PACKET_DIGEST="$(digest "$artifact_root/review-packet.json")" REVIEW_DIGEST="$(digest "$artifact_root/review.json")" assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["schemaVersion"] == 1 && value["issue"] == Integer(ENV.fetch("ISSUE")) && value["headSha"] == ENV.fetch("HEAD") && value["primaryModel"] == "codex" && value["reviewerModel"] == "claude" && value["exitStatus"] == 0 && value["reviewPacketDigest"] == ENV.fetch("PACKET_DIGEST") && value["publishedReviewDigest"] == ENV.fetch("REVIEW_DIGEST") && value["validatedResultDigest"] == ENV.fetch("REVIEW_DIGEST")'
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
 [[ "$(cat "$FAKE_REVIEWER_LOG")" == *"--print"* ]] || { echo 'Claude was not invoked noninteractively' >&2; exit 1; }
@@ -408,7 +408,7 @@ assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0]))
 reset_review_requested
 export FAKE_REVIEWER_MODE=approved
 write_result approved
-MEDIUM_FINDING='[{"severity":"medium","category":"correctness","file":"README.md","line":1,"title":"Blocking issue","evidence":"fixture","requiredChange":"fix it"}]' RESULT="$workspace/result.json" ruby -rjson -e 'path = ENV.fetch("RESULT"); value = JSON.parse(File.read(path)); value["findings"] = JSON.parse(ENV.fetch("MEDIUM_FINDING")); File.write(path, JSON.generate(value))'
+MEDIUM_FINDING='[{"severity":"medium","category":"correctness","file":"docs/README.md","line":1,"title":"Blocking issue","evidence":"fixture","requiredChange":"fix it"}]' RESULT="$workspace/result.json" ruby -rjson -e 'path = ENV.fetch("RESULT"); value = JSON.parse(File.read(path)); value["findings"] = JSON.parse(ENV.fetch("MEDIUM_FINDING")); File.write(path, JSON.generate(value))'
 assert_fails 'approved reviewer result with a medium finding is rejected' run_review
 [[ ! -e "$artifact_root/review.json" ]]
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:review"]'
@@ -524,7 +524,7 @@ mkdir -p "$fake_cursor_home"
 touch "$fake_cursor_home/low-finding"
 HOME="$fake_cursor_home" run_review
 rm -f "$fake_cursor_home/low-finding"
-assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); expected = [{"severity" => "low", "category" => "maintainability", "file" => "README.md", "line" => 1, "title" => "Nonblocking Grok improvement", "evidence" => "fixture", "requiredChange" => "clarify later"}]; abort unless value["reviewerModel"] == "cursor-grok-4.6-xhigh" && value["verdict"] == "approved" && value["findings"] == expected'
+assert_json "$artifact_root/review.json" 'value = JSON.parse(File.read(ARGV[0])); expected = [{"severity" => "low", "category" => "maintainability", "file" => "docs/README.md", "line" => 1, "title" => "Nonblocking Grok improvement", "evidence" => "fixture", "requiredChange" => "clarify later"}]; abort unless value["reviewerModel"] == "cursor-grok-4.6-xhigh" && value["verdict"] == "approved" && value["findings"] == expected'
 assert_json "$artifact_root/review-receipt.json" 'value = JSON.parse(File.read(ARGV[0])); abort unless value["primaryModel"] == "codex" && value["reviewerModel"] == "cursor-grok-4.6-xhigh" && value["reviewerLauncher"] == "tools/request-grok-review.sh" && value.keys.none? { |key| key.downcase.include?("account") || key.downcase.include?("token") }'
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:approved-for-merge"]'
 [[ "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"--mode ask"* && "$(cat "$fake_cursor_home/cursor-reviewer.log")" == *"--model cursor-grok-4.6-xhigh"* ]] || { echo 'Grok was not invoked through the exact read-only model route' >&2; exit 1; }

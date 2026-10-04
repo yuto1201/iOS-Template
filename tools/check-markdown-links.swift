@@ -9,7 +9,7 @@ struct LinkFailure {
 
 func markdownFiles(in root: String) -> [String] {
     let fileManager = FileManager.default
-    var files = ["README.md", "AGENTS.md"].filter { fileManager.fileExists(atPath: $0) }
+    var files = ["AGENTS.md"].filter { fileManager.fileExists(atPath: $0) }
 
     for directory in ["specs", "docs"] where fileManager.fileExists(atPath: directory) {
         guard let enumerator = fileManager.enumerator(atPath: directory) else { continue }
@@ -43,6 +43,24 @@ func normalizedDestination(_ rawDestination: String) -> String? {
     return destination.removingPercentEncoding ?? destination
 }
 
+// Text inside a fenced code block is not a Markdown link, so it is blanked before matching.
+// docs/agents-md-approvals.md, for example, quotes AGENTS.md lines whose links resolve from the root.
+func withoutFencedCode(_ contents: String) -> String {
+    var fence: String?
+    return contents.components(separatedBy: "\n").map { line -> String in
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if let open = fence {
+            if trimmed.hasPrefix(open) { fence = nil }
+            return ""
+        }
+        if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+            fence = String(trimmed.prefix(3))
+            return ""
+        }
+        return line
+    }.joined(separator: "\n")
+}
+
 func failures(in files: [String]) throws -> [LinkFailure] {
     let pattern = #"\[[^\]]*\]\(([^)]+)\)"#
     let regex = try NSRegularExpression(pattern: pattern)
@@ -50,7 +68,7 @@ func failures(in files: [String]) throws -> [LinkFailure] {
     var failures: [LinkFailure] = []
 
     for file in files {
-        let contents = try String(contentsOfFile: file, encoding: .utf8)
+        let contents = withoutFencedCode(try String(contentsOfFile: file, encoding: .utf8))
         let range = NSRange(contents.startIndex..<contents.endIndex, in: contents)
 
         for match in regex.matches(in: contents, range: range) {

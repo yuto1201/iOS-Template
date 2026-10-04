@@ -204,7 +204,7 @@ tools/verify-fast-issue.sh \
 - Identity bootstrapまたは純非UIでは、封印済みGoal／Acceptance criteriaとcurrent-Head差分から非UI scope／理由が裏付けられ、関連する確定済みproduct／spec anchorがある一方、UI方向anchorを要求していないこと。live bodyの`UI verification` exact `Not applicable`形式はClaim前に検証し、最終証拠として代用しないこと。Gateを評価するのは依存する後続native UIであること
 - `Application-fixture binding:`候補がある場合は最大一つで、#121と#122を直接Dependenciesへ持ち両方が`state:done`であることをClaim前に確認し、exact six-key canonical JSON、`tracked-fixture-v1`／schema 1、`tools/tests/fixtures/`配下のsafe relative fixture root、fixture内のcommitted `.xcodeproj`、sorted unique tool paths、同一provider namespace、許可stage／profile／scopeと完全なapplication Verificationを満たすこと。`skillRoot/application-fixture.json`がHeadのbinding bytesと改行なしでexact一致し、Base既存fixture／skill／tool／Claude aliasの所有権を後付けしていないこと。Headの`SKILL.md`、全tool、Claude aliasが宣言どおり存在すること。repository-test manifest変更はBaseのschema、head-all設定、既存rule／testをexact保持したsafeなprovider固有追加だけであること。binding外path、live app、root project／workspace、別provider、core workflow／security、delete／rename／gitlink／不正mode／symlinkを拒否すること
 - App Icon Issueでは、ユーザーが明示選択したstable concept IDと確定brief、選択済みPNG、default AppIcon entry、`Config/app-icon.json`のprompt summary／generator／dimensions／asset path／exact SHA-256が一致し、`tools/validate-app-icon.sh`が成功すること。候補やpreviewを製品assetまたはcanonical iOS evidenceとして扱わず、この選択でUI Direction Gateを満たしたと推測しないこと
-- 3D asset authoringを含むIssueでは、共有`ios-3d-assets` routeが使われ、Issue／PR証拠のauthoring modelがexact `gpt-6-astra`であること。Claudeや別のCodex modelが作成・形状変更した3D bytesへfallbackしていないこと。統合・format validation・RealityKit実装・Build／Test・reviewは一般のClaude／Codex経路で検証してよい
+- 3D asset authoringを含むIssueでは、共有`ios-3d-assets` routeが使われ、Issue／PR証拠にauthoringの経路（Tripo、Claude、またはCodex `gpt-6-astra`）が記録されていること（D-071）。統合・format validation・RealityKit実装・Build／Test・reviewは一般のClaude／Codex経路で検証してよい
 
 ### Stage B: Build and unit tests
 
@@ -541,7 +541,7 @@ validatorは `--expected-head` が現在のGit Headと一致し、BaseとHeadが
 }
 ```
 
-文書例外で許可する差分は、top-levelの `README.md` と `AGENTS.md`、`docs/` と `specs/` 以下のMarkdownだけです。NUL-safeなraw Git diffをrename検出なしで読み、追加・削除の両側を個別に検査します。Script、JSON、YAML、設定、asset、symlink、gitlink、実行bitを含むmode/type変更、allowlist外pathが一つでもあれば文書例外は使えません。文書例外はSimulatorやiOS Runtimeを必要としません。
+文書例外で許可する差分は、top-levelの `AGENTS.md`、`docs/` と `specs/` 以下のMarkdown、および旧top-level `README.md`の削除だけです（D-075）。NUL-safeなraw Git diffをrename検出なしで読み、追加・削除の両側を個別に検査します。Script、JSON、YAML、設定、asset、symlink、gitlink、実行bitを含むmode/type変更、allowlist外pathが一つでもあれば文書例外は使えません。文書例外はSimulatorやiOS Runtimeを必要としません。
 
 `issueContract.fetchedAt` と `completedAt` は有効なISO 8601で、どちらも検証時刻から5分を超えて未来であってはいけません。さらに、`completedAt` は `fetchedAt` 以後でなければなりません。
 

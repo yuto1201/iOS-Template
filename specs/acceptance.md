@@ -1,8 +1,8 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 3.3
-Date: 2026-09-17
+Version: 3.4
+Date: 2026-10-05
 
 ## 1. テンプレート完成条件
 
@@ -13,7 +13,7 @@ Date: 2026-09-17
 - [ ] Unit TestとUI Testのサンプルが実行できる。
 - [ ] 日本語と英語を切り替えて主要画面を検証できる。
 - [ ] CodexとClaudeが同じ外部操作権限を持ち、設定済みアカウント／targetを照合する。
-- [ ] ClaudeとCodexの一般開発を同等に許可しつつ、3D asset authoringは共有`ios-3d-assets` skillによりCodexのexact model `gpt-6-astra`だけへrouteされ、利用不能時に別modelへfallbackしない。
+- [ ] ClaudeとCodexの一般開発を同等に許可しつつ、3D asset authoringは共有`ios-3d-assets` skillにより、ユーザーまたはClaudeがブラウザで操作するTripoを標準とし、簡単なモデルや即効性を求める場合だけClaudeまたはCodexの`gpt-6-astra`（reasoning effort `xhigh`）へrouteされる（D-071）。
 - [ ] IssueからSquash Merge・Branch削除までのdry-run testが通る。
 - [ ] Delivery stageに応じて1条件、targeted部分集合、4条件を固定できる。
 - [ ] 条件付きUI Direction Gateが、必要なUI作業だけを明示選択まで停止し、Identity bootstrapと独立した非UI作業を停止しない。
@@ -21,7 +21,7 @@ Date: 2026-09-17
 - [ ] 反対モデルレビューは既定pairを維持し、ユーザー承認をsealed contractへ明示したCodex-primary Issueだけがexact `cursor-grok-4.6-xhigh`の固定read-only fallbackを使える。
 - [ ] 秘密値が追跡ファイル、ログ、Issue／PR本文へ混入していない。
 - [ ] `App Store/`に提出情報の構造と検証scriptがある。
-- [ ] README、仕様、運用文書、skill、tool間のlink検証が通る。
+- [ ] ルートの文書は`AGENTS.md`だけで、`docs/README.md`、仕様、運用文書、skill、tool間のlink検証が通る（D-075）。
 - [ ] 一つのリリース目標をPhase 1〜6で追跡し、Phase、Delivery stage、Delivery profile、Verification scopeを別軸として扱える。
 - [ ] Claim後の同一Issue contractで許可されたVerification／Acceptance criteria改訂を、明示authority、immutable revision chain、証拠失効を伴う専用経路として監査できる。
 
@@ -57,7 +57,7 @@ Date: 2026-09-17
 - App Icon IssueはIdentity bootstrapに依存し、確定済みの目的・方向性とIdentityから同条件・同fidelityのシンプルな画像生成候補をexactly 2案作る。提示済み候補を上書きせず、ユーザーがstable concept IDを一つ明示選択するまで`blocked:user`とする。組合せや重要な変更は新revisionへ再生成して再選択する。
 - App Icon Issueは`bounded direction-neutral` routeで、App Home Screen／Settings等のicon表示をlive UI verificationに記録し、選択が画面階層、navigation、primary-flow interactionを決めずUI Direction Gateを満たさないことをReasonと関連product anchorから復元可能にする。最初のユーザー向けUI `shape`は完了済みApp Icon Issueへ依存し、独立した非UI作業は依存しない。
 - 選択済みアプリアイコンは1024 x 1024の不透明PNGで、system masking前の正方形、単一の認識しやすい主題、単純な背景、少ない形と色を基本とする。`tools/validate-app-icon.sh`が`Config/app-identity.json`、default AppIcon entry、PNGの寸法・透明性、`Config/app-icon.json`のasset path／prompt summary／generator／exact SHA-256を一致検証する。
-- 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更を含むIssueは`ios-3d-assets`を使い、authoring modelをexact `gpt-6-astra`としてIssue／PR証拠へ記録する。Claudeまたは別のCodex modelは要件整理、既存asset統合、形式検証、RealityKit実装、Build／Test、レビューを担当できるが、3D asset bytesをauthoringしない。exact modelが利用不能なら`blocked:environment`とし、別modelの成果へ置換しない。
+- 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更を含むIssueは`ios-3d-assets`を使い、authoringの経路（Tripo、Claude、またはCodex `gpt-6-astra`）をIssue／PR証拠へ記録する。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行う。どの経路の成果も形式検証、統合、RealityKit実装、Build／Test、視覚確認を経てから受け入れる。
 - application releaseに属するIssueは、release identifier、revision、現在Phase、依存する前Phaseの完了記録へ到達できる。Phase 1のscope承認、Phase 3のユーザー完了判断、Phase 4の独立した対応範囲、Phase 5の残件承認、Phase 6の公開権限を別々に記録する。workflow-onlyのテンプレート改善Issueへ架空のapplication Phaseを付けない。
 - 前Phaseが未完了でもread-only調査、選択肢、Issue草案、依存しない作業は可能だが、その結果を次Phaseの実装開始または完了証拠にしない。依存する実装は前Phase完了と現行revisionの再照合まで開始しない。
 - 反対モデルreviewerは既定でCodex primary→Claude、Claude primary→Codexとする。Claudeが利用不能でユーザーがそのIssueに限り明示承認した場合だけ、一つのAC本文先頭にexact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`を置ける。重複、不完全、別primary／model、推測承認はGrok routeを成立させず、silent／automatic fallback、Claude-primary→Grok、primary自身の承認を許可しない。
@@ -135,7 +135,7 @@ provider統合を`TemplateApp`またはrepository rootのXcode projectへ導入�
 
 bindingを持つIssueはapplication経路であり、完全な`Verification`と、`shape / strict / iphone-ja`または`harden / strict / targeted`のどちらかを必須とする。workflow-only、`release`、`fast`／`standard`、`full`、application Verification欠落、`visual:` mappingは拒否する。CLIへ渡すprojectはsealed `project`とexact一致させ、最終`verify.json`でも同じprojectを再照合する。証拠は既存の`changeClassification: application-code`、`executionRoute: xcodebuild-stage`、source tree／project digest、Build、Unit Test、case、Simulator cleanupを維持し、shape／hardenをrelease-readyへ昇格させない。
 
-scoped application diffで許可できるのは、宣言した`fixtureRoot`、`skillRoot`、exact `toolPaths`、同名の`.claude/skills/<provider>`からexact `../../.agents/skills/<provider>`への新規symlink、およびrouteがexactに固定するrepository root `README.md`と`Config/repository-tests.json`だけである。binding外path、`TemplateApp`、root project／workspace、別provider、既存workflow／review／merge／security／authority実装、削除、rename、gitlink、許可外mode、不正symlinkを拒否する。directory名やproviderらしいpathから例外を推測しない。
+scoped application diffで許可できるのは、宣言した`fixtureRoot`、`skillRoot`、exact `toolPaths`、同名の`.claude/skills/<provider>`からexact `../../.agents/skills/<provider>`への新規symlink、およびrouteがexactに固定する`docs/README.md`と`Config/repository-tests.json`だけである。binding外path、`TemplateApp`、root project／workspace、別provider、既存workflow／review／merge／security／authority実装、削除、rename、gitlink、許可外mode、不正symlinkを拒否する。directory名やproviderらしいpathから例外を推測しない。
 
 `skillRoot/application-fixture.json`をprovider ownership markerとし、そのbytesはprefixを除いたcanonical binding JSONと改行なしでexact一致し、Headでregular `100644`でなければならない。Baseでmarker自身を除く`fixtureRoot`／`skillRoot`配下、宣言済み`toolPaths`、同名Claude aliasのいずれかが既に存在する場合、Baseにも同じmarkerがregular `100644`で存在し同じbindingを所有していなければ拒否する。どのsurfaceもBaseに存在しない新規providerではBase markerを拒否し、markerをHeadでprovider surfaceと同時に追加する。Headでは`skillRoot/SKILL.md`、全tool path、同名Claude aliasのmode／bytes／targetも常に検証し、宣言だけの空bindingや既存aliasの流用を許可しない。Claim時のcore名拒否は補助防御であり、このBase ownership照合を置き換えない。
 

@@ -13,7 +13,7 @@ Start at the Git top-level with the approved `ISSUE`, trusted `BASE_SHA`, `BATCH
 
 Require `.artifacts/issues/${ISSUE}/issue-contract.json`, then resolve `HEAD_SHA` from `git rev-parse HEAD`. Confirm Base and Head are distinct commits and Base is an ancestor. Do not reuse an artifact from another Head.
 
-Classify the trusted Base-to-Head range before touching Simulator state. Only `README.md`, `AGENTS.md`, and Markdown under `docs/` or `specs/`, with no rename, gitlink, symlink, or mode/type change, may use the documentation-only path. Let the final validator make the authoritative classification.
+Classify the trusted Base-to-Head range before touching Simulator state. Only `AGENTS.md`, Markdown under `docs/` or `specs/`, and deletion of a legacy root `README.md`, with no rename, gitlink, symlink, or mode/type change, may use the documentation-only path. Let the final validator make the authoritative classification.
 
 ## Select the execution route
 

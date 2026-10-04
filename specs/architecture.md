@@ -1,8 +1,8 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.9
-Date: 2026-09-17
+Version: 1.10
+Date: 2026-10-05
 
 ## 1. 設計原則
 
@@ -11,20 +11,20 @@ Date: 2026-09-17
 - ディレクトリは責務が発生した時点で追加し、空の抽象層を作らない。
 - 仕様、運用、実行手順、生成証拠を混在させない。
 - Codex と Claude の機能名は揃え、ネイティブ形式だけを分ける。
-- 一般開発のClaude／Codex同等性を維持し、3D asset authoringだけをCodex `gpt-6-astra`へ固定する。モデル固有routeは共有skillへ閉じ込め、アプリ本体のarchitectureを実行モデルへ依存させない。
+- 一般開発のClaude／Codex同等性を維持し、3D asset authoringの経路（Tripoを標準とし、簡単なモデルはClaudeまたはCodex `gpt-6-astra`）は共有skillへ閉じ込め、アプリ本体のarchitectureを実行モデルや生成サービスへ依存させない（D-071）。
 
 ## 2. 完成時のルート構成
 
 ```text
 iOS-Template/
 ├── AGENTS.md
-├── README.md
 ├── TemplateApp/
 ├── TemplateAppTests/
 ├── TemplateAppUITests/
 ├── TemplateApp.xcodeproj/
 ├── specs/
 ├── docs/
+│   ├── README.md
 │   ├── agent-contracts/
 │   └── superpowers/plans/
 ├── tools/
@@ -46,6 +46,8 @@ iOS-Template/
 └── supabase/                 # データベースが必要なアプリだけ
 ```
 
+ルートに置く文書は`AGENTS.md`だけとし、`README.md`はフォルダ内の説明が必要な場合（例：`docs/README.md`）だけに置く（D-075）。
+
 `TemplateApp` は最小の SwiftUI アプリ、Unit Test、UI Test だけを持ちます。サンプル機能、ダミー課金、ダミーAPI、使われないサービス層は含めません。
 
 ### 2.1 Identity Bootstrap境界
@@ -54,7 +56,7 @@ iOS-Template/
 
 - `.xcodeproj`、Target、Product、共有Scheme
 - App、Unit Test、UI Testのディレクトリ、Swift型、Module import、Bundle ID
-- `README.md`の実行例、`AGENTS.md`のリポジトリ見出し、現行仕様のアプリ固有パス
+- `docs/README.md`の実行例、`AGENTS.md`のリポジトリ見出し、現行仕様のアプリ固有パス
 - `Config/ownership.yml`の将来のApp Store対象Bundle ID
 - 変換結果を固定する`Config/app-identity.json`
 
@@ -168,7 +170,7 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | `ui-direction` | 現在のユーザーが対象範囲のHTML比較を明示したとき、または対象範囲のUI方向が未確定で、最初のユーザー向けUI、最上位navigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかを行うとき |
 | `supabase-ops` | アプリ仕様でSupabase使用を確定したとき |
 | `ios-media-assets` | 音声、文字起こし、効果音、音声分離、音楽、画像または動画が受け入れ条件になったとき |
-| `ios-3d-assets` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。authoringはCodexのexact model `gpt-6-astra`だけが行う |
+| `ios-3d-assets` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。ユーザーまたはClaudeがブラウザで操作するTripoを標準とし、簡単なモデルや即効性を求める場合はClaudeまたはCodexの`gpt-6-astra`（reasoning effort `xhigh`）へ依頼する（D-071） |
 | `prepare-appstore-assets` | App Store原稿のread-only準備、登録前提の照合、または完全な提出packageを準備するとき |
 | `submit-appstore-release` | CodexまたはClaudeが原稿準備／先行保存と正式提出を振り分け、監査済みpackageを明示許可の下で提出・再開するとき。先行save実装は§9.2の後続Issue、API入出力は§7.2の`asc` adapter |
 

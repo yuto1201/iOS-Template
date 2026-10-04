@@ -133,7 +133,7 @@ scenarios.each do |input, outcome|
 end
 
 contracts = {
-  'README.md' => ['report-template-issue', 'yuto1201/iOS-Template'],
+  'docs/README.md' => ['report-template-issue', 'yuto1201/iOS-Template'],
   'specs/architecture.md' => ['report-template-issue', '派生アプリ'],
   'specs/decisions.md' => ['report-template-issue', 'Related Issue: #67']
 }
@@ -152,6 +152,6 @@ abort 'report-template-issue test manifest entry is missing' unless test&.fetch(
 RUBY
 
 tools/validate-issue-body.sh --type docs "$example" >/dev/null
-swift tools/check-markdown-links.swift "$skill" README.md >/dev/null
+swift tools/check-markdown-links.swift "$skill" docs/README.md >/dev/null
 
 echo 'Template Issue reporting skill checks passed.'

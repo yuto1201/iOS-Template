@@ -24,7 +24,7 @@ Time.iso8601(reviewed_at)
 packet = JSON.parse(File.binread(packet_path))
 findings = if File.exist?(File.join(ENV.fetch("HOME"), "low-finding"))
   [{
-    "severity" => "low", "category" => "maintainability", "file" => "README.md", "line" => 1,
+    "severity" => "low", "category" => "maintainability", "file" => "docs/README.md", "line" => 1,
     "title" => "Nonblocking Grok improvement", "evidence" => "fixture", "requiredChange" => "clarify later"
   }]
 else

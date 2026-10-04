@@ -1037,10 +1037,10 @@ prepare_repo() {
   printf '%s\n' HEAD-SOURCE >"$repo/Sources/App.swift"
   printf '%s\n' HEAD-CONFIG >"$repo/Config/App.xcconfig"
   printf '%s\n' '# Base' >"$repo/docs/base.md"
-  printf '%s\n' '# Base Template' >"$repo/README.md"
+  printf '%s\n' '# Base Template' >"$repo/docs/README.md"
   printf '%s\n' '#!/bin/sh' 'exit 0' >"$repo/tools/tests/test-base-fixture.sh"
   chmod +x "$repo/tools/tests/test-base-fixture.sh"
-  printf '%s' '{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"base","paths":["Config/repository-tests.json","README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-base-fixture.sh","domains":["base"]}]}' \
+  printf '%s' '{"schemaVersion":1,"headAllPaths":[],"headAllPrefixes":[],"domainRules":[{"domain":"base","paths":["Config/repository-tests.json","docs/README.md"],"prefixes":[]}],"tests":[{"path":"tools/tests/test-base-fixture.sh","domains":["base"]}]}' \
     >"$repo/Config/repository-tests.json"
   printf %s '{"schemaVersion":1,"devices":[{"family":"iphone","name":"Fixture iPhone","deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro","runtimeIdentifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-5"},{"family":"ipad","name":"Fixture iPad","deviceTypeIdentifier":"com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M3","runtimeIdentifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-5"}]}' \
     >"$repo/Config/dedicated-simulators.json"
@@ -1065,7 +1065,7 @@ prepare_repo() {
     mkdir -p "$repo/.claude/skills"
     /bin/ln -s ../../.agents/skills/admob-monetization "$repo/.claude/skills/admob-monetization"
   fi
-  git -C "$repo" add -- .gitignore TemplateApp.xcodeproj Sources Config docs/base.md README.md tools/tests
+  git -C "$repo" add -- .gitignore TemplateApp.xcodeproj Sources Config docs/base.md docs/README.md tools/tests
   [[ ! -d "$repo/tools/lib" ]] || git -C "$repo" add -- tools/lib
   [[ ! -d "$repo/.agents" ]] || git -C "$repo" add -- .agents
   [[ ! -d "$repo/.claude" ]] || git -C "$repo" add -- .claude
@@ -1156,7 +1156,7 @@ prepare_application_fixture_repo() {
   /bin/ln -s ../../.agents/skills/admob-monetization "$repo/.claude/skills/admob-monetization"
   printf '%s\n' '{}' >"$repo/tools/tests/fixtures/admob-integration/AdMobFixtureApp.xcodeproj/project.pbxproj"
   printf '%s\n' 'struct AdMobFixtureApp {}' >"$repo/tools/tests/fixtures/admob-integration/Sources/App.swift"
-  printf '%s\n' '# iOS Template' >"$repo/README.md"
+  printf '%s\n' '# iOS Template' >"$repo/docs/README.md"
   printf '%s\n' '#!/bin/sh' 'exit 0' >"$repo/tools/activate-admob-integration.sh"
   printf '%s\n' 'module AdMobActivation; end' >"$repo/tools/lib/admob-activation.rb"
   printf '%s\n' '#!/bin/sh' 'exit 0' >"$repo/tools/tests/test-admob-integration.sh"
