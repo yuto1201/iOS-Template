@@ -45,21 +45,19 @@ final class AdMobBannerSmokeTests: XCTestCase {
             "The network-free banner creative should become visible."
         )
 
-        let scrollView = app.scrollViews["admob.fixture.scroll"]
-        XCTAssertTrue(scrollView.exists)
-        scrollView.swipeUp()
+        XCTAssertTrue(app.scrollViews["admob.fixture.scroll"].exists)
+        let contentEnd = scrollToContentEnd(app)
 
-        let contentEnd = app.staticTexts["admob.fixture.content-end"]
-        XCTAssertTrue(
-            contentEnd.waitForExistence(timeout: 5),
-            "The scroll content should remain reachable above the inset banner."
-        )
-
+        // In portrait neither device has a horizontal safe-area inset, so the container spans the window
+        // and the expected height follows from the window width, not from the host's own frame.
         let window = app.windows.firstMatch
-        XCTAssertGreaterThanOrEqual(creative.frame.height, 50)
-        XCTAssertLessThanOrEqual(creative.frame.height, 90, "The adaptive height must stay within the anchored banner range.")
-        XCTAssertGreaterThan(creative.frame.width, 0)
-        XCTAssertLessThanOrEqual(creative.frame.width, window.frame.width + 1)
+        XCTAssertEqual(creative.frame.width, window.frame.width, accuracy: 1, "The banner container must span the portrait window.")
+        XCTAssertEqual(
+            creative.frame.height,
+            expectedBannerHeight(forContainerWidth: window.frame.width),
+            accuracy: 1,
+            "The banner must take the adaptive height of its container width."
+        )
         XCTAssertLessThanOrEqual(creative.frame.maxY, window.frame.maxY)
         XCTAssertLessThanOrEqual(
             contentEnd.frame.maxY,
@@ -92,8 +90,25 @@ final class AdMobBannerSmokeTests: XCTestCase {
             .completed,
             "The banner should follow a wider landscape container."
         )
-        XCTAssertLessThanOrEqual(creative.frame.maxY, app.windows.firstMatch.frame.maxY)
+        // Both landscape containers are wider than 576 pt, so the expected height is the 90 pt cap even
+        // where horizontal safe-area insets narrow the container below the window width.
+        let landscapeWindow = app.windows.firstMatch.frame
+        XCTAssertEqual(
+            creative.frame.height,
+            expectedBannerHeight(forContainerWidth: landscapeWindow.width),
+            accuracy: 1,
+            "The landscape banner must take the adaptive height of its wider container."
+        )
+        XCTAssertGreaterThanOrEqual(creative.frame.minX, landscapeWindow.minX - 1, "The landscape banner must stay inside the window.")
+        XCTAssertLessThanOrEqual(creative.frame.maxX, landscapeWindow.maxX + 1, "The landscape banner must stay inside the window.")
+        XCTAssertLessThanOrEqual(creative.frame.maxY, landscapeWindow.maxY)
         assertBannerClearsTabBar(app, creative)
+        let landscapeContentEnd = scrollToContentEnd(app)
+        XCTAssertLessThanOrEqual(
+            landscapeContentEnd.frame.maxY,
+            creative.frame.minY + 1,
+            "In landscape the scroll end must stay reachable above the banner."
+        )
 
         app.terminate()
         XCUIDevice.shared.orientation = .portrait
@@ -138,11 +153,8 @@ final class AdMobBannerSmokeTests: XCTestCase {
                 )
             }
 
-            let scroll = app.scrollViews["admob.fixture.scroll"]
-            XCTAssertTrue(scroll.exists)
-            scroll.swipeUp()
-            let contentEnd = app.staticTexts["admob.fixture.content-end"]
-            XCTAssertTrue(contentEnd.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.scrollViews["admob.fixture.scroll"].exists)
+            let contentEnd = scrollToContentEnd(app)
             XCTAssertLessThanOrEqual(
                 contentEnd.frame.maxY,
                 bottomLimit(app),
@@ -178,6 +190,28 @@ final class AdMobBannerSmokeTests: XCTestCase {
                 line: line
             )
         }
+    }
+
+    /// The offline renderer's anchored-adaptive height for a container width, computed independently
+    /// of the host so a fixed-height or oversized host fails.
+    private func expectedBannerHeight(forContainerWidth width: CGFloat) -> CGFloat {
+        min(90, max(50, floor(width) / 6.4)).rounded(.up)
+    }
+
+    /// Scrolls to the end through the fixture's scroll-to-end button. Synthesized swipes do not scroll an
+    /// iPhone in landscape, and `scrollTo(_:anchor: .bottom)` honors the same safe-area inset as a user.
+    private func scrollToContentEnd(_ app: XCUIApplication) -> XCUIElement {
+        let button = app.buttons["admob.fixture.scroll-to-end"]
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        button.tap()
+        let contentEnd = app.staticTexts["admob.fixture.content-end"]
+        XCTAssertTrue(contentEnd.waitForExistence(timeout: 5))
+        let reachable = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in contentEnd.exists && contentEnd.isHittable },
+            object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [reachable], timeout: 5), .completed, "The scroll end must be reachable.")
+        return contentEnd
     }
 
     private func bottomLimit(_ app: XCUIApplication) -> CGFloat {
