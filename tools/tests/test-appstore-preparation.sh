@@ -860,6 +860,16 @@ write_admob_record.call(status: "draft")
 expect_admob.call("an unactivated record", ["admob-activation-record-unresolved"])
 write_admob_record.call(categories: [])
 expect_admob.call("a record without data-use categories", ["admob-activation-record-unresolved"])
+# Malformed nested values are field-level reasons, never a crash of the preparation entrypoint.
+[
+  {"status" => "activated", "activationInput" => "invalid"},
+  {"status" => "activated", "activationInput" => {"privacyDeclaration" => ["advertising-data"]}},
+  {"status" => "activated", "activationInput" => {"privacyDeclaration" => {"dataUseCategories" => "device-id"}}},
+  ["activated"]
+].each_with_index do |malformed, index|
+  File.write(admob_record_path, JSON.generate(malformed))
+  expect_admob.call("malformed activation record #{index}", ["admob-activation-record-unresolved"])
+end
 File.unlink(admob_record_path)
 File.write(privacy_file, YAML.dump(privacy_values))
 privacy_check.call("non-AdMob inventory is unchanged after the record is removed", "confirmed")

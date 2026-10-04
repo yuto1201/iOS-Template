@@ -180,8 +180,10 @@ module IOSTemplate
         return reasons unless record_present
 
         record = @sources.document(ADMOB_ACTIVATION_RECORD)
-        privacy = record.is_a?(Hash) && record["status"] == "activated" && record.dig("activationInput", "privacyDeclaration")
-        categories = privacy.is_a?(Hash) && privacy["dataUseCategories"]
+        # Check each level's type before reading into it, so a malformed record is a reason, not a crash.
+        input = record.is_a?(Hash) && record["status"] == "activated" ? record["activationInput"] : nil
+        privacy = input.is_a?(Hash) ? input["privacyDeclaration"] : nil
+        categories = privacy.is_a?(Hash) ? privacy["dataUseCategories"] : nil
         unless categories.is_a?(Array) && !categories.empty? && categories.all? { |category| category.is_a?(String) && category.match?(/\A[a-z0-9]+(?:-[a-z0-9]+)*\z/) } &&
             [true, false].include?(privacy["appStoreTracking"]) && privacy["sourcePath"].is_a?(String) &&
             privacy["sourceDigest"].is_a?(String) && privacy["sourceDigest"].match?(/\Asha256:[0-9a-f]{64}\z/)
