@@ -96,6 +96,10 @@ printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/agent-contra
 # Deletions whose manifest entries go away too: an exact-only file, the last files under a prefix,
 # and an app-owned override that would otherwise fall back to a template prefix.
 git -C "$template" rm -q .gitignore specs/acceptance.md
+# Executable-mode changes count as changes.
+chmod +x "$template/tools/lib/bounded-command.rb"                                    # template-only mode change
+printf '%s\n' '# template change' >>"$template/tools/lib/delivery-profile.rb"        # app changes its mode: conflict
+git -C "$template" rm -q tools/lib/release-verification.rb                          # app changes its mode: review
 git -C "$template" rm -q -r .codex
 ruby -rjson -e '
   path = ARGV.fetch(0)
@@ -135,6 +139,8 @@ printf '%s\n' 'アプリ側の追記。' >>"$app1/docs/AUTHORITY.md"
 printf '%s\n' 'アプリ側だけの追記。' >>"$app1/docs/references.md"
 printf '%s\n' '' '## D-076: アプリ固有の決定' '' '- Status: 確定' >>"$app1/specs/decisions.md"
 git -C "$app1" rm -q docs/asc-derived-app-adoption.md docs/agent-contracts/appstore-submission.md
+chmod -x "$app1/tools/lib/workflow-json.rb"
+chmod +x "$app1/tools/lib/delivery-profile.rb" "$app1/tools/lib/release-verification.rb"
 commit_all "$app1" app-changes
 before=$(snapshot "$app1")
 
@@ -168,7 +174,9 @@ PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_dige
     "tools/bootstrap-app.swift" => %w[up-to-date none],
     "docs/asc-derived-app-adoption.md" => %w[app-only-change keep],
     "docs/agent-contracts/appstore-submission.md" => %w[conflict manual],
-    ".gitignore" => %w[deleted-in-template delete], "specs/acceptance.md" => %w[app-owned skip]
+    ".gitignore" => %w[deleted-in-template delete], "specs/acceptance.md" => %w[app-owned skip],
+    "tools/lib/bounded-command.rb" => %w[safe-update update], "tools/lib/workflow-json.rb" => %w[app-only-change keep],
+    "tools/lib/delivery-profile.rb" => %w[conflict manual], "tools/lib/release-verification.rb" => %w[deleted-in-template manual]
   }
   expect.each do |path, (status, action)|
     actual = files.fetch(path) { abort "missing #{path}" }.values_at("status", "action")
@@ -176,6 +184,9 @@ PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_dige
   end
   codex = files.select { |path, _| path.start_with?(".codex/") }
   abort "removed prefix members: #{codex.values.map { |f| f.values_at("path", "status", "action") }}" unless !codex.empty? && codex.values.all? { |file| file.values_at("category", "status", "action") == %w[template deleted-in-template delete] }
+  mode = files["tools/lib/bounded-command.rb"]
+  abort "mode-only change: #{mode}" unless mode.values_at("newMode", "baseMode", "appMode") == %w[100755 100644 100644] && mode["newDigest"] == mode["appDigest"]
+  abort "app mode not recorded" unless files["tools/lib/workflow-json.rb"].values_at("appMode", "baseMode") == %w[100644 100755]
   abort "transformed README digest differs" unless files["docs/README.md"]["newDigest"] == ENV.fetch("README_DIGEST")
   abort "identity regression not flagged" unless files["docs/security.md"]["identityRegression"] == true
   abort "decision collision not reported" unless plan["decisions"] == {

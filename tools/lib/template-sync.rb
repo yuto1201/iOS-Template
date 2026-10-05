@@ -31,6 +31,10 @@ module TemplateSync
 
   class Failure < StandardError; end
 
+  # A file as Git stores it: its mode (100644, 100755 or 120000) and its bytes (a symlink's target).
+  # Comparisons use both, so an executable-bit change is a change.
+  Entry = Struct.new(:mode, :bytes)
+
   module_function
 
   def run(argv)
@@ -308,7 +312,7 @@ module TemplateSync
   def unknown_deleted_file(path, app_content)
     {
       "path" => path, "category" => "unknown", "status" => app_content.nil? ? "up-to-date" : "deleted-in-template",
-      "action" => app_content.nil? ? "none" : "manual", "appDigest" => digest(app_content),
+      "action" => app_content.nil? ? "none" : "manual", "appDigest" => digest(app_content), "appMode" => app_content&.mode,
       "reason" => "テンプレートで削除されましたが、基準の版の所有区分が分からないため、削除せずに手で確認します。"
     }
   end
@@ -346,7 +350,7 @@ module TemplateSync
       fail!("could not read #{path} from the target") unless type == "blob" && sha == entries[path][:sha]
       body = output.byteslice(header_end + 1, size.to_i)
       offset = header_end + 1 + size.to_i + 1
-      contents[path] = entries[path][:mode] == "120000" ? "symlink:#{body}" : body
+      contents[path] = Entry.new(entries[path][:mode], body)
     end
     contents
   end
@@ -378,7 +382,7 @@ module TemplateSync
   end
 
   def read_identity(app)
-    text = app[APP_IDENTITY_PATH]
+    text = app[APP_IDENTITY_PATH]&.bytes
     return [nil, ["#{APP_IDENTITY_PATH}がありません。Identity bootstrapが未適用です。"]] if text.nil?
     value = JSON.parse(text.dup.force_encoding(Encoding::UTF_8))
     return [nil, ["#{APP_IDENTITY_PATH}がJSON objectではありません。"]] unless value.is_a?(Hash)
@@ -398,7 +402,7 @@ module TemplateSync
   end
 
   def read_base(root, ownership, app)
-    text = app[BASE_RECORD_PATH]
+    text = app[BASE_RECORD_PATH]&.bytes
     return {"status" => "unknown", "reason" => "#{BASE_RECORD_PATH}がありません。"} if text.nil?
     value = JSON.parse(text.dup.force_encoding(Encoding::UTF_8))
     problem = if !value.is_a?(Hash) || value.keys.sort != BASE_KEYS then "keyが#{BASE_KEYS.join("、")}と一致しません。"
@@ -418,11 +422,13 @@ module TemplateSync
   def read(tree, path)
     return nil if tree.nil?
     full = File.join(tree, path)
-    File.file?(full) && !File.symlink?(full) ? File.binread(full) : (File.symlink?(full) ? "symlink:#{File.readlink(full)}" : nil)
+    return Entry.new("120000", File.readlink(full)) if File.symlink?(full)
+    return nil unless File.file?(full)
+    Entry.new(File.executable?(full) ? "100755" : "100644", File.binread(full))
   end
 
-  def digest(bytes)
-    bytes && "sha256:#{Digest::SHA256.hexdigest(bytes)}"
+  def digest(entry)
+    entry && "sha256:#{Digest::SHA256.hexdigest(entry.bytes)}"
   end
 
   def compare_file(path, entry, new_raw:, new_xf:, base_raw:, base_xf:, app_files:, base_known:, tokens:, identity:, transform_status:)
@@ -439,12 +445,13 @@ module TemplateSync
       reason = transform_status == "identity-unavailable" ? "アプリのIdentityが読めないため、Identity変換できません。" : "Identity変換に失敗しました。"
       current = app_files[path]
       return record.merge("status" => current.nil? ? "missing" : "conflict", "action" => "manual", "reason" => reason,
-                          "appDigest" => digest(current))
+                          "appDigest" => digest(current), "appMode" => current&.mode)
     end
     new = read(transformed ? new_xf : new_raw, path)
     base = base_known ? read(transformed ? base_xf : base_raw, path) : nil
     app = app_files[path]
-    record.merge!("newDigest" => digest(new), "baseDigest" => digest(base), "appDigest" => digest(app))
+    record.merge!("newDigest" => digest(new), "baseDigest" => digest(base), "appDigest" => digest(app),
+                  "newMode" => new&.mode, "baseMode" => base&.mode, "appMode" => app&.mode)
 
     status, action, reason =
       if new.nil?
@@ -467,8 +474,8 @@ module TemplateSync
       end
 
     if transformed && new && %w[add update].include?(action)
-      before = (app || base || "").scan(Regexp.union(tokens)).length
-      if new.scan(Regexp.union(tokens)).length > before
+      before = ((app || base)&.bytes || "").scan(Regexp.union(tokens)).length
+      if new.bytes.scan(Regexp.union(tokens)).length > before
         action = "manual"
         reason = "Identity変換後も元の名前（#{tokens.join("、")}）が増えるため、上書きしません。"
         record["identityRegression"] = true
@@ -498,9 +505,9 @@ module TemplateSync
   end
 
   def decision_report(new_raw, base_raw, app_files)
-    template = decision_entries(read(new_raw, DECISIONS_PATH))
-    base = base_raw ? decision_entries(read(base_raw, DECISIONS_PATH)) : nil
-    app = decision_entries(app_files[DECISIONS_PATH])
+    template = decision_entries(read(new_raw, DECISIONS_PATH)&.bytes)
+    base = base_raw ? decision_entries(read(base_raw, DECISIONS_PATH)&.bytes) : nil
+    app = decision_entries(app_files[DECISIONS_PATH]&.bytes)
     added = base ? template.keys - base.keys : template.keys - app.keys
     collisions = template.keys.select { |id| app.key?(id) && app[id] != template[id] }.sort.map do |id|
       {"id" => id, "template" => template[id], "app" => app[id]}
@@ -521,8 +528,8 @@ module TemplateSync
     rescue JSON::ParserError
       []
     end
-    app_names = names.call(app_files[SIMULATORS_PATH])
-    planned = names.call(read(new_xf, SIMULATORS_PATH))
+    app_names = names.call(app_files[SIMULATORS_PATH]&.bytes)
+    planned = names.call(read(new_xf, SIMULATORS_PATH)&.bytes)
     prefix = identity && "#{identity["displayName"]} "
     problems = []
     problems << "アプリの#{SIMULATORS_PATH}がありません。" if app_names.empty?
