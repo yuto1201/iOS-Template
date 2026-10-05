@@ -726,3 +726,22 @@
   - `AGENTS.md`を書き換えるときは、変更する文面をユーザーに示し、merge前に必ず承認を得て、その承認をIssueに記録する。
 - Consequence: ルートの`README.md`を`docs/README.md`へ移し、その参照を揃える作業と、`AGENTS.md`へこの規則を書く作業は、後続のIssueで行う。そのIssueでの`AGENTS.md`の変更も、この規則に従ってユーザーの承認を得る。
 - Related Issue: #240
+
+## D-076: アプリ内フィードバックを、アプリごとのCloudflare Worker経由で非公開のGitHub Issueに登録する標準機能とする
+
+- Date: 2026-10-05
+- Status: 確定
+- Supersedes: architecture.md §2の、テンプレートのアプリに使われないサービス層を含めないという記述と、§7の「Cloudflare: ドメイン、公開サイト、Workerが必要な場合だけ」、`docs/README.md`の、外部サービスをFoundationのアプリ本体へ組み込まないという記述のうち、アプリ内フィードバックの部分を置き換える。iOS-PayCycleのD-044とD-046はそのアプリの決定であり、変更しない。
+- Context: iOS-PayCycleは、利用者がアプリから匿名で送った不具合や要望を、Cloudflare WorkerがGitHub Appで非公開リポジトリのIssueにする仕組みを持ち、動いている。ユーザーは2026-10-05に、同じやり方をテンプレートで実装し、新しいアプリを作ったらフィードバック用のリポジトリを作ってCloudflareで起票できるようにすると決めた。
+- Decision:
+  - アプリ内フィードバックを全アプリの標準機能とし、テンプレートのアプリにも入れる。
+  - 送信の流れ：アプリ → アプリごとのCloudflare Worker（Worker名は`<appSlug>-feedback`、hostは`workers.dev`）→ 共通のGitHub App → 非公開リポジトリ`<GitHubのlogin>/<moduleName>-feedback`のIssue。Issueのlabelは`feedback`と種類（`bug`、`request`、`other`）とする。
+  - GitHub Appは全アプリで一つを共有する。権限はIssues: Read and writeだけで、webhookはなく、フィードバック用のリポジトリだけにinstallする。App ID、installation ID、署名鍵はWorkerのsecretにだけ置き、アプリには秘密値を置かない。Workerが取るinstallation tokenは、そのアプリのフィードバック用リポジトリだけに絞る。
+  - 送る内容は、種類（不具合・要望・その他）、本文（1〜2000文字）、アプリのversionとbuild、OSのversion、端末機種、言語の7項目だけとし、リクエスト全体を8KBまでとする。アプリのデータと連絡先は送らない。返信の手段は持たない。
+  - 回数制限は、送信元IPごとに60秒に1件（数えられないときは通す）と、そのWorker全体で1日（UTC）100件（数えられないときは止める）とする。送信元IPごとの数は、同じCloudflare accountのほかのアプリと共有しない。IPアドレスは回数制限の鍵にだけ使い、IPアドレスと本文は保存もログもしない。
+  - 画面：入口から開くsheetで、種類と本文を入れて送る。送信中、完了、失敗（通信なし、回数制限、サーバーエラー）を示し、失敗したら本文と種類を残して再送できる。完了と失敗の表示へVoiceOverのフォーカスを移す。送信先が設定されていないビルドでは入口を出さない。テンプレートのアプリには設定画面がないため入口をルート画面に置き、各アプリは自分の設定画面のサポート欄へ移す。
+  - プライバシー：本文を「カスタマーサポート」、端末情報（アプリとOSのversion、端末機種、言語）を「その他の診断データ」とし、ユーザーに関連付けず、トラッキングなし、目的はアプリの機能として、`PrivacyInfo.xcprivacy`とApp Store ConnectのApp Privacyに申告する。プライバシーポリシーにも、送る内容、送らない内容、CloudflareとGitHubで扱うこと、IPアドレスの使い方を書く。
+  - 新しいアプリの準備：作成時に、フィードバック用リポジトリとlabelの作成、共通GitHub Appのinstall、Workerのsecretの登録とdeploy、送信先hostの設定を行う。リポジトリの作成、secretの登録、deployは、そのアプリのIssueの外部操作として、設定済みのaccountと対象を確かめ、ユーザーの承認を得て行う。GitHub Appの作成（一度だけ）、installと、署名鍵の発行はユーザーが行う。
+  - 構成：アプリ側は`Features/Feedback/`に置く。Workerのひな形はテンプレートのskillに置き、準備toolがアプリのrepositoryの`Services/feedback-worker/`へアプリの値で書き出す。
+- Consequence: Workerのひな形、テンプレートのアプリの画面と送信、新しいアプリの準備toolは、後続のIssue（#249、#250、#251）で作る。既存の派生アプリへの導入は、各アプリのIssueかテンプレートの取り込み（D-074）で行う。
+- Related Issue: #248

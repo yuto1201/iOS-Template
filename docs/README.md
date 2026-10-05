@@ -188,7 +188,9 @@ HTMLは情報階層や操作仮説を早く比較するための資料です。�
 
 ## 条件付き統合と秘密管理
 
-Supabase、AdMob、ElevenLabs、Cloudflare、分析、StoreKit、通知などは Foundation のアプリ本体へ組み込まれていません。必要性を確定仕様と Issue の受け入れ条件に明記した場合だけ、別 Issue で有効化します。テンプレートの状態では root `supabase/`、外部 SDK、認証済み接続を持たず、不要なサービスの保守や権限を発生させません。
+Supabase、AdMob、ElevenLabs、分析、StoreKit、通知などは Foundation のアプリ本体へ組み込まれていません。必要性を確定仕様と Issue の受け入れ条件に明記した場合だけ、別 Issue で有効化します。テンプレートの状態では root `supabase/`、外部 SDK、認証済み接続を持たず、不要なサービスの保守や権限を発生させません。
+
+- アプリ内フィードバックは例外で、全アプリが標準で持ちます。利用者が匿名で送った不具合や要望を、アプリごとのCloudflare Workerが共通のGitHub Appで非公開リポジトリ`<GitHubのlogin>/<moduleName>-feedback`のIssueにします。アプリには秘密値を置かず、送信先が設定されるまで入口を出しません。新しいアプリの作成時に、フィードバック用リポジトリ、Worker、送信先を用意します（[アプリ内フィードバック](../specs/product.md#45-アプリ内フィードバック)、D-076）。
 
 - データベース、認証、同期、Storageが必要なアプリでは [Supabase operations skill](../.agents/skills/supabase-ops/SKILL.md)を使用します。`Status: 確定`かつ`Supabase: required`の仕様だけが有効化でき、`supabase/migrations/`を唯一のスキーマ履歴としてRLSとPolicyを同時に追加します。CodexとClaudeのどちらもlocal／remote作業を実行できますが、remoteではOrganization IDとProject Refを照合します。
 - 広告収益化を確定した派生アプリだけが、[AdMob monetization skill](../.agents/skills/admob-monetization/SKILL.md)と[条件付きAdMob契約](../specs/product.md#41-条件付きadmob収益化)に従ってUMPと非trackingのanchored adaptive bannerを有効化できます。`tools/activate-admob-integration.sh --root <app-root> --input <confirmed-input.json>`は未決入力を変更前に拒否し、公式SPMのexact version、Debug demo／UI Test offline／Release固有ID、consent／eligibility／banner境界を派生アプリだけへ原子的に追加します。適用後は`tools/validate-admob-integration.sh --root <app-root>`でdriftを検査します。未採用出力にSDK／設定／広告sourceを追加せず、shapeのoffline成功をrelease-readyやlive配信成功へ読み替えません。AdMob Console、契約／支払／税務、app-ads.txt、App Store Connectは別の外部操作です。

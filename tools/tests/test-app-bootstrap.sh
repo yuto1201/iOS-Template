@@ -566,7 +566,7 @@ PY
     echo 'bootstrap changed one or more historical plan files' >&2
     exit 1
   }
-  grep -Fqx '`TemplateApp` は最小の SwiftUI アプリ、Unit Test、UI Test だけを持ちます。サンプル機能、ダミー課金、ダミーAPI、使われないサービス層は含めません。' "$fixture/specs/architecture.md" || {
+  grep -Fqx '`TemplateApp` は最小の SwiftUI アプリ、Unit Test、UI Test と、全アプリ標準のアプリ内フィードバック（D-076）だけを持ちます。サンプル機能、ダミー課金、ダミーAPI、使われないサービス層は含めません。' "$fixture/specs/architecture.md" || {
     echo 'bootstrap removed the explicit source-provenance explanation' >&2
     exit 1
   }
