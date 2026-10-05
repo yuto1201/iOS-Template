@@ -59,6 +59,18 @@ commit_all "$template" unclassified
 expect_failure unclassified-file 'unclassified template files: UNCLASSIFIED.txt' "$template/tools/template-sync.sh" check
 git -C "$template" reset -q --hard "$base"
 
+# Bootstrap rewrites docs/README.md, so ownership must keep transforming it.
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  manifest = JSON.parse(File.read(path))
+  manifest["rules"].each { |rule| rule["paths"].delete("docs/README.md") if rule["category"] == "identity" }
+  manifest["rules"].find { |rule| rule["category"] == "template" }["paths"] << "docs/README.md"
+  File.write(path, JSON.pretty_generate(manifest) + "\n")
+' "$template/tools/template-sync/ownership.json"
+commit_all "$template" untransformed-readme
+expect_failure untransformed-identity 'bootstrap rewrites docs/README.md' "$template/tools/template-sync.sh" check
+git -C "$template" reset -q --hard "$base"
+
 # --- template-side changes since the base ----------------------------------------------------
 printf '%s\n' 'テンプレートの手順を追記した。' >>"$template/docs/workflow.md"          # safe update
 printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/AUTHORITY.md"                # conflict
