@@ -1,7 +1,7 @@
 # テンプレート構成
 
 Status: 確定  
-Version: 1.10
+Version: 1.11
 Date: 2026-10-05
 
 ## 1. 設計原則
@@ -43,12 +43,13 @@ iOS-Template/
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
 │   └── pull_request_template.md
+├── Services/feedback-worker/ # 作成したアプリだけ。フィードバックの準備toolが書き出す（D-076）
 └── supabase/                 # データベースが必要なアプリだけ
 ```
 
 ルートに置く文書は`AGENTS.md`だけとし、`README.md`はフォルダ内の説明が必要な場合（例：`docs/README.md`）だけに置く（D-075）。
 
-`TemplateApp` は最小の SwiftUI アプリ、Unit Test、UI Test だけを持ちます。サンプル機能、ダミー課金、ダミーAPI、使われないサービス層は含めません。
+`TemplateApp` は最小の SwiftUI アプリ、Unit Test、UI Test と、全アプリ標準のアプリ内フィードバック（D-076）だけを持ちます。サンプル機能、ダミー課金、ダミーAPI、使われないサービス層は含めません。
 
 ### 2.1 Identity Bootstrap境界
 
@@ -83,6 +84,8 @@ Asset Catalogへはsystem mask前の正方形かつ不透明な1024 x 1024 PNG�
 TemplateApp/
 ├── TemplateAppApp.swift
 ├── ContentView.swift
+├── Features/Feedback/        # アプリ内フィードバック（D-076）
+├── PrivacyInfo.xcprivacy
 ├── Assets.xcassets/
 ├── Localizable.xcstrings
 └── Preview Content/          # Xcode が作成した場合だけ保持
@@ -193,7 +196,7 @@ Codex は `.codex/agents/*.toml`、Claude は `.claude/agents/*.md` を使いま
 
 - GitHub: Issue、PR、レビュー記録、Squash Merge
 - Supabase: 認証・DB・Storageが必要な場合だけ
-- Cloudflare: ドメイン、公開サイト、Workerが必要な場合だけ
+- Cloudflare: ドメイン、公開サイト、Workerが必要な場合。全アプリ標準のアプリ内フィードバックのWorker（[§7.4](#74-アプリ内フィードバック境界)）を含む
 - Linear: Issue／Project連携が必要な場合だけ
 - Vercel: Web配信または補助サービスのdeployが必要な場合だけ
 - ElevenLabs: 承認済みの音声・画像・動画処理が必要な場合だけ
@@ -260,6 +263,15 @@ Unit Test／UI TestはStoreKit configuration fileとStoreKit Testingのnetwork-f
 [#110のread-only source preparation](#91-原稿の正本と登録準備)は、IAPのproduct ID、種別、価格、territory、availability、restore、Offer Code適用可否を、確定仕様、StoreKit実装とtestの証拠、observed productionの状態から得る入力として扱う。現行のsource preparationのcode inventoryはAdMob／UMPの使用だけを検出し、StoreKitの使用を検出しない。この検出の追加は後続Issueとし、それまでIAP項目は利用者の確定値とreadbackだけで扱う。App Store Connectでのproduct作成、価格、税務、契約、IAP審査提出、Offer Code発行はこの境界の外である。
 
 この節と[D-064](decisions.md#d-064-非消耗型の買い切り権利を条件付きstorekit-2境界として定める)は契約の確定だけを行う。StoreKit code、skill、activation tool、validator、StoreKit configuration fileと、そのBuild／Test／Simulatorの証拠は、後続Issueのcurrent-Head成果が揃うまで未実装・未検証である。
+
+### 7.4 アプリ内フィードバック境界
+
+[プロダクト方針 §4.5](product.md#45-アプリ内フィードバック)を、次の4つの部分で実現する（D-076）。
+
+- **アプリ**：`Features/Feedback/`が、入力の検証、送る内容の組み立て、送信、sheetの状態を持つ。送信先のhostはビルド設定から読み、未設定なら入口を出さない。通信は認証情報とcookieを使わない。UI Testは通信しない送信の代わりを使う。
+- **Worker**：アプリごとのCloudflare Worker。`POST /v1/feedback`だけを受け、入力の検証、送信元IPごとと1日の回数制限、GitHub Appのinstallation tokenでのIssue作成を行う。秘密値はWorkerのsecretにだけ置き、IPアドレスと本文を保存もログもしない。テンプレートはWorkerのひな形とテストをskillに持ち、アプリの値（リポジトリ、Worker名、回数制限のnamespace）は準備toolが書き出す。
+- **GitHub**：全アプリで共有するGitHub App（Issues: Read and writeだけ）と、アプリごとの非公開リポジトリ`<GitHubのlogin>/<moduleName>-feedback`。
+- **準備tool**：新しいアプリの作成時に、リポジトリとlabel、Workerの書き出し、secretの登録とdeploy、送信先hostの設定を行う。外部操作はそのアプリのIssueで、設定済みのaccountと対象を確かめ、ユーザーの承認を得て行う。
 
 ## 8. Supabase構成
 

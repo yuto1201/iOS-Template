@@ -1,8 +1,8 @@
 # プロダクト方針
 
 Status: 確定  
-Version: 2.2
-Date: 2026-10-04
+Version: 2.3
+Date: 2026-10-05
 
 ## 1. 目的
 
@@ -50,10 +50,11 @@ ClaudeとCodexは一般の仕様化、実装、検証、レビュー、設定済
 2. Identity Bootstrap Issue と専用 Branch/worktree を作成する。
 3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換し、`tools/setup-dedicated-simulators.sh`でそのリポジトリ専用のSimulator（`<表示名> iPhone 17 Pro Max`と`<表示名> iPad Pro 13-inch (M5)`）を作成する。
 4. Build、Test、標準Simulatorマトリクス、反対モデルレビュー、Squash Mergeを完了する。
-5. Identity Bootstrapに依存するApp Icon IssueとSystem Experiences Planning Issueを作成する。両Issueはwrite-setが独立すれば並行できる。前者は同じ確定briefから画像生成したシンプルな2案を提示し、ユーザーが明示選択した1案だけをAppIconへ組み込む。
-6. System Experiences Planning IssueでWidget、Live Activities、Dynamic Island、Controls、Siri／App Intentsの5面を個別評価し、各面を`adopt-now`、`defer`、`not-applicable`、`blocked:user`へ分類する。主要Feature Issueの計画・Claim前に結果を確定し、採用面のfoundation／surface実装依存を作る。
-7. 変換済みIdentity、選択済みアプリアイコン、確定したsystem-experience計画を基準にアプリ固有仕様を確定し、続くnative UIごとに[条件付きUI Direction Gate](development-stages.md#11-適用判定)の明示指示と通常triggerを評価する。Identity bootstrap、アプリアイコン選択、system-experience計画自体は画面階層、navigationまたは主要flowを決めない。
-8. 最初のUI IssueはApp Icon Issueの完了後に進める。採用するsystem UIはSystem Experiences Planning Issueへ、UI Direction Gateに依存するUI Issueは選択結果を記録した仕様変更へ依存する。依存しない非UI Issueは並行して進められる。
+5. [アプリ内フィードバック](#45-アプリ内フィードバック)の準備として、フィードバック用の非公開リポジトリ、共通GitHub Appのinstall、アプリのCloudflare Worker、送信先hostを用意する。リポジトリの作成とdeployは外部操作として、そのアプリのIssueでユーザーの承認を得て行う。
+6. Identity Bootstrapに依存するApp Icon IssueとSystem Experiences Planning Issueを作成する。両Issueはwrite-setが独立すれば並行できる。前者は同じ確定briefから画像生成したシンプルな2案を提示し、ユーザーが明示選択した1案だけをAppIconへ組み込む。
+7. System Experiences Planning IssueでWidget、Live Activities、Dynamic Island、Controls、Siri／App Intentsの5面を個別評価し、各面を`adopt-now`、`defer`、`not-applicable`、`blocked:user`へ分類する。主要Feature Issueの計画・Claim前に結果を確定し、採用面のfoundation／surface実装依存を作る。
+8. 変換済みIdentity、選択済みアプリアイコン、確定したsystem-experience計画を基準にアプリ固有仕様を確定し、続くnative UIごとに[条件付きUI Direction Gate](development-stages.md#11-適用判定)の明示指示と通常triggerを評価する。Identity bootstrap、アプリアイコン選択、system-experience計画自体は画面階層、navigationまたは主要flowを決めない。
+9. 最初のUI IssueはApp Icon Issueの完了後に進める。採用するsystem UIはSystem Experiences Planning Issueへ、UI Direction Gateに依存するUI Issueは選択結果を記録した仕様変更へ依存する。依存しない非UI Issueは並行して進められる。
 
 アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、選択された実行モデルはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
 
@@ -147,6 +148,19 @@ storeを開けないときは、自動削除、別fileへの置換、空storeで
 permissionは起動直後に要求せず、利用者が通知を有効にする操作をしたときだけ要求する。未決定、拒否、許可を区別して表示し、拒否された後はシステム設定のアプリ通知画面への導線だけを出す。予約はアプリが所有するrequest identifierのprefixに限って削除・再登録し、所有外のrequestに触れない。OSのpending上限（Apple公式の現行値を作業時に確認する）から所有外のrequestを差し引いた範囲で予約し、入りきらない分は部分予約として報告する。同時の再予約要求は結合し、時刻とtimezone／calendarの変更時に再計算する。lock screenに出る本文へ金額、個人情報、秘密を含めない。
 
 ローカル通知はSystem Experiences Planningの5面に含めない独立した条件付き能力であり、D-051の対象を変えない。remote push、通知service extension、Live Activities／Widgetはこの採用に含めない。決定の経緯は[D-068](decisions.md#d-068-ローカル通知を派生アプリの明示採用時だけ使う条件付き能力として定める)を参照する。
+
+### 4.5 アプリ内フィードバック
+
+全アプリは、利用者がアプリから匿名で不具合や要望を送れる機能を標準で持ちます。テンプレートのアプリにも入っています。送ったフィードバックは、アプリごとのCloudflare Workerが、共通のGitHub Appを使って、アプリごとの非公開リポジトリ`<GitHubのlogin>/<moduleName>-feedback`にIssueとして登録します。アプリには秘密値を置きません。
+
+- 送る内容は、種類（不具合・要望・その他）、本文（1〜2000文字）、アプリのversionとbuild、OSのversion、端末機種、言語だけです。アプリのデータと連絡先は送らず、返信の手段も持ちません。リクエスト全体は8KBまでです。
+- Workerは、送信元IPごとに60秒に1件、全体で1日100件まで受け付けます。IPアドレスは回数制限にだけ使い、IPアドレスと本文は保存もログもしません。Issueのlabelは`feedback`と種類です。
+- 画面は、入口から開くsheetで種類と本文を入れて送ります。送信中、完了、失敗（通信なし、回数制限、サーバーエラー）を示し、失敗したときは本文と種類を残して再送できます。完了と失敗の表示へVoiceOverのフォーカスを移します。送信先が設定されていないビルドでは入口を出しません。
+- テンプレートのアプリには設定画面がないため、入口をルート画面に置きます。各アプリは、自分の設定画面のサポート欄へ移します。
+- 本文は「カスタマーサポート」、端末情報は「その他の診断データ」として、ユーザーに関連付けず、トラッキングなし、目的はアプリの機能として、`PrivacyInfo.xcprivacy`とApp Store ConnectのApp Privacyに申告します。プライバシーポリシーにも書きます。
+- 新しいアプリでは、作成時にフィードバック用リポジトリとlabel、共通GitHub Appのinstall、Workerのsecretの登録とdeploy、送信先hostの設定を行います。GitHub Appの作成（一度だけ）、install、署名鍵の発行はユーザーが行います。
+
+決定の経緯は[D-076](decisions.md#d-076-アプリ内フィードバックをアプリごとのcloudflare-worker経由で非公開のgithub-issueに登録する標準機能とする)を参照してください。
 
 ## 5. 音声素材方針
 

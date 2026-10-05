@@ -1,7 +1,7 @@
 # 受け入れ条件
 
 Status: 確定  
-Version: 3.4
+Version: 3.5
 Date: 2026-10-05
 
 ## 1. テンプレート完成条件
@@ -266,3 +266,15 @@ AppLibrary法務ページへの引き継ぎは、次を満たす。
 - [ ] 広告非表示に使う場合、entitlement layerはAdMobの`adFreeEntitlement`入力と`hasAdFreeEntitlement`注入点だけへ接続し、consent、eligibility、広告request、collapseの責務を変えない。起動時は初回の権利確認が終わるまで広告eligibilityの初回評価を始めない。
 - [ ] Debug／UI TestはStoreKit configuration fileとnetwork-free fixtureで各状態を決定的に検証し、StoreKit Testing、sandbox購入、App Store Connectのproduct状態、審査結果を別々に報告する。
 - [ ] App Store Connectでのproduct作成、価格、税務、契約、IAP審査提出、Offer Code発行は、個別のoperation／Executor／account／target／必要なユーザー承認／readbackなしに実行されない。
+
+## 11. アプリ内フィードバック
+
+[プロダクト方針 §4.5](product.md#45-アプリ内フィードバック)と[構成 §7.4](architecture.md#74-アプリ内フィードバック境界)を正本とする。
+
+- [ ] テンプレートのアプリと、そこから作ったアプリが、匿名のフィードバック画面と送信を持つ。送信先が設定されていないビルドでは入口が出ない。
+- [ ] 送る内容は種類、本文（1〜2000文字）、アプリのversionとbuild、OSのversion、端末機種、言語の7項目だけで、リクエスト全体は8KBまでである。アプリのデータ、連絡先、認証情報、cookieを送らない。
+- [ ] 送信中、完了、失敗（通信なし、回数制限、サーバーエラー）を区別して示し、失敗後も本文と種類が残って再送できる。完了と失敗の表示へVoiceOverのフォーカスが移る。
+- [ ] Workerは入力を検証し、送信元IPごとに60秒に1件、全体で1日100件に制限する。IPアドレスと本文を保存もログもせず、GitHub Appの秘密値はWorkerのsecretにだけ置く。installation tokenはそのアプリのフィードバック用リポジトリだけに絞る。
+- [ ] Workerのひな形には特定のアプリの名前、リポジトリ、回数制限のnamespaceが残らず、アプリごとの値は準備toolが書き出す。
+- [ ] `PrivacyInfo.xcprivacy`、App Store ConnectのApp Privacy、プライバシーポリシーが、本文を「カスタマーサポート」、端末情報を「その他の診断データ」として、関連付けなし、トラッキングなし、目的はアプリの機能と申告する。
+- [ ] 新しいアプリの準備は、設定済みのGitHubとCloudflareのaccountと対象を確かめてから行い、リポジトリの作成、secretの登録、deployをユーザーの承認なしに行わない。秘密値を表示、ファイル、log、Issue、PRに残さない。
