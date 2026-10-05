@@ -428,6 +428,11 @@ module TemplateSync
         elsif app == base then ["deleted-in-template", "delete", "テンプレートで削除され、アプリ側は基準のままです。"]
         else ["deleted-in-template", "manual", "テンプレートで削除されましたが、アプリ側に変更があります。"]
         end
+      elsif app.nil? && base_known && !base.nil?
+        # The file existed at the base, so its absence is an app-side deletion, not a missing file.
+        if new == base then ["app-only-change", "keep", "アプリ側で削除したファイルなので、戻しません。"]
+        else ["conflict", "manual", "アプリ側で削除されましたが、テンプレート側は変わっています。"]
+        end
       elsif app.nil? then ["missing", "add", "アプリにありません。"]
       elsif app == new then ["up-to-date", "none", "テンプレートと一致しています。"]
       elsif !base_known then ["conflict", "manual", "基準commitが不明なため、アプリ側の変更かテンプレート側の更新かを判定できません。"]

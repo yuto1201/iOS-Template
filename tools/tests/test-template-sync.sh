@@ -85,6 +85,7 @@ printf '%s\n' '旧名TemplateAppを含む追記。' >>"$template/docs/security.m
 printf '%s\n' '' '## D-076: テンプレートの新しい決定' '' '- Status: 確定' >>"$template/specs/decisions.md"
 printf '%s\n' 'テンプレートのproduct変更。' >>"$template/specs/product.md"          # app-owned
 printf '%s\n' 'テンプレートの計画変更。' >>"$template/docs/superpowers/plans/README.md" # template-only
+printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/agent-contracts/appstore-submission.md" # app deleted it: conflict
 commit_all "$template" new
 
 # --- target repositories ---------------------------------------------------------------------
@@ -113,6 +114,7 @@ commit_all "$app1" created
 printf '%s\n' 'アプリ側の追記。' >>"$app1/docs/AUTHORITY.md"
 printf '%s\n' 'アプリ側だけの追記。' >>"$app1/docs/references.md"
 printf '%s\n' '' '## D-076: アプリ固有の決定' '' '- Status: 確定' >>"$app1/specs/decisions.md"
+git -C "$app1" rm -q docs/asc-derived-app-adoption.md docs/agent-contracts/appstore-submission.md
 commit_all "$app1" app-changes
 before=$(snapshot "$app1")
 
@@ -143,7 +145,9 @@ PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_dige
     "specs/product.md" => %w[app-owned skip], "TemplateApp/ContentView.swift" => %w[app-owned skip],
     "docs/superpowers/plans/README.md" => %w[template-only skip], "tools/template-sync.sh" => %w[template-only skip],
     "AGENTS.md" => %w[up-to-date none], "Config/dedicated-simulators.json" => %w[up-to-date none],
-    "tools/bootstrap-app.swift" => %w[up-to-date none]
+    "tools/bootstrap-app.swift" => %w[up-to-date none],
+    "docs/asc-derived-app-adoption.md" => %w[app-only-change keep],
+    "docs/agent-contracts/appstore-submission.md" => %w[conflict manual]
   }
   expect.each do |path, (status, action)|
     actual = files.fetch(path) { abort "missing #{path}" }.values_at("status", "action")
@@ -160,9 +164,14 @@ PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_dige
   abort "simulators: #{sims}" unless sims["problems"] == [] && sims["planned"].all? { |name| name.start_with?("Garden Notes ") } && sims["app"] == sims["planned"]
   abort "approvals: #{plan["approvals"]}" unless plan["approvals"].length == 1 && plan["approvals"][0].include?("D-074")
 '
+# App-side deletions must never be restored by the plan.
+grep -Fq -- '- 追加: `docs/asc-derived-app-adoption.md`' "$work/report1/plan.md" && { echo 'plan restores an app-side deletion' >&2; exit 1; }
+grep -Fq -- '- 追加: `docs/agent-contracts/appstore-submission.md`' "$work/report1/plan.md" && { echo 'plan restores a deleted, template-changed file' >&2; exit 1; }
 for text in '## 適用する変更' '- 追加: `docs/new-guide.md`' '- 更新: `docs/workflow.md`' '- 削除: `docs/goldie.md`' \
   '## 上書きしないファイル' '`docs/references.md`' '## 手で確認するファイル' '`docs/AUTHORITY.md`（衝突する）' \
-  '`docs/security.md`' '番号が衝突しています' '## 必要な承認' 'このレポートは取り込み先へ何も書き込んでいません。'; do
+  '`docs/security.md`' '番号が衝突しています' '## 必要な承認' 'このレポートは取り込み先へ何も書き込んでいません。' \
+  '- `docs/asc-derived-app-adoption.md`: アプリ側で削除したファイルなので、戻しません。' \
+  '- `docs/agent-contracts/appstore-submission.md`（衝突する）: アプリ側で削除されましたが'; do
   grep -Fq -- "$text" "$work/report1/plan.md" || { echo "plan.md lacks: $text" >&2; exit 1; }
 done
 expect_failure existing-output '--output-dir already exists' \
