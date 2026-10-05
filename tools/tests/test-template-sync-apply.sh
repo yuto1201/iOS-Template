@@ -61,6 +61,13 @@ git -C "$template" init -q
 commit_all "$template" base
 base=$(git -C "$template" rev-parse HEAD)
 
+# A base recorded before the ownership manifest existed: nothing it deleted can be classified.
+git -C "$template" checkout -q -b legacy-base
+git -C "$template" rm -q tools/template-sync/ownership.json
+commit_all "$template" legacy-base
+legacy=$(git -C "$template" rev-parse HEAD)
+git -C "$template" checkout -q -
+
 printf '%s\n' 'テンプレートの手順を追記した。' >>"$template/docs/workflow.md"           # safe update
 printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/AUTHORITY.md"                 # conflict
 printf '%s\n' '# New guide' '' 'テンプレートが追加した文書。' >"$template/docs/new-guide.md"  # missing
@@ -73,7 +80,20 @@ printf '%s\n' 'テンプレートのproduct変更。' >>"$template/specs/product
 printf '%s\n' 'テンプレートの計画変更。' >>"$template/docs/superpowers/plans/README.md" # template-only
 next_decision=$(ruby -e 'ids = File.read(ARGV[0]).scan(/^## D-(\d{3,}):/).flatten.map(&:to_i); printf("D-%03d", ids.max + 1)' "$template/specs/decisions.md")
 printf '%s\n' '' "## $next_decision: テンプレートの新しい決定" '' '- Status: 確定' '- Decision: 同期testで追記する。' >>"$template/specs/decisions.md"
+# Deletions whose ownership entries go away too: the last files under a template prefix, a template
+# exact path that would otherwise fall under the app-owned "App Store/" prefix, and an app-owned file.
+git -C "$template" rm -q -r .codex 'App Store/screenshots/README.md' specs/acceptance.md
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  manifest = JSON.parse(File.read(path))
+  manifest["rules"].each do |rule|
+    rule["paths"] -= ["App Store/screenshots/README.md", "specs/acceptance.md"]
+    rule["prefixes"] -= [".codex/"]
+  end
+  File.write(path, JSON.pretty_generate(manifest) + "\n")
+' "$template/tools/template-sync/ownership.json"
 commit_all "$template" new
+codex_files=$(git -C "$template" ls-tree -r --name-only "$base" .codex | tr '\n' ' ')
 new=$(git -C "$template" rev-parse HEAD)
 
 bootstrap_binary="$work/bootstrap-app"
@@ -81,12 +101,12 @@ swiftc -o "$bootstrap_binary" "$repo_root/tools/bootstrap-app.swift"
 
 # A target created from the base with a recorded base commit, on a template sync branch.
 make_app() {
-  local app=$1
+  local app=$1 commit=${2:-$base}
   mkdir -p "$app"
-  git -C "$template" archive "$base" | tar -x -C "$app"
+  git -C "$template" archive "$commit" | tar -x -C "$app"
   "$bootstrap_binary" apply --root "$app" --manifest "$app/Config/template-identity.json" \
     --display-name 'Garden Notes' --module-name GardenNotes --app-slug garden-notes --bundle-id com.yuto.GardenNotes >/dev/null
-  (cd "$app" && BASE="$base" ruby -rjson -e '
+  (cd "$app" && BASE="$commit" ruby -rjson -e '
     File.write("Config/template-base.json", JSON.pretty_generate({
       "baseCommit" => ENV.fetch("BASE"), "method" => "created", "recordedAt" => "2026-10-05T00:00:00Z",
       "schemaVersion" => 1, "templateRepository" => "yuto1201/iOS-Template"
@@ -206,12 +226,13 @@ before_authority=$(shasum -a 256 "$app/docs/AUTHORITY.md")
 before_references=$(shasum -a 256 "$app/docs/references.md")
 before_security=$(shasum -a 256 "$app/docs/security.md")
 before_product=$(shasum -a 256 "$app/specs/product.md")
+before_acceptance=$(shasum -a 256 "$app/specs/acceptance.md")
 before_agents=$(shasum -a 256 "$app/AGENTS.md")
 before_plans=$(shasum -a 256 "$app/docs/superpowers/plans/README.md")
 before_simulators=$(shasum -a 256 "$app/Config/dedicated-simulators.json")
 cp "$app/specs/decisions.md" "$work/decisions-before.md"
 "$sync" apply --plan "$plan" --approval "$work/approval-codex.json" --app-root "$app" --work-dir "$work/cache" --now 2026-10-05T03:00:00Z >"$work/apply.json"
-for pair in "$before_authority" "$before_references" "$before_security" "$before_product" "$before_agents" "$before_plans" "$before_simulators"; do
+for pair in "$before_authority" "$before_references" "$before_security" "$before_product" "$before_acceptance" "$before_agents" "$before_plans" "$before_simulators"; do
   (cd "$work" && printf '%s\n' "$pair" | shasum -a 256 -c --status) || { echo "a file that must stay was changed: $pair" >&2; exit 1; }
 done
 cmp -s "$template/docs/workflow.md" "$app/docs/workflow.md" || { echo 'safe update not applied' >&2; exit 1; }
@@ -223,12 +244,14 @@ tail -n 1 "$app/docs/README.md" | grep -Fxq '同期testの追記。' || { echo '
 ! grep -Fq 'TemplateApp' "$app/docs/README.md" || { echo 'the transformed README has the template name' >&2; exit 1; }
 cmp -s "$work/decisions-before.md" <(head -c "$(wc -c <"$work/decisions-before.md")" "$app/specs/decisions.md") || { echo 'earlier decisions changed' >&2; exit 1; }
 tail -n 4 "$app/specs/decisions.md" | head -n 1 | grep -Fxq "## $next_decision: テンプレートの新しい決定" || { echo 'decision not appended at the end' >&2; tail -n 6 "$app/specs/decisions.md" >&2; exit 1; }
-APPLY="$work/apply.json" NEW="$new" NEXT_DECISION="$next_decision" APP="$app" ruby -rjson -e '
+[[ ! -e "$app/.codex" && ! -e "$app/App Store/screenshots/README.md" ]] || { echo 'deletions under removed ownership entries not applied' >&2; exit 1; }
+APPLY="$work/apply.json" CODEX_FILES="$codex_files" NEW="$new" NEXT_DECISION="$next_decision" APP="$app" ruby -rjson -e '
   result = JSON.parse(File.read(ENV.fetch("APPLY")))
   abort "apply status: #{result}" unless result["status"] == "applied" && result["approver"] == "codex"
   written = %w[docs/README.md docs/new-guide-link.md docs/new-guide.md docs/workflow.md specs/decisions.md tools/lib/bounded-command.rb]
   abort "written: #{result["written"]}" unless result["written"] == written
-  abort "deleted: #{result["deleted"]}" unless result["deleted"] == ["docs/goldie.md"]
+  deleted = (ENV.fetch("CODEX_FILES").split + ["App Store/screenshots/README.md", "docs/goldie.md"]).sort
+  abort "deleted: #{result["deleted"]}" unless result["deleted"] == deleted && ENV.fetch("CODEX_FILES").split.length >= 1
   abort "decisions: #{result["decisionsAppended"]}" unless result["decisionsAppended"] == [ENV.fetch("NEXT_DECISION")]
   abort "manual: #{result["manual"]}" unless (%w[docs/AUTHORITY.md docs/security.md specs/decisions.md] - result["manual"]).empty?
   abort "simulators: #{result["simulators"]}" unless result["simulators"].length == 2 && result["simulators"].all? { |name| name.start_with?("Garden Notes ") }
@@ -259,6 +282,25 @@ UNIT="$unit" ruby -r"$template/tools/lib/template-sync.rb" -e '
   end
   result = TemplateSync.write_changes(unit, plan, change.call("GardenNotes TemplateApp\n"), tokens, "2026-10-05T04:00:00Z")
   abort "base record: #{result["baseRecord"]}" unless result["baseRecord"]["method"] == "adopted"
+'
+
+# --- a base without an ownership manifest: template deletions are never applied --------------
+legacy_app="$work/app-legacy"
+make_app "$legacy_app" "$legacy"
+commit_all "$legacy_app" legacy-changes
+git -C "$legacy_app" checkout -q -b template-sync/11
+report "$legacy_app" "$work/plan-legacy"
+"$sync" approve --plan "$work/plan-legacy/plan.json" --approver user --reference "$comment_url" --output "$work/approval-legacy.json" >/dev/null
+"$sync" apply --plan "$work/plan-legacy/plan.json" --approval "$work/approval-legacy.json" --app-root "$legacy_app" --work-dir "$work/cache" >"$work/apply-legacy.json"
+for path in .codex/agents/ios-reviewer.toml 'App Store/screenshots/README.md' specs/acceptance.md docs/goldie.md; do
+  [[ -e "$legacy_app/$path" ]] || { echo "deleted without base ownership: $path" >&2; exit 1; }
+done
+PLAN="$work/plan-legacy/plan.json" APPLY="$work/apply-legacy.json" ruby -rjson -e '
+  plan = JSON.parse(File.read(ENV.fetch("PLAN")))
+  result = JSON.parse(File.read(ENV.fetch("APPLY")))
+  abort "legacy deletions: #{result["deleted"]}" unless result["deleted"].empty?
+  unknown = plan["files"].select { |file| file["category"] == "unknown" }
+  abort "unknown deletions: #{unknown}" unless !unknown.empty? && unknown.all? { |file| file["action"] == "manual" }
 '
 
 # --- a decision-number collision stops the whole apply ---------------------------------------

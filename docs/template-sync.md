@@ -144,7 +144,7 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 
 止まらなければ、次だけを書き込みます。indexは変えないので、結果は`git status`と`git diff`で確かめます。
 
-- 計画で`add`、`update`、`delete`のファイル。区分が`template`か`identity`のものだけです。`identity`のファイルは、取り込み先のIdentityで変換した内容を書きます。実行権限とsymlinkも計画どおりにします。
+- 計画で`add`、`update`、`delete`のファイル。区分が`template`か`identity`のものだけです。削除するファイルの区分は、差分レポートと同じく基準の版の`tools/template-sync/ownership.json`で決めます。`identity`のファイルは、取り込み先のIdentityで変換した内容を書きます。実行権限とsymlinkも計画どおりにします。
 - `decisions.append`の`D-###`。テンプレートの`specs/decisions.md`の節を、番号を変えずに取り込み先の末尾へ追記します。
 - `Config/template-base.json`。`baseCommit`を取り込んだテンプレートのcommitへ、`recordedAt`を適用の時刻へ更新します。記録がない、または記録が不正だった取り込み先では、`method`を`adopted`にします。
 

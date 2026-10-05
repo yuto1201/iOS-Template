@@ -165,7 +165,9 @@ module TemplateSync
       raw = File.join(work, "template-#{commit}")
       transformed = transform_tree(raw, commit, plan.dig("app", "identity"), work)
       tokens = template_tokens(raw)
-      changes = prepare_changes(app_root, plan, ownership, raw, transformed, tokens)
+      # As in the report, a file the template deleted keeps the ownership it had at the base.
+      base_ownership = plan.dig("base", "status") == "known" ? historical_ownership(File.join(work, "template-#{plan.dig("base", "commit")}")) : nil
+      changes = prepare_changes(app_root, plan, ownership, base_ownership, raw, transformed, tokens)
       result = write_changes(app_root, plan, changes, tokens, now)
     ensure
       FileUtils.rm_rf(work) unless work_option
@@ -179,7 +181,7 @@ module TemplateSync
   end
 
   # Everything that will be written, checked against the plan and the working tree first.
-  def prepare_changes(app_root, plan, ownership, raw, transformed, tokens)
+  def prepare_changes(app_root, plan, ownership, base_ownership, raw, transformed, tokens)
     decisions = plan.fetch("decisions")
     unless decisions["appendable"]
       ids = decisions["collisions"].map { |item| item["id"] }.join("、")
@@ -192,7 +194,9 @@ module TemplateSync
     files = plan.fetch("files").select { |file| %w[add update delete].include?(file["action"]) }
     changes = files.map do |file|
       path = file.fetch("path")
-      entry = classify(ownership, path)
+      # A deleted file is no longer in the template, so the current manifest may not list it, or may
+      # place it under another rule (an app-owned prefix, for example).
+      entry = file["action"] == "delete" ? base_ownership && classify(base_ownership, path) : classify(ownership, path)
       fail!("#{path} is not a template or identity file, so it is never applied") unless entry && %w[template identity].include?(entry[:category]) && file["category"] == entry[:category]
       safe_parents!(app_root, path)
       current = read_working(app_root, path)
