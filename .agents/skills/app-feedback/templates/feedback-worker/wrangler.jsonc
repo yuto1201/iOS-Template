@@ -1,0 +1,17 @@
+{
+  "name": "{{WORKER_NAME}}",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "vars": {
+    "GITHUB_REPOSITORY": "{{GITHUB_REPOSITORY}}",
+    "DAILY_ISSUE_LIMIT": "100"
+  },
+  "ratelimits": [
+    { "name": "FEEDBACK_SENDER_LIMIT", "namespace_id": "{{RATE_LIMIT_NAMESPACE_ID}}", "simple": { "limit": 1, "period": 60 } }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "DAILY_QUOTA", "class_name": "DailyQuota" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DailyQuota"] }],
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } }
+}

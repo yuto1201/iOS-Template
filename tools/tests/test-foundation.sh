@@ -107,6 +107,7 @@ workflow_skills=(
 )
 
 integration_skills=(
+  app-feedback
   app-icon
   supabase-ops
   ios-media-assets

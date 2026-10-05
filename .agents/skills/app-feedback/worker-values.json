@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "template": "templates/feedback-worker",
+  "placeholders": {
+    "GITHUB_REPOSITORY": {
+      "value": "<GitHub login>/<moduleName>-feedback",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,91}-feedback$"
+    },
+    "RATE_LIMIT_NAMESPACE_ID": {
+      "value": "a positive integer unique in the Cloudflare account",
+      "pattern": "^[1-9][0-9]{0,8}$"
+    },
+    "WORKER_NAME": {
+      "value": "<appSlug>-feedback",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,52}[a-z0-9])?-feedback$"
+    }
+  }
+}

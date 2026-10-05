@@ -18,6 +18,11 @@
       ]
     },
     {
+      "domain": "app-feedback",
+      "paths": [".claude/skills/app-feedback", "tools/tests/test-feedback-worker.sh"],
+      "prefixes": [".agents/skills/app-feedback/"]
+    },
+    {
       "domain": "appstore",
       "paths": [
         ".agents/skills/goldie/SKILL.md",
@@ -412,6 +417,7 @@
     {"path": "tools/tests/test-delivery-stages.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-evidence-applicability.sh", "domains": ["evidence-applicability", "release-disposition"]},
+    {"path": "tools/tests/test-feedback-worker.sh", "domains": ["app-feedback"]},
     {"path": "tools/tests/test-foundation.sh", "domains": ["foundation"]},
     {"path": "tools/tests/test-ios-3d-assets-skill.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-ios-evidence.sh", "domains": ["ios-evidence-exhaustive"]},
