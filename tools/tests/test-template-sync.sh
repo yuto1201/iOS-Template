@@ -51,7 +51,9 @@ CHECK="$check_output" ruby -rjson -e '
 
 template="$work/template"
 mkdir -p "$template"
-(cd "$repo_root" && git ls-files -z | tar --null -T - -cf -) | tar -x -C "$template"
+(cd "$repo_root" && git ls-files -z | tar --null -T - -cf "$work/template.tar")
+tar -x -f "$work/template.tar" -C "$template"
+rm -f "$work/template.tar"
 git -C "$template" init -q
 commit_all "$template" base
 base=$(git -C "$template" rev-parse HEAD)
