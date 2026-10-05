@@ -206,7 +206,7 @@ PLAN="$work/report1/plan.json" BASE="$base" NEXT_DECISION="$next_decision" READM
   abort "transformed README digest differs" unless files["docs/README.md"]["newDigest"] == ENV.fetch("README_DIGEST")
   abort "identity regression not flagged" unless files["docs/security.md"]["identityRegression"] == true
   abort "decision collision not reported" unless plan["decisions"] == {
-    "templateNew" => [ENV.fetch("NEXT_DECISION")], "appendable" => false,
+    "templateNew" => [ENV.fetch("NEXT_DECISION")], "appendable" => false, "append" => [],
     "collisions" => [{"id" => ENV.fetch("NEXT_DECISION"), "template" => "テンプレートの新しい決定", "app" => "アプリ固有の決定"}],
     "note" => "番号が衝突しています。アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移すまで、テンプレートのD-###を追記しません。"
   }

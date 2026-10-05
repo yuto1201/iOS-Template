@@ -1,14 +1,15 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Template sync (D-074), first half: classify every template file, then compare a derived or
-# non-template repository with the template and write a report and an apply plan. Nothing here
-# writes to the target repository; the apply step and its approval belong to a later tool.
+# Template sync (D-074): classify every template file, then compare a derived or non-template
+# repository with the template and write a report and an apply plan. The report never writes to the
+# target repository; approving and applying a plan live in template-sync-apply.rb.
 
 require "digest"
 require "fileutils"
 require "json"
 require "open3"
+require "securerandom"
 require "set"
 require "time"
 require "tmpdir"
@@ -38,14 +39,17 @@ module TemplateSync
   module_function
 
   def run(argv)
-    command = argv.shift or fail!("usage: template-sync.sh check|report [options]")
+    command = argv.shift or fail!("usage: template-sync.sh check|report|codex-review|approve|apply [options]")
     options = parse_options(argv)
     case command
     when "check" then puts JSON.generate(check(options))
     when "report" then puts JSON.generate(report(options))
+    when "codex-review" then puts JSON.generate(codex_review(options))
+    when "approve" then puts JSON.generate(approve(options))
+    when "apply" then puts JSON.generate(apply(options))
     else fail!("unknown command: #{command}")
     end
-  rescue Failure, JSON::ParserError, ArgumentError => error
+  rescue Failure, JSON::ParserError, ArgumentError, SystemCallError => error
     warn "template-sync: #{error.message}"
     exit 1
   end
@@ -539,10 +543,13 @@ module TemplateSync
     collisions = template.keys.select { |id| app.key?(id) && app[id] != template[id] }.sort.map do |id|
       {"id" => id, "template" => template[id], "app" => app[id]}
     end
+    # Appended only when nothing collides and the target has the file; a decision it already has stays.
+    append = collisions.empty? && app_files[DECISIONS_PATH] ? (added - app.keys).sort : []
     {
       "templateNew" => added.sort,
       "collisions" => collisions,
       "appendable" => collisions.empty?,
+      "append" => append,
       "note" => collisions.empty? ? "テンプレートの新しいD-###を末尾へ追記できます。" :
         "番号が衝突しています。アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移すまで、テンプレートのD-###を追記しません。"
     }
@@ -560,6 +567,7 @@ module TemplateSync
     prefix = identity && "#{identity["displayName"]} "
     problems = []
     problems << "アプリの#{SIMULATORS_PATH}がありません。" if app_names.empty?
+    problems << "アプリの専用Simulatorが2台ではありません。" unless app_names.empty? || app_names.length == 2
     if prefix
       problems << "アプリの専用Simulatorが表示名「#{identity["displayName"]}」で始まっていません。" unless app_names.all? { |name| name.start_with?(prefix) }
       problems << "テンプレートを変換した宣言が表示名で始まっていません。" unless planned.all? { |name| name.start_with?(prefix) }
@@ -608,15 +616,20 @@ module TemplateSync
     lines << "## 手順"
     lines << ""
     lines << "1. 取り込み先で「テンプレート同期Issue」を作り、作業ブランチで進めます。`main`へ直接適用しません。"
-    lines << "2. 下の「必要な承認」を得ます。承認は、このレポートの`plan.json`のdigestに結び付けます。"
-    lines << "3. 「適用する変更」だけを適用します。Identity変換されるファイルは、取り込み先のIdentityで変換した内容を使います。"
-    lines << "4. 「上書きしないファイル」はアプリ側の内容を残し、「手で確認するファイル」は個別に判断します。"
-    lines << "5. 適用後に検証し、基準commitの記録（`#{BASE_RECORD_PATH}`）をこのテンプレートのcommitへ更新します。"
+    lines << "2. 下の「必要な承認」を得ます。承認は、このレポートの`plan.json`のdigestに結び付けます（`tools/template-sync.sh approve`）。"
+    lines << "3. `tools/template-sync.sh apply`で「適用する変更」と「追記する決定事項」だけを適用します。Identity変換されるファイルは、取り込み先のIdentityで変換した内容を使います。"
+    lines << "4. 「上書きしないファイル」はアプリ側の内容を残し、「手で確認するファイル」は同じIssueの中で個別に判断します。"
+    lines << "5. 適用toolが基準commitの記録（`#{BASE_RECORD_PATH}`）をこのテンプレートのcommitへ更新します。検証してからmergeします。"
     lines << ""
     lines << "## 適用する変更"
     lines << ""
     applied = pick.call("add", "update", "delete")
     applied.empty? ? lines << "なし" : applied.each { |file| lines << "- #{{"add" => "追加", "update" => "更新", "delete" => "削除"}.fetch(file["action"])}: `#{file["path"]}`" }
+    lines << ""
+    lines << "## 追記する決定事項"
+    lines << ""
+    appended = result.dig("decisions", "append")
+    appended.empty? ? lines << "なし" : appended.each { |id| lines << "- `#{DECISIONS_PATH}`の末尾へ#{id}を追記" }
     lines << ""
     lines << "## 上書きしないファイル"
     lines << ""
@@ -668,5 +681,7 @@ module TemplateSync
     raise Failure, message
   end
 end
+
+require_relative "template-sync-apply"
 
 TemplateSync.run(ARGV) if $PROGRAM_NAME == __FILE__

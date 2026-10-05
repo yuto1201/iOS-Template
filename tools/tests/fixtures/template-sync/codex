@@ -1,0 +1,30 @@
+#!/bin/bash
+# Fake Codex for test-template-sync-apply.sh. It checks the fixed read-only invocation from
+# tools/template-sync-codex-review.sh, then writes the answer the test placed next to it.
+set -euo pipefail
+here=$(cd "${0%/*}" && pwd -P)
+printf '%s\n' "$@" >"$here/codex-arguments"
+[[ "${1:-}" == --ask-for-approval && "${2:-}" == never && "${3:-}" == exec ]] || exit 90
+plan_dir='' answer='' schema='' model='' filesystem=''
+shift 3
+while (($#)); do
+  case "$1" in
+    -C) plan_dir=$2; shift 2 ;;
+    -m) model=$2; shift 2 ;;
+    --output-schema) schema=$2; shift 2 ;;
+    --output-last-message) answer=$2; shift 2 ;;
+    -c)
+      [[ "$2" == permissions.reviewer.filesystem=* ]] && filesystem=$2
+      shift 2 ;;
+    --) prompt=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ "$model" == gpt-6-sol ]] || exit 91
+[[ "$filesystem" == "permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$plan_dir\"=\"read\"}" ]] || exit 92
+[[ -f "$plan_dir/plan.json" && -f "$plan_dir/plan.md" && -f "$schema" && -n "$answer" ]] || exit 93
+[[ "$prompt" == *"Read only $plan_dir/plan.json and $plan_dir/plan.md."* ]] || exit 94
+[[ "${PATH:-}" == *ios-template-sync-review*/bin:/bin && "${HOME:-}" == *ios-template-sync-review* ]] || exit 95
+/usr/bin/ruby -e 'exit(STDIN.stat.rdev == File.stat("/dev/null").rdev ? 0 : 1)' || exit 96
+[[ -f "$here/codex-answer.json" ]] || exit 97
+cp "$here/codex-answer.json" "$answer"

@@ -358,8 +358,8 @@
     },
     {
       "domain": "template-sync",
-      "paths": ["Config/template-identity.json", "docs/template-sync.md", "tools/bootstrap-app.swift", "tools/lib/template-sync.rb", "tools/template-sync.sh"],
-      "prefixes": ["tools/template-sync/"]
+      "paths": ["Config/template-identity.json", "docs/template-sync.md", "tools/bootstrap-app.swift", "tools/lib/template-sync-apply.rb", "tools/lib/template-sync.rb", "tools/template-sync-codex-review.sh", "tools/template-sync.sh"],
+      "prefixes": ["tools/template-sync/", "tools/tests/fixtures/template-sync/"]
     },
     {
       "domain": "ui-direction",
@@ -465,6 +465,7 @@
     {"path": "tools/tests/test-simulator-resolver.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-spec-state.sh", "domains": ["repository-lint", "specification"]},
     {"path": "tools/tests/test-supabase-skill.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-template-sync-apply.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-template-sync.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-tracked-credential-scan.sh", "domains": ["credential-scan"]},
     {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["ui-direction"]},
