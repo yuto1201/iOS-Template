@@ -18,8 +18,9 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 
 commit_all() {
   git -C "$1" add -A
+  # No automatic gc or maintenance, so no background process changes .git during the snapshot.
   git -C "$1" -c user.name='Template Sync Test' -c user.email=template-sync@example.invalid -c commit.gpgsign=false \
-    commit -q -m "$2"
+    -c gc.auto=0 -c maintenance.auto=false commit -q -m "$2"
 }
 
 snapshot() {
