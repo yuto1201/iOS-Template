@@ -75,6 +75,8 @@ tools/template-sync.sh report --app-root /path/to/app --output-dir /path/outside
 | テンプレートで削除された（`deleted-in-template`） | 基準にあり、最新にない | 取り込み先が基準のままなら削除、変更があれば手で確認する |
 | 一致（`up-to-date`） | テンプレートと同じ | なし |
 
+テンプレートで削除されたファイルは、基準の版の`tools/template-sync/ownership.json`で区分を決めます。最新の版でmanifestの記載が消えていても、基準の版で`app`だったファイルを削除の対象にしません。基準の版にmanifestがない、またはそのファイルを分類できない場合は、区分を`unknown`とし、削除せずに手で確認します。
+
 基準commitが記録されていない、または記録が不正な場合は、ファイルごとのhashだけで比べます。違いはすべて`conflict`として手で確認し、レポートの冒頭に基準が不明であることを書きます。
 
 `identity`と、変換指定のある`mixed`のファイルは、そのテンプレートのcommitに含まれる`tools/bootstrap-app.swift`で、取り込み先の`Config/app-identity.json`のIdentityを再適用してから比べます。変換後も`TemplateApp`などの元の名前が増える場合は、更新せずに手で確認する扱いにします。取り込み先にIdentityがない場合や変換に失敗した場合も、これらのファイルは手で確認します。
