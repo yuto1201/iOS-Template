@@ -148,9 +148,12 @@ chmod -x "$app1/tools/lib/workflow-json.rb"
 mkdir -p "$app1/docs/folder-in-app.md"
 printf '%s\n' 'app' >"$app1/docs/folder-in-app.md/note.md"
 printf '%s\n' 'app' >"$app1/docs/blocked"
-git -C "$app1" update-index --add --cacheinfo "160000,$base,docs/submodule-in-app.md"
 chmod +x "$app1/tools/lib/delivery-profile.rb" "$app1/tools/lib/release-verification.rb"
 commit_all "$app1" app-changes
+# A submodule entry is committed directly; `git add -A` would drop it without a checkout.
+git -C "$app1" update-index --add --cacheinfo "160000,$base,docs/submodule-in-app.md"
+git -C "$app1" -c user.name='Template Sync Test' -c user.email=template-sync@example.invalid -c commit.gpgsign=false \
+  -c gc.auto=0 -c maintenance.auto=false commit -q -m submodule
 before=$(snapshot "$app1")
 
 expect_failure output-inside-app 'must not be inside the app repository' \
