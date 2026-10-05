@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "templateRepository": "yuto1201/iOS-Template",
+  "rules": [
+    {
+      "category": "mixed",
+      "rule": "agents-md",
+      "transform": true,
+      "paths": ["AGENTS.md"],
+      "prefixes": []
+    },
+    {
+      "category": "mixed",
+      "rule": "agents-md-approvals",
+      "transform": false,
+      "paths": ["docs/agents-md-approvals.md"],
+      "prefixes": []
+    },
+    {
+      "category": "mixed",
+      "rule": "decisions",
+      "transform": false,
+      "paths": ["specs/decisions.md"],
+      "prefixes": []
+    },
+    {
+      "category": "mixed",
+      "rule": "dedicated-simulators",
+      "transform": true,
+      "paths": ["Config/dedicated-simulators.json"],
+      "prefixes": []
+    },
+    {
+      "category": "mixed",
+      "rule": "ownership",
+      "transform": true,
+      "paths": ["Config/ownership.yml"],
+      "prefixes": []
+    },
+    {
+      "category": "mixed",
+      "rule": "repository-tests",
+      "transform": false,
+      "paths": ["Config/repository-tests.json"],
+      "prefixes": []
+    },
+    {
+      "category": "identity",
+      "transform": true,
+      "paths": [
+        "docs/README.md",
+        "docs/agent-contracts/review-packet.md",
+        "docs/security.md",
+        "docs/verification.md",
+        "specs/architecture.md"
+      ],
+      "prefixes": []
+    },
+    {
+      "category": "app",
+      "transform": false,
+      "paths": ["specs/acceptance.md", "specs/product.md"],
+      "prefixes": ["App Store/", "TemplateApp/", "TemplateApp.xcodeproj/", "TemplateAppTests/", "TemplateAppUITests/"]
+    },
+    {
+      "category": "template",
+      "transform": false,
+      "paths": [
+        ".gitignore",
+        "App Store/README.md",
+        "App Store/legal/README.md",
+        "App Store/metadata/preparation-format.md",
+        "App Store/screenshots/README.md"
+      ],
+      "prefixes": [".agents/", ".claude/", ".codex/", ".github/", "Config/", "docs/", "specs/", "tools/"]
+    },
+    {
+      "category": "template-only",
+      "transform": false,
+      "paths": [
+        "tools/lib/template-sync.rb",
+        "tools/template-sync.sh",
+        "tools/tests/test-template-sync.sh"
+      ],
+      "prefixes": ["docs/superpowers/", "tools/template-sync/"]
+    }
+  ]
+}
