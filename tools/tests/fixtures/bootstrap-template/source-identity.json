@@ -1887,7 +1887,7 @@
     {
       "path": "docs/verification.md",
       "mode": "100644",
-      "sha256": "5fb72c2aa80054ea13ca6b0cec956f4bfd0c3d3d94dfb410efe0d89a4d04a643",
+      "sha256": "7433769264a72877cbc5becc4a462138646d302736da047edef30fdbd0833683",
       "lines": [
         "# iOS verification",
         "",
@@ -1988,6 +1988,7 @@
         "| `rg`（ripgrep） | foundation、bootstrap、Claim／state／workflow、App Store screenshots／skills、runner回帰等の検索・assertion・fake-gh分岐。PATH上の実行ファイルが必須。未導入なら例として`brew install ripgrep`で導入する |",
         "| `git`、`ruby`、`jq` | repository／contract／JSON／fixture操作。各testが使うものを宣言。Rubyの標準ライブラリを含む。`jq`もPATH上の実行ファイルが必要 |",
         "| `swift`、`swiftc`、`/usr/bin/swiftc`、`/usr/bin/xcrun` | Swift validator、画像／動画inspection、bootstrap、evidence等。Xcodeの開発ツールが利用可能なこと。runner／premergeがabsolute pathで使うコンパイラも個別に確認する |",
+        "| `node` | `test-feedback-worker.sh`だけが、アプリ内フィードバックのWorkerのtestを実行する。Node 24以上が必要で、packageは使わない |",
         "| `python3` | app-icon、mediaのfixtureとbootstrap。foundationは`tomllib`を使うためPython 3.11以上が必要。foundationを子として実行するbootstrapも同じ条件を開始前に確認する |",
         "| `${CC:-cc}` | `test-cross-model-review.sh`と`test-review-shared-artifacts.sh`のnative reviewer fixtureコンパイル。`CC`は単一の実行ファイル名またはパスとし、flagsを混ぜない |",
         "| `codex` | `test-cross-model-review.sh`だけが実際のnative Mach-O Codex sandboxを使用。他のtestには一律要求しない。既存のMach-O／sandbox検査も維持する |",
