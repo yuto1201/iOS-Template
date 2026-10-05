@@ -77,7 +77,9 @@ module TemplateSync
   end
 
   def git(root, *args, input: nil)
-    stdout, stderr, status = Open3.capture3({"GIT_OPTIONAL_LOCKS" => "0"}, "git", "-C", root, *args, stdin_data: input, binmode: true)
+    # No optional index refresh and no fsmonitor hook: reading a repository must not write to it.
+    stdout, stderr, status = Open3.capture3({"GIT_OPTIONAL_LOCKS" => "0"}, "git", "-c", "core.fsmonitor=false", "-C", root, *args,
+                                            stdin_data: input, binmode: true)
     fail!("git #{args.first} failed in #{root}: #{stderr.strip}") unless status.success?
     stdout
   end
