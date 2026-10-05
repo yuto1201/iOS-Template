@@ -352,6 +352,11 @@
       "prefixes": [".agents/skills/report-template-issue/"]
     },
     {
+      "domain": "template-sync",
+      "paths": ["Config/template-identity.json", "docs/template-sync.md", "tools/bootstrap-app.swift", "tools/lib/template-sync.rb", "tools/template-sync.sh"],
+      "prefixes": ["tools/template-sync/"]
+    },
+    {
       "domain": "ui-direction",
       "paths": [],
       "prefixes": [".agents/skills/ui-direction/"]
@@ -454,6 +459,7 @@
     {"path": "tools/tests/test-simulator-resolver.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-spec-state.sh", "domains": ["repository-lint", "specification"]},
     {"path": "tools/tests/test-supabase-skill.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-template-sync.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-tracked-credential-scan.sh", "domains": ["credential-scan"]},
     {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["ui-direction"]},
     {"path": "tools/tests/test-verification-contract.sh", "domains": ["ios-verification"]},
