@@ -9,6 +9,7 @@ require "digest"
 require "fileutils"
 require "json"
 require "open3"
+require "set"
 require "time"
 require "tmpdir"
 
@@ -264,9 +265,16 @@ module TemplateSync
     base_paths = base_raw ? tracked_paths(root, base["commit"]) : []
     missing_base_paths = base_paths - paths
     app.merge!(read_app_files(app_root, app_head, missing_base_paths)) unless missing_base_paths.empty?
+    current = paths.to_set
+    # A file the template deleted keeps the ownership it had at the base; the current manifest may
+    # no longer list it, or may now place it under a different rule.
+    base_ownership = base_raw && historical_ownership(base_raw)
     files = (paths | base_paths).sort.map do |path|
-      entry = classify(ownership, path)
-      fail!("unclassified template file: #{path}") unless entry
+      entry = current.include?(path) ? classify(ownership, path) : base_ownership && classify(base_ownership, path)
+      unless entry
+        fail!("unclassified template file: #{path}") if current.include?(path)
+        next unknown_deleted_file(path, app[path])
+      end
       compare_file(path, entry, new_raw: new_raw, new_xf: new_xf, base_raw: base_raw, base_xf: base_xf,
                    app_files: app, base_known: base["status"] == "known", tokens: tokens,
                    identity: identity, transform_status: transform_status)
@@ -286,6 +294,22 @@ module TemplateSync
       "decisions" => decision_report(new_raw, base_raw, app),
       "simulators" => simulator_report(app, new_xf, identity),
       "approvals" => approvals(files)
+    }
+  end
+
+  def historical_ownership(tree)
+    path = File.join(tree, OWNERSHIP_PATH)
+    File.file?(path) ? load_ownership(File.read(path)) : nil
+  rescue Failure, JSON::ParserError
+    nil
+  end
+
+  # Without the base's ownership rule, a deleted file is never deleted automatically.
+  def unknown_deleted_file(path, app_content)
+    {
+      "path" => path, "category" => "unknown", "status" => app_content.nil? ? "up-to-date" : "deleted-in-template",
+      "action" => app_content.nil? ? "none" : "manual", "appDigest" => digest(app_content),
+      "reason" => "テンプレートで削除されましたが、基準の版の所有区分が分からないため、削除せずに手で確認します。"
     }
   end
 

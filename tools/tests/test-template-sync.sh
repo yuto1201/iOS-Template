@@ -75,6 +75,13 @@ commit_all "$template" untransformed-readme
 expect_failure untransformed-identity 'bootstrap rewrites docs/README.md' "$template/tools/template-sync.sh" check
 git -C "$template" reset -q --hard "$base"
 
+# A base recorded before the ownership manifest existed: deleted files must not be deleted blindly.
+git -C "$template" checkout -q -b legacy-base
+git -C "$template" rm -q tools/template-sync/ownership.json
+commit_all "$template" legacy-base
+legacy=$(git -C "$template" rev-parse HEAD)
+git -C "$template" checkout -q -
+
 # --- template-side changes since the base ----------------------------------------------------
 printf '%s\n' 'テンプレートの手順を追記した。' >>"$template/docs/workflow.md"          # safe update
 printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/AUTHORITY.md"                # conflict
@@ -86,6 +93,19 @@ printf '%s\n' '' '## D-076: テンプレートの新しい決定' '' '- Status: 
 printf '%s\n' 'テンプレートのproduct変更。' >>"$template/specs/product.md"          # app-owned
 printf '%s\n' 'テンプレートの計画変更。' >>"$template/docs/superpowers/plans/README.md" # template-only
 printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/agent-contracts/appstore-submission.md" # app deleted it: conflict
+# Deletions whose manifest entries go away too: an exact-only file, the last files under a prefix,
+# and an app-owned override that would otherwise fall back to a template prefix.
+git -C "$template" rm -q .gitignore specs/acceptance.md
+git -C "$template" rm -q -r .codex
+ruby -rjson -e '
+  path = ARGV.fetch(0)
+  manifest = JSON.parse(File.read(path))
+  manifest["rules"].each do |rule|
+    rule["paths"] -= [".gitignore", "specs/acceptance.md"]
+    rule["prefixes"] -= [".codex/"]
+  end
+  File.write(path, JSON.pretty_generate(manifest) + "\n")
+' "$template/tools/template-sync/ownership.json"
 commit_all "$template" new
 
 # --- target repositories ---------------------------------------------------------------------
@@ -93,9 +113,9 @@ bootstrap_binary="$work/bootstrap-app"
 swiftc -o "$bootstrap_binary" "$repo_root/tools/bootstrap-app.swift"
 
 make_app() {
-  local app=$1
+  local app=$1 commit=${2:-$base}
   mkdir -p "$app"
-  git -C "$template" archive "$base" | tar -x -C "$app"
+  git -C "$template" archive "$commit" | tar -x -C "$app"
   "$bootstrap_binary" apply --root "$app" --manifest "$app/Config/template-identity.json" \
     --display-name 'Garden Notes' --module-name GardenNotes --app-slug garden-notes --bundle-id com.yuto.GardenNotes >/dev/null
   git -C "$app" init -q
@@ -147,12 +167,15 @@ PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_dige
     "AGENTS.md" => %w[up-to-date none], "Config/dedicated-simulators.json" => %w[up-to-date none],
     "tools/bootstrap-app.swift" => %w[up-to-date none],
     "docs/asc-derived-app-adoption.md" => %w[app-only-change keep],
-    "docs/agent-contracts/appstore-submission.md" => %w[conflict manual]
+    "docs/agent-contracts/appstore-submission.md" => %w[conflict manual],
+    ".gitignore" => %w[deleted-in-template delete], "specs/acceptance.md" => %w[app-owned skip]
   }
   expect.each do |path, (status, action)|
     actual = files.fetch(path) { abort "missing #{path}" }.values_at("status", "action")
     abort "#{path}: expected #{status}/#{action}, got #{actual.join("/")}" unless actual == [status, action]
   end
+  codex = files.select { |path, _| path.start_with?(".codex/") }
+  abort "removed prefix members: #{codex.values.map { |f| f.values_at("path", "status", "action") }}" unless !codex.empty? && codex.values.all? { |file| file.values_at("category", "status", "action") == %w[template deleted-in-template delete] }
   abort "transformed README digest differs" unless files["docs/README.md"]["newDigest"] == ENV.fetch("README_DIGEST")
   abort "identity regression not flagged" unless files["docs/security.md"]["identityRegression"] == true
   abort "decision collision not reported" unless plan["decisions"] == {
@@ -167,6 +190,7 @@ PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_dige
 # App-side deletions must never be restored by the plan.
 grep -Fq -- '- 追加: `docs/asc-derived-app-adoption.md`' "$work/report1/plan.md" && { echo 'plan restores an app-side deletion' >&2; exit 1; }
 grep -Fq -- '- 追加: `docs/agent-contracts/appstore-submission.md`' "$work/report1/plan.md" && { echo 'plan restores a deleted, template-changed file' >&2; exit 1; }
+grep -Fq -- '- 削除: `specs/acceptance.md`' "$work/report1/plan.md" && { echo 'plan deletes an app-owned file' >&2; exit 1; }
 for text in '## 適用する変更' '- 追加: `docs/new-guide.md`' '- 更新: `docs/workflow.md`' '- 削除: `docs/goldie.md`' \
   '## 上書きしないファイル' '`docs/references.md`' '## 手で確認するファイル' '`docs/AUTHORITY.md`（衝突する）' \
   '`docs/security.md`' '番号が衝突しています' '## 必要な承認' 'このレポートは取り込み先へ何も書き込んでいません。' \
@@ -221,6 +245,26 @@ PLAN="$work/report3/plan.json" ruby -rjson -e '
   abort "transformed file without identity must be manual" unless files["docs/README.md"].values_at("status", "action") == %w[missing manual]
   abort "AGENTS.md without identity must be manual" unless files["AGENTS.md"].values_at("status", "action") == %w[conflict manual]
   abort "template file must be added" unless files["docs/AUTHORITY.md"].values_at("status", "action") == %w[missing add]
+'
+
+# App 5: the recorded base has no ownership manifest, so template-deleted files stay for review.
+app5="$work/app5"
+make_app "$app5" "$legacy"
+(cd "$app5" && LEGACY="$legacy" ruby -rjson -e '
+  File.write("Config/template-base.json", JSON.generate({"schemaVersion" => 1, "templateRepository" => "yuto1201/iOS-Template",
+    "baseCommit" => ENV.fetch("LEGACY"), "recordedAt" => "2026-10-05T00:00:00Z", "method" => "created"}) + "\n")
+')
+commit_all "$app5" legacy-created
+"$template/tools/template-sync.sh" report --app-root "$app5" --output-dir "$work/report5" --work-dir "$work/cache" >/dev/null
+PLAN="$work/report5/plan.json" ruby -rjson -e '
+  plan = JSON.parse(File.read(ENV.fetch("PLAN")))
+  abort "legacy base not known" unless plan.dig("base", "status") == "known"
+  files = plan.fetch("files").to_h { |file| [file["path"], file] }
+  %w[.gitignore specs/acceptance.md docs/goldie.md].each do |path|
+    actual = files.fetch(path).values_at("category", "status", "action")
+    abort "#{path} without base ownership: #{actual}" unless actual == %w[unknown deleted-in-template manual]
+  end
+  abort "no deletion may be planned without base ownership" if plan.fetch("files").any? { |file| file["action"] == "delete" }
 '
 
 # An invalid base record is reported, not trusted.
