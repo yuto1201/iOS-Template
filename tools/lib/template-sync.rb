@@ -467,7 +467,7 @@ module TemplateSync
       "collisions" => collisions,
       "appendable" => collisions.empty?,
       "note" => collisions.empty? ? "テンプレートの新しいD-###を末尾へ追記できます。" :
-        "番号が衝突しています。アプリ固有の決定事項をA-###へ移すまで、テンプレートのD-###を追記しません。"
+        "番号が衝突しています。アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移すまで、テンプレートのD-###を追記しません。"
     }
   end
 

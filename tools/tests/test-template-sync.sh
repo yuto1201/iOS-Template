@@ -132,7 +132,7 @@ PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_dige
   abort "decision collision not reported" unless plan["decisions"] == {
     "templateNew" => ["D-076"], "appendable" => false,
     "collisions" => [{"id" => "D-076", "template" => "テンプレートの新しい決定", "app" => "アプリ固有の決定"}],
-    "note" => "番号が衝突しています。アプリ固有の決定事項をA-###へ移すまで、テンプレートのD-###を追記しません。"
+    "note" => "番号が衝突しています。アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移すまで、テンプレートのD-###を追記しません。"
   }
   sims = plan["simulators"]
   abort "simulators: #{sims}" unless sims["problems"] == [] && sims["planned"].all? { |name| name.start_with?("Garden Notes ") } && sims["app"] == sims["planned"]
