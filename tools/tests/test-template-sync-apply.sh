@@ -282,6 +282,21 @@ UNIT="$unit" ruby -r"$template/tools/lib/template-sync.rb" -e '
   end
   result = TemplateSync.write_changes(unit, plan, change.call("GardenNotes TemplateApp\n"), tokens, "2026-10-05T04:00:00Z")
   abort "base record: #{result["baseRecord"]}" unless result["baseRecord"]["method"] == "adopted"
+
+  # An existing entry under the staging name is kept; the write takes another fresh name.
+  names = %w[aaaa1111aaaa1111 bbbb2222bbbb2222 cccc3333cccc3333 dddd4444dddd4444]
+  SecureRandom.define_singleton_method(:hex) { |*_| names.shift or raise "too many staging names" }
+  kept = File.join(unit, "docs/.guide.md.template-sync-aaaa1111aaaa1111")
+  File.write(kept, "ignored notes\n")
+  link = File.join(unit, "docs/.link.md.template-sync-cccc3333cccc3333")
+  File.symlink("elsewhere.md", link)
+  TemplateSync.write_entry(File.join(unit, "docs/guide.md"), TemplateSync::Entry.new("100755", "new\n".b))
+  TemplateSync.write_entry(File.join(unit, "docs/link.md"), TemplateSync::Entry.new("120000", "guide.md"))
+  abort "a colliding staging file was changed" unless File.read(kept) == "ignored notes\n" && File.readlink(link) == "elsewhere.md"
+  abort "the planned file was not written" unless File.read(File.join(unit, "docs/guide.md")) == "new\n" && File.executable?(File.join(unit, "docs/guide.md"))
+  abort "the planned symlink was not written" unless File.readlink(File.join(unit, "docs/link.md")) == "guide.md"
+  leftovers = Dir.glob(File.join(unit, "docs/.*.template-sync-*"), File::FNM_DOTMATCH).sort
+  abort "staging entries left: #{leftovers}" unless leftovers == [kept, link].sort
 '
 
 # --- a base without an ownership manifest: template deletions are never applied --------------
@@ -346,5 +361,17 @@ printf '%s\n' 'later' >>"$ignored/docs/references.md"
 commit_all "$ignored" later
 expect_untouched apply-target-moved 'the target moved since the plan was made' "$ignored" \
   "$sync" apply --plan "$work/plan-ignored/plan.json" --approval "$work/approval-ignored.json" --app-root "$ignored" --work-dir "$work/cache"
+
+# --- an ignored base record in a target without one is not overwritten -----------------------
+nobase="$work/app-nobase"
+make_app "$nobase"
+git -C "$nobase" rm -q --cached Config/template-base.json
+printf '%s\n' 'Config/template-base.json' >>"$nobase/.gitignore"
+commit_all "$nobase" untracked-base-record
+git -C "$nobase" checkout -q -b template-sync/12
+report "$nobase" "$work/plan-nobase"
+"$sync" approve --plan "$work/plan-nobase/plan.json" --approver user --reference "$comment_url" --output "$work/approval-nobase.json" >/dev/null
+expect_untouched apply-ignored-base-record 'Config/template-base.json already exists in the working tree' "$nobase" \
+  "$sync" apply --plan "$work/plan-nobase/plan.json" --approval "$work/approval-nobase.json" --app-root "$nobase" --work-dir "$work/cache"
 
 echo "template sync apply tests passed"

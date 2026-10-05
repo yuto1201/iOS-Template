@@ -188,6 +188,9 @@ module TemplateSync
       fail!("specs/decisions.md has decision numbers that collide with the template (#{ids}). Nothing was written. " \
             "Move the app's own decisions to A-### in specs/app-decisions.md, then make a new report.")
     end
+    if plan.dig("base", "status") == "unknown" && read_working(app_root, BASE_RECORD_PATH)
+      fail!("#{BASE_RECORD_PATH} already exists in the working tree (an ignored or untracked file), so it is not overwritten")
+    end
     problems = plan.dig("simulators", "problems")
     fail!("the dedicated Simulator declaration needs attention first: #{problems.join(" ")} Nothing was written.") unless problems.empty?
 
@@ -366,18 +369,35 @@ module TemplateSync
     Entry.new(File.executable?(full) ? "100755" : "100644", File.binread(full))
   end
 
+  # Write through a staging entry that this call creates exclusively under a fresh random name, so an
+  # existing file (an ignored one, for example) is never replaced or removed except the planned path.
   def write_entry(path, entry)
     FileUtils.mkdir_p(File.dirname(path))
-    staging = File.join(File.dirname(path), ".#{File.basename(path)}.template-sync-#{Process.pid}")
-    FileUtils.rm_f(staging)
-    if entry.mode == "120000"
-      File.symlink(entry.bytes, staging)
-    else
-      File.binwrite(staging, entry.bytes)
-      File.chmod(entry.mode == "100755" ? 0o755 : 0o644, staging)
+    staging = nil
+    10.times do
+      candidate = File.join(File.dirname(path), ".#{File.basename(path)}.template-sync-#{SecureRandom.hex(8)}")
+      begin
+        if entry.mode == "120000"
+          File.symlink(entry.bytes, candidate)
+          staging = candidate
+        else
+          File.open(candidate, File::WRONLY | File::CREAT | File::EXCL | File::BINARY, 0o600) do |file|
+            staging = candidate
+            file.write(entry.bytes)
+          end
+          File.chmod(entry.mode == "100755" ? 0o755 : 0o644, staging)
+        end
+        break
+      rescue Errno::EEXIST
+        next
+      end
     end
+    fail!("could not create a staging file next to #{path}") if staging.nil?
     # rename replaces the entry itself, whether it was a file or a symlink.
     File.rename(staging, path)
+    staging = nil
+  ensure
+    File.unlink(staging) if staging && (File.symlink?(staging) || File.exist?(staging))
   end
 
   def remove_empty_parents(app_root, directory)

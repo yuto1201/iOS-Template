@@ -140,9 +140,9 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 - 取り込み先にIdentity（`Config/app-identity.json`）がない。テンプレートを未適用のリポジトリでは、先にIdentityを決めてから計画を作り直します。
 - `specs/decisions.md`の番号がテンプレートと衝突している。アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移してから、計画を作り直します。
 - 専用Simulatorの宣言が、取り込み先の表示名を前置した2台ではない、またはテンプレート用の端末を指している。
-- 追加するパスに、ignoredやuntrackedのファイルが既にある。更新や削除するファイルが、計画を作ったときの内容と違う。親のパスがsymlinkやファイルである。
+- 追加するパスや、記録がない取り込み先の`Config/template-base.json`に、ignoredやuntrackedのファイルが既にある。更新や削除するファイルが、計画を作ったときの内容と違う。親のパスがsymlinkやファイルである。
 
-止まらなければ、次だけを書き込みます。indexは変えないので、結果は`git status`と`git diff`で確かめます。
+止まらなければ、次だけを書き込みます。各ファイルは、同じフォルダに新しいランダムな名前で作った一時ファイルを置き換える形で書き、ほかの既存のファイルを消しません。indexは変えないので、結果は`git status`と`git diff`で確かめます。
 
 - 計画で`add`、`update`、`delete`のファイル。区分が`template`か`identity`のものだけです。削除するファイルの区分は、差分レポートと同じく基準の版の`tools/template-sync/ownership.json`で決めます。`identity`のファイルは、取り込み先のIdentityで変換した内容を書きます。実行権限とsymlinkも計画どおりにします。
 - `decisions.append`の`D-###`。テンプレートの`specs/decisions.md`の節を、番号を変えずに取り込み先の末尾へ追記します。
