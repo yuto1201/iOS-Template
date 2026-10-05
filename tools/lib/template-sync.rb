@@ -183,8 +183,9 @@ module TemplateSync
 
     work_option = options["--work-dir"]
     if work_option
+      # Resolve through the nearest existing ancestor (and its symlinks) before creating anything.
+      fail!("--work-dir must not be inside the app repository") if inside?(app_root, resolved_location(work_option))
       FileUtils.mkdir_p(work_option)
-      fail!("--work-dir must not be inside the app repository") if inside?(app_root, File.realpath(work_option))
     end
     work = work_option ? File.realpath(work_option) : Dir.mktmpdir("template-sync")
     begin
@@ -218,9 +219,22 @@ module TemplateSync
     fail!("--output-dir already exists") if File.exist?(path) || File.symlink?(path)
     parent = File.dirname(path)
     fail!("--output-dir parent does not exist") unless File.directory?(parent)
-    real = File.join(File.realpath(parent), File.basename(path))
+    real = resolved_location(path)
     fail!("--output-dir must not be inside the app repository; the report never writes there") if inside?(app_root, real)
     real
+  end
+
+  # The real location a path would have, even if its trailing components do not exist yet.
+  def resolved_location(value)
+    path = File.expand_path(value)
+    missing = []
+    until File.exist?(path) || File.symlink?(path)
+      missing.unshift(File.basename(path))
+      parent = File.dirname(path)
+      fail!("cannot resolve #{value}") if parent == path
+      path = parent
+    end
+    File.join(File.realpath(path), *missing)
   end
 
   def inside?(root, path)

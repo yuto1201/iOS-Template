@@ -23,8 +23,10 @@ commit_all() {
     -c gc.auto=0 -c maintenance.auto=false commit -q -m "$2"
 }
 
+# Every entry (directories and symlinks included) plus every file's bytes.
 snapshot() {
-  (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256) | shasum -a 256 | awk '{print $1}'
+  (cd "$1" && { find . -print | LC_ALL=C sort; find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256; }) |
+    shasum -a 256 | awk '{print $1}'
 }
 
 expect_failure() {
@@ -114,6 +116,12 @@ before=$(snapshot "$app1")
 
 expect_failure output-inside-app 'must not be inside the app repository' \
   "$template/tools/template-sync.sh" report --app-root "$app1" --output-dir "$app1/sync-report"
+expect_failure work-dir-inside-app '--work-dir must not be inside the app repository' \
+  "$template/tools/template-sync.sh" report --app-root "$app1" --output-dir "$work/rejected-report" --work-dir "$app1/sync-cache/nested"
+ln -s "$app1/docs" "$work/app-docs-link"
+expect_failure work-dir-through-symlink '--work-dir must not be inside the app repository' \
+  "$template/tools/template-sync.sh" report --app-root "$app1" --output-dir "$work/rejected-report" --work-dir "$work/app-docs-link/cache"
+[[ ! -e "$app1/sync-cache" && ! -e "$app1/docs/cache" && ! -e "$work/rejected-report" ]] || { echo 'a rejected report created a directory' >&2; exit 1; }
 report1=$("$template/tools/template-sync.sh" report --app-root "$app1" --output-dir "$work/report1" \
   --work-dir "$work/cache" --now 2026-10-05T01:00:00Z)
 [[ "$(snapshot "$app1")" == "$before" ]] || { echo 'the report wrote to the target repository' >&2; exit 1; }
