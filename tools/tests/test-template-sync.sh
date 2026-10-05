@@ -100,6 +100,11 @@ git -C "$template" rm -q .gitignore specs/acceptance.md
 chmod +x "$template/tools/lib/bounded-command.rb"                                    # template-only mode change
 printf '%s\n' '# template change' >>"$template/tools/lib/delivery-profile.rb"        # app changes its mode: conflict
 git -C "$template" rm -q tools/lib/release-verification.rb                          # app changes its mode: review
+# New template files that the app's tree cannot take: a same-named folder, a parent file, a submodule.
+mkdir -p "$template/docs/blocked"
+printf '%s\n' 'new' >"$template/docs/folder-in-app.md"
+printf '%s\n' 'new' >"$template/docs/blocked/guide.md"
+printf '%s\n' 'new' >"$template/docs/submodule-in-app.md"
 git -C "$template" rm -q -r .codex
 ruby -rjson -e '
   path = ARGV.fetch(0)
@@ -140,6 +145,10 @@ printf '%s\n' 'アプリ側だけの追記。' >>"$app1/docs/references.md"
 printf '%s\n' '' '## D-076: アプリ固有の決定' '' '- Status: 確定' >>"$app1/specs/decisions.md"
 git -C "$app1" rm -q docs/asc-derived-app-adoption.md docs/agent-contracts/appstore-submission.md
 chmod -x "$app1/tools/lib/workflow-json.rb"
+mkdir -p "$app1/docs/folder-in-app.md"
+printf '%s\n' 'app' >"$app1/docs/folder-in-app.md/note.md"
+printf '%s\n' 'app' >"$app1/docs/blocked"
+git -C "$app1" update-index --add --cacheinfo "160000,$base,docs/submodule-in-app.md"
 chmod +x "$app1/tools/lib/delivery-profile.rb" "$app1/tools/lib/release-verification.rb"
 commit_all "$app1" app-changes
 before=$(snapshot "$app1")
@@ -176,7 +185,9 @@ PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_dige
     "docs/agent-contracts/appstore-submission.md" => %w[conflict manual],
     ".gitignore" => %w[deleted-in-template delete], "specs/acceptance.md" => %w[app-owned skip],
     "tools/lib/bounded-command.rb" => %w[safe-update update], "tools/lib/workflow-json.rb" => %w[app-only-change keep],
-    "tools/lib/delivery-profile.rb" => %w[conflict manual], "tools/lib/release-verification.rb" => %w[deleted-in-template manual]
+    "tools/lib/delivery-profile.rb" => %w[conflict manual], "tools/lib/release-verification.rb" => %w[deleted-in-template manual],
+    "docs/folder-in-app.md" => %w[conflict manual], "docs/blocked/guide.md" => %w[conflict manual],
+    "docs/submodule-in-app.md" => %w[conflict manual]
   }
   expect.each do |path, (status, action)|
     actual = files.fetch(path) { abort "missing #{path}" }.values_at("status", "action")

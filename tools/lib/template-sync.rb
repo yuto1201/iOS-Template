@@ -270,6 +270,7 @@ module TemplateSync
     missing_base_paths = base_paths - paths
     app.merge!(read_app_files(app_root, app_head, missing_base_paths)) unless missing_base_paths.empty?
     current = paths.to_set
+    app_paths = git(app_root, "ls-tree", "-r", "-z", "--name-only", "--full-tree", app_head).force_encoding(Encoding::UTF_8).split("\0").reject(&:empty?).to_set
     # A file the template deleted keeps the ownership it had at the base; the current manifest may
     # no longer list it, or may now place it under a different rule.
     base_ownership = base_raw && historical_ownership(base_raw)
@@ -279,6 +280,8 @@ module TemplateSync
         fail!("unclassified template file: #{path}") if current.include?(path)
         next unknown_deleted_file(path, app[path])
       end
+      blocked = path_blocked?(app_paths, path)
+      next blocked_file(path, entry, blocked) if blocked && app[path].nil?
       compare_file(path, entry, new_raw: new_raw, new_xf: new_xf, base_raw: base_raw, base_xf: base_xf,
                    app_files: app, base_known: base["status"] == "known", tokens: tokens,
                    identity: identity, transform_status: transform_status)
@@ -306,6 +309,23 @@ module TemplateSync
     File.file?(path) ? load_ownership(File.read(path)) : nil
   rescue Failure, JSON::ParserError
     nil
+  end
+
+  # A template file cannot be added where the app has a folder of that name, or a file at a parent path.
+  def path_blocked?(app_paths, path)
+    parts = path.split("/")
+    parent_file = (1...parts.length).map { |count| parts.first(count).join("/") }.find { |prefix| app_paths.include?(prefix) }
+    return "アプリでは親のパス#{parent_file}がファイルです。" if parent_file
+    prefix = "#{path}/"
+    app_paths.any? { |candidate| candidate.start_with?(prefix) } ? "アプリでは同じ名前のフォルダがあります。" : nil
+  end
+
+  def blocked_file(path, entry, reason)
+    record = {"path" => path, "category" => entry[:category]}
+    record["rule"] = entry[:rule] if entry[:rule]
+    return record.merge("status" => "app-owned", "action" => "skip", "reason" => "アプリが持つファイルなので取り込みません。") if entry[:category] == "app"
+    return record.merge("status" => "template-only", "action" => "skip", "reason" => "テンプレート専用なのでアプリへ持ち込みません。") if entry[:category] == "template-only"
+    record.merge("status" => "conflict", "action" => "manual", "reason" => "テンプレートのファイルを置けません。#{reason}")
   end
 
   # Without the base's ownership rule, a deleted file is never deleted automatically.
@@ -339,10 +359,15 @@ module TemplateSync
       mode, type, sha = meta.split(" ")
       entries[path] = {mode: mode, type: type, sha: sha}
     end
-    wanted = paths.uniq.select { |path| entries.key?(path) && entries[path][:type] == "blob" }
-    return {} if wanted.empty?
-    output = git(app_root, "cat-file", "--batch", input: wanted.map { |path| entries[path][:sha] }.join("\n") + "\n")
     contents = {}
+    # A submodule is compared as its own kind of entry, never read as file content.
+    paths.uniq.each do |path|
+      entry = entries[path]
+      contents[path] = Entry.new(entry[:mode], "gitlink:#{entry[:sha]}") if entry && entry[:type] == "commit"
+    end
+    wanted = paths.uniq.select { |path| entries.key?(path) && entries[path][:type] == "blob" }
+    return contents if wanted.empty?
+    output = git(app_root, "cat-file", "--batch", input: wanted.map { |path| entries[path][:sha] }.join("\n") + "\n")
     offset = 0
     wanted.each do |path|
       header_end = output.index("\n", offset)
