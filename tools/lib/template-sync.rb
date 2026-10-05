@@ -230,12 +230,13 @@ module TemplateSync
   def build_report(root, commit, ownership, app_root, work, now)
     app_head = git(app_root, "rev-parse", "--verify", "HEAD^{commit}").strip
     dirty = !git(app_root, "status", "--porcelain", "--untracked-files=no").empty?
-    app_tree = export_tree(app_root, app_head, File.join(work, "app-#{app_head}"))
-
-    identity, identity_issues = read_identity(app_tree)
-    base = read_base(root, ownership, app_tree)
 
     new_raw = export_tree(root, commit, File.join(work, "template-#{commit}"))
+    paths = tracked_paths(root, commit)
+    app = read_app_files(app_root, app_head, paths + [APP_IDENTITY_PATH, BASE_RECORD_PATH])
+    identity, identity_issues = read_identity(app)
+    base = read_base(root, ownership, app)
+
     new_xf = identity && transform_tree(new_raw, commit, identity, work)
     base_raw = base["status"] == "known" ? export_tree(root, base["commit"], File.join(work, "template-#{base["commit"]}")) : nil
     base_xf = base_raw && identity && transform_tree(base_raw, base["commit"], identity, work)
@@ -246,13 +247,14 @@ module TemplateSync
 
     source = JSON.parse(File.read(File.join(new_raw, IDENTITY_MANIFEST_PATH))).fetch("source")
     tokens = [source.fetch("module"), source.fetch("bundleId")].uniq
-    paths = tracked_paths(root, commit)
     base_paths = base_raw ? tracked_paths(root, base["commit"]) : []
+    missing_base_paths = base_paths - paths
+    app.merge!(read_app_files(app_root, app_head, missing_base_paths)) unless missing_base_paths.empty?
     files = (paths | base_paths).sort.map do |path|
       entry = classify(ownership, path)
       fail!("unclassified template file: #{path}") unless entry
       compare_file(path, entry, new_raw: new_raw, new_xf: new_xf, base_raw: base_raw, base_xf: base_xf,
-                   app_tree: app_tree, base_known: base["status"] == "known", tokens: tokens,
+                   app_files: app, base_known: base["status"] == "known", tokens: tokens,
                    identity: identity, transform_status: transform_status)
     end
 
@@ -267,8 +269,8 @@ module TemplateSync
       "base" => base,
       "files" => files,
       "summary" => summary.sort.to_h,
-      "decisions" => decision_report(new_raw, base_raw, app_tree),
-      "simulators" => simulator_report(app_tree, new_xf, identity),
+      "decisions" => decision_report(new_raw, base_raw, app),
+      "simulators" => simulator_report(app, new_xf, identity),
       "approvals" => approvals(files)
     }
   end
@@ -283,6 +285,32 @@ module TemplateSync
     fail!("could not export #{commit}: #{err.strip}") unless status.success?
     File.rename(staging, destination)
     destination
+  end
+
+  # Read only the paths the comparison needs from the target's HEAD, through git's object store.
+  # Nothing in the target's working tree or index is touched.
+  def read_app_files(app_root, head, paths)
+    entries = {}
+    git(app_root, "ls-tree", "-r", "-z", "--full-tree", head).force_encoding(Encoding::UTF_8).split("\0").each do |line|
+      meta, path = line.split("\t", 2)
+      next if path.nil?
+      mode, type, sha = meta.split(" ")
+      entries[path] = {mode: mode, type: type, sha: sha}
+    end
+    wanted = paths.uniq.select { |path| entries.key?(path) && entries[path][:type] == "blob" }
+    return {} if wanted.empty?
+    output = git(app_root, "cat-file", "--batch", input: wanted.map { |path| entries[path][:sha] }.join("\n") + "\n")
+    contents = {}
+    offset = 0
+    wanted.each do |path|
+      header_end = output.index("\n", offset)
+      sha, type, size = output[offset...header_end].split(" ")
+      fail!("could not read #{path} from the target") unless type == "blob" && sha == entries[path][:sha]
+      body = output.byteslice(header_end + 1, size.to_i)
+      offset = header_end + 1 + size.to_i + 1
+      contents[path] = entries[path][:mode] == "120000" ? "symlink:#{body}" : body
+    end
+    contents
   end
 
   # Re-apply Identity bootstrap with the app's identity, using that template commit's own tool.
@@ -311,10 +339,10 @@ module TemplateSync
     destination
   end
 
-  def read_identity(app_tree)
-    path = File.join(app_tree, APP_IDENTITY_PATH)
-    return [nil, ["#{APP_IDENTITY_PATH}がありません。Identity bootstrapが未適用です。"]] unless File.file?(path)
-    value = JSON.parse(File.read(path))
+  def read_identity(app)
+    text = app[APP_IDENTITY_PATH]
+    return [nil, ["#{APP_IDENTITY_PATH}がありません。Identity bootstrapが未適用です。"]] if text.nil?
+    value = JSON.parse(text.dup.force_encoding(Encoding::UTF_8))
     return [nil, ["#{APP_IDENTITY_PATH}がJSON objectではありません。"]] unless value.is_a?(Hash)
     issues = []
     missing = IDENTITY_KEYS - value.keys
@@ -331,10 +359,10 @@ module TemplateSync
     [nil, ["#{APP_IDENTITY_PATH}を読めません。"]]
   end
 
-  def read_base(root, ownership, app_tree)
-    path = File.join(app_tree, BASE_RECORD_PATH)
-    return {"status" => "unknown", "reason" => "#{BASE_RECORD_PATH}がありません。"} unless File.file?(path)
-    value = JSON.parse(File.read(path))
+  def read_base(root, ownership, app)
+    text = app[BASE_RECORD_PATH]
+    return {"status" => "unknown", "reason" => "#{BASE_RECORD_PATH}がありません。"} if text.nil?
+    value = JSON.parse(text.dup.force_encoding(Encoding::UTF_8))
     problem = if !value.is_a?(Hash) || value.keys.sort != BASE_KEYS then "keyが#{BASE_KEYS.join("、")}と一致しません。"
               elsif value["schemaVersion"] != 1 then "schemaVersionが1ではありません。"
               elsif value["templateRepository"] != ownership[:repository] then "templateRepositoryが#{ownership[:repository]}ではありません。"
@@ -359,7 +387,7 @@ module TemplateSync
     bytes && "sha256:#{Digest::SHA256.hexdigest(bytes)}"
   end
 
-  def compare_file(path, entry, new_raw:, new_xf:, base_raw:, base_xf:, app_tree:, base_known:, tokens:, identity:, transform_status:)
+  def compare_file(path, entry, new_raw:, new_xf:, base_raw:, base_xf:, app_files:, base_known:, tokens:, identity:, transform_status:)
     record = {"path" => path, "category" => entry[:category]}
     record["rule"] = entry[:rule] if entry[:rule]
     if entry[:category] == "app"
@@ -371,13 +399,13 @@ module TemplateSync
     transformed = entry[:transform]
     if transformed && transform_status != "applied"
       reason = transform_status == "identity-unavailable" ? "アプリのIdentityが読めないため、Identity変換できません。" : "Identity変換に失敗しました。"
-      app = read(app_tree, path)
-      return record.merge("status" => app.nil? ? "missing" : "conflict", "action" => "manual", "reason" => reason,
-                          "appDigest" => digest(app))
+      current = app_files[path]
+      return record.merge("status" => current.nil? ? "missing" : "conflict", "action" => "manual", "reason" => reason,
+                          "appDigest" => digest(current))
     end
     new = read(transformed ? new_xf : new_raw, path)
     base = base_known ? read(transformed ? base_xf : base_raw, path) : nil
-    app = read(app_tree, path)
+    app = app_files[path]
     record.merge!("newDigest" => digest(new), "baseDigest" => digest(base), "appDigest" => digest(app))
 
     status, action, reason =
@@ -426,10 +454,10 @@ module TemplateSync
     text.dup.force_encoding(Encoding::UTF_8).scan(DECISION_HEADING).to_h { |id, title| [id, title.strip] }
   end
 
-  def decision_report(new_raw, base_raw, app_tree)
+  def decision_report(new_raw, base_raw, app_files)
     template = decision_entries(read(new_raw, DECISIONS_PATH))
     base = base_raw ? decision_entries(read(base_raw, DECISIONS_PATH)) : nil
-    app = decision_entries(read(app_tree, DECISIONS_PATH))
+    app = decision_entries(app_files[DECISIONS_PATH])
     added = base ? template.keys - base.keys : template.keys - app.keys
     collisions = template.keys.select { |id| app.key?(id) && app[id] != template[id] }.sort.map do |id|
       {"id" => id, "template" => template[id], "app" => app[id]}
@@ -443,14 +471,14 @@ module TemplateSync
     }
   end
 
-  def simulator_report(app_tree, new_xf, identity)
+  def simulator_report(app_files, new_xf, identity)
     names = lambda do |text|
       next [] if text.nil?
       JSON.parse(text.dup.force_encoding(Encoding::UTF_8)).fetch("devices", []).map { |device| device["name"] }
     rescue JSON::ParserError
       []
     end
-    app_names = names.call(read(app_tree, SIMULATORS_PATH))
+    app_names = names.call(app_files[SIMULATORS_PATH])
     planned = names.call(read(new_xf, SIMULATORS_PATH))
     prefix = identity && "#{identity["displayName"]} "
     problems = []
