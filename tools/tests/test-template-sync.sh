@@ -89,7 +89,9 @@ printf '%s\n' '# New guide' '' 'テンプレートが追加した文書。' >"$t
 git -C "$template" rm -q docs/goldie.md                                              # deleted in template
 printf '%s\n' '同期testの追記。' >>"$template/docs/README.md"                        # transformed safe update
 printf '%s\n' '旧名TemplateAppを含む追記。' >>"$template/docs/security.md"           # identity regression
-printf '%s\n' '' '## D-076: テンプレートの新しい決定' '' '- Status: 確定' >>"$template/specs/decisions.md"
+# The next free decision number, so the case keeps working as the template appends real decisions.
+next_decision=$(ruby -e 'ids = File.read(ARGV[0]).scan(/^## D-(\d{3,}):/).flatten.map(&:to_i); printf("D-%03d", ids.max + 1)' "$template/specs/decisions.md")
+printf '%s\n' '' "## $next_decision: テンプレートの新しい決定" '' '- Status: 確定' >>"$template/specs/decisions.md"
 printf '%s\n' 'テンプレートのproduct変更。' >>"$template/specs/product.md"          # app-owned
 printf '%s\n' 'テンプレートの計画変更。' >>"$template/docs/superpowers/plans/README.md" # template-only
 printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/agent-contracts/appstore-submission.md" # app deleted it: conflict
@@ -142,7 +144,7 @@ make_app "$app1"
 commit_all "$app1" created
 printf '%s\n' 'アプリ側の追記。' >>"$app1/docs/AUTHORITY.md"
 printf '%s\n' 'アプリ側だけの追記。' >>"$app1/docs/references.md"
-printf '%s\n' '' '## D-076: アプリ固有の決定' '' '- Status: 確定' >>"$app1/specs/decisions.md"
+printf '%s\n' '' "## $next_decision: アプリ固有の決定" '' '- Status: 確定' >>"$app1/specs/decisions.md"
 git -C "$app1" rm -q docs/asc-derived-app-adoption.md docs/agent-contracts/appstore-submission.md
 chmod -x "$app1/tools/lib/workflow-json.rb"
 mkdir -p "$app1/docs/folder-in-app.md"
@@ -169,7 +171,7 @@ report1=$("$template/tools/template-sync.sh" report --app-root "$app1" --output-
 [[ "$(snapshot "$app1")" == "$before" ]] || { echo 'the report wrote to the target repository' >&2; exit 1; }
 
 expected_readme_digest="sha256:$( { cat "$app1/docs/README.md"; printf '%s\n' '同期testの追記。'; } | shasum -a 256 | awk '{print $1}')"
-PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_digest" REPORT="$report1" ruby -rjson -rdigest -e '
+PLAN="$work/report1/plan.json" BASE="$base" NEXT_DECISION="$next_decision" README_DIGEST="$expected_readme_digest" REPORT="$report1" ruby -rjson -rdigest -e '
   plan = JSON.parse(File.read(ENV.fetch("PLAN")))
   abort "report digest differs" unless JSON.parse(ENV.fetch("REPORT"))["planDigest"] == "sha256:#{Digest::SHA256.file(ENV.fetch("PLAN")).hexdigest}"
   abort "base not recorded: #{plan["base"]}" unless plan["base"] == {"status" => "known", "commit" => ENV.fetch("BASE"), "method" => "created", "recordedAt" => "2026-10-05T00:00:00Z"}
@@ -204,8 +206,8 @@ PLAN="$work/report1/plan.json" BASE="$base" README_DIGEST="$expected_readme_dige
   abort "transformed README digest differs" unless files["docs/README.md"]["newDigest"] == ENV.fetch("README_DIGEST")
   abort "identity regression not flagged" unless files["docs/security.md"]["identityRegression"] == true
   abort "decision collision not reported" unless plan["decisions"] == {
-    "templateNew" => ["D-076"], "appendable" => false,
-    "collisions" => [{"id" => "D-076", "template" => "テンプレートの新しい決定", "app" => "アプリ固有の決定"}],
+    "templateNew" => [ENV.fetch("NEXT_DECISION")], "appendable" => false,
+    "collisions" => [{"id" => ENV.fetch("NEXT_DECISION"), "template" => "テンプレートの新しい決定", "app" => "アプリ固有の決定"}],
     "note" => "番号が衝突しています。アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移すまで、テンプレートのD-###を追記しません。"
   }
   sims = plan["simulators"]
