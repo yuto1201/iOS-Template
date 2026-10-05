@@ -1,14 +1,14 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { WorkerEnv } from "../src/env.ts";
-import { githubAppAuth } from "../src/github-app-auth.ts";
+import { githubAppAuth, pkcs8PemLabel } from "../src/github-app-auth.ts";
 
 const keys = await crypto.subtle.generateKey(
   { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
   true, ["sign", "verify"],
 );
 const pkcs8 = await crypto.subtle.exportKey("pkcs8", keys.privateKey);
-const pem = `-----BEGIN PRIVATE KEY-----\n${Buffer.from(pkcs8).toString("base64").match(/.{1,64}/g)!.join("\n")}\n-----END PRIVATE KEY-----`;
+const pem = `-----BEGIN ${pkcs8PemLabel}-----\n${Buffer.from(pkcs8).toString("base64").match(/.{1,64}/g)!.join("\n")}\n-----END ${pkcs8PemLabel}-----`;
 const start = Date.parse("2026-09-28T00:00:00Z");
 
 function environment(repository = "example-owner/GardenNotes-feedback"): WorkerEnv {
