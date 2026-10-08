@@ -94,7 +94,7 @@ review_bin="$review_home/bin"
 mkdir "$review_bin"
 ln -s /usr/bin/uname "$review_bin/uname"
 trap 'rm -rf "$review_home"' EXIT
-ruby -rtimeout - "$review_home" "$review_bin" "$review_codex_home" "$codex_bin" --ask-for-approval never exec --ignore-user-config --ignore-rules --strict-config -c 'default_permissions="reviewer"' -c 'permissions.reviewer.extends=":read-only"' -c "$filesystem_profile" -c 'permissions.reviewer.network={enabled=false}' -c 'mcp_servers={}' -c 'features.web_search=false' -c 'features.plugins=false' -c 'features.apps=false' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'shell_environment_policy.inherit="none"' --ephemeral -- "$prompt" <<'RUBY'
+ruby -rtimeout - "$review_home" "$review_bin" "$review_codex_home" "$codex_bin" --ask-for-approval never exec --ignore-user-config --ignore-rules --strict-config -m gpt-6-sol -c 'model_reasoning_effort="high"' -c 'default_permissions="reviewer"' -c 'permissions.reviewer.extends=":read-only"' -c "$filesystem_profile" -c 'permissions.reviewer.network={enabled=false}' -c 'mcp_servers={}' -c 'features.web_search=false' -c 'features.plugins=false' -c 'features.apps=false' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'shell_environment_policy.inherit="none"' --ephemeral -- "$prompt" <<'RUBY'
   review_home, review_bin, codex_home, *command = ARGV
   environment = {"PATH" => "#{review_bin}:/bin", "HOME" => review_home, "CODEX_HOME" => codex_home, "LANG" => "C", "LC_ALL" => "C"}
   timeout_seconds = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "600"), 10)

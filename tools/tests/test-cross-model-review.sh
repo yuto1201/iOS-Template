@@ -272,6 +272,10 @@ reset_review_requested() {
   printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 }
 
+# The Claude-primary reviewer runs the fixed model and reasoning effort, whatever the Mac's Codex default is.
+grep -Fq -- "--strict-config -m gpt-6-sol -c 'model_reasoning_effort=\"high\"' -c 'default_permissions=\"reviewer\"'" "$repo_root/tools/request-codex-review.sh" ||
+  { echo 'Codex reviewer launcher must pin gpt-6-sol with high reasoning effort' >&2; exit 1; }
+
 script_launcher_bin="$workspace/script-launcher"
 mkdir "$script_launcher_bin"
 cp "$repo_root/tools/tests/fixtures/cross-model-review/codex" "$script_launcher_bin/codex"
