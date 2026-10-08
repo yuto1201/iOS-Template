@@ -359,11 +359,6 @@ make_fixture "$symlink_fixture"
 ln -s "$valid_png" "$workspace/source-link.png"
 assert_fails 'symlinked source' "$installer" --root "$symlink_fixture" --source "$workspace/source-link.png" --concept-id concept-a --prompt-file "$prompt_file" --generator builtin-imagegen
 
-secret_prompt_fixture="$workspace/secret-prompt-app"
-make_fixture "$secret_prompt_fixture"
-printf '%s\n' 'A simple icon with API_KEY=do-not-store' >"$workspace/secret-prompt.txt"
-assert_fails 'credential-like prompt summary' "$installer" --root "$secret_prompt_fixture" --source "$valid_png" --concept-id concept-a --prompt-file "$workspace/secret-prompt.txt" --generator builtin-imagegen
-[[ ! -e "$secret_prompt_fixture/Config/app-icon.json" ]] || { echo 'credential-like prompt was written to the repository' >&2; exit 1; }
 
 # A Japanese UTF-8 summary is recorded as the same UTF-8 text without its surrounding spaces, even
 # from a shell without a locale, and the same input reruns as already complete.
@@ -395,15 +390,33 @@ japanese_rerun=$(japanese_install)
 [[ "$japanese_rerun" == *'"status":"already-complete"'* && -z "$(git -C "$japanese_fixture" status --porcelain=v1)" ]] ||
   { echo "Japanese prompt summary rerun was not idempotent: $japanese_rerun" >&2; exit 1; }
 
-# An invalid UTF-8 byte sequence is refused before anything is written.
-invalid_utf8_fixture="$workspace/invalid-utf8-prompt-app"
-make_fixture "$invalid_utf8_fixture"
+# Every refused prompt summary stops before writing: the asset, the Asset Catalog and the record stay as
+# committed (no asset, the original catalog, no record), and the repository has no change at all.
+refused_prompt() {
+  local label=$1 message=$2 refused="$workspace/refused-$1-app"
+  make_fixture "$refused"
+  assert_fails "$label prompt summary" env -u LANG -u LC_ALL -u LC_CTYPE "$installer" --root "$refused" --source "$valid_png" \
+    --concept-id concept-a --prompt-file "$workspace/$label-prompt.txt" --generator builtin-imagegen
+  grep -Fq "$message" "$workspace/stderr" || { echo "$label prompt summary was not refused as: $message" >&2; cat "$workspace/stderr" >&2; exit 1; }
+  [[ ! -e "$refused/Config/app-icon.json" && ! -e "$refused/GardenNotes/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" ]] ||
+    { echo "$label prompt summary wrote the asset or the record" >&2; exit 1; }
+  git -C "$refused" diff --quiet HEAD -- GardenNotes/Assets.xcassets/AppIcon.appiconset/Contents.json ||
+    { echo "$label prompt summary changed the Asset Catalog" >&2; exit 1; }
+  [[ -z "$(git -C "$refused" status --porcelain=v1 --untracked-files=all)" ]] ||
+    { echo "$label prompt summary changed the repository" >&2; exit 1; }
+}
 printf 'A leaf mark \xe8\xaa on a calm background\n' >"$workspace/invalid-utf8-prompt.txt"
-assert_fails 'invalid UTF-8 prompt summary' env -u LANG -u LC_ALL -u LC_CTYPE "$installer" --root "$invalid_utf8_fixture" --source "$valid_png" \
-  --concept-id concept-a --prompt-file "$workspace/invalid-utf8-prompt.txt" --generator builtin-imagegen
-grep -Fq 'prompt summary is invalid' "$workspace/stderr" || { echo 'invalid UTF-8 was not refused as an invalid prompt summary' >&2; cat "$workspace/stderr" >&2; exit 1; }
-[[ -z "$(git -C "$invalid_utf8_fixture" status --porcelain=v1 --untracked-files=all)" ]] ||
-  { echo 'invalid UTF-8 prompt summary changed the repository' >&2; exit 1; }
+refused_prompt invalid-utf8 'prompt summary is invalid'
+printf 'A leaf mark\001 on a calm background\n' >"$workspace/control-character-prompt.txt"
+refused_prompt control-character 'prompt summary is invalid'
+: >"$workspace/empty-prompt.txt"
+refused_prompt empty 'prompt summary is invalid'
+printf ' \t\n  \n' >"$workspace/whitespace-only-prompt.txt"
+refused_prompt whitespace-only 'prompt summary is empty'
+ruby -e 'print "a" * 4097' >"$workspace/oversized-prompt.txt"
+refused_prompt oversized 'prompt summary is invalid'
+printf '%s\n' 'A simple icon with API_KEY=do-not-store' >"$workspace/credential-prompt.txt"
+refused_prompt credential 'prompt summary contains a credential pattern'
 
 default_fixture="$workspace/default-app"
 make_fixture "$default_fixture" main-work
