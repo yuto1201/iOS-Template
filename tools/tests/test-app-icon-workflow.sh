@@ -365,6 +365,46 @@ printf '%s\n' 'A simple icon with API_KEY=do-not-store' >"$workspace/secret-prom
 assert_fails 'credential-like prompt summary' "$installer" --root "$secret_prompt_fixture" --source "$valid_png" --concept-id concept-a --prompt-file "$workspace/secret-prompt.txt" --generator builtin-imagegen
 [[ ! -e "$secret_prompt_fixture/Config/app-icon.json" ]] || { echo 'credential-like prompt was written to the repository' >&2; exit 1; }
 
+# A Japanese UTF-8 summary is recorded as the same UTF-8 text without its surrounding spaces, even
+# from a shell without a locale, and the same input reruns as already complete.
+japanese_fixture="$workspace/japanese-prompt-app"
+make_fixture "$japanese_fixture"
+japanese_summary='落ち着いた単色の背景に、中央の葉のマーク。文字なし。'
+printf '%s\n' "  $japanese_summary  " >"$workspace/japanese-prompt.txt"
+japanese_install() {
+  env -u LANG -u LC_ALL -u LC_CTYPE "$installer" --root "$japanese_fixture" --source "$valid_png" --concept-id concept-a \
+    --prompt-file "$workspace/japanese-prompt.txt" --generator builtin-imagegen
+}
+japanese_result=$(japanese_install)
+[[ "$japanese_result" == *'"status":"applied"'* ]] || { echo "Japanese prompt summary was not installed: $japanese_result" >&2; exit 1; }
+[[ "$("$validator" --root "$japanese_fixture")" == *'"status":"valid"'* ]] || { echo 'Japanese prompt summary record did not validate' >&2; exit 1; }
+python3 - "$japanese_fixture/Config/app-icon.json" "$japanese_summary" <<'PY'
+import json
+import sys
+
+raw = open(sys.argv[1], "rb").read()
+expected = sys.argv[2]
+if json.loads(raw.decode("utf-8"))["promptSummary"] != expected:
+    raise SystemExit("Japanese prompt summary differs")
+if expected.encode("utf-8") not in raw:
+    raise SystemExit("Japanese prompt summary is not stored as UTF-8 text")
+PY
+git -C "$japanese_fixture" add -A
+git -C "$japanese_fixture" commit -qm icon
+japanese_rerun=$(japanese_install)
+[[ "$japanese_rerun" == *'"status":"already-complete"'* && -z "$(git -C "$japanese_fixture" status --porcelain=v1)" ]] ||
+  { echo "Japanese prompt summary rerun was not idempotent: $japanese_rerun" >&2; exit 1; }
+
+# An invalid UTF-8 byte sequence is refused before anything is written.
+invalid_utf8_fixture="$workspace/invalid-utf8-prompt-app"
+make_fixture "$invalid_utf8_fixture"
+printf 'A leaf mark \xe8\xaa on a calm background\n' >"$workspace/invalid-utf8-prompt.txt"
+assert_fails 'invalid UTF-8 prompt summary' env -u LANG -u LC_ALL -u LC_CTYPE "$installer" --root "$invalid_utf8_fixture" --source "$valid_png" \
+  --concept-id concept-a --prompt-file "$workspace/invalid-utf8-prompt.txt" --generator builtin-imagegen
+grep -Fq 'prompt summary is invalid' "$workspace/stderr" || { echo 'invalid UTF-8 was not refused as an invalid prompt summary' >&2; cat "$workspace/stderr" >&2; exit 1; }
+[[ -z "$(git -C "$invalid_utf8_fixture" status --porcelain=v1 --untracked-files=all)" ]] ||
+  { echo 'invalid UTF-8 prompt summary changed the repository' >&2; exit 1; }
+
 default_fixture="$workspace/default-app"
 make_fixture "$default_fixture" main-work
 git -C "$default_fixture" switch -q main
