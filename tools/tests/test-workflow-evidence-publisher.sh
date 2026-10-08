@@ -15,6 +15,9 @@ trap '/bin/rm -rf "$scratch"' EXIT
 compiled_validator="$scratch/validate-verify-json"
 /usr/bin/swiftc "$validator" -o "$compiled_validator"
 
+phase_record='Config/releases/anygps-mvp/phase-records/0001-phase-1.json'
+
+# prepare_fixture LABEL [recorded]: "recorded" puts a template base record and a phase record in the base.
 prepare_fixture() {
   local label="$1"
   repo="$scratch/$label/repository"
@@ -25,6 +28,12 @@ prepare_fixture() {
   printf '%s\n' '.artifacts/' >"$repo/.gitignore"
   printf '%s\n' '# base' >"$repo/README.md"
   /usr/bin/git -C "$repo" add -- .gitignore README.md
+  if [[ "${2:-}" == recorded ]]; then
+    /bin/mkdir -p "$repo/Config/releases/anygps-mvp/phase-records"
+    printf '%s\n' '{"recordId":"0001-phase-1"}' >"$repo/$phase_record"
+    printf '%s\n' '{"baseCommit":"0000000000000000000000000000000000000001"}' >"$repo/Config/template-base.json"
+    /usr/bin/git -C "$repo" add -- "$phase_record" Config/template-base.json
+  fi
   /usr/bin/git -C "$repo" commit -q -m base
   base_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
   printf '%s\n' '{}' >"$repo/Config/repository-tests.json"
@@ -351,6 +360,74 @@ head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 rebind_head_artifacts "$previous_head"
 published="$(run_publisher)"
 [[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]] || { echo 'workflow publisher rejected the account ownership binding' >&2; exit 1; }
+
+# The staged Config changes become the Head, and the evidence follows it.
+commit_config_change() {
+  local previous_head="$head_sha"
+  /usr/bin/git -C "$repo" add -A -- Config
+  /usr/bin/git -C "$repo" commit -q --amend --no-edit
+  head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+  rebind_head_artifacts "$previous_head"
+}
+
+expect_published() {
+  published="$(run_publisher)"
+  [[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]] || { echo "workflow publisher rejected $1" >&2; exit 1; }
+}
+
+# D-073, D-074: the template base record may be added or changed.
+prepare_fixture template-base-record-add
+printf '%s\n' '{"baseCommit":"0000000000000000000000000000000000000002"}' >"$repo/Config/template-base.json"
+commit_config_change
+expect_published 'adding the template base record'
+
+prepare_fixture template-base-record-change recorded
+printf '%s\n' '{"baseCommit":"0000000000000000000000000000000000000003"}' >"$repo/Config/template-base.json"
+commit_config_change
+expect_published 'changing the template base record'
+
+# D-038: phase records are append-only, so only a new regular record file is accepted.
+prepare_fixture phase-record-add recorded
+printf '%s\n' '{"recordId":"0002-phase-2"}' >"$repo/Config/releases/anygps-mvp/phase-records/0002-phase-2.json"
+commit_config_change
+expect_published 'adding a new phase record'
+
+prepare_fixture phase-record-change recorded
+printf '%s\n' '{"recordId":"0001-phase-1","changed":true}' >"$repo/$phase_record"
+commit_config_change
+expect_rejection phase-record-change "workflow-only diff may only add a new phase record: $phase_record"
+
+prepare_fixture phase-record-delete recorded
+/usr/bin/git -C "$repo" rm -q -- "$phase_record"
+commit_config_change
+expect_rejection phase-record-delete "workflow-only diff may only add a new phase record: $phase_record"
+
+prepare_fixture phase-record-rename recorded
+/usr/bin/git -C "$repo" mv "$phase_record" Config/releases/anygps-mvp/phase-records/0003-phase-1.json
+commit_config_change
+expect_rejection phase-record-rename "workflow-only diff may only add a new phase record: $phase_record"
+
+prepare_fixture phase-record-executable recorded
+printf '%s\n' '{"recordId":"0002-phase-2"}' >"$repo/Config/releases/anygps-mvp/phase-records/0002-phase-2.json"
+/bin/chmod +x "$repo/Config/releases/anygps-mvp/phase-records/0002-phase-2.json"
+commit_config_change
+expect_rejection phase-record-executable 'workflow-only diff may only add a new phase record: Config/releases/anygps-mvp/phase-records/0002-phase-2.json'
+
+prepare_fixture phase-record-symlink recorded
+/bin/ln -s 0001-phase-1.json "$repo/Config/releases/anygps-mvp/phase-records/0002-phase-2.json"
+commit_config_change
+expect_rejection phase-record-symlink 'workflow-only diff may only add a new phase record: Config/releases/anygps-mvp/phase-records/0002-phase-2.json'
+
+prepare_fixture release-other-path recorded
+printf '%s\n' '{"scope":"other"}' >"$repo/Config/releases/anygps-mvp/plan.json"
+commit_config_change
+expect_rejection release-other-path 'workflow-only path is not allowlisted: Config/releases/anygps-mvp/plan.json'
+
+prepare_fixture phase-record-invalid-id recorded
+/bin/mkdir -p "$repo/Config/releases/AnyGPS/phase-records"
+printf '%s\n' '{"recordId":"0001"}' >"$repo/Config/releases/AnyGPS/phase-records/0001.json"
+commit_config_change
+expect_rejection phase-record-invalid-id 'workflow-only path is not allowlisted: Config/releases/AnyGPS/phase-records/0001.json'
 
 # D-075: a workflow-only change may move the legacy root README.md into docs/, but never edit a root README.md.
 prepare_fixture legacy-root-readme-move
