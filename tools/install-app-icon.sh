@@ -186,7 +186,9 @@ fi
 
 PROMPT="$prompt_file" DISPLAY_NAME="$display_name" CONCEPT_ID="$concept_id" GENERATOR="$generator" MODULE_NAME="$module_name" DIGEST="$digest" REFERENCE_DIGEST="$reference_digest" SELECTION_REVISION="$selection_revision" SUPERSEDES="$supersedes" /usr/bin/ruby -rjson -e '
   def refuse(message); warn message; exit 1; end
-  prompt=File.binread(ENV.fetch("PROMPT"))
+  # Read the summary as UTF-8 text: binary bytes would make valid_encoding? always true and stop
+  # JSON.generate on any non-ASCII character.
+  prompt=File.binread(ENV.fetch("PROMPT")).force_encoding(Encoding::UTF_8)
   refuse("prompt summary is invalid") unless prompt.valid_encoding? && prompt.bytesize.between?(1,4096) && !prompt.match?(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/)
   prompt=prompt.strip
   refuse("prompt summary is empty") if prompt.empty?

@@ -359,11 +359,64 @@ make_fixture "$symlink_fixture"
 ln -s "$valid_png" "$workspace/source-link.png"
 assert_fails 'symlinked source' "$installer" --root "$symlink_fixture" --source "$workspace/source-link.png" --concept-id concept-a --prompt-file "$prompt_file" --generator builtin-imagegen
 
-secret_prompt_fixture="$workspace/secret-prompt-app"
-make_fixture "$secret_prompt_fixture"
-printf '%s\n' 'A simple icon with API_KEY=do-not-store' >"$workspace/secret-prompt.txt"
-assert_fails 'credential-like prompt summary' "$installer" --root "$secret_prompt_fixture" --source "$valid_png" --concept-id concept-a --prompt-file "$workspace/secret-prompt.txt" --generator builtin-imagegen
-[[ ! -e "$secret_prompt_fixture/Config/app-icon.json" ]] || { echo 'credential-like prompt was written to the repository' >&2; exit 1; }
+
+# A Japanese UTF-8 summary is recorded as the same UTF-8 text without its surrounding spaces, even
+# from a shell without a locale, and the same input reruns as already complete.
+japanese_fixture="$workspace/japanese-prompt-app"
+make_fixture "$japanese_fixture"
+japanese_summary='落ち着いた単色の背景に、中央の葉のマーク。文字なし。'
+printf '%s\n' "  $japanese_summary  " >"$workspace/japanese-prompt.txt"
+japanese_install() {
+  env -u LANG -u LC_ALL -u LC_CTYPE "$installer" --root "$japanese_fixture" --source "$valid_png" --concept-id concept-a \
+    --prompt-file "$workspace/japanese-prompt.txt" --generator builtin-imagegen
+}
+japanese_result=$(japanese_install)
+[[ "$japanese_result" == *'"status":"applied"'* ]] || { echo "Japanese prompt summary was not installed: $japanese_result" >&2; exit 1; }
+[[ "$("$validator" --root "$japanese_fixture")" == *'"status":"valid"'* ]] || { echo 'Japanese prompt summary record did not validate' >&2; exit 1; }
+python3 - "$japanese_fixture/Config/app-icon.json" "$japanese_summary" <<'PY'
+import json
+import sys
+
+raw = open(sys.argv[1], "rb").read()
+expected = sys.argv[2]
+if json.loads(raw.decode("utf-8"))["promptSummary"] != expected:
+    raise SystemExit("Japanese prompt summary differs")
+if expected.encode("utf-8") not in raw:
+    raise SystemExit("Japanese prompt summary is not stored as UTF-8 text")
+PY
+git -C "$japanese_fixture" add -A
+git -C "$japanese_fixture" commit -qm icon
+japanese_rerun=$(japanese_install)
+[[ "$japanese_rerun" == *'"status":"already-complete"'* && -z "$(git -C "$japanese_fixture" status --porcelain=v1)" ]] ||
+  { echo "Japanese prompt summary rerun was not idempotent: $japanese_rerun" >&2; exit 1; }
+
+# Every refused prompt summary stops before writing: the asset, the Asset Catalog and the record stay as
+# committed (no asset, the original catalog, no record), and the repository has no change at all.
+refused_prompt() {
+  local label=$1 message=$2 refused="$workspace/refused-$1-app"
+  make_fixture "$refused"
+  assert_fails "$label prompt summary" env -u LANG -u LC_ALL -u LC_CTYPE "$installer" --root "$refused" --source "$valid_png" \
+    --concept-id concept-a --prompt-file "$workspace/$label-prompt.txt" --generator builtin-imagegen
+  grep -Fq "$message" "$workspace/stderr" || { echo "$label prompt summary was not refused as: $message" >&2; cat "$workspace/stderr" >&2; exit 1; }
+  [[ ! -e "$refused/Config/app-icon.json" && ! -e "$refused/GardenNotes/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" ]] ||
+    { echo "$label prompt summary wrote the asset or the record" >&2; exit 1; }
+  git -C "$refused" diff --quiet HEAD -- GardenNotes/Assets.xcassets/AppIcon.appiconset/Contents.json ||
+    { echo "$label prompt summary changed the Asset Catalog" >&2; exit 1; }
+  [[ -z "$(git -C "$refused" status --porcelain=v1 --untracked-files=all)" ]] ||
+    { echo "$label prompt summary changed the repository" >&2; exit 1; }
+}
+printf 'A leaf mark \xe8\xaa on a calm background\n' >"$workspace/invalid-utf8-prompt.txt"
+refused_prompt invalid-utf8 'prompt summary is invalid'
+printf 'A leaf mark\001 on a calm background\n' >"$workspace/control-character-prompt.txt"
+refused_prompt control-character 'prompt summary is invalid'
+: >"$workspace/empty-prompt.txt"
+refused_prompt empty 'prompt summary is invalid'
+printf ' \t\n  \n' >"$workspace/whitespace-only-prompt.txt"
+refused_prompt whitespace-only 'prompt summary is empty'
+ruby -e 'print "a" * 4097' >"$workspace/oversized-prompt.txt"
+refused_prompt oversized 'prompt summary is invalid'
+printf '%s\n' 'A simple icon with API_KEY=do-not-store' >"$workspace/credential-prompt.txt"
+refused_prompt credential 'prompt summary contains a credential pattern'
 
 default_fixture="$workspace/default-app"
 make_fixture "$default_fixture" main-work
