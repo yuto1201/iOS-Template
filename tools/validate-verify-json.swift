@@ -2698,9 +2698,11 @@ func validateWorkflowPath(_ path: String) throws {
     // manifest is non-secret configuration of the bootstrap tool that reads it. Config/ownership.yml
     // (#214) binds external operations to non-secret account and target identifiers; a change to it still
     // needs the strict opposite-model review and the pre-merge gate like every workflow-only change.
+    // Config/template-base.json (D-073, D-074) is the non-secret record of the template commit a repository
+    // is based on; adding or changing it also needs that review and the pre-merge gate.
     let exact: Set<String> = [
         "AGENTS.md", "Config/dedicated-simulators.json", "Config/ownership.yml",
-        "Config/repository-tests.json", "Config/template-identity.json"
+        "Config/repository-tests.json", "Config/template-base.json", "Config/template-identity.json"
     ]
     let prefixes = ["tools/", "docs/", "specs/", ".agents/", ".codex/", ".claude/", ".github/"]
     guard exact.contains(path) || localDeliveryToolPaths.contains(path) || prefixes.contains(where: { path.hasPrefix($0) }) else {
@@ -2739,6 +2741,11 @@ func validateWorkflowSharedSkillSymlink(expectedHead: String, path: String) thro
     }
 }
 
+// The phase record path rule of tools/lib/workflow-release-phase.rb (RECORD_PATH, D-038).
+let workflowPhaseRecordPattern = try! NSRegularExpression(
+    pattern: "^Config/releases/[a-z0-9][a-z0-9._-]*/phase-records/[a-z0-9][a-z0-9._-]*\\.json$"
+)
+
 func validateWorkflowDiff(expectedBase: String, expectedHead: String) throws {
     let result = try runGitProcess(["diff", "--raw", "-z", "--no-renames", expectedBase, expectedHead, "--"])
     guard result.status == 0 else { throw ValidationFailure("unable to inspect trusted workflow-only range") }
@@ -2757,6 +2764,16 @@ func validateWorkflowDiff(expectedBase: String, expectedHead: String) throws {
         let metadata = header.dropFirst().split(separator: " ").map(String.init)
         guard metadata.count == 5 else { throw ValidationFailure("Git raw diff contains malformed metadata") }
         let oldMode = metadata[0], newMode = metadata[1], status = metadata[4]
+        if matches(path, regex: workflowPhaseRecordPattern) {
+            // Phase records are append-only: a workflow-only change may add a new regular record file, never
+            // change, delete, rename, link or make one executable. Claim and the phase consumers validate the
+            // record content; the change still needs the strict opposite-model review and the pre-merge gate.
+            guard status == "A", oldMode == "000000", newMode == "100644" else {
+                throw ValidationFailure("workflow-only diff may only add a new phase record: \(path)")
+            }
+            index += 2
+            continue
+        }
         if path == legacyRootReadmePath {
             guard status == "D" else {
                 throw ValidationFailure("workflow-only diff may only delete the legacy root README.md")
