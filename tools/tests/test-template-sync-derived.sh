@@ -3,7 +3,8 @@ set -euo pipefail
 
 # D-074 template sync regressions in a derived app (#259). A disposable copy of the template records
 # its template base (D-073, before Identity bootstrap), then runs Identity bootstrap; in both states the
-# report and apply regressions must pass, without changing the repository that runs this test.
+# report and apply regressions must pass, without changing the repository that runs this test. Their
+# disposable repositories must be gone afterwards, whether they pass or fail.
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby swiftc tar shasum cc python3
@@ -30,10 +31,22 @@ repository_state() {
 }
 before=$(repository_state)
 
+# run_in_copy LABEL TEST: runs TEST of the derived copy in its own temporary area and returns its status.
+run_in_copy() {
+  local label=$1 test=$2 temporary="$work/temporary-${1// /-}-$2" status=0
+  mkdir -p "$temporary"
+  TMPDIR="$temporary" bash "$app/tools/tests/$test.sh" >"$work/$label-$test.log" 2>&1 || status=$?
+  if compgen -G "$temporary/ios-template-template-sync*" >/dev/null; then
+    echo "$test left its disposable repositories behind ($label)" >&2
+    exit 1
+  fi
+  return "$status"
+}
+
 run_sync_regressions() {
   local state=$1 test
   for test in test-template-sync test-template-sync-apply; do
-    if ! bash "$app/tools/tests/$test.sh" >"$work/$state-$test.log" 2>&1; then
+    if ! run_in_copy "$state" "$test"; then
       echo "$test failed in a derived app $state" >&2
       tail -n 20 "$work/$state-$test.log" >&2
       exit 1
@@ -66,6 +79,16 @@ commit_all "$app" identity
 [[ -d "$app/GardenNotes" && ! -e "$app/TemplateApp" && -f "$app/Config/app-identity.json" ]] ||
   { echo 'the derived copy was not converted to its Identity' >&2; exit 1; }
 run_sync_regressions 'after Identity bootstrap'
+
+# A failing run cleans up as well: an unreadable ownership manifest stops both regressions early.
+printf '%s\n' '{' >"$app/tools/template-sync/ownership.json"
+for test in test-template-sync test-template-sync-apply; do
+  if run_in_copy 'with a broken ownership manifest' "$test"; then
+    echo "$test passed with a broken ownership manifest" >&2
+    exit 1
+  fi
+done
+git -C "$app" checkout -q -- tools/template-sync/ownership.json
 
 [[ "$(repository_state)" == "$before" ]] || { echo 'the derived-app regression changed the running repository' >&2; exit 1; }
 echo "template sync derived-app tests passed"
