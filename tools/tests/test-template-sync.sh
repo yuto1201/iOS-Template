@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # D-074 template sync, report half: ownership classification and the read-only diff report/plan.
-# A synthetic template repository holds this template's tracked files as its base commit, then a
+# A synthetic template repository holds this template's tracked files (in a derived app, the same
+# files rebuilt from the frozen template Identity) as its base commit, then a
 # second commit with template-side changes; synthetic target repositories cover a recorded base,
 # an unknown base, a non-template repository, app-side changes, Identity transform, and a
 # decision-number collision.
@@ -11,6 +12,7 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby swiftc tar shasum
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
+source "$repo_root/tools/tests/fixtures/template-sync/template-sample.sh"
 work=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-template-sync.XXXXXX")
 work=$(cd "$work" && pwd -P)
 trap 'rm -rf -- "$work"' EXIT
@@ -39,8 +41,18 @@ expect_failure() {
   grep -Fq -- "$message" "$work/$label.out" || { echo "unexpected failure for $label" >&2; cat "$work/$label.out" >&2; exit 1; }
 }
 
+template="$work/template"
+build_template_sample "$repo_root" "$template"
+git -C "$template" init -q
+commit_all "$template" base
+base=$(git -C "$template" rev-parse HEAD)
+
 # --- ownership classification (AC-3) ----------------------------------------------------------
-check_output=$("$repo_root/tools/template-sync.sh" check)
+# The template is checked as it is. A derived app's own paths are not the template's files, so there
+# the rebuilt sample is checked instead.
+check_root=$repo_root
+template_sample_derived "$repo_root" && check_root=$template
+check_output=$("$check_root/tools/template-sync.sh" check)
 CHECK="$check_output" ruby -rjson -e '
   value = JSON.parse(ENV.fetch("CHECK"))
   abort "check did not classify the template" unless value["status"] == "classified"
@@ -49,14 +61,6 @@ CHECK="$check_output" ruby -rjson -e '
   abort "category counts do not cover every file" unless counts.values.sum == value["files"]
 '
 
-template="$work/template"
-mkdir -p "$template"
-(cd "$repo_root" && git ls-files -z | tar --null -T - -cf "$work/template.tar")
-tar -x -f "$work/template.tar" -C "$template"
-rm -f "$work/template.tar"
-git -C "$template" init -q
-commit_all "$template" base
-base=$(git -C "$template" rev-parse HEAD)
 
 printf '%s\n' 'unclassified' >"$template/UNCLASSIFIED.txt"
 commit_all "$template" unclassified

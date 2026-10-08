@@ -3,12 +3,14 @@ set -euo pipefail
 
 # D-074 template sync, apply half: approval bound to the plan digest, the Codex route through the
 # fixed read-only launcher, and apply on a synthetic target. A synthetic template repository holds
-# this template's tracked files as its base commit, then a second commit with template-side changes.
+# this template's tracked files (in a derived app, the same files rebuilt from the frozen template
+# Identity) as its base commit, then a second commit with template-side changes.
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby swiftc tar shasum cc
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
+source "$repo_root/tools/tests/fixtures/template-sync/template-sample.sh"
 work=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-template-sync-apply.XXXXXX")
 work=$(cd "$work" && pwd -P)
 trap 'rm -rf -- "$work"' EXIT
@@ -53,10 +55,7 @@ codex_url='https://github.com/yuto1201/iOS-GardenNotes/issues/7#issuecomment-100
 
 # --- synthetic template ----------------------------------------------------------------------
 template="$work/template"
-mkdir -p "$template"
-(cd "$repo_root" && git ls-files -z | tar --null -T - -cf "$work/template.tar")
-tar -x -f "$work/template.tar" -C "$template"
-rm -f "$work/template.tar"
+build_template_sample "$repo_root" "$template"
 git -C "$template" init -q
 commit_all "$template" base
 base=$(git -C "$template" rev-parse HEAD)
