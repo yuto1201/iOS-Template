@@ -466,6 +466,7 @@
     {"path": "tools/tests/test-spec-state.sh", "domains": ["repository-lint", "specification"]},
     {"path": "tools/tests/test-supabase-skill.sh", "domains": ["provider-security"]},
     {"path": "tools/tests/test-template-sync-apply.sh", "domains": ["template-sync"]},
+    {"path": "tools/tests/test-template-sync-derived.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-template-sync.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-tracked-credential-scan.sh", "domains": ["credential-scan"]},
     {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["ui-direction"]},
