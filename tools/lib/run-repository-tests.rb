@@ -27,6 +27,7 @@ module IOSTemplate
     FAILURE_FILE_PREFIX = "repository-test-failure-attempt-"
     # A failed test's own output is kept here, private to this user and outside the repository and the
     # canonical evidence, for the selected diagnostic before the one allowed retry (#268).
+    # IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT moves it to another absolute path outside both.
     FAILED_OUTPUT_ROOT = "/tmp/ios-template-repository-tests"
     FAILED_OUTPUT_LIMIT = 262_144
 
@@ -447,9 +448,22 @@ module IOSTemplate
       output = @failed_test_output
       return unless output
       root = File.realpath(repo)
+      # The canonical evidence may live behind the worktree's .artifacts link.
+      artifacts = File.join(root, ".artifacts")
+      protected_roots = [root] + (File.exist?(artifacts) ? [File.realpath(artifacts)] : [])
+      output_root = ENV.fetch("IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT", FAILED_OUTPUT_ROOT)
+      raise "the output root must be an absolute path" unless output_root.start_with?("/")
       worktree = "#{File.basename(root).gsub(/[^A-Za-z0-9_.-]/, '-')}-#{Digest::SHA256.hexdigest(root)}"
-      directory = private_output_directory!(FAILED_OUTPUT_ROOT)
-      [worktree, "issue-#{issue}", head_sha].each { |part| directory = private_output_directory!(File.join(directory, part)) }
+      directory = nil
+      [output_root, worktree, "issue-#{issue}", head_sha].each do |part|
+        candidate = directory ? File.join(directory, part) : part
+        # Checked before anything is created or changed there.
+        location = physical_location(candidate)
+        if protected_roots.any? { |protected| location == protected || location.start_with?(protected + "/") || protected.start_with?(location + "/") }
+          raise "the output location overlaps the repository or the canonical evidence"
+        end
+        directory = private_output_directory!(candidate)
+      end
       tail = ->(text) { bytes = text.to_s.b; bytes.bytesize > FAILED_OUTPUT_LIMIT ? bytes.byteslice(-FAILED_OUTPUT_LIMIT, FAILED_OUTPUT_LIMIT) : bytes }
       text = [
         "test: #{output.fetch('path')}", "exitStatus: #{output.fetch('exitStatus')}", "timedOut: #{output.fetch('timedOut')}",
@@ -462,6 +476,19 @@ module IOSTemplate
       warn "repository test output kept for diagnosis: #{path}"
     rescue StandardError => error
       warn "repository test output could not be kept: #{error.message}"
+    end
+
+    # Where a path would physically be, through the links of its nearest existing ancestor.
+    def physical_location(path)
+      current = File.expand_path(path)
+      missing = []
+      until File.exist?(current) || File.symlink?(current)
+        missing.unshift(File.basename(current))
+        parent = File.dirname(current)
+        raise "the output location cannot be resolved" if parent == current
+        current = parent
+      end
+      File.join(File.realpath(current), *missing)
     end
 
     # An existing or new directory owned by this user, never a link, with mode 0700.

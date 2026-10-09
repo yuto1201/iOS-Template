@@ -7,9 +7,10 @@ require_test_commands "$0" jq git ruby
 source_repo=$(cd "$(dirname "$0")/../.." && pwd -P)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-repository-evidence.XXXXXX")
 repo="$scratch/repo"
-# #268: where the runner keeps a failed test's own output for this fixture repository.
-kept_root="/tmp/ios-template-repository-tests/repo-$(printf '%s' "$(cd "$scratch" && pwd -P)/repo" | shasum -a 256 | awk '{print $1}')"
-trap 'rm -rf -- "$scratch" "$kept_root"' EXIT
+trap 'rm -rf -- "$scratch"' EXIT
+# #268: a failed test's own output is kept outside the fixture repository, here inside this scratch area.
+export IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT="$(cd "$scratch" && pwd -P)/kept-output"
+kept_root="$IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT/repo-$(printf '%s' "$(cd "$scratch" && pwd -P)/repo" | shasum -a 256 | awk '{print $1}')"
 
 git init -q -b main "$repo"
 git -C "$repo" config user.name Test
@@ -320,6 +321,63 @@ if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=1 IOS_TEMPLATE_RE
   exit 1
 fi
 grep -Fq 'repository test output could not be kept' "$scratch/unkept.err" || { echo 'the unkept output was not reported' >&2; exit 1; }
+
+# The default place is outside every repository, and a place inside the repository or the canonical
+# evidence is refused before anything is created there; the failure record is still published.
+ruby -I"$source_repo/tools/lib" -rrun-repository-tests -e '
+  abort "default output root changed" unless IOSTemplate::RepositoryTests::FAILED_OUTPUT_ROOT == "/tmp/ios-template-repository-tests"'
+for refused in 50:kept-output 51:.artifacts/kept-output; do
+  refused_issue=${refused%%:*} refused_root="$repo/${refused#*:}"
+  mkdir -p "$repo/.artifacts/issues/$refused_issue/$aggregate_head"
+  sed "s/\"issue\":47/\"issue\":$refused_issue/" "$repo/.artifacts/issues/47/issue-contract.json" >"$repo/.artifacts/issues/$refused_issue/issue-contract.json"
+  if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT="$refused_root" \
+    IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=1 IOS_TEMPLATE_REPOSITORY_TEST_SUITE_TIMEOUT_SECONDS=5 \
+    tools/run-repository-tests.sh --issue "$refused_issue" --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) \
+    >"$scratch/refused-$refused_issue.out" 2>"$scratch/refused-$refused_issue.err"; then
+    echo "a failing suite passed with the output root $refused_root" >&2
+    exit 1
+  fi
+  grep -Fq 'repository test output could not be kept: the output location overlaps the repository or the canonical evidence' "$scratch/refused-$refused_issue.err" ||
+    { echo "an output root inside the repository was not refused: $refused_root" >&2; cat "$scratch/refused-$refused_issue.err" >&2; exit 1; }
+  [[ ! -e "$refused_root" ]] || { echo "the runner created output inside the repository: $refused_root" >&2; exit 1; }
+  jq -e --argjson issue "$refused_issue" '.issue == $issue and .attempt == 1 and .failedTest == "tools/tests/test-alpha.sh"' \
+    "$repo/.artifacts/issues/$refused_issue/$aggregate_head/repository-test-failure-attempt-1.json" >/dev/null ||
+    { echo 'the failure record was not published when the output root was refused' >&2; exit 1; }
+done
+
+# Each stream keeps only its last 256 KiB.
+cat > "$repo/tools/tests/test-alpha.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'alpha passed'
+EOF
+cat > "$repo/tools/tests/test-beta.sh" <<'EOF'
+#!/usr/bin/env bash
+/usr/bin/ruby -e 'STDOUT.write("STDOUT-START" + "o" * 300_000 + "STDOUT-END\n"); STDERR.write("STDERR-START" + "e" * 300_000 + "STDERR-END\n")'
+exit 3
+EOF
+git -C "$repo" add tools/tests/test-alpha.sh tools/tests/test-beta.sh
+git -C "$repo" commit -q -m large-output-head
+large_head=$(git -C "$repo" rev-parse HEAD)
+mkdir -p "$repo/.artifacts/issues/49/$large_head"
+sed 's/"issue":47/"issue":49/' "$repo/.artifacts/issues/47/issue-contract.json" >"$repo/.artifacts/issues/49/issue-contract.json"
+if (cd "$repo" && tools/run-repository-tests.sh --issue 49 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) \
+  >"$scratch/large.out" 2>"$scratch/large.err"; then
+  echo 'a failing large-output suite passed' >&2
+  exit 1
+fi
+assert_kept_output "$kept_root/issue-49/$large_head/attempt-1-output.log" "$scratch/large.err" 'test: tools/tests/test-beta.sh' 'exitStatus: 3'
+ruby - "$kept_root/issue-49/$large_head/attempt-1-output.log" <<'TAIL'
+text = File.binread(ARGV.fetch(0))
+limit = 262_144
+stdout_marker = "--- stdout (last #{limit} bytes)\n"
+stderr_marker = "\n--- stderr (last #{limit} bytes)\n"
+stdout = text[(text.index(stdout_marker) + stdout_marker.length)...text.index(stderr_marker)]
+stderr = text[(text.index(stderr_marker) + stderr_marker.length)..]
+{"stdout" => [stdout, "o", "STDOUT"], "stderr" => [stderr, "e", "STDERR"]}.each do |name, (kept, fill, label)|
+  expected = (fill * 300_000 + "#{label}-END\n").byteslice(-limit, limit)
+  abort "#{name} was not cut to its last #{limit} bytes (#{kept.bytesize} bytes)" unless kept == expected && !kept.include?("#{label}-START")
+end
+TAIL
 jq -e '.issue == 48 and .attempt == 1 and .timedOut == true and .failedTest == "tools/tests/test-alpha.sh"' \
   "$repo/.artifacts/issues/48/$aggregate_head/repository-test-failure-attempt-1.json" >/dev/null ||
   { echo 'the failure record was not published when the output could not be kept' >&2; exit 1; }
@@ -354,9 +412,6 @@ review = IOSTemplate::ReviewContract
 Dir.mktmpdir("repository-two-revisions-") do |scratch|
   scratch = File.realpath(scratch)
   repo = File.join(scratch, "repo")
-  # #268: the failed Base cases below keep their output under this repository's own private directory.
-  kept = File.join(runner::FAILED_OUTPUT_ROOT, "repo-#{Digest::SHA256.hexdigest(repo)}")
-  at_exit { FileUtils.rm_rf(kept) }
   FileUtils.mkdir_p(File.join(repo, "tools/tests"))
   git = ->(*args) { runner.git!(repo, *args).strip }
   git.call("init", "-q", "-b", "main")
