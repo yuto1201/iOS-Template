@@ -268,7 +268,7 @@ Unit Test／UI TestはStoreKit configuration fileとStoreKit Testingのnetwork-f
 
 [プロダクト方針 §4.5](product.md#45-アプリ内フィードバック)を、次の4つの部分で実現する（D-076）。
 
-- **アプリ**：`Features/Feedback/`が、入力の検証、送る内容の組み立て、送信、sheetの状態を持つ。送信先のhostはビルド設定から読み、未設定なら入口を出さない。通信は認証情報とcookieを使わない。UI Testは通信しない送信の代わりを使う。
+- **アプリ**：`Features/Feedback/`が、入力の検証、送る内容の組み立て、送信、sheetの状態を持つ。送信先のhostはアプリに同梱する設定ファイル（`Features/Feedback/FeedbackEndpoint.json`）から読み、未設定なら入口を出さない。Info.plistに依存しないので、Info.plistを置き換えるAdMobの有効化でも送信先は残る。通信は認証情報とcookieを使わない。UI Testは通信しない送信の代わりを使う。
 - **Worker**：アプリごとのCloudflare Worker。`POST /v1/feedback`だけを受け、入力の検証、送信元IPごとと1日の回数制限、GitHub Appのinstallation tokenでのIssue作成を行う。秘密値はWorkerのsecretにだけ置き、IPアドレスと本文を保存もログもしない。テンプレートはWorkerのひな形とテストをskillに持ち、アプリの値（リポジトリ、Worker名、回数制限のnamespace）は準備toolが書き出す。
 - **GitHub**：全アプリで共有するGitHub App（Issues: Read and writeだけ）と、アプリごとの非公開リポジトリ`<GitHubのlogin>/<moduleName>-feedback`。
 - **準備tool**：新しいアプリの作成時に、リポジトリとlabel、Workerの書き出し、secretの登録とdeploy、送信先hostの設定を行う。外部操作はそのアプリのIssueで、設定済みのaccountと対象を確かめ、ユーザーの承認を得て行う。

@@ -17,6 +17,8 @@ struct ContentView: View {
             Text("template.welcome")
                 .font(.headline)
                 .accessibilityIdentifier("template.welcome-title")
+
+            FeedbackEntryButton()
         }
         .padding()
     }

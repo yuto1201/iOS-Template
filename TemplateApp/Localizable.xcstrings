@@ -1,6 +1,346 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "feedback.body" : {
+      "comment" : "Label of the feedback message editor.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Message"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内容"
+          }
+        }
+      }
+    },
+    "feedback.body.count %lld" : {
+      "comment" : "Characters typed out of the 2,000 allowed.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld / 2,000"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld / 2,000"
+          }
+        }
+      }
+    },
+    "feedback.cancel" : {
+      "comment" : "Closes the feedback sheet without sending.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "キャンセル"
+          }
+        }
+      }
+    },
+    "feedback.category" : {
+      "comment" : "Label of the feedback type picker.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Type"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "種類"
+          }
+        }
+      }
+    },
+    "feedback.category.bug" : {
+      "comment" : "Feedback type for a problem.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bug"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不具合"
+          }
+        }
+      }
+    },
+    "feedback.category.other" : {
+      "comment" : "Feedback type for anything else.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Other"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "その他"
+          }
+        }
+      }
+    },
+    "feedback.category.request" : {
+      "comment" : "Feedback type for a request.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Request"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要望"
+          }
+        }
+      }
+    },
+    "feedback.close" : {
+      "comment" : "Closes the feedback sheet after sending.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "閉じる"
+          }
+        }
+      }
+    },
+    "feedback.disclosure" : {
+      "comment" : "What is sent with feedback, and what is not.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sent anonymously with the app and iOS versions, device model, and language and region settings. Your data in the app and your contact details are not sent."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "匿名で送信します。アプリとiOSのバージョン、端末の機種、言語と地域の設定を添えます。アプリ内のデータと連絡先は送信しません。"
+          }
+        }
+      }
+    },
+    "feedback.entry" : {
+      "comment" : "Shown on the entry that opens the anonymous feedback sheet.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send Feedback"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フィードバックを送る"
+          }
+        }
+      }
+    },
+    "feedback.error.offline" : {
+      "comment" : "No connection; the message is kept for another try.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't connect. Check your connection and send again. Your message is kept."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続できませんでした。通信環境を確認して、もう一度送信してください。入力した内容は残っています。"
+          }
+        }
+      }
+    },
+    "feedback.error.rate-limited" : {
+      "comment" : "The feedback service limits how often messages are accepted.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Too many messages right now. Try again later."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信が集中しています。時間をおいて、もう一度送信してください。"
+          }
+        }
+      }
+    },
+    "feedback.error.server" : {
+      "comment" : "The feedback service could not accept the message.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn't send right now. Try again later."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今は送信できませんでした。時間をおいて、もう一度送信してください。"
+          }
+        }
+      }
+    },
+    "feedback.send" : {
+      "comment" : "Sends the feedback.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信"
+          }
+        }
+      }
+    },
+    "feedback.sending" : {
+      "comment" : "Shown while the feedback is being sent.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sending…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "送信中…"
+          }
+        }
+      }
+    },
+    "feedback.success.message" : {
+      "comment" : "Shown after the feedback was sent.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your feedback was sent. It helps improve the app."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フィードバックを送信しました。今後の改善に役立てます。"
+          }
+        }
+      }
+    },
+    "feedback.success.title" : {
+      "comment" : "Header shown after the feedback was sent.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thank you"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ありがとうございます"
+          }
+        }
+      }
+    },
+    "feedback.title" : {
+      "comment" : "Title of the feedback sheet.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feedback"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フィードバック"
+          }
+        }
+      }
+    },
+    "feedback.validation.body" : {
+      "comment" : "The message must not be empty or too long.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter 1 to 2,000 characters."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1〜2,000文字で入力してください。"
+          }
+        }
+      }
+    },
+    "feedback.validation.too-long" : {
+      "comment" : "The message is too large to send.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This message is too long to send. Shorten it and send again."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この内容は長すぎて送信できません。短くしてから、もう一度送信してください。"
+          }
+        }
+      }
+    },
     "template.welcome" : {
       "comment" : "Deterministic welcome message shown on the template launch screen.",
       "localizations" : {
