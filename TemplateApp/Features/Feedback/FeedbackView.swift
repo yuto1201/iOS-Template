@@ -80,7 +80,7 @@ struct FeedbackView: View {
     private var sentSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 8) {
-                Label("feedback.success.title", systemImage: "checkmark.circle.fill")
+                messageLabel("feedback.success.title", systemImage: "checkmark.circle.fill")
                     .font(.headline)
                     .foregroundStyle(.tint)
                     .accessibilityAddTraits(.isHeader)
@@ -135,7 +135,7 @@ struct FeedbackView: View {
         Section {
             // Right above Send, so the reason is where the user just tapped.
             if let sendError {
-                Label(sendError.messageKey, systemImage: "exclamationmark.triangle")
+                messageLabel(sendError.messageKey, systemImage: "exclamationmark.triangle")
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityFocused($focusesResult)
                     .accessibilityIdentifier("feedback.error")
@@ -158,8 +158,16 @@ struct FeedbackView: View {
         }
     }
 
+    /// A message with a decorative icon. VoiceOver and UI tests see one element that reads only the text,
+    /// so the icon's own name ("Selected" for a checkmark) is never read or matched instead.
+    private func messageLabel(_ key: LocalizedStringKey, systemImage: String) -> some View {
+        Label(key, systemImage: systemImage)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(key))
+    }
+
     private func validationMessage(_ key: LocalizedStringKey) -> some View {
-        Label(key, systemImage: "exclamationmark.circle")
+        messageLabel(key, systemImage: "exclamationmark.circle")
             .font(.footnote)
             .foregroundStyle(.red)
             .fixedSize(horizontal: false, vertical: true)
