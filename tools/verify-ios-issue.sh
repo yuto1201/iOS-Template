@@ -166,8 +166,10 @@ head_sha="$(run_git rev-parse HEAD 2>/dev/null)" || { echo "iOS verification fai
 [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "iOS verification failed: current Git Head is invalid" >&2; exit 1; }
 evidence_dir="$repository_root/.artifacts/issues/$issue/$head_sha"
 stage="preflight"
+retained_failure_id=""
+retained_failure_stage=""
 fail() {
-  local message="$1"
+  local message="$1" failure_record=""
   if [[ -n "${IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE-}" ]]; then
     message="$message; $IOS_TEMPLATE_LAST_TIMEOUT_MESSAGE"
   fi
@@ -175,9 +177,14 @@ fail() {
     select_initial_xcode_environment >/dev/null 2>&1 || true
   fi
   if [[ -n "${XCODE_SWIFT_PATH-}" ]]; then
-    run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-record-failure \
+    failure_record="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-record-failure \
       --issue "$issue" --expected-base "$expected_base" --expected-head "$head_sha" \
-      --stage "$stage" --message "$message" >/dev/null 2>&1 || true
+      --stage "$stage" --message "$message" 2>/dev/null)" || failure_record=""
+  fi
+  # The failed stage's diagnostics are kept under this failure record's UUID when the attempt is cleaned.
+  if [[ "$failure_record" =~ /failure-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$ ]]; then
+    retained_failure_id="${BASH_REMATCH[1]}"
+    retained_failure_stage="$stage"
   fi
   echo "iOS verification failed: $message" >&2
   exit 1
@@ -386,6 +393,18 @@ release_runner() {
       echo "iOS verification failed: active Simulator resource reclamation failed" >&2
       [[ "$status" -ne 0 ]] || status=1
     fi
+  fi
+  # Keep only the failed Build, Unit Test or UI case result bundle and log, outside the repository and the
+  # canonical evidence, for diagnosis (#262). Keeping them never blocks the cleanup below.
+  if [[ -n "$retained_failure_id" && -n "${config-}" && -n "${config_digest-}" ]]; then
+    case "$retained_failure_stage" in
+      build|unit-tests|case-*)
+        run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-retain-failure \
+          --config "$config" --digest "$config_digest" --failure "$retained_failure_id" \
+          --stage "$retained_failure_stage" >/dev/null 2>&1 ||
+          echo "iOS verification: the failed stage's diagnostics could not be retained" >&2
+        ;;
+    esac
   fi
   # Dispose of private state before closing the channel that holds the Head lock.
   if ! run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-clean-attempt \

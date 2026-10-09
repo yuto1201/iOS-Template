@@ -21,7 +21,18 @@ cleanup_test() {
     /bin/kill "$unrelated_timeout_pid" >/dev/null 2>&1 || true
     wait "$unrelated_timeout_pid" 2>/dev/null || true
   fi
-  [[ "${KEEP_IOS_RUNNER_SCRATCH-}" == 1 ]] || rm -rf "$scratch"
+  [[ "${KEEP_IOS_RUNNER_SCRATCH-}" == 1 ]] && return
+  # The runner workspaces of this fixture's own repositories, including the diagnostics a failed fixture
+  # run retains there (#262). Each name is derived from a repository under this scratch area. A private
+  # source snapshot is read-only, so write access comes back first; this cleanup never fails the test.
+  local fixture_root fixture_workspace
+  while IFS= read -r fixture_root; do
+    fixture_workspace="/tmp/ios-template-verify/repository-$(printf '%s' "$fixture_root" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+    [[ -e "$fixture_workspace" ]] || continue
+    /bin/chmod -R u+rwX "$fixture_workspace" 2>/dev/null || true
+    rm -rf "$fixture_workspace" 2>/dev/null || true
+  done < <(/usr/bin/find "$scratch" -mindepth 2 -maxdepth 2 -type d -name repository 2>/dev/null)
+  rm -rf "$scratch"
 }
 trap cleanup_test EXIT
 
