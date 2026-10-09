@@ -62,6 +62,11 @@ final class FeedbackUITests: XCTestCase {
         send.tap()
         XCTAssertTrue(element("feedback.validation", in: app).waitForExistence(timeout: 3))
         XCTAssertFalse(element("feedback.success", in: app).exists)
+        // VoiceOver focus moves only to a send result, not to the validation message. VoiceOver cannot
+        // run here, so the Debug sheet reports where it moved focus.
+        let resultFocus = element("feedback.result-focus", in: app)
+        XCTAssertTrue(resultFocus.waitForExistence(timeout: 3))
+        XCTAssertEqual(resultFocus.label, "result-focus:none")
 
         let request = app.segmentedControls["feedback.category"].buttons[language.request]
         request.tap()
@@ -69,19 +74,22 @@ final class FeedbackUITests: XCTestCase {
         body.tap()
         body.typeText("Template feedback check")
 
-        // No connection: the reason shows, and the message and type are kept for another try.
+        // No connection: the reason shows and takes VoiceOver focus, and the message and type are kept
+        // for another try.
         send.tap()
         let error = element("feedback.error", in: app)
         XCTAssertTrue(error.waitForExistence(timeout: 5))
         XCTAssertTrue(error.label.contains(language.offline), error.label)
+        XCTAssertTrue(waitForLabel("result-focus:error", of: resultFocus), resultFocus.label)
         XCTAssertEqual(body.value as? String, "Template feedback check")
         XCTAssertTrue(request.isSelected)
 
-        // Sending again succeeds, and Close returns to the root screen.
+        // Sending again succeeds, the result takes VoiceOver focus, and Close returns to the root screen.
         send.tap()
         let success = element("feedback.success", in: app)
         XCTAssertTrue(success.waitForExistence(timeout: 5))
         XCTAssertTrue(success.label.contains(language.success), success.label)
+        XCTAssertTrue(waitForLabel("result-focus:success", of: resultFocus), resultFocus.label)
         app.buttons["feedback.close"].tap()
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
         XCTAssertFalse(success.exists)
@@ -89,5 +97,10 @@ final class FeedbackUITests: XCTestCase {
 
     private func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)[identifier].firstMatch
+    }
+
+    private func waitForLabel(_ label: String, of element: XCUIElement) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", label), object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: 5) == .completed
     }
 }

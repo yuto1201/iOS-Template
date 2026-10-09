@@ -48,6 +48,10 @@ struct FeedbackView: View {
     @State private var showsValidation = false
     @State private var tooLong = false
     @AccessibilityFocusState private var focusesResult: Bool
+    #if DEBUG
+    /// UI tests only: the result VoiceOver focus was last moved to ("none", "error" or "success").
+    @State private var requestedResultFocus = "none"
+    #endif
     @FocusState private var editsBody: Bool
 
     private enum Phase { case editing, sending, sent }
@@ -75,7 +79,24 @@ struct FeedbackView: View {
                 }
             }
         }
+        #if DEBUG
+        .overlay(alignment: .bottomTrailing) { resultFocusProbe }
+        #endif
     }
+
+    #if DEBUG
+    /// UI tests only (the scripted sender): the result the sheet last moved VoiceOver focus to. XCUITest
+    /// cannot run VoiceOver, and SwiftUI keeps the focus state false while VoiceOver is off, so the
+    /// sheet records each focus request here for the test to read.
+    @ViewBuilder private var resultFocusProbe: some View {
+        if sender is ScriptedFeedbackSender {
+            Text(verbatim: "result-focus:\(requestedResultFocus)")
+                .font(.system(size: 1))
+                .frame(width: 1, height: 1)
+                .accessibilityIdentifier("feedback.result-focus")
+        }
+    }
+    #endif
 
     private var sentSection: some View {
         Section {
@@ -174,6 +195,14 @@ struct FeedbackView: View {
             .accessibilityIdentifier("feedback.validation")
     }
 
+    /// Moves VoiceOver focus to the shown result: the success title, or the error above Send.
+    private func moveFocusToResult() {
+        focusesResult = true
+        #if DEBUG
+        requestedResultFocus = phase == .sent ? "success" : (sendError == nil ? "none" : "error")
+        #endif
+    }
+
     private func send() {
         guard let body = draft.validatedBody() else {
             showsValidation = true
@@ -185,6 +214,11 @@ struct FeedbackView: View {
         guard !tooLong else { return }
         sendError = nil
         editsBody = false
+        // Cleared while sending, so focus moves again to this attempt's result.
+        focusesResult = false
+        #if DEBUG
+        requestedResultFocus = "none"
+        #endif
         phase = .sending
         Task {
             do {
@@ -198,7 +232,7 @@ struct FeedbackView: View {
                 phase = .editing
             }
             // One run-loop turn later, once the result row exists, so VoiceOver can move to it.
-            DispatchQueue.main.async { focusesResult = true }
+            DispatchQueue.main.async { moveFocusToResult() }
         }
     }
 }
