@@ -4060,6 +4060,189 @@ func cleanRunnerAttempt(configPath: String, expectedDigest: String) throws {
     try removeBoundRunnerAttempt(parent: parent, name: name, attempt: attempt)
 }
 
+// Diagnostics of a failed verification stage (#262). Before the attempt is removed, the failed stage's
+// result bundle and log move to <workspace>/Retained/failure-<uuid>/, named by the UUID of the same
+// failure record. They stay outside the repository and the canonical evidence, are private to this
+// user, and only help diagnose that failure; no evidence, review packet or PR body reads them.
+let retainedFailurePattern = try! NSRegularExpression(
+    pattern: "^failure-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+let retainedFailureRecordKeys: Set<String> = [
+    "failureId", "items", "repositoryRoot", "retainedAt", "schemaVersion", "stage", "workspaceRoot"
+]
+
+struct RetainedFailureItem {
+    let directory: String?
+    let name: String
+    let type: mode_t
+}
+
+// Only the failed stage's own result bundle and log: Build, the selected Unit Test, or one sealed UI case.
+func retainedFailureItems(stage: String, caseIDs: [String]) -> [RetainedFailureItem] {
+    switch stage {
+    case "build":
+        return [RetainedFailureItem(directory: nil, name: "Build.xcresult", type: S_IFDIR),
+                RetainedFailureItem(directory: nil, name: "build.log", type: S_IFREG)]
+    case "unit-tests":
+        return [RetainedFailureItem(directory: nil, name: "Tests.xcresult", type: S_IFDIR),
+                RetainedFailureItem(directory: nil, name: "tests.log", type: S_IFREG)]
+    default:
+        guard stage.hasPrefix("case-") else { return [] }
+        let caseID = String(stage.dropFirst("case-".count))
+        guard caseIDs.contains(caseID) else { return [] }
+        return [RetainedFailureItem(directory: "Cases", name: "\(caseID).xcresult", type: S_IFDIR),
+                RetainedFailureItem(directory: nil, name: "\(caseID)-ui-test.log", type: S_IFREG)]
+    }
+}
+
+func retainRunnerFailure(configPath: String, expectedDigest: String, failureID: String, stage: String) throws -> String {
+    let config = try readSealedRunnerConfig(configPath: configPath, expectedDigest: expectedDigest)
+    guard let attemptPath = config["attemptRoot"] as? String, configPath == attemptPath + "/config.json",
+          let workspacePath = config["workspaceRoot"] as? String,
+          let repositoryRoot = config["repositoryRoot"] as? String else {
+        throw ValidationFailure("runner attempt identity mismatch")
+    }
+    try validateCleanupIdentity(config: config, attemptPath: attemptPath)
+    let directoryName = "failure-\(failureID)"
+    guard matches(directoryName, regex: retainedFailurePattern) else {
+        throw ValidationFailure("retained failure identity is invalid")
+    }
+    let items = retainedFailureItems(stage: stage, caseIDs: try runnerConfigCaseIDs(config))
+    guard !items.isEmpty else { return "none" }
+
+    let temporary = open("/tmp", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard temporary >= 0 else { throw ValidationFailure("trusted temporary root is unavailable") }
+    defer { close(temporary) }
+    let workspaceComponents = try relativeComponents(String(workspacePath.dropFirst("/tmp/".count)), at: "runner workspace")
+    let workspaceParent = try openBoundDirectory(
+        rootFileDescriptor: temporary, components: Array(workspaceComponents.dropLast()), at: "runner workspace parent"
+    )
+    defer { close(workspaceParent) }
+    let workspace = try openOwnedRunnerDirectory(parent: workspaceParent, name: workspaceComponents.last!)
+    defer { close(workspace) }
+    let attempts = try openOwnedRunnerDirectory(parent: workspace, name: "Attempts")
+    defer { close(attempts) }
+    let attemptName = String(attemptPath.split(separator: "/").last!)
+    let attempt = try openOwnedRunnerDirectory(parent: attempts, name: attemptName)
+    defer { close(attempt) }
+    let boundConfig = try readSealedRunnerConfig(directory: attempt, expectedDigest: expectedDigest)
+    try validateCleanupIdentity(config: boundConfig, attemptPath: attemptPath)
+
+    // What the failed stage left behind, each an owned entry of the expected type and never a link.
+    var present: [(parent: Int32, name: String)] = []
+    var opened: [Int32] = []
+    defer { opened.forEach { close($0) } }
+    for item in items {
+        var parent = attempt
+        if let directory = item.directory {
+            var info = stat()
+            guard fstatat(attempt, directory, &info, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+            let child = try openOwnedRunnerDirectory(parent: attempt, name: directory)
+            opened.append(child)
+            parent = child
+        }
+        var info = stat()
+        guard fstatat(parent, item.name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+        guard (info.st_mode & S_IFMT) == item.type, info.st_uid == getuid() else {
+            throw ValidationFailure("failed stage output is not an owned result bundle or log")
+        }
+        present.append((parent, item.name))
+    }
+    guard !present.isEmpty else { return "none" }
+
+    let retained = try ensureOwnedDirectory(
+        parent: workspace, name: "Retained", privatePermissions: true, label: "retained failure directory"
+    )
+    defer { close(retained) }
+    try checkOwnedRunnerEntry(parent: workspace, name: "Retained", descriptor: retained, type: S_IFDIR)
+    guard mkdirat(retained, directoryName, S_IRWXU) == 0 else {
+        throw ValidationFailure("retained failure already exists")
+    }
+    let target = try openOwnedRunnerDirectory(parent: retained, name: directoryName)
+    defer { close(target) }
+    do {
+        guard fchmod(target, S_IRWXU) == 0 else { throw ValidationFailure("retained failure could not be made private") }
+        for entry in present {
+            guard renameat(entry.parent, entry.name, target, entry.name) == 0 else {
+                throw ValidationFailure("failed stage output could not be retained")
+            }
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let record: [String: Any] = [
+            "schemaVersion": 1, "failureId": failureID, "stage": stage,
+            "items": present.map { $0.name }, "repositoryRoot": repositoryRoot,
+            "workspaceRoot": workspacePath, "retainedAt": formatter.string(from: Date())
+        ]
+        try writeExclusiveFile(
+            directoryFileDescriptor: target, name: "retained.json",
+            data: try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) + Data("\n".utf8),
+            permissions: S_IRUSR
+        )
+        guard fsync(target) == 0, fsync(retained) == 0, fsync(attempt) == 0 else {
+            throw ValidationFailure("retained failure could not be synchronized")
+        }
+    } catch {
+        // A partial retention without its record could never be collected, so it is removed at once.
+        try? removeBoundRunnerAttempt(parent: retained, name: directoryName, attempt: target)
+        throw error
+    }
+    return workspacePath + "/Retained/" + directoryName
+}
+
+// Keeps only the newest retained failure of one Head. An older one is removed only when it proves its
+// ownership; unknown names, links and records of another workspace or repository are left alone.
+func pruneRetainedFailures(head: Int32, workspacePath: String, repositoryRoot: String) -> (removed: Int, skipped: Int, failed: Int) {
+    var removed = 0, skipped = 0, failed = 0
+    let retained = openat(head, "Retained", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard retained >= 0 else {
+        var info = stat()
+        if fstatat(head, "Retained", &info, AT_SYMLINK_NOFOLLOW) == 0 { skipped += 1 }
+        return (removed, skipped, failed)
+    }
+    defer { close(retained) }
+    guard (try? checkOwnedRunnerEntry(parent: head, name: "Retained", descriptor: retained, type: S_IFDIR)) != nil,
+          let names = try? sortedDirectoryNames(retained, label: "retained failure cleanup") else {
+        return (removed, skipped + 1, failed)
+    }
+    var entries: [(retainedAt: String, name: String, descriptor: Int32)] = []
+    defer { entries.forEach { close($0.descriptor) } }
+    for name in names {
+        guard matches(name, regex: retainedFailurePattern),
+              let directory = try? openOwnedRunnerDirectory(parent: retained, name: name) else {
+            skipped += 1
+            continue
+        }
+        let file = openat(directory, "retained.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        var info = stat()
+        guard file >= 0 else { close(directory); skipped += 1; continue }
+        defer { close(file) }
+        guard (try? checkOwnedRunnerEntry(parent: directory, name: "retained.json", descriptor: file, type: S_IFREG)) != nil,
+              fstat(file, &info) == 0, info.st_nlink == 1, info.st_size <= 65_536,
+              let data = try? readAll(file, at: "retained failure record"),
+              let record = (try? JSONSerialization.jsonObject(with: data)) as? JSONObject,
+              Set(record.keys) == retainedFailureRecordKeys,
+              record["schemaVersion"] as? Int == 1,
+              record["failureId"] as? String == String(name.dropFirst("failure-".count)),
+              record["workspaceRoot"] as? String == workspacePath,
+              record["repositoryRoot"] as? String == repositoryRoot,
+              let retainedAt = record["retainedAt"] as? String else {
+            close(directory)
+            skipped += 1
+            continue
+        }
+        entries.append((retainedAt, name, directory))
+    }
+    let ordered = entries.sorted { ($0.retainedAt, $0.name) < ($1.retainedAt, $1.name) }
+    for entry in ordered.dropLast() {
+        do {
+            try removeBoundRunnerAttempt(parent: retained, name: entry.name, attempt: entry.descriptor)
+            removed += 1
+        } catch { failed += 1 }
+    }
+    return (removed, skipped, failed)
+}
+
 // Called only by the lock holder, before Build. The current Head uses its already
 // held lock; every other Head requires a separate nonblocking kernel lock.
 func cleanRunnerOrphans(config: JSONObject) {
@@ -4068,7 +4251,8 @@ func cleanRunnerOrphans(config: JSONObject) {
         FileHandle.standardError.write(Data("runner orphan cleanup: removed=\(removed) skipped=\(skipped) failed=\(failed)\n".utf8))
     }
     do {
-        guard let currentAttempt = config["attemptRoot"] as? String else {
+        guard let currentAttempt = config["attemptRoot"] as? String,
+              let repositoryRoot = config["repositoryRoot"] as? String else {
             throw ValidationFailure("runner attempt identity missing")
         }
         try validateCleanupIdentity(config: config, attemptPath: currentAttempt)
@@ -4102,6 +4286,14 @@ func cleanRunnerOrphans(config: JSONObject) {
                                   flock(lock, LOCK_EX | LOCK_NB) == 0 else { skipped += 1; continue }
                             try checkOwnedRunnerEntry(parent: head, name: ".verify.lock", descriptor: lock, type: S_IFREG)
                         }
+                        let pruned = pruneRetainedFailures(
+                            head: head,
+                            workspacePath: "/tmp/ios-template-verify/\(components[2])/\(issueName)/\(headName)",
+                            repositoryRoot: repositoryRoot
+                        )
+                        removed += pruned.removed
+                        skipped += pruned.skipped
+                        failed += pruned.failed
                         let attempts = try openOwnedRunnerDirectory(parent: head, name: "Attempts")
                         defer { close(attempts) }
                         for name in try sortedDirectoryNames(attempts, label: "runner cleanup") {
@@ -7209,6 +7401,14 @@ do {
             throw ValidationFailure("invalid runner cleanup arguments")
         }
         try cleanRunnerAttempt(configPath: arguments[2], expectedDigest: arguments[4])
+    } else if arguments.first == "--runner-retain-failure" {
+        guard arguments.count == 9, arguments[1] == "--config", arguments[3] == "--digest",
+              arguments[5] == "--failure", arguments[7] == "--stage" else {
+            throw ValidationFailure("invalid runner failure retention arguments")
+        }
+        print(try retainRunnerFailure(
+            configPath: arguments[2], expectedDigest: arguments[4], failureID: arguments[6], stage: arguments[8]
+        ))
     } else if arguments.first == "--runner-verify-xcode" {
         guard arguments.count == 11, arguments[1] == "--config", arguments[3] == "--digest",
               arguments[5] == "--path", arguments[7] == "--version", arguments[9] == "--build" else {
