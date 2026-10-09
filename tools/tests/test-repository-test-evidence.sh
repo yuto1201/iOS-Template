@@ -378,6 +378,34 @@ stderr = text[(text.index(stderr_marker) + stderr_marker.length)..]
   abort "#{name} was not cut to its last #{limit} bytes (#{kept.bytesize} bytes)" unless kept == expected && !kept.include?("#{label}-START")
 end
 TAIL
+
+# A restrictive umask cannot narrow the private modes of the kept output.
+ruby -I"$source_repo/tools/lib" -rrun-repository-tests -rtmpdir -e '
+  runner = IOSTemplate::RepositoryTests
+  Dir.mktmpdir("repository-output-umask-") do |scratch|
+    scratch = File.realpath(scratch)
+    repo = File.join(scratch, "repo")
+    Dir.mkdir(repo)
+    ENV["IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT"] = File.join(scratch, "kept")
+    runner.instance_variable_set(:@failed_test_output, {"path" => "tools/tests/test-beta.sh", "exitStatus" => 3,
+      "timedOut" => false, "elapsedSeconds" => 0.1, "stdout" => "umask-stdout", "stderr" => "umask-stderr"})
+    previous = File.umask(0o377)
+    begin
+      runner.keep_failed_test_output(repo, issue: 52, head_sha: "a" * 40, attempt: 1)
+    ensure
+      File.umask(previous)
+    end
+    file = Dir.glob(File.join(scratch, "kept", "*", "issue-52", "a" * 40, "attempt-1-output.log")).first
+    abort "the output was not kept under a restrictive umask" unless file
+    abort "kept output mode under a restrictive umask: #{format("%o", File.stat(file).mode & 0o777)}" unless (File.stat(file).mode & 0o777) == 0o600
+    directory = File.dirname(file)
+    until directory == scratch
+      abort "kept output directory mode under a restrictive umask: #{directory}" unless (File.stat(directory).mode & 0o777) == 0o700
+      directory = File.dirname(directory)
+    end
+    abort "kept output under a restrictive umask is unreadable" unless File.read(file).include?("umask-stderr")
+  end
+'
 jq -e '.issue == 48 and .attempt == 1 and .timedOut == true and .failedTest == "tools/tests/test-alpha.sh"' \
   "$repo/.artifacts/issues/48/$aggregate_head/repository-test-failure-attempt-1.json" >/dev/null ||
   { echo 'the failure record was not published when the output could not be kept' >&2; exit 1; }

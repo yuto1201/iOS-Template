@@ -472,7 +472,11 @@ module IOSTemplate
         "--- stderr (last #{FAILED_OUTPUT_LIMIT} bytes)", tail.call(output.fetch("stderr"))
       ].map(&:b).join("\n".b)
       path = File.join(directory, "attempt-#{attempt}-output.log")
-      File.open(path, File::WRONLY | File::CREAT | File::EXCL | File::NOFOLLOW | File::BINARY, 0o600) { |file| file.write(text) }
+      File.open(path, File::WRONLY | File::CREAT | File::EXCL | File::NOFOLLOW | File::BINARY, 0o600) do |file|
+        # The process umask may have narrowed the creation mode, so it is set again through the open file.
+        file.chmod(0o600)
+        file.write(text)
+      end
       warn "repository test output kept for diagnosis: #{path}"
     rescue StandardError => error
       warn "repository test output could not be kept: #{error.message}"
