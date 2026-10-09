@@ -25,6 +25,10 @@ module IOSTemplate
     DEFAULT_FULL_CHILD_TIMEOUT_SECONDS = 900
     DEFAULT_FULL_SUITE_TIMEOUT_SECONDS = 14_400
     FAILURE_FILE_PREFIX = "repository-test-failure-attempt-"
+    # A failed test's own output is kept here, private to this user and outside the repository and the
+    # canonical evidence, for the selected diagnostic before the one allowed retry (#268).
+    FAILED_OUTPUT_ROOT = "/tmp/ios-template-repository-tests"
+    FAILED_OUTPUT_LIMIT = 262_144
 
     def run(repo:, issue:, expected_base:, mappings:, base_mappings: {}, retry_after_targeted: nil, before_publish: nil)
       reject("repository root must be a physical absolute directory") unless repo.start_with?("/") && File.realpath(repo) == repo
@@ -129,6 +133,7 @@ module IOSTemplate
         execution_stage = "suite"
         warn "repository test execution plan: #{JSON.generate({scope: execution_scope, testCount: tests.length,
           tests: tests, childTimeoutSeconds: child_timeout_seconds, suiteTimeoutSeconds: suite_timeout_seconds})}"
+        @failed_test_output = nil
         begin
           if retry_after_targeted
             execution_stage = "diagnostic"
@@ -171,6 +176,7 @@ module IOSTemplate
             stage: execution_stage, child_timeout_seconds: child_timeout_seconds,
             suite_timeout_seconds: suite_timeout_seconds, elapsed_seconds: elapsed_seconds,
             failure_details: failure_details, error: error.message)
+          keep_failed_test_output(repo, issue: issue, head_sha: head_sha, attempt: previous_failures.length + 1)
           raise
         end
         suite_completed = Time.now.utc
@@ -292,6 +298,10 @@ module IOSTemplate
             )
             completed = Time.now.utc
             exit_status = timed_out ? 124 : status.exitstatus || 128 + status.termsig.to_i
+            unless status.success? && !timed_out
+              @failed_test_output = {"path" => path, "exitStatus" => exit_status, "timedOut" => timed_out,
+                                     "elapsedSeconds" => elapsed, "stdout" => stdout, "stderr" => stderr}
+            end
             results << {
               "path" => path,
               "arguments" => arguments,
@@ -429,6 +439,42 @@ module IOSTemplate
       }
       snapshots.publish_exclusive(head_directory, "#{FAILURE_FILE_PREFIX}#{attempt}.json", JSON.generate(document).b,
         at: "repository test failure attempt #{attempt}")
+    end
+
+    # Writes the failed test's output tail for diagnosis. It never changes the published failure record or
+    # the runner's exit, and it is never evidence, review input or PR text.
+    def keep_failed_test_output(repo, issue:, head_sha:, attempt:)
+      output = @failed_test_output
+      return unless output
+      root = File.realpath(repo)
+      worktree = "#{File.basename(root).gsub(/[^A-Za-z0-9_.-]/, '-')}-#{Digest::SHA256.hexdigest(root)}"
+      directory = private_output_directory!(FAILED_OUTPUT_ROOT)
+      [worktree, "issue-#{issue}", head_sha].each { |part| directory = private_output_directory!(File.join(directory, part)) }
+      tail = ->(text) { bytes = text.to_s.b; bytes.bytesize > FAILED_OUTPUT_LIMIT ? bytes.byteslice(-FAILED_OUTPUT_LIMIT, FAILED_OUTPUT_LIMIT) : bytes }
+      text = [
+        "test: #{output.fetch('path')}", "exitStatus: #{output.fetch('exitStatus')}", "timedOut: #{output.fetch('timedOut')}",
+        "elapsedSeconds: #{format('%.3f', output.fetch('elapsedSeconds'))}",
+        "--- stdout (last #{FAILED_OUTPUT_LIMIT} bytes)", tail.call(output.fetch("stdout")),
+        "--- stderr (last #{FAILED_OUTPUT_LIMIT} bytes)", tail.call(output.fetch("stderr"))
+      ].map(&:b).join("\n".b)
+      path = File.join(directory, "attempt-#{attempt}-output.log")
+      File.open(path, File::WRONLY | File::CREAT | File::EXCL | File::NOFOLLOW | File::BINARY, 0o600) { |file| file.write(text) }
+      warn "repository test output kept for diagnosis: #{path}"
+    rescue StandardError => error
+      warn "repository test output could not be kept: #{error.message}"
+    end
+
+    # An existing or new directory owned by this user, never a link, with mode 0700.
+    def private_output_directory!(path)
+      begin
+        Dir.mkdir(path, 0o700)
+      rescue Errno::EEXIST
+        nil
+      end
+      info = File.lstat(path)
+      raise "unsafe output directory #{path}" unless info.directory? && !info.symlink? && info.uid == Process.uid
+      File.chmod(0o700, path) unless (info.mode & 0o777) == 0o700
+      path
     end
 
     def capture3_bounded(environment, *command, chdir:, timeout_seconds:)

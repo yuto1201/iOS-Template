@@ -6,8 +6,10 @@ require_test_commands "$0" jq git ruby
 
 source_repo=$(cd "$(dirname "$0")/../.." && pwd -P)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-repository-evidence.XXXXXX")
-trap 'rm -rf -- "$scratch"' EXIT
 repo="$scratch/repo"
+# #268: where the runner keeps a failed test's own output for this fixture repository.
+kept_root="/tmp/ios-template-repository-tests/repo-$(printf '%s' "$(cd "$scratch" && pwd -P)/repo" | shasum -a 256 | awk '{print $1}')"
+trap 'rm -rf -- "$scratch" "$kept_root"' EXIT
 
 git init -q -b main "$repo"
 git -C "$repo" config user.name Test
@@ -86,6 +88,8 @@ evidence="$head_dir/repository-tests.json"
 [[ $(stat -f '%Lp' "$evidence") == 600 ]] || { echo 'repository test evidence permissions differ' >&2; exit 1; }
 grep -Fq 'sensitive-test-output-must-not-be-published' "$evidence" && { echo 'test output leaked into evidence' >&2; exit 1; }
 grep -Fq 'repository test execution completed:' "$scratch/initial.err"
+[[ ! -e "$kept_root/issue-42" ]] && ! grep -Fq 'repository test output kept' "$scratch/initial.err" ||
+  { echo 'a passing suite kept test output' >&2; exit 1; }
 grep -Eq '"elapsedSeconds":[0-9]' "$scratch/initial.err"
 grep -Fq '"unexecutedTests":[]' "$scratch/initial.err"
 
@@ -147,6 +151,8 @@ grep -Fq 'canonical repository-tests.json already exists' "$scratch/collision.er
 
 cat > "$repo/tools/tests/test-beta.sh" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' 'beta-stdout-before-failure'
+printf '%s\n' 'beta-stderr-before-failure' >&2
 exit 3
 EOF
 git -C "$repo" add tools/tests/test-beta.sh
@@ -167,6 +173,29 @@ jq -e '.issue == 43 and .attempt == 1 and .scope == "legacy-head" and .stage == 
   .unexecutedTestPaths == []' "$failure_one" >/dev/null
 grep -Fq 'repository test execution stopped:' "$scratch/fail.err"
 grep -Fq '"timedOut":false' "$scratch/fail.err"
+# The failed test's output is kept privately, outside the repository and the canonical evidence, and the
+# failure record keeps its exact schema.
+assert_kept_output() {
+  local file=$1 run_log=$2 directory
+  shift 2
+  [[ -f "$file" && ! -L "$file" && $(stat -f '%Lp %u' "$file") == "600 $(id -u)" ]] || { echo "failed test output was not kept privately: $file" >&2; exit 1; }
+  for directory in "$kept_root" "$(dirname "$(dirname "$file")")" "$(dirname "$file")"; do
+    [[ -d "$directory" && ! -L "$directory" && $(stat -f '%Lp %u' "$directory") == "700 $(id -u)" ]] || { echo "kept output directory is not private: $directory" >&2; exit 1; }
+  done
+  grep -Fq "repository test output kept for diagnosis: $file" "$run_log" || { echo 'the kept output path was not reported' >&2; exit 1; }
+  local expected
+  for expected in "$@"; do
+    grep -Fq -- "$expected" "$file" || { echo "kept output lacks: $expected" >&2; exit 1; }
+  done
+  if grep -rqF -- 'beta-stdout-before-failure' "$repo/.artifacts" || grep -rqF -- "$kept_root" "$repo/.artifacts"; then
+    echo 'kept test output entered the canonical artifacts' >&2; exit 1
+  fi
+}
+assert_kept_output "$kept_root/issue-43/$failed_head/attempt-1-output.log" "$scratch/fail.err" \
+  'test: tools/tests/test-beta.sh' 'exitStatus: 3' 'timedOut: false' 'beta-stdout-before-failure' 'beta-stderr-before-failure'
+jq -e 'keys == ["attempt","childTimeoutSeconds","completedAt","elapsedSeconds","error","failedTest","headSha","issue",
+  "schemaVersion","scope","stage","startedAt","suiteTimeoutSeconds","testPaths","timedOut","unexecutedTestPaths"]' "$failure_one" >/dev/null ||
+  { echo 'the failure record schema changed' >&2; exit 1; }
 if (cd "$repo" && tools/run-repository-tests.sh --issue 43 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) >"$scratch/repeat.out" 2>"$scratch/repeat.err"; then
   echo 'same-Head repository suite repeated without a diagnostic' >&2
   exit 1
@@ -184,6 +213,8 @@ if (cd "$repo" && tools/run-repository-tests.sh --issue 43 --expected-base "$bas
   exit 1
 fi
 grep -Fq 'retry diagnostic failed: tools/tests/test-beta.sh' "$scratch/retry.err"
+assert_kept_output "$kept_root/issue-43/$failed_head/attempt-2-output.log" "$scratch/retry.err" \
+  'test: tools/tests/test-beta.sh' 'exitStatus: 3' 'beta-stderr-before-failure'
 jq -e '.issue == 43 and .attempt == 2 and .stage == "diagnostic" and .timedOut == false and
   .unexecutedTestPaths == ["tools/tests/test-alpha.sh", "tools/tests/test-beta.sh"]' \
   "$repo/.artifacts/issues/43/$failed_head/repository-test-failure-attempt-2.json" >/dev/null
@@ -275,6 +306,23 @@ if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=1 IOS_TEMPLATE_RE
   exit 1
 fi
 grep -Fq 'repository test timed out: tools/tests/test-alpha.sh' "$scratch/child-timeout.err"
+assert_kept_output "$kept_root/issue-47/$aggregate_head/attempt-1-output.log" "$scratch/child-timeout.err" \
+  'test: tools/tests/test-alpha.sh' 'exitStatus: 124' 'timedOut: true'
+
+# Keeping the output never changes the published failure record or the runner's exit.
+mkdir -p "$repo/.artifacts/issues/48/$aggregate_head" "$kept_root"
+printf '%s\n' 'not a directory' >"$kept_root/issue-48"
+sed 's/"issue":47/"issue":48/' "$repo/.artifacts/issues/47/issue-contract.json" >"$repo/.artifacts/issues/48/issue-contract.json"
+if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=1 IOS_TEMPLATE_REPOSITORY_TEST_SUITE_TIMEOUT_SECONDS=5 \
+  tools/run-repository-tests.sh --issue 48 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) \
+  >"$scratch/unkept.out" 2>"$scratch/unkept.err"; then
+  echo 'a failing suite passed when its output could not be kept' >&2
+  exit 1
+fi
+grep -Fq 'repository test output could not be kept' "$scratch/unkept.err" || { echo 'the unkept output was not reported' >&2; exit 1; }
+jq -e '.issue == 48 and .attempt == 1 and .timedOut == true and .failedTest == "tools/tests/test-alpha.sh"' \
+  "$repo/.artifacts/issues/48/$aggregate_head/repository-test-failure-attempt-1.json" >/dev/null ||
+  { echo 'the failure record was not published when the output could not be kept' >&2; exit 1; }
 jq -e '.issue == 47 and .attempt == 1 and .stage == "suite" and .childTimeoutSeconds == 1 and
   .suiteTimeoutSeconds == 5 and (.elapsedSeconds > 0) and .timedOut == true and
   .failedTest == "tools/tests/test-alpha.sh" and .unexecutedTestPaths == ["tools/tests/test-beta.sh"]' \
@@ -306,6 +354,9 @@ review = IOSTemplate::ReviewContract
 Dir.mktmpdir("repository-two-revisions-") do |scratch|
   scratch = File.realpath(scratch)
   repo = File.join(scratch, "repo")
+  # #268: the failed Base cases below keep their output under this repository's own private directory.
+  kept = File.join(runner::FAILED_OUTPUT_ROOT, "repo-#{Digest::SHA256.hexdigest(repo)}")
+  at_exit { FileUtils.rm_rf(kept) }
   FileUtils.mkdir_p(File.join(repo, "tools/tests"))
   git = ->(*args) { runner.git!(repo, *args).strip }
   git.call("init", "-q", "-b", "main")
