@@ -327,7 +327,7 @@ grep -Fq 'repository test output could not be kept' "$scratch/unkept.err" || { e
 ruby -I"$source_repo/tools/lib" -rrun-repository-tests -e '
   abort "default output root changed" unless IOSTemplate::RepositoryTests::FAILED_OUTPUT_ROOT == "/tmp/ios-template-repository-tests"'
 for refused in 50:kept-output 51:.artifacts/kept-output; do
-  refused_issue=${refused%%:*} refused_root="$repo/${refused#*:}"
+  refused_issue=${refused%%:*} refused_root="$(cd "$repo" && pwd -P)/${refused#*:}"
   mkdir -p "$repo/.artifacts/issues/$refused_issue/$aggregate_head"
   sed "s/\"issue\":47/\"issue\":$refused_issue/" "$repo/.artifacts/issues/47/issue-contract.json" >"$repo/.artifacts/issues/$refused_issue/issue-contract.json"
   if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT="$refused_root" \
@@ -406,6 +406,34 @@ ruby -I"$source_repo/tools/lib" -rrun-repository-tests -rtmpdir -e '
     abort "kept output under a restrictive umask is unreadable" unless File.read(file).include?("umask-stderr")
   end
 '
+
+# An output root that reaches the repository through a link, or through a ".." after a link, is refused
+# before anything is created there.
+route="$(cd "$scratch" && pwd -P)/route"
+mkdir -p "$repo/inner" "$route"
+ln -s "$(cd "$repo" && pwd -P)/inner" "$route/link"
+ln -s "$(cd "$repo" && pwd -P)" "$route/repository-link"
+for routed in "53:$route/link/../kept-output:the output root must be a normalized absolute path" \
+  "54:$route/repository-link/kept-output:the output location overlaps the repository or the canonical evidence"; do
+  routed_issue=${routed%%:*} routed_rest=${routed#*:}
+  routed_root=${routed_rest%%:*} routed_message=${routed_rest#*:}
+  mkdir -p "$repo/.artifacts/issues/$routed_issue/$large_head"
+  sed "s/\"issue\":47/\"issue\":$routed_issue/" "$repo/.artifacts/issues/47/issue-contract.json" >"$repo/.artifacts/issues/$routed_issue/issue-contract.json"
+  if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT="$routed_root" \
+    tools/run-repository-tests.sh --issue "$routed_issue" --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) \
+    >"$scratch/routed-$routed_issue.out" 2>"$scratch/routed-$routed_issue.err"; then
+    echo "a failing suite passed with the output root $routed_root" >&2
+    exit 1
+  fi
+  grep -Fq "repository test output could not be kept: $routed_message" "$scratch/routed-$routed_issue.err" ||
+    { echo "a routed output root was not refused: $routed_root" >&2; cat "$scratch/routed-$routed_issue.err" >&2; exit 1; }
+  [[ ! -e "$repo/kept-output" && ! -e "$repo/inner/kept-output" && -z "$(ls -A "$repo/inner")" ]] ||
+    { echo "the runner created output inside the repository through $routed_root" >&2; exit 1; }
+  jq -e --argjson issue "$routed_issue" '.issue == $issue and .attempt == 1 and .failedTest == "tools/tests/test-beta.sh"' \
+    "$repo/.artifacts/issues/$routed_issue/$large_head/repository-test-failure-attempt-1.json" >/dev/null ||
+    { echo 'the failure record was not published when a routed output root was refused' >&2; exit 1; }
+done
+rmdir "$repo/inner"
 jq -e '.issue == 48 and .attempt == 1 and .timedOut == true and .failedTest == "tools/tests/test-alpha.sh"' \
   "$repo/.artifacts/issues/48/$aggregate_head/repository-test-failure-attempt-1.json" >/dev/null ||
   { echo 'the failure record was not published when the output could not be kept' >&2; exit 1; }

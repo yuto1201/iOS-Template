@@ -452,7 +452,12 @@ module IOSTemplate
       artifacts = File.join(root, ".artifacts")
       protected_roots = [root] + (File.exist?(artifacts) ? [File.realpath(artifacts)] : [])
       output_root = ENV.fetch("IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT", FAILED_OUTPUT_ROOT)
-      raise "the output root must be an absolute path" unless output_root.start_with?("/")
+      # Only a normalized absolute path: a ".." after a link would be resolved differently by the check
+      # below and by the writes that follow it.
+      unless output_root.start_with?("/") && File.expand_path(output_root) == output_root &&
+             output_root.split("/").none? { |part| part == "." || part == ".." }
+        raise "the output root must be a normalized absolute path"
+      end
       worktree = "#{File.basename(root).gsub(/[^A-Za-z0-9_.-]/, '-')}-#{Digest::SHA256.hexdigest(root)}"
       directory = nil
       [output_root, worktree, "issue-#{issue}", head_sha].each do |part|
