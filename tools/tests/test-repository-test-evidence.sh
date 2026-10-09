@@ -6,8 +6,11 @@ require_test_commands "$0" jq git ruby
 
 source_repo=$(cd "$(dirname "$0")/../.." && pwd -P)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-repository-evidence.XXXXXX")
-trap 'rm -rf -- "$scratch"' EXIT
 repo="$scratch/repo"
+trap 'rm -rf -- "$scratch"' EXIT
+# #268: a failed test's own output is kept outside the fixture repository, here inside this scratch area.
+export IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT="$(cd "$scratch" && pwd -P)/kept-output"
+kept_root="$IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT/repo-$(printf '%s' "$(cd "$scratch" && pwd -P)/repo" | shasum -a 256 | awk '{print $1}')"
 
 git init -q -b main "$repo"
 git -C "$repo" config user.name Test
@@ -86,6 +89,8 @@ evidence="$head_dir/repository-tests.json"
 [[ $(stat -f '%Lp' "$evidence") == 600 ]] || { echo 'repository test evidence permissions differ' >&2; exit 1; }
 grep -Fq 'sensitive-test-output-must-not-be-published' "$evidence" && { echo 'test output leaked into evidence' >&2; exit 1; }
 grep -Fq 'repository test execution completed:' "$scratch/initial.err"
+[[ ! -e "$kept_root/issue-42" ]] && ! grep -Fq 'repository test output kept' "$scratch/initial.err" ||
+  { echo 'a passing suite kept test output' >&2; exit 1; }
 grep -Eq '"elapsedSeconds":[0-9]' "$scratch/initial.err"
 grep -Fq '"unexecutedTests":[]' "$scratch/initial.err"
 
@@ -147,6 +152,8 @@ grep -Fq 'canonical repository-tests.json already exists' "$scratch/collision.er
 
 cat > "$repo/tools/tests/test-beta.sh" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' 'beta-stdout-before-failure'
+printf '%s\n' 'beta-stderr-before-failure' >&2
 exit 3
 EOF
 git -C "$repo" add tools/tests/test-beta.sh
@@ -167,6 +174,29 @@ jq -e '.issue == 43 and .attempt == 1 and .scope == "legacy-head" and .stage == 
   .unexecutedTestPaths == []' "$failure_one" >/dev/null
 grep -Fq 'repository test execution stopped:' "$scratch/fail.err"
 grep -Fq '"timedOut":false' "$scratch/fail.err"
+# The failed test's output is kept privately, outside the repository and the canonical evidence, and the
+# failure record keeps its exact schema.
+assert_kept_output() {
+  local file=$1 run_log=$2 directory
+  shift 2
+  [[ -f "$file" && ! -L "$file" && $(stat -f '%Lp %u' "$file") == "600 $(id -u)" ]] || { echo "failed test output was not kept privately: $file" >&2; exit 1; }
+  for directory in "$kept_root" "$(dirname "$(dirname "$file")")" "$(dirname "$file")"; do
+    [[ -d "$directory" && ! -L "$directory" && $(stat -f '%Lp %u' "$directory") == "700 $(id -u)" ]] || { echo "kept output directory is not private: $directory" >&2; exit 1; }
+  done
+  grep -Fq "repository test output kept for diagnosis: $file" "$run_log" || { echo 'the kept output path was not reported' >&2; exit 1; }
+  local expected
+  for expected in "$@"; do
+    grep -Fq -- "$expected" "$file" || { echo "kept output lacks: $expected" >&2; exit 1; }
+  done
+  if grep -rqF -- 'beta-stdout-before-failure' "$repo/.artifacts" || grep -rqF -- "$kept_root" "$repo/.artifacts"; then
+    echo 'kept test output entered the canonical artifacts' >&2; exit 1
+  fi
+}
+assert_kept_output "$kept_root/issue-43/$failed_head/attempt-1-output.log" "$scratch/fail.err" \
+  'test: tools/tests/test-beta.sh' 'exitStatus: 3' 'timedOut: false' 'beta-stdout-before-failure' 'beta-stderr-before-failure'
+jq -e 'keys == ["attempt","childTimeoutSeconds","completedAt","elapsedSeconds","error","failedTest","headSha","issue",
+  "schemaVersion","scope","stage","startedAt","suiteTimeoutSeconds","testPaths","timedOut","unexecutedTestPaths"]' "$failure_one" >/dev/null ||
+  { echo 'the failure record schema changed' >&2; exit 1; }
 if (cd "$repo" && tools/run-repository-tests.sh --issue 43 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) >"$scratch/repeat.out" 2>"$scratch/repeat.err"; then
   echo 'same-Head repository suite repeated without a diagnostic' >&2
   exit 1
@@ -184,6 +214,8 @@ if (cd "$repo" && tools/run-repository-tests.sh --issue 43 --expected-base "$bas
   exit 1
 fi
 grep -Fq 'retry diagnostic failed: tools/tests/test-beta.sh' "$scratch/retry.err"
+assert_kept_output "$kept_root/issue-43/$failed_head/attempt-2-output.log" "$scratch/retry.err" \
+  'test: tools/tests/test-beta.sh' 'exitStatus: 3' 'beta-stderr-before-failure'
 jq -e '.issue == 43 and .attempt == 2 and .stage == "diagnostic" and .timedOut == false and
   .unexecutedTestPaths == ["tools/tests/test-alpha.sh", "tools/tests/test-beta.sh"]' \
   "$repo/.artifacts/issues/43/$failed_head/repository-test-failure-attempt-2.json" >/dev/null
@@ -275,6 +307,136 @@ if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=1 IOS_TEMPLATE_RE
   exit 1
 fi
 grep -Fq 'repository test timed out: tools/tests/test-alpha.sh' "$scratch/child-timeout.err"
+assert_kept_output "$kept_root/issue-47/$aggregate_head/attempt-1-output.log" "$scratch/child-timeout.err" \
+  'test: tools/tests/test-alpha.sh' 'exitStatus: 124' 'timedOut: true'
+
+# Keeping the output never changes the published failure record or the runner's exit.
+mkdir -p "$repo/.artifacts/issues/48/$aggregate_head" "$kept_root"
+printf '%s\n' 'not a directory' >"$kept_root/issue-48"
+sed 's/"issue":47/"issue":48/' "$repo/.artifacts/issues/47/issue-contract.json" >"$repo/.artifacts/issues/48/issue-contract.json"
+if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=1 IOS_TEMPLATE_REPOSITORY_TEST_SUITE_TIMEOUT_SECONDS=5 \
+  tools/run-repository-tests.sh --issue 48 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) \
+  >"$scratch/unkept.out" 2>"$scratch/unkept.err"; then
+  echo 'a failing suite passed when its output could not be kept' >&2
+  exit 1
+fi
+grep -Fq 'repository test output could not be kept' "$scratch/unkept.err" || { echo 'the unkept output was not reported' >&2; exit 1; }
+
+# The default place is outside every repository, and a place inside the repository or the canonical
+# evidence is refused before anything is created there; the failure record is still published.
+ruby -I"$source_repo/tools/lib" -rrun-repository-tests -e '
+  abort "default output root changed" unless IOSTemplate::RepositoryTests::FAILED_OUTPUT_ROOT == "/tmp/ios-template-repository-tests"'
+for refused in 50:kept-output 51:.artifacts/kept-output; do
+  refused_issue=${refused%%:*} refused_root="$(cd "$repo" && pwd -P)/${refused#*:}"
+  mkdir -p "$repo/.artifacts/issues/$refused_issue/$aggregate_head"
+  sed "s/\"issue\":47/\"issue\":$refused_issue/" "$repo/.artifacts/issues/47/issue-contract.json" >"$repo/.artifacts/issues/$refused_issue/issue-contract.json"
+  if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT="$refused_root" \
+    IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=1 IOS_TEMPLATE_REPOSITORY_TEST_SUITE_TIMEOUT_SECONDS=5 \
+    tools/run-repository-tests.sh --issue "$refused_issue" --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) \
+    >"$scratch/refused-$refused_issue.out" 2>"$scratch/refused-$refused_issue.err"; then
+    echo "a failing suite passed with the output root $refused_root" >&2
+    exit 1
+  fi
+  grep -Fq 'repository test output could not be kept: the output location overlaps the repository or the canonical evidence' "$scratch/refused-$refused_issue.err" ||
+    { echo "an output root inside the repository was not refused: $refused_root" >&2; cat "$scratch/refused-$refused_issue.err" >&2; exit 1; }
+  [[ ! -e "$refused_root" ]] || { echo "the runner created output inside the repository: $refused_root" >&2; exit 1; }
+  jq -e --argjson issue "$refused_issue" '.issue == $issue and .attempt == 1 and .failedTest == "tools/tests/test-alpha.sh"' \
+    "$repo/.artifacts/issues/$refused_issue/$aggregate_head/repository-test-failure-attempt-1.json" >/dev/null ||
+    { echo 'the failure record was not published when the output root was refused' >&2; exit 1; }
+done
+
+# Each stream keeps only its last 256 KiB.
+cat > "$repo/tools/tests/test-alpha.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'alpha passed'
+EOF
+cat > "$repo/tools/tests/test-beta.sh" <<'EOF'
+#!/usr/bin/env bash
+/usr/bin/ruby -e 'STDOUT.write("STDOUT-START" + "o" * 300_000 + "STDOUT-END\n"); STDERR.write("STDERR-START" + "e" * 300_000 + "STDERR-END\n")'
+exit 3
+EOF
+git -C "$repo" add tools/tests/test-alpha.sh tools/tests/test-beta.sh
+git -C "$repo" commit -q -m large-output-head
+large_head=$(git -C "$repo" rev-parse HEAD)
+mkdir -p "$repo/.artifacts/issues/49/$large_head"
+sed 's/"issue":47/"issue":49/' "$repo/.artifacts/issues/47/issue-contract.json" >"$repo/.artifacts/issues/49/issue-contract.json"
+if (cd "$repo" && tools/run-repository-tests.sh --issue 49 --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) \
+  >"$scratch/large.out" 2>"$scratch/large.err"; then
+  echo 'a failing large-output suite passed' >&2
+  exit 1
+fi
+assert_kept_output "$kept_root/issue-49/$large_head/attempt-1-output.log" "$scratch/large.err" 'test: tools/tests/test-beta.sh' 'exitStatus: 3'
+ruby - "$kept_root/issue-49/$large_head/attempt-1-output.log" <<'TAIL'
+text = File.binread(ARGV.fetch(0))
+limit = 262_144
+stdout_marker = "--- stdout (last #{limit} bytes)\n"
+stderr_marker = "\n--- stderr (last #{limit} bytes)\n"
+stdout = text[(text.index(stdout_marker) + stdout_marker.length)...text.index(stderr_marker)]
+stderr = text[(text.index(stderr_marker) + stderr_marker.length)..]
+{"stdout" => [stdout, "o", "STDOUT"], "stderr" => [stderr, "e", "STDERR"]}.each do |name, (kept, fill, label)|
+  expected = (fill * 300_000 + "#{label}-END\n").byteslice(-limit, limit)
+  abort "#{name} was not cut to its last #{limit} bytes (#{kept.bytesize} bytes)" unless kept == expected && !kept.include?("#{label}-START")
+end
+TAIL
+
+# A restrictive umask cannot narrow the private modes of the kept output.
+ruby -I"$source_repo/tools/lib" -rrun-repository-tests -rtmpdir -e '
+  runner = IOSTemplate::RepositoryTests
+  Dir.mktmpdir("repository-output-umask-") do |scratch|
+    scratch = File.realpath(scratch)
+    repo = File.join(scratch, "repo")
+    Dir.mkdir(repo)
+    ENV["IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT"] = File.join(scratch, "kept")
+    runner.instance_variable_set(:@failed_test_output, {"path" => "tools/tests/test-beta.sh", "exitStatus" => 3,
+      "timedOut" => false, "elapsedSeconds" => 0.1, "stdout" => "umask-stdout", "stderr" => "umask-stderr"})
+    previous = File.umask(0o377)
+    begin
+      runner.keep_failed_test_output(repo, issue: 52, head_sha: "a" * 40, attempt: 1)
+    ensure
+      File.umask(previous)
+    end
+    file = Dir.glob(File.join(scratch, "kept", "*", "issue-52", "a" * 40, "attempt-1-output.log")).first
+    abort "the output was not kept under a restrictive umask" unless file
+    abort "kept output mode under a restrictive umask: #{format("%o", File.stat(file).mode & 0o777)}" unless (File.stat(file).mode & 0o777) == 0o600
+    directory = File.dirname(file)
+    until directory == scratch
+      abort "kept output directory mode under a restrictive umask: #{directory}" unless (File.stat(directory).mode & 0o777) == 0o700
+      directory = File.dirname(directory)
+    end
+    abort "kept output under a restrictive umask is unreadable" unless File.read(file).include?("umask-stderr")
+  end
+'
+
+# An output root that reaches the repository through a link, or through a ".." after a link, is refused
+# before anything is created there.
+route="$(cd "$scratch" && pwd -P)/route"
+mkdir -p "$repo/inner" "$route"
+ln -s "$(cd "$repo" && pwd -P)/inner" "$route/link"
+ln -s "$(cd "$repo" && pwd -P)" "$route/repository-link"
+for routed in "53:$route/link/../kept-output:the output root must be a normalized absolute path" \
+  "54:$route/repository-link/kept-output:the output location overlaps the repository or the canonical evidence"; do
+  routed_issue=${routed%%:*} routed_rest=${routed#*:}
+  routed_root=${routed_rest%%:*} routed_message=${routed_rest#*:}
+  mkdir -p "$repo/.artifacts/issues/$routed_issue/$large_head"
+  sed "s/\"issue\":47/\"issue\":$routed_issue/" "$repo/.artifacts/issues/47/issue-contract.json" >"$repo/.artifacts/issues/$routed_issue/issue-contract.json"
+  if (cd "$repo" && IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT="$routed_root" \
+    tools/run-repository-tests.sh --issue "$routed_issue" --expected-base "$base_sha" --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) \
+    >"$scratch/routed-$routed_issue.out" 2>"$scratch/routed-$routed_issue.err"; then
+    echo "a failing suite passed with the output root $routed_root" >&2
+    exit 1
+  fi
+  grep -Fq "repository test output could not be kept: $routed_message" "$scratch/routed-$routed_issue.err" ||
+    { echo "a routed output root was not refused: $routed_root" >&2; cat "$scratch/routed-$routed_issue.err" >&2; exit 1; }
+  [[ ! -e "$repo/kept-output" && ! -e "$repo/inner/kept-output" && -z "$(ls -A "$repo/inner")" ]] ||
+    { echo "the runner created output inside the repository through $routed_root" >&2; exit 1; }
+  jq -e --argjson issue "$routed_issue" '.issue == $issue and .attempt == 1 and .failedTest == "tools/tests/test-beta.sh"' \
+    "$repo/.artifacts/issues/$routed_issue/$large_head/repository-test-failure-attempt-1.json" >/dev/null ||
+    { echo 'the failure record was not published when a routed output root was refused' >&2; exit 1; }
+done
+rmdir "$repo/inner"
+jq -e '.issue == 48 and .attempt == 1 and .timedOut == true and .failedTest == "tools/tests/test-alpha.sh"' \
+  "$repo/.artifacts/issues/48/$aggregate_head/repository-test-failure-attempt-1.json" >/dev/null ||
+  { echo 'the failure record was not published when the output could not be kept' >&2; exit 1; }
 jq -e '.issue == 47 and .attempt == 1 and .stage == "suite" and .childTimeoutSeconds == 1 and
   .suiteTimeoutSeconds == 5 and (.elapsedSeconds > 0) and .timedOut == true and
   .failedTest == "tools/tests/test-alpha.sh" and .unexecutedTestPaths == ["tools/tests/test-beta.sh"]' \
