@@ -4,7 +4,8 @@
 # Prepares an app's anonymous in-app feedback (D-076) in the repository that runs it: the private
 # feedback repository and its labels, the app's Cloudflare Worker with its secrets, and the host the
 # app sends to. `plan` only reads; `apply` changes nothing unless the user approved the same plan;
-# `check-delivery` sends one real submission. Secrets go to child processes on stdin only.
+# `check-delivery` runs apply for the approved plan and then sends one real submission. Secrets go to
+# child processes on stdin only.
 
 require "base64"
 require "digest"
@@ -691,41 +692,49 @@ module IOSTemplate
       refuse("labels are still missing after creation") unless repository_state["missingLabels"].empty?
       raise WaitingForInstallation, installation_steps unless installed_on_repository?
 
+      # The host comes from Cloudflare on every run, never from the repository's files, which anyone
+      # could change. Deploying again updates the same Worker; it creates nothing new.
+      host = deploy!
       saved = record
-      host = saved && saved["host"] == endpoint_host ? saved["host"] : deploy!
+      refuse("#{RECORD} names #{saved["host"]}, not the deployed Worker's host #{host}") if saved && saved["host"] != host
+      current = endpoint_host
+      unless current.empty? || current == host
+        refuse("#{values.fetch("endpointFile")} names #{current}, not the deployed Worker's host #{host}")
+      end
       put_missing_secrets!
       finish_settings!(host)
       {"status" => "provisioned", "repository" => values.fetch("repository"), "workerName" => values.fetch("workerName"),
        "host" => host, "record" => RECORD}
     end
 
-    def command_check_delivery
-      check_environment!
-      saved = check_local_settings!
-      refuse("the feedback is not provisioned yet; run apply first") if saved.nil? || endpoint_host.empty?
-      check_github_account!
+    # Runs apply for the approved plan first, so the submission goes only to the host Cloudflare just
+    # reported for this app's Worker.
+    def command_check_delivery(approved_digest)
+      provisioned = command_apply(approved_digest)
+      host = provisioned.fetch("host")
+      repository = values.fetch("repository")
       nonce = SecureRandom.hex(8)
       payload = JSON.generate({"category" => "other", "body" => "Feedback provisioning check #{nonce}", "appVersion" => "0.0",
                                "build" => "0", "osVersion" => "0.0", "deviceModel" => "provisioning-check", "locale" => "en_US"})
-      code, = curl("delivery-send", "https://#{saved.fetch("host")}/v1/feedback", method: "POST", body: payload,
+      code, = curl("delivery-send", "https://#{host}/v1/feedback", method: "POST", body: payload,
                    headers: ["Content-Type: application/json", "User-Agent: ios-template-app-feedback"])
       refuse("the Worker answered HTTP #{code} instead of 201") unless code == 201
       5.times do |attempt|
         sleep 2 unless attempt.zero?
-        issues = gh("issues-read", "repos/#{saved.fetch("repository")}/issues?labels=feedback&state=open&per_page=20")
+        issues = gh("issues-read", "repos/#{repository}/issues?labels=feedback&state=open&per_page=20")
         refuse("GitHub issue response is unreadable") unless issues.is_a?(Array)
         found = issues.find { |issue| issue.is_a?(Hash) && issue["body"].to_s.include?(nonce) }
         next unless found
 
         labels = Array(found["labels"]).map { |label| label.is_a?(Hash) ? label["name"] : nil }
         refuse("the created issue does not have the feedback and other labels") unless (%w[feedback other] - labels).empty?
-        return {"status" => "delivered", "repository" => saved.fetch("repository"), "issue" => found["number"]}
+        return {"status" => "delivered", "repository" => repository, "issue" => found["number"]}
       end
-      refuse("the Worker answered 201, but no matching issue appeared in #{saved.fetch("repository")}")
+      refuse("the Worker answered 201, but no matching issue appeared in #{repository}")
     end
 
     def usage
-      warn "usage: provision-app-feedback.sh plan | apply --plan-digest sha256:HEX | check-delivery"
+      warn "usage: provision-app-feedback.sh plan | apply --plan-digest sha256:HEX | check-delivery --plan-digest sha256:HEX"
       2
     end
 
@@ -739,8 +748,8 @@ module IOSTemplate
                  return usage unless arguments.length == 3 && arguments[1] == "--plan-digest"
                  command_apply(arguments[2])
                when "check-delivery"
-                 return usage unless arguments.length == 1
-                 command_check_delivery
+                 return usage unless arguments.length == 3 && arguments[1] == "--plan-digest"
+                 command_check_delivery(arguments[2])
                else
                  return usage
                end

@@ -451,14 +451,36 @@ ruby -rjson -e '
     record["host"] == "garden-notes-feedback.example-sub.workers.dev" && record["planDigest"] == ARGV[1]
 ' "$app/Config/app-feedback.json" "$digest"
 
-cp "$state/events.log" "$work/events-before-rerun"
+# A rerun deploys the same Worker again to read its host from Cloudflare, and creates nothing else.
+grep -v '^deploy ' "$state/events.log" > "$work/events-before-rerun"
 provision "$app" "$state" apply --plan-digest "$digest"
 [[ $status == 0 ]] || fail "the rerun failed: $(cat "$work/err")"
-cmp -s "$state/events.log" "$work/events-before-rerun" || fail "the rerun created something: $(diff "$work/events-before-rerun" "$state/events.log")"
+grep -v '^deploy ' "$state/events.log" | cmp -s - "$work/events-before-rerun" ||
+  fail "the rerun created something: $(grep -v '^deploy ' "$state/events.log" | diff "$work/events-before-rerun" -)"
+[[ "$(count "$state" 'deploy garden-notes-feedback')" == 2 ]] || fail 'the rerun did not read the host from a deploy'
 
 provision "$app" "$state" check-delivery
+[[ $status == 2 ]] || fail 'check-delivery without the approved digest must be a usage error'
+provision "$app" "$state" check-delivery --plan-digest "$digest"
 [[ $status == 0 ]] || fail "check-delivery failed: $(cat "$work/err")"
 ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); abort "delivery differs: #{value}" unless value["status"] == "delivered" && value["issue"] == 1' "$work/out"
+
+# A host changed in the repository's files is refused, even when the record and the app agree, and
+# nothing is sent to it.
+cp "$app/Config/app-feedback.json" "$work/record.json"
+ruby -rjson -e '
+  record = JSON.parse(File.read(ARGV[0])); record["host"] = "garden-notes-feedback.elsewhere.workers.dev"
+  File.write(ARGV[0], JSON.pretty_generate(record) + "\n")' "$app/Config/app-feedback.json"
+printf '{\n  "host": "garden-notes-feedback.elsewhere.workers.dev"\n}\n' > "$app/GardenNotes/Features/Feedback/FeedbackEndpoint.json"
+provision "$app" "$state" apply --plan-digest "$digest"
+expect_refused 'changed host' "Config/app-feedback.json names garden-notes-feedback.elsewhere.workers.dev, not the deployed Worker's host"
+provision "$app" "$state" check-delivery --plan-digest "$digest"
+expect_refused 'changed host before delivery' "not the deployed Worker's host"
+[[ "$(count "$state" delivered)" == 1 ]] || fail 'a submission was sent to a changed host'
+grep -Fxq '  "host": "garden-notes-feedback.elsewhere.workers.dev"' "$app/GardenNotes/Features/Feedback/FeedbackEndpoint.json" ||
+  fail 'a refusal overwrote the app host'
+cp "$work/record.json" "$app/Config/app-feedback.json"
+printf '{\n  "host": "garden-notes-feedback.example-sub.workers.dev"\n}\n' > "$app/GardenNotes/Features/Feedback/FeedbackEndpoint.json"
 
 # Finder's .DS_Store is not part of the Worker; a Worker changed by hand is not overwritten.
 : > "$app/Services/feedback-worker/.DS_Store"

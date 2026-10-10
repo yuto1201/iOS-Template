@@ -50,17 +50,17 @@ Run in the app's repository after Identity bootstrap ([product §3.1](../../../s
 | Command | What it does |
 | --- | --- |
 | `plan` | Reads only. Prints the plan, its `planDigest`, and what already exists. |
-| `apply --plan-digest <digest>` | Refuses unless the plan still has the approved digest. Then writes `Services/feedback-worker/` and runs its tests, creates the private repository and the missing labels (`feedback`, `bug`, `request`, `other`), stops with exit 3 until the shared App is installed on the repository, deploys the Worker, registers its three secrets from standard input, writes the host to `<moduleName>/Features/Feedback/FeedbackEndpoint.json`, and records `Config/app-feedback.json` (no secret). |
-| `check-delivery` | Sends one real submission and confirms that the issue appeared with the `feedback` and `other` labels. |
+| `apply --plan-digest <digest>` | Refuses unless the plan still has the approved digest. Then writes `Services/feedback-worker/` and runs its tests, creates the private repository and the missing labels (`feedback`, `bug`, `request`, `other`), stops with exit 3 until the shared App is installed on the repository, deploys the Worker and takes its host from what Cloudflare reports, registers its three secrets from standard input, writes the host to `<moduleName>/Features/Feedback/FeedbackEndpoint.json`, and records `Config/app-feedback.json` (no secret). |
+| `check-delivery --plan-digest <digest>` | Runs `apply` for the same approved plan, then sends one real submission to the host Cloudflare just reported and confirms that the issue appeared with the `feedback` and `other` labels. |
 
-Every stage checks what exists first, so a rerun creates nothing twice. It registers only the Worker secrets that are missing; replacing a registered secret, such as after a new signing key, is a separate operation the user approves. A repository that is public or archived, a Worker directory, host or record that differs from the plan, a failure, or an unreadable answer stops the tool without overwriting anything.
+Every stage checks what exists first, so a rerun creates no second repository, label or secret. Each run deploys the same Worker again, because the host is read only from Cloudflare and never trusted from the repository's files: a record or endpoint file that names another host stops the tool. It registers only the Worker secrets that are missing; replacing a registered secret, such as after a new signing key, is a separate operation the user approves. A repository that is public or archived, a Worker directory, host or record that differs from the plan, a failure, or an unreadable answer stops the tool without overwriting anything.
 
 Who does what:
 
 1. The AI sets `cloudflare.target` to `<appSlug>-feedback`, runs `plan`, and shows the user the plan and its digest.
 2. The user approves that digest in the app's Issue. The app's Issue declares the external operations, with `Approval required: yes`: deploying the Worker is `cloudflare.deploy`; creating the feedback repository needs its own operation, which the template does not allow yet, so do not run `apply` in an app until it does.
 3. The AI runs `apply`. When it stops for the installation, the user adds the repository to the shared App (Configure > Repository access > add the repository > Save), and the AI runs `apply` again with the same digest.
-4. After the user approves sending one real submission, the AI runs `check-delivery`.
+4. After the user approves sending one real submission, the AI runs `check-delivery` with the same digest.
 5. The AI commits `Services/feedback-worker/`, the endpoint file, `Config/app-feedback.json` and `Config/ownership.yml` in the Issue's PR.
 
 The user signs in `gh` and `wrangler` (`npx wrangler@<pinned version> login`); the AI never signs in or switches accounts.
