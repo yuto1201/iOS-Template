@@ -270,6 +270,14 @@ assert_fails 'fast profile rejects high-risk provider mutation' "$repo_root/tool
 write_feature_issue "$workspace/standard-deploy.md" $'- Operation: cloudflare.deploy\n- Service: Cloudflare\n- Environment: production\n- Executor: Codex\n- Approval required: no' 'No additional approval.' $'## Delivery profile\n\n- Profile: standard\n- Reason: Incorrectly classified production deploy.'
 assert_fails 'standard profile rejects high-risk provider mutation' "$repo_root/tools/validate-issue-body.sh" "$workspace/standard-deploy.md"
 
+# D-076: creating an app's private feedback repository is a strict, user-approved GitHub operation.
+write_feature_issue "$workspace/standard-create-repository.md" $'- Operation: github.create_repository\n- Service: GitHub\n- Environment: production\n- Executor: Claude\n- Approval required: no' 'No additional approval.' $'## Delivery profile\n\n- Profile: standard\n- Reason: Incorrectly classified repository creation.'
+assert_fails 'standard profile rejects creating a repository' "$repo_root/tools/validate-issue-body.sh" "$workspace/standard-create-repository.md"
+write_feature_issue "$workspace/strict-create-repository.md" $'- Operation: github.create_repository\n- Service: GitHub\n- Environment: production\n- Executor: Claude\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: strict\n- Reason: Creating the feedback repository is a strict, user-approved operation.'
+"$repo_root/tools/validate-issue-body.sh" "$workspace/strict-create-repository.md"
+write_feature_issue "$workspace/unknown-repository-operation.md" $'- Operation: github.delete_repository\n- Service: GitHub\n- Environment: production\n- Executor: Claude\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: strict\n- Reason: Not an allowed operation.'
+assert_fails 'an operation outside the allowlist is rejected' "$repo_root/tools/validate-issue-body.sh" "$workspace/unknown-repository-operation.md"
+
 write_feature_issue "$workspace/standard-approval-required.md" $'- Operation: github.push_branch\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: yes' 'Approval reference: #73' $'## Delivery profile\n\n- Profile: standard\n- Reason: Incorrectly classified approval-required operation.'
 assert_fails 'standard profile rejects any approval-required operation' "$repo_root/tools/validate-issue-body.sh" "$workspace/standard-approval-required.md"
 

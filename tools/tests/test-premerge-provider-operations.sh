@@ -31,7 +31,7 @@ cp -R "$repo_root/tools/lib" "$repo/tools/"
 cp -R "$repo_root/.agents" "$repo/"
 cp -R "$repo_root/specs" "$repo/"
 cp "$repo_root/Config/ownership.yml" "$repo/Config/"
-ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; text.sub!(/appStore:\n  teamId: [^\n]*\n  bundleId: null/,"appStore:\n  teamId: PERSONALTEAM\n  bundleId: com.yuto1201.personal") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; text.sub!(/(cloudflare:\n(?:  [^\n]*\n)*?)  target: null/){"#{$1}  target: garden-notes-feedback"} or abort; text.sub!(/appStore:\n  teamId: [^\n]*\n  bundleId: null/,"appStore:\n  teamId: PERSONALTEAM\n  bundleId: com.yuto1201.personal") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
 mkdir -p "$repo/Config/releases/premerge-v1/phase-records"
 PHASE_RECORD="$repo/Config/releases/premerge-v1/phase-records/phase6.json" ruby -I "$repo/tools/lib" -rworkflow-release-phase -e '
   bytes=IOSTemplate::ReleasePhase.create(release_identifier:"premerge-v1",revision:1,scope:["workflow"],goal:"Validate release workflow gates.",actor:"yuto1201",reason:"Start the fixture release.",recorded_at:"2026-09-15T08:00:00Z")
@@ -402,5 +402,29 @@ CHECKED_AT="$preflight_at" ruby -rjson -rdigest -e '
   File.binwrite(ARGV.fetch(0),JSON.generate(canonical(value)))
 ' "$repo/.artifacts/issues/42/provider-preflights/supabase.json"
 FAKE_SKIP_SWIFT=1 assert_fails_with 'non-App Store provider still rejects multiple operations' 'multiple operations for provider supabase' run_gate
+
+
+# D-076 feedback provisioning: an app Issue declares github.create_repository and cloudflare.deploy.
+# GitHub operations need no provider evidence; the Cloudflare evidence must record cloudflare.deploy.
+cp "$scratch/before-appstore.md" "$issue_body"
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); block="- Operation: github.create_repository\n- Service: GitHub\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n- Operation: cloudflare.deploy\n- Service: Cloudflare\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n"; text.sub!("## User approvals",block+"## User approvals") or abort; File.binwrite(path,text)' "$issue_body"
+refresh_provider_contract
+write_cloudflare_preflight() {
+  local recorded_operation=$1
+  mkdir -p "$repo/.artifacts/issues/42/provider-preflights"
+  OPERATION="$recorded_operation" CHECKED_AT="$preflight_at" ruby -rjson -rdigest -e '
+    def canonical(v); v.is_a?(Hash) ? v.keys.sort.to_h { |k| [k, canonical(v[k])] } : v; end
+    value={"schemaVersion"=>2,"issue"=>42,"executor"=>"codex","provider"=>"cloudflare","account"=>"7ea8e713d76506f9e303f58624829aa5","target"=>"garden-notes-feedback","environment"=>"production","operation"=>ENV.fetch("OPERATION"),"health"=>"healthy","checkedAt"=>ENV.fetch("CHECKED_AT")}
+    value["digest"]="sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(value)))}"
+    File.binwrite(ARGV.fetch(0),JSON.generate(canonical(value)))
+  ' "$repo/.artifacts/issues/42/provider-preflights/cloudflare.json"
+}
+rm -f "$repo/.artifacts/issues/42/provider-preflights/cloudflare.json"
+FAKE_SKIP_SWIFT=1 assert_fails_with 'the Cloudflare deploy evidence is missing' 'cloudflare.deploy provider preflight' run_gate
+write_cloudflare_preflight cloudflare.inspect_account
+FAKE_SKIP_SWIFT=1 assert_fails_with 'Cloudflare evidence for another operation' 'provider operation does not match the Issue contract' run_gate
+write_cloudflare_preflight cloudflare.deploy
+FAKE_SKIP_SWIFT=1 run_gate > "$scratch/feedback-provisioning-gate.json"
+jq -e '.status == "passed"' "$scratch/feedback-provisioning-gate.json" >/dev/null
 
 echo 'PASS: per-operation App Store evidence is required while other providers retain one-operation gating'

@@ -42,6 +42,8 @@ ios-template/template-app/elevenlabs/production/api-key
 
 App Store Connectは例外です。一本のTeam keyをこのMacの全アプリで共通に使うため、`${appSlug}`の代わりにApple teamごとの名前空間`apple-team-<teamId>`を使います（D-066）。詳しくは「固定版ascの利用」を見てください。
 
+アプリ内フィードバック（D-076）の共通GitHub Appも、全アプリで一つの秘密を共有するため、`${appSlug}`の代わりにGitHub loginごとの名前空間`github-<login>`（`Config/ownership.yml`の`github.login`を小文字にした値）を使います。App IDとinstallation IDは`ios-template/github-<login>/feedback-github-app/production/app-id`と`installation-id`（account `github-<login>`）のKeychain generic password、署名鍵は下のファイル保存先の`github-<login>/feedback-github-app.pem`に一つだけ置きます。作成と保存はユーザーが一度だけ行い、`tools/provision-app-feedback.sh`だけが読み、値を子processのstdinだけでWorkerのsecretへ渡します。手順は`app-feedback` skillを見てください。
+
 ファイル形式が必須の場合だけ、次へ保存します。
 
 ```text

@@ -8,6 +8,7 @@ module IOSTemplate
   module DeliveryProfile
     NAMES = %w[fast standard strict].freeze
     STRICT_OPERATIONS = %w[
+      github.create_repository
       supabase.apply_migrations
       cloudflare.deploy
       elevenlabs.generate_audio
