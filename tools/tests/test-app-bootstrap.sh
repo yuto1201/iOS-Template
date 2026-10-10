@@ -990,6 +990,21 @@ if [[ "$mode" == "transform" ]]; then
     }
   done
 
+  # In-app feedback (D-076) moves with the app and keeps no source identifier.
+  for feedback_path in \
+    GardenNotes/Features/Feedback/FeedbackClient.swift \
+    GardenNotes/Features/Feedback/FeedbackEndpoint.json \
+    GardenNotes/Features/Feedback/FeedbackSubmission.swift \
+    GardenNotes/Features/Feedback/FeedbackView.swift \
+    GardenNotes/PrivacyInfo.xcprivacy \
+    GardenNotesUITests/FeedbackUITests.swift; do
+    [[ -f "$fixture/$feedback_path" ]] || { echo "missing feedback path after bootstrap: $feedback_path" >&2; exit 1; }
+    if grep -Eq 'TemplateApp|template-app|template\.welcome' "$fixture/$feedback_path"; then
+      echo "feedback file keeps a source identifier after bootstrap: $feedback_path" >&2
+      exit 1
+    fi
+  done
+
   pbxproj="$fixture/GardenNotes.xcodeproj/project.pbxproj"
   grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotes;' "$pbxproj"
   grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotesTests;' "$pbxproj"

@@ -1,9 +1,11 @@
 schemaVersion: 1
-collectsData: false
+collectsData: true
 tracking: false
-dataTypes: []
+dataTypes:
+  - CUSTOMER_SUPPORT
+  - OTHER_DIAGNOSTIC_DATA
 thirdPartySDKs: []
 permissions: []
 accountDeletion:
   required: false
-  reason: "The untouched template has no accounts. Re-audit after app features are implemented."
+  reason: "The template has no accounts. Re-audit after app features are implemented."
