@@ -257,7 +257,8 @@
         "tools/provider-preflight.sh",
         "tools/run-with-private-key.sh",
         "tools/run-with-secret.sh",
-        "tools/secret-store.sh"
+        "tools/secret-store.sh",
+        "tools/tests/fixtures/security"
       ],
       "prefixes": [
         ".agents/skills/external-ops/",
