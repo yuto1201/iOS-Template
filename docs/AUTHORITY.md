@@ -71,7 +71,7 @@ preflight証拠には秘密値を含めず、Issue、executor、provider、accou
 
 ## 5. Operation allowlist
 
-- GitHub: `github.read_issue`、`github.create_issue`、`github.update_issue`、`github.push_branch`、`github.create_pr`、`github.merge_pr`、`github.delete_branch`、`github.sync_labels`
+- GitHub: `github.read_issue`、`github.create_issue`、`github.update_issue`、`github.push_branch`、`github.create_pr`、`github.merge_pr`、`github.delete_branch`、`github.sync_labels`、`github.create_repository`
 - Supabase: `supabase.inspect_project`、`supabase.apply_migrations`
 - Cloudflare: `cloudflare.inspect_account`、`cloudflare.deploy`
 - Linear: `linear.inspect_workspace`
@@ -80,6 +80,8 @@ preflight証拠には秘密値を含めず、Issue、executor、provider、accou
 - App Store Connect: `appstore.inspect_app`、`appstore.upload_build`、`appstore.update_metadata`、`appstore.submit_review`、`appstore.distribute_testflight`
 
 Linear／Vercelのmutation operationは、必要なworkflowとschemaを別Issueで追加するまでallowlistへ含めません。利用可能なconnectorが存在することだけではmutation権限になりません。
+
+`github.create_repository`は、アプリ内フィードバック（D-076）の準備tool `tools/provision-app-feedback.sh`が、設定済みGitHub loginの下に非公開の`<GitHub login>/<moduleName>-feedback`とそのlabelを作る場合だけに使います。strictのprofileを要し、宣言は`Approval required: yes`とし、ユーザーが承認した計画のdigestでだけ実行します。ほかのリポジトリの作成、公開リポジトリ、既存リポジトリの設定変更には使いません。
 
 App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)の固定版`asc` guarded runnerだけで行います。`appstore.distribute_testflight`の宣言には他のlive `appstore.*`と同じ`release` stage、`full` scope、`strict`、Issue contractとExecutorの一致を要します。production preflightは宣言済みoperationごとに読取専用照会と証拠発行を行い、そのoperation自体は実行しません。live操作には設定済みownership、同一Headの検証・レビュー、必要なユーザー承認を別途要します。App Privacy申告だけは既存のauthenticated browser sectionで行います。
 
@@ -102,6 +104,7 @@ App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.
 - Account IDが`7ea8e713d76506f9e303f58624829aa5`
 - Account名`Yuto Dev`、plan `free`
 - Zone／Worker／Pages projectと変更前状態。target未設定中はdeployを拒否
+- `tools/provider-preflight.sh --executor EXECUTOR --issue N cloudflare --target TARGET [--operation cloudflare.deploy]`は、`tools/provision-app-feedback.sh`と同じ固定versionの`wrangler whoami --json`で、認証済みsessionが設定済みaccountを使えることを確かめ、設定済みtargetの証拠を出します。targetはdeploy前のWorker名でもよく、存在は確かめません。`cloudflare.deploy`の証拠は、sealed Issue contractが同じoperationを宣言している場合だけ出し、メールアドレスなどの応答は証拠とlogに残しません
 - Pro／Business前提の機能や課金変更は自動的に追加しない
 
 ### Linear

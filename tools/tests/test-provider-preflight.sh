@@ -57,6 +57,23 @@ case "$1 $2" in
 esac
 FAKE_ASC
 chmod 700 "$asc_runner"
+# wrangler whoami --json, as wrangler 4 prints it. The email must never reach the evidence or the output.
+fake_wrangler="$test_workspace/fake-wrangler"
+cat > "$fake_wrangler" <<'FAKE_WRANGLER'
+#!/bin/bash
+set -euo pipefail
+[[ $# == 2 && $1 == whoami && $2 == --json ]] || exit 81
+[[ "${WRANGLER_SEND_METRICS:-}" == false ]] || exit 82
+case "${FAKE_WRANGLER_SCENARIO:-success}" in
+  success) printf '%s\n' '{"loggedIn":true,"authType":"OAuth Token","email":"must-not-survive@example.invalid","accounts":[{"id":"other-account","name":"Other"},{"id":"personal-cloudflare","name":"Yuto Dev"}],"tokenPermissions":["workers_scripts:write"]}' ;;
+  other-account) printf '%s\n' '{"loggedIn":true,"authType":"OAuth Token","email":"must-not-survive@example.invalid","accounts":[{"id":"other-account","name":"Other"}]}' ;;
+  logged-out) printf '%s\n' '{"loggedIn":false}'; exit 1 ;;
+  not-logged-in-json) printf '%s\n' '{"loggedIn":false,"accounts":[{"id":"personal-cloudflare"}]}' ;;
+  malformed) printf '%s\n' '{"loggedIn":true,"accounts":"must-not-survive"' ;;
+  *) exit 83 ;;
+esac
+FAKE_WRANGLER
+chmod 700 "$fake_wrangler"
 
 run_preflight() {
   local response_file=$1
@@ -64,6 +81,8 @@ run_preflight() {
   IOS_TEMPLATE_TEST_MODE=1 \
     IOS_TEMPLATE_TEST_PROVIDER_BIN="$adapter" \
     IOS_TEMPLATE_TEST_ASC_RUNNER="${IOS_TEMPLATE_TEST_ASC_RUNNER:-$asc_runner}" \
+    IOS_TEMPLATE_TEST_WRANGLER_BIN="${IOS_TEMPLATE_TEST_WRANGLER_BIN:-$fake_wrangler}" \
+    FAKE_WRANGLER_SCENARIO="${FAKE_WRANGLER_SCENARIO:-success}" \
     IOS_TEMPLATE_TEST_PROVIDER_RESPONSE_FILE="$response_file" \
     IOS_TEMPLATE_TEST_OWNERSHIP_FILE="$ownership" \
     IOS_TEMPLATE_TEST_ARTIFACT_ROOT="$artifact_root" \
@@ -129,8 +148,9 @@ run_preflight "$fixture_root/supabase-personal.json" --executor claude --issue 4
 assert_record supabase claude kmjpkzaqlewqnypyqwkg personal-project production supabase.inspect_project
 
 rm -rf -- "$artifact_root/issues/42/provider-preflights"
-run_preflight "$fixture_root/cloudflare-personal.json" --executor codex --issue 42 cloudflare --target personal-worker >/dev/null
+cloudflare_output=$(run_preflight /dev/null --executor codex --issue 42 cloudflare --target personal-worker)
 assert_record cloudflare codex personal-cloudflare personal-worker production cloudflare.inspect_account
+[[ "$cloudflare_output" == *'"provider":"cloudflare"'* && "$cloudflare_output" != *'must-not-survive'* ]] || { echo 'Cloudflare output is not sanitized' >&2; exit 1; }
 
 rm -rf -- "$artifact_root/issues/42/provider-preflights"
 run_preflight "$fixture_root/linear-personal.json" --executor claude --issue 42 linear --target YUT >/dev/null
@@ -150,7 +170,7 @@ for operation in text-to-speech speech-to-speech speech-to-text audio-isolation 
   assert_record elevenlabs codex personal-elevenlabs personal-workspace production elevenlabs.process_media
 done
 
-write_appstore_contract() {
+write_sealed_contract() {
   local operations=$1
   mkdir -p "$artifact_root/issues/42"
   OPERATIONS="$operations" ruby -rjson -rdigest -e '
@@ -162,7 +182,7 @@ write_appstore_contract() {
   ' "$artifact_root/issues/42"
 }
 
-write_appstore_contract 'appstore.inspect_app,appstore.update_metadata,appstore.upload_build,appstore.submit_review,appstore.distribute_testflight'
+write_sealed_contract 'appstore.inspect_app,appstore.update_metadata,appstore.upload_build,appstore.submit_review,appstore.distribute_testflight'
 rm -rf -- "$artifact_root/issues/42/provider-preflights"
 run_preflight "$fixture_root/app-store-personal.json" --executor claude --issue 42 app-store --version 1.0 >/dev/null
 assert_record app-store claude PERSONALTEAM com.yuto1201.personal production appstore.inspect_app
@@ -172,19 +192,19 @@ for operation in appstore.update_metadata appstore.upload_build appstore.submit_
   assert_record app-store codex PERSONALTEAM com.yuto1201.personal production "$operation"
 done
 
-write_appstore_contract 'appstore.inspect_app'
+write_sealed_contract 'appstore.inspect_app'
 assert_fails_without_artifact 'undeclared App Store operation' app-store "$fixture_root/app-store-personal.json" --executor codex --version 1.0 --operation appstore.update_metadata
 assert_fails_without_artifact 'unknown App Store operation' app-store "$fixture_root/app-store-personal.json" --executor codex --version 1.0 --operation appstore.delete_app
-write_appstore_contract 'appstore.inspect_app,appstore.update_metadata'
+write_sealed_contract 'appstore.inspect_app,appstore.update_metadata'
 for scenario in seed-mismatch bundle-zero bundle-two bundle-wrong app-zero app-two app-wrong version-absent version-two version-wrong platform-wrong runner-failure malformed more-pages wrong-total; do
   FAKE_ASC_SCENARIO="$scenario" assert_fails_without_artifact "App Store $scenario" app-store "$fixture_root/app-store-personal.json" --executor codex --version 1.0
 done
-write_appstore_contract 'appstore.update_metadata'
+write_sealed_contract 'appstore.update_metadata'
 assert_fails_without_artifact 'default App Store operation is undeclared' app-store "$fixture_root/app-store-personal.json" --executor codex --version 1.0
-write_appstore_contract 'appstore.inspect_app'
+write_sealed_contract 'appstore.inspect_app'
 echo ' ' >> "$artifact_root/issues/42/issue-contract.json"
 assert_fails_without_artifact 'tampered sealed contract' app-store "$fixture_root/app-store-personal.json" --executor codex --version 1.0
-write_appstore_contract 'appstore.inspect_app'
+write_sealed_contract 'appstore.inspect_app'
 if IOS_TEMPLATE_TEST_ASC_RUNNER="$asc_runner" "$repo_root/tools/provider-preflight.sh" --executor codex --issue 42 app-store --version 1.0 >"$test_workspace/stdout" 2>"$test_workspace/stderr"; then
   echo 'production accepted a test asc runner override' >&2
   exit 1
@@ -198,7 +218,26 @@ done
 
 assert_fails_without_artifact 'company Supabase identity' supabase "$fixture_root/supabase-company.json" --executor claude --environment production
 assert_fails_without_artifact 'unhealthy Supabase project' supabase "$fixture_root/supabase-unhealthy.json" --executor codex --environment production
-assert_fails_without_artifact 'Cloudflare target mismatch' cloudflare "$fixture_root/cloudflare-personal.json" --executor claude --target another-worker
+assert_fails_without_artifact 'Cloudflare target mismatch' cloudflare /dev/null --executor claude --target another-worker
+
+# cloudflare.deploy evidence (D-076 feedback provisioning) is issued only for a sealed declaration.
+write_sealed_contract 'github.read_issue,cloudflare.deploy'
+rm -rf -- "$artifact_root/issues/42/provider-preflights"
+run_preflight /dev/null --executor claude --issue 42 cloudflare --target personal-worker --operation cloudflare.deploy >/dev/null
+assert_record cloudflare claude personal-cloudflare personal-worker production cloudflare.deploy
+write_sealed_contract 'github.read_issue'
+assert_fails_without_artifact 'undeclared Cloudflare deploy' cloudflare /dev/null --executor claude --target personal-worker --operation cloudflare.deploy
+assert_fails_without_artifact 'unknown Cloudflare operation' cloudflare /dev/null --executor claude --target personal-worker --operation cloudflare.delete_worker
+for scenario in other-account logged-out not-logged-in-json malformed; do
+  FAKE_WRANGLER_SCENARIO="$scenario" assert_fails_without_artifact "Cloudflare $scenario" cloudflare /dev/null --executor codex --target personal-worker
+done
+ln -s "$fake_wrangler" "$test_workspace/wrangler-link"
+IOS_TEMPLATE_TEST_WRANGLER_BIN="$test_workspace/wrangler-link" assert_fails_without_artifact 'symlinked test wrangler' cloudflare /dev/null --executor codex --target personal-worker
+if IOS_TEMPLATE_TEST_WRANGLER_BIN="$fake_wrangler" "$repo_root/tools/provider-preflight.sh" --executor codex --issue 42 cloudflare --target personal-worker >"$test_workspace/stdout" 2>"$test_workspace/stderr"; then
+  echo 'production accepted a test wrangler override' >&2
+  exit 1
+fi
+/usr/bin/grep -Fq 'test overrides are not allowed in production mode' "$test_workspace/stderr" || { echo 'production wrangler override was not refused as a test override' >&2; exit 1; }
 assert_fails_without_artifact 'wrong Linear workspace' linear "$fixture_root/linear-wrong-workspace.json" --executor codex --target YUT
 assert_fails_without_artifact 'wrong Vercel team' vercel "$fixture_root/vercel-wrong-team.json" --executor claude --target yuto16
 assert_fails_without_artifact 'ElevenLabs music entitlement' elevenlabs "$fixture_root/elevenlabs-personal.json" --executor claude --operation music
@@ -212,6 +251,8 @@ missing_ownership="$test_workspace/missing-ownership.yml"
 /usr/bin/sed -i '' 's/projectRef: personal-project/projectRef: null/' "$missing_ownership"
 ownership=$missing_ownership
 assert_fails_without_artifact 'missing ownership target' supabase "$fixture_root/supabase-personal.json" --executor claude --environment production
+/usr/bin/sed -i '' 's/target: personal-worker/target: null/' "$missing_ownership"
+assert_fails_without_artifact 'missing Cloudflare target' cloudflare /dev/null --executor claude --target personal-worker
 
 echo '{not-json' > "$test_workspace/malformed.json"
 ownership="$fixture_root/ownership.yml"

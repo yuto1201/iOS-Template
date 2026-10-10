@@ -50,6 +50,7 @@ module IOSTemplate
       github.merge_pr
       github.delete_branch
       github.sync_labels
+      github.create_repository
       supabase.inspect_project
       supabase.apply_migrations
       cloudflare.inspect_account

@@ -58,10 +58,10 @@ Every stage checks what exists first, so a rerun creates no second repository, l
 Who does what:
 
 1. The AI sets `cloudflare.target` to `<appSlug>-feedback`, runs `plan`, and shows the user the plan and its digest.
-2. The user approves that digest in the app's Issue. The app's Issue declares the external operations, with `Approval required: yes`: deploying the Worker is `cloudflare.deploy`; creating the feedback repository needs its own operation, which the template does not allow yet, so do not run `apply` in an app until it does.
+2. The user approves that digest in the app's Issue. That Issue uses the `strict` profile and declares, with `Approval required: yes`, `github.create_repository` for the feedback repository and its labels and `cloudflare.deploy` for the Worker and its secrets. Declare no other Cloudflare operation: the pre-merge gate takes one Cloudflare evidence file per Issue.
 3. The AI runs `apply`. When it stops for the installation, the user adds the repository to the shared App (Configure > Repository access > add the repository > Save), and the AI runs `apply` again with the same digest.
 4. After the user approves sending one real submission, the AI runs `check-delivery` with the same digest.
-5. The AI commits `Services/feedback-worker/`, the endpoint file, `Config/app-feedback.json` and `Config/ownership.yml` in the Issue's PR.
+5. The AI commits `Services/feedback-worker/`, the endpoint file, `Config/app-feedback.json` and `Config/ownership.yml` in the Issue's PR. Before merging, it publishes the Cloudflare evidence with `tools/provider-preflight.sh --executor <executor> --issue <number> cloudflare --target <appSlug>-feedback --operation cloudflare.deploy`; that check signs in nothing and reads only whether the `wrangler` session can use the configured account.
 
 The user signs in `gh` and `wrangler` (`npx wrangler@<pinned version> login`); the AI never signs in or switches accounts.
 

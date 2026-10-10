@@ -13,7 +13,7 @@ usage() {
 usage:
   provider-preflight.sh --executor codex|claude --issue NUMBER github --target OWNER/REPO
   provider-preflight.sh --executor codex|claude --issue NUMBER supabase --environment local|preview|staging|production
-  provider-preflight.sh --executor codex|claude --issue NUMBER cloudflare --target IDENTIFIER
+  provider-preflight.sh --executor codex|claude --issue NUMBER cloudflare --target IDENTIFIER [--operation cloudflare.inspect_account|cloudflare.deploy]
   provider-preflight.sh --executor codex|claude --issue NUMBER linear --target TEAM_KEY
   provider-preflight.sh --executor codex|claude --issue NUMBER vercel --target TEAM_SLUG
   provider-preflight.sh --executor codex|claude --issue NUMBER elevenlabs --operation text-to-speech|speech-to-speech|speech-to-text|sound-effect|audio-isolation|music|image|video
@@ -64,10 +64,14 @@ case "$provider" in
     evidence_operation=supabase.inspect_project
     ;;
   cloudflare)
-    [[ -n "$requested_target" && -z "$requested_environment$requested_media_operation$requested_version" ]] || usage
+    [[ -n "$requested_target" && -z "$requested_environment$requested_version" ]] || usage
     [[ "$requested_target" =~ ^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,255}$ ]] || fail 'Cloudflare target is invalid'
     evidence_environment=production
-    evidence_operation=cloudflare.inspect_account
+    evidence_operation=${requested_media_operation:-cloudflare.inspect_account}
+    case "$evidence_operation" in
+      cloudflare.inspect_account|cloudflare.deploy) ;;
+      *) fail 'Cloudflare operation is invalid' ;;
+    esac
     ;;
   linear)
     [[ -n "$requested_target" && -z "$requested_environment$requested_media_operation$requested_version" ]] || usage
@@ -104,6 +108,7 @@ ownership_file="$repo_root/Config/ownership.yml"
 artifact_root="$repo_root/.artifacts"
 checked_at=$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)
 provider_adapter=''
+wrangler_command=()
 if [[ "$test_mode" == 1 ]]; then
   ownership_file=${IOS_TEMPLATE_TEST_OWNERSHIP_FILE:-}
   artifact_root=${IOS_TEMPLATE_TEST_ARTIFACT_ROOT:-}
@@ -111,17 +116,30 @@ if [[ "$test_mode" == 1 ]]; then
   provider_adapter=${IOS_TEMPLATE_TEST_PROVIDER_BIN:-}
   [[ "$ownership_file" == /* && -f "$ownership_file" && ! -L "$ownership_file" ]] || fail 'test ownership file is invalid'
   [[ "$artifact_root" == /* ]] || fail 'test artifact root is invalid'
-  if [[ "$provider" != app-store ]]; then
+  if [[ "$provider" == cloudflare ]]; then
+    test_wrangler=${IOS_TEMPLATE_TEST_WRANGLER_BIN:-}
+    [[ "$test_wrangler" == /* && -f "$test_wrangler" && -x "$test_wrangler" && ! -L "$test_wrangler" ]] || fail 'test wrangler executable is invalid'
+    wrangler_command=("$test_wrangler")
+  elif [[ "$provider" != app-store ]]; then
     [[ "$provider_adapter" == /* && -f "$provider_adapter" && -x "$provider_adapter" && ! -L "$provider_adapter" ]] || fail 'test provider adapter is invalid'
   fi
 else
-  [[ -z "${IOS_TEMPLATE_TEST_OWNERSHIP_FILE:-}${IOS_TEMPLATE_TEST_ARTIFACT_ROOT:-}${IOS_TEMPLATE_TEST_NOW:-}${IOS_TEMPLATE_TEST_PROVIDER_BIN:-}${IOS_TEMPLATE_TEST_ASC_RUNNER:-}" ]] || fail 'test overrides are not allowed in production mode'
+  [[ -z "${IOS_TEMPLATE_TEST_OWNERSHIP_FILE:-}${IOS_TEMPLATE_TEST_ARTIFACT_ROOT:-}${IOS_TEMPLATE_TEST_NOW:-}${IOS_TEMPLATE_TEST_PROVIDER_BIN:-}${IOS_TEMPLATE_TEST_ASC_RUNNER:-}${IOS_TEMPLATE_TEST_WRANGLER_BIN:-}" ]] || fail 'test overrides are not allowed in production mode'
+  if [[ "$provider" == cloudflare ]]; then
+    # The same pinned wrangler as the app feedback provisioning tool (D-076).
+    npx_executable=$(command -v npx 2>/dev/null) || fail 'npx (Node 24 or later) is unavailable for wrangler'
+    wrangler_version=$(/usr/bin/ruby -I "$repo_root/tools/lib" -rapp-feedback-provision -e 'print IOSTemplate::AppFeedbackProvision::WRANGLER_VERSION' 2>/dev/null) || fail 'pinned wrangler version is unavailable'
+    [[ "$wrangler_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'pinned wrangler version is invalid'
+    wrangler_command=("$npx_executable" --yes "wrangler@$wrangler_version")
+  fi
 fi
 
 [[ "$checked_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail 'checked timestamp is invalid'
 [[ -f "$ownership_file" && ! -L "$ownership_file" ]] || fail 'ownership configuration is unavailable'
 
-if [[ "$provider" == app-store ]]; then
+# A mutation's evidence is issued only for an operation the sealed Issue contract declares.
+require_sealed_operation() {
+  local label=$1
   issue_root="$artifact_root/issues/$issue_number"
   [[ -f "$issue_root/issue-contract.json" && ! -L "$issue_root/issue-contract.json" && -f "$issue_root/state.json" && ! -L "$issue_root/state.json" ]] || fail 'sealed Issue contract is unavailable'
   ISSUE="$issue_number" OPERATION="$evidence_operation" /usr/bin/ruby --disable-gems -rjson -rdigest -e '
@@ -137,8 +155,17 @@ if [[ "$provider" == app-store ]]; then
     abort unless contract.is_a?(Hash) && contract["issue"] == issue && contract["externalOperations"].is_a?(Array) && contract["externalOperations"].include?(ENV.fetch("OPERATION"))
     seal=state.fetch("issueContract")
     abort unless state["issue"] == issue && seal.fetch("path") == ".artifacts/issues/#{issue}/issue-contract.json" && seal.fetch("digest") == "sha256:#{Digest::SHA256.hexdigest(bytes)}"
-  ' "$issue_root/issue-contract.json" "$issue_root/state.json" 2>/dev/null || fail 'App Store operation is not in the sealed Issue contract'
+  ' "$issue_root/issue-contract.json" "$issue_root/state.json" 2>/dev/null || fail "$label operation is not in the sealed Issue contract"
+}
+
+if [[ "$provider" == app-store ]]; then
+  require_sealed_operation 'App Store'
   expected_bundle_id=$(/usr/bin/ruby --disable-gems "$repo_root/tools/lib/ownership.rb" --file "$ownership_file" --provider app-store | jq -er '.target | strings') || fail 'configured App Store Bundle ID is missing or invalid'
+fi
+if [[ "$provider" == cloudflare ]]; then
+  [[ "$evidence_operation" != cloudflare.deploy ]] || require_sealed_operation 'Cloudflare'
+  # Refuses before any wrangler call while the account or the deploy target is not configured.
+  expected_cloudflare_account=$(/usr/bin/ruby --disable-gems "$repo_root/tools/lib/ownership.rb" --file "$ownership_file" --provider cloudflare 2>/dev/null | jq -er '.account | strings') || fail 'configured Cloudflare account or target is missing or invalid'
 fi
 
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-provider-preflight.XXXXXX")
@@ -230,8 +257,25 @@ exit AppStoreASCPreflight.main(*ARGV)
 RUBY
 }
 
+# wrangler's whoami JSON also carries the signed-in email; only the configured account ID, the
+# configured target and the health leave this function.
+run_cloudflare_inspection() {
+  local native="$temporary_directory/wrangler-whoami.json"
+  WRANGLER_SEND_METRICS=false NO_COLOR=1 FORCE_COLOR=0 /usr/bin/ruby "$repo_root/tools/lib/bounded-command.rb" \
+    --stage provider-preflight-cloudflare --timeout-seconds 120 --grace-seconds 2 -- "${wrangler_command[@]}" whoami --json \
+    > "$native" 2>/dev/null < /dev/null || fail 'Cloudflare account inspection failed'
+  ACCOUNT="$expected_cloudflare_account" TARGET="$requested_target" /usr/bin/ruby --disable-gems -rjson -e '
+    value=JSON.parse(File.binread(ARGV.fetch(0)))
+    abort unless value.is_a?(Hash) && value["loggedIn"] == true && value["accounts"].is_a?(Array)
+    abort unless value["accounts"].any?{|account| account.is_a?(Hash) && account["id"] == ENV.fetch("ACCOUNT")}
+    puts JSON.generate({"provider"=>"cloudflare","account"=>ENV.fetch("ACCOUNT"),"target"=>ENV.fetch("TARGET"),"health"=>"healthy"})
+  ' "$native" > "$raw_response" 2>/dev/null || fail 'the wrangler session cannot use the configured Cloudflare account'
+}
+
 if [[ "$provider" == app-store ]]; then
   run_app_store_inspection
+elif [[ "$provider" == cloudflare ]]; then
+  run_cloudflare_inspection
 elif [[ "$test_mode" == 1 ]]; then
   "$provider_adapter" "$provider" "$evidence_operation" > "$raw_response" 2>/dev/null || fail 'provider adapter failed'
 else
@@ -253,9 +297,6 @@ else
         health=%w[healthy active active_healthy].include?(status) ? "healthy" : "unhealthy"
         puts JSON.generate({"provider"=>"supabase","account"=>account,"target"=>expected,"health"=>health})
       ' "$temporary_directory/provider-native.json" "$(ruby "$repo_root/tools/lib/ownership.rb" --file "$ownership_file" --provider supabase | jq -er .target)" > "$raw_response" 2>/dev/null || fail 'Supabase response could not prove the configured project'
-      ;;
-    cloudflare)
-      fail 'Cloudflare target inspection requires an authenticated provider adapter that is not configured'
       ;;
     linear)
       fail 'Linear workspace inspection requires an authenticated provider adapter that is not configured'
