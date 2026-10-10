@@ -19,7 +19,7 @@
     },
     {
       "domain": "app-feedback",
-      "paths": [".claude/skills/app-feedback", "tools/tests/test-feedback-worker.sh"],
+      "paths": [".claude/skills/app-feedback", "tools/lib/app-feedback-provision.rb", "tools/provision-app-feedback.sh", "tools/tests/test-app-feedback-provision.sh", "tools/tests/test-feedback-worker.sh"],
       "prefixes": [".agents/skills/app-feedback/"]
     },
     {
@@ -396,6 +396,7 @@
     {"path": "tools/tests/test-admob-integration.sh", "domains": ["admob-monetization"]},
     {"path": "tools/tests/test-agents-md-approval.sh", "domains": ["specification"]},
     {"path": "tools/tests/test-app-bootstrap.sh", "domains": ["bootstrap-assets"]},
+    {"path": "tools/tests/test-app-feedback-provision.sh", "domains": ["app-feedback", "provider-security"]},
     {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-appstore-build.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-legal-handoff.sh", "domains": ["appstore"]},

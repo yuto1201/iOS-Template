@@ -1,6 +1,6 @@
 ---
 name: app-feedback
-description: Use when porting, testing, or provisioning the standard anonymous in-app feedback (D-076) — the per-app Cloudflare Worker template that files issues in the app's private feedback repository through the shared GitHub App.
+description: Use when porting, testing, or provisioning the standard anonymous in-app feedback (D-076) — the per-app Cloudflare Worker template that files issues in the app's private feedback repository through the shared GitHub App, and the tool that prepares a new app's repository, Worker and host.
 ---
 
 # App Feedback
@@ -21,12 +21,56 @@ The template is not deployable as is. `wrangler.jsonc` holds the placeholders li
 
 A Worker whose `GITHUB_REPOSITORY` is still a placeholder or malformed refuses before any GitHub call.
 
+## Shared GitHub App (the user, once)
+
+The user creates one GitHub App for all apps and keeps its credentials on this Mac. The AI never creates the App, installs it, issues its key, or types, prints, or records a credential value.
+
+1. GitHub > Settings > Developer settings > GitHub Apps > New GitHub App. Repository permissions: Issues: Read and write, nothing else (Metadata: Read-only is automatic). Webhook: off. Where can this GitHub App be installed: Only on this account.
+2. Install it on the account with **Only select repositories**. Never choose All repositories: the installation must reach the feedback repositories only.
+3. Generate a private key. Move the downloaded `.pem` to `~/Library/Application Support/iOS-Template/secrets/github-<login>/feedback-github-app.pem`, where `<login>` is the lowercased `github.login` of `Config/ownership.yml`. Keep the two directories at mode `0700` and the file at `0600`, with one copy only, like the App Store Connect key (D-066). The tool converts it to PKCS#8 in memory.
+4. Store the App ID and the installation ID (the number at the end of the installation's settings URL) in the Keychain, each as one line on standard input, never as an argument:
+
+```bash
+tools/secret-store.sh put --app github-<login> --service feedback-github-app --environment production --key app-id
+```
+
+```bash
+tools/secret-store.sh put --app github-<login> --service feedback-github-app --environment production --key installation-id
+```
+
+macOS may ask once whether `security` can read these items; the user answers.
+
+## Provisioning a new app
+
+Run in the app's repository after Identity bootstrap ([product §3.1](../../../specs/product.md#31-新しいアプリの開始順序), step 5), in an Issue of that app. `tools/provision-app-feedback.sh` works on the repository it belongs to:
+
+- It reads `Config/app-identity.json` and `Config/ownership.yml`: the repository `<login>/<moduleName>-feedback`, the Worker `<appSlug>-feedback`, and a rate-limit namespace derived from the Cloudflare account ID and the Worker name. `cloudflare.target` must already be the Worker name.
+- Before anything changes, it checks that `gh` is signed in as `github.login`, that `wrangler` (pinned version, run with `npx`) can use `cloudflare.accountId`, that the shared App credentials are stored as above, and that the App and its installation have only Issues: Read and write and only selected repositories.
+
+| Command | What it does |
+| --- | --- |
+| `plan` | Reads only. Prints the plan, its `planDigest`, and what already exists. |
+| `apply --plan-digest <digest>` | Refuses unless the plan still has the approved digest. Then writes `Services/feedback-worker/` and runs its tests, creates the private repository and the missing labels (`feedback`, `bug`, `request`, `other`), stops with exit 3 until the shared App is installed on the repository, deploys the Worker, registers its three secrets from standard input, writes the host to `<moduleName>/Features/Feedback/FeedbackEndpoint.json`, and records `Config/app-feedback.json` (no secret). |
+| `check-delivery` | Sends one real submission and confirms that the issue appeared with the `feedback` and `other` labels. |
+
+Every stage checks what exists first, so a rerun creates nothing twice. It registers only the Worker secrets that are missing; replacing a registered secret, such as after a new signing key, is a separate operation the user approves. A repository that is public or archived, a Worker directory, host or record that differs from the plan, a failure, or an unreadable answer stops the tool without overwriting anything.
+
+Who does what:
+
+1. The AI sets `cloudflare.target` to `<appSlug>-feedback`, runs `plan`, and shows the user the plan and its digest.
+2. The user approves that digest in the app's Issue. The app's Issue declares the external operations, with `Approval required: yes`: deploying the Worker is `cloudflare.deploy`; creating the feedback repository needs its own operation, which the template does not allow yet, so do not run `apply` in an app until it does.
+3. The AI runs `apply`. When it stops for the installation, the user adds the repository to the shared App (Configure > Repository access > add the repository > Save), and the AI runs `apply` again with the same digest.
+4. After the user approves sending one real submission, the AI runs `check-delivery`.
+5. The AI commits `Services/feedback-worker/`, the endpoint file, `Config/app-feedback.json` and `Config/ownership.yml` in the Issue's PR.
+
+The user signs in `gh` and `wrangler` (`npx wrangler@<pinned version> login`); the AI never signs in or switches accounts.
+
 ## Tests
 
-The Worker tests use Node 24 or later with `node:test` and no packages: run `node test/all.ts` inside the Worker directory. In this repository, `tools/tests/test-feedback-worker.sh` runs them on the template and on a copy written with sample values, and checks the placeholder contract and that no app-specific value remains.
+The Worker tests use Node 24 or later with `node:test` and no packages: run `node test/all.ts` inside the Worker directory. In this repository, `tools/tests/test-feedback-worker.sh` runs them on the template and on a copy written with sample values, and checks the placeholder contract and that no app-specific value remains. `tools/tests/test-app-feedback-provision.sh` runs the provisioning tool in a sample app with fake `gh`, `wrangler`, `security` and `curl`.
 
 ## Boundaries
 
-- Secrets (`GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_SIGNING_PKCS8`) live only in Worker secrets. Never write them to `wrangler.jsonc`, the app, `.dev.vars` (ignored by Git), a log, an Issue, or a PR.
-- This skill performs no external operation. Creating the feedback repository, registering secrets, deploying, and setting the app's host belong to the provisioning tool, run in each app's Issue after the user approves those operations. Creating the shared GitHub App, installing it, and issuing its signing key are the user's.
+- Secrets (`GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_SIGNING_PKCS8`) live only in Worker secrets and in the places above. The tool passes them to child processes on standard input only: never as arguments, and never to `wrangler.jsonc`, the app, `.dev.vars` (ignored by Git), a log, an Issue, or a PR.
+- The skill and its template perform no external operation. Creating the feedback repository, registering secrets, deploying, and setting the app's host belong to the provisioning tool, run in each app's Issue after the user approves those operations. Creating the shared GitHub App, installing it, and issuing its signing key are the user's.
 - The app side (`Features/Feedback/`) sends to `https://<host>/v1/feedback` and hides its entry until the host is set.
