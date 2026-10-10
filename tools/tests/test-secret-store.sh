@@ -2,7 +2,7 @@
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" git ruby
+require_test_commands "$0" git ruby script
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 test_workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-secret-store.XXXXXX")
@@ -52,6 +52,56 @@ put_output=$(printf '%s\n' "$test_secret" | run_secret_store put \
 [[ -f "$fake_db" ]] || { echo 'put did not store the secret' >&2; exit 1; }
 if /usr/bin/grep -aFq -- "$test_secret" "$fake_argv"; then
   echo 'secret appeared in security argv' >&2
+  exit 1
+fi
+
+# #277: the stored value is the entered one, not the empty password that `add-generic-password -w`
+# stores from a pipe. The fake behaves like the real security there.
+[[ "$(/bin/cat "$fake_db")" == "$test_secret" ]] || { echo 'put stored a different value' >&2; exit 1; }
+rm -f -- "$fake_db"
+printf '%s\n' "$test_secret" | IOS_TEMPLATE_TEST_MODE=1 FAKE_SECURITY_DB="$fake_db" FAKE_SECURITY_ARGV="$test_workspace/legacy-argv" \
+  "$fake_security" add-generic-password -U -a template-app -s "$service_name" -T '' -w
+[[ -f "$fake_db" && ! -s "$fake_db" ]] || { echo 'the fake security no longer stores the empty password the real one does' >&2; exit 1; }
+
+# Quotes, backslashes, spaces and other printable ASCII survive security's interactive mode.
+special_secret='fixture "quoted" \back slash'"'"'s x=y+z/_-.~'
+: > "$fake_argv"
+printf '%s\n' "$special_secret" | run_secret_store put --app template-app --service elevenlabs --environment production --key api-key
+[[ "$(/bin/cat "$fake_db")" == "$special_secret" ]] || { echo 'put changed a value with quotes or backslashes' >&2; exit 1; }
+if /usr/bin/grep -aFq -- 'fixture "quoted"' "$fake_argv"; then
+  echo 'secret appeared in security argv' >&2
+  exit 1
+fi
+
+# An empty line, a byte the Keychain would return in hex, and a readback that differs all fail.
+assert_fails 'empty secret' bash -c 'printf "\\n" | "$@"' _ env IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_SECURITY_BIN="$fake_security" \
+  FAKE_SECURITY_DB="$fake_db" FAKE_SECURITY_ARGV="$fake_argv" "$repo_root/tools/secret-store.sh" put --app template-app --service elevenlabs --environment production --key api-key
+for unsupported in $'tab\there' 'パスワード' $'del\x7fete'; do
+  assert_fails 'non-printable or non-ASCII secret' bash -c 'printf "%s\n" "$1" | "${@:2}"' _ "$unsupported" env IOS_TEMPLATE_TEST_MODE=1 \
+    IOS_TEMPLATE_TEST_SECURITY_BIN="$fake_security" FAKE_SECURITY_DB="$fake_db" FAKE_SECURITY_ARGV="$fake_argv" \
+    "$repo_root/tools/secret-store.sh" put --app template-app --service elevenlabs --environment production --key api-key
+done
+assert_fails 'readback differs' bash -c 'printf "%s\n" "$1" | "${@:2}"' _ "$test_secret" env IOS_TEMPLATE_TEST_MODE=1 FAKE_SECURITY_READBACK=differs \
+  IOS_TEMPLATE_TEST_SECURITY_BIN="$fake_security" FAKE_SECURITY_DB="$fake_db" FAKE_SECURITY_ARGV="$fake_argv" \
+  "$repo_root/tools/secret-store.sh" put --app template-app --service elevenlabs --environment production --key api-key
+
+# Typed at a terminal: one hidden line, confirmed with Enter, without waiting for the end of input.
+tty_secret='fixture-typed-value-77'
+tty_output="$test_workspace/tty-output"
+: > "$tty_output"
+rm -f -- "$fake_db"
+{
+  for _ in $(/usr/bin/seq 1 150); do
+    /usr/bin/grep -q 'Secret (input hidden)' "$tty_output" 2>/dev/null && break
+    sleep 0.2
+  done
+  printf '%s\n' "$tty_secret"
+} | IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_SECURITY_BIN="$fake_security" FAKE_SECURITY_DB="$fake_db" FAKE_SECURITY_ARGV="$fake_argv" \
+  /usr/bin/script -q /dev/null "$repo_root/tools/secret-store.sh" put --app template-app --service elevenlabs --environment production \
+  --key api-key > "$tty_output" 2>&1
+[[ "$(/bin/cat "$fake_db" 2>/dev/null)" == "$tty_secret" ]] || { echo 'terminal input was not stored' >&2; exit 1; }
+if /usr/bin/grep -aFq -- "$tty_secret" "$tty_output"; then
+  echo 'terminal input was echoed' >&2
   exit 1
 fi
 

@@ -53,18 +53,45 @@ umask 077
 case "$operation" in
   put)
     secret_value=''
-    IFS= read -r secret_value || fail 'secret must be one newline-terminated line on stdin'
-    [[ -n "$secret_value" && "$secret_value" != *$'\r'* ]] || { unset secret_value; fail 'secret must be a nonempty single line'; }
-    if IFS= read -r _extra_value; then
-      unset secret_value _extra_value
-      fail 'secret input contains more than one line'
+    if [[ -t 0 ]]; then
+      # Typed at a terminal: one hidden line, confirmed with Enter.
+      printf 'Secret (input hidden): ' >&2
+      IFS= read -rs secret_value || { printf '\n' >&2; unset secret_value; fail 'secret input ended before a line was entered'; }
+      printf '\n' >&2
+    else
+      IFS= read -r secret_value || fail 'secret must be one newline-terminated line on stdin'
+      if IFS= read -r _extra_value; then
+        unset secret_value _extra_value
+        fail 'secret input contains more than one line'
+      fi
     fi
-    printf '%s\n' "$secret_value" | "$security_executable" add-generic-password \
-      -U -a "$app_slug" -s "$service_name" -T '' -w >/dev/null 2>&1 || {
-        unset secret_value
+    [[ -n "$secret_value" ]] || { unset secret_value; fail 'secret must be a nonempty single line'; }
+    # Printable ASCII only: the Keychain returns any other byte in hex, so the readback could not match.
+    # Checked in a subshell with the C locale; a here-string would write the value to a temporary file.
+    if ( LC_ALL=C; [[ "$secret_value" == *[![:print:]]* ]] ); then
+      unset secret_value
+      fail 'secret must be printable ASCII on one line'
+    fi
+    # `security add-generic-password -w` reads no value from a pipe and stores an empty password (#277).
+    # Its interactive mode takes the whole command, value included, on stdin, so the value never
+    # appears in a process listing. Inside double quotes it reads \" and \\ as escapes.
+    escaped_value=${secret_value//\\/\\\\}
+    escaped_value=${escaped_value//\"/\\\"}
+    printf 'add-generic-password -U -a %s -s %s -T "" -w "%s"\n' "$app_slug" "$service_name" "$escaped_value" |
+      "$security_executable" -i >/dev/null 2>&1 || {
+        unset secret_value escaped_value
         fail 'Keychain write failed'
       }
-    unset secret_value
+    unset escaped_value
+    stored_value=$("$security_executable" find-generic-password -a "$app_slug" -s "$service_name" -w 2>/dev/null) || {
+      unset secret_value stored_value
+      fail 'Keychain readback failed'
+    }
+    if [[ "$stored_value" != "$secret_value" ]]; then
+      unset secret_value stored_value
+      fail 'Keychain readback differs from the entered secret; run put again'
+    fi
+    unset secret_value stored_value
     ;;
   check)
     set +e

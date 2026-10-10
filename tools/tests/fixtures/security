@@ -1,31 +1,76 @@
-#!/bin/bash
-set -euo pipefail
+#!/usr/bin/ruby
+# A fake macOS `security` that behaves like the real one where tools/secret-store.sh and
+# tools/run-with-secret.sh depend on it (#277):
+# - `add-generic-password ... -w` with no value after `-w` stores an empty password from a pipe.
+# - `-i` reads whole commands from stdin; inside double quotes \" and \\ are escapes, and a
+#   missing `-w` value or an existing item without `-U` fails with status 45.
+# - `find-generic-password ... -w` prints the password and a newline; a missing item is status 44.
+# It logs its argv, NUL-separated, so tests can check that no secret is ever an argument.
+# FAKE_SECURITY_READBACK=differs makes find return another value, to test the readback check.
 
-: "${FAKE_SECURITY_DB:?}"
-: "${FAKE_SECURITY_ARGV:?}"
+db = ENV.fetch("FAKE_SECURITY_DB")
+File.open(ENV.fetch("FAKE_SECURITY_ARGV"), "ab") { |file| ARGV.each { |argument| file.write(argument.b + "\0") } }
 
-printf '%s\0' "$@" >> "$FAKE_SECURITY_ARGV"
+def tokens(line)
+  result = []
+  current = nil
+  quoted = false
+  index = 0
+  while index < line.length
+    character = line[index]
+    if quoted
+      if character == "\\" && index + 1 < line.length
+        current << line[index + 1]
+        index += 1
+      elsif character == '"'
+        quoted = false
+      else
+        current << character
+      end
+    elsif character == '"'
+      current ||= +""
+      quoted = true
+    elsif character == " " || character == "\t"
+      result << current if current
+      current = nil
+    else
+      (current ||= +"") << character
+    end
+    index += 1
+  end
+  exit 64 if quoted
+  result << current if current
+  result
+end
 
-operation=${1:-}
-shift || true
+def add(arguments, db, interactive)
+  flag = arguments.index("-w") or exit 64
+  value = arguments[flag + 1]
+  if value.nil?
+    exit 45 if interactive
+    value = ""
+  end
+  exit 45 if File.exist?(db) && !arguments.include?("-U")
+  File.open(db, File::WRONLY | File::CREAT | File::TRUNC, 0o600) { |file| file.write(value) }
+end
 
-case "$operation" in
-  add-generic-password)
-    [[ " ${*} " == *" -w " ]] || exit 64
-    IFS= read -r secret_value || exit 65
-    if IFS= read -r _extra_value; then
-      exit 66
-    fi
-    umask 077
-    printf '%s' "$secret_value" > "$FAKE_SECURITY_DB"
-    ;;
-  find-generic-password)
-    [[ -f "$FAKE_SECURITY_DB" ]] || exit 44
-    if [[ " ${*} " == *" -w " ]]; then
-      /bin/cat "$FAKE_SECURITY_DB"
-    fi
-    ;;
-  *)
-    exit 64
-    ;;
-esac
+case ARGV.first
+when "-i"
+  STDIN.each_line do |line|
+    words = tokens(line.chomp)
+    next if words.empty?
+    exit 64 unless words.first == "add-generic-password"
+    add(words.drop(1), db, true)
+  end
+when "add-generic-password"
+  add(ARGV.drop(1), db, false)
+when "find-generic-password"
+  exit 44 unless File.exist?(db)
+  if ARGV.include?("-w")
+    value = File.binread(db)
+    value = "#{value}-differs" if ENV["FAKE_SECURITY_READBACK"] == "differs"
+    puts value
+  end
+else
+  exit 64
+end
