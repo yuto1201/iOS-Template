@@ -60,7 +60,9 @@ case "$operation" in
       printf '\n' >&2
     else
       IFS= read -r secret_value || fail 'secret must be one newline-terminated line on stdin'
-      if IFS= read -r _extra_value; then
+      # A second line counts even without a final newline, when read stops at the end of input.
+      _extra_value=''
+      if IFS= read -r _extra_value || [[ -n "$_extra_value" ]]; then
         unset secret_value _extra_value
         fail 'secret input contains more than one line'
       fi

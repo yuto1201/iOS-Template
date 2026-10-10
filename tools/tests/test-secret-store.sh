@@ -131,6 +131,11 @@ assert_fails 'invalid service path' run_with_secret --service-name 'ios-template
 assert_fails 'invalid environment name' run_with_secret --service-name "$service_name" --env 'bad-name' -- "$secret_probe"
 assert_fails 'shell evaluation command' run_with_secret --service-name "$service_name" --env ELEVENLABS_API_KEY -- /bin/bash -c 'true'
 assert_fails 'multiline secret' bash -c 'printf "one\\ntwo\\n" | "$1" put --app template-app --service elevenlabs --environment production --key api-key' _ "$repo_root/tools/secret-store.sh"
+rm -f -- "$fake_db"
+assert_fails 'second line without a final newline' bash -c 'printf "one\\ntwo" | "$@"' _ env IOS_TEMPLATE_TEST_MODE=1 \
+  IOS_TEMPLATE_TEST_SECURITY_BIN="$fake_security" FAKE_SECURITY_DB="$fake_db" FAKE_SECURITY_ARGV="$fake_argv" \
+  "$repo_root/tools/secret-store.sh" put --app template-app --service elevenlabs --environment production --key api-key
+[[ ! -e "$fake_db" ]] || { echo 'a refused multi-line input was stored' >&2; exit 1; }
 
 test_home="$test_workspace/home"
 approved_root="$test_home/Library/Application Support/iOS-Template/secrets/template-app"
