@@ -297,6 +297,8 @@ supabase/
 
 App Store用スクリーンショットも、通常検証と同じrepository専用の2台（D-063）だけで撮影します。2台はApp Storeの必須画像サイズ（iPhone 6.9-inch、iPad 13-inch）の機種なので（D-070）、撮影画像はそのまま必須サイズを満たし、合成や切り抜きを必要としません。必須サイズに合わない画像は、撮影toolが保存前に拒否し、upload前の画像判定でも受け入れません。
 
+撮影した画像から提出用の画像とプレビュー動画を作るときは、`appstore-creative`スキルを使います（D-077）。Goldie（固定版）を土台にし、端末のない面、iPad、録画のようにGoldieにないものはテンプレートの拡張層で補います。まず3〜4パターンを縮小版で示してユーザーが選び、選んだパターンだけを日英とiPhone・iPadで作り込みます。生成画像は背景や風景などの素材として使い、アプリの画面は必ず撮影した本物を使います。プレビュー動画は、試し録りの機械確認とユーザーの判断で「動画なし」を選べます。各アプリは、採用したGoldieの設定を`goldie/<locale>/`、採用した生成画像とその由来を`goldie/assets/`に置いてcommitし、提案シートと不採用の画像はcommitしません。
+
 ### 9.1 原稿の正本と登録準備
 
 App Store準備は、原稿の確認、remote保存、release readiness、提出を区別する。アプリ共通のfield inventoryとsource→ASC対応、登録前の照合、解除条件付きreadiness reportは[App Store運用契約](../docs/agent-contracts/appstore-submission.md#source-inventory-and-registration-preparation)に従う。

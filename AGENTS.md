@@ -50,7 +50,7 @@ ClaudeとCodexは同じ権限を持ち、どちらもローカル作業と認証
 - `harden`: 承認済みの形に対し、保存復旧、特定画面のDynamic Type、VoiceOver、localization、Dark Mode、性能、回帰など一つの問題を狭く改善する。`targeted`なcaseだけを検証し、無関係な品質項目を同じIssueへ集めない。
 - `release`: リリース候補Headへ従来の完全品質ゲートを適用する。4条件、Light/Dark、Dynamic Type、VoiceOver、44pt、目視、統合UI Test、同一Head証拠、反対モデルレビュー、premerge、提出前確認を必須にする。
 
-Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの主要機能と軽量検証、Phase 4は英語／iPadの対象拡張、Phase 5は完全品質、Phase 6は同一candidateに対する証拠適用判断と公開準備を担当する。Phase 6のApp Store用iPhone画像はGoldieを標準参照とし、`ja`／`en-US`を分離する。iPadは検証済み既存撮影経路を使い、どちらも共通Simulator資源管理、全画像監査、package／upload／submitの独立gateを維持する。
+Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの主要機能と軽量検証、Phase 4は英語／iPadの対象拡張、Phase 5は完全品質、Phase 6は同一candidateに対する証拠適用判断と公開準備を担当する。Phase 6のApp Store用画像とプレビュー動画は、`appstore-creative`スキル（Goldieを土台とする、D-077）でパターンを提案し、ユーザーの選択を経て作り、`ja`／`en-US`を分離する。iPhone・iPadとも撮影と録画は検証済み既存撮影経路の専用deviceを使い、共通Simulator資源管理、全画像監査、package／upload／submitの独立gateを維持する。
 
 すべてのstageで、コンパイル可能性、重要な金額・日付・保存ロジック、データ非破壊、秘密・個人情報の非保存、ユーザー所有ファイル保護、Scope境界、実行結果の正確な報告を省略しません。`strict`対象の認証・migration・本番データ・課金・法務・workflow gateは、stageが早くても対象別安全確認と必要な承認を維持します。
 
@@ -58,7 +58,7 @@ Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの�
 
 `shape`は`iphone-ja`、applicationを検証する`harden`はcanonical部分集合の`targeted`、`release`は`full`を使用します。repository testの`targeted`は既知domainの関連testだけを選び、manifest、runner、tracked test、複数domainを理由に全件へ自動昇格しません。未知pathは開始前に停止し、`head-all`／`base-and-head`と4条件検証はrelease、nightly相当の明示実行、またはユーザーのIssue contract上の明示要求に限定します。未確認の条件は延期・未検証として報告します。
 
-workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression test、D-059に従い後続Issueがexact列挙するasc adapterのtool／helper／fixture／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
+workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression test、D-059に従い後続Issueがexact列挙するasc adapterのtool／helper／fixture／直接regression test、D-077に従い後続Issueがexact列挙する非認証creative producer（スキル、拡張層、提案シート、録画と品質確認）のtool／helper／fixture／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
 
 UI方向比較のHTMLは選択を助ける作業artifactであり、仕様の正本、pixel仕様、Build／Test／Simulator／画像評価の証拠にはしません。実装は選択した情報階層、主要導線、状態とaccessibility意図をnative SwiftUIへ翻訳します。
 

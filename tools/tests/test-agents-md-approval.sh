@@ -81,9 +81,12 @@ from pathlib import Path
 import sys
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-marker = "\n+- `AGENTS.md`を書き換えるときは"
-assert marker in text
-path.write_text(text.replace(marker, "\n+- 別の文面。\n+- `AGENTS.md`を書き換えるときは", 1), encoding="utf-8")
+# The check reads only the latest record, so the unapproved line goes into the latest approved diff.
+marker = "\n```diff\n"
+index = text.rfind(marker)
+assert index >= 0
+index += len(marker)
+path.write_text(text[:index] + "+- 別の文面。\n" + text[index:], encoding="utf-8")
 PY
 expect_failure unapproved-line 'AGENTS.md lacks an approved line'
 
