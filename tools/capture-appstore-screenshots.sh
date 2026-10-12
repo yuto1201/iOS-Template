@@ -64,6 +64,14 @@ if [[ -z "$simulator_session_id" ]]; then
   simulator_session_id=$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')
 fi
 [[ "$simulator_session_id" =~ ^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$ ]] || { echo 'Simulator session identity is invalid' >&2; exit 1; }
+# simctl returns from launch before the app draws, so each capture waits this long first.
+settle_seconds=${IOS_TEMPLATE_APPSTORE_SETTLE_SECONDS:-8}
+[[ "$settle_seconds" =~ ^[0-9]{1,3}$ ]] && (( 10#$settle_seconds <= 120 )) || {
+  echo 'IOS_TEMPLATE_APPSTORE_SETTLE_SECONDS must be an integer from 0 to 120' >&2; exit 1;
+}
+# simctl writes RGBA PNGs even when every pixel is opaque; App Store screenshots must not carry alpha.
+flatten_script="$capture_script_dir/flatten-appstore-screenshot.swift"
+[[ -f "$flatten_script" && ! -L "$flatten_script" ]] || { echo 'screenshot flattener is unavailable' >&2; exit 1; }
 
 for variable in requirements states app_path; do
   value=${!variable}; directory=$(cd "$(dirname "$value")" && /bin/pwd -P)
@@ -88,7 +96,7 @@ run_simulator_resource() {
 release_active_simulator() {
   local reason=$1 output allocation_id udid receipt
   [[ -n "$active_allocation_id" ]] || return 0
-  output=$(run_simulator_resource release "${resource_test_flags[@]}" \
+  output=$(run_simulator_resource release ${resource_test_flags[@]+"${resource_test_flags[@]}"} \
     --session "$simulator_session_id" --allocation-id "$active_allocation_id" \
     --reason "$reason" --receipt-dir "$allocation_receipt_dir") || return 1
   IFS=$'\t' read -r allocation_id udid receipt <<<"$output"
@@ -202,7 +210,7 @@ while [[ "$group_index" -lt "$group_count" ]]; do
     ipad-*:ja) active_case_id=ipad-ja ;;
     *) echo "unsupported App Store capture condition: $family/$locale" >&2; exit 1 ;;
   esac
-  allocation_output=$(run_simulator_resource allocate "${resource_test_flags[@]}" \
+  allocation_output=$(run_simulator_resource allocate ${resource_test_flags[@]+"${resource_test_flags[@]}"} \
     --session "$simulator_session_id" --repository "$repository_root" --issue "$issue" --head "$source_sha" \
     --batch "$batch_id" --attempt "$attempt_id" --case "$active_case_id" --runtime "$runtime" \
     --device-type "$device_identifier" --owner-pid "$$" --wait-seconds 60 \
@@ -215,6 +223,26 @@ while [[ "$group_index" -lt "$group_count" ]]; do
 
   bounded_run appstore-simulator-boot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl boot "$active_allocation_udid"
   bounded_run appstore-simulator-bootstatus "${IOS_TEMPLATE_SIMULATOR_BOOT_TIMEOUT_SECONDS:-300}" "$xcrun_bin" simctl bootstatus "$active_allocation_udid" -b
+  # #173: launch arguments only reach the app. The status bar and system UI follow the device's
+  # own language, which an erased device takes from the Mac, so write it and restart in place
+  # (erasing would drop it), as verify-ios-issue.sh prepare_system_locale does.
+  case "$language:$apple_locale" in
+    en:en_US) system_language=en-US ;;
+    ja:ja_JP) system_language=ja-JP ;;
+    *) echo "unsupported App Store capture system language: $language/$apple_locale" >&2; exit 1 ;;
+  esac
+  bounded_run appstore-system-language "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl spawn "$active_allocation_udid" defaults write -g AppleLanguages -array "$system_language"
+  bounded_run appstore-system-locale "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl spawn "$active_allocation_udid" defaults write -g AppleLocale -string "$apple_locale"
+  bounded_run appstore-locale-shutdown "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl shutdown "$active_allocation_udid"
+  bounded_run appstore-locale-boot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl boot "$active_allocation_udid"
+  bounded_run appstore-locale-bootstatus "${IOS_TEMPLATE_SIMULATOR_BOOT_TIMEOUT_SECONDS:-300}" "$xcrun_bin" simctl bootstatus "$active_allocation_udid" -b
+  system_preferences="$staging/system-preferences-$active_case_id.plist"
+  bounded_run appstore-system-locale-readback "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl spawn "$active_allocation_udid" defaults export -g - > "$system_preferences"
+  observed_languages=$(/usr/bin/plutil -extract AppleLanguages json -o - "$system_preferences" 2>/dev/null) || observed_languages=
+  observed_locale=$(/usr/bin/plutil -extract AppleLocale raw -o - "$system_preferences" 2>/dev/null) || observed_locale=
+  [[ "$observed_languages" == "[\"$system_language\"]" && "$observed_locale" == "$apple_locale" ]] || {
+    echo "the dedicated Simulator system language/locale is not $system_language/$apple_locale after the restart" >&2; exit 1;
+  }
   bounded_run appstore-status-bar "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl status_bar "$active_allocation_udid" override --time 9:41 --dataNetwork wifi --wifiBars 3 --cellularBars 4 --batteryState charged --batteryLevel 100
 
   state_count=$(ruby -rjson -e '
@@ -243,7 +271,11 @@ while [[ "$group_index" -lt "$group_count" ]]; do
     bounded_run appstore-simulator-launch "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl launch --terminate-running-process "$active_allocation_udid" "$bundle_id" \
       -AppleLanguages "($language)" -AppleLocale "$apple_locale" -AppleInterfaceStyle Light \
       --disable-animations --fixed-date 2026-01-01T09:41:00Z "${launch_arguments[@]}"
-    bounded_run appstore-screenshot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl io "$active_allocation_udid" screenshot --type=png "$destination"
+    sleep "$settle_seconds"
+    raw_capture="$destination_directory/.raw-$(basename "$destination")"
+    bounded_run appstore-screenshot "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl io "$active_allocation_udid" screenshot --type=png "$raw_capture"
+    bounded_run appstore-screenshot-flatten "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" /usr/bin/xcrun swift "$flatten_script" "$raw_capture" "$destination"
+    rm -f -- "$raw_capture"
     bounded_run appstore-simulator-terminate "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl terminate "$active_allocation_udid" "$bundle_id"
     bounded_run appstore-simulator-uninstall "${IOS_TEMPLATE_SIMCTL_TIMEOUT_SECONDS:-180}" "$xcrun_bin" simctl uninstall "$active_allocation_udid" "$bundle_id"
     state_index=$((state_index+1))

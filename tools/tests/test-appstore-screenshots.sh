@@ -28,13 +28,13 @@ ruby -rjson -e '
 ' "$requirements"
 
 write_png() {
-  local path=$1 width=$2 height=$3 color_type=$4 seed=$5
+  local path=$1 width=$2 height=$3 color_type=$4 seed=$5 alpha=${6:-255}
   mkdir -p "$(dirname "$path")"
   ruby -rzlib -e '
-    path,width,height,color_type,seed=ARGV
+    path,width,height,color_type,seed,alpha=ARGV
     width=Integer(width); height=Integer(height); color_type=Integer(color_type); seed=Integer(seed)
     channels=color_type==6 ? 4 : 3
-    pixel=[seed%251,(seed*3)%251,(seed*7)%251,255].take(channels).pack("C*")
+    pixel=[seed%251,(seed*3)%251,(seed*7)%251,Integer(alpha)].take(channels).pack("C*")
     raw=("\x00" + pixel*width)*height
     chunk=lambda do |type,data|
       type=type.b; [data.bytesize].pack("N")+type+data+[Zlib.crc32(type+data)].pack("N")
@@ -44,7 +44,7 @@ write_png() {
     png << chunk.call("IDAT",Zlib::Deflate.deflate(raw,9))
     png << chunk.call("IEND","".b)
     File.binwrite(path,png)
-  ' "$path" "$width" "$height" "$color_type" "$seed"
+  ' "$path" "$width" "$height" "$color_type" "$seed" "$alpha"
 }
 
 write_valid_fixture() {
@@ -176,16 +176,22 @@ capture_requirements="$workspace/capture-requirements.json"
 /bin/cp "$repo_root/tools/tests/fixtures/appstore/requirements.json" "$capture_requirements"
 fake_bin="$workspace/fake-bin"; mkdir -p "$fake_bin"
 # Each locale/family gets distinct bytes because the set builder rejects duplicate images.
+# Like real simctl captures, they are opaque RGBA PNGs (color type 6).
 fake_pngs="$workspace/fake-png"
-write_png "$fake_pngs/en-US-iphone-6.3.png" 1206 2622 2 77
-write_png "$fake_pngs/ja-iphone-6.3.png" 1206 2622 2 78
-write_png "$fake_pngs/en-US-ipad-13.png" 2064 2752 2 79
-write_png "$fake_pngs/ja-ipad-13.png" 2064 2752 2 80
+write_png "$fake_pngs/en-US-iphone-6.3.png" 1206 2622 6 77
+write_png "$fake_pngs/ja-iphone-6.3.png" 1206 2622 6 78
+write_png "$fake_pngs/en-US-ipad-13.png" 2064 2752 6 79
+write_png "$fake_pngs/ja-ipad-13.png" 2064 2752 6 80
 # A Simulator that still renders the former iPhone 17 Pro Max size (1320x2868) must not pass capture.
 old_size_pngs="$workspace/fake-png-old-size"
-write_png "$old_size_pngs/en-US-iphone-6.3.png" 1320 2868 2 87
-write_png "$old_size_pngs/ja-iphone-6.3.png" 1320 2868 2 88
+write_png "$old_size_pngs/en-US-iphone-6.3.png" 1320 2868 6 87
+write_png "$old_size_pngs/ja-iphone-6.3.png" 1320 2868 6 88
 /bin/cp "$fake_pngs/en-US-ipad-13.png" "$fake_pngs/ja-ipad-13.png" "$old_size_pngs/"
+# #168: one translucent capture must stop the whole run instead of being blended.
+translucent_pngs="$workspace/translucent-png"
+/bin/mkdir -p "$translucent_pngs"
+/bin/cp "$fake_pngs"/*.png "$translucent_pngs/"
+write_png "$translucent_pngs/ja-ipad-13.png" 2064 2752 6 80 254
 fake_log="$workspace/xcrun.log"
 fake_state="$workspace/simctl-state.json"
 resource_state="$workspace/resource-state"
@@ -234,18 +240,48 @@ begin
       abort "unexpected list arguments"
     end
   when "boot"
-    target.call["state"] = "Booted"
+    device = target.call
+    device["state"] = "Booted"
+    # #173: a restart that loses the written system language must not pass the readback.
+    device.delete("preferences") if ENV["FAKE_LOCALE_FAILURE"] == "lost-on-restart"
     File.binwrite(state_path, JSON.generate(state))
   when "shutdown"
     target.call["state"] = "Shutdown"
     File.binwrite(state_path, JSON.generate(state))
   when "erase"
-    abort "erase requires a shut down device" unless target.call["state"] == "Shutdown"
+    device = target.call
+    abort "erase requires a shut down device" unless device["state"] == "Shutdown"
+    device.delete("preferences")
+    File.binwrite(state_path, JSON.generate(state))
+  when "spawn"
+    device = target.call
+    abort "spawn requires a booted device" unless device["state"] == "Booted"
+    preferences = device["preferences"] ||= {}
+    arguments = ARGV.drop(1)
+    if arguments.length == 6 && arguments.first(5) == %w[defaults write -g AppleLanguages -array]
+      abort "configured system language write failure" if ENV["FAKE_LOCALE_FAILURE"] == "write"
+      preferences["AppleLanguages"] = [arguments.last]
+    elsif arguments.length == 6 && arguments.first(5) == %w[defaults write -g AppleLocale -string]
+      preferences["AppleLocale"] = arguments.last
+    elsif arguments == %w[defaults export -g -]
+      abort "configured system language readback failure" if ENV["FAKE_LOCALE_FAILURE"] == "read"
+      entries = preferences.map do |key, value|
+        rendered = value.is_a?(Array) ? "<array>#{value.map { |item| "<string>#{item}</string>" }.join}</array>" : "<string>#{value}</string>"
+        "<key>#{key}</key>#{rendered}"
+      end
+      puts %(<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>#{entries.join}</dict></plist>)
+    else
+      abort "unexpected spawn arguments"
+    end
+    File.binwrite(state_path, JSON.generate(state))
+  when "bootstatus"
+    # #173: the restart after the system language write is the bootstatus that follows a written preference.
+    abort "configured restart failure" if ENV["FAKE_LOCALE_FAILURE"] == "restart" && target.call["preferences"]
   when "io"
     abort "configured screenshot failure" if ENV["FAKE_FAIL_SCREENSHOT"] == "1"
     destination = ARGV.fetch(-1)
     FileUtils.cp(File.join(ENV.fetch("FAKE_PNG_DIR"), destination.split("/")[-3, 2].join("-") + ".png"), destination)
-  when "bootstatus", "status_bar", "install", "launch", "terminate", "uninstall"
+  when "status_bar", "install", "launch", "terminate", "uninstall"
     # Deterministic no-op fixture commands.
   else
     abort "unexpected simctl command #{command}"
@@ -261,7 +297,7 @@ mkdir -p "$workspace/Fake.app"
 run_capture() {
   local session=$1 output=$2 requirements_file=$3 runtime_id=$4
   shift 4
-  env FAKE_XCRUN_LOG="$fake_log" FAKE_SIMCTL_STATE="$fake_state" FAKE_PNG_DIR="$fake_pngs" "$@" \
+  env FAKE_XCRUN_LOG="$fake_log" FAKE_SIMCTL_STATE="$fake_state" FAKE_PNG_DIR="$fake_pngs" IOS_TEMPLATE_APPSTORE_SETTLE_SECONDS=0 "$@" \
     IOS_TEMPLATE_SIMULATOR_SESSION_ID="$session" IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE=1 \
     IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT="$resource_state" IOS_TEMPLATE_APPSTORE_XCRUN="$fake_bin/xcrun" \
     "$capture" --requirements "$requirements_file" --states "$states" --app-path "$workspace/Fake.app" \
@@ -341,12 +377,83 @@ fi
 [[ ! -e "$failure_root" ]] || { echo 'failed capture published output' >&2; exit 1; }
 assert_dedicated_devices_intact
 
+# #168: an invalid settle time stops before any Simulator is touched.
+for settle in 121 abc -1; do
+  : > "$fake_log"
+  if run_capture appstore-settle-session "$workspace/settle-capture" "$capture_requirements" "$capture_runtime" \
+    IOS_TEMPLATE_APPSTORE_SETTLE_SECONDS="$settle"; then
+    echo "capture accepted settle time $settle" >&2; exit 1
+  fi
+  grep -Fq 'IOS_TEMPLATE_APPSTORE_SETTLE_SECONDS must be an integer from 0 to 120' "$workspace/capture.err" || {
+    echo "invalid settle time $settle failed for another reason: $(<"$workspace/capture.err")" >&2; exit 1
+  }
+  [[ ! -s "$fake_log" && ! -e "$workspace/settle-capture" ]] || { echo "invalid settle time $settle touched a Simulator" >&2; exit 1; }
+done
+
+# #168: a translucent pixel fails the capture instead of being blended, and nothing is published.
+: > "$fake_log"
+translucent_root="$workspace/translucent-capture"
+if run_capture appstore-translucent-session "$translucent_root" "$capture_requirements" "$capture_runtime" \
+  FAKE_PNG_DIR="$translucent_pngs"; then
+  echo 'capture accepted a translucent screenshot' >&2; exit 1
+fi
+grep -Fq 'capture contains a pixel that is not fully opaque' "$workspace/capture.err" || {
+  echo "translucent capture failed for another reason: $(<"$workspace/capture.err")" >&2; exit 1
+}
+[[ ! -e "$translucent_root" ]] || { echo 'translucent capture published output' >&2; exit 1; }
+assert_dedicated_devices_intact
+
+# #173: a failed write, restart, or readback, or a readback that differs, publishes nothing.
+for locale_failure in write restart read lost-on-restart; do
+  : > "$fake_log"
+  locale_failure_root="$workspace/locale-$locale_failure-capture"
+  if run_capture "appstore-locale-$locale_failure-session" "$locale_failure_root" "$capture_requirements" "$capture_runtime" \
+    FAKE_LOCALE_FAILURE="$locale_failure"; then
+    echo "capture succeeded after a system language $locale_failure failure" >&2; exit 1
+  fi
+  [[ ! -e "$locale_failure_root" ]] || { echo "system language $locale_failure failure published output" >&2; exit 1; }
+  ! rg -q '^simctl (launch|io) ' "$fake_log" || { echo "system language $locale_failure failure still captured the app" >&2; exit 1; }
+  assert_dedicated_devices_intact
+done
+grep -Fq 'the dedicated Simulator system language/locale is not en-US/en_US after the restart' "$workspace/capture.err" || {
+  echo "a lost system language failed for another reason: $(<"$workspace/capture.err")" >&2; exit 1
+}
+
 : > "$fake_log"
 capture_root="$workspace/captured"
 run_capture appstore-test-session "$capture_root" "$capture_requirements" "$capture_runtime" || {
   echo "dedicated capture failed: $(<"$workspace/capture.err")" >&2; exit 1
 }
 assert_dedicated_devices_intact
+# #168: the RGBA captures are published as RGB PNGs with the same colors and no leftover raw capture.
+ruby -rjson -rzlib -e '
+  root = ARGV.fetch(0)
+  JSON.parse(File.binread(File.join(root, "manifest.json"))).fetch("cases").each do |entry|
+    data = File.binread(File.join(root, entry.fetch("path")))
+    abort "#{entry["path"]} is not RGB" unless data.byteslice(25, 1).unpack1("C") == 2
+    seed = {"en-US/iphone-6.3" => 77, "ja/iphone-6.3" => 78, "en-US/ipad-13" => 79, "ja/ipad-13" => 80}.fetch("#{entry["locale"]}/#{entry["family"]}")
+    idat = +""; offset = 8
+    while offset < data.bytesize
+      length = data.byteslice(offset, 4).unpack1("N"); type = data.byteslice(offset + 4, 4)
+      idat << data.byteslice(offset + 8, length) if type == "IDAT"
+      offset += 12 + length
+    end
+    # Every PNG filter leaves the first pixel of the first row unchanged.
+    first = Zlib::Inflate.inflate(idat).byteslice(1, 3).unpack("C3")
+    abort "#{entry["path"]} changed its colors" unless first == [seed % 251, (seed * 3) % 251, (seed * 7) % 251]
+  end
+  abort "a raw capture was left behind" unless Dir.glob(File.join(root, "**", ".raw-*"), File::FNM_DOTMATCH).empty?
+' "$capture_root"
+grep -Fq 'settle_seconds=${IOS_TEMPLATE_APPSTORE_SETTLE_SECONDS:-8}' "$capture" || {
+  echo 'capture must wait 8 seconds by default before each screenshot' >&2; exit 1
+}
+ruby -e '
+  lines = File.readlines(ARGV.fetch(0))
+  launch = lines.index { |line| line.include?("simctl launch") }
+  settle = lines.index { |line| line.strip == %q{sleep "$settle_seconds"} }
+  shot = lines.index { |line| line.include?("screenshot --type=png") }
+  abort "capture must wait between launch and screenshot" unless launch && settle && shot && launch < settle && settle < shot
+' "$capture"
 ruby -rjson -e '
   value = JSON.parse(File.binread(ARGV.fetch(0)))
   abort "capture runtime" unless value.fetch("runtime") == ARGV.fetch(1)
@@ -372,6 +479,32 @@ rg -q 'status_bar .*--time 9:41' "$fake_log" || { echo 'fixed status bar was not
 rg -q -- '-AppleLanguages \(en\)' "$fake_log" && rg -q -- '-AppleLanguages \(ja\)' "$fake_log" || {
   echo 'English or Japanese launch arguments are missing' >&2; exit 1
 }
+# #173: each lease writes the system language and locale, restarts in place without erasing,
+# and reads them back before the status bar and the first launch.
+ruby -e '
+  lines = File.readlines(ARGV.fetch(0)).map(&:strip)
+  expected = {"en-US" => %w[en-US en_US], "ja" => %w[ja-JP ja_JP]}
+  seen = []
+  lines.each_index do |index|
+    next unless lines[index].start_with?("simctl erase ")
+    udid = lines[index].split.last
+    rest = lines[index + 1..-1]
+    language_line = rest.find_index { |line| line.start_with?("simctl spawn #{udid} defaults write -g AppleLanguages -array ") } or abort "no system language write after erase of #{udid}"
+    language, locale = rest[language_line].split.last, rest[language_line + 1].to_s.split.last
+    pair = expected.find { |_, value| value == [language, locale] } or abort "unexpected system language #{language}/#{locale}"
+    sequence = rest[language_line, 7].map { |line| line.split.first(3).join(" ") }
+    abort "system language for #{udid} was not written, restarted, and read back in order: #{sequence}" unless sequence == [
+      "simctl spawn #{udid}", "simctl spawn #{udid}", "simctl shutdown #{udid}", "simctl boot #{udid}",
+      "simctl bootstatus #{udid}", "simctl spawn #{udid}", "simctl status_bar #{udid}"
+    ] && rest[language_line + 1] == "simctl spawn #{udid} defaults write -g AppleLocale -string #{locale}" &&
+      rest[language_line + 5] == "simctl spawn #{udid} defaults export -g -"
+    abort "the system language restart erased the device" if rest[language_line, 7].any? { |line| line.start_with?("simctl erase ") }
+    first_launch = rest.find_index { |line| line.start_with?("simctl launch ") } or abort "no launch after erase of #{udid}"
+    abort "the app launched before the system language was ready" unless language_line + 6 < first_launch
+    seen << pair.first
+  end
+  abort "system languages per lease: #{seen}" unless seen.sort == %w[en-US en-US ja ja]
+' "$fake_log"
 
 # The existing set builder accepts the dedicated capture unchanged.
 capture_review="$workspace/capture-review.json"
@@ -389,5 +522,20 @@ ruby -rjson -e '
 result=$("$builder" --raw-root "$capture_root" --output-root "$workspace/capture-final" --requirements "$capture_requirements" \
   --review "$capture_review" --source-sha "$source_sha" --runtime "$capture_runtime" --build-digest "$build_digest")
 [[ "$result" == *'"status":"ready"'* ]] || { echo "the set builder rejected the dedicated capture: $result" >&2; exit 1; }
+
+# #165: outside test mode resource_test_flags is empty, and macOS /bin/bash 3.2 stops with
+# "unbound variable" on a bare "${resource_test_flags[@]}" under set -u. Every expansion must
+# use the guarded form, as verify-ios-issue.sh does.
+capture_tool="$repo_root/tools/capture-appstore-screenshots.sh"
+if grep -n 'resource_test_flags\[@\]' "$capture_tool" | grep -v '\${resource_test_flags\[@\]+"\${resource_test_flags\[@\]}"}' | grep -q .; then
+  echo "capture passes resource_test_flags without the empty-array guard" >&2
+  exit 1
+fi
+[[ "$(grep -c '\${resource_test_flags\[@\]+"\${resource_test_flags\[@\]}"}' "$capture_tool")" -eq 2 ]] || {
+  echo "capture must pass the guarded resource_test_flags to allocate and release" >&2; exit 1;
+}
+/bin/bash -c 'set -euo pipefail; flags=(); printf "%s\n" x ${flags[@]+"${flags[@]}"} >/dev/null' || {
+  echo "the guarded empty-array expansion fails under /bin/bash" >&2; exit 1;
+}
 
 echo 'PASS: App Store screenshots require exact images, deterministic locales, and release-only device families, and capture leases only the dedicated Simulators'
