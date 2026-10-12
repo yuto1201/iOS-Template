@@ -2,8 +2,9 @@
 # frozen_string_literal: true
 
 # Template sync (D-074): classify every template file, then compare a derived or non-template
-# repository with the template and write a report and an apply plan. The report never writes to the
-# target repository; approving and applying a plan live in template-sync-apply.rb.
+# repository with the template and write a report and an apply plan. Without a recorded base, each
+# file is judged by its own provenance in the template's history (D-078). The report never writes to
+# the target repository; approving and applying a plan live in template-sync-apply.rb.
 
 require "digest"
 require "fileutils"
@@ -27,6 +28,8 @@ module TemplateSync
   BASE_METHODS = %w[created adopted].freeze
   IDENTITY_KEYS = %w[appSlug bundleId displayName moduleName schemaVersion sourceIdentityVersion].freeze
   TEMPLATE_DEVICE_PREFIX = "iOS-Template "
+  # A commit that changes these can change every Identity-transformed file without touching it.
+  TRANSFORM_TOOL_PATHS = ["tools/bootstrap-app.swift", IDENTITY_MANIFEST_PATH].freeze
   SHA_PATTERN = /\A[0-9a-f]{40}\z/
   DECISION_HEADING = /^## (D-\d{3,}): (.+)$/
 
@@ -272,6 +275,8 @@ module TemplateSync
 
     source = JSON.parse(File.read(File.join(new_raw, IDENTITY_MANIFEST_PATH))).fetch("source")
     tokens = [source.fetch("module"), source.fetch("bundleId")].uniq
+    # Without a known base, each file is judged by its own provenance in the template's history (D-078).
+    history = base["status"] == "known" ? nil : file_history(root, commit, ownership, paths, app, identity, new_raw, new_xf, transform_status, work)
     base_paths = base_raw ? tracked_paths(root, base["commit"]) : []
     missing_base_paths = base_paths - paths
     app.merge!(read_app_files(app_root, app_head, missing_base_paths)) unless missing_base_paths.empty?
@@ -290,12 +295,12 @@ module TemplateSync
       next blocked_file(path, entry, blocked) if blocked && app[path].nil?
       compare_file(path, entry, new_raw: new_raw, new_xf: new_xf, base_raw: base_raw, base_xf: base_xf,
                    app_files: app, base_known: base["status"] == "known", tokens: tokens,
-                   identity: identity, transform_status: transform_status)
+                   identity: identity, transform_status: transform_status, provenance: history && history[:files])
     end
 
     summary = Hash.new(0)
     files.each { |file| summary[file["status"]] += 1 }
-    {
+    result = {
       "schemaVersion" => 1,
       "generatedAt" => now,
       "template" => {"repository" => ownership[:repository], "commit" => commit},
@@ -308,6 +313,9 @@ module TemplateSync
       "simulators" => simulator_report(app, new_xf, identity),
       "approvals" => approvals(files)
     }
+    # Shown to the user only; no decision above uses it. A known base keeps the D-074 plan unchanged.
+    result["inferredBase"] = history[:inferred] if history
+    result
   end
 
   def historical_ownership(tree)
@@ -386,10 +394,11 @@ module TemplateSync
     contents
   end
 
-  # Re-apply Identity bootstrap with the app's identity, using that template commit's own tool.
-  def transform_tree(raw, commit, identity, work)
+  # Re-apply Identity bootstrap with the app's identity, using that template commit's own tool. The tool
+  # is compiled once per version into work; the transformed tree goes into `into`.
+  def transform_tree(raw, commit, identity, work, into: work)
     key = Digest::SHA256.hexdigest(JSON.generate([commit, identity.values_at("displayName", "moduleName", "appSlug", "bundleId")]))[0, 16]
-    destination = File.join(work, "transformed-#{commit}-#{key}")
+    destination = File.join(into, "transformed-#{commit}-#{key}")
     return destination if File.directory?(destination)
     source = File.join(raw, "tools/bootstrap-app.swift")
     return nil unless File.file?(source)
@@ -462,7 +471,7 @@ module TemplateSync
     entry && "sha256:#{Digest::SHA256.hexdigest(entry.bytes)}"
   end
 
-  def compare_file(path, entry, new_raw:, new_xf:, base_raw:, base_xf:, app_files:, base_known:, tokens:, identity:, transform_status:)
+  def compare_file(path, entry, new_raw:, new_xf:, base_raw:, base_xf:, app_files:, base_known:, tokens:, identity:, transform_status:, provenance: nil)
     record = {"path" => path, "category" => entry[:category]}
     record["rule"] = entry[:rule] if entry[:rule]
     if entry[:category] == "app"
@@ -481,6 +490,15 @@ module TemplateSync
     new = read(transformed ? new_xf : new_raw, path)
     base = base_known ? read(transformed ? base_xf : base_raw, path) : nil
     app = app_files[path]
+    # Without a known base (D-078), a file that is exactly one of the template's earlier versions takes
+    # that version as its base; a file that matches none of them records the nearest version.
+    origin = provenance && provenance[path]
+    if origin && origin[:entry]
+      base = origin[:entry]
+      record["provenance"] = {"commit" => origin[:commit], "method" => "exact"}
+    elsif origin
+      record["nearest"] = origin[:nearest]
+    end
     record.merge!("newDigest" => digest(new), "baseDigest" => digest(base), "appDigest" => digest(app),
                   "newMode" => new&.mode, "baseMode" => base&.mode, "appMode" => app&.mode)
 
@@ -497,7 +515,13 @@ module TemplateSync
         end
       elsif app.nil? then ["missing", "add", "アプリにありません。"]
       elsif app == new then ["up-to-date", "none", "テンプレートと一致しています。"]
-      elsif !base_known then ["conflict", "manual", "基準commitが不明なため、アプリ側の変更かテンプレート側の更新かを判定できません。"]
+      elsif !base_known
+        fail!("no provenance was found for #{path}") if origin.nil?
+        if origin[:entry]
+          ["safe-update", "update", "基準commitは不明ですが、アプリ側はテンプレートの`#{origin[:commit][0, 7]}`の版と1バイトも違わないため、最新の版へ更新できます。"]
+        else
+          ["conflict", "manual", "基準commitが不明で、アプリ側の内容はテンプレートのどの版とも一致しません。アプリ側で変更したものとして手で確認します。"]
+        end
       elsif base.nil? then ["conflict", "manual", "テンプレートが新しく追加したパスに、アプリが別の内容を置いています。"]
       elsif app == base then ["safe-update", "update", "アプリ側は基準のままで、テンプレート側だけが変わりました。"]
       elsif new == base then ["app-only-change", "keep", "アプリ側だけの変更なので残します。"]
@@ -528,6 +552,245 @@ module TemplateSync
       "ownership" => "アカウントと提出先の設定はアプリの値を保ち、テンプレートの構造の変更だけを手で取り込みます。",
       "repository-tests" => "test manifestはアプリが追加したtestを保ち、テンプレートの変更を手で取り込みます。"
     }.fetch(rule)
+  end
+
+  # --- provenance without a known base (D-078) ------------------------------------------------
+
+  # Every template, Identity and mixed file the app has that differs from the newest template version
+  # is compared with each version of the same path in the template's history up to the compared
+  # commit. A file that is one of them byte for byte and mode for mode is that version, unmodified, so
+  # the newest version can replace it; any other file is the app's own change and gets the nearest
+  # version for review. Identity-transformed files are compared with each version transformed by the
+  # app's Identity with that commit's own tool. Returns {files: {path => origin}, inferred: ...}.
+  def file_history(root, commit, ownership, paths, app, identity, new_raw, new_xf, transform_status, work)
+    examined = {}
+    paths.each do |path|
+      entry = classify(ownership, path)
+      next unless entry && %w[template identity mixed].include?(entry[:category]) && app[path]
+      next if entry[:transform] && transform_status != "applied"
+      examined[path] = entry[:transform]
+    end
+    differing = examined.select do |path, transformed|
+      newest = read(transformed ? new_xf : new_raw, path)
+      newest && newest != app[path]
+    end
+    log = template_log(root, commit, (examined.keys + TRANSFORM_TOOL_PATHS).to_set)
+    states = differing.to_h { |path, transformed| [path, history_states(log, commit, path, transformed)] }
+
+    # Untransformed versions are read straight from the object store; transformed ones come from the
+    # commits that changed the path or the transform tool, each transformed once and kept in work.
+    untransformed = states.reject { |path, _| differing[path] }.values.flatten(1).map(&:last).compact
+    blobs = read_blobs(root, untransformed.reject { |mode, _| mode == "160000" }.map(&:last))
+    transformed_paths = paths.select { |path| classify(ownership, path)&.dig(:transform) }.sort
+    trees = {commit => new_xf}
+    files = {}
+    targets = {}
+    differing.each do |path, transformed|
+      versions = states.fetch(path).map do |sha, raw|
+        entry = if raw.nil? then nil
+                elsif transformed
+                  trees[sha] = transformed_history(root, sha, identity, transformed_paths, work) unless trees.key?(sha)
+                  # This commit's tool could not transform it, so the version cannot be compared.
+                  next nil if trees[sha].nil?
+                  read(trees[sha], path)
+                elsif raw[0] == "160000" then Entry.new(raw[0], "gitlink:#{raw[1]}")
+                else Entry.new(raw[0], blobs.fetch(raw[1]))
+                end
+        {commit: sha, raw: raw, entry: entry}
+      end.compact
+      # The raw versions that hold the app's content; the inferred base looks for them in each tree.
+      targets[path] = versions.select { |version| version[:entry] == app[path] }.map { |version| version[:raw] }.to_set if transformed
+      # A state equal to the one before it introduced nothing. Identical bytes can come back later (a
+      # revert, for example); the newest commit that introduced them is the one recorded.
+      introduced = []
+      versions.each { |version| introduced << version if introduced.empty? || introduced.last[:entry] != version[:entry] }
+      introduced = introduced.select { |version| version[:entry] }.reverse
+      found = introduced.find { |version| version[:entry] == app[path] }
+      files[path] = found ? {commit: found[:commit], entry: found[:entry]} : {nearest: nearest_version(introduced, app[path])}
+    end
+    {files: files, inferred: inferred_base(root, commit, log, examined, app, targets)}
+  end
+
+  # Each commit up to commit, newest first (no parent before its children), with the paths it changed
+  # among wanted: [mode, object name], or nil where it deleted the path. A merge is compared with its
+  # first parent, so what it brings into the history counts as changed there.
+  def template_log(root, commit, wanted)
+    output = git(root, "log", "--format=%H", "-z", "--raw", "--root", "--no-renames", "--no-abbrev", "--diff-merges=first-parent",
+                 "--ignore-submodules=none", "--date-order", "--no-color", "--no-show-signature", commit, "--")
+    tokens = output.force_encoding(Encoding::UTF_8).split("\0")
+    log = []
+    index = 0
+    while index < tokens.length
+      token = tokens[index]
+      index += 1
+      if (change = token.match(/\A\n?:\d{6} (\d{6}) \h+ (\h+) [A-Z]\d*\z/))
+        path = tokens[index]
+        index += 1
+        fail!("could not read the template history") if log.empty? || path.nil?
+        log.last[1][path] = change[1] == "000000" ? nil : [change[1], change[2]] if wanted.include?(path)
+      elsif token.match?(/\A\h{40}(?:\h{24})?\z/)
+        log << [token, {}]
+      else
+        fail!("could not read the template history")
+      end
+    end
+    log
+  end
+
+  # The states of one path in history order: [commit, raw entry or nil]. An Identity-transformed path
+  # also gets a state at each commit that changed the transform tool, and at the compared commit.
+  def history_states(log, commit, path, transformed)
+    states = []
+    current = nil
+    log.reverse_each do |sha, changes|
+      changed = changes.key?(path)
+      next unless changed || (transformed && TRANSFORM_TOOL_PATHS.any? { |tool| changes.key?(tool) })
+      current = changes[path] if changed
+      states << [sha, current]
+    end
+    states << [commit, current] if transformed && states.last&.first != commit
+    states
+  end
+
+  # Blobs by object name, through one cat-file process.
+  def read_blobs(root, names)
+    names = names.uniq
+    return {} if names.empty?
+    output = git(root, "cat-file", "--batch", input: names.join("\n") + "\n")
+    blobs = {}
+    offset = 0
+    names.each do |name|
+      header_end = output.index("\n", offset)
+      sha, type, size = header_end && output[offset...header_end].split(" ")
+      fail!("could not read #{name} from the template history") unless type == "blob" && sha == name
+      blobs[name] = output.byteslice(header_end + 1, size.to_i)
+      offset = header_end + 1 + size.to_i + 1
+    end
+    blobs
+  end
+
+  # An earlier commit with the app's Identity applied by that commit's own tool. Only the transformed
+  # paths are kept, so a long history leaves one small folder per commit in the work dir instead of two
+  # copies of the template. nil when that commit's tool cannot transform it.
+  def transformed_history(root, sha, identity, transformed_paths, work)
+    key = Digest::SHA256.hexdigest(JSON.generate([sha, identity.values_at("displayName", "moduleName", "appSlug", "bundleId"), transformed_paths]))[0, 16]
+    destination = File.join(work, "history-#{sha}-#{key}")
+    return destination if File.directory?(destination)
+    scratch = "#{destination}.partial"
+    FileUtils.rm_rf(scratch)
+    FileUtils.mkdir_p(scratch)
+    transformed = transform_tree(export_tree(root, sha, File.join(scratch, "raw")), sha, identity, work, into: scratch)
+    return nil if transformed.nil?
+    kept = File.join(scratch, "kept")
+    FileUtils.mkdir_p(kept)
+    transformed_paths.each do |path|
+      entry = read(transformed, path)
+      next if entry.nil?
+      target = File.join(kept, path)
+      FileUtils.mkdir_p(File.dirname(target))
+      if entry.mode == "120000"
+        File.symlink(entry.bytes, target)
+      else
+        File.binwrite(target, entry.bytes)
+        File.chmod(entry.mode == "100755" ? 0o755 : 0o644, target)
+      end
+    end
+    File.rename(kept, destination)
+    destination
+  ensure
+    FileUtils.rm_rf(scratch) if scratch
+  end
+
+  # The version with the fewest changed lines; among equals, the newest. A version that differs only in
+  # file mode has no changed lines, but it is still not a match.
+  def nearest_version(versions, app_entry)
+    best = nil
+    versions.each do |version|
+      lines = changed_lines(version[:entry].bytes, app_entry.bytes, best && best["changedLines"] - 1)
+      best = {"commit" => version[:commit], "changedLines" => lines} if lines
+    end
+    best
+  end
+
+  # Lines removed plus lines added between two versions, by Myers' O(ND) diff after the common start and
+  # end are set aside. nil once the count would exceed limit.
+  def changed_lines(before, after, limit = nil)
+    a = before.b.lines
+    b = after.b.lines
+    start = 0
+    start += 1 while start < a.length && start < b.length && a[start] == b[start]
+    finish = 0
+    finish += 1 while finish < a.length - start && finish < b.length - start && a[-1 - finish] == b[-1 - finish]
+    ids = {}
+    a = a[start...(a.length - finish)].map { |line| ids[line] ||= ids.length }
+    b = b[start...(b.length - finish)].map { |line| ids[line] ||= ids.length }
+    n = a.length
+    m = b.length
+    max = limit ? [n + m, limit].min : n + m
+    return nil if (n - m).abs > max
+    offset = max + 1
+    furthest = Array.new(2 * max + 3, 0)
+    (0..max).each do |edits|
+      (-edits..edits).step(2) do |diagonal|
+        x = if diagonal == -edits || (diagonal != edits && furthest[offset + diagonal - 1] < furthest[offset + diagonal + 1])
+              furthest[offset + diagonal + 1]
+            else
+              furthest[offset + diagonal - 1] + 1
+            end
+        y = x - diagonal
+        while x < n && y < m && a[x] == b[y]
+          x += 1
+          y += 1
+        end
+        furthest[offset + diagonal] = x
+        return edits if x >= n && y >= m
+      end
+    end
+    nil
+  end
+
+  # The commit whose tree has the most of the app's files exactly (D-078). It is only shown to the
+  # user; every decision comes from each file's own provenance. An untransformed file is looked up by
+  # the object name of the app's bytes; an Identity-transformed one by the raw versions that transform
+  # into the app's bytes, or by the compared commit's version when it already matches. Only commits
+  # that change a file into the app's content can raise the count, so only those trees are read. Ties
+  # go to the newest commit.
+  def inferred_base(root, commit, log, examined, app, targets)
+    format = git(root, "rev-parse", "--show-object-format").strip
+    head = nil
+    wanted = examined.to_h do |path, transformed|
+      names = if !transformed then Set[[app[path].mode, object_name(app[path], format)]]
+              elsif targets.key?(path) then targets[path]
+              else
+                head ||= tree_entries(root, commit)
+                head[path] ? Set[head[path]] : Set.new
+              end
+      [path, names]
+    end
+    best = nil
+    log.each do |sha, changes|
+      next unless changes.any? { |path, name| name && wanted[path]&.include?(name) }
+      tree = tree_entries(root, sha)
+      count = wanted.count { |path, names| names.include?(tree[path]) }
+      best = {"commit" => sha, "matchedFiles" => count} if best.nil? || count > best["matchedFiles"]
+    end
+    best
+  end
+
+  def tree_entries(root, sha)
+    git(root, "ls-tree", "-r", "-z", "--full-tree", sha).force_encoding(Encoding::UTF_8).split("\0").each_with_object({}) do |line, entries|
+      meta, path = line.split("\t", 2)
+      next if path.nil?
+      mode, _type, name = meta.split(" ")
+      entries[path] = [mode, name]
+    end
+  end
+
+  # The object name Git gives these bytes, so an app file can be found in the template's trees.
+  def object_name(entry, format)
+    return entry.bytes.delete_prefix("gitlink:") if entry.mode == "160000"
+    data = "blob #{entry.bytes.bytesize}\0".b + entry.bytes.b
+    format == "sha256" ? Digest::SHA256.hexdigest(data) : Digest::SHA1.hexdigest(data)
   end
 
   def decision_entries(text)
@@ -604,8 +867,16 @@ module TemplateSync
     base = result["base"]
     lines << case base["status"]
              when "known" then "- 基準commit: `#{base["commit"]}`（#{base["method"]}、#{base["recordedAt"]}）"
-             else "- 基準commit: 不明。#{base["reason"]} ファイルごとのhashだけで比べたため、違いはすべて手で確認します。"
+             else "- 基準commit: 不明。#{base["reason"]} テンプレートと違うファイルは、テンプレートの全履歴にある同じパスの全版と比べました。どれかの版と1バイトも違わなければ安全な更新、どの版とも一致しなければ手で確認します。"
              end
+    if result.key?("inferredBase")
+      inferred = result["inferredBase"]
+      lines << if inferred
+                 "- 推定の基準: `#{inferred["commit"]}`（アプリのファイルのうち#{inferred["matchedFiles"]}個がこのcommitと一致します。参考の情報で、判定には使っていません）"
+               else
+                 "- 推定の基準: なし（テンプレートのどの版とも一致するファイルがありません）"
+               end
+    end
     lines << "- Identity変換: #{{"applied" => "取り込み先のIdentityで再適用しました", "identity-unavailable" => "取り込み先のIdentityがないため行っていません", "transform-failed" => "失敗しました"}.fetch(result.dig("app", "transform"))}"
     lines << "- このレポートは取り込み先へ何も書き込んでいません。"
     lines << ""
@@ -624,7 +895,7 @@ module TemplateSync
     lines << "## 適用する変更"
     lines << ""
     applied = pick.call("add", "update", "delete")
-    applied.empty? ? lines << "なし" : applied.each { |file| lines << "- #{{"add" => "追加", "update" => "更新", "delete" => "削除"}.fetch(file["action"])}: `#{file["path"]}`" }
+    applied.empty? ? lines << "なし" : applied.each { |file| lines << "- #{{"add" => "追加", "update" => "更新", "delete" => "削除"}.fetch(file["action"])}: `#{file["path"]}`#{origin_note(file)}" }
     lines << ""
     lines << "## 追記する決定事項"
     lines << ""
@@ -639,7 +910,7 @@ module TemplateSync
     lines << "## 手で確認するファイル"
     lines << ""
     manual = pick.call("manual")
-    manual.empty? ? lines << "なし" : manual.each { |file| lines << "- `#{file["path"]}`（#{STATUS_LABELS.fetch(file["status"], file["status"])}）: #{file["reason"]}" }
+    manual.empty? ? lines << "なし" : manual.each { |file| lines << "- `#{file["path"]}`（#{STATUS_LABELS.fetch(file["status"], file["status"])}）: #{file["reason"]}#{nearest_note(file)}" }
     lines << ""
     lines << "## 確認事項"
     lines << ""
@@ -656,6 +927,20 @@ module TemplateSync
     result["approvals"].each { |item| lines << "- #{item}" }
     lines << ""
     lines.join("\n")
+  end
+
+  # Only files judged without a known base (D-078) carry these, so a D-074 plan renders as before.
+  def origin_note(file)
+    file["provenance"] ? "（テンプレートの`#{file["provenance"]["commit"][0, 7]}`の版から）" : ""
+  end
+
+  def nearest_note(file)
+    return "" unless file.key?("nearest")
+    nearest = file["nearest"]
+    return " 比べられるテンプレートの版がありません。" if nearest.nil?
+    commit = nearest["commit"][0, 7]
+    return " 最も近い版は`#{commit}`で、内容は同じですがfile modeが違います。" if nearest["changedLines"].zero?
+    " 最も近い版は`#{commit}`で、違いは#{nearest["changedLines"]}行です。"
   end
 
   def canonical_json(value)

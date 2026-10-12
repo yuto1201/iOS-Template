@@ -3,10 +3,10 @@ set -euo pipefail
 
 # D-074 template sync, report half: ownership classification and the read-only diff report/plan.
 # A synthetic template repository holds this template's tracked files (in a derived app, the same
-# files rebuilt from the frozen template Identity) as its base commit, then a
-# second commit with template-side changes; synthetic target repositories cover a recorded base,
-# an unknown base, a non-template repository, app-side changes, Identity transform, and a
-# decision-number collision.
+# files rebuilt from the frozen template Identity) as its base commit, then an intermediate commit
+# and a commit with template-side changes; synthetic target repositories cover a recorded base,
+# an unknown base judged by each file's provenance (D-078), a non-template repository, app-side
+# changes, Identity transform, and a decision-number collision.
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby swiftc tar shasum
@@ -86,8 +86,18 @@ commit_all "$template" legacy-base
 legacy=$(git -C "$template" rev-parse HEAD)
 git -C "$template" checkout -q -
 
+# --- an intermediate version (D-078) ---------------------------------------------------------
+# With the next commit, docs/workflow.md and the Identity-transformed docs/verification.md have three
+# versions; docs/agent-contracts/ios-reviewer.md has two, the newest being this one.
+printf '%s\n' '中間の版で追記した手順。' >>"$template/docs/workflow.md"
+printf '%s\n' '中間の版で追記した検証。' >>"$template/docs/verification.md"
+printf '%s\n' '中間の版で追記した確認。' >>"$template/docs/agent-contracts/ios-reviewer.md"
+commit_all "$template" middle
+middle=$(git -C "$template" rev-parse HEAD)
+
 # --- template-side changes since the base ----------------------------------------------------
 printf '%s\n' 'テンプレートの手順を追記した。' >>"$template/docs/workflow.md"          # safe update
+printf '%s\n' 'テンプレートの検証を追記した。' >>"$template/docs/verification.md"      # transformed, third version
 printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/AUTHORITY.md"                # conflict
 printf '%s\n' '# New guide' '' 'テンプレートが追加した文書。' >"$template/docs/new-guide.md" # missing
 git -C "$template" rm -q docs/appstore-creative.md                                              # deleted in template
@@ -232,6 +242,17 @@ done
 expect_failure existing-output '--output-dir already exists' \
   "$template/tools/template-sync.sh" report --app-root "$app1" --output-dir "$work/report1"
 
+# A recorded base stays with D-074: no provenance, no nearest version, no inferred base (AC-6).
+known_base_unchanged() {
+  PLAN="$1/plan.json" ruby -rjson -e '
+    plan = JSON.parse(File.read(ENV.fetch("PLAN")))
+    abort "a known base got an inferred base" if plan.key?("inferredBase")
+    abort "a known base got provenance" if plan.fetch("files").any? { |file| file.key?("provenance") || file.key?("nearest") }
+  '
+  ! grep -Fq '推定の基準' "$1/plan.md" || { echo 'plan.md shows an inferred base for a known base' >&2; exit 1; }
+}
+known_base_unchanged "$work/report1"
+
 # App 2: no base record, an older identity format, and template device names.
 app2="$work/app2"
 make_app "$app2"
@@ -245,11 +266,17 @@ make_app "$app2"
 ')
 commit_all "$app2" adopted-without-base
 "$template/tools/template-sync.sh" report --app-root "$app2" --output-dir "$work/report2" --work-dir "$work/cache" >/dev/null
-PLAN="$work/report2/plan.json" ruby -rjson -e '
+PLAN="$work/report2/plan.json" BASE="$base" ruby -rjson -e '
   plan = JSON.parse(File.read(ENV.fetch("PLAN")))
   abort "base should be unknown: #{plan["base"]}" unless plan.dig("base", "status") == "unknown"
   files = plan.fetch("files").to_h { |file| [file["path"], file] }
-  abort "unknown-base difference must be manual" unless files["docs/workflow.md"].values_at("status", "action") == %w[conflict manual]
+  # D-078 (AC-3, AC-4): the base version of a file, untransformed or transformed with the app Identity,
+  # is a safe update. docs/AUTHORITY.md is also in the intermediate tree, but the base introduced it.
+  %w[docs/workflow.md docs/verification.md docs/AUTHORITY.md].each do |path|
+    actual = files.fetch(path).values_at("status", "action", "provenance")
+    abort "#{path} at the base version: #{actual}" unless actual == ["safe-update", "update", {"commit" => ENV.fetch("BASE"), "method" => "exact"}]
+  end
+  abort "inferred base: #{plan["inferredBase"]}" unless plan.dig("inferredBase", "commit") == ENV.fetch("BASE")
   abort "missing file must be added" unless files["docs/new-guide.md"].values_at("status", "action") == %w[missing add]
   abort "deletion needs a base" if files.key?("docs/appstore-creative.md")
   abort "identity format issue not reported" unless plan.dig("app", "identityFormatIssues").any? { |issue| issue.include?("sourceIdentityVersion") }
@@ -297,6 +324,7 @@ PLAN="$work/report5/plan.json" ruby -rjson -e '
   end
   abort "no deletion may be planned without base ownership" if plan.fetch("files").any? { |file| file["action"] == "delete" }
 '
+known_base_unchanged "$work/report5"
 
 # An invalid base record is reported, not trusted.
 app4="$work/app4"
@@ -309,5 +337,60 @@ PLAN="$work/report4/plan.json" ruby -rjson -e '
   base = JSON.parse(File.read(ENV.fetch("PLAN")))["base"]
   abort "invalid base accepted: #{base}" unless base["status"] == "invalid" && base["reason"].include?("テンプレートの履歴にありません")
 '
+# An invalid record is judged like a missing one, by each file's provenance (D-078).
+PLAN="$work/report4/plan.json" BASE="$base" ruby -rjson -e '
+  plan = JSON.parse(File.read(ENV.fetch("PLAN")))
+  workflow = plan.fetch("files").find { |file| file["path"] == "docs/workflow.md" }
+  abort "invalid base without provenance: #{workflow}" unless workflow.values_at("status", "provenance") == ["safe-update", {"commit" => ENV.fetch("BASE"), "method" => "exact"}]
+  abort "invalid base without an inferred base: #{plan["inferredBase"]}" unless plan.dig("inferredBase", "commit") == ENV.fetch("BASE")
+'
+
+# --- provenance without a recorded base (D-078) ----------------------------------------------
+# App 6 is the intermediate version without a base record. One file is put back to the base version,
+# one is changed by the app, and one differs only in its executable bit.
+app6="$work/app6"
+make_app "$app6" "$middle"
+git -C "$template" show "$base:docs/agent-contracts/ios-reviewer.md" >"$app6/docs/agent-contracts/ios-reviewer.md"
+printf '%s\n' 'アプリ側の追記。' >>"$app6/docs/AUTHORITY.md"
+chmod +x "$app6/docs/references.md"
+commit_all "$app6" from-middle
+# Only a transformed version can match: the raw intermediate version differs from the app's file.
+git -C "$template" show "$middle:docs/verification.md" >"$work/verification-raw.md"
+! cmp -s "$work/verification-raw.md" "$app6/docs/verification.md" || { echo 'the transformed file equals the raw version' >&2; exit 1; }
+before6=$(snapshot "$app6")
+"$template/tools/template-sync.sh" report --app-root "$app6" --output-dir "$work/report6" --work-dir "$work/cache" >/dev/null
+[[ "$(snapshot "$app6")" == "$before6" ]] || { echo 'the report wrote to the target repository' >&2; exit 1; }
+PLAN="$work/report6/plan.json" BASE="$base" MIDDLE="$middle" ruby -rjson -e '
+  plan = JSON.parse(File.read(ENV.fetch("PLAN")))
+  abort "base should be unknown: #{plan["base"]}" unless plan.dig("base", "status") == "unknown"
+  files = plan.fetch("files").to_h { |file| [file["path"], file] }
+  exact = ->(commit) { {"commit" => ENV.fetch(commit), "method" => "exact"} }
+  # AC-3, AC-4: the intermediate version, untransformed and transformed, is matched to its commit and
+  # becomes the base of the comparison.
+  %w[docs/workflow.md docs/verification.md].each do |path|
+    file = files.fetch(path)
+    abort "#{path} at the intermediate version: #{file}" unless file.values_at("status", "action", "provenance") == ["safe-update", "update", exact.call("MIDDLE")]
+    abort "#{path} base: #{file}" unless file.values_at("baseDigest", "baseMode") == file.values_at("appDigest", "appMode") && file["newDigest"] != file["appDigest"]
+  end
+  # AC-6: the inferred base is the intermediate commit, but a file at the base version is still judged
+  # by its own commit (with the intermediate commit as the base it would be an app-only change).
+  inferred = plan["inferredBase"]
+  abort "inferred base: #{inferred}" unless inferred&.fetch("commit") == ENV.fetch("MIDDLE") && inferred["matchedFiles"].is_a?(Integer) && inferred["matchedFiles"] > 2
+  reviewer = files.fetch("docs/agent-contracts/ios-reviewer.md")
+  abort "per-file provenance: #{reviewer}" unless reviewer.values_at("status", "action", "provenance") == ["safe-update", "update", exact.call("BASE")]
+  # AC-5: an app change and a mode-only difference match no version; each names the nearest one.
+  authority = files.fetch("docs/AUTHORITY.md")
+  abort "changed file: #{authority}" unless authority.values_at("status", "action", "nearest") == ["conflict", "manual", {"commit" => ENV.fetch("BASE"), "changedLines" => 1}] && !authority.key?("provenance")
+  mode = files.fetch("docs/references.md")
+  abort "mode-only difference: #{mode}" unless mode.values_at("status", "action", "nearest", "appMode") == ["conflict", "manual", {"commit" => ENV.fetch("BASE"), "changedLines" => 0}, "100755"] && !mode.key?("provenance")
+'
+unknown_reason='基準commitが不明で、アプリ側の内容はテンプレートのどの版とも一致しません。アプリ側で変更したものとして手で確認します。'
+for text in "- 推定の基準: \`$middle\`" \
+  "- 更新: \`docs/workflow.md\`（テンプレートの\`${middle:0:7}\`の版から）" \
+  "- 更新: \`docs/agent-contracts/ios-reviewer.md\`（テンプレートの\`${base:0:7}\`の版から）" \
+  "- \`docs/AUTHORITY.md\`（衝突する）: $unknown_reason 最も近い版は\`${base:0:7}\`で、違いは1行です。" \
+  "- \`docs/references.md\`（衝突する）: $unknown_reason 最も近い版は\`${base:0:7}\`で、内容は同じですがfile modeが違います。"; do
+  grep -Fq -- "$text" "$work/report6/plan.md" || { echo "plan.md lacks: $text" >&2; exit 1; }
+done
 
 echo "template sync report tests passed"
