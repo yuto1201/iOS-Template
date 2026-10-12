@@ -72,7 +72,10 @@ tools/appstore-creative-sheet.sh select --sheet .artifacts/store-creative/flower
 allowed only on a stage 1 sheet, must cover every slot, and must still meet the rules. `selection.json`
 records the revision, the sheet's SHA-256, the choice and `user-explicit`. It refuses
 an unknown pattern, a pattern that breaks the rules, a combination with a missing
-slot, a sheet whose bytes changed after it was built, and a second selection.
+slot, a sheet whose bytes changed after it was built, and a second selection. The
+patterns and tile kinds a choice is checked against come from a record inside the
+displayed page, and the rules are checked again at that moment; an edited `sheet.json`
+that no longer matches the page is refused.
 
 Only the user's explicit pattern ID or complete combination counts. Praise, a
 ranking, or "something like A" is not a choice: apply the request in a new revision

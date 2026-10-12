@@ -137,6 +137,24 @@ cp -R "$root/r1" "$workspace/tampered"
 rm "$workspace/tampered/selection.json"
 printf '<!-- edited -->\n' >>"$workspace/tampered/sheet.html"
 expect_failure tampered 'sheet.html differs from the sheet record' "$tool" select --sheet "$workspace/tampered" --pattern A
+# The choice is checked against the record inside the displayed page, never against an edited sheet.json.
+grep -Fq '<meta name="appstore-creative-sheet" content="' "$sheet" || fail 'sheet does not carry its displayed record'
+cp -R "$root/r1" "$workspace/added-pattern"
+rm "$workspace/added-pattern/selection.json"
+ruby -rjson -e 'path = ARGV[0]; record = JSON.parse(File.read(path)); extra = Marshal.load(Marshal.dump(record["patterns"][0]))
+  extra["id"] = "Z"; record["patterns"] << extra; File.write(path, JSON.generate(record))' "$workspace/added-pattern/sheet.json"
+expect_failure added-pattern 'sheet.json differs from the displayed sheet' "$tool" select --sheet "$workspace/added-pattern" --pattern Z
+cp -R "$root/r1" "$workspace/forged-check"
+rm "$workspace/forged-check/selection.json"
+ruby -rjson -e 'path = ARGV[0]; record = JSON.parse(File.read(path))
+  record["patterns"].find { |pattern| pattern["id"] == "B" }["ruleCheck"] = {"passed" => true, "localeParity" => "not-applicable", "violations" => []}
+  File.write(path, JSON.generate(record))' "$workspace/forged-check/sheet.json"
+expect_failure forged-check 'pattern B breaks the tile rules' "$tool" select --sheet "$workspace/forged-check" --pattern B
+cp -R "$root/r1" "$workspace/forged-kind"
+rm "$workspace/forged-kind/selection.json"
+ruby -rjson -e 'path = ARGV[0]; record = JSON.parse(File.read(path))
+  record["patterns"].find { |pattern| pattern["id"] == "B" }["tiles"][0]["kind"] = "device"; File.write(path, JSON.generate(record))' "$workspace/forged-kind/sheet.json"
+expect_failure forged-kind 'sheet.json differs from the displayed sheet' "$tool" select --sheet "$workspace/forged-kind" --pattern B
 expect_failure preview-combination 'a combination applies only to a proposal sheet' "$tool" select --sheet "$root/p1" --tiles 1=A:1
 
 echo 'appstore-creative sheet tests passed'

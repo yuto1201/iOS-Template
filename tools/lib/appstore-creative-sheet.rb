@@ -24,6 +24,10 @@ module AppStoreCreativeSheet
   ID_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9-]{0,31}\z/
   REVISION_PATTERN = /\A[a-z0-9][a-z0-9-]{0,63}\z/
   DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
+  # The patterns, tiles and tile kinds the page shows travel inside the page itself, so a selection is
+  # checked against the displayed bytes rather than against the separate, editable sheet.json.
+  DISPLAY_RECORD_META = "appstore-creative-sheet"
+  DISPLAY_RECORD_PATTERN = /<meta name="#{DISPLAY_RECORD_META}" content="([A-Za-z0-9+\/=]+)">/
   # The first three tiles show in search results, so they must show the app in use (App Review 2.3.3).
   FIRST_TILES_WITH_APP = 3
   MAX_CONCEPT_TILES = 2
@@ -105,7 +109,7 @@ module AppStoreCreativeSheet
         end
       end
       checks = spec.fetch("patterns").to_h { |pattern| [pattern.fetch("id"), rule_check(pattern.fetch("tiles"), spec.fetch("kind"))] }
-      html = render_html(spec, revision, images, checks)
+      html = render_html(spec, revision, images, checks, display_record(spec, revision))
       File.binwrite(File.join(staging, "sheet.html"), html)
       record = {
         "schemaVersion" => SCHEMA_VERSION,
@@ -260,7 +264,15 @@ module AppStoreCreativeSheet
      "dataUri" => "data:image/#{type};base64,#{Base64.strict_encode64(data)}"}
   end
 
-  def render_html(spec, revision, images, checks)
+  def display_record(spec, revision)
+    {"schemaVersion" => SCHEMA_VERSION, "revision" => revision, "kind" => spec.fetch("kind"),
+     "patterns" => spec.fetch("patterns").map do |pattern|
+       {"id" => pattern.fetch("id"),
+        "tiles" => pattern.fetch("tiles").map { |tile| tile.slice("slot", "kind", "device", "locale") }}
+     end}
+  end
+
+  def render_html(spec, revision, images, checks, record)
     h = ->(text) { CGI.escapeHTML(text.to_s) }
     stage = spec.fetch("kind") == "proposal" ? "第1段階：パターンの比較" : "第2段階：選んだパターンの見本"
     sections = spec.fetch("patterns").map do |pattern|
@@ -298,6 +310,7 @@ module AppStoreCreativeSheet
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <meta http-equiv="Content-Security-Policy" content="#{CONTENT_SECURITY_POLICY}">
+      <meta name="#{DISPLAY_RECORD_META}" content="#{Base64.strict_encode64(JSON.generate(record))}">
       <title>#{h.(spec.fetch('title'))}</title>
       <style>
       :root { color-scheme: light dark; --bg: #f6f5f2; --fg: #1d1d1f; --muted: #5b5b60; --card: #ffffff; --line: #d9d7d2; --ok: #1f7a3d; --ng: #b3261e; }
@@ -344,16 +357,24 @@ module AppStoreCreativeSheet
       record["sheetSha256"].match?(DIGEST_PATTERN) && record["sheetSha256"] == actual
     target = File.join(directory, "selection.json")
     fail!("a selection is already recorded for this sheet and is never replaced") if File.exist?(target) || File.symlink?(target)
-    patterns = record.fetch("patterns").to_h { |pattern| [pattern.fetch("id"), pattern] }
+    displayed = displayed_record(html)
+    listed = {"schemaVersion" => record["schemaVersion"], "revision" => record["revision"], "kind" => record["kind"],
+              "patterns" => (record["patterns"] || []).map do |pattern|
+                {"id" => pattern["id"], "tiles" => (pattern["tiles"] || []).map { |tile| tile.slice("slot", "kind", "device", "locale") }}
+              end}
+    fail!("sheet.json differs from the displayed sheet") unless listed == displayed
+    kind = displayed.fetch("kind")
+    patterns = displayed.fetch("patterns").to_h { |pattern| [pattern.fetch("id"), pattern] }
 
     selection = if options.key?("pattern")
                   id = options.fetch("pattern")
                   pattern = patterns[id] or fail!("unknown pattern id: #{id}")
-                  check = pattern.fetch("ruleCheck")
+                  # The rules are checked again here from the displayed tiles, never read from sheet.json.
+                  check = rule_check(pattern.fetch("tiles"), kind)
                   fail!("pattern #{id} breaks the tile rules: #{check.fetch('violations').join('; ')}") unless check.fetch("passed")
                   {"type" => "pattern", "patternId" => id}
                 else
-                  {"type" => "combination", "tiles" => combination(options.fetch("tiles"), patterns, record.fetch("kind"))}
+                  {"type" => "combination", "tiles" => combination(options.fetch("tiles"), patterns, kind)}
                 end
     value = {
       "schemaVersion" => SCHEMA_VERSION,
@@ -365,6 +386,15 @@ module AppStoreCreativeSheet
     }
     File.open(target, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |file| file.write("#{JSON.pretty_generate(value)}\n") }
     {"status" => "selected", "selection" => File.join(directory, "selection.json"), "type" => selection.fetch("type")}
+  end
+
+  def displayed_record(html)
+    matches = html.scan(DISPLAY_RECORD_PATTERN)
+    fail!("the sheet does not carry exactly one displayed record") unless matches.length == 1
+    record = JSON.parse(Base64.strict_decode64(matches.first.first))
+    fail!("the displayed record is invalid") unless record.is_a?(Hash) && record["schemaVersion"] == SCHEMA_VERSION &&
+      SHEET_KINDS.include?(record["kind"]) && record["patterns"].is_a?(Array)
+    record
   end
 
   # A combination names, for every slot of the set, the pattern and its tile slot that fills it, for
