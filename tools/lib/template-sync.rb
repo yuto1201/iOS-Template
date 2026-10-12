@@ -4,8 +4,10 @@
 # Template sync (D-074): classify every template file, then compare a derived or non-template
 # repository with the template and write a report and an apply plan. Without a recorded base, each
 # file is judged by its own provenance in the template's history (D-078). Before an import, preflight
-# judges from reads alone whether the target is busy with other work and how large the plan is (D-078).
-# Neither writes to the target repository; approving and applying a plan live in template-sync-apply.rb.
+# judges from reads alone whether the target is busy with other work and how large the plan is, and the
+# analysis explains a plan before the user approves it: what is missing or outdated, what was renamed or
+# may be duplicated, what the app changed, and what must be cleared first (D-078). None of them writes to
+# the target repository; approving and applying a plan live in template-sync-apply.rb.
 
 require "digest"
 require "fileutils"
@@ -43,12 +45,13 @@ module TemplateSync
   module_function
 
   def run(argv)
-    command = argv.shift or fail!("usage: template-sync.sh check|report|preflight|codex-review|approve|apply [options]")
+    command = argv.shift or fail!("usage: template-sync.sh check|report|preflight|analyze|codex-review|approve|apply [options]")
     options = parse_options(argv)
     case command
     when "check" then puts JSON.generate(check(options))
     when "report" then puts JSON.generate(report(options))
     when "preflight" then puts JSON.generate(preflight(options))
+    when "analyze" then puts JSON.generate(analyze(options))
     when "codex-review" then puts JSON.generate(codex_review(options))
     when "approve" then puts JSON.generate(approve(options))
     when "apply" then puts JSON.generate(apply(options))
@@ -197,18 +200,7 @@ module TemplateSync
     now = options.fetch("--now", Time.now.utc.iso8601)
     fail!("--now must be a UTC timestamp") unless now.match?(/\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\z/)
 
-    work_option = options["--work-dir"]
-    if work_option
-      # Resolve through the nearest existing ancestor (and its symlinks) before creating anything.
-      fail!("--work-dir must not be inside the app repository") if inside?(app_root, resolved_location(work_option))
-      FileUtils.mkdir_p(work_option)
-    end
-    work = work_option ? File.realpath(work_option) : Dir.mktmpdir("template-sync")
-    begin
-      result = build_report(root, commit, ownership, app_root, work, now)
-    ensure
-      FileUtils.rm_rf(work) unless work_option
-    end
+    result = with_work_dir(options["--work-dir"], app_root) { |work| build_report(root, commit, ownership, app_root, work, now) }
     FileUtils.mkdir(output)
     json = canonical_json(result)
     File.write(File.join(output, "plan.json"), json)
@@ -217,6 +209,22 @@ module TemplateSync
       "status" => "reported", "output" => output, "planDigest" => "sha256:#{Digest::SHA256.hexdigest(json)}",
       "base" => result["base"]["status"], "summary" => result["summary"]
     }
+  end
+
+  # Run the block with a work dir outside the target: --work-dir, kept for reuse, or a temporary folder
+  # removed afterwards.
+  def with_work_dir(work_option, app_root)
+    if work_option
+      # Resolve through the nearest existing ancestor (and its symlinks) before creating anything.
+      fail!("--work-dir must not be inside the app repository") if inside?(app_root, resolved_location(work_option))
+      FileUtils.mkdir_p(work_option)
+    end
+    work = work_option ? File.realpath(work_option) : Dir.mktmpdir("template-sync")
+    begin
+      yield work
+    ensure
+      FileUtils.rm_rf(work) unless work_option
+    end
   end
 
   def app_root!(value)
@@ -1099,6 +1107,739 @@ module TemplateSync
       finding["branch"] ? "本体のcheckoutが`main`ではなく`#{finding["branch"]}`にいます。" : "本体のcheckoutがどのブランチにもいません（detached HEAD）。"
     when "uncommitted-changes" then "本体のcheckoutに未commitの変更があります: #{finding["paths"].map { |path| "`#{path}`" }.join("、")}"
     when "untracked-files" then "本体のcheckoutに未commitの新しいファイルがあります: #{finding["paths"].map { |path| "`#{path}`" }.join("、")}"
+    end
+  end
+
+  # --- analysis (D-078) -----------------------------------------------------------------------
+
+  # A target-only file may duplicate a template file when it has the same file name at another path, or
+  # when its content is similar: the Jaccard index of the two files' sets of distinct lines (each line
+  # stripped of surrounding whitespace, blank lines left out), shared lines divided by the lines either
+  # file has, is at least SIMILARITY_THRESHOLD. Only text files (no NUL byte) up to SIMILARITY_MAX_BYTES
+  # with at least SIMILARITY_MIN_LINES such lines are compared, the template's before the Identity transform.
+  SIMILARITY_THRESHOLD = Rational(3, 5)
+  SIMILARITY_MAX_BYTES = 1_048_576
+  SIMILARITY_MIN_LINES = 3
+  # At most this many similar template files are listed for one target file, the most similar first.
+  SIMILAR_LISTED = 3
+  # A file name the template uses at more than one path (SKILL.md, for example) names a role many folders
+  # share, so a target file with that name is compared by content only. These conventional names count as
+  # shared even where the template uses them once.
+  SHARED_FILE_NAMES = %w[.gitignore .gitkeep LICENSE README.md].freeze
+  # The app's own records, which the template never has: they are never possible duplicates.
+  APP_RECORD_PATHS = [APP_IDENTITY_PATH, BASE_RECORD_PATH, "specs/app-decisions.md"].freeze
+  # The categories an import brings into the target.
+  RECEIVED_CATEGORIES = %w[template identity mixed].freeze
+  CHANGE_OPTIONS = {"keep-app" => "アプリの変更を残す", "take-template" => "テンプレートに合わせる", "merge" => "両方を合わせる"}.freeze
+  REPORT_HINTS = {"candidate" => "ありそう", "app-specific" => "なさそう", "unclear" => "分からない"}.freeze
+  UPDATE_ACTIONS = {"add" => "追加", "update" => "更新", "manual" => "手で確認"}.freeze
+  # A difference is summarized by counts and at most EXCERPT_LINES changed lines of EXCERPT_WIDTH
+  # characters, never the whole file. Long commit subjects and tool lists are cut in analysis.md only.
+  EXCERPT_LINES = 5
+  EXCERPT_WIDTH = 120
+  SUBJECT_WIDTH = 80
+  LISTED_TOOLS = 20
+  DECISION_MENTION = /(?<![A-Za-z0-9_-])D-\d{3,}(?!\d)/
+  # What must be cleared first, in the order it is cleared. The Identity comes first: without it the
+  # Identity files cannot be compared and the dedicated Simulators have no name prefix. Moving the app's
+  # decisions and fixing the Simulator declaration change the target, so the plan is made again after
+  # them. The base record and the target's tools are handled by the import itself.
+  PREREQUISITES = {
+    "identity-unavailable" => "Identityの未設定", "identity-format" => "Identityの形式の違い",
+    "decision-collision" => "決定事項の番号の衝突", "simulators" => "専用Simulatorの宣言",
+    "base-record" => "基準commitの記録", "outdated-tools" => "取り込み先のtoolの更新"
+  }.freeze
+  # The size estimate counts the others itself (D-078); these only the analysis finds.
+  UNCOUNTED_PREREQUISITES = %w[identity-format simulators outdated-tools].freeze
+
+  # Before the user approves a plan, explain it from reads alone: the template's history up to the plan's
+  # commit, the plan, the target's HEAD through Git's objects and, if given, the preflight. Nothing is
+  # written to the target; analysis.json and analysis.md go to a new folder outside it.
+  def analyze(options)
+    allow_options!(options, ["--plan", "--app-root", "--output-dir"], ["--preflight", "--work-dir", "--now"])
+    app_root = app_root!(options.fetch("--app-root"))
+    output = output_dir!(options.fetch("--output-dir"), app_root)
+    now = timestamp!(options)
+    _plan_path, plan, plan_digest = read_plan(options.fetch("--plan"))
+    size = size_estimate(plan)
+    analysis_plan!(plan)
+    root = template_root
+    commit = plan["template"]["commit"]
+    unless commit.match?(/\A\h{40}(?:\h{24})?\z/) && commit_exists?(root, commit)
+      fail!("the plan names template commit #{commit}, which is not in the template's history")
+    end
+    ownership = load_ownership(blob(root, commit, OWNERSHIP_PATH))
+    fail!("the plan names another template repository") unless plan["template"]["repository"] == ownership[:repository]
+    head = git(app_root, "rev-parse", "--verify", "HEAD^{commit}").strip
+    fail!("the target moved since the plan was made: HEAD is #{head}, the plan is for #{plan["app"]["head"]}") unless head == plan["app"]["head"]
+    preflight = options.key?("--preflight") ? read_preflight(options["--preflight"], plan_digest, head) : nil
+
+    parts = with_work_dir(options["--work-dir"], app_root) { |work| build_analysis(root, commit, ownership, app_root, plan, work) }
+    final = analysis_size(preflight ? preflight[:size] : size, preflight ? "preflight" : "plan", parts[:prerequisites])
+    result = {
+      "schemaVersion" => 1,
+      "generatedAt" => now,
+      "planDigest" => plan_digest,
+      "template" => {"repository" => plan["template"]["repository"], "commit" => commit},
+      "app" => {"head" => head},
+      "summary" => {
+        "writeFiles" => final["writeFiles"], "manualFiles" => final["manualFiles"], "renamePairs" => parts[:renames].length,
+        "possibleDuplicates" => parts[:duplicates].length, "prerequisites" => parts[:prerequisites].map { |item| item["kind"] },
+        "size" => final["estimate"]
+      },
+      "size" => final,
+      "updates" => parts[:updates],
+      "renames" => parts[:renames],
+      "duplicates" => parts[:duplicates],
+      "similarity" => {
+        "measure" => "line-set-jaccard", "threshold" => SIMILARITY_THRESHOLD.to_f, "maxBytes" => SIMILARITY_MAX_BYTES,
+        "minLines" => SIMILARITY_MIN_LINES, "sharedNames" => SHARED_FILE_NAMES
+      },
+      "appChanges" => parts[:changes],
+      "otherManual" => parts[:other],
+      "prerequisites" => parts[:prerequisites]
+    }
+    result.merge!("preflightDigest" => preflight[:digest], "preflightStatus" => preflight[:status]) if preflight
+    FileUtils.mkdir(output)
+    json = canonical_json(result)
+    File.write(File.join(output, "analysis.json"), json)
+    File.write(File.join(output, "analysis.md"), render_analysis(result))
+    answer = {"status" => "analyzed", "output" => output, "analysisDigest" => "sha256:#{Digest::SHA256.hexdigest(json)}",
+              "planDigest" => plan_digest, "summary" => result["summary"]}
+    answer["preflightDigest"] = preflight[:digest] if preflight
+    answer
+  end
+
+  # What the analysis reads beyond what the size estimate already checked.
+  def analysis_plan!(plan)
+    inferred = plan["inferredBase"]
+    valid = plan["template"].is_a?(Hash) && plan["template"]["commit"].is_a?(String) && plan["app"]["identityFormatIssues"].is_a?(Array) &&
+            plan["app"]["transform"].is_a?(String) && plan["simulators"].is_a?(Hash) && plan["simulators"]["problems"].is_a?(Array) &&
+            plan["base"]["status"].is_a?(String) && plan["files"].all? { |file| file["status"].is_a?(String) && nearest_valid?(file) } &&
+            (inferred.nil? || (inferred.is_a?(Hash) && inferred["commit"].is_a?(String)))
+    fail!("the plan lacks what the analysis reads; make a new report") unless valid
+  end
+
+  def nearest_valid?(file)
+    nearest = file["nearest"]
+    nearest.nil? || (nearest.is_a?(Hash) && nearest["commit"].to_s.match?(/\A\h{40}(?:\h{24})?\z/) && nearest["changedLines"].is_a?(Integer))
+  end
+
+  # A preflight of this very plan at the target's current HEAD.
+  def read_preflight(value, plan_digest, head)
+    bytes = File.binread(File.realpath(value))
+    preflight = JSON.parse(bytes)
+    size = preflight.is_a?(Hash) ? preflight["size"] : nil
+    valid = size.is_a?(Hash) && preflight["schemaVersion"] == 1 && %w[idle busy].include?(preflight["status"]) &&
+            preflight["plan"].is_a?(Hash) && preflight["app"].is_a?(Hash) && %w[normal large].include?(size["estimate"]) &&
+            size["writeFiles"].is_a?(Integer) && size["manualFiles"].is_a?(Integer) && size["limits"].is_a?(Hash) && size["reasons"].is_a?(Array) &&
+            size["reasons"].all? { |reason| reason.is_a?(Hash) && reason["kind"].is_a?(String) && reason["message"].is_a?(String) }
+    fail!("--preflight must be the preflight.json of a template sync preflight") unless valid
+    fail!("the preflight was made for another plan (#{preflight["plan"]["digest"]}); the plan is #{plan_digest}") unless preflight["plan"]["digest"] == plan_digest
+    fail!("the preflight was made at another HEAD of the target (#{preflight["app"]["head"]}); HEAD is #{head}") unless preflight["app"]["head"] == head
+    {digest: "sha256:#{Digest::SHA256.hexdigest(bytes)}", status: preflight["status"], size: size}
+  rescue Errno::ENOENT
+    fail!("--preflight does not exist")
+  end
+
+  def build_analysis(root, commit, ownership, app_root, plan, work)
+    files = plan["files"]
+    by_path = files.to_h { |file| [file["path"], file] }
+    template_tree = tree_entries(root, commit)
+    app_tree = tree_entries(app_root, plan["app"]["head"])
+    renames = rename_pairs(root, commit, template_tree, app_tree, by_path)
+    shown = %w[conflict missing safe-update]
+    other = files.select { |file| file["action"] == "manual" && !shown.include?(file["status"]) }.sort_by { |file| file["path"] }
+    {
+      updates: update_entries(root, commit, files, template_tree),
+      renames: renames,
+      duplicates: duplicate_entries(root, commit, ownership, plan, template_tree, app_root, app_tree, by_path, renames.map { |pair| pair["oldPath"] }),
+      changes: app_change_entries(root, commit, ownership, plan, app_root, work),
+      other: other.map { |file| {"path" => file["path"], "status" => file["status"], "reason" => file["reason"]} },
+      prerequisites: prerequisite_entries(plan)
+    }
+  end
+
+  # Every entry of a commit's tree: path => {mode:, type:, sha:, size:}; a submodule's size is "-".
+  def tree_entries(root, commit)
+    git(root, "ls-tree", "-r", "-z", "-l", "--full-tree", commit).force_encoding(Encoding::UTF_8).split("\0").each_with_object({}) do |line, entries|
+      meta, path = line.split("\t", 2)
+      next if path.nil?
+      mode, type, sha, size = meta.split(" ")
+      entries[path] = {mode: mode, type: type, sha: sha, size: size}
+    end
+  end
+
+  # 1. Missing and outdated files: the commit that brought each file's newest version, the Issue and PR
+  # numbers in that commit's subject, and the template decisions that the commit message or the lines the
+  # commit added to the file mention. An Identity-transformed file is traced by its content before the
+  # transform.
+  def update_entries(root, commit, files, template_tree)
+    chosen = files.select { |file| %w[missing safe-update].include?(file["status"]) }.sort_by { |file| file["path"] }
+    return [] if chosen.empty?
+    known = template_tree.key?(DECISIONS_PATH) ? decision_entries(blob(root, commit, DECISIONS_PATH)).keys.to_set : Set.new
+    newest = {}
+    template_log(root, commit, chosen.map { |file| file["path"] }.to_set).each do |sha, changes|
+      changes.each_key { |path| newest[path] ||= sha }
+    end
+    messages = commit_messages(root, newest.values)
+    chosen.map do |file|
+      path = file["path"]
+      sha = newest[path]
+      record = {"path" => path, "status" => file["status"], "action" => file["action"]}
+      record["reason"] = file["reason"] if file["action"] == "manual"
+      next record.merge("commit" => nil, "subject" => nil, "issue" => nil, "pullRequest" => nil, "decisions" => []) if sha.nil?
+      message = messages.fetch(sha)
+      mentioned = mentioned_decisions(message[:body]) | mentioned_decisions(added_lines(root, sha, path).join("\n"))
+      record.merge(commit_reference(sha, message)).merge("decisions" => sort_decisions(mentioned.select { |id| known.include?(id) }))
+    end
+  end
+
+  # Subject and message of each commit, through one git process.
+  def commit_messages(root, shas)
+    shas = shas.compact.uniq
+    return {} if shas.empty?
+    output = git(root, "log", "--no-walk=unsorted", "-z", "--no-color", "--format=%H%x1f%s%x1f%B", *shas, "--")
+    output.force_encoding(Encoding::UTF_8).scrub.split("\0").each_with_object({}) do |record, messages|
+      sha, subject, body = record.sub(/\A\n/, "").split("\x1f", 3)
+      messages[sha] = {subject: subject.to_s, body: body.to_s}
+    end
+  end
+
+  # A squash-merged subject ends with its pull request, "(#NNN)"; an Issue's subject may start "Issue #NNN:".
+  def commit_reference(sha, message)
+    subject = message[:subject]
+    pull = subject[/\(#(\d+)\)\s*\z/, 1]
+    issue = subject[/\AIssue #(\d+):/, 1]
+    {"commit" => sha, "subject" => subject, "pullRequest" => pull && pull.to_i, "issue" => issue && issue.to_i}
+  end
+
+  # The lines one commit added to one path, compared with its first parent.
+  def added_lines(root, sha, path)
+    output = git(root, "--literal-pathspecs", "show", "--format=", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames",
+                 "--unified=0", "--diff-merges=first-parent", sha, "--", path)
+    diff_changes(output)[:added]
+  end
+
+  def mentioned_decisions(text)
+    text.b.scan(DECISION_MENTION).map { |id| id.dup.force_encoding(Encoding::UTF_8) }.uniq
+  end
+
+  def sort_decisions(ids)
+    ids.uniq.sort_by { |id| [id[2..-1].to_i, id] }
+  end
+
+  # The changed lines of a unified diff without context, in order, as [sign, line without the sign].
+  def diff_changes(output)
+    changes = []
+    binary = false
+    in_hunk = false
+    output.b.each_line do |line|
+      if line.start_with?("diff --git ")
+        in_hunk = false
+      elsif line.start_with?("@@")
+        in_hunk = true
+      elsif in_hunk && (line.start_with?("+") || line.start_with?("-"))
+        changes << [line[0], line[1..-1].chomp]
+      elsif !in_hunk && line.start_with?("Binary files ")
+        binary = true
+      end
+    end
+    {binary: binary, changes: changes, added: changes.select { |sign, _| sign == "+" }.map(&:last),
+     removed: changes.select { |sign, _| sign == "-" }.map(&:last)}
+  end
+
+  # 2a. Renames in the template's history whose old name the target still has, each as one pair: delete
+  # the old file, take the new one. A chain of renames ends at the name the template has now.
+  def rename_pairs(root, commit, template_tree, app_tree, by_path)
+    latest = {}
+    template_renames(root, commit).each_with_index { |(sha, old, new), index| latest[old] = [index, sha, new] }
+    pairs = []
+    latest.each do |old, (index, sha, new)|
+      next if template_tree.key?(old) || !app_tree.key?(old)
+      path = new
+      via = []
+      position = index
+      while (step = latest[path]) && step[0] > position
+        via << path
+        position = step[0]
+        path = step[2]
+      end
+      file = by_path[path]
+      next unless template_tree.key?(path) && file && RECEIVED_CATEGORIES.include?(file["category"])
+      pairs << {"oldPath" => old, "newPath" => path, "via" => via, "commit" => sha, "newStatus" => file["status"],
+                "newAction" => file["action"], "oldAction" => by_path[old] && by_path[old]["action"]}
+    end
+    messages = commit_messages(root, pairs.map { |pair| pair["commit"] })
+    pairs.sort_by { |pair| pair["oldPath"] }.map { |pair| pair.merge(commit_reference(pair["commit"], messages.fetch(pair["commit"]))) }
+  end
+
+  # Each rename up to commit, oldest first, as [commit, old path, new path]. A merge is compared with its
+  # first parent, as in template_log.
+  def template_renames(root, commit)
+    output = git(root, "log", "-z", "--format=%H", "--name-status", "-M", "--diff-filter=R", "--diff-merges=first-parent",
+                 "--no-color", "--no-show-signature", commit, "--")
+    tokens = output.force_encoding(Encoding::UTF_8).split("\0")
+    renames = []
+    sha = nil
+    index = 0
+    while index < tokens.length
+      token = tokens[index]
+      index += 1
+      if token.match?(/\A\n?R\d*\z/)
+        old, new = tokens[index, 2]
+        index += 2
+        fail!("could not read the renames in the template history") if sha.nil? || new.nil?
+        renames << [sha, old, new]
+      elsif (match = token.match(/\A\n?(\h{40}(?:\h{24})?)\z/))
+        sha = match[1]
+      elsif !token.strip.empty?
+        fail!("could not read the renames in the template history")
+      end
+    end
+    renames.reverse
+  end
+
+  # 2b. Files only the target has that may duplicate a template file. Left out are the template's own
+  # paths, the plan's paths, the app's records, the old names of 2a, and the app's own files: a path that
+  # Identity bootstrap renamed (the app's module folder, for example) is classified as the template path
+  # it came from. Each file is compared with the files an import brings (template, identity, mixed).
+  def duplicate_entries(root, commit, ownership, plan, template_tree, app_root, app_tree, by_path, renamed)
+    mapping = identity_path_mapping(root, commit, plan["app"]["identity"])
+    candidates = app_tree.select do |path, entry|
+      next false unless entry[:type] == "blob"
+      next false if template_tree.key?(path) || by_path.key?(path) || APP_RECORD_PATHS.include?(path) || renamed.include?(path)
+      classify(ownership, template_path_for(path, mapping))&.dig(:category) != "app"
+    end
+    return [] if candidates.empty?
+    received = template_tree.select do |path, entry|
+      entry[:type] == "blob" && RECEIVED_CATEGORIES.include?(classify(ownership, path)&.dig(:category))
+    end
+    by_name = received.keys.group_by { |path| File.basename(path) }
+    template_lines = line_sets(root, received)
+    app_lines = line_sets(app_root, candidates)
+    index = {}
+    template_lines.each { |path, lines| lines.each { |line| (index[line] ||= []) << path } }
+    candidates.keys.sort.map do |path|
+      name = File.basename(path)
+      same = SHARED_FILE_NAMES.include?(name) || by_name.fetch(name, []).length != 1 ? [] : by_name[name]
+      similar = similar_files(app_lines[path], template_lines, index)
+      same.empty? && similar.empty? ? nil : {"path" => path, "sameName" => same, "similar" => similar}
+    end.compact
+  end
+
+  # The template paths Identity bootstrap renames, as [template path, the target's path]; TemplateApp/ is
+  # the app's module folder in the target, for example. Without a usable Identity there is no mapping.
+  def identity_path_mapping(root, commit, identity)
+    return [] unless identity.is_a?(Hash) && identity["moduleName"].is_a?(String)
+    manifest = JSON.parse(blob(root, commit, IDENTITY_MANIFEST_PATH))
+    source = manifest.fetch("source").fetch("module")
+    manifest.fetch("renamePaths").map { |path| [path, path.gsub(source) { identity["moduleName"] }] }
+  rescue Failure, JSON::ParserError, KeyError
+    []
+  end
+
+  def template_path_for(path, mapping)
+    from, to = mapping.select { |_, app| path == app || path.start_with?("#{app}/") }.max_by { |_, app| app.length }
+    from ? from + path[to.length..-1] : path
+  end
+
+  # The distinct non-blank lines of each file the similarity compares.
+  def line_sets(root, entries)
+    wanted = entries.select { |_, entry| entry[:mode] != "120000" && entry[:size].to_i <= SIMILARITY_MAX_BYTES }
+    blobs = read_blobs(root, wanted.values.map { |entry| entry[:sha] })
+    wanted.each_with_object({}) do |(path, entry), sets|
+      bytes = blobs.fetch(entry[:sha]).b
+      next if bytes.include?("\0")
+      lines = bytes.each_line.map(&:strip).reject(&:empty?).uniq
+      sets[path] = lines.to_set if lines.length >= SIMILARITY_MIN_LINES
+    end
+  end
+
+  def similar_files(lines, template_lines, index)
+    return [] if lines.nil?
+    shared = Hash.new(0)
+    lines.each { |line| (index[line] || []).each { |path| shared[path] += 1 } }
+    scored = shared.map do |path, count|
+      score = Rational(count, lines.length + template_lines[path].length - count)
+      score >= SIMILARITY_THRESHOLD ? [path, score] : nil
+    end
+    scored.compact.sort_by { |path, score| [-score, path] }.first(SIMILAR_LISTED).map do |path, score|
+      {"path" => path, "similarity" => score.to_f.round(3)}
+    end
+  end
+
+  # 3. Files the app changed (the plan's conflicts): how each differs from the template's nearest version
+  # (with a recorded base, the base version; otherwise the newest), three ways to settle it, and a
+  # suggested finding on whether the change might be worth reporting back to the template.
+  def app_change_entries(root, commit, ownership, plan, app_root, work)
+    conflicts = plan["files"].select { |file| file["status"] == "conflict" }.sort_by { |file| file["path"] }
+    return [] if conflicts.empty?
+    app = read_app_files(app_root, plan["app"]["head"], conflicts.map { |file| file["path"] })
+    identity = plan["app"]["identity"]
+    transformable = plan["app"]["transform"] == "applied"
+    trees = {}
+    conflicts.map do |file|
+      path = file["path"]
+      transform = if !classify(ownership, path)&.dig(:transform) then "none"
+                  elsif transformable then "applied"
+                  elsif plan["app"]["transform"] == "identity-unavailable" then "unavailable"
+                  else "failed"
+                  end
+      reference = change_reference(file, plan, commit)
+      source = reference && reference_entry(root, commit, ownership, reference, path, transform == "applied" ? identity : nil, work, trees)
+      # That commit's own tool could not transform it, so there is nothing to compare with.
+      transform = "untransformable" if transform == "applied" && reference && source.nil?
+      difference, added = describe_difference(source, app[path], work)
+      record = {"path" => path, "category" => file["category"], "reason" => file["reason"],
+                "reference" => reference && reference.merge("transform" => transform), "difference" => difference,
+                "options" => CHANGE_OPTIONS.keys, "reportHint" => report_hint(file, difference, added, identity)}
+      record["rule"] = file["rule"] if file["rule"]
+      record
+    end
+  end
+
+  def change_reference(file, plan, commit)
+    if file.key?("nearest")
+      nearest = file["nearest"]
+      nearest && {"kind" => "nearest", "commit" => nearest["commit"], "changedLines" => nearest["changedLines"]}
+    elsif plan["base"]["status"] == "known" && file["baseDigest"]
+      {"kind" => "base", "commit" => plan["base"]["commit"]}
+    else
+      {"kind" => "newest", "commit" => commit}
+    end
+  end
+
+  # The template's version of path at the reference commit. With an Identity, it is transformed by that
+  # commit's own tool, as the report compared it, so a work dir the report used is reused; nil if the
+  # tool cannot transform it.
+  def reference_entry(root, commit, ownership, reference, path, identity, work, trees)
+    sha = reference["commit"]
+    return template_entry(root, sha, path) unless identity
+    tree = trees.fetch(sha) do
+      trees[sha] = if sha == commit || reference["kind"] == "base"
+                     transform_tree(export_tree(root, sha, File.join(work, "template-#{sha}")), sha, identity, work)
+                   else
+                     trees[:paths] ||= tracked_paths(root, commit).select { |candidate| classify(ownership, candidate)&.dig(:transform) }.sort
+                     transformed_history(root, sha, identity, trees[:paths], work)
+                   end
+    end
+    tree && read(tree, path)
+  end
+
+  # One path of a template commit as Git stores it, or nil.
+  def template_entry(root, sha, path)
+    line = git(root, "--literal-pathspecs", "ls-tree", "-z", "--full-tree", sha, "--", path).force_encoding(Encoding::UTF_8).split("\0").first
+    return nil if line.nil?
+    meta, found = line.split("\t", 2)
+    mode, type, name = meta.split(" ")
+    return nil unless found == path
+    return Entry.new(mode, "gitlink:#{name}") if type == "commit"
+    type == "blob" ? Entry.new(mode, read_blobs(root, [name]).fetch(name)) : nil
+  end
+
+  # How the app's file differs from the template's version: the counts of lines the app added and
+  # removed (git's minimal diff) and the first few of them, never the whole file. Returns the summary and
+  # every added line.
+  def describe_difference(template, app, work)
+    return [{"kind" => "app-missing"}, []] if app.nil?
+    return [{"kind" => "no-reference"}, []] if template.nil?
+    modes = {"templateMode" => template.mode, "appMode" => app.mode}
+    return [modes.merge("kind" => "not-a-file"), []] if [template.mode, app.mode].include?("160000")
+    return [modes.merge("kind" => "mode-only"), []] if template.bytes.b == app.bytes.b
+    return [modes.merge("kind" => "binary"), []] if template.bytes.b.include?("\0") || app.bytes.b.include?("\0")
+    diff = line_diff(template.bytes, app.bytes, work)
+    return [modes.merge("kind" => "binary"), []] if diff[:binary]
+    excerpt = diff[:changes].reject { |_, line| line.strip.empty? }.first(EXCERPT_LINES).map { |sign, line| "#{sign}#{excerpt_line(line)}" }
+    [modes.merge("kind" => "lines", "added" => diff[:added].length, "removed" => diff[:removed].length, "excerpt" => excerpt), diff[:added]]
+  end
+
+  # git's minimal line diff of two contents, written to a folder in the work dir and run from there.
+  def line_diff(before, after, work)
+    dir = Dir.mktmpdir("difference", work)
+    File.binwrite(File.join(dir, "template"), before)
+    File.binwrite(File.join(dir, "app"), after)
+    stdout, stderr, status = Open3.capture3({"GIT_OPTIONAL_LOCKS" => "0"}, "git", "-c", "core.fsmonitor=false", "-c", "core.autocrlf=false",
+                                            "diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--diff-algorithm=myers",
+                                            "--minimal", "--unified=0", "--", "template", "app", chdir: dir, binmode: true)
+    fail!("git diff failed: #{stderr.strip}") unless [0, 1].include?(status.exitstatus)
+    diff_changes(stdout)
+  ensure
+    FileUtils.rm_rf(dir) if dir
+  end
+
+  def excerpt_line(line)
+    text = line.dup.force_encoding(Encoding::UTF_8).scrub("?")
+    text.length > EXCERPT_WIDTH ? "#{text[0, EXCERPT_WIDTH]}…" : text
+  end
+
+  # Only a suggestion, and marked as one: the user decides, and a report to the template is made only when
+  # the user asks, through report-template-issue.
+  def report_hint(file, difference, added, identity)
+    names = identity ? identity.values_at("displayName", "moduleName", "appSlug", "bundleId").select { |name| name.is_a?(String) && !name.empty? } : []
+    found = names.select { |name| added.any? { |line| line.b.include?(name.b) } }
+    if file["category"] == "mixed"
+      {"kind" => "app-specific", "note" => "テンプレートとアプリの内容が混ざるファイルなので、違いはアプリの値や規則と見られます。"}
+    elsif !found.empty?
+      {"kind" => "app-specific", "note" => "アプリの名前（#{found.join("、")}）を含む変更なので、アプリ固有の変更と見られます。"}
+    elsif %w[lines mode-only].include?(difference["kind"])
+      {"kind" => "candidate", "note" => "アプリの名前を含まない変更です。テンプレートの不具合の修正や改善であれば、テンプレートでも役に立ちます。"}
+    else
+      {"kind" => "unclear", "note" => "行で比べられないため、判断する材料がありません。"}
+    end
+  end
+
+  # 4. What must be cleared first, in the order of PREREQUISITES.
+  def prerequisite_entries(plan)
+    items = []
+    issues = plan["app"]["identityFormatIssues"]
+    if plan["app"]["identity"].nil?
+      items << {"kind" => "identity-unavailable", "issues" => issues,
+                "message" => "取り込み先のIdentityが使えません。#{issues.join}Identity bootstrapを済ませる（または`#{APP_IDENTITY_PATH}`を直す）までは、Identity変換されるファイルを比べられず、適用toolも止まります。"}
+    elsif !issues.empty?
+      items << {"kind" => "identity-format", "issues" => issues,
+                "message" => "`#{APP_IDENTITY_PATH}`の形式がテンプレートと違います。#{issues.join}形式を直します。"}
+    end
+    collisions = plan["decisions"]["collisions"]
+    unless collisions.empty?
+      items << {"kind" => "decision-collision", "collisions" => collisions,
+                "message" => "決定事項の番号が衝突しています（#{collisions.map { |item| item["id"] }.join("、")}）。アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移します（D-069）。移すまで、適用toolはテンプレートの決定事項を追記せずに止まります。"}
+    end
+    problems = plan["simulators"]["problems"]
+    unless problems.empty?
+      items << {"kind" => "simulators", "problems" => problems,
+                "message" => "専用Simulatorの宣言（`#{SIMULATORS_PATH}`）を、取り込み先の表示名を前置した2台に直します。#{problems.join}直すまで、適用toolは止まります。"}
+    end
+    base = plan["base"]
+    unless base["status"] == "known"
+      inferred = plan["inferredBase"]
+      note = inferred ? "推定の基準は`#{inferred["commit"][0, 7]}`です（参考）。" : ""
+      message = if base["status"] == "invalid"
+                  "基準commitの記録が不正です。#{base["reason"]}この計画は、記録がない場合と同じく、ファイルごとの出どころで判定しています（D-078）。#{note}なぜ不正になったかを確かめます。記録は、適用toolが取り込んだテンプレートのcommitで書き直します。"
+                else
+                  "基準commitが記録されていません。#{base["reason"]}この計画は、ファイルごとの出どころで判定しています（D-078）。#{note}記録は、適用toolが取り込んだテンプレートのcommitで作ります。"
+                end
+      items << {"kind" => "base-record", "status" => base["status"], "reason" => base["reason"], "message" => message}
+    end
+    tools = plan["files"].select { |file| file["path"].start_with?("tools/") && file["category"] == "template" && %w[safe-update conflict].include?(file["status"]) }
+    unless tools.empty?
+      update = tools.select { |file| file["status"] == "safe-update" }.map { |file| file["path"] }.sort
+      manual = tools.select { |file| file["status"] == "conflict" }.map { |file| file["path"] }.sort
+      parts = []
+      parts << "安全に更新できる#{update.length}個は、この計画の適用で更新します。" unless update.empty?
+      parts << "アプリ側で変えた#{manual.length}個は、取り込み先で検証する前に、「3. アプリ独自の改造」で扱いを決めます。" unless manual.empty?
+      items << {"kind" => "outdated-tools", "update" => update, "manual" => manual,
+                "message" => "検証に使う取り込み先のtoolのうち#{tools.length}個が、テンプレートの最新と違います。#{parts.join}"}
+    end
+    items.each_with_index.map { |item, index| item.merge("order" => index + 1) }
+  end
+
+  # The size of the change (D-078): the preflight's estimate, or the same rules applied to the plan, plus
+  # the work that must come first that only the analysis finds.
+  def analysis_size(size, source, prerequisites)
+    extra = prerequisites.map { |item| item["kind"] } & UNCOUNTED_PREREQUISITES
+    reasons = size["reasons"].dup
+    unless extra.empty?
+      reasons << {"kind" => "prerequisites", "items" => extra,
+                  "message" => "先に必要な整理があります（#{extra.map { |kind| PREREQUISITES.fetch(kind) }.join("、")}）。"}
+    end
+    {
+      "source" => source, "estimate" => (size["estimate"] == "large" || !extra.empty?) ? "large" : "normal",
+      "writeFiles" => size["writeFiles"], "manualFiles" => size["manualFiles"], "limits" => size["limits"], "reasons" => reasons
+    }
+  end
+
+  # analysis.md is made from analysis.json alone.
+  def render_analysis(result)
+    summary = result["summary"]
+    size = result["size"]
+    limits = size["limits"]
+    lines = []
+    lines << "# テンプレートの取り込みの事前の分析"
+    lines << ""
+    lines << "- テンプレート: `#{result.dig("template", "repository")}` の `#{result.dig("template", "commit")}`"
+    lines << "- 取り込み先のHEAD: `#{result.dig("app", "head")}`"
+    lines << "- 分析した計画: `plan.json`（#{result["planDigest"]}）"
+    if result.key?("preflightDigest")
+      lines << "- 事前の判定: `preflight.json`（#{result["preflightDigest"]}）。ほかの作業中か: #{result["preflightStatus"] == "busy" ? "作業中" : "作業中ではない"}"
+    end
+    lines << "- この分析は読み取りだけで行い、取り込み先へ何も書き込んでいません。計画を承認する前に、`plan.md`とあわせて読みます。"
+    lines << ""
+    lines << "## 要約"
+    lines << ""
+    lines << "- 書き込むファイル: #{summary["writeFiles"]}個（#{limits["writeFiles"]}個を超えると大きい変更）"
+    lines << "- 手で確認するファイル: #{summary["manualFiles"]}個（#{limits["manualFiles"]}個を超えると大きい変更）"
+    lines << "- 名前の変更で古い名前が残っているもの: #{summary["renamePairs"]}組"
+    lines << "- 重複の可能性: #{summary["possibleDuplicates"]}個"
+    kinds = summary["prerequisites"]
+    lines << "- 先に必要な整理: #{kinds.empty? ? "なし" : "#{kinds.length}件（#{kinds.map { |kind| PREREQUISITES.fetch(kind) }.join("、")}）"}"
+    source = size["source"] == "preflight" ? "`preflight.json`の判定" : "計画から求めた判定"
+    source += "に、この分析で見つかった先に必要な整理を加えました" if size["reasons"].any? { |reason| reason["kind"] == "prerequisites" }
+    lines << "- 変更の大きさ: #{size["estimate"] == "large" ? "大きい" : "通常"}（#{source}）"
+    size["reasons"].each { |reason| lines << "  - 理由: #{reason["message"]}" }
+    lines << ""
+    lines << "## 1. 不足と更新"
+    lines << ""
+    lines << "テンプレートにあって取り込み先にないものと、取り込み先が古い版のままのものです。それぞれに、今の版を入れたテンプレートのcommit、その件名にあるIssueとPRの番号、関係する決定事項を添えます。関係する決定事項は、commitのメッセージと、そのcommitがこのファイルに加えた行に出てくる`D-###`のうち、テンプレートの`#{DECISIONS_PATH}`にあるものです。Identity変換されるファイルは、変換する前の内容を変えたcommitを示します。"
+    [["missing", "足りないファイル"], ["safe-update", "古い版のままのファイル"]].each do |status, title|
+      entries = result["updates"].select { |entry| entry["status"] == status }
+      lines << ""
+      lines << "### #{title}（#{entries.length}個）"
+      lines << ""
+      lines << "なし" if entries.empty?
+      entries.each do |entry|
+        reason = entry["reason"] ? "。手で確認する理由: #{entry["reason"]}" : ""
+        lines << "- #{UPDATE_ACTIONS.fetch(entry["action"], entry["action"])}: `#{entry["path"]}` — #{commit_note(entry, true)}#{reason}"
+      end
+    end
+    lines << ""
+    lines << "## 2. 重複と名前の変更"
+    lines << ""
+    lines << "### 名前の変更（#{result["renames"].length}組）"
+    lines << ""
+    lines << "テンプレートの履歴で名前が変わったファイルのうち、古い名前が取り込み先に残っているものです。古い方の削除と新しい方の追加を1組として扱います。"
+    lines << ""
+    lines << "なし" if result["renames"].empty?
+    result["renames"].each do |pair|
+      via = pair["via"].empty? ? "" : "途中の名前は#{pair["via"].map { |path| "`#{path}`" }.join("、")}です。"
+      lines << "- `#{pair["oldPath"]}` → `#{pair["newPath"]}`: #{commit_note(pair, false)}で名前が変わりました。#{via}#{rename_note(pair)}"
+    end
+    similarity = result["similarity"]
+    lines << ""
+    lines << "### 重複の可能性（#{result["duplicates"].length}個）"
+    lines << ""
+    lines << "取り込み先だけにあるファイル（テンプレートの今の版にも計画にもなく、アプリが持つファイルや記録でもないもの）のうち、次のどちらかに当たるものです。"
+    lines << ""
+    lines << "- 同じ名前: テンプレートが1か所だけで使うファイル名と同じ名前で、別の場所にあります。テンプレートが2か所以上で使う名前と、#{similarity["sharedNames"].join("、")}は、多くのフォルダで使う名前なので中身だけで比べます。"
+    lines << "- 中身が似ている: 前後の空白を除いた行の集合のJaccard係数（両方にある行の数を、どちらかにある行の数で割った値。空白だけの行は数えません）が#{similarity["threshold"]}以上です。比べるのは、#{similarity["maxBytes"] / 1_048_576} MB以下で、NULを含まず、#{similarity["minLines"]}行以上あるファイルだけです。テンプレートのファイルは、Identity変換の前の内容で比べます。"
+    lines << ""
+    lines << "扱い（残す、削除する、テンプレートのファイルへまとめる）は、ユーザーが決めます。この分析はどれも変更しません。"
+    lines << ""
+    lines << "なし" if result["duplicates"].empty?
+    result["duplicates"].each do |entry|
+      found = []
+      found << "同じ名前のテンプレートのファイル#{entry["sameName"].map { |path| "`#{path}`" }.join("、")}" unless entry["sameName"].empty?
+      unless entry["similar"].empty?
+        found << "中身が似ているテンプレートのファイル#{entry["similar"].map { |item| "`#{item["path"]}`（一致度#{item["similarity"]}）" }.join("、")}"
+      end
+      lines << "- `#{entry["path"]}`: #{found.join("。")}"
+    end
+    lines << ""
+    lines << "## 3. アプリ独自の改造"
+    lines << ""
+    lines << "テンプレートのファイルをアプリ側で書き換えたもの（計画の「衝突する」）です。比べたテンプレートの版との違いを要約し、次の3つの候補を示します。どれにするかは、取り込みIssueの中でファイルごとに決めます。"
+    lines << ""
+    lines << "- #{CHANGE_OPTIONS["keep-app"]}: テンプレートの今回の変更は入りません。"
+    lines << "- #{CHANGE_OPTIONS["take-template"]}: アプリの変更はなくなります。"
+    lines << "- #{CHANGE_OPTIONS["merge"]}: テンプレートの最新の版に、アプリの変更を手で加えます。"
+    lines << ""
+    lines << "「テンプレートへ戻す価値」は、違いの中身から機械的に付けた所見の候補です。決めるのはユーザーです。テンプレートへの報告は、ユーザーが頼んだときだけ`report-template-issue`で行います。この分析は報告しません。"
+    if result["appChanges"].empty?
+      lines << ""
+      lines << "なし"
+    end
+    result["appChanges"].each do |change|
+      hint = change["reportHint"]
+      lines << ""
+      lines << "### `#{change["path"]}`"
+      lines << ""
+      lines << "- 比べた版: #{reference_note(change["reference"])}"
+      lines.concat(difference_lines(change["difference"]))
+      lines << "- 候補: #{change["options"].map { |option| CHANGE_OPTIONS.fetch(option) }.join("／")}"
+      lines << "- テンプレートへ戻す価値（所見の候補）: #{REPORT_HINTS.fetch(hint["kind"])}。#{hint["note"]}"
+    end
+    lines << ""
+    lines << "### そのほかの手で確認するファイル（#{result["otherManual"].length}個）"
+    lines << ""
+    lines << "1と3に入らない、計画で手で確認するファイルです。"
+    lines << ""
+    lines << "なし" if result["otherManual"].empty?
+    result["otherManual"].each { |file| lines << "- `#{file["path"]}`（#{STATUS_LABELS.fetch(file["status"], file["status"])}）: #{file["reason"]}" }
+    lines << ""
+    lines << "## 4. 先に必要な整理"
+    lines << ""
+    if result["prerequisites"].empty?
+      lines << "なし"
+    else
+      lines << "取り込みIssueの最初の手順として、次の順に片付けます。取り込み先のファイルを変えたら、レポートと計画を作り直し、この分析をやり直します。"
+      lines << ""
+    end
+    result["prerequisites"].each do |item|
+      lines << "#{item["order"]}. #{PREREQUISITES.fetch(item["kind"])}: #{item["message"]}"
+      case item["kind"]
+      when "decision-collision"
+        item["collisions"].each { |collision| lines << "   - #{collision["id"]}: テンプレート「#{collision["template"]}」／アプリ「#{collision["app"]}」" }
+      when "outdated-tools"
+        listed = item["update"].map { |path| "更新: `#{path}`" } + item["manual"].map { |path| "手で確認: `#{path}`" }
+        listed.first(LISTED_TOOLS).each { |entry| lines << "   - #{entry}" }
+        lines << "   - ほか#{listed.length - LISTED_TOOLS}個" if listed.length > LISTED_TOOLS
+      end
+    end
+    lines << ""
+    lines.join("\n")
+  end
+
+  def commit_note(entry, with_decisions)
+    return "テンプレートの履歴に、このファイルを変えたcommitが見つかりません。" if entry["commit"].nil?
+    subject = entry["subject"]
+    subject = "#{subject[0, SUBJECT_WIDTH]}…" if subject.length > SUBJECT_WIDTH
+    numbers = []
+    numbers << "Issue ##{entry["issue"]}" if entry["issue"]
+    numbers << "PR ##{entry["pullRequest"]}" if entry["pullRequest"]
+    details = [numbers.empty? ? "件名にIssueとPRの番号はありません" : numbers.join("、")]
+    details << "関係する決定事項: #{entry["decisions"].empty? ? "なし" : entry["decisions"].join("、")}" if with_decisions
+    "`#{entry["commit"][0, 7]}`「#{subject}」（#{details.join("。")}）"
+  end
+
+  def rename_note(pair)
+    new_note = case pair["newAction"]
+               when "add" then "新しい方は計画で追加します。"
+               when "update" then "新しい方は計画で更新します。"
+               when "none" then "新しい方はすでに取り込み先にあり、テンプレートと一致しています。"
+               when "manual" then "新しい方は計画で手で確認します。"
+               else "新しい方は計画で「#{STATUS_LABELS.fetch(pair["newStatus"], pair["newStatus"])}」です。"
+               end
+    old_note = case pair["oldAction"]
+               when nil then "古い方の削除は計画に含まれないため、取り込みIssueで中身を確かめてから手で削除します。"
+               when "delete" then "古い方は計画で削除します。"
+               when "manual" then "古い方は計画で手で確認します。"
+               else "古い方は計画で「#{pair["oldAction"]}」です。"
+               end
+    new_note + old_note
+  end
+
+  def reference_note(reference)
+    return "比べられるテンプレートの版がありません。" if reference.nil?
+    commit = "`#{reference["commit"][0, 7]}`"
+    note = case reference["kind"]
+           when "nearest" then "最も近い版#{commit}（計画の判定では違いは#{reference["changedLines"]}行）"
+           when "base" then "基準の版#{commit}"
+           else "テンプレートの最新の版#{commit}"
+           end
+    case reference["transform"]
+    when "applied" then "#{note}。取り込み先のIdentityで変換した内容と比べました。"
+    when "unavailable" then "#{note}。取り込み先のIdentityがないため、Identity変換の前の内容と比べました。"
+    when "failed" then "#{note}。取り込み先のIdentityで変換できなかったため、Identity変換の前の内容と比べました。"
+    when "untransformable" then "#{note}。このcommitのtoolでは取り込み先のIdentityへ変換できないため、比べていません。"
+    else "#{note}。"
+    end
+  end
+
+  def difference_lines(difference)
+    modes = "テンプレート`#{difference["templateMode"]}`、アプリ`#{difference["appMode"]}`"
+    case difference["kind"]
+    when "lines"
+      mode = difference["templateMode"] == difference["appMode"] ? "" : "file modeも違います（#{modes}）。"
+      excerpt = difference["excerpt"]
+      counts = "- 違い: アプリ側で#{difference["added"]}行を加え、#{difference["removed"]}行を削っています。#{mode}"
+      return ["#{counts}違いは空白だけの行です。"] if excerpt.empty?
+      ["#{counts}空白だけの行を除いた最初の#{excerpt.length}行（`-`はテンプレートの版にだけある行、`+`はアプリにだけある行）:",
+       "", "  ```diff", *excerpt.map { |line| "  #{line}" }, "  ```", ""]
+    when "mode-only" then ["- 違い: 内容は同じで、file modeだけが違います（#{modes}）。"]
+    when "binary" then ["- 違い: NULを含むファイルなので、行では比べていません。"]
+    when "not-a-file" then ["- 違い: どちらかがsubmoduleなので、行では比べていません。"]
+    when "app-missing" then ["- 違い: 取り込み先には、このパスのファイルがありません（アプリ側で削除したか、別の種類のものを置いています）。"]
+    else ["- 違い: 比べられるテンプレートの版がないため、要約できません。"]
     end
   end
 
