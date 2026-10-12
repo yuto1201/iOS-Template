@@ -363,8 +363,8 @@
     },
     {
       "domain": "template-sync",
-      "paths": ["Config/template-identity.json", "docs/template-sync.md", "tools/bootstrap-app.swift", "tools/lib/template-sync-apply.rb", "tools/lib/template-sync.rb", "tools/template-sync-codex-review.sh", "tools/template-sync.sh"],
-      "prefixes": ["tools/template-sync/", "tools/tests/fixtures/template-sync/"]
+      "paths": ["Config/template-identity.json", "docs/template-sync.md", "tools/bootstrap-app.swift", "tools/lib/template-sync-apply.rb", "tools/lib/template-sync.rb", "tools/link-user-skill.sh", "tools/template-sync-codex-review.sh", "tools/template-sync.sh"],
+      "prefixes": [".agents/user-skills/", "tools/template-sync/", "tools/tests/fixtures/template-sync/"]
     },
     {
       "domain": "ui-direction",
@@ -452,6 +452,7 @@
     {"path": "tools/tests/test-ios-system-experiences-skill.sh", "domains": ["system-experiences"]},
     {"path": "tools/tests/test-issue-contract-revision.sh", "domains": ["descriptor-files", "issue-contract-revision"]},
     {"path": "tools/tests/test-issue-contract.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-link-user-skill.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-media-skill.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-merge-issue.sh", "domains": ["descriptor-files", "merge-publication"]},
     {"path": "tools/tests/test-premerge-gate.sh", "domains": ["descriptor-files", "review-evidence-sealing"]},

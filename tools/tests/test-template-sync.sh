@@ -9,7 +9,9 @@ set -euo pipefail
 # changes, Identity transform, and a decision-number collision. The preflight (D-078) runs on a
 # synthetic target with a fake gh that answers only read-only list queries. The analysis (D-078) adds
 # template commits with Issue and PR numbers, decisions and renames, and analyzes synthetic targets
-# with app changes, files of their own and work that must come first.
+# with app changes, files of their own and work that must come first. The ios-template-sync user skill
+# (D-078) must guide both entry points, the command order and the sync Issue's verification, and the skill
+# and its link tool must stay template-only, so no report brings them into an app.
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby swiftc tar shasum
@@ -63,6 +65,82 @@ CHECK="$check_output" ruby -rjson -e '
   abort "a category is empty: #{counts}" unless counts.keys.sort == %w[app identity mixed template template-only] && counts.values.all?(&:positive?)
   abort "category counts do not cover every file" unless counts.values.sum == value["files"]
 '
+
+# --- the ios-template-sync user skill and its link tool (D-078) ------------------------------
+# They belong to the template alone: the user skill folder and the link tool with its test are
+# template-only, so check classifies them there and no report brings them into an app.
+template_only_paths='.agents/user-skills/ios-template-sync/SKILL.md .agents/user-skills/ios-template-sync/agents/openai.yaml tools/link-user-skill.sh tools/tests/test-link-user-skill.sh'
+CHECK_ROOT="$check_root" PATHS="$template_only_paths" ruby -r"$check_root/tools/lib/template-sync.rb" -e '
+  root = ENV.fetch("CHECK_ROOT")
+  ownership = TemplateSync.load_ownership(File.read(File.join(root, TemplateSync::OWNERSHIP_PATH)))
+  tracked = TemplateSync.tracked_paths(root, "HEAD")
+  ENV.fetch("PATHS").split.each do |path|
+    abort "#{path} is not a tracked template file" unless tracked.include?(path)
+    category = TemplateSync.classify(ownership, path)&.dig(:category)
+    abort "#{path} is classified #{category.inspect}, not template-only" unless category == "template-only"
+  end
+'
+# expect_not_imported REPORT: the plan skips every template-only path above and plan.md names none of them.
+expect_not_imported() {
+  PLAN="$1/plan.json" PATHS="$template_only_paths" ruby -rjson -e '
+    files = JSON.parse(File.read(ENV.fetch("PLAN"))).fetch("files").to_h { |file| [file["path"], file] }
+    ENV.fetch("PATHS").split.each do |path|
+      actual = files.fetch(path) { abort "the plan does not judge #{path}" }.values_at("category", "status", "action")
+      abort "#{path} in the plan: #{actual}" unless actual == %w[template-only template-only skip]
+    end
+  '
+  ! grep -Eq 'user-skills|link-user-skill' "$1/plan.md" || { echo "plan.md in $1 brings the user skill or its link tool into the app" >&2; exit 1; }
+}
+
+# The skill guides both entry points, the template source, one sync Issue in the target, the command
+# order, the busy and large cases, the prerequisites and the sync Issue's verification.
+skill_md="$repo_root/.agents/user-skills/ios-template-sync/SKILL.md"
+skill_yaml="$repo_root/.agents/user-skills/ios-template-sync/agents/openai.yaml"
+[[ -f "$skill_md" && -f "$skill_yaml" ]] || { echo 'the ios-template-sync skill is incomplete' >&2; exit 1; }
+[[ "$(sed -n '1,2p' "$skill_md")" == $'---\nname: ios-template-sync' ]] || { echo 'the skill frontmatter name differs' >&2; exit 1; }
+for text in 'テンプレートを取り込む' 'テンプレートを反映する' 'テンプレートと同期する'; do
+  sed -n '3p' "$skill_md" | grep -Fq -- "$text" || { echo "the skill description does not trigger on: $text" >&2; exit 1; }
+done
+for text in '**入り口1**' '**入り口2**' '/Users/uesugiyuuto/Documents/Xcode/iOS-Template' \
+  'テンプレートのcleanな`main`で、`origin/main`と一致するcommitだけを取り込みます。' \
+  'テンプレートへcommit、ブランチ、Issue、PR、ファイルを作りません。' \
+  '取り込み先の1つのテンプレート同期Issueとして進めます' '取り込み先の`AGENTS.md`と規則に従います。' \
+  '取り込み先とテンプレートの両方の外に置きます。' \
+  '`busy`（ほかの作業中）なら止めます。' 'それが終わるまで待つことを勧めます。' \
+  'ただし、大きい変更（`large`）では並行をおすすめしないと、はっきり伝えます。' \
+  '並行するかは、ユーザーの明示の指示だけで決め、自分で決めません。' \
+  '分析の「先に必要な整理」を、示された順のままIssueの最初の手順として' \
+  'ユーザーがCodexの確認を指定したときだけ' \
+  '- 取り込んだtoolとskillの、取り込み先のrepository test' '- アプリのBuild' '- 重要なUnit Test' \
+  '- 日本語iPhoneのSmoke Test' '- 取り込みの前（同期ブランチの最初のHEAD）と後で、BuildとUnit Testが同じように通ること' \
+  '- 反対モデルの承認' 'tools/link-user-skill.sh ios-template-sync'; do
+  grep -Fq -- "$text" "$skill_md" || { echo "the skill lacks: $text" >&2; exit 1; }
+done
+grep -Fq -- '$ios-template-sync' "$skill_yaml" || { echo 'openai.yaml does not invoke the skill' >&2; exit 1; }
+# Every template-sync.sh command in the skill passes the options its command requires and no others,
+# and the commands come in the order report, preflight, analyze, approve, apply.
+ruby -rjson -e '
+  skill, *libraries = ARGV
+  source = libraries.map { |path| File.binread(path) }.join
+  allowed = {}
+  source.scan(/def (\w+)\(options\)\n\s+allow_options!\(options, (\[[^\]]*\]), (\[[^\]]*\])\)/) do |name, required, optional|
+    allowed[name.tr("_", "-")] = [JSON.parse(required), JSON.parse(optional)]
+  end
+  text = File.binread(skill).gsub(/\\\n\s*/, " ")
+  commands = text.lines.grep(/\A"\$TEMPLATE\/tools\/template-sync\.sh" /)
+  abort "the skill shows no template-sync commands" if commands.empty?
+  commands.each do |line|
+    name = line[/template-sync\.sh" ([a-z-]+)/, 1]
+    required, optional = allowed.fetch(name) { abort "the skill runs an unknown command: #{name}" }
+    given = line.scan(/(?<=\s)--[a-z-]+/)
+    abort "#{name} in the skill lacks #{(required - given).join(", ")}" unless (required - given).empty?
+    abort "#{name} in the skill passes #{(given - required - optional).join(", ")}" unless (given - required - optional).empty?
+    abort "#{name} in the skill repeats an option" unless given.uniq == given
+    abort "#{name} in the skill writes inside a repository" if line.match?(/--(?:output-dir|output|work-dir) "\$(?:APP|TEMPLATE|WORKTREE)[\/"]/)
+  end
+  order = %w[report preflight analyze approve apply].map { |name| commands.index { |line| line.include?("template-sync.sh\" #{name} ") } }
+  abort "the skill does not show report, preflight, analyze, approve and apply in this order: #{order}" unless order.all? && order == order.sort
+' "$skill_md" "$repo_root/tools/lib/template-sync.rb" "$repo_root/tools/lib/template-sync-apply.rb"
 
 
 printf '%s\n' 'unclassified' >"$template/UNCLASSIFIED.txt"
@@ -313,6 +391,12 @@ PLAN="$work/report3/plan.json" ruby -rjson -e '
   abort "AGENTS.md without identity must be manual" unless files["AGENTS.md"].values_at("status", "action") == %w[conflict manual]
   abort "template file must be added" unless files["docs/AUTHORITY.md"].values_at("status", "action") == %w[missing add]
 '
+
+# D-078: the user skill and its link tool are skipped for a known base, an unknown base and a
+# repository that never adopted the template.
+for report in report1 report2 report3; do
+  expect_not_imported "$work/$report"
+done
 
 # App 5: the recorded base has no ownership manifest, so template-deleted files stay for review.
 app5="$work/app5"
