@@ -56,13 +56,49 @@ steps:
 
 ## Videos, only when requested
 
-Preview recording uses Goldie `capture`, so it is unavailable on the dedicated
-Simulators. For reference: add a `kind: "preview"` scene with segments `{id, flow, holdSeconds}`. The first
-segment launches, later ones may declare `executionPrerequisite` describing the
-previous final state. Check continuity and deliberate pacing. `capture` also
-records all preview segments present in config; use a screenshot-only config when
-no video was requested. Then run `preview`, `manifest`, `verify`.
+Goldie's `capture` cannot reach the dedicated Simulators, so preview footage is
+recorded with `tools/record-appstore-preview.sh` instead (D-077). It runs under
+`tools/with-ios-simulator-lock.sh`, leases the dedicated device of one family the same
+way as the screenshot capture, and records one storyboard per family and locale:
 
-Goldie 0.3.1 targets 15–30 seconds and 886×1920 H.264 for its iPhone preview. Use
-real UI recordings and verify current Apple requirements for actual submission.
-A successful image `verify` is not proof of video creation or App Store acceptance.
+```sh
+tools/with-ios-simulator-lock.sh --timeout 0 -- tools/record-appstore-preview.sh record \
+  --requirements "App Store/submission/requirements.json" --states "App Store/screenshots/states.json" \
+  --storyboard storyboard.json --app-path <Release .app> --bundle-id <id> \
+  --source-sha <Head> --build-digest sha256:<hex> --runtime <runtime> \
+  --family iphone-6.3 --locale ja --output-root <new directory> --issue <n> --batch-id <id>
+```
+
+`--family` is `iphone-6.3` (the dedicated iPhone 17 Pro, D-079) or `ipad-13` (the
+dedicated iPad Pro 13-inch (M5)), as named in the submission requirements. The
+storyboard lists segments `{id, state, seconds, allowStill}`; `state` is an entry of
+`states.json`, `seconds` is 1–30 and the whole storyboard is at most 30 seconds.
+
+After the lease erases and boots the device, the tool writes the device's own language
+and locale, restarts it in place and reads them back, so the status bar shows the
+recorded locale (launch arguments reach only the app). Then, for each segment, it
+installs the Release build, fixes the status bar (9:41, full battery), launches the app
+in that state with the fixed date but with animations on, records with
+`simctl io recordVideo --codec=h264`, and stops the recorder with SIGINT. A recorder
+that does not stop is terminated and the run fails; every failure, timeout, INT or
+TERM still stops the recorder and releases the lease, and a lease that cannot be
+released fails the run. The clips, the lease receipts and `record.json` are saved
+outside the device. The record holds only the schema version, family, locale, device
+type, runtime, source SHA, build digest, and for each segment its id, state, seconds,
+`allowStill`, relative path and SHA-256; it holds no UDID, session or local path.
+
+Check every trial clip before recording the full storyboard:
+
+```sh
+tools/record-appstore-preview.sh check --clip 01-open.mp4 --family iphone --seconds 5 --output quality.json
+```
+
+It passes only at the dedicated device's screen size (iPhone 1206×2622, iPad
+2064×2752), at least 30 fps on average, within 0.5 s of the planned length, with no
+frame gap over 100 ms (or more than 2% of the clip in gaps), no freeze of 0.5 s or
+more, and no black frames of 0.1 s or more. A segment marked `allowStill` may hold
+still, which also waives the frame-rate and gap checks; black frames always fail. The
+JSON result lists the reasons and the thresholds it applied. Exit status 3 means the
+clip failed; a failed trial is the moment to record "no video" instead of shipping a
+weak preview. App Store previews are 886×1920 for iPhone and 1200×1600 for iPad, 15–30
+seconds, H.264; verify the current Apple requirements before a real submission.
