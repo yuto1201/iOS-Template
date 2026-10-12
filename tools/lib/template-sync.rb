@@ -574,18 +574,21 @@ module TemplateSync
       newest = read(transformed ? new_xf : new_raw, path)
       newest && newest != app[path]
     end
+    # A transformed file that already matches the newest version gets no provenance, but its raw bytes can
+    # differ between commits that transform to the same content, so the inferred base needs its history too.
+    compared = examined.select { |path, transformed| transformed || differing.key?(path) }
     log = template_log(root, commit, (examined.keys + TRANSFORM_TOOL_PATHS).to_set)
-    states = differing.to_h { |path, transformed| [path, history_states(log, commit, path, transformed)] }
+    states = compared.to_h { |path, transformed| [path, history_states(log, commit, path, transformed)] }
 
     # Untransformed versions are read straight from the object store; transformed ones come from the
     # commits that changed the path or the transform tool, each transformed once and kept in work.
-    untransformed = states.reject { |path, _| differing[path] }.values.flatten(1).map(&:last).compact
+    untransformed = states.reject { |path, _| compared[path] }.values.flatten(1).map(&:last).compact
     blobs = read_blobs(root, untransformed.reject { |mode, _| mode == "160000" }.map(&:last))
     transformed_paths = paths.select { |path| classify(ownership, path)&.dig(:transform) }.sort
     trees = {commit => new_xf}
     files = {}
     targets = {}
-    differing.each do |path, transformed|
+    compared.each do |path, transformed|
       versions = states.fetch(path).map do |sha, raw|
         entry = if raw.nil? then nil
                 elsif transformed
@@ -600,6 +603,7 @@ module TemplateSync
       end.compact
       # The raw versions that hold the app's content; the inferred base looks for them in each tree.
       targets[path] = versions.select { |version| version[:entry] == app[path] }.map { |version| version[:raw] }.to_set if transformed
+      next unless differing.key?(path)
       # A state equal to the one before it introduced nothing. Identical bytes can come back later (a
       # revert, for example); the newest commit that introduced them is the one recorded.
       introduced = []
@@ -608,7 +612,7 @@ module TemplateSync
       found = introduced.find { |version| version[:entry] == app[path] }
       files[path] = found ? {commit: found[:commit], entry: found[:entry]} : {nearest: nearest_version(introduced, app[path])}
     end
-    {files: files, inferred: inferred_base(root, commit, log, examined, app, targets)}
+    {files: files, inferred: inferred_base(root, log, examined, app, targets)}
   end
 
   # Each commit up to commit, newest first (no parent before its children), with the paths it changed
@@ -751,21 +755,13 @@ module TemplateSync
 
   # The commit whose tree has the most of the app's files exactly (D-078). It is only shown to the
   # user; every decision comes from each file's own provenance. An untransformed file is looked up by
-  # the object name of the app's bytes; an Identity-transformed one by the raw versions that transform
-  # into the app's bytes, or by the compared commit's version when it already matches. Only commits
-  # that change a file into the app's content can raise the count, so only those trees are read. Ties
-  # go to the newest commit.
-  def inferred_base(root, commit, log, examined, app, targets)
+  # the object name of the app's bytes; an Identity-transformed one by every raw version, from any
+  # commit, that transforms into the app's bytes. Only commits that change a file into the app's content
+  # can raise the count, so only those trees are read. Ties go to the newest commit.
+  def inferred_base(root, log, examined, app, targets)
     format = git(root, "rev-parse", "--show-object-format").strip
-    head = nil
     wanted = examined.to_h do |path, transformed|
-      names = if !transformed then Set[[app[path].mode, object_name(app[path], format)]]
-              elsif targets.key?(path) then targets[path]
-              else
-                head ||= tree_entries(root, commit)
-                head[path] ? Set[head[path]] : Set.new
-              end
-      [path, names]
+      [path, transformed ? targets.fetch(path) : Set[[app[path].mode, object_name(app[path], format)]]]
     end
     best = nil
     log.each do |sha, changes|

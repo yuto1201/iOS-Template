@@ -393,4 +393,41 @@ for text in "- 推定の基準: \`$middle\`" \
   grep -Fq -- "$text" "$work/report6/plan.md" || { echo "plan.md lacks: $text" >&2; exit 1; }
 done
 
+# The inferred base also counts an Identity-transformed file that already matches the newest version,
+# through every raw version that transforms to the app's content. On a side branch, X changes
+# docs/workflow.md; Y then changes the raw docs/README.md and docs/workflow.md again. With a transform
+# under which every README.md version gives the same text, an app at X matches X in both files and Y in
+# README.md only, so X is the inferred base; counting only Y's raw README.md would tie X with Y and pick
+# the newer Y. The real transform cannot give two raw versions the same text, so it is replaced here.
+git -C "$template" checkout -q -b provenance-side
+printf '%s\n' '分岐で追記した手順。' >>"$template/docs/workflow.md"
+commit_all "$template" side-x
+side_x=$(git -C "$template" rev-parse HEAD)
+printf '%s\n' '分岐で追記した説明。' >>"$template/docs/README.md"
+printf '%s\n' '分岐でさらに追記した手順。' >>"$template/docs/workflow.md"
+commit_all "$template" side-y
+side_y=$(git -C "$template" rev-parse HEAD)
+git -C "$template" checkout -q -
+TEMPLATE="$template" SIDE_X="$side_x" SIDE_Y="$side_y" WORK="$work/inferred" ruby -e '
+  require File.join(ARGV.fetch(0), "tools/lib/template-sync.rb")
+  sync = TemplateSync
+  root, x, y, work = ENV.fetch("TEMPLATE"), ENV.fetch("SIDE_X"), ENV.fetch("SIDE_Y"), ENV.fetch("WORK")
+  FileUtils.mkdir_p(work)
+  same = File.join(work, "same")
+  FileUtils.mkdir_p(File.join(same, "docs"))
+  File.write(File.join(same, "docs/README.md"), "transformed README\n")
+  sync.define_singleton_method(:transformed_history) { |*_| same }
+  ownership = sync.load_ownership(sync.blob(root, y, sync::OWNERSHIP_PATH))
+  paths = %w[docs/README.md docs/workflow.md]
+  abort "README.md must be transformed" unless sync.classify(ownership, "docs/README.md")[:transform]
+  app = {"docs/README.md" => sync::Entry.new("100644", "transformed README\n"),
+         "docs/workflow.md" => sync::Entry.new("100644", sync.blob(root, x, "docs/workflow.md").b)}
+  identity = {"displayName" => "Garden Notes", "moduleName" => "GardenNotes", "appSlug" => "garden-notes", "bundleId" => "com.yuto.GardenNotes"}
+  new_raw = sync.export_tree(root, y, File.join(work, "raw-y"))
+  history = sync.file_history(root, y, ownership, paths, app, identity, new_raw, same, "applied", work)
+  abort "README.md matches the newest version and gets no provenance: #{history[:files]}" if history[:files].key?("docs/README.md")
+  abort "workflow.md provenance: #{history[:files]}" unless history[:files].dig("docs/workflow.md", :commit) == x
+  abort "inferred base should be X, not #{history[:inferred]}" unless history[:inferred] == {"commit" => x, "matchedFiles" => 2}
+' "$repo_root"
+
 echo "template sync report tests passed"
