@@ -102,7 +102,11 @@ swiftc -o "$bootstrap_binary" "$repo_root/tools/bootstrap-app.swift"
 make_app() {
   local app=$1 commit=${2:-$base}
   mkdir -p "$app"
-  git -C "$template" archive "$commit" | tar -x -C "$app"
+  # macOS tar stops at the end-of-archive marker without reading the padding after it, so a pipe from
+  # git archive can die of SIGPIPE under pipefail depending on the archive bytes; extract from a file.
+  git -C "$template" archive -o "$work/make-app.tar" "$commit"
+  tar -xf "$work/make-app.tar" -C "$app"
+  rm -f "$work/make-app.tar"
   "$bootstrap_binary" apply --root "$app" --manifest "$app/Config/template-identity.json" \
     --display-name 'Garden Notes' --module-name GardenNotes --app-slug garden-notes --bundle-id com.yuto.GardenNotes >/dev/null
   (cd "$app" && BASE="$commit" ruby -rjson -e '
@@ -116,6 +120,8 @@ make_app() {
   printf '%s\n' 'アプリ側の追記。' >>"$app/docs/AUTHORITY.md"
   printf '%s\n' 'アプリ側だけの追記。' >>"$app/docs/references.md"
 }
+# make_app never pipes git archive into tar (see the comment in make_app).
+! declare -f make_app | grep -Eq 'archive[^|]*\|[[:space:]]*tar' || { echo 'make_app pipes git archive into tar' >&2; exit 1; }
 
 report() {
   "$sync" report --app-root "$1" --output-dir "$2" --work-dir "$work/cache" --now 2026-10-05T01:00:00Z >/dev/null
