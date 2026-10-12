@@ -86,16 +86,19 @@ expect_failure rebuild 'revision already exists and is never replaced' "$tool" b
 [[ "$(shasum -a 256 "$sheet")" == "$before" ]] || fail 'rebuild changed the existing sheet'
 
 # Definitions that could leak a URL or markup into the page, or point at a non-image, are refused.
-write_spec "$workspace/url.json" proposal "[$good,$(pattern U "$(tiles device pair device)" | sed 's/動きで伝える。/https:\/\/example.com を見る/')]"
+six=(device pair device device device device)
+write_spec "$workspace/url.json" proposal "[$good,$early,$(pattern U "$(tiles "${six[@]}")" | sed 's/動きで伝える。/https:\/\/example.com を見る/')]"
 expect_failure url-text 'must not contain URLs, markup, or style imports' "$tool" build --spec "$workspace/url.json" --root "$root" --revision r2
-write_spec "$workspace/markup.json" proposal "[$good,$(pattern M "$(tiles device pair device)" | sed 's/動きで伝える。/<img src=x>/')]"
+write_spec "$workspace/markup.json" proposal "[$good,$early,$(pattern M "$(tiles "${six[@]}")" | sed 's/動きで伝える。/<img src=x>/')]"
 expect_failure markup-text 'must not contain URLs, markup, or style imports' "$tool" build --spec "$workspace/markup.json" --root "$root" --revision r2
-write_spec "$workspace/broken.json" proposal "[$good,$(pattern X "$(tiles device pair device)" | sed 's/pair.png/broken.png/')]"
+write_spec "$workspace/broken.json" proposal "[$good,$early,$(pattern X "$(tiles "${six[@]}")" | sed 's/pair.png/broken.png/')]"
 expect_failure broken-image 'tile image must be PNG or JPEG' "$tool" build --spec "$workspace/broken.json" --root "$root" --revision r2
 [[ ! -e "$root/r2" ]] || fail 'a refused build left a revision behind'
 expect_failure bad-revision 'revision must be lowercase letters' "$tool" build --spec "$workspace/proposal.json" --root "$root" --revision 'R 3'
-write_spec "$workspace/single.json" proposal "[$good]"
-expect_failure single-pattern 'a proposal compares two to four patterns' "$tool" build --spec "$workspace/single.json" --root "$root" --revision r2
+write_spec "$workspace/two.json" proposal "[$good,$early]"
+expect_failure two-patterns 'a proposal compares three or four patterns' "$tool" build --spec "$workspace/two.json" --root "$root" --revision r2
+write_spec "$workspace/uneven.json" proposal "[$good,$early,$(pattern E "$(tiles device pair device)")]"
+expect_failure uneven-patterns 'proposal patterns must all have the same number of tiles; found 3, 6' "$tool" build --spec "$workspace/uneven.json" --root "$root" --revision r2
 
 # The second-stage sample shows Japanese and English for each device and checks they match.
 preview_tiles=$(ruby -rjson -e '
@@ -114,9 +117,10 @@ ruby -rjson -e '
 expect_failure unknown-pattern 'unknown pattern id: Z' "$tool" select --sheet "$root/r1" --pattern Z
 expect_failure violating-pattern 'pattern B breaks the tile rules' "$tool" select --sheet "$root/r1" --pattern B
 expect_failure both-choices 'give exactly one of --pattern or --tiles' "$tool" select --sheet "$root/r1" --pattern A --tiles 1=A:1
-expect_failure missing-slot 'must name every slot from 1 to 3 exactly once' "$tool" select --sheet "$root/r1" --tiles 1=A:1,2=C:2,4=A:4
-expect_failure unknown-tile 'pattern A has no Japanese iPhone tile 9' "$tool" select --sheet "$root/r1" --tiles 1=A:1,2=A:9
-expect_failure combo-rules 'the combination breaks the tile rules' "$tool" select --sheet "$root/r1" --tiles 1=B:1,2=A:2,3=A:3
+expect_failure missing-slot 'must name every slot from 1 to 6 exactly once' "$tool" select --sheet "$root/r1" --tiles 1=A:1,2=C:2,4=A:4,5=A:5,6=A:6
+expect_failure trailing-slots 'must name every slot from 1 to 6 exactly once' "$tool" select --sheet "$root/r1" --tiles 1=A:1,2=A:2,3=A:3
+expect_failure unknown-tile 'pattern A has no Japanese iPhone tile 9' "$tool" select --sheet "$root/r1" --tiles 1=A:1,2=A:9,3=A:3,4=A:4,5=A:5,6=A:6
+expect_failure combo-rules 'the combination breaks the tile rules' "$tool" select --sheet "$root/r1" --tiles 1=B:1,2=A:2,3=A:3,4=A:4,5=A:5,6=A:6
 [[ ! -e "$root/r1/selection.json" ]] || fail 'a refused selection was recorded'
 "$tool" select --sheet "$root/r1" --tiles 1=A:1,2=C:2,3=C:3,4=A:4,5=A:5,6=A:6 >/dev/null
 ruby -rjson -e '

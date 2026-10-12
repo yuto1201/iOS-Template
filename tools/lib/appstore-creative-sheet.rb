@@ -153,10 +153,17 @@ module AppStoreCreativeSheet
     text!(spec["brief"], "brief", required: false)
     patterns = spec["patterns"]
     fail!("patterns must be a non-empty array") unless patterns.is_a?(Array) && !patterns.empty?
-    fail!("a proposal compares two to four patterns") if spec["kind"] == "proposal" && !(2..4).cover?(patterns.length)
+    fail!("a proposal compares three or four patterns") if spec["kind"] == "proposal" && !(3..4).cover?(patterns.length)
     ids = patterns.map { |pattern| pattern.is_a?(Hash) ? pattern["id"] : nil }
     fail!("pattern ids must be unique") unless ids.uniq.length == ids.length
-    spec.merge("patterns" => patterns.map { |pattern| validate_pattern(pattern, base, spec["kind"]) })
+    validated = patterns.map { |pattern| validate_pattern(pattern, base, spec["kind"]) }
+    if spec["kind"] == "proposal"
+      # Every pattern fills the same number of store slots, the tile count fixed in the brief, so a
+      # combination can be checked for completeness against it.
+      counts = validated.map { |pattern| pattern.fetch("tiles").length }.uniq
+      fail!("proposal patterns must all have the same number of tiles; found #{counts.sort.join(', ')}") unless counts.length == 1
+    end
+    spec.merge("patterns" => validated)
   end
 
   def validate_pattern(pattern, base, kind)
@@ -360,8 +367,8 @@ module AppStoreCreativeSheet
     {"status" => "selected", "selection" => File.join(directory, "selection.json"), "type" => selection.fetch("type")}
   end
 
-  # A combination names, for every slot from 1, the pattern and its tile slot that fills it, for
-  # example "1=A:1,2=C:2,3=A:3". It must cover every slot once and still meet the tile rules.
+  # A combination names, for every slot of the set, the pattern and its tile slot that fills it, for
+  # example "1=A:1,2=C:2,3=A:3". It must cover every slot of the set once and still meet the tile rules.
   def combination(text, patterns, kind)
     fail!("a combination applies only to a proposal sheet") unless kind == "proposal"
     entries = text.split(",").map(&:strip)
@@ -372,8 +379,9 @@ module AppStoreCreativeSheet
       [Integer(match[1], 10), match[2], Integer(match[3], 10)]
     end
     slots = parsed.map(&:first)
-    unless slots.sort == (1..parsed.length).to_a && slots.uniq.length == slots.length
-      fail!("a combination must name every slot from 1 to #{parsed.length} exactly once")
+    size = patterns.values.map { |pattern| pattern.fetch("tiles").length }.max
+    unless slots.sort == (1..size).to_a
+      fail!("a combination must name every slot from 1 to #{size} exactly once")
     end
     tiles = parsed.sort_by(&:first).map do |slot, id, source_slot|
       pattern = patterns[id] or fail!("unknown pattern id in combination: #{id}")

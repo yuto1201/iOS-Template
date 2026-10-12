@@ -28,7 +28,8 @@ ignores. A revision is never rebuilt or edited; every change gets a new revision
 }
 ```
 
-- `kind` is `proposal` (stage 1: two to four patterns, Japanese iPhone tiles only) or
+- `kind` is `proposal` (stage 1: three or four patterns with the same tile count from the
+  brief, Japanese iPhone tiles only) or
   `preview` (stage 2: the chosen pattern, Japanese and English, iPhone and iPad).
 - `tiles[].kind` is one of `device`, `pair`, `panorama`, `continuous`, `callout`,
   `scene`, `concept`. A panorama fills two slots. Slots run from 1 in order for each
@@ -67,8 +68,8 @@ tools/appstore-creative-sheet.sh select --sheet .artifacts/store-creative/flower
 tools/appstore-creative-sheet.sh select --sheet .artifacts/store-creative/flower-r1 --tiles 1=A:1,2=C:2,3=A:3
 ```
 
-`--tiles` names, for every slot from 1, the pattern and its tile that fills it; it is
-allowed only on a stage 1 sheet and must still meet the rules. `selection.json`
+`--tiles` names, for every slot of the set, the pattern and its tile that fills it; it is
+allowed only on a stage 1 sheet, must cover every slot, and must still meet the rules. `selection.json`
 records the revision, the sheet's SHA-256, the choice and `user-explicit`. It refuses
 an unknown pattern, a pattern that breaks the rules, a combination with a missing
 slot, a sheet whose bytes changed after it was built, and a second selection.
