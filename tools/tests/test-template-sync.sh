@@ -90,7 +90,7 @@ git -C "$template" checkout -q -
 printf '%s\n' 'テンプレートの手順を追記した。' >>"$template/docs/workflow.md"          # safe update
 printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/AUTHORITY.md"                # conflict
 printf '%s\n' '# New guide' '' 'テンプレートが追加した文書。' >"$template/docs/new-guide.md" # missing
-git -C "$template" rm -q docs/goldie.md                                              # deleted in template
+git -C "$template" rm -q docs/appstore-creative.md                                              # deleted in template
 printf '%s\n' '同期testの追記。' >>"$template/docs/README.md"                        # transformed safe update
 printf '%s\n' '旧名TemplateAppを含む追記。' >>"$template/docs/security.md"           # identity regression
 # The next free decision number, so the case keeps working as the template appends real decisions.
@@ -184,7 +184,7 @@ PLAN="$work/report1/plan.json" BASE="$base" NEXT_DECISION="$next_decision" READM
   expect = {
     "docs/workflow.md" => %w[safe-update update], "docs/AUTHORITY.md" => %w[conflict manual],
     "docs/references.md" => %w[app-only-change keep], "docs/new-guide.md" => %w[missing add],
-    "docs/goldie.md" => %w[deleted-in-template delete], "docs/README.md" => %w[safe-update update],
+    "docs/appstore-creative.md" => %w[deleted-in-template delete], "docs/README.md" => %w[safe-update update],
     "docs/security.md" => %w[safe-update manual], "specs/decisions.md" => %w[conflict manual],
     "specs/product.md" => %w[app-owned skip], "TemplateApp/ContentView.swift" => %w[app-owned skip],
     "docs/superpowers/plans/README.md" => %w[template-only skip], "tools/template-sync.sh" => %w[template-only skip],
@@ -222,7 +222,7 @@ PLAN="$work/report1/plan.json" BASE="$base" NEXT_DECISION="$next_decision" READM
 grep -Fq -- '- 追加: `docs/asc-derived-app-adoption.md`' "$work/report1/plan.md" && { echo 'plan restores an app-side deletion' >&2; exit 1; }
 grep -Fq -- '- 追加: `docs/agent-contracts/appstore-submission.md`' "$work/report1/plan.md" && { echo 'plan restores a deleted, template-changed file' >&2; exit 1; }
 grep -Fq -- '- 削除: `specs/acceptance.md`' "$work/report1/plan.md" && { echo 'plan deletes an app-owned file' >&2; exit 1; }
-for text in '## 適用する変更' '- 追加: `docs/new-guide.md`' '- 更新: `docs/workflow.md`' '- 削除: `docs/goldie.md`' \
+for text in '## 適用する変更' '- 追加: `docs/new-guide.md`' '- 更新: `docs/workflow.md`' '- 削除: `docs/appstore-creative.md`' \
   '## 上書きしないファイル' '`docs/references.md`' '## 手で確認するファイル' '`docs/AUTHORITY.md`（衝突する）' \
   '`docs/security.md`' '番号が衝突しています' '## 必要な承認' 'このレポートは取り込み先へ何も書き込んでいません。' \
   '- `docs/asc-derived-app-adoption.md`: アプリ側で削除したファイルなので、戻しません。' \
@@ -251,7 +251,7 @@ PLAN="$work/report2/plan.json" ruby -rjson -e '
   files = plan.fetch("files").to_h { |file| [file["path"], file] }
   abort "unknown-base difference must be manual" unless files["docs/workflow.md"].values_at("status", "action") == %w[conflict manual]
   abort "missing file must be added" unless files["docs/new-guide.md"].values_at("status", "action") == %w[missing add]
-  abort "deletion needs a base" if files.key?("docs/goldie.md")
+  abort "deletion needs a base" if files.key?("docs/appstore-creative.md")
   abort "identity format issue not reported" unless plan.dig("app", "identityFormatIssues").any? { |issue| issue.include?("sourceIdentityVersion") }
   problems = plan.dig("simulators", "problems")
   abort "template device names not reported: #{problems}" unless problems.any? { |problem| problem.include?("テンプレート用の端末") }
@@ -291,7 +291,7 @@ PLAN="$work/report5/plan.json" ruby -rjson -e '
   plan = JSON.parse(File.read(ENV.fetch("PLAN")))
   abort "legacy base not known" unless plan.dig("base", "status") == "known"
   files = plan.fetch("files").to_h { |file| [file["path"], file] }
-  %w[.gitignore specs/acceptance.md docs/goldie.md].each do |path|
+  %w[.gitignore specs/acceptance.md docs/appstore-creative.md].each do |path|
     actual = files.fetch(path).values_at("category", "status", "action")
     abort "#{path} without base ownership: #{actual}" unless actual == %w[unknown deleted-in-template manual]
   end

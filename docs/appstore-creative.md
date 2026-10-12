@@ -1,21 +1,21 @@
-# CodexでGoldieを使う
+# appstore-creativeスキルでストア用の画像を作る
 
-[Goldieスキル](../.agents/skills/goldie/SKILL.md)は、公式Goldie 0.3.1を利用して
-App Store向け画像を装飾し、依頼された場合に撮影や動画生成を進めます。
-テンプレートから作ったアプリでは `.agents/skills/goldie/` が引き継がれます。
-Claude側も同じ正本へのリンクを使います。
+[appstore-creativeスキル](../.agents/skills/appstore-creative/SKILL.md)は、公式Goldie 0.3.1を土台に
+App Store向け画像を装飾し、依頼された場合に撮影や動画生成を進めます（D-077）。
+テンプレートから作ったアプリでは `.agents/skills/appstore-creative/` が引き継がれます。
+Claude側も同じ正本へのリンク（`.claude/skills/appstore-creative`）を使います。
 
 Codexには、たとえば次のように依頼できます。
 
-- 「Goldieをセットアップして。スクショはまだ作らないで」
-- 「Goldieで、この実際のアプリ画像に日本語の見出しを付けて」
-- 「Goldieでストア用スクショを日本語と英語で作って。動画は不要」
-- 「Goldieで背景だけ変えて。撮影し直さないで」
+- 「appstore-creativeでGoldieをセットアップして。スクショはまだ作らないで」
+- 「appstore-creativeで、この実際のアプリ画像に日本語の見出しを付けて」
+- 「appstore-creativeでストア用スクショを日本語と英語で作って。動画は不要」
+- 「appstore-creativeで背景だけ変えて。撮影し直さないで」
 
-このMacでは個人スキル `~/.codex/skills/goldie/` からも利用できます。
+このMacでは個人スキル `~/.codex/skills/appstore-creative/` からも利用できます。
 別のMacでは同じスキルフォルダをその場所にコピーします。既存スキルがある場合は
 差分を確認し、上書きしません。CLIの導入と設定例は
-[config reference](../.agents/skills/goldie/references/config.md)を参照してください。
+[config reference](../.agents/skills/appstore-creative/references/config.md)を参照してください。
 
 アプリごとに `goldie/ja/` と `goldie/en-US/` の設定を分けます。Goldie 0.3.1は
 最初のlocaleのUIしか撮影しないためです。出力 `out/` はGit管理外とし、採用した

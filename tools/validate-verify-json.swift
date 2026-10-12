@@ -867,7 +867,7 @@ struct VerificationInfo {
 
 let applicationFixtureDeclarationPrefix = "Application-fixture binding:"
 let applicationFixtureProtectedSkillNames: Set<String> = [
-    "app-bootstrap", "app-icon", "cross-model-review", "external-ops", "goldie",
+    "app-bootstrap", "app-icon", "appstore-creative", "cross-model-review", "external-ops",
     "ios-3d-assets", "ios-media-assets", "ios-system-experiences", "ios-verify",
     "plan-issue-batch", "prepare-appstore-assets", "report-template-issue", "ship-issue",
     "ship-issue-batch", "spec-workflow", "submit-appstore-release", "supabase-ops",
@@ -2655,7 +2655,37 @@ func validateWorkflowPath(_ path: String) throws {
         "tools/tests/test-appstore-preparation.sh",
         "tools/tests/test-appstore-release-sections.sh",
         "tools/tests/test-appstore-screenshots.sh",
-        "tools/tests/test-appstore-skills.sh"
+        "tools/tests/test-appstore-skills.sh",
+        // D-077: the appstore-creative skill and its unauthenticated creative producers. #282 lists the
+        // renamed skill and the exact files that its follow-up Issues create (#283 proposal sheet,
+        // #284 render extension, #285 preview recording and quality check, #286 preview encoding).
+        ".agents/skills/appstore-creative/LICENSE",
+        ".agents/skills/appstore-creative/SKILL.md",
+        ".agents/skills/appstore-creative/agents/openai.yaml",
+        ".agents/skills/appstore-creative/assets/goldie.config.ts",
+        ".agents/skills/appstore-creative/assets/ipad.config.ts",
+        ".agents/skills/appstore-creative/references/config.md",
+        ".agents/skills/appstore-creative/references/extension.md",
+        ".agents/skills/appstore-creative/references/flows.md",
+        ".agents/skills/appstore-creative/references/imagegen.md",
+        ".agents/skills/appstore-creative/references/patterns.md",
+        ".agents/skills/appstore-creative/references/preview-video.md",
+        ".agents/skills/appstore-creative/references/proposal.md",
+        ".agents/skills/appstore-creative/references/upstream.md",
+        ".claude/skills/appstore-creative",
+        "docs/appstore-creative.md",
+        "tools/appstore-creative-preview.sh",
+        "tools/appstore-creative-render.sh",
+        "tools/appstore-creative-sheet.sh",
+        "tools/lib/appstore-creative-preview.rb",
+        "tools/lib/appstore-creative-render.mjs",
+        "tools/lib/appstore-creative-sheet.rb",
+        "tools/lib/appstore-preview-quality.rb",
+        "tools/record-appstore-preview.sh",
+        "tools/tests/test-appstore-creative-preview.sh",
+        "tools/tests/test-appstore-creative-render.sh",
+        "tools/tests/test-appstore-creative-sheet.sh",
+        "tools/tests/test-appstore-preview-record.sh"
     ]
     let deniedPrefixes = [
         "App Store/", ".agents/skills/prepare-appstore-assets/",
@@ -2741,6 +2771,30 @@ func validateWorkflowSharedSkillSymlink(expectedHead: String, path: String) thro
     }
 }
 
+// A workflow-only change may remove a shared Claude skill link only together with the skill it points to,
+// as when a skill is renamed (#282): the Base link must be the exact `../../.agents/skills/<name>` link,
+// and the Head must no longer carry that skill. A link to a skill that still exists stays protected.
+func validateDeletedWorkflowSharedSkillSymlink(expectedBase: String, expectedHead: String, path: String) throws {
+    let components = try relativeComponents(path, at: "workflow-only shared skill symlink")
+    let skillNamePattern = try! NSRegularExpression(pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    guard components.count == 3,
+          components[0] == ".claude",
+          components[1] == "skills",
+          matches(components[2], regex: skillNamePattern) else {
+        throw ValidationFailure("workflow-only shared skill symlink deletion is invalid")
+    }
+    let skillName = components[2]
+    let link = try runGitProcess(["cat-file", "blob", "\(expectedBase):\(path)"])
+    guard link.status == 0,
+          String(data: link.stdout, encoding: .utf8) == "../../.agents/skills/\(skillName)" else {
+        throw ValidationFailure("workflow-only shared skill symlink deletion is invalid")
+    }
+    let remaining = try runGitProcess(["ls-tree", "-z", expectedHead, "--", ".agents/skills/\(skillName)"])
+    guard remaining.status == 0, remaining.stdout.isEmpty else {
+        throw ValidationFailure("workflow-only diff deletes the link of a skill that still exists: \(path)")
+    }
+}
+
 // The phase record path rule of tools/lib/workflow-release-phase.rb (RECORD_PATH, D-038).
 let workflowPhaseRecordPattern = try! NSRegularExpression(
     pattern: "^Config/releases/[a-z0-9][a-z0-9._-]*/phase-records/[a-z0-9][a-z0-9._-]*\\.json$"
@@ -2786,6 +2840,8 @@ func validateWorkflowDiff(expectedBase: String, expectedHead: String) throws {
             (status == "M" && oldMode == newMode && ["100644", "100755"].contains(oldMode))
         if status == "A" && oldMode == "000000" && newMode == "120000" {
             try validateWorkflowSharedSkillSymlink(expectedHead: expectedHead, path: path)
+        } else if status == "D" && oldMode == "120000" && newMode == "000000" {
+            try validateDeletedWorkflowSharedSkillSymlink(expectedBase: expectedBase, expectedHead: expectedHead, path: path)
         } else {
             guard regularMode else { throw ValidationFailure("workflow-only diff contains a type or mode change") }
         }

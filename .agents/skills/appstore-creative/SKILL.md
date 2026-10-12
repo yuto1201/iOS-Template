@@ -1,12 +1,12 @@
 ---
-name: goldie
+name: appstore-creative
 description: >-
-  GoldieでiOSアプリのApp Store用スクリーンショットを装飾・編集し、依頼時に
-  Simulator撮影やプレビュー動画を作る。Goldieの導入、ストア用スクショ、
+  Goldieを土台に、iOSアプリのApp Store用スクリーンショットを装飾・編集し、依頼時に
+  Simulator撮影やプレビュー動画を作る（D-077）。Goldieの導入、ストア用スクショ、
   画像の見出し・背景・端末枠の変更に使う。通常のUI検証スクショには使わない。
 ---
 
-# Goldie for Codex
+# App Store creative (Goldie-based)
 
 Use official **Goldie 0.3.1** as the renderer; this skill adapts its workflow for
 Codex and iOS-Template. Read [provenance](references/upstream.md) when installing

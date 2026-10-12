@@ -84,7 +84,7 @@ module IOSTemplate
     APPLICATION_FIXTURE_KEYS = %w[fixtureRoot project route schemaVersion skillRoot toolPaths].freeze
     APPLICATION_FIXTURE_ROUTE = "tracked-fixture-v1"
     APPLICATION_FIXTURE_PROTECTED_SKILL_NAMES = %w[
-      app-bootstrap app-icon cross-model-review external-ops goldie ios-3d-assets
+      app-bootstrap app-icon appstore-creative cross-model-review external-ops ios-3d-assets
       ios-media-assets ios-system-experiences ios-verify plan-issue-batch
       prepare-appstore-assets report-template-issue ship-issue ship-issue-batch
       spec-workflow submit-appstore-release supabase-ops ui-direction

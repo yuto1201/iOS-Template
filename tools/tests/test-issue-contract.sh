@@ -756,9 +756,9 @@ while IFS= read -r protected_skill; do
 done <<'PROTECTED_SKILLS'
 app-bootstrap
 app-icon
+appstore-creative
 cross-model-review
 external-ops
-goldie
 ios-3d-assets
 ios-media-assets
 ios-system-experiences

@@ -71,7 +71,7 @@ printf '%s\n' 'テンプレートの手順を追記した。' >>"$template/docs/
 printf '%s\n' 'テンプレート側の追記。' >>"$template/docs/AUTHORITY.md"                 # conflict
 printf '%s\n' '# New guide' '' 'テンプレートが追加した文書。' >"$template/docs/new-guide.md"  # missing
 ln -s new-guide.md "$template/docs/new-guide-link.md"                                 # missing symlink
-git -C "$template" rm -q docs/goldie.md                                               # deleted in template
+git -C "$template" rm -q docs/appstore-creative.md                                               # deleted in template
 printf '%s\n' '同期testの追記。' >>"$template/docs/README.md"                         # transformed safe update
 printf '%s\n' '旧名TemplateAppを含む追記。' >>"$template/docs/security.md"            # identity regression
 chmod +x "$template/tools/lib/bounded-command.rb"                                     # mode-only update
@@ -237,7 +237,7 @@ done
 cmp -s "$template/docs/workflow.md" "$app/docs/workflow.md" || { echo 'safe update not applied' >&2; exit 1; }
 cmp -s "$template/docs/new-guide.md" "$app/docs/new-guide.md" || { echo 'missing file not added' >&2; exit 1; }
 [[ -L "$app/docs/new-guide-link.md" && "$(readlink "$app/docs/new-guide-link.md")" == new-guide.md ]] || { echo 'symlink not added' >&2; exit 1; }
-[[ ! -e "$app/docs/goldie.md" ]] || { echo 'template deletion not applied' >&2; exit 1; }
+[[ ! -e "$app/docs/appstore-creative.md" ]] || { echo 'template deletion not applied' >&2; exit 1; }
 [[ -x "$app/tools/lib/bounded-command.rb" ]] || { echo 'mode update not applied' >&2; exit 1; }
 tail -n 1 "$app/docs/README.md" | grep -Fxq '同期testの追記。' || { echo 'transformed update not applied' >&2; exit 1; }
 ! grep -Fq 'TemplateApp' "$app/docs/README.md" || { echo 'the transformed README has the template name' >&2; exit 1; }
@@ -249,7 +249,7 @@ APPLY="$work/apply.json" CODEX_FILES="$codex_files" NEW="$new" NEXT_DECISION="$n
   abort "apply status: #{result}" unless result["status"] == "applied" && result["approver"] == "codex"
   written = %w[docs/README.md docs/new-guide-link.md docs/new-guide.md docs/workflow.md specs/decisions.md tools/lib/bounded-command.rb]
   abort "written: #{result["written"]}" unless result["written"] == written
-  deleted = (ENV.fetch("CODEX_FILES").split + ["App Store/screenshots/README.md", "docs/goldie.md"]).sort
+  deleted = (ENV.fetch("CODEX_FILES").split + ["App Store/screenshots/README.md", "docs/appstore-creative.md"]).sort
   abort "deleted: #{result["deleted"]}" unless result["deleted"] == deleted && ENV.fetch("CODEX_FILES").split.length >= 1
   abort "decisions: #{result["decisionsAppended"]}" unless result["decisionsAppended"] == [ENV.fetch("NEXT_DECISION")]
   abort "manual: #{result["manual"]}" unless (%w[docs/AUTHORITY.md docs/security.md specs/decisions.md] - result["manual"]).empty?
@@ -306,7 +306,7 @@ git -C "$legacy_app" checkout -q -b template-sync/11
 report "$legacy_app" "$work/plan-legacy"
 "$sync" approve --plan "$work/plan-legacy/plan.json" --approver user --reference "$comment_url" --output "$work/approval-legacy.json" >/dev/null
 "$sync" apply --plan "$work/plan-legacy/plan.json" --approval "$work/approval-legacy.json" --app-root "$legacy_app" --work-dir "$work/cache" >"$work/apply-legacy.json"
-for path in .codex/agents/ios-reviewer.toml 'App Store/screenshots/README.md' specs/acceptance.md docs/goldie.md; do
+for path in .codex/agents/ios-reviewer.toml 'App Store/screenshots/README.md' specs/acceptance.md docs/appstore-creative.md; do
   [[ -e "$legacy_app/$path" ]] || { echo "deleted without base ownership: $path" >&2; exit 1; }
 done
 PLAN="$work/plan-legacy/plan.json" APPLY="$work/apply-legacy.json" ruby -rjson -e '
