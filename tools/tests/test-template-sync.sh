@@ -6,7 +6,8 @@ set -euo pipefail
 # files rebuilt from the frozen template Identity) as its base commit, then an intermediate commit
 # and a commit with template-side changes; synthetic target repositories cover a recorded base,
 # an unknown base judged by each file's provenance (D-078), a non-template repository, app-side
-# changes, Identity transform, and a decision-number collision.
+# changes, Identity transform, and a decision-number collision. The preflight (D-078) runs on a
+# synthetic target with a fake gh that answers only read-only list queries.
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby swiftc tar shasum
@@ -475,5 +476,282 @@ TEMPLATE="$template" TOOL_X="$tool_x" TOOL_Y="$tool_y" WORK="$work/inferred-tool
   history = sync.file_history(root, y, ownership, paths, app, identity, new_raw, trees["new"], "applied", work)
   abort "inferred base should be X2, not #{history[:inferred]}" unless history[:inferred] == {"commit" => x, "matchedFiles" => 2}
 ' "$repo_root"
+
+# --- preflight: other work in progress and the size of the change (D-078) --------------------
+# The target is on main with a recorded base. A fake gh, first in PATH, answers only the two read-only
+# list queries, from FAKE_GH_ISSUES and FAKE_GH_PRS (FAKE_GH_FAIL makes one fail or answer something
+# that is not JSON), and refuses anything else, so no case reaches GitHub.
+fake_bin="$work/fake-bin"
+gh_log="$work/gh-calls.log"
+mkdir -p "$fake_bin" "$work/plans" "$work/preflight"
+cat >"$fake_bin/gh" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$FAKE_GH_LOG"
+case "$*" in
+  'issue list --repo test-owner/garden-notes --state open --limit 1000 --json number,title,labels') kind=issue answer=${FAKE_GH_ISSUES:-[]} ;;
+  'pr list --repo test-owner/garden-notes --state open --limit 1000 --json number,title,headRefName') kind=pr answer=${FAKE_GH_PRS:-[]} ;;
+  *) echo "fake gh: unexpected call: $*" >&2; exit 2 ;;
+esac
+case "${FAKE_GH_FAIL:-}" in
+  "$kind") echo 'HTTP 401: Bad credentials (https://api.github.com/graphql)' >&2; exit 1 ;;
+  "$kind-garbage") echo 'Welcome to GitHub CLI!'; exit 0 ;;
+esac
+printf '%s\n' "$answer"
+EOF
+chmod +x "$fake_bin/gh"
+
+target="$work/target"
+make_app "$target"
+git -C "$target" symbolic-ref HEAD refs/heads/main
+(cd "$target" && BASE="$base" ruby -rjson -e '
+  File.write("Config/template-base.json", JSON.pretty_generate({
+    "schemaVersion" => 1, "templateRepository" => "yuto1201/iOS-Template", "baseCommit" => ENV.fetch("BASE"),
+    "recordedAt" => "2026-10-05T00:00:00Z", "method" => "created"
+  }) + "\n")
+')
+commit_all "$target" created
+"$template/tools/template-sync.sh" report --app-root "$target" --output-dir "$work/target-report" --work-dir "$work/cache" >/dev/null
+
+preflight_cli() {
+  PATH="$fake_bin:$PATH" FAKE_GH_LOG="$gh_log" "$template/tools/template-sync.sh" preflight "$@"
+}
+
+# run_preflight NAME PLAN: one preflight of the target. Afterwards the target's status, HEAD and every
+# byte, its .git included, must be what they were (AC-6).
+run_preflight() {
+  local name=$1 plan=$2 status head before
+  status=$(GIT_OPTIONAL_LOCKS=0 git -C "$target" status --porcelain --untracked-files=all)
+  head=$(git -C "$target" rev-parse HEAD)
+  before=$(snapshot "$target")
+  preflight_cli --app-root "$target" --repo test-owner/garden-notes --plan "$plan" --output-dir "$work/preflight/$name" \
+    --now 2026-10-13T00:00:00Z >"$work/preflight/$name.out"
+  [[ "$(snapshot "$target")" == "$before" && "$(git -C "$target" rev-parse HEAD)" == "$head" &&
+     "$(GIT_OPTIONAL_LOCKS=0 git -C "$target" status --porcelain --untracked-files=all)" == "$status" ]] ||
+    { echo "preflight $name changed the target" >&2; exit 1; }
+}
+
+# expect_preflight NAME STATUS FINDING-KINDS SIZE REASON-KINDS: preflight.json says exactly this, the
+# printed summary agrees, and preflight.md shows the status and every reason.
+expect_preflight() {
+  RESULT="$work/preflight/$1" STATUS=$2 KINDS=$3 SIZE=$4 REASONS=$5 ruby -rjson -rdigest -e '
+    dir = ENV.fetch("RESULT")
+    result = JSON.parse(File.read(File.join(dir, "preflight.json")))
+    summary = JSON.parse(File.read("#{dir}.out"))
+    markdown = File.read(File.join(dir, "preflight.md"))
+    kinds = result["findings"].map { |finding| finding["kind"] }
+    reasons = result.dig("size", "reasons")
+    abort "#{dir}: #{result["status"]} with #{kinds}" unless result["status"] == ENV.fetch("STATUS") && kinds == ENV.fetch("KINDS").split
+    abort "#{dir}: size #{result["size"]}" unless result.dig("size", "estimate") == ENV.fetch("SIZE") && reasons.map { |reason| reason["kind"] } == ENV.fetch("REASONS").split
+    abort "#{dir}: summary #{summary}" unless summary.values_at("status", "size", "output", "planDigest") == [result["status"], ENV.fetch("SIZE"), dir, result.dig("plan", "digest")] &&
+      summary["preflightDigest"] == "sha256:#{Digest::SHA256.file(File.join(dir, "preflight.json")).hexdigest}"
+    abort "#{dir}: preflight.md lacks the status" unless markdown.include?("## ほかの作業中か: #{result["status"] == "busy" ? "作業中" : "作業中ではない"}\n")
+    abort "#{dir}: preflight.md lacks a reason" unless reasons.all? { |reason| markdown.include?("- 理由: #{reason["message"]}\n") }
+  '
+}
+
+# expect_findings NAME JSON: the findings, exactly.
+expect_findings() {
+  RESULT="$work/preflight/$1/preflight.json" EXPECTED=$2 ruby -rjson -e '
+    findings = JSON.parse(File.read(ENV.fetch("RESULT")))["findings"]
+    abort "#{ENV["RESULT"]}: #{findings}" unless findings == JSON.parse(ENV.fetch("EXPECTED"))
+  '
+}
+
+expect_markdown() {
+  grep -Fq -- "$2" "$work/preflight/$1/preflight.md" || { echo "preflight $1 lacks: $2" >&2; exit 1; }
+}
+
+# craft_plan NAME RUBY: the target's plan at the limits of a normal change (30 files to write, 10 to
+# review by hand, only template files), then changed by RUBY, which gets `plan` and `set.call(action,
+# count)` for more template files. plan.md is rendered again, so preflight accepts it as a report's plan.
+craft_plan() {
+  mkdir "$work/plans/$1"
+  PLAN="$work/target-report/plan.json" OUT="$work/plans/$1" CHANGE=$2 ruby -r"$template/tools/lib/template-sync.rb" -rjson -e '
+    plan = JSON.parse(File.read(ENV.fetch("PLAN")))
+    plan["files"].each { |file| file["action"] = %w[app template-only].include?(file["category"]) ? "skip" : "none" }
+    plan["decisions"].merge!("collisions" => [], "append" => [])
+    set = lambda do |action, count|
+      chosen = plan["files"].select { |file| file["category"] == "template" && file["action"] == "none" }.first(count)
+      abort "the plan has too few template files" unless chosen.length == count
+      chosen.each { |file| file["action"] = action }
+    end
+    set.call("add", 10)
+    set.call("update", 10)
+    set.call("delete", 10)
+    set.call("manual", 10)
+    eval(ENV.fetch("CHANGE"))
+    File.write(File.join(ENV.fetch("OUT"), "plan.json"), TemplateSync.canonical_json(plan))
+    File.write(File.join(ENV.fetch("OUT"), "plan.md"), TemplateSync.render_markdown(plan))
+  '
+}
+craft_plan normal ''
+normal_plan="$work/plans/normal/plan.json"
+
+# AC-3: with nothing in progress the target is idle; an untracked file alone keeps it idle.
+run_preflight idle "$normal_plan"
+expect_preflight idle idle '' normal ''
+PLAN="$normal_plan" RESULT="$work/preflight/idle/preflight.json" HEAD=$(git -C "$target" rev-parse HEAD) ruby -rjson -rdigest -e '
+  result = JSON.parse(File.read(ENV.fetch("RESULT")))
+  abort "plan digest: #{result["plan"]}" unless result.dig("plan", "digest") == "sha256:#{Digest::SHA256.file(ENV.fetch("PLAN")).hexdigest}"
+  abort "heads: #{result}" unless result.dig("plan", "appHead") == ENV.fetch("HEAD") && result.dig("app", "head") == ENV.fetch("HEAD")
+  abort "counts at the limits: #{result["size"]}" unless result["size"].values_at("writeFiles", "manualFiles") == [30, 10]
+  abort "untracked: #{result["app"]}" unless result.dig("app", "untracked") == []
+'
+printf '%s\n' 'note' >"$target/local-note.txt"
+run_preflight untracked "$normal_plan"
+expect_preflight untracked idle '' normal ''
+expect_markdown untracked '未追跡のファイルがあります（ほかの作業中かの判定には数えません）: `local-note.txt`'
+rm "$target/local-note.txt"
+
+# Each working-state label, and any blocked:* label, makes an open Issue busy; other labels do not.
+for label in state:claimed state:in-progress state:verify-passed state:review-requested state:changes-requested \
+  state:approved-for-merge state:paused blocked:user blocked:dependency; do
+  name="issue-${label/:/-}"
+  FAKE_GH_ISSUES="[{\"number\":3,\"title\":\"提案中\",\"labels\":[{\"name\":\"state:proposed\"},{\"name\":\"type:feature\"}]},
+    {\"number\":12,\"title\":\"作業中のIssue\",\"labels\":[{\"name\":\"type:feature\"},{\"name\":\"$label\"}]}]" \
+    run_preflight "$name" "$normal_plan"
+  expect_preflight "$name" busy issue normal ''
+  expect_findings "$name" "[{\"kind\":\"issue\",\"number\":12,\"title\":\"作業中のIssue\",\"labels\":[\"$label\"]}]"
+  expect_markdown "$name" "- Issue #12「作業中のIssue」（${label}）"
+done
+
+FAKE_GH_PRS='[{"number":5,"title":"Add a widget","headRefName":"claude/5-add-a-widget"}]' run_preflight pull-request "$normal_plan"
+expect_preflight pull-request busy pull-request normal ''
+expect_findings pull-request '[{"kind":"pull-request","number":5,"title":"Add a widget","branch":"claude/5-add-a-widget"}]'
+expect_markdown pull-request '- 開いているPR #5「Add a widget」（ブランチ`claude/5-add-a-widget`）'
+
+git -C "$target" worktree add -q -b feature "$work/target-feature"
+run_preflight worktree "$normal_plan"
+expect_preflight worktree busy worktree normal ''
+expect_findings worktree "[{\"kind\":\"worktree\",\"path\":\"$work/target-feature\",\"branch\":\"feature\",\"head\":\"$(git -C "$target" rev-parse HEAD)\"}]"
+expect_markdown worktree "- 本体以外のworktree \`$work/target-feature\`（ブランチ\`feature\`）"
+# A linked worktree is not the main checkout, so it cannot stand for the target.
+expect_failure preflight-linked-worktree '--app-root must be the main checkout of the target' \
+  preflight_cli --app-root "$work/target-feature" --repo test-owner/garden-notes --plan "$normal_plan" --output-dir "$work/preflight/linked"
+git -C "$target" worktree remove "$work/target-feature"
+git -C "$target" branch -q -D feature
+
+git -C "$target" checkout -q -b other
+run_preflight branch "$normal_plan"
+expect_preflight branch busy branch normal ''
+expect_findings branch '[{"kind":"branch","branch":"other"}]'
+expect_markdown branch '- 本体のcheckoutが`main`ではなく`other`にいます。'
+git -C "$target" checkout -q --detach main
+run_preflight detached "$normal_plan"
+expect_preflight detached busy branch normal ''
+expect_findings detached '[{"kind":"branch","branch":null}]'
+expect_markdown detached '（detached HEAD）'
+git -C "$target" checkout -q main
+git -C "$target" branch -q -D other
+
+# A tracked change counts whether it is staged or not.
+printf '%s\n' 'ローカルの変更。' >>"$target/docs/workflow.md"
+printf '%s\n' 'staged' >"$target/docs/staged.md"
+git -C "$target" add docs/staged.md
+run_preflight uncommitted "$normal_plan"
+expect_preflight uncommitted busy uncommitted-changes normal ''
+expect_findings uncommitted '[{"kind":"uncommitted-changes","paths":["docs/staged.md","docs/workflow.md"]}]'
+expect_markdown uncommitted '- 本体のcheckoutに未commitの変更があります: `docs/staged.md`、`docs/workflow.md`'
+git -C "$target" rm -q --cached docs/staged.md
+rm "$target/docs/staged.md"
+git -C "$target" checkout -q -- docs/workflow.md
+
+# AC-4: each reason alone makes the change large, and is listed.
+craft_plan unknown-base 'plan["base"] = {"status" => "unknown", "reason" => "Config/template-base.jsonがありません。"}'
+craft_plan invalid-base 'plan["base"] = {"status" => "invalid", "reason" => "Config/template-base.jsonを読めません。"}'
+craft_plan many-writes 'set.call("update", 1)'
+craft_plan many-manual 'set.call("manual", 1)'
+craft_plan collision 'plan["decisions"]["collisions"] = [{"id" => "D-001", "template" => "テンプレートの決定", "app" => "アプリの決定"}]'
+craft_plan no-identity 'plan["app"]["identity"] = nil'
+craft_plan appended-decision 'plan["decisions"]["append"] = ["D-999"]'
+for entry in unknown-base:base-unknown invalid-base:base-unknown many-writes:many-writes many-manual:many-manual \
+  collision:decision-collision no-identity:identity-unavailable appended-decision:shared-settings; do
+  run_preflight "size-${entry%%:*}" "$work/plans/${entry%%:*}/plan.json"
+  expect_preflight "size-${entry%%:*}" idle '' large "${entry#*:}"
+done
+expect_markdown size-many-writes '- 理由: 書き込むファイルが31個で、30個を超えています。'
+expect_markdown size-many-manual '- 理由: 手で確認するファイルが11個で、10個を超えています。'
+expect_markdown size-unknown-base '- 理由: 基準commitが分かりません。Config/template-base.jsonがありません。'
+expect_markdown size-collision '- 理由: 決定事項の番号が衝突しています（D-001）。'
+# Every shared setting counts once the plan does anything to it. One template file leaves the manual
+# review, so the shared setting is the only reason.
+for path in AGENTS.md Config/repository-tests.json specs/decisions.md Config/dedicated-simulators.json; do
+  name="shared-${path//\//-}"
+  TOUCH=$path craft_plan "$name" 'plan["files"].find { |file| file["action"] == "manual" }["action"] = "none"
+    plan["files"].find { |file| file["path"] == ENV.fetch("TOUCH") }["action"] = "manual"'
+  run_preflight "$name" "$work/plans/$name/plan.json"
+  expect_preflight "$name" idle '' large shared-settings
+  expect_markdown "$name" "- 理由: 共有の設定（\`$path\`）に触れます。"
+done
+
+# Reports as written: the target's own plan changes specs/decisions.md; app2 has no base, app1 a decision
+# collision, and app3 no Identity. Those three plans were made for other repositories, which the result notes.
+FAKE_GH_PRS='[{"number":8,"title":"Sync the template","headRefName":"claude/8-sync"}]' run_preflight real-target "$work/target-report/plan.json"
+run_preflight real-no-base "$work/report2/plan.json"
+run_preflight real-collision "$work/report1/plan.json"
+run_preflight real-no-identity "$work/report3/plan.json"
+for entry in real-target:busy:shared-settings real-no-base:idle:base-unknown real-collision:idle:decision-collision \
+  real-no-identity:idle:identity-unavailable; do
+  IFS=: read -r name status reason <<<"$entry"
+  RESULT="$work/preflight/$name/preflight.json" STATUS=$status REASON=$reason ruby -rjson -e '
+    result = JSON.parse(File.read(ENV.fetch("RESULT")))
+    abort "#{ENV["RESULT"]}: #{result}" unless result["status"] == ENV.fetch("STATUS") && result.dig("size", "estimate") == "large" &&
+      result.dig("size", "reasons").any? { |reason| reason["kind"] == ENV.fetch("REASON") }
+  '
+done
+expect_markdown real-target '- 理由: 共有の設定（`specs/decisions.md`）に触れます。'
+expect_markdown real-no-base "計画は取り込み先の別のHEAD（\`$(git -C "$app2" rev-parse HEAD)\`）で作られています。"
+! grep -Fq '計画は取り込み先の別のHEAD' "$work/preflight/real-target/preflight.md" || { echo 'the target plan was taken for another HEAD' >&2; exit 1; }
+
+# AC-5: busy advises waiting until the other work is done, and an idle large change advises not starting
+# other work meanwhile. Every result says that parallel worktrees are not recommended for a large change
+# and leaves that choice to the user; none starts or decides parallel work.
+for name in idle pull-request size-many-writes real-target; do
+  expect_markdown "$name" '- 並行して進めるなら、worktreeを分けて行えます。ただし、大きい変更では並行をおすすめしません。'
+  expect_markdown "$name" '- 並行して進めるかは、ユーザーの明示の指示だけで決めます。この判定は並行するかを決めません。'
+done
+for name in pull-request real-target; do
+  expect_markdown "$name" '- ほかの作業中なので、取り込みを始めません。上の作業が終わるまで待ってから取り込むことをおすすめします。'
+done
+expect_markdown size-many-writes '- ほかの作業中ではありません。大きい変更なので、取り込みが終わるまでほかの作業を始めずに待つことをおすすめします。'
+for name in size-many-writes real-target; do
+  expect_markdown "$name" 'ただし、大きい変更では並行をおすすめしません。今回は大きい変更です。'
+done
+expect_markdown idle '- ほかの作業中ではありません。取り込み先の単独の作業として、テンプレート同期Issueで進められます。'
+! grep -Fq '今回は大きい変更です。' "$work/preflight/idle/preflight.md" || { echo 'a normal change was called large' >&2; exit 1; }
+if grep -E '並行(して|で)(進めます|取り込みます|行います)' "$work"/preflight/*/preflight.md; then
+  echo 'a preflight decided to work in parallel' >&2
+  exit 1
+fi
+
+# AC-6: when gh fails, answers something that is not JSON or not the expected list, or may have cut the
+# list off, the preflight stops with no result and the target unchanged, although the target is idle.
+expect_no_result() {
+  local label=$1 message=$2 before
+  before=$(snapshot "$target")
+  expect_failure "preflight-$label" "$message" \
+    preflight_cli --app-root "$target" --repo test-owner/garden-notes --plan "$normal_plan" --output-dir "$work/preflight/$label"
+  [[ ! -e "$work/preflight/$label" && "$(snapshot "$target")" == "$before" ]] || { echo "preflight $label left a result or changed the target" >&2; exit 1; }
+}
+FAKE_GH_FAIL=issue expect_no_result gh-issue-fails 'gh issue list failed (HTTP 401: Bad credentials'
+FAKE_GH_FAIL=pr expect_no_result gh-pr-fails 'gh pr list failed (HTTP 401: Bad credentials'
+FAKE_GH_FAIL=issue-garbage expect_no_result gh-issue-garbage 'gh issue list returned output that is not JSON; cannot tell whether test-owner/garden-notes is busy'
+FAKE_GH_FAIL=pr-garbage expect_no_result gh-pr-garbage 'gh pr list returned output that is not JSON; cannot tell whether test-owner/garden-notes is busy'
+FAKE_GH_ISSUES='[{"number":"1","title":"x","labels":[]}]' expect_no_result gh-issue-unexpected 'gh issue list returned an unexpected answer'
+FAKE_GH_ISSUES=$(ruby -rjson -e 'puts JSON.generate((1..1000).map { |number| {"number" => number, "title" => "Issue #{number}", "labels" => []} })') \
+  expect_no_result gh-issue-limit 'gh issue list returned 1000 entries and may have left some out'
+expect_failure preflight-repo '--repo must be owner/name' \
+  preflight_cli --app-root "$target" --repo garden-notes --plan "$normal_plan" --output-dir "$work/preflight/bad-repo"
+expect_failure preflight-output-inside '--output-dir must not be inside the app repository' \
+  preflight_cli --app-root "$target" --repo test-owner/garden-notes --plan "$normal_plan" --output-dir "$target/preflight"
+expect_failure preflight-not-a-plan '--plan must be a plan.json file' \
+  preflight_cli --app-root "$target" --repo test-owner/garden-notes --plan "$work/preflight/idle/preflight.json" --output-dir "$work/preflight/not-a-plan"
+[[ ! -e "$work/preflight/bad-repo" && ! -e "$target/preflight" && ! -e "$work/preflight/not-a-plan" ]] || { echo 'a rejected preflight left a result' >&2; exit 1; }
+# gh was asked only the two read-only list queries.
+[[ "$(sort -u "$gh_log")" == "$(printf '%s\n' \
+  'issue list --repo test-owner/garden-notes --state open --limit 1000 --json number,title,labels' \
+  'pr list --repo test-owner/garden-notes --state open --limit 1000 --json number,title,headRefName')" ]] ||
+  { echo "unexpected gh calls: $(sort -u "$gh_log")" >&2; exit 1; }
 
 echo "template sync report tests passed"

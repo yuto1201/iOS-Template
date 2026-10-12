@@ -3,8 +3,9 @@
 
 # Template sync (D-074): classify every template file, then compare a derived or non-template
 # repository with the template and write a report and an apply plan. Without a recorded base, each
-# file is judged by its own provenance in the template's history (D-078). The report never writes to
-# the target repository; approving and applying a plan live in template-sync-apply.rb.
+# file is judged by its own provenance in the template's history (D-078). Before an import, preflight
+# judges from reads alone whether the target is busy with other work and how large the plan is (D-078).
+# Neither writes to the target repository; approving and applying a plan live in template-sync-apply.rb.
 
 require "digest"
 require "fileutils"
@@ -42,11 +43,12 @@ module TemplateSync
   module_function
 
   def run(argv)
-    command = argv.shift or fail!("usage: template-sync.sh check|report|codex-review|approve|apply [options]")
+    command = argv.shift or fail!("usage: template-sync.sh check|report|preflight|codex-review|approve|apply [options]")
     options = parse_options(argv)
     case command
     when "check" then puts JSON.generate(check(options))
     when "report" then puts JSON.generate(report(options))
+    when "preflight" then puts JSON.generate(preflight(options))
     when "codex-review" then puts JSON.generate(codex_review(options))
     when "approve" then puts JSON.generate(approve(options))
     when "apply" then puts JSON.generate(apply(options))
@@ -839,6 +841,259 @@ module TemplateSync
       list << "AGENTS.mdの変更文面のユーザー承認と、Issueコメントおよびdocs/agents-md-approvals.mdへの記録（D-075）"
     end
     list
+  end
+
+  # --- preflight (D-078) ----------------------------------------------------------------------
+
+  # The labels of an Issue someone is working on: claimed, in progress, verified, in review, sent back,
+  # waiting for merge, or paused. Any blocked:* label counts too.
+  WORKING_LABELS = %w[state:claimed state:in-progress state:verify-passed state:review-requested
+                      state:changes-requested state:approved-for-merge state:paused].freeze
+  BLOCKED_LABEL_PREFIX = "blocked:"
+  # One gh query lists at most this many open Issues or PRs; a full page may hide the rest.
+  GH_LIST_LIMIT = 1000
+  # A plan is large above these counts (D-078). D-078 lets a later Decision adjust them after real imports.
+  LARGE_WRITE_FILES = 30
+  LARGE_MANUAL_FILES = 10
+  WRITE_ACTIONS = %w[add update delete].freeze
+  UNTOUCHED_ACTIONS = %w[none skip].freeze
+  REPOSITORY_PATTERN = %r{\A[\w.-]+/[\w.-]+\z}
+
+  # Before an import starts, judge from reads alone whether the target is busy with other work and how
+  # large the planned change is. Nothing is written to the target and nothing changes on GitHub. The
+  # result only advises: whether to work in parallel is decided by the user's explicit instruction.
+  def preflight(options)
+    allow_options!(options, ["--app-root", "--repo", "--plan", "--output-dir"], ["--now"])
+    app_root = app_root!(options.fetch("--app-root"))
+    repository = options.fetch("--repo")
+    fail!("--repo must be owner/name") unless repository.match?(REPOSITORY_PATTERN)
+    output = output_dir!(options.fetch("--output-dir"), app_root)
+    now = timestamp!(options)
+    _plan_path, plan, plan_digest = read_plan(options.fetch("--plan"))
+    size = size_estimate(plan)
+
+    # Every check runs before anything is written, so a check that cannot run leaves no result at all.
+    head = git(app_root, "rev-parse", "--verify", "HEAD^{commit}").strip
+    checkout = checkout_findings(app_root)
+    findings = issue_findings(repository) + pull_request_findings(repository) + checkout[:findings]
+    result = {
+      "schemaVersion" => 1,
+      "generatedAt" => now,
+      "repository" => repository,
+      "app" => {"head" => head, "untracked" => checkout[:untracked]},
+      "plan" => {"digest" => plan_digest, "appHead" => plan.dig("app", "head"), "templateCommit" => plan.dig("template", "commit")},
+      "status" => findings.empty? ? "idle" : "busy",
+      "findings" => findings,
+      "size" => size
+    }
+    FileUtils.mkdir(output)
+    json = canonical_json(result)
+    File.write(File.join(output, "preflight.json"), json)
+    File.write(File.join(output, "preflight.md"), render_preflight(result))
+    {
+      "status" => result["status"], "size" => size["estimate"], "output" => output,
+      "preflightDigest" => "sha256:#{Digest::SHA256.hexdigest(json)}", "planDigest" => plan_digest
+    }
+  end
+
+  # Large when any D-078 reason applies, with every reason that applies. Of the work that must come
+  # first, only what the plan itself shows counts here (a decision-number collision and an unusable
+  # Identity); the analysis finds the rest.
+  def size_estimate(plan)
+    files = plan["files"]
+    valid = files.all? { |file| file.is_a?(Hash) && %w[path category action].all? { |key| file[key].is_a?(String) } } &&
+            plan["base"].is_a?(Hash) && plan["app"].is_a?(Hash) && plan["app"].key?("identity") &&
+            plan["decisions"].is_a?(Hash) && plan["decisions"]["append"].is_a?(Array) &&
+            plan["decisions"]["collisions"].is_a?(Array) && plan["decisions"]["collisions"].all? { |item| item.is_a?(Hash) && item["id"].is_a?(String) }
+    fail!("the plan lacks what the size estimate reads; make a new report") unless valid
+    writes = files.count { |file| WRITE_ACTIONS.include?(file["action"]) }
+    manual = files.count { |file| file["action"] == "manual" }
+    reasons = []
+    unless plan["base"]["status"] == "known"
+      reasons << {"kind" => "base-unknown", "message" => "基準commitが分かりません。#{plan["base"]["reason"]}"}
+    end
+    if writes > LARGE_WRITE_FILES
+      reasons << {"kind" => "many-writes", "count" => writes, "message" => "書き込むファイルが#{writes}個で、#{LARGE_WRITE_FILES}個を超えています。"}
+    end
+    if manual > LARGE_MANUAL_FILES
+      reasons << {"kind" => "many-manual", "count" => manual, "message" => "手で確認するファイルが#{manual}個で、#{LARGE_MANUAL_FILES}個を超えています。"}
+    end
+    # The shared settings are the mixed files (AGENTS.md, Config/repository-tests.json, specs/decisions.md
+    # and the other mixed rules). Appending decisions writes specs/decisions.md as well.
+    shared = files.select { |file| file["category"] == "mixed" && !UNTOUCHED_ACTIONS.include?(file["action"]) }.map { |file| file["path"] }
+    shared |= [DECISIONS_PATH] unless plan["decisions"]["append"].empty?
+    unless shared.empty?
+      shared.sort!
+      reasons << {"kind" => "shared-settings", "paths" => shared, "message" => "共有の設定（#{shared.map { |path| "`#{path}`" }.join("、")}）に触れます。"}
+    end
+    collisions = plan["decisions"]["collisions"].map { |item| item["id"] }
+    unless collisions.empty?
+      reasons << {"kind" => "decision-collision", "ids" => collisions,
+                  "message" => "決定事項の番号が衝突しています（#{collisions.join("、")}）。先にアプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移します。"}
+    end
+    if plan["app"]["identity"].nil?
+      reasons << {"kind" => "identity-unavailable", "message" => "取り込み先のIdentityが設定されていないか、読めません。先にIdentity bootstrapを済ませます。"}
+    end
+    {
+      "estimate" => reasons.empty? ? "normal" : "large", "writeFiles" => writes, "manualFiles" => manual, "reasons" => reasons,
+      "limits" => {"writeFiles" => LARGE_WRITE_FILES, "manualFiles" => LARGE_MANUAL_FILES}
+    }
+  end
+
+  # Open Issues with a working-state label, through the gh on PATH.
+  def issue_findings(repository)
+    gh_list(repository, "issue", "number,title,labels").map do |issue|
+      labels = issue["labels"]
+      fail!("gh issue list returned an unexpected answer; cannot tell whether #{repository} is busy") unless labels.is_a?(Array) && labels.all? { |label| label.is_a?(Hash) && label["name"].is_a?(String) }
+      working = labels.map { |label| label["name"] }.select { |name| WORKING_LABELS.include?(name) || name.start_with?(BLOCKED_LABEL_PREFIX) }.sort
+      working.empty? ? nil : {"kind" => "issue", "number" => issue["number"], "title" => issue["title"], "labels" => working}
+    end.compact.sort_by { |finding| finding["number"] }
+  end
+
+  # Every open PR, whatever its state, is work in progress.
+  def pull_request_findings(repository)
+    gh_list(repository, "pr", "number,title,headRefName").map do |pull|
+      fail!("gh pr list returned an unexpected answer; cannot tell whether #{repository} is busy") unless pull["headRefName"].is_a?(String)
+      {"kind" => "pull-request", "number" => pull["number"], "title" => pull["title"], "branch" => pull["headRefName"]}
+    end.sort_by { |finding| finding["number"] }
+  end
+
+  # One read-only list query. If gh fails or its answer cannot be read, the preflight stops: a target
+  # whose state could not be checked is never reported as idle.
+  def gh_list(repository, kind, fields)
+    args = [kind, "list", "--repo", repository, "--state", "open", "--limit", GH_LIST_LIMIT.to_s, "--json", fields]
+    stdout, stderr, status = Open3.capture3({"GH_PROMPT_DISABLED" => "1"}, "gh", *args)
+    fail!("gh #{kind} list failed (#{stderr.strip}); cannot tell whether #{repository} is busy") unless status.success?
+    entries = JSON.parse(stdout.force_encoding(Encoding::UTF_8))
+    valid = entries.is_a?(Array) && entries.all? { |entry| entry.is_a?(Hash) && entry["number"].is_a?(Integer) && entry["title"].is_a?(String) }
+    fail!("gh #{kind} list returned an unexpected answer; cannot tell whether #{repository} is busy") unless valid
+    fail!("gh #{kind} list returned #{GH_LIST_LIMIT} entries and may have left some out; cannot tell whether #{repository} is busy") if entries.length >= GH_LIST_LIMIT
+    entries
+  rescue JSON::ParserError
+    fail!("gh #{kind} list returned output that is not JSON; cannot tell whether #{repository} is busy")
+  rescue Errno::ENOENT
+    fail!("gh is not on PATH; cannot tell whether #{repository} is busy")
+  end
+
+  # The target's own checkout: every worktree besides the main one, the main checkout on a branch other
+  # than main (or on none), and tracked changes there, staged or not. Untracked files are listed but do
+  # not count as busy: build output or a note left in the folder is not another task in progress, and
+  # apply checks every path it writes against the working tree before it writes.
+  def checkout_findings(app_root)
+    worktrees = worktree_records(app_root)
+    main = worktrees.first
+    main_path = main && !main.key?("bare") && File.directory?(main["worktree"]) ? File.realpath(main["worktree"]) : nil
+    fail!("--app-root must be the main checkout of the target, not a linked worktree") unless main_path == app_root
+    findings = worktrees.drop(1).map do |record|
+      {"kind" => "worktree", "path" => record["worktree"], "branch" => record["branch"]&.delete_prefix("refs/heads/"), "head" => record["HEAD"]}
+    end
+    branch = main["branch"]&.delete_prefix("refs/heads/")
+    findings << {"kind" => "branch", "branch" => branch} unless branch == "main"
+    tracked, untracked = working_changes(app_root)
+    findings << {"kind" => "uncommitted-changes", "paths" => tracked} unless tracked.empty?
+    {findings: findings, untracked: untracked}
+  end
+
+  # The records of `git worktree list --porcelain -z`; the first one is the main worktree.
+  def worktree_records(root)
+    records = []
+    current = nil
+    git(root, "worktree", "list", "--porcelain", "-z").force_encoding(Encoding::UTF_8).split("\0").each do |line|
+      if line.empty?
+        current = nil
+        next
+      end
+      key, value = line.split(" ", 2)
+      if key == "worktree"
+        current = {"worktree" => value}
+        records << current
+      elsif current
+        current[key] = value || true
+      else
+        fail!("could not read the worktrees of #{root}")
+      end
+    end
+    records
+  end
+
+  # Tracked changes and untracked files of a checkout, from its porcelain status.
+  def working_changes(root)
+    tokens = git(root, "status", "--porcelain=v1", "-z", "--untracked-files=normal").force_encoding(Encoding::UTF_8).split("\0")
+    tracked = []
+    untracked = []
+    until tokens.empty?
+      line = tokens.shift
+      code = line[0, 2]
+      path = line[3..-1]
+      if code == "??"
+        untracked << path
+      else
+        tracked << path
+        # A rename or a copy is followed by the path it came from.
+        tokens.shift if code.include?("R") || code.include?("C")
+      end
+    end
+    [tracked.sort, untracked.sort]
+  end
+
+  def render_preflight(result)
+    size = result["size"]
+    busy = result["status"] == "busy"
+    large = size["estimate"] == "large"
+    limits = size["limits"]
+    lines = []
+    lines << "# テンプレートの取り込みの事前の判定"
+    lines << ""
+    lines << "- 取り込み先: `#{result["repository"]}`（HEAD `#{result.dig("app", "head")}`）"
+    lines << "- 計画: `plan.json`（#{result.dig("plan", "digest")}）"
+    unless result.dig("plan", "appHead") == result.dig("app", "head")
+      lines << "- 計画は取り込み先の別のHEAD（`#{result.dig("plan", "appHead")}`）で作られています。取り込む前に、新しいレポートを作ってください。"
+    end
+    lines << "- この判定は読み取りだけで行い、取り込み先とGitHubへ何も書き込んでいません。"
+    lines << ""
+    lines << "## ほかの作業中か: #{busy ? "作業中" : "作業中ではない"}"
+    lines << ""
+    if busy
+      result["findings"].each { |finding| lines << "- #{finding_line(finding)}" }
+    else
+      lines << "作業中の状態のIssue、開いているPR、本体以外のworktree、`main`以外のブランチや未commitの変更がある本体のcheckoutは、どれもありません。"
+    end
+    untracked = result.dig("app", "untracked")
+    unless untracked.empty?
+      lines << ""
+      lines << "本体のcheckoutに未追跡のファイルがあります（ほかの作業中かの判定には数えません）: #{untracked.map { |path| "`#{path}`" }.join("、")}"
+    end
+    lines << ""
+    lines << "## 変更の大きさ: #{large ? "大きい" : "通常"}"
+    lines << ""
+    lines << "- 書き込むファイル: #{size["writeFiles"]}個（#{limits["writeFiles"]}個を超えると大きい変更）"
+    lines << "- 手で確認するファイル: #{size["manualFiles"]}個（#{limits["manualFiles"]}個を超えると大きい変更）"
+    size["reasons"].each { |reason| lines << "- 理由: #{reason["message"]}" }
+    lines << ""
+    lines << "## 進め方"
+    lines << ""
+    lines << if busy
+               "- ほかの作業中なので、取り込みを始めません。上の作業が終わるまで待ってから取り込むことをおすすめします。"
+             elsif large
+               "- ほかの作業中ではありません。大きい変更なので、取り込みが終わるまでほかの作業を始めずに待つことをおすすめします。"
+             else
+               "- ほかの作業中ではありません。取り込み先の単独の作業として、テンプレート同期Issueで進められます。"
+             end
+    lines << "- 並行して進めるなら、worktreeを分けて行えます。ただし、大きい変更では並行をおすすめしません。#{large ? "今回は大きい変更です。" : ""}"
+    lines << "- 並行して進めるかは、ユーザーの明示の指示だけで決めます。この判定は並行するかを決めません。"
+    lines << ""
+    lines.join("\n")
+  end
+
+  def finding_line(finding)
+    case finding["kind"]
+    when "issue" then "Issue ##{finding["number"]}「#{finding["title"]}」（#{finding["labels"].join("、")}）"
+    when "pull-request" then "開いているPR ##{finding["number"]}「#{finding["title"]}」（ブランチ`#{finding["branch"]}`）"
+    when "worktree" then "本体以外のworktree `#{finding["path"]}`（#{finding["branch"] ? "ブランチ`#{finding["branch"]}`" : "ブランチなし"}）"
+    when "branch"
+      finding["branch"] ? "本体のcheckoutが`main`ではなく`#{finding["branch"]}`にいます。" : "本体のcheckoutがどのブランチにもいません（detached HEAD）。"
+    when "uncommitted-changes" then "本体のcheckoutに未commitの変更があります: #{finding["paths"].map { |path| "`#{path}`" }.join("、")}"
+    end
   end
 
   # --- output ---------------------------------------------------------------------------------
