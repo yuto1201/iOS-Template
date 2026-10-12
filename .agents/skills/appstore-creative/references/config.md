@@ -15,8 +15,8 @@ The top-level version is pinned; npm resolves transitive dependencies into this
 runtime's package-lock.json. Retain that lock and use `npm ci --prefix
 "$GOLDIE_RUNTIME"` to recreate the same runtime. Don't share/overwrite another
 project's Node dependencies. If the runtime already exists, inspect version/lock
-before changing it. For a new machine, copy the adapted skill directory into
-`~/.codex/skills/appstore-creative` only when that destination does not already exist.
+before changing it. Keep the skill only in the repository: it calls the repository's tools, so do not
+copy it into a personal skills folder.
 
 ## Starter config
 
