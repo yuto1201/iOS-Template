@@ -131,6 +131,15 @@ ruby -rjson -e '
   abort "combination record" unless value.fetch("selection").fetch("type") == "combination" && tiles.map { |tile| tile.fetch("patternId") } == %w[A C C A A A]
 ' "$root/r1/selection.json"
 expect_failure reselect 'a selection is already recorded for this sheet and is never replaced' "$tool" select --sheet "$root/r1" --pattern A
+# A listed pattern that meets the rules is recorded by its ID on a fresh sheet.
+"$tool" build --spec "$workspace/proposal.json" --root "$root" --revision r3 >/dev/null
+"$tool" select --sheet "$root/r3" --pattern A >/dev/null
+ruby -rjson -e '
+  value = JSON.parse(File.read(ARGV[0])); record = JSON.parse(File.read(ARGV[1]))
+  abort "pattern selection type" unless value.fetch("selection") == {"type" => "pattern", "patternId" => "A"}
+  abort "pattern selection revision" unless value.fetch("revision") == "r3" && value.fetch("decision") == "user-explicit"
+  abort "pattern selection digest" unless value.fetch("sheetSha256") == record.fetch("sheetSha256")
+' "$root/r3/selection.json" "$root/r3/sheet.json"
 
 # A sheet changed after it was built cannot take a selection.
 cp -R "$root/r1" "$workspace/tampered"
