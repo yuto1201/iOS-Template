@@ -587,23 +587,24 @@ module TemplateSync
     transformed_paths = paths.select { |path| classify(ownership, path)&.dig(:transform) }.sort
     trees = {commit => new_xf}
     files = {}
-    targets = {}
+    matches = {}
     compared.each do |path, transformed|
       versions = states.fetch(path).map do |sha, raw|
         entry = if raw.nil? then nil
                 elsif transformed
                   trees[sha] = transformed_history(root, sha, identity, transformed_paths, work) unless trees.key?(sha)
                   # This commit's tool could not transform it, so the version cannot be compared.
-                  next nil if trees[sha].nil?
-                  read(trees[sha], path)
+                  trees[sha].nil? ? :untransformable : read(trees[sha], path)
                 elsif raw[0] == "160000" then Entry.new(raw[0], "gitlink:#{raw[1]}")
                 else Entry.new(raw[0], blobs.fetch(raw[1]))
                 end
-        {commit: sha, raw: raw, entry: entry}
-      end.compact
-      # The raw versions that hold the app's content; the inferred base looks for them in each tree.
-      targets[path] = versions.select { |version| version[:entry] == app[path] }.map { |version| version[:raw] }.to_set if transformed
+        {commit: sha, entry: entry}
+      end
+      # Whether the transformed content equals the app's from each of these commits until the next one.
+      # The same raw bytes can transform differently once the tool changes, so the content decides.
+      matches[path] = versions.to_h { |version| [version[:commit], version[:entry] == app[path]] } if transformed
       next unless differing.key?(path)
+      versions = versions.reject { |version| version[:entry] == :untransformable }
       # A state equal to the one before it introduced nothing. Identical bytes can come back later (a
       # revert, for example); the newest commit that introduced them is the one recorded.
       introduced = []
@@ -612,7 +613,7 @@ module TemplateSync
       found = introduced.find { |version| version[:entry] == app[path] }
       files[path] = found ? {commit: found[:commit], entry: found[:entry]} : {nearest: nearest_version(introduced, app[path])}
     end
-    {files: files, inferred: inferred_base(root, log, examined, app, targets)}
+    {files: files, inferred: inferred_base(root, log, examined, app, matches)}
   end
 
   # Each commit up to commit, newest first (no parent before its children), with the paths it changed
@@ -753,33 +754,29 @@ module TemplateSync
     nil
   end
 
-  # The commit whose tree has the most of the app's files exactly (D-078). It is only shown to the
-  # user; every decision comes from each file's own provenance. An untransformed file is looked up by
-  # the object name of the app's bytes; an Identity-transformed one by every raw version, from any
-  # commit, that transforms into the app's bytes. Only commits that change a file into the app's content
-  # can raise the count, so only those trees are read. Ties go to the newest commit.
-  def inferred_base(root, log, examined, app, targets)
+  # The commit at which the most of the app's files are exactly the template's (D-078). It is only shown
+  # to the user; every decision comes from each file's own provenance. Walking the history from the
+  # oldest commit, an untransformed file matches while its mode and object name equal the app's; an
+  # Identity-transformed one matches while the content its latest state transformed to, with that
+  # state's own tool, equals the app's. Only a commit that turns a file into a match can be the inferred
+  # base, so a later commit that changes none of them never wins a tie; among those, ties go to the newest.
+  def inferred_base(root, log, examined, app, matches)
     format = git(root, "rev-parse", "--show-object-format").strip
-    wanted = examined.to_h do |path, transformed|
-      [path, transformed ? targets.fetch(path) : Set[[app[path].mode, object_name(app[path], format)]]]
-    end
+    wanted = examined.reject { |_, transformed| transformed }.to_h { |path, _| [path, [app[path].mode, object_name(app[path], format)]] }
+    current = Hash.new(false)
+    count = 0
     best = nil
-    log.each do |sha, changes|
-      next unless changes.any? { |path, name| name && wanted[path]&.include?(name) }
-      tree = tree_entries(root, sha)
-      count = wanted.count { |path, names| names.include?(tree[path]) }
-      best = {"commit" => sha, "matchedFiles" => count} if best.nil? || count > best["matchedFiles"]
+    log.reverse_each do |sha, changes|
+      updates = changes.select { |path, _| wanted.key?(path) }.map { |path, name| [path, name == wanted[path]] }
+      updates += matches.select { |_, by_commit| by_commit.key?(sha) }.map { |path, by_commit| [path, by_commit[sha]] }
+      raised = updates.any? { |path, matched| matched && !current[path] }
+      updates.each do |path, matched|
+        count += (matched ? 1 : 0) - (current[path] ? 1 : 0)
+        current[path] = matched
+      end
+      best = {"commit" => sha, "matchedFiles" => count} if raised && (best.nil? || count >= best["matchedFiles"])
     end
     best
-  end
-
-  def tree_entries(root, sha)
-    git(root, "ls-tree", "-r", "-z", "--full-tree", sha).force_encoding(Encoding::UTF_8).split("\0").each_with_object({}) do |line, entries|
-      meta, path = line.split("\t", 2)
-      next if path.nil?
-      mode, _type, name = meta.split(" ")
-      entries[path] = [mode, name]
-    end
   end
 
   # The object name Git gives these bytes, so an app file can be found in the template's trees.

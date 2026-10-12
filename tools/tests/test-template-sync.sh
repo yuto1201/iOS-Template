@@ -430,4 +430,44 @@ TEMPLATE="$template" SIDE_X="$side_x" SIDE_Y="$side_y" WORK="$work/inferred" rub
   abort "inferred base should be X, not #{history[:inferred]}" unless history[:inferred] == {"commit" => x, "matchedFiles" => 2}
 ' "$repo_root"
 
+# The same raw bytes can transform differently once the transform tool changes, so a transformed file
+# counts only while the content its latest state transformed to equals the app's. On another side
+# branch, X2 changes docs/workflow.md; Y2 changes the transform tool, docs/workflow.md again and
+# docs/references.md. docs/README.md keeps the same raw bytes, but the replaced transform gives other
+# text from Y2 on. An app at X2 with Y2's docs/references.md matches X2 in README.md and workflow.md and
+# Y2 only in references.md, so X2 is the inferred base; counting the unchanged raw README.md at Y2
+# would tie X2 with Y2 and pick the newer Y2.
+git -C "$template" checkout -q -b provenance-tool
+printf '%s\n' '分岐2で追記した手順。' >>"$template/docs/workflow.md"
+commit_all "$template" tool-x
+tool_x=$(git -C "$template" rev-parse HEAD)
+printf '%s\n' '// side branch change to the transform tool' >>"$template/tools/bootstrap-app.swift"
+printf '%s\n' '分岐2でさらに追記した手順。' >>"$template/docs/workflow.md"
+printf '%s\n' '分岐2で追記した参照。' >>"$template/docs/references.md"
+commit_all "$template" tool-y
+tool_y=$(git -C "$template" rev-parse HEAD)
+git -C "$template" checkout -q -
+TEMPLATE="$template" TOOL_X="$tool_x" TOOL_Y="$tool_y" WORK="$work/inferred-tool" ruby -e '
+  require File.join(ARGV.fetch(0), "tools/lib/template-sync.rb")
+  sync = TemplateSync
+  root, x, y, work = ENV.fetch("TEMPLATE"), ENV.fetch("TOOL_X"), ENV.fetch("TOOL_Y"), ENV.fetch("WORK")
+  abort "README.md raw bytes changed" unless sync.blob(root, x, "docs/README.md") == sync.blob(root, y, "docs/README.md")
+  trees = %w[old new].to_h do |name|
+    dir = File.join(work, name)
+    FileUtils.mkdir_p(File.join(dir, "docs"))
+    File.write(File.join(dir, "docs/README.md"), "README by the #{name} tool\n")
+    [name, dir]
+  end
+  sync.define_singleton_method(:transformed_history) { |_root, sha, *_| sha == y ? trees["new"] : trees["old"] }
+  ownership = sync.load_ownership(sync.blob(root, y, sync::OWNERSHIP_PATH))
+  paths = %w[docs/README.md docs/workflow.md docs/references.md]
+  app = {"docs/README.md" => sync::Entry.new("100644", "README by the old tool\n"),
+         "docs/workflow.md" => sync::Entry.new("100644", sync.blob(root, x, "docs/workflow.md").b),
+         "docs/references.md" => sync::Entry.new("100644", sync.blob(root, y, "docs/references.md").b)}
+  identity = {"displayName" => "Garden Notes", "moduleName" => "GardenNotes", "appSlug" => "garden-notes", "bundleId" => "com.yuto.GardenNotes"}
+  new_raw = sync.export_tree(root, y, File.join(work, "raw-y"))
+  history = sync.file_history(root, y, ownership, paths, app, identity, new_raw, trees["new"], "applied", work)
+  abort "inferred base should be X2, not #{history[:inferred]}" unless history[:inferred] == {"commit" => x, "matchedFiles" => 2}
+' "$repo_root"
+
 echo "template sync report tests passed"
