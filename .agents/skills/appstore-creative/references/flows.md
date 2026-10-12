@@ -7,11 +7,11 @@ and are imported into Goldie for styling.
 ## Why Goldie capture is not used
 
 Goldie 0.3.1's `capture` has no explicit iOS UDID override. It selects the first
-Simulator named exactly `iPhone 17 Pro Max` in the newest matching installed iOS
-runtime, changes locale/appearance and **reinstalls the app, clearing its data**.
+Simulator whose name is exactly a model name in its own device table, in the newest
+matching installed iOS runtime, changes locale/appearance and **reinstalls the app, clearing its data**.
 iOS-Template captures only on its dedicated Simulators (D-063), named
-`<display name> iPhone 17 Pro Max` and `<display name> iPad Pro 13-inch (M5)`
-(D-070), so Goldie's selector never resolves to them. Do not run Goldie `capture`
+`<display name> iPhone 17 Pro` and `<display name> iPad Pro 13-inch (M5)`
+(D-070, D-079), so Goldie's selector never resolves to them. Do not run Goldie `capture`
 or preview recording, pass an invented `--udid` option, rename a device, or create
 a device that matches Goldie's selector.
 

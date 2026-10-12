@@ -16,10 +16,12 @@ if (!["ja", "en-US"].includes(locale))
   throw new Error("Create a separate config directory for ja or en-US");
 
 // Replace scene IDs, flow names and copy from the actual app before rendering.
-// Keep this file in goldie/<locale>/; out/ is generated beside it.
+// Keep this file in goldie/<locale>/; out/ is generated beside it. Render it only with
+//   tools/appstore-creative-render.sh render --config <this file> --device iphone-6.3 --locale <locale>
+// iphone-6.3 is the App Store iPhone size (1206x2622, D-079) that the render extension adds.
 const config: GoldieConfig = {
   appRoot, appPath, bundleId,
-  devices: ["iphone-6.9"],
+  devices: ["iphone-6.3"],
   locales: [locale],
   appearance: "light",
   frame: { variant: "17-pro-silver" },

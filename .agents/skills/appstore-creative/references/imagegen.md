@@ -11,7 +11,7 @@ strips and concept art. They never replace a real screen.
 
   ```sh
   codex exec --skip-git-repo-check -C "$WORK" -s workspace-write \
-    "Use your built-in image generation tool (not SVG, not code, not the CLI fallback) to create ONE image: <prompt>. Request a tall portrait size as close as possible to a 1320x2868 aspect ratio. Copy the generated PNG into the current directory as <name>.png, then print the source path and 'sips -g pixelWidth -g pixelHeight <name>.png'. Do nothing else."
+    "Use your built-in image generation tool (not SVG, not code, not the CLI fallback) to create ONE image: <prompt>. Request a tall portrait size as close as possible to a 1206x2622 aspect ratio. Copy the generated PNG into the current directory as <name>.png, then print the source path and 'sips -g pixelWidth -g pixelHeight <name>.png'. Do nothing else."
   ```
 
   For an edit (`scene`), attach the reference with `-i render.png` and say what must
@@ -29,9 +29,9 @@ an image of the app itself; the device and its screen come from real captures.
 
 ## Size
 
-A tall portrait request returned 851×1849 on 2026-10-12, the same aspect ratio as the
-1320×2868 iPhone tile. Scale generated material to the exact tile size before use,
-for example `sips -z 2868 1320 in.png --out out.png`, and inspect it for softness.
+A tall portrait request returned 851×1849 on 2026-10-12, within 0.1% of the aspect
+ratio of the 1206×2622 iPhone tile (D-079). Scale generated material to the exact tile
+size before use, for example `sips -z 2622 1206 in.png --out out.png`, and inspect it for softness.
 For iPad (2064×2752) or a `continuous` strip, ask for that aspect ratio and keep the
 subject inside the area every device crop keeps. Scaling and cropping are allowed for
 generated material only, never for real captures.

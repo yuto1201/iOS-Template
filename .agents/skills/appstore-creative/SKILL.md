@@ -40,8 +40,8 @@ for a native iOS-only project. Ask about platforms only if genuinely unresolved.
    avoid, the real screens worth showing, the tile count (up to 10), and locales.
 3. **Stage 1 — compare patterns.** Design three or four whole-set patterns that
    differ in story and composition, not only color. Draw every tile for real with
-   Goldie at full size, Japanese iPhone only. Each pattern may use one generated key
-   image once the render extension exists; use real captures and solid or gradient
+   Goldie and the render extension at full size, Japanese iPhone only. Each pattern
+   may use one generated key image; use real captures and solid or gradient
    backgrounds elsewhere. Build the sheet:
 
    ```sh
@@ -59,7 +59,7 @@ for a native iOS-only project. Ask about platforms only if genuinely unresolved.
    A vague answer ("like A, but brighter") is not a choice: build a new revision
    that applies it and ask again. Never edit a revision the user has seen.
 6. **Stage 2 — the full sample.** Generate the remaining images, render Japanese and
-   English (and iPad once the render extension exists), build a `preview` sheet,
+   English for iPhone and iPad, build a `preview` sheet,
    and repeat the choice for changes in a new revision.
 7. **Finish.** Export at the exact store sizes, inspect every image, and hand the
    adopted images to `prepare-appstore-assets`. Commit only `goldie/<locale>/`
@@ -76,14 +76,16 @@ Details: [proposal sheet](references/proposal.md), [tile kinds](references/patte
 | `device` | Real screen with styling | Goldie layouts and templates |
 | `pair` | Two screens, or one screen in two states | `duo` / `duo-tilt` |
 | `panorama` | One picture across two tiles | `panorama` / `panorama-duo` |
-| `continuous` | One background running through every tile | render extension (D-077, pending) |
+| `continuous` | One background running through every tile | `backgroundImage` strip (extension) |
 | `callout` | A magnified part of a real screen | crop beside the device |
-| `scene` | The real device inside a generated setting | render extension (D-077, pending) |
-| `concept` | A generated image and headline, no device | render extension (D-077, pending) |
+| `scene` | The real device inside a generated setting | generated `backgroundImage` (extension) |
+| `concept` | A generated image and headline, no device | `concept` layout (extension) |
 
-Goldie 0.3.1 draws image layers over the headline, so any full-tile generated image
-(a generated background, `continuous`, `scene`, `concept`) waits for the render
-extension. iPad 13-inch uses the same kinds through it as well (pending).
+Every App Store tile is rendered with `tools/appstore-creative-render.sh` (see
+[extension](references/extension.md)). The App Store iPhone size, iPhone 6.3-inch
+(1206×2622, `--device iphone-6.3`, D-079), and iPad 13-inch are extension devices, and
+Goldie 0.3.1 draws image layers over the headline, so every full-tile generated image
+(a generated background, `continuous`, `scene`, `concept`) needs the extension too.
 
 ## Rules (D-077)
 
@@ -112,14 +114,14 @@ Every new native capture runs `tools/capture-appstore-screenshots.sh` under
 `tools/with-ios-simulator-lock.sh`. It leases only the repository's dedicated
 iPhone and iPad Simulators through `tools/lib/ios-simulator-resource.rb` (D-063),
 which erases the device before each lease and shuts it down on release without
-creating or deleting a device. Since D-070 those devices are the App Store display
-sizes, so raw captures are already at the required pixel size; never crop, scale,
+creating or deleting a device. Since D-070 and D-079 those devices (iPhone 17 Pro and
+iPad Pro 13-inch (M5)) are the App Store display sizes, so raw captures are already at the required pixel size; never crop, scale,
 or composite them outside the `callout` rule. Import the raw images with the recipe
 in [references/config.md](references/config.md#import-existing-captures).
 
 Do not run Goldie's own `capture`. Goldie 0.3.1 has no UDID selector, picks the
-first Simulator named exactly `iPhone 17 Pro Max` (never the dedicated
-`<display name> iPhone 17 Pro Max`), and reinstalls the app there. Preserve images
+first Simulator whose name is exactly a model name in its own device table (never a
+dedicated `<display name> …` device), and reinstalls the app there. Preserve images
 and diagnostics outside the device and verify the released lease receipts before
 rendering. Never boot, erase, or install into a user or other-owner device.
 
@@ -174,6 +176,10 @@ typography guarantee. Studio listing scaffolding is a local preview only.
 
 Goldie Studio (`studio --no-open --port <available-port>`) remains available for
 fine-tuning a chosen pattern; capture its PID and confirm the URL before opening it.
+Goldie's own CLI (`frame`, `manifest`, `verify`) and Studio know only Goldie's own
+devices, reject the `concept` layout and ignore `backgroundImage`. Use Studio only to
+sketch a layout on Goldie's own iPhone device, then render every App Store tile with
+`tools/appstore-creative-render.sh`.
 
 Inspect every selected exported image, including raw-to-framed content, readable
 copy, locale parity, safe areas, order and actual pixel dimensions. `verify` checks
