@@ -818,3 +818,19 @@
   - 取り込みIssueの検証：取り込んだtoolとskillのrepository test、アプリのBuild、重要なUnit Test、日本語iPhoneのSmoke Testを行い、反対モデルの承認を必須にする。受け入れ条件には、取り込みの前と後でアプリのBuildとUnit Testが同じように通ることを含める。
 - Consequence: 実装は次の後続Issueに分ける。(1) ファイルごとの出どころと推定の基準を差分レポートと計画に入れる、(2) ほかの作業中かの判定と大きさの見積もり（`preflight`）、(3) 4項目の分析（`analyze`）、(4) `ios-template-sync`スキル、リンクを張るtool、`docs/template-sync.md`の更新。(1)から(3)は同じtoolを変えるため順に進め、(4)はそれらに依存する。テンプレートでのtestは、偽のテンプレートの履歴、偽の取り込み先、偽のGitHubで行い、実在するアプリへの取り込みを主張しない。実在するアプリへの取り込みは、それぞれのアプリのテンプレート同期Issueで行う。
 - Related Issue: #288
+
+## D-079: 専用iPhoneを、App Storeの必須画像サイズになったiPhone 17 Proにする
+
+- Date: 2026-10-13
+- Status: 確定
+- Supersedes: D-070のうち、専用iPhoneの機種をiPhone 17 Pro Max（1320×2868）とした部分と、D-077のうちApp Store用のiPhoneの画像をiPhone 6.9-inchで作るとした部分を置き換える。専用はiPhone 1台とiPad 1台だけ、AI検証とApp Store撮影の両方に使う、exact name・Device Type・Runtimeでちょうど1台を確認する、AIは端末を作成・clone・rename・削除しない、各caseの前にeraseする、`-parallel-testing-enabled NO`で実行する、派生アプリは表示名を前置した同じ機種を持つ、専用iPadをiPad Pro 13-inch (M5)とする、という規則は維持する。
+- Context: 2026-10-13にAppleのスクリーンショット仕様（App Store Connect Help「Screenshot specifications」）を確認すると、提出に必須のiPhoneの画像は「At least one screenshot for iPhone with Dynamic Island (medium display).」で、受け付ける寸法は1206×2622と1179×2556（iPhone 18 Pro、17 Pro、17、16 Pro、16、15 Pro、15、14 Pro）になっていた。D-070で選んだiPhone 17 Pro Max（1320×2868、Dynamic Island (large display)）は必須ではなくなった。iPadの必須は引き続き13-inch（2064×2752）で、プレビュー動画の寸法はiPhoneの中と大のどちらも886×1920、iPad 13-inchは1200×1600のまま変わらない。App Store Connect APIの画面種別には6.3-inchの値がなく、中サイズの画面に当たる値は`APP_IPHONE_61`と見られる。ユーザーは同日、専用iPhoneをiPhone 17 Proへ変えることを決めた。
+- Decision:
+  - Templateの専用iPhoneを`iOS-Template iPhone 17 Pro`（Device Type iPhone 17 Pro、1206×2622、Runtime iOS 27.0）に置き換える。専用iPadは`iOS-Template iPad Pro 13-inch (M5)`のままとする。派生アプリは表示名を前置した同じ機種（例：`Flower iPhone 17 Pro`）とする。
+  - App Store用のiPhoneの画像は、Dynamic Island (medium display)の寸法（1206×2622、1179×2556）で作る。提出の要件、撮影tool、画像判定、提出packageの検査、`appstore-creative`はこの寸法を使う。
+  - App Store Connectへの保存では、iPhoneの画像を`APP_IPHONE_61`の画面種別へ入れる。この対応は、最初の実際の保存で読み戻して確かめるまで、確認待ちとして扱う。
+  - 提出の要件（`App Store/submission/requirements.json`）は、撮影tool、画像判定、提出packageの検査が読む非認証の設定として、後続Issueが自分のHeadで正確なpathを列挙したうえでD-054のexact allowlistへ加えて変更できる。同じ後続Issueは、その直接のtest fixture（`tools/tests/fixtures/appstore/requirements.json`）と、iPhoneのfamilyのフォルダ名を固定値で持つ提出packageの検査の直接のtest（`tools/tests/test-appstore-package.sh`）も、同じ方法でallowlistへ加えて変更できる。提出packageの検査そのもの（`tools/validate-appstore-package.sh`）、実アプリのmetadata、採用画像、package内容、upload、提出は、これまでどおりrelease経路に残す。
+  - プレビュー動画の寸法（iPhone 886×1920、iPad 1200×1600）は変えない。
+  - 新しい専用iPhoneは、宣言の変更がmergeされた後にユーザーが`tools/setup-dedicated-simulators.sh`で作成する。AIは作成しない。古い`iOS-Template iPhone 17 Pro Max`はAIが削除せず、ユーザーが削除する。新しい端末ができるまで、iPhoneを使うネイティブの検証は`blocked:environment`とする。
+- Consequence: 実装は次の後続Issueに分ける。(1) 専用Simulatorの宣言、検証の文書とtest。(2) 提出の要件、撮影tool、画像判定、提出packageの検査、App Store Connectの画面種別の対応とtest。(2)は、`AGENTS.md`のworkflow-onlyで扱えるApp Store関連変更の文へ、この提出の要件とそのfixture／直接regression testを、ユーザーが承認した文面で加える。`appstore-creative`のiPhoneの寸法は、D-077の後続Issue（拡張層、録画と品質確認、動画の仕上げ）で、このDecisionに合わせて作る。2027年4月からiOS 27.1 SDK以降のアプリにiPhone Duoの画像が必須になるとAppleが予告しているが、このDecisionでは扱わない。派生アプリへの適用は、テンプレートの取り込み（D-074、D-078）とそれぞれのアプリのIssueで行う。
+- Related Issue: #290
