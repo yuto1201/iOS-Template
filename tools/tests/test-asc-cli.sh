@@ -199,6 +199,31 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   rescue AscCLI::Refused
     # Refused before any process invocation.
   end
+  # D-079: iphone-6.3 images upload as APP_IPHONE_61 and ipad-13 images as APP_IPAD_PRO_3GEN_129. The former
+  # APP_IPHONE_67 slot and iphone-6.9 folder are refused before asc runs.
+  screenshot_root = File.join(repo, 'App Store/screenshots')
+  screenshot_paths = %w[iphone-6.3 iphone-6.9 ipad-13].each_with_index.to_h do |family, index|
+    path = File.join(screenshot_root, "en-US/#{family}/01-primary.png")
+    FileUtils.mkdir_p(File.dirname(path))
+    File.binwrite(path, "synthetic screenshot #{index}")
+    [family, path]
+  end
+  File.write(File.join(screenshot_root, 'manifest.json'), JSON.generate({'schemaVersion'=>1, 'cases'=>screenshot_paths.values.map do |path|
+    {'path'=>path.delete_prefix(screenshot_root + '/'), 'digest'=>"sha256:#{Digest::SHA256.file(path).hexdigest}"}
+  end}))
+  upload = lambda do |family, display_type|
+    ['--operation', 'appstore.update_metadata', '--', 'screenshots', 'upload', '--version-localization', 'LOC1',
+     '--path', screenshot_paths.fetch(family), '--device-type', display_type]
+  end
+  out, = invoke.call(runner, upload.call('iphone-6.3', 'APP_IPHONE_61'))
+  check(JSON.parse(out).fetch('argv').each_cons(2).include?(['--device-type', 'APP_IPHONE_61']), 'iPhone screenshots upload as APP_IPHONE_61')
+  invoke.call(runner, upload.call('ipad-13', 'APP_IPAD_PRO_3GEN_129'))
+  [%w[iphone-6.3 APP_IPHONE_67], %w[iphone-6.3 APP_IPHONE_69], %w[iphone-6.9 APP_IPHONE_61], %w[iphone-6.9 APP_IPHONE_67]].each do |family, display_type|
+    _, err = invoke.call(runner, upload.call(family, display_type), {}, :failure)
+    check(err.include?('flag value is invalid'), "#{family} as #{display_type} was not refused by the adapter: #{err}")
+  end
+  check(File.read(File.join(root, 'tools/lib/asc-cli.rb'), encoding: 'UTF-8').match?(/D-079: iPhone screenshots use APP_IPHONE_61 .*pending\s+#\s+confirmation until the first real save is read back/m),
+    'the APP_IPHONE_61 mapping is not recorded as pending confirmation')
   invoke.call(runner, read_args.map { |arg| arg == 'appstore.inspect_app' ? 'appstore.update_metadata' : arg })
   out, err = invoke.call(runner, read_args+['--name','fixture-leak'])
   check(out.include?('[REDACTED]') && err.include?('[REDACTED]'), 'both streams redacted')

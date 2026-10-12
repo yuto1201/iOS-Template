@@ -2685,7 +2685,16 @@ func validateWorkflowPath(_ path: String) throws {
         "tools/tests/test-appstore-creative-preview.sh",
         "tools/tests/test-appstore-creative-render.sh",
         "tools/tests/test-appstore-creative-sheet.sh",
-        "tools/tests/test-appstore-preview-record.sh"
+        "tools/tests/test-appstore-preview-record.sh",
+        // D-079: the non-secret submission requirements that capture, image checks and the package check
+        // read, their direct test fixture, the package check's direct test that names the iPhone family
+        // folders, and the capture helper that the #279 fix (#295) adds to rewrite a capture as an opaque
+        // PNG, listed here before that helper exists. The package check itself
+        // (tools/validate-appstore-package.sh) stays on the release route.
+        "App Store/submission/requirements.json",
+        "tools/tests/fixtures/appstore/requirements.json",
+        "tools/tests/test-appstore-package.sh",
+        "tools/flatten-appstore-screenshot.swift"
     ]
     let deniedPrefixes = [
         "App Store/", ".agents/skills/prepare-appstore-assets/",

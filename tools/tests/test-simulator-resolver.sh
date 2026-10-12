@@ -83,7 +83,7 @@ end
 abort "unexpected matrix cases: #{actual.inspect}" unless actual == expected_cases
 RUBY
 
-# The repository declaration resolves to the dedicated iOS 27 iPhone 17 Pro Max and iPad Pro 13-inch (M5) when installed.
+# The repository declaration resolves to the dedicated iOS 27 iPhone 17 Pro and iPad Pro 13-inch (M5) when installed (D-079).
 available_runtimes="$scratch/runtimes-27.json"
 ruby -rjson - "$fixtures/runtimes.json" "$available_runtimes" <<'RUBY'
 source, destination = ARGV
@@ -102,7 +102,7 @@ ruby -rjson - "$output" <<'RUBY'
 matrix = JSON.parse(File.read(ARGV.fetch(0)))
 abort "repository declaration did not use iOS 27.0" unless matrix.dig("runtime", "identifier") == "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
 names = matrix.fetch("cases").map { |entry| entry.dig("deviceType", "name") }
-abort "repository declaration did not use the dedicated devices: #{names.inspect}" unless names == ["iPhone 17 Pro Max", "iPhone 17 Pro Max", "iPad Pro 13-inch (M5)", "iPad Pro 13-inch (M5)"]
+abort "repository declaration did not use the dedicated devices: #{names.inspect}" unless names == ["iPhone 17 Pro", "iPhone 17 Pro", "iPad Pro 13-inch (M5)", "iPad Pro 13-inch (M5)"]
 RUBY
 
 # An unavailable declared Runtime or a missing declared Device Type stops without a fallback.
@@ -124,6 +124,16 @@ expect_failure "declared Runtime is not installed and available: com.apple.CoreS
   --runtimes "$unavailable_runtimes" --device-types "$dedicated_types" --dedicated-config Config/dedicated-simulators.json
 expect_failure "declared Device Type is not installed: com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB" \
   --runtimes "$available_runtimes" --device-types "$no_a16_types" --dedicated-config Config/dedicated-simulators.json
+# Without iPhone 17 Pro installed, the declaration stops instead of falling back to the old iPhone 17 Pro Max.
+no_iphone_pro_types="$scratch/devicetypes-no-iphone-17-pro.json"
+ruby -rjson - "$fixtures/devicetypes.json" "$no_iphone_pro_types" <<'RUBY'
+source, destination = ARGV
+document = JSON.parse(File.read(source))
+document["devicetypes"].reject! { |entry| entry["identifier"] == "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro" }
+File.write(destination, JSON.generate(document))
+RUBY
+expect_failure "declared Device Type is not installed: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro" \
+  --runtimes "$available_runtimes" --device-types "$no_iphone_pro_types" --dedicated-config Config/dedicated-simulators.json
 
 # Partial scopes resolve only their family, so a missing iPad type does not block the Japanese iPhone.
 no_ipad_types="$scratch/no-ipad.json"

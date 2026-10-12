@@ -341,7 +341,9 @@ module AscCLI
               when :copyright then value.length.between?(1, 200)
               when :category then value.match?(/\A[A-Z][A-Z0-9_]{1,63}\z/)
               when :app_info_include then value == 'primaryCategory'
-              when :screenshot_type then %w[APP_IPHONE_67 APP_IPAD_PRO_3GEN_129].include?(value)
+              # D-079: iPhone screenshots use APP_IPHONE_61 (Dynamic Island, medium display), pending
+              # confirmation until the first real save is read back from App Store Connect.
+              when :screenshot_type then %w[APP_IPHONE_61 APP_IPAD_PRO_3GEN_129].include?(value)
               when :https_url
                 valid_sealed_https_url?(value, flag, package_root)
               end
@@ -436,7 +438,7 @@ module AscCLI
     screenshots = File.join(package_root, 'screenshots')
     return false unless value.start_with?(screenshots + '/')
     relative = value.delete_prefix(screenshots + '/')
-    return false unless relative.match?(%r{\A(?:en-US|ja)/(?:iphone-6\.9|ipad-13)/[0-9]{2}-[a-z0-9-]+\.png\z})
+    return false unless relative.match?(%r{\A(?:en-US|ja)/(?:iphone-6\.3|ipad-13)/[0-9]{2}-[a-z0-9-]+\.png\z})
     manifest = JSON.parse(read_regular(File.join(screenshots, 'manifest.json'), 1_000_000))
     return false unless manifest['schemaVersion'] == 1 && manifest['cases'].is_a?(Array)
     rows = manifest['cases'].select { |entry| entry.is_a?(Hash) && entry['path'] == relative }

@@ -80,7 +80,7 @@ requirements_digest="sha256:#{Digest::SHA256.file(requirements).hexdigest}"
 png=Base64.decode64('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
 cases=[]
 %w[en-US ja].each do |locale|
-  %w[iphone-6.9 ipad-13].each do |family|
+  %w[iphone-6.3 ipad-13].each do |family|
     relative="#{locale}/#{family}/01-primary.png"
     path=put(package,"screenshots/#{relative}",png+"#{locale}:#{family}")
     cases << {'locale'=>locale,'family'=>family,'state'=>'primary','order'=>1,'path'=>relative,
@@ -430,13 +430,43 @@ File.binwrite(browser,JSON.generate(browser_doc))
 
 scenario.call('screenshots-readback'); invoke.call('screenshots',1); scenario.call('normal')
 remote=JSON.parse(File.binread(state_path))
-remote['shots']['en-US']['APP_IPHONE_67'][0]['attributes']['sourceFileChecksum']='f'*32
+# D-079: iphone-6.3 images are uploaded to APP_IPHONE_61, and nothing goes to APP_IPHONE_67.
+%w[en-US ja].each do |locale|
+  check(remote['shots'][locale].keys.sort==%w[APP_IPAD_PRO_3GEN_129 APP_IPHONE_61],
+    "#{locale} screenshots uploaded to APP_IPHONE_61 and APP_IPAD_PRO_3GEN_129: #{remote['shots'][locale].keys}")
+end
+remote['shots']['en-US']['APP_IPHONE_61'][0]['attributes']['sourceFileChecksum']='f'*32
 File.binwrite(state_path,JSON.generate(remote))
 invoke.call('screenshots',1)
-remote['shots']['en-US']['APP_IPHONE_67'][0]['attributes']['sourceFileChecksum']=
-  Digest::MD5.file(File.join(package,'screenshots/en-US/iphone-6.9/01-primary.png')).hexdigest
+remote['shots']['en-US']['APP_IPHONE_61'][0]['attributes']['sourceFileChecksum']=
+  Digest::MD5.file(File.join(package,'screenshots/en-US/iphone-6.3/01-primary.png')).hexdigest
 File.binwrite(state_path,JSON.generate(remote))
 invoke.call('screenshots')
+
+# D-079: the former iPhone 6.9-inch slot APP_IPHONE_67 and the iphone-6.9 family are refused.
+sections=IOSTemplate::AppStoreReleaseSections
+former_set={'en-US'=>{'localizationId'=>'LOC_V_EN','sets'=>[{'set'=>{'type'=>'appScreenshotSets','id'=>'SET_EN_APP_IPHONE_67',
+  'attributes'=>{'screenshotDisplayType'=>'APP_IPHONE_67'}},'screenshots'=>[]}]}}
+begin
+  sections.screenshot_projection(former_set,[])
+  check(false,'APP_IPHONE_67 screenshot set was accepted')
+rescue sections::Refused => failure
+  check(failure.message=='screenshot-set-unrecognized',"APP_IPHONE_67 set refusal: #{failure.message}")
+end
+former_png=put(scratch,'former/screenshots/en-US/iphone-6.9/01-primary.png',png+'former')
+begin
+  sections.screenshot_cases({package:File.join(scratch,'former'),screenshot:{'cases'=>[{'locale'=>'en-US','family'=>'iphone-6.9',
+    'state'=>'primary','order'=>1,'path'=>'en-US/iphone-6.9/01-primary.png',
+    'digest'=>"sha256:#{Digest::SHA256.file(former_png).hexdigest}"}]}})
+  check(false,'iphone-6.9 screenshot case was accepted')
+rescue sections::Refused => failure
+  check(failure.message=='screenshot-case-invalid',"iphone-6.9 case refusal: #{failure.message}")
+end
+# The APP_IPHONE_61 mapping stays recorded as pending confirmation until a real save is read back.
+library=File.read(entry,encoding:'UTF-8')
+check(library.match?(/D-079: iphone-6\.3 .*APP_IPHONE_61\./) &&
+  library.match?(/pending\s+#\s+confirmation until the first real save is read back/),
+  'APP_IPHONE_61 mapping is not recorded as pending confirmation')
 
 journal_last=File.join(journal,'0005-processing-readback.json')
 journal_bytes=File.binread(journal_last)

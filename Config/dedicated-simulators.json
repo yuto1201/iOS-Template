@@ -3,8 +3,8 @@
   "devices": [
     {
       "family": "iphone",
-      "name": "iOS-Template iPhone 17 Pro Max",
-      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max",
+      "name": "iOS-Template iPhone 17 Pro",
+      "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
       "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
     },
     {
