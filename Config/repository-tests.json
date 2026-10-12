@@ -36,6 +36,7 @@
         "docs/agent-contracts/appstore-submission.md",
         "docs/appstore-creative.md",
         "docs/asc-derived-app-adoption.md",
+        "tools/appstore-creative-sheet.sh",
         "tools/build-appstore-screenshot-set.sh",
         "tools/capture-appstore-screenshots.sh",
         "tools/export-appstore-build.sh",
@@ -43,6 +44,7 @@
         "tools/prepare-appstore-legal-handoff.sh",
         "tools/prepare-appstore-sources.sh",
         "tools/tests/test-appstore-build.sh",
+        "tools/tests/test-appstore-creative-sheet.sh",
         "tools/tests/test-appstore-metadata-save.sh",
         "tools/tests/test-appstore-release-sections.sh",
         "tools/validate-appstore-package.sh"
@@ -400,6 +402,7 @@
     {"path": "tools/tests/test-app-feedback-provision.sh", "domains": ["app-feedback", "provider-security"]},
     {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-appstore-build.sh", "domains": ["appstore"]},
+    {"path": "tools/tests/test-appstore-creative-sheet.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-legal-handoff.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-metadata-save.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-package.sh", "domains": ["appstore"]},

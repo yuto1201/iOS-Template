@@ -66,6 +66,31 @@ done
 printf '%s\n' 'Keep goldie/ja/goldie.config.ts and run node_modules/goldie/dist/cli.js.' >"$stale_probe/README.md"
 git -C "$stale_probe" add README.md
 [[ -z "$(stale_goldie_references "$stale_probe")" ]] || { echo 'stale goldie check rejected a Goldie tool reference' >&2; exit 1; }
+# D-077: the skill proposes patterns before building, keeps the tile rules, and generates images through Codex.
+creative_refs="$creative_skill/references"
+for creative_file in "$creative_refs/patterns.md" "$creative_refs/proposal.md" "$creative_refs/imagegen.md"; do
+  [[ -f "$creative_file" ]] || { echo "appstore-creative reference is missing: $creative_file" >&2; exit 1; }
+done
+require_text() { # file pattern message
+  rg -q -- "$2" "$1" || { echo "$3" >&2; exit 1; }
+}
+require_text "$creative_skill/SKILL.md" 'appstore-creative-sheet\.sh build' 'skill does not build a proposal sheet'
+require_text "$creative_skill/SKILL.md" 'appstore-creative-sheet\.sh select' 'skill does not record the choice'
+require_text "$creative_skill/SKILL.md" 'three or four whole-set patterns' 'skill does not compare patterns first'
+require_text "$creative_skill/SKILL.md" 'private Artifact' 'skill does not publish the sheet for Claude'
+require_text "$creative_skill/SKILL.md" 'Codex opens the local file' 'skill does not show the sheet in Codex'
+require_text "$creative_skill/SKILL.md" 'first three tiles show the app in use' 'skill drops the first-three-tiles rule'
+require_text "$creative_skill/SKILL.md" 'At most two `concept` tiles' 'skill drops the concept limit'
+require_text "$creative_skill/SKILL.md" 'never contain app screens or UI, text, logos' 'skill drops the generated-image limits'
+require_text "$creative_skill/SKILL.md" 'goldie/assets/provenance\.json' 'skill does not record adopted image provenance'
+for tile_kind in device pair panorama continuous callout scene concept; do
+  require_text "$creative_refs/patterns.md" "^## \`$tile_kind\`" "patterns guide lacks the $tile_kind tile"
+done
+require_text "$creative_refs/imagegen.md" 'codex exec --skip-git-repo-check' 'image guide lacks the Claude-to-Codex handoff'
+require_text "$creative_refs/imagegen.md" 'only when the user explicitly asks' 'image guide does not limit the API-key fallback'
+require_text "$creative_refs/imagegen.md" 'two failures with the same cause' 'image guide does not stop after repeated failures'
+require_text "$creative_refs/imagegen.md" 'hold the rights' 'image guide does not check reference rights'
+require_text "$creative_refs/proposal.md" 'user-explicit' 'proposal guide does not record an explicit choice'
 [[ -L "$repo_root/.claude/skills/prepare-appstore-assets" && "$(readlink "$repo_root/.claude/skills/prepare-appstore-assets")" == ../../.agents/skills/prepare-appstore-assets ]] || {
   echo 'prepare skill symlink is invalid' >&2; exit 1
 }
