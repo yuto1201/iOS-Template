@@ -50,7 +50,7 @@ import { pathToFileURL } from 'node:url';
 const {loadConfig} = await import(pathToFileURL(
   `${process.env.GOLDIE_RUNTIME}/node_modules/goldie/dist/index.js`));
 const cfg = await loadConfig(process.env.GOLDIE_CONFIG);
-if (cfg.devices.join() !== 'iphone-6.9' || cfg.locales.length !== 1)
+if (cfg.devices.join() !== 'iphone-6.3' || cfg.locales.length !== 1)
   throw new Error('Expected one iPhone device and one locale');
 console.log(JSON.stringify({devices:cfg.devices, locales:cfg.locales,
   scenes:cfg.scenes.map(s=>s.id), outDir:cfg.outDir}));
@@ -65,13 +65,13 @@ proves safe device ownership or end-to-end capture.
 ## Import existing captures
 
 Keep source originals outside Goldie's disposable `out/`. The actual screenshot
-must already be a 1320×2868 iPhone capture with verified locale. Read it visually
+must already be a 1206×2622 iPhone 17 Pro capture (D-079) with verified locale. Read it visually
 and check dimensions before copying; no stretching. Write
-`goldie/<locale>/out/raw/iphone-6.9/manifest.json` using this 0.3.1 shape:
+`goldie/<locale>/out/raw/iphone-6.3/manifest.json` using this 0.3.1 shape:
 
 ```json
 {
-  "device": "iphone-6.9",
+  "device": "iphone-6.3",
   "udid": "ACTUAL_SOURCE_SIMULATOR_UDID",
   "capturedAt": "ACTUAL_SOURCE_CAPTURE_TIMESTAMP",
   "screenshots": [

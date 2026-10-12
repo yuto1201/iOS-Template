@@ -91,6 +91,23 @@ require_text "$creative_refs/imagegen.md" 'only when the user explicitly asks' '
 require_text "$creative_refs/imagegen.md" 'two failures with the same cause' 'image guide does not stop after repeated failures'
 require_text "$creative_refs/imagegen.md" 'hold the rights' 'image guide does not check reference rights'
 require_text "$creative_refs/proposal.md" 'user-explicit' 'proposal guide does not record an explicit choice'
+# The render extension adds concept tiles, background images under the copy, and iPad.
+[[ -f "$creative_refs/extension.md" && -f "$creative_skill/assets/ipad.config.ts" ]] || { echo 'render extension guide is missing' >&2; exit 1; }
+require_text "$creative_skill/SKILL.md" 'appstore-creative-render\.sh' 'skill does not route full-tile images and iPad through the extension'
+require_text "$creative_refs/extension.md" 'Goldie 0\.3\.1' 'extension guide does not pin Goldie'
+require_text "$creative_refs/extension.md" 'backgroundImage' 'extension guide lacks background images'
+require_text "$creative_refs/extension.md" 'layout: "concept"' 'extension guide lacks the concept layout'
+require_text "$creative_refs/extension.md" '--device ipad-13' 'extension guide lacks iPad rendering'
+require_text "$creative_refs/patterns.md" 'strip: N, index: i' 'patterns guide lacks the continuous strip recipe'
+# D-079: App Store iPhone tiles are iPhone 6.3-inch (1206x2622) from the dedicated iPhone 17 Pro. Only the
+# extension guide may name Goldie's own iphone-6.9, to say its output stays pixel-identical to Goldie.
+require_text "$creative_refs/extension.md" '--device iphone-6\.3' 'extension guide lacks iPhone 6.3-inch rendering'
+require_text "$creative_skill/assets/goldie.config.ts" 'devices: \["iphone-6\.3"\]' 'iPhone starter config does not use iphone-6.3'
+require_text "$creative_refs/patterns.md" 'The iPhone tile is 1206×2622' 'patterns guide does not give the 1206x2622 iPhone tile'
+old_iphone_size=$(rg -n '1320|2868|17 Pro Max|6\.9-inch|6\.9インチ|iphone-6\.9' "$creative_skill" "$prepare_skill/SKILL.md" "$repo_root/docs/appstore-creative.md" |
+  rg -v "^$creative_refs/extension\.md:[0-9]+:uses none of them on Goldie's own \`iphone-6\.9\`" || true)
+[[ -z "$old_iphone_size" ]] || { echo "the creative skill still names the old App Store iPhone size:" >&2; printf '%s\n' "$old_iphone_size" >&2; exit 1; }
+require_text "$prepare_skill/SKILL.md" 'appstore-creative-render\.sh render .*--device ipad-13' 'prepare skill does not render iPad through the extension'
 [[ -L "$repo_root/.claude/skills/prepare-appstore-assets" && "$(readlink "$repo_root/.claude/skills/prepare-appstore-assets")" == ../../.agents/skills/prepare-appstore-assets ]] || {
   echo 'prepare skill symlink is invalid' >&2; exit 1
 }

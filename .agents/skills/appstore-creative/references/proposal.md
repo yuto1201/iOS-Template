@@ -21,7 +21,7 @@ ignores. A revision is never rebuilt or edited; every change gets a new revision
       "tradeoffs": "生成した背景の質に左右される。",
       "tiles": [
         {"slot": 1, "kind": "scene", "device": "iphone", "locale": "ja",
-         "image": "goldie/ja/out/screenshots/iphone-6.9/ja/01-rain.png", "caption": "雨の日"}
+         "image": "goldie/ja/out/screenshots/iphone-6.3/ja/01-rain.png", "caption": "雨の日"}
       ]
     }
   ]

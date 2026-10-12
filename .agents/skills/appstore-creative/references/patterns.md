@@ -3,7 +3,7 @@
 Every recipe below uses Goldie 0.3.1 as installed (see [config](config.md)). Put the
 fields in `goldie/<locale>/goldie.config.ts`; relative image paths resolve against
 the config file, so shared adopted images live in `goldie/assets/` and are referenced
-as `../assets/<file>.png`. The iPhone tile is 1320×2868.
+as `../assets/<file>.png`. The iPhone tile is 1206×2622 (D-079).
 
 ## Backgrounds
 
@@ -12,10 +12,11 @@ as `../assets/<file>.png`. The iPhone tile is 1320×2868.
   Goldie parses `linear-gradient` with a `deg` or `to <side>` direction and color
   stops; it picks light or dark copy colors from the hex colors it finds.
 - A per-scene `background` overrides the theme one.
-- **Generated images under the copy need the render extension.** Goldie 0.3.1 draws
-  image layers (`decorations`) after the headline, so a full-tile image hides it.
-  Use image layers only for small pieces placed away from the copy (a `callout`, a
-  badge); full-tile generated backgrounds arrive with the render extension (D-077).
+- Generated image: `backgroundImage: "../assets/rain-sky.png"` on a scene or on
+  `theme`, rendered with the [render extension](extension.md). It sits under the copy
+  and the device. Do not use a full-tile `decorations` image for this: Goldie 0.3.1
+  draws image layers after the headline, so it would hide the copy. Image layers stay
+  for small pieces placed away from the copy (a `callout`, a badge).
 
 ## `device` — real screen with styling
 
@@ -41,8 +42,16 @@ counts as two tiles in the rules.
 
 ## `continuous` — one background through every tile
 
-Needs the render extension (D-077): one wide generated image runs under every tile,
-and each tile shows its own slice. Until then, propose it only as a plan.
+Generate one wide image with the aspect ratio `N × 1206 : 2622` for `N` tiles, and give
+every scene its slice with the render extension:
+
+```ts
+backgroundImage: { src: "../assets/strip.png", strip: N, index: i } // i = zero-based tile position
+```
+
+The extension scales the image to cover the whole strip and crops each tile's slice, so
+the picture continues when tiles sit side by side. Keep important content away from
+the seams.
 
 ## `callout` — a magnified part of a real screen
 
@@ -59,16 +68,28 @@ the source capture's SHA-256 and the crop rectangle in `goldie/assets/provenance
 
 ## `scene` — the real device inside a generated setting
 
-Needs the render extension (D-077): the generated setting is a full-tile image under
-the copy and the real device. Until then, propose it only as a plan.
+1. Render the tile with its final layout and a flat mid-gray background.
+2. Give that render to image generation as an edit reference: keep the phone, its
+   screen and its position unchanged; paint the setting around it (room, desk, hands
+   holding it from behind, sky). No text, logos or faces (see [imagegen](imagegen.md)).
+3. Use the result as the scene's `backgroundImage` and render again with the same
+   layout and theme through the render extension. Goldie draws the real device and
+   the real capture on top, in the same place, so the generated phone is covered.
+
+Inspect the edges of the device: if the generated image moved or resized the phone,
+the old outline shows around it; generate again. Hands sit behind the device.
+Perspective (a phone seen from above at an angle) is not possible; use the tilt
+layouts for movement.
 
 ## `concept` — a generated image and headline, no device
 
-Needs the render extension from D-077's follow-up Issue; until it exists, propose
-this kind only as a plan and say it cannot be rendered yet. Place it after the first
-three tiles, at most twice and in no more than a third of the set.
+`layout: "concept"` with a `backgroundImage`, rendered with the render extension. It
+needs no capture. Place it after the first three tiles, at most twice and in no more
+than a third of the set.
 
 ## iPad
 
-iPad 13-inch tiles (2064×2752, no bezel) need the same render extension. Until then,
-iPad stays on the repository capture path and is never stretched from iPhone.
+Render iPad 13-inch tiles (2064×2752, bare screen) with the render extension and
+`--device ipad-13`, from a separate `goldie.ipad.config.ts` that starts from
+[assets/ipad.config.ts](../assets/ipad.config.ts). Use the same pattern as iPhone with
+iPad placement, and never stretch an iPhone image. See [extension](extension.md).
