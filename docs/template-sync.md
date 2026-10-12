@@ -117,7 +117,7 @@ tools/template-sync.sh approve --plan /path/outside/app/sync-report/plan.json --
   --output /path/outside/app/sync-report/approval.json
 ```
 
-- `codex-review`は、固定のlauncher（`tools/template-sync-codex-review.sh`）でCodex（`gpt-6-sol`、reasoning effort `high`）を起動します。Codexが読めるのは、一時フォルダへ写した`plan.json`と`plan.md`だけです。network、MCP、plugin、web検索、ファイルの書き込みは使えません。10分で止めます。
+- `codex-review`は、固定のlauncher（`tools/template-sync-codex-review.sh`）でCodex（`gpt-6.1-sol`、reasoning effort `xhigh`、D-080）を起動します。Codexが読めるのは、一時フォルダへ写した`plan.json`と`plan.md`だけです。network、MCP、plugin、web検索、ファイルの書き込みは使えません。20分で止めます。
 - Codexの答えは、`approved`と空の指摘か、`changes-requested`と1件以上の指摘（`path`と`problem`）のどちらかです。それ以外の答えは記録しません。`changes-requested`の記録からは承認を作れません。
 - 確認の記録は、計画のdigest、ユーザーの指定のURL、launcherのdigest、modelを持ちます。承認と適用のときに、launcherが今のテンプレートのものと同じかを確かめます。
 - Codexの承認は、その計画の適用だけに使います。`AGENTS.md`の変更文面（D-075）、その他の変更、外部操作、反対モデルレビュー、mergeの承認にはなりません。確認の記録そのもの（`codex-review.json`）は承認として使えません。

@@ -273,8 +273,16 @@ reset_review_requested() {
 }
 
 # The Claude-primary reviewer runs the fixed model and reasoning effort, whatever the Mac's Codex default is.
-grep -Fq -- "--strict-config -m gpt-6-sol -c 'model_reasoning_effort=\"high\"' -c 'default_permissions=\"reviewer\"'" "$repo_root/tools/request-codex-review.sh" ||
-  { echo 'Codex reviewer launcher must pin gpt-6-sol with high reasoning effort' >&2; exit 1; }
+grep -Fq -- "--strict-config -m gpt-6.1-sol -c 'model_reasoning_effort=\"xhigh\"' -c 'default_permissions=\"reviewer\"'" "$repo_root/tools/request-codex-review.sh" ||
+  { echo 'Codex reviewer launcher must pin gpt-6.1-sol with xhigh reasoning effort' >&2; exit 1; }
+# D-080: the Codex reviewer gets up to 20 minutes; the Claude and Grok reviewers keep 10 minutes.
+grep -Fq 'ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "1200")' "$repo_root/tools/request-codex-review.sh" &&
+  grep -Fq '(1..1200).cover?(timeout_seconds)' "$repo_root/tools/request-codex-review.sh" || {
+  echo 'Codex reviewer launcher must default to and cap at 1200 seconds' >&2; exit 1; }
+grep -Fq 'ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "600")' "$repo_root/tools/cross-model-review.sh" &&
+  grep -Fq '(1..600).cover?(timeout_seconds)' "$repo_root/tools/cross-model-review.sh" &&
+  grep -Fq 'ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "600")' "$repo_root/tools/request-grok-review.sh" || {
+  echo 'Claude and Grok reviewers must keep the 600-second limit' >&2; exit 1; }
 
 script_launcher_bin="$workspace/script-launcher"
 mkdir "$script_launcher_bin"

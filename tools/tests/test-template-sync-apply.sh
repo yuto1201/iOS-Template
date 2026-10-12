@@ -195,8 +195,13 @@ printf '%s\n' '{"verdict":"changes-requested","summary":"確認が必要です�
   >"$fake_bin/codex-answer.json"
 PATH="$fake_bin:$PATH" "$sync" codex-review --plan "$plan" --user-request "$codex_url" --output "$work/codex-changes.json" --now 2026-10-05T02:10:00Z >"$work/codex-changes.out"
 grep -Fq '"verdict":"changes-requested"' "$work/codex-changes.out" || { echo 'Codex changes-requested not reported' >&2; exit 1; }
-grep -Fxq 'gpt-6-sol' "$fake_bin/codex-arguments" || { echo 'Codex did not run with the fixed model' >&2; exit 1; }
+grep -Fxq 'gpt-6.1-sol' "$fake_bin/codex-arguments" || { echo 'Codex did not run with the fixed model' >&2; exit 1; }
 grep -Fxq 'permissions.reviewer.network={enabled=false}' "$fake_bin/codex-arguments" || { echo 'Codex network not disabled' >&2; exit 1; }
+grep -Fxq 'model_reasoning_effort="xhigh"' "$fake_bin/codex-arguments" || { echo 'Codex did not run with xhigh reasoning effort' >&2; exit 1; }
+# D-080: the plan review allows up to 20 minutes and refuses a longer limit.
+grep -Fq 'ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "1200")' "$repo_root/tools/template-sync-codex-review.sh" &&
+  grep -Fq '(1..1200).cover?(timeout_seconds)' "$repo_root/tools/template-sync-codex-review.sh" || {
+  echo 'template sync Codex review must default to and cap at 1200 seconds' >&2; exit 1; }
 expect_failure approve-codex-changes 'Codex asked for changes, so the plan is not approved' \
   "$sync" approve --plan "$plan" --approver codex --review "$work/codex-changes.json" --output "$work/approval-codex-changes.json"
 printf '%s\n' '{"verdict":"approved","summary":"問題はありません。","findings":[{"path":"docs/AUTHORITY.md","problem":"x"}]}' >"$fake_bin/codex-answer.json"
@@ -209,6 +214,10 @@ expect_failure approve-codex-with-reference 'do not pass --reference' \
   "$sync" approve --plan "$plan" --approver codex --review "$work/codex-review.json" --reference "$comment_url" --output "$work/approval-codex-ref.json"
 expect_failure approve-codex-other-plan 'the Codex review is for another plan' \
   "$sync" approve --plan "$work/plan-edited/plan.json" --approver codex --review "$work/codex-review.json" --output "$work/approval-codex-other.json"
+ruby -rjson -e 'review = JSON.parse(File.read(ARGV[0])); review["model"] = "gpt-6-sol"; File.write(ARGV[1], JSON.generate(review))' \
+  "$work/codex-review.json" "$work/codex-review-old-model.json"
+expect_failure approve-codex-old-model 'the Codex review is not a template sync plan review' \
+  "$sync" approve --plan "$plan" --approver codex --review "$work/codex-review-old-model.json" --output "$work/approval-codex-old.json"
 "$sync" approve --plan "$plan" --approver codex --review "$work/codex-review.json" --output "$work/approval-codex.json" --now 2026-10-05T02:30:00Z >/dev/null
 # The Codex review alone is not an approval of anything.
 expect_untouched apply-with-codex-review 'approval keys differ' "$app" \
@@ -216,7 +225,7 @@ expect_untouched apply-with-codex-review 'approval keys differ' "$app" \
 REVIEW="$work/codex-review.json" APPROVAL="$work/approval-codex.json" URL="$codex_url" ruby -rjson -e '
   review = JSON.parse(File.read(ENV.fetch("REVIEW")))
   approval = JSON.parse(File.read(ENV.fetch("APPROVAL")))
-  abort "Codex review: #{review}" unless review.values_at("reviewer", "model", "verdict", "userRequest", "scope") == ["codex", "gpt-6-sol", "approved", ENV.fetch("URL"), "template-sync-plan"]
+  abort "Codex review: #{review}" unless review.values_at("reviewer", "model", "verdict", "userRequest", "scope") == ["codex", "gpt-6.1-sol", "approved", ENV.fetch("URL"), "template-sync-plan"]
   abort "Codex approval: #{approval}" unless approval.values_at("approver", "reference", "scope") == ["codex", ENV.fetch("URL"), "template-sync-plan"] && approval["codexReview"] == review
 '
 

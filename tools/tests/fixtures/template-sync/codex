@@ -15,12 +15,13 @@ while (($#)); do
     --output-last-message) answer=$2; shift 2 ;;
     -c)
       [[ "$2" == permissions.reviewer.filesystem=* ]] && filesystem=$2
+      [[ "$2" == model_reasoning_effort=* ]] && effort=$2
       shift 2 ;;
     --) prompt=$2; shift 2 ;;
     *) shift ;;
   esac
 done
-[[ "$model" == gpt-6-sol ]] || exit 91
+[[ "$model" == gpt-6.1-sol && "${effort:-}" == 'model_reasoning_effort="xhigh"' ]] || exit 91
 [[ "$filesystem" == "permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$plan_dir\"=\"read\"}" ]] || exit 92
 [[ -f "$plan_dir/plan.json" && -f "$plan_dir/plan.md" && -f "$schema" && -n "$answer" ]] || exit 93
 [[ "$prompt" == *"Read only $plan_dir/plan.json and $plan_dir/plan.md."* ]] || exit 94

@@ -834,3 +834,16 @@
   - 新しい専用iPhoneは、宣言の変更がmergeされた後にユーザーが`tools/setup-dedicated-simulators.sh`で作成する。AIは作成しない。古い`iOS-Template iPhone 17 Pro Max`はAIが削除せず、ユーザーが削除する。新しい端末ができるまで、iPhoneを使うネイティブの検証は`blocked:environment`とする。
 - Consequence: 実装は次の後続Issueに分ける。(1) 専用Simulatorの宣言、検証の文書とtest。(2) 提出の要件、撮影tool、画像判定、提出packageの検査、App Store Connectの画面種別の対応とtest。(2)は、`AGENTS.md`のworkflow-onlyで扱えるApp Store関連変更の文へ、この提出の要件とそのfixture／直接regression testを、ユーザーが承認した文面で加える。`appstore-creative`のiPhoneの寸法は、D-077の後続Issue（拡張層、録画と品質確認、動画の仕上げ）で、このDecisionに合わせて作る。2027年4月からiOS 27.1 SDK以降のアプリにiPhone Duoの画像が必須になるとAppleが予告しているが、このDecisionでは扱わない。派生アプリへの適用は、テンプレートの取り込み（D-074、D-078）とそれぞれのアプリのIssueで行う。
 - Related Issue: #290
+
+## D-080: Codexのレビューを、gpt-6.1-solのreasoning effort xhighで行う
+
+- Date: 2026-10-13
+- Status: 確定
+- Supersedes: `docs/agent-contracts/review-packet.md`の§6で、Claude primaryからCodexを呼ぶレビューのmodelを`gpt-6-sol`、reasoning effortを`high`、時間の上限を10分とした部分と、`docs/template-sync.md`で、テンプレート取り込みの計画をCodexが確認するときのmodelを`gpt-6-sol`、reasoning effortを`high`とした部分を置き換える。modelを固定し、使えないときに別のmodelへ置き換えず`blocked:review`とすること、read-onlyで呼ぶこと、Codex primaryからClaudeを呼ぶレビューとGrokを呼ぶレビューの時間の上限（10分）は維持する。
+- Context: 2026-10-13時点で、反対モデルのレビューとテンプレート取り込みの計画の確認は`gpt-6-sol`、reasoning effort `high`に固定されていた。ユーザーの個人のCodexの設定は`gpt-6.1-sol`、`xhigh`だった。ユーザーは同日、レビューのmodelを`gpt-6.1-sol`の`xhigh`へ上げることを決めた。これまでのhighのレビューは1件80〜291秒かかっており、xhighでは大きな変更で10分を超えるおそれがある。
+- Decision:
+  - Claude primaryからCodexを呼ぶ反対モデルのレビューは、model `gpt-6.1-sol`、reasoning effort `xhigh`に固定し、時間の上限を20分（1200秒）とする。
+  - テンプレート取り込みの計画をCodexが確認するとき（D-074、D-078）も、model `gpt-6.1-sol`、reasoning effort `xhigh`、時間の上限20分とする。確認の記録に残すmodelも`gpt-6.1-sol`とする。
+  - Codex primaryからClaudeを呼ぶレビューと、Grokを呼ぶレビューは変えない。
+- Consequence: Codexを起動するlauncherの中身が変わるため、これからのレビューの記録は新しいlauncherのdigestに結び付く。それより前のレビューの記録は書き換えない。派生アプリへの適用は、テンプレートの取り込み（D-074、D-078）で行う。
+- Related Issue: #302（#291を置き換え）

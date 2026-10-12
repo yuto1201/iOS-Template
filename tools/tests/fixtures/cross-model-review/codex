@@ -3,7 +3,7 @@ set -euo pipefail
 
 [[ "${1:-}" == --ask-for-approval && "${2:-}" == never && "${3:-}" == exec ]] || exit 94
 [[ "${4:-}" == --ignore-user-config && "${5:-}" == --ignore-rules && "${6:-}" == --strict-config ]] || exit 95
-[[ "${7:-}" == -m && "${8:-}" == gpt-6-sol && "${9:-}" == -c && "${10:-}" == 'model_reasoning_effort="high"' ]] || exit 114
+[[ "${7:-}" == -m && "${8:-}" == gpt-6.1-sol && "${9:-}" == -c && "${10:-}" == 'model_reasoning_effort="xhigh"' ]] || exit 114
 [[ "${11:-}" == -c && "${12:-}" == 'default_permissions="reviewer"' ]] || exit 96
 [[ "${13:-}" == -c && "${14:-}" == 'permissions.reviewer.extends=":read-only"' ]] || exit 97
 repo_root=$(pwd -P)
