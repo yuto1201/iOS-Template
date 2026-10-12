@@ -48,7 +48,7 @@ ClaudeとCodexは一般の仕様化、実装、検証、レビュー、設定済
 
 1. アプリの目的、対象ユーザー、中心的な価値と雰囲気をアプリ固有仕様へ確定し、Identity入力として表示名、Swift モジュール名、アプリ Slug、Bundle IDの4値を確定する。Deployment TargetはIdentity入力とは別のアプリ仕様として確定する。
 2. Identity Bootstrap Issue と専用 Branch/worktree を作成する。
-3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換し、`tools/setup-dedicated-simulators.sh`でそのリポジトリ専用のSimulator（`<表示名> iPhone 17 Pro Max`と`<表示名> iPad Pro 13-inch (M5)`）を作成する。
+3. 共有 bootstrap ツールで、Xcode project、Target、Scheme、ソース、Test、設定、アプリ固有文書を一貫したIdentityへ変換し、`tools/setup-dedicated-simulators.sh`でそのリポジトリ専用のSimulator（`<表示名> iPhone 17 Pro`と`<表示名> iPad Pro 13-inch (M5)`）を作成する。
 4. Build、Test、標準Simulatorマトリクス、反対モデルレビュー、Squash Mergeを完了する。
 5. [アプリ内フィードバック](#45-アプリ内フィードバック)の準備として、フィードバック用の非公開リポジトリ、共通GitHub Appのinstall、アプリのCloudflare Worker、送信先hostを用意する。リポジトリの作成とdeployは外部操作として、そのアプリのIssueでユーザーの承認を得て行う。
 6. Identity Bootstrapに依存するApp Icon IssueとSystem Experiences Planning Issueを作成する。両Issueはwrite-setが独立すれば並行できる。前者は同じ確定briefから画像生成したシンプルな2案を提示し、ユーザーが明示選択した1案だけをAppIconへ組み込む。
