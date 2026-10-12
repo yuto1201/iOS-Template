@@ -14,10 +14,15 @@ require "tmpdir"
 # tile images into one self-contained HTML page that makes no network request, checks every pattern
 # against the D-077 tile rules, and never replaces a revision the user may have seen. `select` records
 # the user's explicit choice of one pattern, or of a complete tile-by-tile combination, for that exact
-# sheet.
+# sheet. A `storyboard` sheet compares exactly two preview video storyboards for one device and locale:
+# each frame is a still of one segment with its states.json state, seconds and motion, a storyboard
+# runs 15 to 30 seconds, and the user chooses one storyboard whole.
 module AppStoreCreativeSheet
   SCHEMA_VERSION = 1
-  SHEET_KINDS = %w[proposal preview].freeze
+  SHEET_KINDS = %w[proposal preview storyboard].freeze
+  STORYBOARD_COUNT = 2
+  PREVIEW_SECONDS = (15..30).freeze
+  STATE_PATTERN = /\A[a-z0-9][a-z0-9-]{0,31}\z/
   TILE_KINDS = %w[device pair panorama continuous callout scene concept].freeze
   DEVICES = %w[iphone ipad].freeze
   LOCALES = %w[ja en-US].freeze
@@ -122,8 +127,7 @@ module AppStoreCreativeSheet
           {
             "id" => pattern.fetch("id"),
             "tiles" => pattern.fetch("tiles").map do |tile|
-              {"slot" => tile.fetch("slot"), "kind" => tile.fetch("kind"), "device" => tile.fetch("device"),
-               "locale" => tile.fetch("locale"), "sourceSha256" => images.fetch(tile.fetch("source")).fetch("sha256")}
+              display_tile(tile, spec.fetch("kind")).merge("sourceSha256" => images.fetch(tile.fetch("source")).fetch("sha256"))
             end,
             "ruleCheck" => checks.fetch(pattern.fetch("id"))
           }
@@ -158,6 +162,9 @@ module AppStoreCreativeSheet
     patterns = spec["patterns"]
     fail!("patterns must be a non-empty array") unless patterns.is_a?(Array) && !patterns.empty?
     fail!("a proposal compares three or four patterns") if spec["kind"] == "proposal" && !(3..4).cover?(patterns.length)
+    if spec["kind"] == "storyboard" && patterns.length != STORYBOARD_COUNT
+      fail!("a storyboard sheet compares exactly #{STORYBOARD_COUNT} storyboards; found #{patterns.length}")
+    end
     ids = patterns.map { |pattern| pattern.is_a?(Hash) ? pattern["id"] : nil }
     fail!("pattern ids must be unique") unless ids.uniq.length == ids.length
     validated = patterns.map { |pattern| validate_pattern(pattern, base, spec["kind"]) }
@@ -166,6 +173,11 @@ module AppStoreCreativeSheet
       # combination can be checked for completeness against it.
       counts = validated.map { |pattern| pattern.fetch("tiles").length }.uniq
       fail!("proposal patterns must all have the same number of tiles; found #{counts.sort.join(', ')}") unless counts.length == 1
+    end
+    if spec["kind"] == "storyboard"
+      # Both storyboards plan the same preview: one device and locale.
+      targets = validated.map { |pattern| pattern.fetch("tiles").map { |tile| tile.values_at("device", "locale") }.uniq }.uniq
+      fail!("both storyboards must use the same device and locale") unless targets.length == 1
     end
     spec.merge("patterns" => validated)
   end
@@ -179,7 +191,7 @@ module AppStoreCreativeSheet
     %w[title hypothesis tradeoffs].each { |key| text!(pattern[key], "#{id}.#{key}", required: true) }
     tiles = pattern["tiles"]
     fail!("pattern #{id} needs tiles") unless tiles.is_a?(Array) && !tiles.empty?
-    validated = tiles.map { |tile| validate_tile(tile, base, id) }
+    validated = tiles.map { |tile| validate_tile(tile, base, id, kind) }
     groups = validated.group_by { |tile| [tile.fetch("device"), tile.fetch("locale")] }
     groups.each do |(device, locale), group|
       slots = group.map { |tile| tile.fetch("slot") }
@@ -190,15 +202,25 @@ module AppStoreCreativeSheet
     if kind == "proposal" && groups.keys != [%w[iphone ja]]
       fail!("a proposal shows only Japanese iPhone tiles; pattern #{id} has #{groups.keys.map { |key| key.join('/') }.join(', ')}")
     end
+    fail!("storyboard #{id} must use one device and locale") if kind == "storyboard" && groups.length != 1
     pattern.merge("tiles" => validated)
   end
 
-  def validate_tile(tile, base, id)
+  def validate_tile(tile, base, id, kind)
     fail!("each tile of #{id} must be an object") unless tile.is_a?(Hash)
-    extra = tile.keys - %w[slot kind device locale image caption]
+    allowed = kind == "storyboard" ? %w[slot device locale image caption state seconds motion] : %w[slot kind device locale image caption]
+    extra = tile.keys - allowed
     fail!("unknown tile field in #{id}: #{extra.first}") unless extra.empty?
     fail!("tile slot of #{id} must be a positive integer") unless tile["slot"].is_a?(Integer) && tile["slot"].positive?
-    fail!("tile kind of #{id} must be one of #{TILE_KINDS.join(', ')}") unless TILE_KINDS.include?(tile["kind"])
+    if kind == "storyboard"
+      # A storyboard frame is a still of one recorded segment: its states.json state, seconds and motion.
+      fail!("storyboard frame state of #{id} is invalid") unless tile["state"].is_a?(String) && tile["state"].match?(STATE_PATTERN)
+      fail!("storyboard frame seconds of #{id} must be an integer from 1 to 30") unless tile["seconds"].is_a?(Integer) && (1..30).cover?(tile["seconds"])
+      text!(tile["motion"], "#{id}.motion", required: false)
+      tile = tile.merge("kind" => "frame")
+    else
+      fail!("tile kind of #{id} must be one of #{TILE_KINDS.join(', ')}") unless TILE_KINDS.include?(tile["kind"])
+    end
     fail!("tile device of #{id} must be iphone or ipad") unless DEVICES.include?(tile["device"])
     fail!("tile locale of #{id} must be ja or en-US") unless LOCALES.include?(tile["locale"])
     text!(tile["caption"], "#{id}.caption", required: false)
@@ -220,6 +242,7 @@ module AppStoreCreativeSheet
   # has at most two concept tiles and no more than a third of its tiles, and Japanese and English use
   # the same tile kinds in the same order.
   def rule_check(tiles, kind)
+    return storyboard_check(tiles) if kind == "storyboard"
     violations = []
     sequences = tiles.group_by { |tile| [tile.fetch("device"), tile.fetch("locale")] }
     sequences.each do |(device, locale), group|
@@ -250,6 +273,22 @@ module AppStoreCreativeSheet
     {"passed" => violations.empty?, "localeParity" => parity, "violations" => violations}
   end
 
+  # A storyboard becomes one App Store preview, which runs 15 to 30 seconds.
+  def storyboard_check(tiles)
+    total = tiles.sum { |tile| tile.fetch("seconds") }
+    violations = []
+    unless PREVIEW_SECONDS.cover?(total)
+      violations << "storyboard runs #{total}s; a preview must run #{PREVIEW_SECONDS.min} to #{PREVIEW_SECONDS.max} seconds"
+    end
+    {"passed" => violations.empty?, "localeParity" => "not-applicable", "totalSeconds" => total, "violations" => violations}
+  end
+
+  # What the page shows of a tile and a selection is checked against: a storyboard frame also carries
+  # its state and seconds, so the 15-to-30-second rule is checked again from the displayed page.
+  def display_tile(tile, kind)
+    tile.slice(*(kind == "storyboard" ? %w[slot kind device locale state seconds] : %w[slot kind device locale]))
+  end
+
   def embed_image(source, max_dimension, staging)
     bytes = read_regular(source, "tile image")
     type = if bytes.start_with?("\x89PNG\r\n\x1A\n".b) then "png"
@@ -268,25 +307,36 @@ module AppStoreCreativeSheet
     {"schemaVersion" => SCHEMA_VERSION, "revision" => revision, "kind" => spec.fetch("kind"),
      "patterns" => spec.fetch("patterns").map do |pattern|
        {"id" => pattern.fetch("id"),
-        "tiles" => pattern.fetch("tiles").map { |tile| tile.slice("slot", "kind", "device", "locale") }}
+        "tiles" => pattern.fetch("tiles").map { |tile| display_tile(tile, spec.fetch("kind")) }}
      end}
   end
 
   def render_html(spec, revision, images, checks, record)
     h = ->(text) { CGI.escapeHTML(text.to_s) }
-    stage = spec.fetch("kind") == "proposal" ? "第1段階：パターンの比較" : "第2段階：選んだパターンの見本"
+    stage = {"proposal" => "第1段階：パターンの比較", "preview" => "第2段階：選んだパターンの見本",
+             "storyboard" => "プレビュー動画の絵コンテ"}.fetch(spec.fetch("kind"))
+    instruction = if spec.fetch("kind") == "storyboard"
+                    "絵コンテのIDを1つ選んでください。"
+                  else
+                    "パターンIDを1つ選ぶか、面ごとにどのパターンの何枚目を使うかを指定してください。"
+                  end
     sections = spec.fetch("patterns").map do |pattern|
       check = checks.fetch(pattern.fetch("id"))
+      total = check["totalSeconds"] ? "（合計#{check.fetch('totalSeconds')}秒）" : ""
       status = if check.fetch("passed")
-                 %(<p class="check ok">ルール：すべて満たしています</p>)
+                 %(<p class="check ok">ルール：すべて満たしています#{total}</p>)
                else
                  items = check.fetch("violations").map { |message| "<li>#{h.(message)}</li>" }.join
-                 %(<div class="check ng"><p>ルール違反があります（このパターンは選べません）</p><ul>#{items}</ul></div>)
+                 %(<div class="check ng"><p>ルール違反があります（このパターンは選べません）#{total}</p><ul>#{items}</ul></div>)
                end
       groups = pattern.fetch("tiles").group_by { |tile| [tile.fetch("device"), tile.fetch("locale")] }
       strips = groups.map do |(device, locale), tiles|
         figures = tiles.sort_by { |tile| tile.fetch("slot") }.map do |tile|
           caption = tile["caption"] ? "<span>#{h.(tile['caption'])}</span>" : ""
+          if tile.fetch("kind") == "frame"
+            caption += "<span>#{h.(tile.fetch('state'))} ・ #{tile.fetch('seconds')}秒</span>"
+            caption += "<span>#{h.(tile['motion'])}</span>" if tile["motion"]
+          end
           %(<figure class="tile #{h.(device)}"><img src="#{images.fetch(tile.fetch('source')).fetch('dataUri')}" ) +
             %(alt="#{h.(pattern.fetch('id'))} #{tile.fetch('slot')}"><figcaption><b>#{tile.fetch('slot')}</b> ) +
             %(<code>#{h.(tile.fetch('kind'))}</code>#{caption}</figcaption></figure>)
@@ -334,7 +384,7 @@ module AppStoreCreativeSheet
       <h1>#{h.(spec.fetch('title'))}</h1>
       <p class="meta">#{h.(spec.fetch('app'))} ・ #{h.(stage)} ・ revision #{h.(revision)}</p>
       #{brief}
-      <p class="meta">パターンIDを1つ選ぶか、面ごとにどのパターンの何枚目を使うかを指定してください。</p>
+      <p class="meta">#{h.(instruction)}</p>
       </header>
       #{sections}
       </body>
@@ -360,7 +410,7 @@ module AppStoreCreativeSheet
     displayed = displayed_record(html)
     listed = {"schemaVersion" => record["schemaVersion"], "revision" => record["revision"], "kind" => record["kind"],
               "patterns" => (record["patterns"] || []).map do |pattern|
-                {"id" => pattern["id"], "tiles" => (pattern["tiles"] || []).map { |tile| tile.slice("slot", "kind", "device", "locale") }}
+                {"id" => pattern["id"], "tiles" => (pattern["tiles"] || []).map { |tile| display_tile(tile, record["kind"]) }}
               end}
     fail!("sheet.json differs from the displayed sheet") unless listed == displayed
     kind = displayed.fetch("kind")
@@ -394,6 +444,9 @@ module AppStoreCreativeSheet
     record = JSON.parse(Base64.strict_decode64(matches.first.first))
     fail!("the displayed record is invalid") unless record.is_a?(Hash) && record["schemaVersion"] == SCHEMA_VERSION &&
       SHEET_KINDS.include?(record["kind"]) && record["patterns"].is_a?(Array)
+    if record["kind"] == "storyboard" && record["patterns"].length != STORYBOARD_COUNT
+      fail!("a storyboard sheet must show exactly #{STORYBOARD_COUNT} storyboards")
+    end
     record
   end
 

@@ -25,9 +25,8 @@ or updating. This is a local asset workflow, not App Store Connect submission.
 - **New capture:** capture with the repository tool on the dedicated Simulators,
   then import (see [capture and flows](references/flows.md)). Use real app UI and
   synthetic demo content.
-- **Preview video:** not available yet; the recording and quality-gate tools arrive
-  with the follow-up Issues of D-077. Report it as unavailable instead of recording
-  on another device. Screenshot requests do not imply videos.
+- **Preview video:** only when asked; see [Preview video](#preview-video-d-077) below.
+  Screenshot requests do not imply videos.
 
 Respect a user's named platform and previously selected scope. Infer App Store
 for a native iOS-only project. Ask about platforms only if genuinely unresolved.
@@ -67,7 +66,7 @@ for a native iOS-only project. Ask about platforms only if genuinely unresolved.
    `goldie/assets/provenance.json`; keep sheets and rejected images out of Git.
 
 Details: [proposal sheet](references/proposal.md), [tile kinds](references/patterns.md),
-[image generation](references/imagegen.md).
+[image generation](references/imagegen.md), [preview video](references/preview-video.md).
 
 ## Tile kinds
 
@@ -100,6 +99,27 @@ Goldie 0.3.1 draws image layers over the headline, so every full-tile generated 
 - Generated images carry no text and are shared by Japanese and English. Both
   locales use the same tile kinds in the same order; iPhone and iPad use the same
   pattern with device-specific placement.
+
+## Preview video (D-077)
+
+Only when the user asks, and "no video" is a valid answer at every gate. Details:
+[preview video](references/preview-video.md).
+
+1. **Storyboards.** Show exactly two storyboards for one family and locale on a
+   `storyboard` sheet (`appstore-creative-sheet.sh build`) and record the user's
+   choice of one (`select --pattern`).
+2. **Trial.** Record one segment with `tools/record-appstore-preview.sh` on the
+   dedicated Simulator and run its quality gate (`check`). If it fails, offer "no
+   video" or the user's own screen recordings; never loosen the gate.
+3. **Full draft.** Record every segment and encode with
+   `tools/appstore-creative-preview.sh encode` (iPhone 886×1920 through the
+   extension's `iphone-6.3`, iPad 1200×1600, 15–30 seconds, H.264, 30 fps).
+4. **Decision.** The user adopts the draft or chooses no video; record it with
+   `appstore-creative-preview.sh decide` in `preview-decision.json` with the user's
+   reason. Choose no video whenever a gate fails or the draft does not sell the app.
+
+Previews are silent by default; make music only when the user asks for it. Check
+Apple's current preview requirements before a real submission.
 
 ## Phase 6 boundary and Simulator ownership
 
