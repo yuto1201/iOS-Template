@@ -496,6 +496,7 @@ esac
 case "${FAKE_GH_FAIL:-}" in
   "$kind") echo 'HTTP 401: Bad credentials (https://api.github.com/graphql)' >&2; exit 1 ;;
   "$kind-garbage") echo 'Welcome to GitHub CLI!'; exit 0 ;;
+  "$kind-hang") sleep 30 ;;
 esac
 printf '%s\n' "$answer"
 EOF
@@ -737,6 +738,9 @@ expect_no_result() {
 FAKE_GH_FAIL=issue expect_no_result gh-issue-fails 'gh issue list failed (HTTP 401: Bad credentials'
 FAKE_GH_FAIL=pr expect_no_result gh-pr-fails 'gh pr list failed (HTTP 401: Bad credentials'
 FAKE_GH_FAIL=issue-garbage expect_no_result gh-issue-garbage 'gh issue list returned output that is not JSON; cannot tell whether test-owner/garden-notes is busy'
+# A gh that does not answer is stopped after the time limit (shortened here) instead of hanging the preflight.
+IOS_TEMPLATE_SYNC_GH_TIMEOUT_SECONDS=2 FAKE_GH_FAIL=issue-hang expect_no_result gh-issue-hangs 'gh issue list did not answer within 2 seconds; cannot tell whether test-owner/garden-notes is busy'
+IOS_TEMPLATE_SYNC_GH_TIMEOUT_SECONDS=0 expect_no_result gh-bad-timeout 'IOS_TEMPLATE_SYNC_GH_TIMEOUT_SECONDS must be an integer from 1 to 300'
 FAKE_GH_FAIL=pr-garbage expect_no_result gh-pr-garbage 'gh pr list returned output that is not JSON; cannot tell whether test-owner/garden-notes is busy'
 FAKE_GH_ISSUES='[{"number":"1","title":"x","labels":[]}]' expect_no_result gh-issue-unexpected 'gh issue list returned an unexpected answer'
 FAKE_GH_ISSUES=$(ruby -rjson -e 'puts JSON.generate((1..1000).map { |number| {"number" => number, "title" => "Issue #{number}", "labels" => []} })') \

@@ -852,6 +852,8 @@ module TemplateSync
   BLOCKED_LABEL_PREFIX = "blocked:"
   # One gh query lists at most this many open Issues or PRs; a full page may hide the rest.
   GH_LIST_LIMIT = 1000
+  # Each gh query runs under bounded-command.rb and stops after this many seconds; tests may shorten it.
+  GH_TIMEOUT_SECONDS = 60
   # A plan is large above these counts (D-078). D-078 lets a later Decision adjust them after real imports.
   LARGE_WRITE_FILES = 30
   LARGE_MANUAL_FILES = 10
@@ -962,7 +964,13 @@ module TemplateSync
   # whose state could not be checked is never reported as idle.
   def gh_list(repository, kind, fields)
     args = [kind, "list", "--repo", repository, "--state", "open", "--limit", GH_LIST_LIMIT.to_s, "--json", fields]
-    stdout, stderr, status = Open3.capture3({"GH_PROMPT_DISABLED" => "1"}, "gh", *args)
+    timeout = ENV.fetch("IOS_TEMPLATE_SYNC_GH_TIMEOUT_SECONDS", GH_TIMEOUT_SECONDS.to_s)
+    fail!("IOS_TEMPLATE_SYNC_GH_TIMEOUT_SECONDS must be an integer from 1 to 300") unless timeout.match?(/\A[1-9]\d{0,2}\z/) && timeout.to_i <= 300
+    bounded = ["/usr/bin/ruby", File.join(__dir__, "bounded-command.rb"), "--stage", "template-sync-gh-#{kind}",
+               "--timeout-seconds", timeout, "--grace-seconds", "2", "--", "gh", *args]
+    stdout, stderr, status = Open3.capture3({"GH_PROMPT_DISABLED" => "1"}, *bounded)
+    fail!("gh #{kind} list did not answer within #{timeout} seconds; cannot tell whether #{repository} is busy") if status.exitstatus == 124
+    fail!("gh could not be started (#{stderr.strip}); cannot tell whether #{repository} is busy") if status.exitstatus == 126
     fail!("gh #{kind} list failed (#{stderr.strip}); cannot tell whether #{repository} is busy") unless status.success?
     entries = JSON.parse(stdout.force_encoding(Encoding::UTF_8))
     valid = entries.is_a?(Array) && entries.all? { |entry| entry.is_a?(Hash) && entry["number"].is_a?(Integer) && entry["title"].is_a?(String) }
