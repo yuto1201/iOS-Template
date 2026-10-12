@@ -9,7 +9,7 @@ module TemplateSync
   APPROVERS = %w[user codex].freeze
   VERDICTS = %w[approved changes-requested].freeze
   CODEX_LAUNCHER = "tools/template-sync-codex-review.sh"
-  CODEX_MODEL = "gpt-6-sol"
+  CODEX_MODEL = "gpt-6.1-sol"
   REFERENCE_PATTERN = %r{\Ahttps://github\.com/[\w.-]+/[\w.-]+/(?:issues|pull)/\d+#issuecomment-\d+\z}
   TIMESTAMP_PATTERN = /\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\z/
   APPROVAL_KEYS = %w[approvedAt approver decision planDigest reference schemaVersion scope].freeze

@@ -61,12 +61,12 @@ prompt="You review one template sync apply plan for an iOS app repository (decis
 Your answer approves only this exact plan for the template sync apply step. It is not approval for any other change, operation, review or merge.
 Answer with verdict approved and an empty findings list only if nothing above is violated and the plan is safe to apply as written. Otherwise answer changes-requested and list each problem with the plan path it concerns. Write the summary in Japanese."
 
-/usr/bin/ruby -rtimeout - "$review_home" "$review_bin" "$codex_home" "$codex_bin" --ask-for-approval never exec --ignore-user-config --ignore-rules --strict-config --skip-git-repo-check -C "$plan_dir" -m gpt-6-sol -c 'model_reasoning_effort="high"' -c 'default_permissions="reviewer"' -c 'permissions.reviewer.extends=":read-only"' -c "permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$plan_dir\"=\"read\"}" -c 'permissions.reviewer.network={enabled=false}' -c 'mcp_servers={}' -c 'features.web_search=false' -c 'features.plugins=false' -c 'features.apps=false' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'shell_environment_policy.inherit="none"' --ephemeral --output-schema "$schema" --output-last-message "$answer" -- "$prompt" <<'RUBY'
+/usr/bin/ruby -rtimeout - "$review_home" "$review_bin" "$codex_home" "$codex_bin" --ask-for-approval never exec --ignore-user-config --ignore-rules --strict-config --skip-git-repo-check -C "$plan_dir" -m gpt-6.1-sol -c 'model_reasoning_effort="xhigh"' -c 'default_permissions="reviewer"' -c 'permissions.reviewer.extends=":read-only"' -c "permissions.reviewer.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"$plan_dir\"=\"read\"}" -c 'permissions.reviewer.network={enabled=false}' -c 'mcp_servers={}' -c 'features.web_search=false' -c 'features.plugins=false' -c 'features.apps=false' -c 'features.browser_use=false' -c 'features.browser_use_external=false' -c 'features.computer_use=false' -c 'shell_environment_policy.inherit="none"' --ephemeral --output-schema "$schema" --output-last-message "$answer" -- "$prompt" <<'RUBY'
   review_home, review_bin, codex_home, *command = ARGV
   environment = {"PATH" => "#{review_bin}:/bin", "HOME" => review_home, "CODEX_HOME" => codex_home, "LANG" => "C", "LC_ALL" => "C"}
-  timeout_seconds = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "600"), 10)
+  timeout_seconds = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TIMEOUT_SECONDS", "1200"), 10)
   term_grace = Integer(ENV.fetch("IOS_TEMPLATE_REVIEW_TERM_GRACE_SECONDS", "5"), 10)
-  exit 2 unless (1..600).cover?(timeout_seconds) && (1..5).cover?(term_grace)
+  exit 2 unless (1..1200).cover?(timeout_seconds) && (1..5).cover?(term_grace)
   pid = Process.spawn(environment, *command, in: File::NULL, out: File::NULL, unsetenv_others: true)
   begin
     Timeout.timeout(timeout_seconds) { Process.wait(pid) }
