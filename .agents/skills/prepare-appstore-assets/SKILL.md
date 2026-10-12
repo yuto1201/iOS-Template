@@ -41,7 +41,7 @@ The following preconditions apply only when continuing from source preparation i
 
 ## Phase 6 screenshot routing
 
-Use [`goldie`](../goldie/SKILL.md) as the standard Phase 6 presentation workflow for iPhone 6.9-inch App Store images. Keep `goldie/ja/` and `goldie/en-US/` as separate configs, raw inputs, flows, and disposable outputs. Existing real screenshots that need only headline, background, frame, font, layout, or order changes are imported and rendered without recapture.
+Use [`appstore-creative`](../appstore-creative/SKILL.md) (Goldie-based, D-077) as the standard Phase 6 presentation workflow for iPhone 6.9-inch App Store images. Keep `goldie/ja/` and `goldie/en-US/` as separate configs, raw inputs, flows, and disposable outputs. Existing real screenshots that need only headline, background, frame, font, layout, or order changes are imported and rendered without recapture.
 
 For new raw capture, acquire one inherited session through `tools/with-ios-simulator-lock.sh` and run the repository capture tool. It leases only the dedicated iPhone and iPad Simulators declared in `Config/dedicated-simulators.json` through `tools/lib/ios-simulator-resource.rb` and never creates, clones, renames, or deletes a device. Since D-070 those devices are the App Store display sizes, so captures are used at their native size without cropping or compositing. Import the iPhone raw images into Goldie. Do not run Goldie's own `capture`: Goldie 0.3.1 selects a device by name and cannot reach a dedicated Simulator. Save screenshots and diagnostics outside the device, then require the released lease receipts before continuing.
 

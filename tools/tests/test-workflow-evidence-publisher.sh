@@ -17,7 +17,8 @@ compiled_validator="$scratch/validate-verify-json"
 
 phase_record='Config/releases/anygps-mvp/phase-records/0001-phase-1.json'
 
-# prepare_fixture LABEL [recorded]: "recorded" puts a template base record and a phase record in the base.
+# prepare_fixture LABEL [recorded|skill-link]: "recorded" puts a template base record and a phase record in the
+# base; "skill-link" puts a skill and its shared Claude link in the base.
 prepare_fixture() {
   local label="$1"
   repo="$scratch/$label/repository"
@@ -33,6 +34,12 @@ prepare_fixture() {
     printf '%s\n' '{"recordId":"0001-phase-1"}' >"$repo/$phase_record"
     printf '%s\n' '{"baseCommit":"0000000000000000000000000000000000000001"}' >"$repo/Config/template-base.json"
     /usr/bin/git -C "$repo" add -- "$phase_record" Config/template-base.json
+  fi
+  if [[ "${2:-}" == skill-link ]]; then
+    /bin/mkdir -p "$repo/.agents/skills/old-skill" "$repo/.claude/skills"
+    printf '%s\n' '# old skill' >"$repo/.agents/skills/old-skill/SKILL.md"
+    /bin/ln -s ../../.agents/skills/old-skill "$repo/.claude/skills/old-skill"
+    /usr/bin/git -C "$repo" add -- .agents/skills/old-skill/SKILL.md .claude/skills/old-skill
   fi
   /usr/bin/git -C "$repo" commit -q -m base
   base_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
@@ -233,6 +240,24 @@ previous_head="$head_sha"
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 rebind_head_artifacts "$previous_head"
 expect_rejection escaping-skill-link 'workflow-only shared skill symlink is invalid'
+
+# A renamed skill takes its shared Claude link with it; a link to a skill that remains cannot be deleted.
+prepare_fixture removed-skill-link skill-link
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" rm -q -- .agents/skills/old-skill/SKILL.md .claude/skills/old-skill
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
+
+prepare_fixture orphaned-skill-link skill-link
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" rm -q -- .claude/skills/old-skill
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+expect_rejection orphaned-skill-link 'workflow-only diff deletes the link of a skill that still exists: .claude/skills/old-skill'
 
 prepare_fixture application-path
 /bin/mkdir -p "$repo/TemplateApp"
@@ -510,6 +535,48 @@ printf '%s\n' '# unknown local helper' >"$repo/tools/lib/appstore-unknown.rb"
 /usr/bin/git -C "$repo" commit -q --amend --no-edit
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 expect_rejection unknown-appstore-helper 'workflow-only diff contains a release or App Store path: tools/lib/appstore-unknown.rb'
+
+# D-077: only the enumerated appstore-creative skill files and creative producers qualify.
+prepare_fixture appstore-creative-exact-paths
+creative_paths=(
+  .agents/skills/appstore-creative/LICENSE .agents/skills/appstore-creative/SKILL.md
+  .agents/skills/appstore-creative/agents/openai.yaml .agents/skills/appstore-creative/assets/goldie.config.ts
+  .agents/skills/appstore-creative/assets/ipad.config.ts .agents/skills/appstore-creative/references/config.md
+  .agents/skills/appstore-creative/references/extension.md .agents/skills/appstore-creative/references/flows.md
+  .agents/skills/appstore-creative/references/imagegen.md .agents/skills/appstore-creative/references/patterns.md
+  .agents/skills/appstore-creative/references/preview-video.md .agents/skills/appstore-creative/references/proposal.md
+  .agents/skills/appstore-creative/references/upstream.md docs/appstore-creative.md
+  tools/appstore-creative-preview.sh tools/appstore-creative-render.sh tools/appstore-creative-sheet.sh
+  tools/lib/appstore-creative-preview.rb tools/lib/appstore-creative-render.mjs tools/lib/appstore-creative-sheet.rb
+  tools/lib/appstore-preview-quality.rb tools/record-appstore-preview.sh
+  tools/tests/test-appstore-creative-preview.sh tools/tests/test-appstore-creative-render.sh
+  tools/tests/test-appstore-creative-sheet.sh tools/tests/test-appstore-preview-record.sh
+)
+for creative_path in "${creative_paths[@]}"; do
+  /bin/mkdir -p "$(/usr/bin/dirname "$repo/$creative_path")"
+  case "$creative_path" in
+    *.sh) printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/$creative_path"; /bin/chmod +x "$repo/$creative_path" ;;
+    *) printf '%s\n' '# local creative producer' >"$repo/$creative_path" ;;
+  esac
+done
+/bin/mkdir -p "$repo/.claude/skills"
+/bin/ln -s ../../.agents/skills/appstore-creative "$repo/.claude/skills/appstore-creative"
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- "${creative_paths[@]}" .claude/skills/appstore-creative
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
+
+prepare_fixture unknown-appstore-creative-tool
+/bin/mkdir -p "$repo/tools"
+printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/appstore-creative-upload.sh"
+/bin/chmod +x "$repo/tools/appstore-creative-upload.sh"
+/usr/bin/git -C "$repo" add -- tools/appstore-creative-upload.sh
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+expect_rejection unknown-appstore-creative-tool 'workflow-only diff contains a release or App Store path: tools/appstore-creative-upload.sh'
 
 prepare_fixture missing-repository-evidence
 /usr/bin/ruby -e 'File.unlink(ARGV.fetch(0))' "$repo/.artifacts/issues/42/$head_sha/repository-tests.json"

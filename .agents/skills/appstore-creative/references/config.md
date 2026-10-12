@@ -16,7 +16,7 @@ runtime's package-lock.json. Retain that lock and use `npm ci --prefix
 "$GOLDIE_RUNTIME"` to recreate the same runtime. Don't share/overwrite another
 project's Node dependencies. If the runtime already exists, inspect version/lock
 before changing it. For a new machine, copy the adapted skill directory into
-`~/.codex/skills/goldie` only when that destination does not already exist.
+`~/.codex/skills/appstore-creative` only when that destination does not already exist.
 
 ## Starter config
 

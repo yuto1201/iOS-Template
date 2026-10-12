@@ -31,7 +31,7 @@ if check_adoption_paths "$mutated_adoption" 2>/dev/null; then
 fi
 prepare_skill="$repo_root/.agents/skills/prepare-appstore-assets"
 submit_skill="$repo_root/.agents/skills/submit-appstore-release"
-goldie_skill="$repo_root/.agents/skills/goldie"
+creative_skill="$repo_root/.agents/skills/appstore-creative"
 seal="$prepare_skill/scripts/seal-package.sh"
 record="$submit_skill/scripts/record-section.sh"
 requirements_source="$repo_root/tools/tests/fixtures/appstore/requirements.json"
@@ -43,7 +43,29 @@ version=1.0
 [[ -f "$prepare_skill/SKILL.md" && -x "$seal" && -f "$submit_skill/SKILL.md" && -x "$record" ]] || {
   echo 'App Store skill scripts are incomplete' >&2; exit 1
 }
-[[ -f "$goldie_skill/SKILL.md" ]] || { echo 'Goldie skill is unavailable' >&2; exit 1; }
+[[ -f "$creative_skill/SKILL.md" ]] || { echo 'appstore-creative skill is unavailable' >&2; exit 1; }
+rg -q '^name: appstore-creative$' "$creative_skill/SKILL.md" || { echo 'appstore-creative skill name is invalid' >&2; exit 1; }
+[[ -L "$repo_root/.claude/skills/appstore-creative" && "$(readlink "$repo_root/.claude/skills/appstore-creative")" == ../../.agents/skills/appstore-creative ]] || {
+  echo 'appstore-creative skill symlink is invalid' >&2; exit 1
+}
+# D-077 renamed the goldie skill. Only the decision history, the AGENTS.md approval ledger, Goldie itself
+# (the npm package, goldie/<locale>/ configs, goldie.config.ts) may still say goldie.
+stale_goldie_references() {
+  git -C "$1" grep -n -I -E '(\.agents|\.claude|\.codex)/skills/goldie|docs/goldie\.md|\./goldie\.md|\$goldie([^a-z-]|$)|^name: goldie$|\[`goldie`\]' -- \
+    ':!specs/decisions.md' ':!docs/agents-md-approvals.md' ':!tools/tests/test-appstore-skills.sh' || true
+}
+stale=$(stale_goldie_references "$repo_root")
+[[ -z "$stale" ]] || { echo "stale goldie skill references remain:" >&2; printf '%s\n' "$stale" >&2; exit 1; }
+stale_probe="$workspace/stale-probe"
+git init -q "$stale_probe"
+for stale_line in 'See .agents/skills/goldie/SKILL.md.' 'Run $goldie now.' 'Read [usage](./goldie.md).'; do
+  printf '%s\n' "$stale_line" >"$stale_probe/README.md"
+  git -C "$stale_probe" add README.md
+  [[ -n "$(stale_goldie_references "$stale_probe")" ]] || { echo "stale goldie check missed: $stale_line" >&2; exit 1; }
+done
+printf '%s\n' 'Keep goldie/ja/goldie.config.ts and run node_modules/goldie/dist/cli.js.' >"$stale_probe/README.md"
+git -C "$stale_probe" add README.md
+[[ -z "$(stale_goldie_references "$stale_probe")" ]] || { echo 'stale goldie check rejected a Goldie tool reference' >&2; exit 1; }
 [[ -L "$repo_root/.claude/skills/prepare-appstore-assets" && "$(readlink "$repo_root/.claude/skills/prepare-appstore-assets")" == ../../.agents/skills/prepare-appstore-assets ]] || {
   echo 'prepare skill symlink is invalid' >&2; exit 1
 }
@@ -53,7 +75,7 @@ version=1.0
 ! rg -q 'TODO|\[TODO' "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md"
 rg -q 'Codex and Claude may perform' "$submit_skill/SKILL.md" && ! rg -q 'Claude.*delegate|Claude.*委託' "$submit_skill/SKILL.md"
 rg -q 'first.publication|first publication|初回公開' "$prepare_skill/SKILL.md"
-for phase_skill in "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md" "$goldie_skill/SKILL.md"; do
+for phase_skill in "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md" "$creative_skill/SKILL.md"; do
   rg -q 'Phase 6' "$phase_skill" || { echo "Phase 6 routing is missing: $phase_skill" >&2; exit 1; }
 done
 rg -q 'goldie/ja/' "$prepare_skill/SKILL.md" && rg -q 'goldie/en-US/' "$prepare_skill/SKILL.md" || {
@@ -62,11 +84,11 @@ rg -q 'goldie/ja/' "$prepare_skill/SKILL.md" && rg -q 'goldie/en-US/' "$prepare_
 rg -q 'iPad.*capture-appstore-screenshots|capture-appstore-screenshots.*iPad' "$prepare_skill/SKILL.md" || {
   echo 'prepare skill does not route iPad outside Goldie' >&2; exit 1
 }
-rg -q 'with-ios-simulator-lock\.sh' "$prepare_skill/SKILL.md" "$goldie_skill/SKILL.md" || {
+rg -q 'with-ios-simulator-lock\.sh' "$prepare_skill/SKILL.md" "$creative_skill/SKILL.md" || {
   echo 'App Store capture skills do not require the shared Simulator session' >&2; exit 1
 }
-rg -q 'ios-simulator-resource\.rb' "$goldie_skill/SKILL.md" || {
-  echo 'Goldie capture does not use the Mac-wide Simulator resource manager' >&2; exit 1
+rg -q 'ios-simulator-resource\.rb' "$creative_skill/SKILL.md" || {
+  echo 'appstore-creative capture does not use the Mac-wide Simulator resource manager' >&2; exit 1
 }
 rg -q 'evidence-applicability\.json' "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md" || {
   echo 'Phase 6 evidence applicability is not preserved through preparation and submission' >&2; exit 1

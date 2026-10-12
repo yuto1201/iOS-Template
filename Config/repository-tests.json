@@ -25,17 +25,17 @@
     {
       "domain": "appstore",
       "paths": [
-        ".agents/skills/goldie/SKILL.md",
         ".agents/skills/prepare-appstore-assets/SKILL.md",
         ".agents/skills/save-appstore-metadata/SKILL.md",
         ".agents/skills/save-appstore-metadata/scripts/save-appstore-metadata.sh",
         ".agents/skills/submit-appstore-release/SKILL.md",
         ".agents/skills/submit-appstore-release/agents/openai.yaml",
         ".agents/skills/submit-appstore-release/scripts/record-section.sh",
+        ".claude/skills/appstore-creative",
         ".claude/skills/save-appstore-metadata",
         "docs/agent-contracts/appstore-submission.md",
+        "docs/appstore-creative.md",
         "docs/asc-derived-app-adoption.md",
-        "docs/goldie.md",
         "tools/build-appstore-screenshot-set.sh",
         "tools/capture-appstore-screenshots.sh",
         "tools/export-appstore-build.sh",
@@ -48,7 +48,7 @@
         "tools/validate-appstore-package.sh"
       ],
       "prefixes": [
-        ".agents/skills/goldie/references/",
+        ".agents/skills/appstore-creative/",
         ".agents/skills/prepare-appstore-assets/templates/",
         "App Store/",
         "tools/lib/appstore-"
