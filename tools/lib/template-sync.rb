@@ -882,7 +882,7 @@ module TemplateSync
       "schemaVersion" => 1,
       "generatedAt" => now,
       "repository" => repository,
-      "app" => {"head" => head, "untracked" => checkout[:untracked]},
+      "app" => {"head" => head},
       "plan" => {"digest" => plan_digest, "appHead" => plan.dig("app", "head"), "templateCommit" => plan.dig("template", "commit")},
       "status" => findings.empty? ? "idle" : "busy",
       "findings" => findings,
@@ -984,9 +984,8 @@ module TemplateSync
   end
 
   # The target's own checkout: every worktree besides the main one, the main checkout on a branch other
-  # than main (or on none), and tracked changes there, staged or not. Untracked files are listed but do
-  # not count as busy: build output or a note left in the folder is not another task in progress, and
-  # apply checks every path it writes against the working tree before it writes.
+  # than main (or on none), and uncommitted changes there: tracked changes, staged or not, and files not
+  # yet tracked that .gitignore does not exclude.
   def checkout_findings(app_root)
     worktrees = worktree_records(app_root)
     main = worktrees.first
@@ -997,9 +996,12 @@ module TemplateSync
     end
     branch = main["branch"]&.delete_prefix("refs/heads/")
     findings << {"kind" => "branch", "branch" => branch} unless branch == "main"
+    # D-078 counts every uncommitted change as other work in progress: a new file that is not yet tracked
+    # (outside .gitignore) is as much in progress as an edited one.
     tracked, untracked = working_changes(app_root)
     findings << {"kind" => "uncommitted-changes", "paths" => tracked} unless tracked.empty?
-    {findings: findings, untracked: untracked}
+    findings << {"kind" => "untracked-files", "paths" => untracked} unless untracked.empty?
+    {findings: findings}
   end
 
   # The records of `git worktree list --porcelain -z`; the first one is the main worktree.
@@ -1066,11 +1068,6 @@ module TemplateSync
     else
       lines << "作業中の状態のIssue、開いているPR、本体以外のworktree、`main`以外のブランチや未commitの変更がある本体のcheckoutは、どれもありません。"
     end
-    untracked = result.dig("app", "untracked")
-    unless untracked.empty?
-      lines << ""
-      lines << "本体のcheckoutに未追跡のファイルがあります（ほかの作業中かの判定には数えません）: #{untracked.map { |path| "`#{path}`" }.join("、")}"
-    end
     lines << ""
     lines << "## 変更の大きさ: #{large ? "大きい" : "通常"}"
     lines << ""
@@ -1101,6 +1098,7 @@ module TemplateSync
     when "branch"
       finding["branch"] ? "本体のcheckoutが`main`ではなく`#{finding["branch"]}`にいます。" : "本体のcheckoutがどのブランチにもいません（detached HEAD）。"
     when "uncommitted-changes" then "本体のcheckoutに未commitの変更があります: #{finding["paths"].map { |path| "`#{path}`" }.join("、")}"
+    when "untracked-files" then "本体のcheckoutに未commitの新しいファイルがあります: #{finding["paths"].map { |path| "`#{path}`" }.join("、")}"
     end
   end
 

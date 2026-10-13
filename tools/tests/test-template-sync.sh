@@ -589,7 +589,7 @@ craft_plan() {
 craft_plan normal ''
 normal_plan="$work/plans/normal/plan.json"
 
-# AC-3: with nothing in progress the target is idle; an untracked file alone keeps it idle.
+# AC-3: with nothing in progress the target is idle; a new file that is not yet tracked makes it busy.
 run_preflight idle "$normal_plan"
 expect_preflight idle idle '' normal ''
 PLAN="$normal_plan" RESULT="$work/preflight/idle/preflight.json" HEAD=$(git -C "$target" rev-parse HEAD) ruby -rjson -rdigest -e '
@@ -597,13 +597,14 @@ PLAN="$normal_plan" RESULT="$work/preflight/idle/preflight.json" HEAD=$(git -C "
   abort "plan digest: #{result["plan"]}" unless result.dig("plan", "digest") == "sha256:#{Digest::SHA256.file(ENV.fetch("PLAN")).hexdigest}"
   abort "heads: #{result}" unless result.dig("plan", "appHead") == ENV.fetch("HEAD") && result.dig("app", "head") == ENV.fetch("HEAD")
   abort "counts at the limits: #{result["size"]}" unless result["size"].values_at("writeFiles", "manualFiles") == [30, 10]
-  abort "untracked: #{result["app"]}" unless result.dig("app", "untracked") == []
+  abort "app: #{result["app"]}" unless result["app"].keys == ["head"]
 '
-printf '%s\n' 'note' >"$target/local-note.txt"
+mkdir -p "$target/NewFeature"
+printf '%s\n' 'struct NewFeature {}' >"$target/NewFeature/NewFeature.swift"
 run_preflight untracked "$normal_plan"
-expect_preflight untracked idle '' normal ''
-expect_markdown untracked '未追跡のファイルがあります（ほかの作業中かの判定には数えません）: `local-note.txt`'
-rm "$target/local-note.txt"
+expect_preflight untracked busy 'untracked-files' normal ''
+expect_markdown untracked '本体のcheckoutに未commitの新しいファイルがあります: `NewFeature/`'
+rm -r "$target/NewFeature"
 
 # Each working-state label, and any blocked:* label, makes an open Issue busy; other labels do not.
 for label in state:claimed state:in-progress state:verify-passed state:review-requested state:changes-requested \
