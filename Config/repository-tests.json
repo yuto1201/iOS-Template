@@ -41,6 +41,7 @@
         "tools/build-appstore-screenshot-set.sh",
         "tools/capture-appstore-screenshots.sh",
         "tools/export-appstore-build.sh",
+        "tools/flatten-appstore-screenshot.swift",
         "tools/lib/appstore-build.rb",
         "tools/prepare-appstore-legal-handoff.sh",
         "tools/prepare-appstore-sources.sh",
