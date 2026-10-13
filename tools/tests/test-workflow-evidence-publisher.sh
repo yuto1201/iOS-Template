@@ -578,6 +578,40 @@ printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/tools/appstore-creative-upload.sh"
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 expect_rejection unknown-appstore-creative-tool 'workflow-only diff contains a release or App Store path: tools/appstore-creative-upload.sh'
 
+# D-079: the submission requirements, their direct fixture, the package check's direct test and the capture
+# helper qualify by exact path. The package check itself and other App Store paths stay on the release route.
+prepare_fixture appstore-requirements-exact-paths
+requirements_paths=(
+  'App Store/submission/requirements.json' tools/tests/fixtures/appstore/requirements.json
+  tools/tests/test-appstore-package.sh tools/flatten-appstore-screenshot.swift
+)
+for requirements_path in "${requirements_paths[@]}"; do
+  /bin/mkdir -p "$(/usr/bin/dirname "$repo/$requirements_path")"
+  case "$requirements_path" in
+    *.sh) printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/$requirements_path"; /bin/chmod +x "$repo/$requirements_path" ;;
+    *.swift) printf '%s\n' '// local capture helper' >"$repo/$requirements_path" ;;
+    *) /bin/cp "$source_repo/App Store/submission/requirements.json" "$repo/$requirements_path" ;;
+  esac
+done
+previous_head="$head_sha"
+/usr/bin/git -C "$repo" add -- "${requirements_paths[@]}"
+/usr/bin/git -C "$repo" commit -q --amend --no-edit
+head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+rebind_head_artifacts "$previous_head"
+published="$(run_publisher)"
+[[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
+
+for unlisted_path in tools/validate-appstore-package.sh tools/build-appstore-screenshot-set.sh 'App Store/submission/checklist.yml'; do
+  fixture_name="unlisted-$(printf '%s' "$unlisted_path" | /usr/bin/sed 's#[/. ]#-#g')"
+  prepare_fixture "$fixture_name"
+  /bin/mkdir -p "$(/usr/bin/dirname "$repo/$unlisted_path")"
+  printf '%s\n' '# unlisted App Store release path' >"$repo/$unlisted_path"
+  /usr/bin/git -C "$repo" add -- "$unlisted_path"
+  /usr/bin/git -C "$repo" commit -q --amend --no-edit
+  head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+  expect_rejection "$fixture_name" "workflow-only diff contains a release or App Store path: $unlisted_path"
+done
+
 prepare_fixture missing-repository-evidence
 /usr/bin/ruby -e 'File.unlink(ARGV.fetch(0))' "$repo/.artifacts/issues/42/$head_sha/repository-tests.json"
 if run_publisher >"$scratch/missing.stdout" 2>"$scratch/missing.stderr"; then

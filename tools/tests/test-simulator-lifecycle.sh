@@ -130,8 +130,8 @@ matrix = {
     "version" => "27.0"
   },
   "cases" => [
-    ["iphone-en", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max", "iPhone 17 Pro Max", "en_US", "en"],
-    ["iphone-ja", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max", "iPhone 17 Pro Max", "ja_JP", "ja"],
+    ["iphone-en", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "iPhone 17 Pro", "en_US", "en"],
+    ["iphone-ja", "iPhone", "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro", "iPhone 17 Pro", "ja_JP", "ja"],
     ["ipad-en", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB", "iPad Pro 13-inch (M5)", "en_US", "en"],
     ["ipad-ja", "iPad", "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB", "iPad Pro 13-inch (M5)", "ja_JP", "ja"]
   ].map do |id, family, identifier, name, locale, language|

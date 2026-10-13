@@ -26,10 +26,10 @@ tools/tests/test-foundation.sh
 
 Issueには、成熟度を表す`shape`／`harden`／`release`のDelivery stageとTime budget、危険度を表す`fast`／`standard`／`strict`のdelivery profileを別々に指定します。shapeはBuild・重要Unit Test・日本語iPhone 1条件のSmoke、hardenは対象Testと指定caseだけ、releaseは従来の完全検証です。`strict`または`release`だけがblockingな反対モデルレビューを要求します。stage未指定の既存contractは従来のprofile／scope gateを維持し、profile未指定はstrict、検証範囲未指定はfullとして扱います。以下はrelease/full検証の手順例です。
 
-Foundationやdelivery gate自体は`strict`です。Build と Test は、インストール済み Xcode から [標準 Simulator マトリクス](./verification.md#3-固定されるmatrix)を解決し、Issue バッチ内で固定して実行します。次は Foundation 検証で使うコマンド形です。`TEMPLATE_IPHONE_UDID` と `TEMPLATE_IPAD_UDID` には、`Config/dedicated-simulators.json`が宣言するrepository専用の2台（iOS 27.0のiPhone 17 Pro MaxとiPad Pro 13-inch (M5)）のUDIDを指定します。Templateでは`iOS-Template iPhone 17 Pro Max`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリでは表示名を前置した同じ機種です。
+Foundationやdelivery gate自体は`strict`です。Build と Test は、インストール済み Xcode から [標準 Simulator マトリクス](./verification.md#3-固定されるmatrix)を解決し、Issue バッチ内で固定して実行します。次は Foundation 検証で使うコマンド形です。`TEMPLATE_IPHONE_UDID` と `TEMPLATE_IPAD_UDID` には、`Config/dedicated-simulators.json`が宣言するrepository専用の2台（iOS 27.0のiPhone 17 ProとiPad Pro 13-inch (M5)）のUDIDを指定します。Templateでは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリでは表示名を前置した同じ機種です。
 
 ```sh
-TEMPLATE_IPHONE_UDID="<dedicated-iPhone-17-Pro-Max-UDID>"
+TEMPLATE_IPHONE_UDID="<dedicated-iPhone-17-Pro-UDID>"
 TEMPLATE_IPAD_UDID="<dedicated-iPad-Pro-13-inch-M5-UDID>"
 TEMPLATE_DERIVED_DATA=$(mktemp -d /tmp/ios-template-derived-data.XXXXXX)
 TEMPLATE_RESULT_BUNDLES=$(mktemp -d /tmp/ios-template-result-bundles.XXXXXX)
@@ -89,7 +89,7 @@ run_xcodebuild \
 
 ### canonical検証
 
-Issueの完了判定に使う検証は、上の手作業のコマンドではなく`tools/verify-ios-issue.sh`がrepository専用の2台で実行します。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行します（D-063、D-070）。
+Issueの完了判定に使う検証は、上の手作業のコマンドではなく`tools/verify-ios-issue.sh`がrepository専用の2台で実行します。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行します（D-063、D-070、D-079）。
 
 証拠の形式、画像評価、Head SHA 一致条件は [iOS verification](./verification.md) を正とします。Simulator のUDIDと結果ファイルは環境固有なのでGitへ追加しません。
 
@@ -204,7 +204,7 @@ Supabase、AdMob、ElevenLabs、分析、StoreKit、通知などは Foundation �
 
 `App Store/`は、英語・日本語metadata、privacy宣言、privacy policyとtermsの原稿、review notes、release notes、最終screenshots、提出チェックリストを一括管理する非秘密の正本です。テンプレートのURLと法務文書は未確定、画像は未生成なので、そのまま提出可能という意味ではありません。現在の公開要件は`App Store/submission/requirements.json`へ取得日時・参照元とともに固定し、準備時に期限切れなら実行モデルがApple公式資料から更新します。
 
-リリース候補がBuild/Test済みになったら [prepare-appstore-assets skill](../.agents/skills/prepare-appstore-assets/SKILL.md)で、実際の仕様から文面を生成し、repository専用の2台（App Storeの必須画像サイズで撮影できるiPhone 17 Pro MaxとiPad Pro 13-inch (M5)）で英日・iPhone/iPad画像を撮影します。全画像とprivacy/legal/metadataを`release-auditor`が同一SHA・同一build digestで承認し、初回公開時はユーザーがprivacy policyとtermsを確認した後だけ、変更検知可能なpackage manifestを作ります。
+リリース候補がBuild/Test済みになったら [prepare-appstore-assets skill](../.agents/skills/prepare-appstore-assets/SKILL.md)で、実際の仕様から文面を生成し、repository専用の2台（App Storeの必須画像サイズで撮影できるiPhone 17 ProとiPad Pro 13-inch (M5)）で英日・iPhone/iPad画像を撮影します。全画像とprivacy/legal/metadataを`release-auditor`が同一SHA・同一build digestで承認し、初回公開時はユーザーがprivacy policyとtermsを確認した後だけ、変更検知可能なpackage manifestを作ります。
 
 提出は [submit-appstore-release skill](../.agents/skills/submit-appstore-release/SKILL.md)をIssueで指定されたCodexまたはClaudeが実行します。実行モデルが設定済みTeam、App、Bundle ID、version、buildを確認し、App Store Connectへセクション単位で入力・保存・再読込します。
 

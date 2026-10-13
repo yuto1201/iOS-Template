@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "retrievedAt": "2026-08-26T00:00:00Z",
+  "retrievedAt": "2026-10-13T00:00:00Z",
   "maxAgeDays": 30,
   "sources": [
     "https://developer.apple.com/help/app-store-connect/reference/app-information/app-information",
@@ -22,11 +22,11 @@
     "allowAlpha": false,
     "requiredFamilies": [
       {
-        "id": "iphone-6.9",
+        "id": "iphone-6.3",
         "platform": "iphone",
-        "deviceTypes": ["iPhone Air", "iPhone 17 Pro Max", "iPhone 16 Pro Max"],
-        "portraitSizes": [[1260, 2736], [1290, 2796], [1320, 2868]],
-        "landscapeSizes": [[2736, 1260], [2796, 1290], [2868, 1320]]
+        "deviceTypes": ["iPhone 18 Pro", "iPhone 17 Pro", "iPhone 17", "iPhone 16 Pro", "iPhone 16", "iPhone 15 Pro", "iPhone 15", "iPhone 14 Pro"],
+        "portraitSizes": [[1179, 2556], [1206, 2622]],
+        "landscapeSizes": [[2556, 1179], [2622, 1206]]
       },
       {
         "id": "ipad-13",

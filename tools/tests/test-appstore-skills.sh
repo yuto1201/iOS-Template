@@ -104,9 +104,18 @@ require_text "$creative_refs/patterns.md" 'strip: N, index: i' 'patterns guide l
 require_text "$creative_refs/extension.md" '--device iphone-6\.3' 'extension guide lacks iPhone 6.3-inch rendering'
 require_text "$creative_skill/assets/goldie.config.ts" 'devices: \["iphone-6\.3"\]' 'iPhone starter config does not use iphone-6.3'
 require_text "$creative_refs/patterns.md" 'The iPhone tile is 1206×2622' 'patterns guide does not give the 1206x2622 iPhone tile'
-old_iphone_size=$(rg -n '1320|2868|17 Pro Max|6\.9-inch|6\.9インチ|iphone-6\.9' "$creative_skill" "$prepare_skill/SKILL.md" "$repo_root/docs/appstore-creative.md" |
+old_iphone_size=$(rg -n '1320|2868|17 Pro Max|6\.9-inch|6\.9インチ|iphone-6\.9' "$creative_skill" "$prepare_skill/SKILL.md" "$repo_root/docs/appstore-creative.md" \
+  "$repo_root/App Store/screenshots/README.md" |
   rg -v "^$creative_refs/extension\.md:[0-9]+:uses none of them on Goldie's own \`iphone-6\.9\`" || true)
 [[ -z "$old_iphone_size" ]] || { echo "the creative skill still names the old App Store iPhone size:" >&2; printf '%s\n' "$old_iphone_size" >&2; exit 1; }
+# D-079: capture guidance names the dedicated iPhone 17 Pro at 1206x2622 in family iphone-6.3.
+require_text "$prepare_skill/SKILL.md" 'dedicated iPhone 17 Pro captures .*1206×2622 \(family `iphone-6\.3`\)' 'prepare skill does not capture the D-079 iPhone size'
+require_text "$repo_root/App Store/screenshots/README.md" 'dedicated iPhone 17 Pro produces .*1206×2622 \(family `iphone-6\.3`\)' 'screenshot README does not name the D-079 iPhone size'
+ruby -e '
+  section = File.read(ARGV.fetch(0), encoding: "UTF-8")[/^### 3\.3 Phase 6のApp Store画像\n(.*?)(?=^##)/m, 1] or abort "verification guide lacks its App Store image section"
+  abort "verification guide does not name the D-079 iPhone size" unless section.include?("専用iPhone 17 Pro") && section.include?("1206×2622（family `iphone-6.3`")
+  abort "verification guide still names the old App Store iPhone size" if section.match?(/1320|2868|17 Pro Max|6\.9-inch|iphone-6\.9/)
+' "$repo_root/docs/verification.md"
 require_text "$prepare_skill/SKILL.md" 'appstore-creative-render\.sh render .*--device ipad-13' 'prepare skill does not render iPad through the extension'
 [[ -L "$repo_root/.claude/skills/prepare-appstore-assets" && "$(readlink "$repo_root/.claude/skills/prepare-appstore-assets")" == ../../.agents/skills/prepare-appstore-assets ]] || {
   echo 'prepare skill symlink is invalid' >&2; exit 1
@@ -158,8 +167,8 @@ package_digest() {
 
 write_valid_fixture() {
   rm -rf -- "$package"; mkdir -p "$project/tools" "$package/metadata/localizations" "$package/privacy" "$package/legal" "$package/review" \
-    "$package/release-notes" "$package/submission" "$package/screenshots/en-US/iphone-6.9" "$package/screenshots/en-US/ipad-13" \
-    "$package/screenshots/ja/iphone-6.9" "$package/screenshots/ja/ipad-13"
+    "$package/release-notes" "$package/submission" "$package/screenshots/en-US/iphone-6.3" "$package/screenshots/en-US/ipad-13" \
+    "$package/screenshots/ja/iphone-6.3" "$package/screenshots/ja/ipad-13"
   /bin/cp "$repo_root/tools/validate-appstore-package.sh" "$project/tools/validate-appstore-package.sh"
   chmod +x "$project/tools/validate-appstore-package.sh"
   cat > "$package/metadata/app.yml" <<EOF
@@ -218,13 +227,13 @@ EOF
   /bin/cp "$requirements_source" "$package/submission/requirements.json"
   local locale family counter=1
   for locale in en-US ja; do
-    for family in iphone-6.9 ipad-13; do
+    for family in iphone-6.3 ipad-13; do
       printf 'release screenshot %s\n' "$counter" > "$package/screenshots/$locale/$family/01-primary.png"; counter=$((counter+1))
     done
   done
   PACKAGE="$package" REQUIREMENTS="$package/submission/requirements.json" SOURCE_SHA="$source_sha" BUILD_DIGEST="$build_digest" ruby -rjson -rdigest -e '
     root=ENV.fetch("PACKAGE"); cases=[]
-    [["en-US","iphone-6.9"],["en-US","ipad-13"],["ja","iphone-6.9"],["ja","ipad-13"]].each do |locale,family|
+    [["en-US","iphone-6.3"],["en-US","ipad-13"],["ja","iphone-6.3"],["ja","ipad-13"]].each do |locale,family|
       relative="#{locale}/#{family}/01-primary.png"; absolute=File.join(root,"screenshots",relative)
       cases << {"locale"=>locale,"family"=>family,"state"=>"primary","order"=>1,"path"=>relative,"digest"=>"sha256:#{Digest::SHA256.file(absolute).hexdigest}"}
     end

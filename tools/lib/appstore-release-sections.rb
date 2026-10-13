@@ -432,7 +432,7 @@ module IOSTemplate
       seen = {}
       rows.map do |row|
         refuse('screenshot-case-invalid') unless row.is_a?(Hash) && row['path'].is_a?(String) &&
-          row['path'].match?(%r{\A(?:en-US|ja)/(?:iphone-6\.9|ipad-13)/[0-9]{2}-[a-z0-9-]+\.png\z}) &&
+          row['path'].match?(%r{\A(?:en-US|ja)/(?:iphone-6\.3|ipad-13)/[0-9]{2}-[a-z0-9-]+\.png\z}) &&
           row['digest'].to_s.match?(DIGEST) && row['locale'] == row['path'].split('/')[0] &&
           row['family'] == row['path'].split('/')[1] && row['order'].is_a?(Integer)
         refuse('duplicate-screenshot-path') if seen[row['path']]
@@ -442,9 +442,11 @@ module IOSTemplate
         refuse('screenshot-digest-mismatch') unless "sha256:#{Digest::SHA256.hexdigest(bytes)}" == row['digest']
         row.merge('absolutePath'=>path,'fileName'=>File.basename(path),'fileSize'=>bytes.bytesize,
                   'sourceFileChecksum'=>Digest::MD5.hexdigest(bytes),
-                  # asc 5.4.0 internal/screenshotcatalog/catalog.go normalizes
-                  # APP_IPHONE_69 to the API slot APP_IPHONE_67.
-                  'displayType'=>row['family'] == 'iphone-6.9' ? 'APP_IPHONE_67' : 'APP_IPAD_PRO_3GEN_129')
+                  # D-079: iphone-6.3 (Dynamic Island, medium display) goes to APP_IPHONE_61.
+                  # asc 5.4.0 internal/screenshotcatalog/catalog.go accepts APP_IPHONE_61 for
+                  # 1206x2622 and 1179x2556 without an API alias. The mapping is pending
+                  # confirmation until the first real save is read back from App Store Connect.
+                  'displayType'=>row['family'] == 'iphone-6.3' ? 'APP_IPHONE_61' : 'APP_IPAD_PRO_3GEN_129')
       end.sort_by { |row| [row['locale'],row['family'],row['order']] }
     end
 
@@ -467,7 +469,7 @@ module IOSTemplate
       snapshot.each do |locale, data|
         data.fetch('sets').each do |set|
           type = set.dig('set','attributes','screenshotDisplayType')
-          refuse('screenshot-set-unrecognized') unless %w[APP_IPHONE_67 APP_IPAD_PRO_3GEN_129].include?(type) &&
+          refuse('screenshot-set-unrecognized') unless %w[APP_IPHONE_61 APP_IPAD_PRO_3GEN_129].include?(type) &&
             set.dig('set','id').to_s.match?(ID) && set['screenshots'].is_a?(Array)
           set['screenshots'].each_with_index do |shot,index|
             attrs = shot['attributes'] if shot.is_a?(Hash)

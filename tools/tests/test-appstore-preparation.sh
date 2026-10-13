@@ -1934,7 +1934,7 @@ requirements_document["retrievedAt"] = Time.now.utc.iso8601
 File.write(File.join(project, requirements_relative), JSON.generate(requirements_document))
 screenshot_cases = []
 %w[en-US ja].each_with_index do |locale, locale_index|
-  [["iphone", "iphone-6.9", "iPhone 17 Pro Max", 1260, 2736], ["ipad", "ipad-13", "iPad Air (M4)", 2064, 2752]].each_with_index do |(device, family, device_type, width, height), device_index|
+  [["iphone", "iphone-6.3", "iPhone 17 Pro", 1206, 2622], ["ipad", "ipad-13", "iPad Air (M4)", 2064, 2752]].each_with_index do |(device, family, device_type, width, height), device_index|
     relative = "App Store/screenshots/#{locale}/#{family}/01-primary.png"
     FileUtils.mkdir_p(File.dirname(File.join(project, relative)))
     rgb = [40 + locale_index * 50, 80 + device_index * 50, 120].pack("C*")
@@ -2031,7 +2031,7 @@ asset_case.call("PNG CRC or stream corruption", "screenshots.iphone", "invalid-s
 end)
 asset_case.call("different valid image cannot reuse an adopted digest", "screenshots.iphone", "screenshot-image-digest-mismatch", lambda do
   target = "App Store/screenshots/#{screenshot_cases.first['path']}"
-  replacement = "App Store/screenshots/#{screenshot_cases.find { |entry| entry['locale'] == 'ja' && entry['family'] == 'iphone-6.9' }['path']}"
+  replacement = "App Store/screenshots/#{screenshot_cases.find { |entry| entry['locale'] == 'ja' && entry['family'] == 'iphone-6.3' }['path']}"
   FileUtils.copy_file(File.join(project, replacement), File.join(project, target))
 end)
 asset_case.call("dirty application source cannot reuse an old build", "build", "distribution-source-revision-mismatch", lambda do
@@ -2105,6 +2105,20 @@ asset_case.call("old screenshot requirements are not current", "screenshots.ipho
   requirements = JSON.parse(asset_originals[requirements_relative])
   requirements["retrievedAt"] = (Time.now.utc - 40 * 86_400).iso8601
   File.write(File.join(project, requirements_relative), JSON.generate(requirements))
+  refresh_asset_references.call
+end)
+# D-079: the iPhone family is Dynamic Island (medium display). The former iPhone 6.9-inch size and the
+# former dedicated iPhone 17 Pro Max do not satisfy iphone-6.3.
+asset_case.call("iPhone 6.9-inch size is not an iphone-6.3 size", "screenshots.iphone", "invalid-screenshot-dimensions", lambda do
+  manifest = JSON.parse(asset_originals[manifest_relative])
+  manifest["cases"].find { |entry| entry["locale"] == "en-US" && entry["family"] == "iphone-6.3" }.merge!("width" => 1320, "height" => 2868)
+  File.write(File.join(project, manifest_relative), JSON.generate(manifest))
+  refresh_asset_references.call
+end)
+asset_case.call("iPhone 17 Pro Max is not an iphone-6.3 model", "screenshots.iphone", "screenshot-identity-mismatch", lambda do
+  manifest = JSON.parse(asset_originals[manifest_relative])
+  manifest["cases"].find { |entry| entry["locale"] == "en-US" && entry["family"] == "iphone-6.3" }["deviceType"] = "iPhone 17 Pro Max"
+  File.write(File.join(project, manifest_relative), JSON.generate(manifest))
   refresh_asset_references.call
 end)
 stdout, _, status = Open3.capture3(entrypoint, "--project-root", project)

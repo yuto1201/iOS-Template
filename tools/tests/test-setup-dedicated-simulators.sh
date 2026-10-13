@@ -9,9 +9,9 @@ tool="$repo_root/tools/setup-dedicated-simulators.sh"
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/ios-template-dedicated-setup-test.XXXXXX")"
 trap 'rm -rf -- "$workspace"' EXIT
 
-iphone_name='iOS-Template iPhone 17 Pro Max'
+iphone_name='iOS-Template iPhone 17 Pro'
 ipad_name='iOS-Template iPad Pro 13-inch (M5)'
-iphone_type='com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max'
+iphone_type='com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro'
 ipad_type='com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB'
 runtime='com.apple.CoreSimulator.SimRuntime.iOS-27-0'
 
@@ -108,7 +108,7 @@ run_tool
 ruby -rjson -e 'abort "rerun did not report present devices" unless JSON.parse(File.read(ARGV[0]))["devices"].all? { |entry| entry["status"] == "present" }' "$state/stdout"
 assert_only_list_and_create
 
-prepare partial "$iphone_name|$iphone_type|$runtime|true" "iPhone 17 Pro Max|$iphone_type|$runtime|true"
+prepare partial "$iphone_name|$iphone_type|$runtime|true" "iPhone 17 Pro|$iphone_type|$runtime|true"
 run_tool
 [[ "$(creates)" == 1 && "$(device_count "$iphone_name")" == 1 && "$(device_count "$ipad_name")" == 1 ]] || { echo 'partial setup did not create only the missing device' >&2; exit 1; }
 grep -Fxq "simctl create $ipad_name $ipad_type $runtime" "$state/calls.log"
@@ -132,7 +132,7 @@ assert_blocked 'missing Runtime' 'declared Runtime com.apple.CoreSimulator.SimRu
 sed 's/iPad-Pro-13-inch-M5-12GB/iPad-Z99/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/missing-type.json"
 prepare missing-type
 assert_blocked 'missing Device Type' 'declared Device Type com.apple.CoreSimulator.SimDeviceType.iPad-Z99 is not available' --config "$workspace/missing-type.json"
-sed 's/"iOS-Template iPhone 17 Pro Max"/"iOS-Template-shared"/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/protected-name.json"
+sed 's/"iOS-Template iPhone 17 Pro"/"iOS-Template-shared"/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/protected-name.json"
 prepare protected-name
 assert_blocked 'protected name' 'Simulator declaration name is invalid' --config "$workspace/protected-name.json"
 ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["devices"].pop; File.write(ARGV[1], JSON.generate(value))' \
@@ -149,8 +149,26 @@ fi
 [[ "$(device_count "$iphone_name")" == 0 ]] || { echo 'failed create left a device' >&2; exit 1; }
 assert_only_list_and_create
 
+# D-079: the old dedicated iPhone 17 Pro Max is left for the user to delete. With it still present, setup
+# creates the new iPhone 17 Pro and the iPad, and never touches or removes the old device.
+legacy_name='iOS-Template iPhone 17 Pro Max'
+legacy_type='com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max'
+prepare legacy "$legacy_name|$legacy_type|$runtime|true"
+run_tool
+[[ "$(creates)" == 2 && "$(device_count "$iphone_name")" == 1 && "$(device_count "$ipad_name")" == 1 && "$(device_count "$legacy_name")" == 1 ]] || {
+  echo 'setup did not create the new devices beside the old iPhone 17 Pro Max' >&2; exit 1;
+}
+assert_only_list_and_create
+! grep -Eq '17-Pro-Max|17 Pro Max' "$repo_root/Config/dedicated-simulators.json" || { echo 'the declaration still names iPhone 17 Pro Max' >&2; exit 1; }
+
 skill="$repo_root/.agents/skills/app-bootstrap/SKILL.md"
-grep -Fq 'tools/setup-dedicated-simulators.sh' "$skill" || { echo 'app-bootstrap skill does not run the setup tool' >&2; exit 1; }
-grep -Fq '`<display name> iPhone 17 Pro Max` and `<display name> iPad Pro 13-inch (M5)`' "$skill" || { echo 'app-bootstrap skill does not name the derived devices' >&2; exit 1; }
+grep -Fq 'tools/setup-dedicated-simulators.sh' "$skill" || { echo 'app-bootstrap skill does not name the setup tool' >&2; exit 1; }
+# D-079: the user creates the dedicated Simulators; AI only checks them read-only and stops when one is missing.
+grep -Fq "Have the user create this app's dedicated Simulators" "$skill" &&
+  grep -Fq 'do not run the setup tool yourself' "$skill" &&
+  grep -Fq 'If one is missing or does not match, stop as `blocked:environment`, hand the user the command above' "$skill" || {
+  echo 'app-bootstrap skill does not leave Simulator creation to the user' >&2; exit 1;
+}
+grep -Fq '`<display name> iPhone 17 Pro` and `<display name> iPad Pro 13-inch (M5)`' "$skill" || { echo 'app-bootstrap skill does not name the derived devices' >&2; exit 1; }
 
 echo 'dedicated Simulator setup tests passed'

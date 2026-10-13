@@ -69,3 +69,20 @@ D-075に従い、`AGENTS.md`を書き換えるときは、変更する文面を�
 -AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17 Pro Max`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリは表示名を前置した同じ機種とする。どちらもApp Storeの必須画像サイズで撮影できる機種である。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063とD-070。
 +AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリは表示名を前置した同じ機種とする。どちらもApp Storeの必須画像サイズで撮影できる機種である。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063、D-070とD-079。
 ```
+
+## #306（2026-10-13）
+
+- Issue: #306
+- 承認を記録したIssueコメント: https://github.com/yuto1201/iOS-Template/issues/306#issuecomment-6132861494（2026-10-12T21:23:16Z）
+- 承認: ユーザーが会話の中で、変更文面を示した確認に「承認する」と回答した。最初の記録は#294のコメント（https://github.com/yuto1201/iOS-Template/issues/294#issuecomment-6129244876）で、#294は#293とともに#306へ置き換えた。
+- 承認後の`AGENTS.md`（1行目を除く）のSHA-256: `sha256:2501b9293d7df33eb0c5bbac0072ad5863700b76bbbfef29f04f11f746a80156`
+
+承認した変更の文面:
+
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -61 +61 @@ Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの
+-workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression test、D-059に従い後続Issueがexact列挙するasc adapterのtool／helper／fixture／直接regression test、D-077に従い後続Issueがexact列挙する非認証creative producer（スキル、拡張層、提案シート、録画と品質確認）のtool／helper／fixture／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
++workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression test、D-059に従い後続Issueがexact列挙するasc adapterのtool／helper／fixture／直接regression test、D-077に従い後続Issueがexact列挙する非認証creative producer（スキル、拡張層、提案シート、録画と品質確認）のtool／helper／fixture／直接regression test、D-079に従い後続Issueがexact列挙する提出の要件（`App Store/submission/requirements.json`）とそのfixture／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
+```

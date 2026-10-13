@@ -16,8 +16,8 @@ write_valid_fixture() {
   rm -rf -- "$fixture_project"
   mkdir -p "$package_root/metadata/localizations" "$package_root/privacy" "$package_root/legal" \
     "$package_root/review" "$package_root/release-notes" "$package_root/submission" \
-    "$package_root/screenshots/en-US/iphone-6.9" "$package_root/screenshots/en-US/ipad-13" \
-    "$package_root/screenshots/ja/iphone-6.9" "$package_root/screenshots/ja/ipad-13"
+    "$package_root/screenshots/en-US/iphone-6.3" "$package_root/screenshots/en-US/ipad-13" \
+    "$package_root/screenshots/ja/iphone-6.3" "$package_root/screenshots/ja/ipad-13"
   cat > "$package_root/metadata/app.yml" <<'EOF'
 schemaVersion: 1
 bundleId: "com.yuto.TemplateApp"
@@ -89,7 +89,7 @@ releaseAuditorApproved: false
 EOF
   /bin/cp "$requirements" "$package_root/submission/requirements.json"
   for locale in en-US ja; do
-    for family in iphone-6.9 ipad-13; do
+    for family in iphone-6.3 ipad-13; do
       printf 'fixture image bytes' > "$package_root/screenshots/$locale/$family/01-primary.png"
     done
   done
@@ -111,6 +111,22 @@ assert_invalid() {
     exit 1
   fi
 }
+
+# D-079: the submission requirements and this fixture name the iPhone family Dynamic Island (medium display),
+# with Apple's models and sizes, and keep the iPad 13-inch family.
+ruby -rjson -e '
+  expected = [
+    {"id" => "iphone-6.3", "platform" => "iphone",
+     "deviceTypes" => ["iPhone 18 Pro", "iPhone 17 Pro", "iPhone 17", "iPhone 16 Pro", "iPhone 16", "iPhone 15 Pro", "iPhone 15", "iPhone 14 Pro"],
+     "portraitSizes" => [[1179, 2556], [1206, 2622]], "landscapeSizes" => [[2556, 1179], [2622, 1206]]},
+    {"id" => "ipad-13", "platform" => "ipad", "deviceTypes" => ["iPad Air (M4)", "iPad Pro (M5)", "iPad Pro (M4)"],
+     "portraitSizes" => [[2064, 2752], [2048, 2732]], "landscapeSizes" => [[2752, 2064], [2732, 2048]]}
+  ]
+  ARGV.each do |path|
+    families = JSON.parse(File.binread(path)).dig("screenshots", "requiredFamilies")
+    abort "screenshot families differ from D-079: #{path}" unless families == expected
+  end
+' "$requirements" "$repo_root/App Store/submission/requirements.json"
 
 write_valid_fixture
 ready=$("$validator" --root "$package_root" --project-root "$fixture_project" \
@@ -136,6 +152,13 @@ assert_invalid 'privacy and linked SDK mismatch' 'privacy/data-use.yml.collectsD
 write_valid_fixture
 rm -rf -- "$package_root/screenshots/ja/ipad-13"
 assert_invalid 'missing screenshot family' 'screenshots/ja/ipad-13'
+
+# D-079: images left in the former iPhone 6.9-inch family folder do not satisfy iphone-6.3.
+write_valid_fixture
+for locale in en-US ja; do
+  /bin/mv "$package_root/screenshots/$locale/iphone-6.3" "$package_root/screenshots/$locale/iphone-6.9"
+done
+assert_invalid 'former iPhone 6.9-inch family' 'screenshots/en-US/iphone-6.3'
 
 write_valid_fixture
 secret_fixture='actual-secret-value-42'

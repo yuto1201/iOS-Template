@@ -22,8 +22,8 @@ build_digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 /bin/cp "$repo_root/tools/tests/fixtures/appstore/requirements.json" "$requirements"
 ruby -rjson -e '
   path=ARGV.fetch(0); value=JSON.parse(File.binread(path))
-  family=value.fetch("screenshots").fetch("requiredFamilies").find{|entry| entry.fetch("id")=="iphone-6.9"}
-  family["deviceTypes"]=["iPhone 17 Pro Max"]
+  family=value.fetch("screenshots").fetch("requiredFamilies").find{|entry| entry.fetch("id")=="iphone-6.3"}
+  family["deviceTypes"]=["iPhone 17 Pro"]
   File.binwrite(path,JSON.generate(value))
 ' "$requirements"
 
@@ -49,16 +49,16 @@ write_png() {
 
 write_valid_fixture() {
   rm -rf -- "$raw" "$final"
-  mkdir -p "$raw/en-US/iphone-6.9" "$raw/en-US/ipad-13" "$raw/ja/iphone-6.9" "$raw/ja/ipad-13"
-  write_png "$raw/en-US/iphone-6.9/01-primary.png" 1260 2736 2 11
-  write_png "$raw/ja/iphone-6.9/01-primary.png" 1260 2736 2 12
+  mkdir -p "$raw/en-US/iphone-6.3" "$raw/en-US/ipad-13" "$raw/ja/iphone-6.3" "$raw/ja/ipad-13"
+  write_png "$raw/en-US/iphone-6.3/01-primary.png" 1206 2622 2 11
+  write_png "$raw/ja/iphone-6.3/01-primary.png" 1206 2622 2 12
   write_png "$raw/en-US/ipad-13/01-primary.png" 2064 2752 2 21
   write_png "$raw/ja/ipad-13/01-primary.png" 2064 2752 2 22
   RAW="$raw" REVIEW="$review" REQUIREMENTS="$requirements" SOURCE_SHA="$source_sha" RUNTIME="$runtime" BUILD_DIGEST="$build_digest" ruby -rjson -rdigest -e '
     raw=ENV.fetch("RAW")
     definitions=[
-      ["en-US","iphone-6.9","iPhone 17 Pro Max",1260,2736],
-      ["ja","iphone-6.9","iPhone 17 Pro Max",1260,2736],
+      ["en-US","iphone-6.3","iPhone 17 Pro",1206,2622],
+      ["ja","iphone-6.3","iPhone 17 Pro",1206,2622],
       ["en-US","ipad-13","iPad Air (M4)",2064,2752],
       ["ja","ipad-13","iPad Air (M4)",2064,2752]
     ]
@@ -115,22 +115,30 @@ assert_failure() {
 write_valid_fixture
 result=$(build_set)
 [[ "$result" == *'"status":"ready"'* ]] || { echo "valid screenshot set failed: $result" >&2; exit 1; }
-[[ -f "$final/en-US/iphone-6.9/01-primary.png" && -f "$final/ja/ipad-13/01-primary.png" && -f "$final/manifest.json" ]] || {
+[[ -f "$final/en-US/iphone-6.3/01-primary.png" && -f "$final/ja/ipad-13/01-primary.png" && -f "$final/manifest.json" ]] || {
   echo 'final screenshot set is incomplete' >&2; exit 1
 }
 
 write_valid_fixture
-write_png "$raw/en-US/iphone-6.9/01-primary.png" 1170 2532 2 31
+write_png "$raw/en-US/iphone-6.3/01-primary.png" 1170 2532 2 31
 refresh_digests
 assert_failure 'wrong dimensions' 'dimensions'
 
+# D-079: the iPhone family is Dynamic Island (medium display). A consistent iPhone 6.9-inch image
+# (1320x2868, the former dedicated iPhone 17 Pro Max size) is refused by the family sizes alone.
 write_valid_fixture
-write_png "$raw/en-US/iphone-6.9/01-primary.png" 1260 2736 6 32
+ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].find{|e| e["locale"]=="en-US" && e["family"]=="iphone-6.3"}.merge!("width"=>1320,"height"=>2868); File.binwrite(p,JSON.generate(v))' "$raw/manifest.json"
+write_png "$raw/en-US/iphone-6.3/01-primary.png" 1320 2868 2 33
+refresh_digests
+assert_failure 'iPhone 6.9-inch dimensions' 'en-US/iphone-6.3/01-primary.png:dimensions-not-allowed'
+
+write_valid_fixture
+write_png "$raw/en-US/iphone-6.3/01-primary.png" 1206 2622 6 32
 refresh_digests
 assert_failure 'alpha channel' 'alpha'
 
 write_valid_fixture
-/bin/cp "$raw/en-US/iphone-6.9/01-primary.png" "$raw/ja/iphone-6.9/01-primary.png"
+/bin/cp "$raw/en-US/iphone-6.3/01-primary.png" "$raw/ja/iphone-6.3/01-primary.png"
 refresh_digests
 assert_failure 'duplicate bytes' 'duplicate'
 
@@ -139,7 +147,7 @@ ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].rejec
 assert_failure 'missing locale' 'missing ja'
 
 write_valid_fixture
-ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].find{|e| e["locale"]=="en-US" && e["family"]=="iphone-6.9"}["order"]=2; File.binwrite(p,JSON.generate(v))' "$raw/manifest.json"
+ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].find{|e| e["locale"]=="en-US" && e["family"]=="iphone-6.3"}["order"]=2; File.binwrite(p,JSON.generate(v))' "$raw/manifest.json"
 assert_failure 'non-contiguous ordering' 'order'
 
 write_valid_fixture
@@ -151,13 +159,13 @@ ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].first
 assert_failure 'safe area clipping' 'safeArea'
 
 write_valid_fixture
-ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].find{|e| e["family"]=="iphone-6.9"}["deviceType"]="iPhone 17 Pro"; File.binwrite(p,JSON.generate(v))' "$raw/manifest.json"
-assert_failure 'required Pro Max capture' 'deviceType'
+ruby -rjson -e 'p=ARGV.fetch(0); v=JSON.parse(File.binread(p)); v["cases"].find{|e| e["family"]=="iphone-6.3"}["deviceType"]="iPhone 17 Pro Max"; File.binwrite(p,JSON.generate(v))' "$raw/manifest.json"
+assert_failure 'iPhone 17 Pro Max capture outside the family' 'deviceType'
 
-# D-063/D-070: capture leases only the dedicated Simulator that Config/dedicated-simulators.json
+# D-063/D-079: capture leases only the dedicated Simulator that Config/dedicated-simulators.json
 # declares for each platform and records the Apple model name of its family. The unmodified fixture
-# lists iPhone Air and iPad Air (M4) first and a user-owned iPhone Air is installed, so selecting by
-# the requirements order would capture on another device.
+# lists iPhone 18 Pro and iPad Air (M4) first and a user-owned iPhone 18 Pro is installed, so selecting
+# by the requirements order would capture on another device.
 dedicated_config="$repo_root/Config/dedicated-simulators.json"
 capture_runtime=$(jq -er '.devices[0].runtimeIdentifier' "$dedicated_config")
 iphone_name=$(jq -er '.devices[] | select(.family == "iphone") | .name' "$dedicated_config")
@@ -169,10 +177,15 @@ capture_requirements="$workspace/capture-requirements.json"
 fake_bin="$workspace/fake-bin"; mkdir -p "$fake_bin"
 # Each locale/family gets distinct bytes because the set builder rejects duplicate images.
 fake_pngs="$workspace/fake-png"
-write_png "$fake_pngs/en-US-iphone-6.9.png" 1320 2868 2 77
-write_png "$fake_pngs/ja-iphone-6.9.png" 1320 2868 2 78
+write_png "$fake_pngs/en-US-iphone-6.3.png" 1206 2622 2 77
+write_png "$fake_pngs/ja-iphone-6.3.png" 1206 2622 2 78
 write_png "$fake_pngs/en-US-ipad-13.png" 2064 2752 2 79
 write_png "$fake_pngs/ja-ipad-13.png" 2064 2752 2 80
+# A Simulator that still renders the former iPhone 17 Pro Max size (1320x2868) must not pass capture.
+old_size_pngs="$workspace/fake-png-old-size"
+write_png "$old_size_pngs/en-US-iphone-6.3.png" 1320 2868 2 87
+write_png "$old_size_pngs/ja-iphone-6.3.png" 1320 2868 2 88
+/bin/cp "$fake_pngs/en-US-ipad-13.png" "$fake_pngs/ja-ipad-13.png" "$old_size_pngs/"
 fake_log="$workspace/xcrun.log"
 fake_state="$workspace/simctl-state.json"
 resource_state="$workspace/resource-state"
@@ -185,7 +198,7 @@ ruby -rjson -e '
   puts JSON.generate("devices" => {runtime => [
     device.call("00000000-0000-0000-0000-000000000001", iphone_name, iphone_type),
     device.call("00000000-0000-0000-0000-000000000002", ipad_name, ipad_type),
-    device.call(user_udid, "iPhone Air", "com.apple.CoreSimulator.SimDeviceType.iPhone-Air")
+    device.call(user_udid, "iPhone 18 Pro", "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro")
   ]})
 ' "$capture_runtime" "$iphone_name" "$iphone_type" "$ipad_name" "$ipad_type" "$user_udid" > "$fake_state"
 cat > "$fake_bin/xcrun" <<'RUBY'
@@ -209,7 +222,8 @@ begin
     case ARGV
     when %w[-j devicetypes]
       puts JSON.generate("devicetypes" => [
-        {"name" => "iPhone Air", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-Air"},
+        {"name" => "iPhone 18 Pro", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro"},
+        {"name" => "iPhone 17 Pro", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"},
         {"name" => "iPhone 17 Pro Max", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max"},
         {"name" => "iPad Air 13-inch (M4)", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Air-13-inch-M4"},
         {"name" => "iPad Pro 13-inch (M5)", "identifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB"}
@@ -288,6 +302,34 @@ ruby -rjson -e '
 ' "$capture_requirements" "$ipad_air_only"
 assert_capture_blocked 'dedicated device outside the family' \
   'the dedicated ipad Simulator (iPad Pro 13-inch (M5)) is not a ipad-13 App Store device type' "$ipad_air_only" "$capture_runtime"
+# D-079: requirements that still name the former iPhone 6.9-inch family stop before any Simulator change,
+# because the dedicated iPhone 17 Pro is not one of its Apple models.
+former_iphone_family="$workspace/iphone-6.9-requirements.json"
+ruby -rjson -e '
+  value = JSON.parse(File.binread(ARGV.fetch(0)))
+  families = value.fetch("screenshots").fetch("requiredFamilies")
+  index = families.index { |entry| entry.fetch("id") == "iphone-6.3" } or abort "iphone-6.3 family is missing"
+  families[index] = {"id" => "iphone-6.9", "platform" => "iphone",
+    "deviceTypes" => ["iPhone Air", "iPhone 17 Pro Max", "iPhone 16 Pro Max"],
+    "portraitSizes" => [[1260, 2736], [1290, 2796], [1320, 2868]],
+    "landscapeSizes" => [[2736, 1260], [2796, 1290], [2868, 1320]]}
+  File.binwrite(ARGV.fetch(1), JSON.generate(value))
+' "$capture_requirements" "$former_iphone_family"
+assert_capture_blocked 'former iPhone 6.9-inch family' \
+  'the dedicated iphone Simulator (iPhone 17 Pro) is not a iphone-6.9 App Store device type' "$former_iphone_family" "$capture_runtime"
+assert_dedicated_devices_intact
+
+# D-079: a capture at the former iPhone 17 Pro Max size (1320x2868) does not satisfy iphone-6.3, publishes
+# nothing, and still releases every lease.
+: > "$fake_log"
+old_size_root="$workspace/capture-old-size"
+if run_capture appstore-old-size-session "$old_size_root" "$capture_requirements" "$capture_runtime" FAKE_PNG_DIR="$old_size_pngs"; then
+  echo 'capture accepted a 1320x2868 iPhone image' >&2; exit 1
+fi
+[[ ! -e "$old_size_root" ]] || { echo 'capture with the former iPhone size published output' >&2; exit 1; }
+grep -Fq 'capture dimensions do not satisfy iphone-6.3' "$workspace/capture.err" || {
+  echo "1320x2868 capture failed for another reason: $(<"$workspace/capture.err")" >&2; exit 1
+}
 assert_dedicated_devices_intact
 
 # A capture failure releases the exact lease and leaves the dedicated device shut down.
@@ -308,9 +350,9 @@ assert_dedicated_devices_intact
 ruby -rjson -e '
   value = JSON.parse(File.binread(ARGV.fetch(0)))
   abort "capture runtime" unless value.fetch("runtime") == ARGV.fetch(1)
-  expected = {"iphone-6.9" => ["iPhone 17 Pro Max", 1320, 2868], "ipad-13" => ["iPad Pro (M5)", 2064, 2752]}
+  expected = {"iphone-6.3" => ["iPhone 17 Pro", 1206, 2622], "ipad-13" => ["iPad Pro (M5)", 2064, 2752]}
   cases = value.fetch("cases")
-  abort "capture cases" unless cases.map { |entry| entry.values_at("locale", "family") }.sort == [%w[en-US ipad-13], %w[en-US iphone-6.9], %w[ja ipad-13], %w[ja iphone-6.9]]
+  abort "capture cases" unless cases.map { |entry| entry.values_at("locale", "family") }.sort == [%w[en-US ipad-13], %w[en-US iphone-6.3], %w[ja ipad-13], %w[ja iphone-6.3]]
   cases.each do |entry|
     abort "capture device or size for #{entry["family"]}" unless entry.values_at("deviceType", "width", "height") == expected.fetch(entry.fetch("family"))
   end

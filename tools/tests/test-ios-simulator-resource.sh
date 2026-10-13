@@ -227,11 +227,14 @@ edit_simctl 'state["saved"] = devices.find { |d| d["udid"] == args[0] }; devices
 expect_denied 'missing dedicated device' "must exist exactly once (found 0)" allocate session-3 attempt-3 iphone-ja
 edit_simctl 'devices << state["saved"]; devices << state["saved"].merge("udid" => "00000000-0000-0000-0000-000000000099")'
 expect_denied 'duplicate dedicated device' "must exist exactly once (found 2)" allocate session-3 attempt-3 iphone-ja
-edit_simctl 'devices.delete_if { |d| d["udid"] == "00000000-0000-0000-0000-000000000099" }; devices.find { |d| d["udid"] == args[0] }["deviceTypeIdentifier"] = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"' "$iphone_udid"
+# Another type: the former dedicated iPhone 17 Pro Max (D-079), which must no longer satisfy the declaration.
+other_iphone_type=com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max
+[[ "$other_iphone_type" != "$iphone_type" ]] || fail "the other iPhone type equals the declared one"
+edit_simctl 'devices.delete_if { |d| d["udid"] == "00000000-0000-0000-0000-000000000099" }; devices.find { |d| d["udid"] == args[0] }["deviceTypeIdentifier"] = args[1]' "$iphone_udid" "$other_iphone_type"
 expect_denied 'dedicated device with another type' "does not match its declared Device Type and Runtime" allocate session-3 attempt-3 iphone-ja
 edit_simctl 'devices.find { |d| d["udid"] == args[0] }["deviceTypeIdentifier"] = args[1]; state.delete("saved")' "$iphone_udid" "$iphone_type"
 expect_denied 'request for an undeclared type' "differ from the dedicated Simulator declaration" \
-  allocate session-3 attempt-3 iphone-ja "$owner_pid" 0 com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro
+  allocate session-3 attempt-3 iphone-ja "$owner_pid" 0 "$other_iphone_type"
 set_device_state "$iphone_udid" Booted
 expect_denied 'device booted outside a lease' "Booted outside a lease" allocate session-3 attempt-3 iphone-ja
 set_device_state "$iphone_udid" Shutdown
