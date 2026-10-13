@@ -1,0 +1,4 @@
+interface:
+  display_name: "iOS Template Sync — テンプレートの取り込み"
+  short_description: "テンプレートの更新を、事前の判定と分析と承認を経て、アプリの1つのIssueで取り込む"
+  default_prompt: "$ios-template-sync で、このアプリにテンプレートの最新のmainを取り込んでください。report、preflight、analyzeの結果を見せてから、承認をもらって進めてください。"

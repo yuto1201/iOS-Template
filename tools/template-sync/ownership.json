@@ -80,12 +80,14 @@
       "paths": [
         "tools/lib/template-sync-apply.rb",
         "tools/lib/template-sync.rb",
+        "tools/link-user-skill.sh",
         "tools/template-sync-codex-review.sh",
         "tools/template-sync.sh",
+        "tools/tests/test-link-user-skill.sh",
         "tools/tests/test-template-sync-apply.sh",
         "tools/tests/test-template-sync.sh"
       ],
-      "prefixes": ["docs/superpowers/", "tools/template-sync/", "tools/tests/fixtures/template-sync/"]
+      "prefixes": [".agents/user-skills/", "docs/superpowers/", "tools/template-sync/", "tools/tests/fixtures/template-sync/"]
     }
   ]
 }
