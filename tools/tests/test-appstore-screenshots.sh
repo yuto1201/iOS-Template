@@ -538,4 +538,65 @@ fi
   echo "the guarded empty-array expansion fails under /bin/bash" >&2; exit 1;
 }
 
+# #165 at the real call sites: outside test mode resource_test_flags is empty. A disposable copy of tools/
+# runs under /bin/bash 3.2 with test mode off. Its xcrun path is pointed at this test's fake xcrun and its
+# resource manager is a fake that refuses test flags, hands out the fake dedicated device of the requested
+# type and shuts it down on release, so the capture's own allocate and release lines run with the empty
+# array and no real simctl is ever called.
+empty_repo="$workspace/empty-flags"
+mkdir -p "$empty_repo/Config"
+rsync -a --exclude tests "$repo_root/tools/" "$empty_repo/tools/"
+/bin/cp "$repo_root/Config/dedicated-simulators.json" "$empty_repo/Config/"
+empty_capture="$empty_repo/tools/capture-appstore-screenshots.sh"
+[[ "$(grep -c '^  xcrun_bin=/usr/bin/xcrun$' "$empty_capture")" -eq 1 ]] || { echo 'capture no longer sets xcrun_bin once outside test mode' >&2; exit 1; }
+sed -i '' 's|^  xcrun_bin=/usr/bin/xcrun$|  xcrun_bin=${FAKE_XCRUN_FOR_COPY:?}|' "$empty_capture"
+cat >"$empty_repo/tools/lib/ios-simulator-resource.rb" <<'RUBY'
+# Fake resource manager for the empty-flag regression: it records each call and uses only the fake xcrun.
+require "json"
+require "securerandom"
+command, *rest = ARGV
+File.open(ENV.fetch("FAKE_RESOURCE_LOG"), "a") { |log| log.puts(([command] + rest).join(" ")) }
+abort "test flags reached the resource manager: #{rest.first}" unless rest.first == "--session"
+options = rest.each_slice(2).to_h
+leases = ENV.fetch("FAKE_RESOURCE_STATE")
+case command
+when "allocate"
+  devices = JSON.parse(File.read(ENV.fetch("FAKE_SIMCTL_STATE"))).fetch("devices").values.flatten
+  udid = devices.find { |device| device["deviceTypeIdentifier"] == options.fetch("--device-type") && device["name"].start_with?("iOS-Template ") }.fetch("udid")
+  id = SecureRandom.uuid
+  receipt = File.join(File.realpath(options.fetch("--receipt-dir")), "allocation-#{id}.json")
+  File.write(receipt, "{}\n")
+  line = [id, udid, receipt].join("\t")
+  File.write(File.join(leases, id), line)
+  puts line
+when "release"
+  line = File.read(File.join(leases, options.fetch("--allocation-id")))
+  system(ENV.fetch("FAKE_XCRUN_FOR_COPY"), "simctl", "shutdown", line.split("\t")[1]) or abort "fake shutdown failed"
+  puts line
+else abort "unexpected command #{command}"
+end
+RUBY
+git -C "$empty_repo" init -q
+git -C "$empty_repo" add -A
+git -C "$empty_repo" -c user.name='Capture Test' -c user.email=capture@example.invalid -c commit.gpgsign=false commit -q -m empty-flags
+mkdir -p "$workspace/empty-flags-leases"
+: > "$fake_log"
+env -u IOS_TEMPLATE_APPSTORE_XCRUN -u IOS_TEMPLATE_SIMULATOR_RESOURCE_STATE_ROOT -u IOS_TEMPLATE_SIMULATOR_RESOURCE_TEST_MODE \
+  FAKE_XCRUN_FOR_COPY="$fake_bin/xcrun" FAKE_XCRUN_LOG="$fake_log" FAKE_SIMCTL_STATE="$fake_state" FAKE_PNG_DIR="$fake_pngs" \
+  FAKE_RESOURCE_LOG="$workspace/empty-flags.log" FAKE_RESOURCE_STATE="$workspace/empty-flags-leases" IOS_TEMPLATE_APPSTORE_SETTLE_SECONDS=0 \
+  /bin/bash "$empty_capture" --requirements "$capture_requirements" --states "$states" --app-path "$workspace/Fake.app" \
+  --bundle-id com.yuto.TemplateApp --source-sha "$(git -C "$empty_repo" rev-parse HEAD)" --build-digest "$build_digest" \
+  --runtime "$capture_runtime" --output-root "$workspace/empty-flags-out" --issue 88 --batch-id appstore-empty-flags \
+  >"$workspace/empty-flags.out" 2>"$workspace/empty-flags.err" || {
+  echo "capture outside test mode failed with empty resource flags: $(<"$workspace/empty-flags.err")" >&2; exit 1;
+}
+! grep -q 'unbound variable' "$workspace/empty-flags.err" || { echo 'bash 3.2 stopped on the empty resource flags' >&2; exit 1; }
+ruby -e '
+  calls = File.readlines(ARGV.fetch(0)).map { |line| line.split.first(2) }
+  abort "resource calls: #{calls}" unless calls.length == 8 && calls.each_slice(2).all? { |pair| pair == [%w[allocate --session], %w[release --session]] }
+' "$workspace/empty-flags.log"
+[[ -f "$workspace/empty-flags-out/manifest.json" ]] || { echo 'capture outside test mode published no manifest' >&2; exit 1; }
+! rg -q '^simctl (create|clone|delete|rename) ' "$fake_log" || { echo 'capture outside test mode changed the device set' >&2; exit 1; }
+assert_dedicated_devices_intact
+
 echo 'PASS: App Store screenshots require exact images, deterministic locales, and release-only device families, and capture leases only the dedicated Simulators'
