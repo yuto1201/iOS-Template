@@ -166,4 +166,70 @@ ruby -rjson -e 'path = ARGV[0]; record = JSON.parse(File.read(path))
 expect_failure forged-kind 'sheet.json differs from the displayed sheet' "$tool" select --sheet "$workspace/forged-kind" --pattern B
 expect_failure preview-combination 'a combination applies only to a proposal sheet' "$tool" select --sheet "$root/p1" --tiles 1=A:1
 
+# A storyboard sheet compares exactly two preview storyboards of one device and locale. Each frame is a
+# still of one segment with its state, seconds and motion; a storyboard must run 15 to 30 seconds, and
+# the user chooses one listed storyboard whole. The page has the same CSP, digest and no-overwrite rules.
+frames() { # seconds... -> Japanese iPhone storyboard frames
+  ruby -rjson -e 'puts JSON.generate(ARGV.each_with_index.map { |seconds, index|
+    {"slot" => index + 1, "device" => "iphone", "locale" => "ja", "image" => "device.png", "state" => "primary",
+     "seconds" => Integer(seconds), "motion" => "花が揺れる", "caption" => "場面#{index + 1}"} })' "$@"
+}
+s1=$(pattern S1 "$(frames 6 6 6)")
+s2=$(pattern S2 "$(frames 5 5)")
+write_spec "$workspace/storyboard.json" storyboard "[$s1,$s2]"
+"$tool" build --spec "$workspace/storyboard.json" --root "$root" --revision s1 >/dev/null
+storyboard_sheet="$root/s1/sheet.html"
+grep -Fq "http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';" "$storyboard_sheet" || fail 'storyboard sheet lacks the restrictive CSP'
+! grep -Eiq 'https?://|url\(|@import|<script|<iframe|<object|<embed|<link|<form' "$storyboard_sheet" || fail 'storyboard sheet can reach the network or run script'
+[[ "$(grep -o '<img src="data:image/png;base64,' "$storyboard_sheet" | wc -l | tr -d ' ')" == 5 ]] || fail 'storyboard sheet does not embed every frame'
+ruby -rjson -rdigest -e '
+  record = JSON.parse(File.read(ARGV[0])); html = File.binread(ARGV[1])
+  abort "storyboard digest differs" unless record.fetch("sheetSha256") == "sha256:#{Digest::SHA256.hexdigest(html)}"
+  abort "storyboard kind" unless record.fetch("kind") == "storyboard" && record.fetch("patterns").map { |pattern| pattern.fetch("id") } == %w[S1 S2]
+  checks = record.fetch("patterns").to_h { |pattern| [pattern.fetch("id"), pattern.fetch("ruleCheck")] }
+  abort "valid storyboard failed" unless checks.fetch("S1").fetch("passed") && checks.fetch("S1").fetch("totalSeconds") == 18
+  abort "short storyboard passed" if checks.fetch("S2").fetch("passed")
+  abort "short storyboard reason" unless checks.fetch("S2").fetch("violations") == ["storyboard runs 10s; a preview must run 15 to 30 seconds"]
+  frame = record.dig("patterns", 0, "tiles", 0)
+  abort "storyboard frame fields" unless frame.values_at("slot", "kind", "device", "locale", "state", "seconds") == [1, "frame", "iphone", "ja", "primary", 6] &&
+    frame.fetch("sourceSha256").match?(/\Asha256:[0-9a-f]{64}\z/)
+' "$root/s1/sheet.json" "$storyboard_sheet"
+grep -Fq 'プレビュー動画の絵コンテ' "$storyboard_sheet" && grep -Fq 'primary ・ 6秒' "$storyboard_sheet" && grep -Fq '花が揺れる' "$storyboard_sheet" &&
+  grep -Fq '（合計18秒）' "$storyboard_sheet" || fail 'storyboard sheet does not show the state, seconds, motion and length'
+before=$(shasum -a 256 "$storyboard_sheet")
+expect_failure storyboard-rebuild 'revision already exists and is never replaced' "$tool" build --spec "$workspace/storyboard.json" --root "$root" --revision s1
+[[ "$(shasum -a 256 "$storyboard_sheet")" == "$before" ]] || fail 'rebuild changed the existing storyboard sheet'
+write_spec "$workspace/storyboard-one.json" storyboard "[$s1]"
+expect_failure one-storyboard 'a storyboard sheet compares exactly 2 storyboards; found 1' "$tool" build --spec "$workspace/storyboard-one.json" --root "$root" --revision s2
+write_spec "$workspace/storyboard-three.json" storyboard "[$s1,$s2,$(pattern S3 "$(frames 8 8)")]"
+expect_failure three-storyboards 'a storyboard sheet compares exactly 2 storyboards; found 3' "$tool" build --spec "$workspace/storyboard-three.json" --root "$root" --revision s2
+write_spec "$workspace/storyboard-kind.json" storyboard "[$s1,$(pattern S2 "$(tiles device pair device)")]"
+expect_failure storyboard-tile-kind 'unknown tile field in S2: kind' "$tool" build --spec "$workspace/storyboard-kind.json" --root "$root" --revision s2
+write_spec "$workspace/storyboard-devices.json" storyboard "[$s1,$(pattern S2 "$(frames 8 8 | sed 's/"iphone"/"ipad"/g')")]"
+expect_failure storyboard-devices 'both storyboards must use the same device and locale' "$tool" build --spec "$workspace/storyboard-devices.json" --root "$root" --revision s2
+write_spec "$workspace/storyboard-seconds.json" storyboard "[$s1,$(pattern S2 "$(frames 31 2)")]"
+expect_failure storyboard-seconds 'storyboard frame seconds of S2 must be an integer from 1 to 30' "$tool" build --spec "$workspace/storyboard-seconds.json" --root "$root" --revision s2
+write_spec "$workspace/storyboard-state.json" storyboard "[$s1,$(pattern S2 "$(frames 8 8 | sed 's/"primary"/"Primary State"/')")]"
+expect_failure storyboard-state 'storyboard frame state of S2 is invalid' "$tool" build --spec "$workspace/storyboard-state.json" --root "$root" --revision s2
+write_spec "$workspace/storyboard-url.json" storyboard "[$s1,$(pattern S2 "$(frames 8 8 | sed 's/花が揺れる/https:\/\/example.com/')")]"
+expect_failure storyboard-url 'S2.motion must not contain URLs, markup, or style imports' "$tool" build --spec "$workspace/storyboard-url.json" --root "$root" --revision s2
+[[ ! -e "$root/s2" ]] || fail 'a refused storyboard build left a revision behind'
+# Only a listed storyboard that runs 15 to 30 seconds can be chosen, and only whole.
+expect_failure storyboard-unknown 'unknown pattern id: S9' "$tool" select --sheet "$root/s1" --pattern S9
+expect_failure short-storyboard 'pattern S2 breaks the tile rules' "$tool" select --sheet "$root/s1" --pattern S2
+expect_failure storyboard-combination 'a combination applies only to a proposal sheet' "$tool" select --sheet "$root/s1" --tiles 1=S1:1
+cp -R "$root/s1" "$workspace/forged-seconds"
+ruby -rjson -e 'path = ARGV[0]; record = JSON.parse(File.read(path))
+  record["patterns"].find { |pattern| pattern["id"] == "S2" }["tiles"].each { |tile| tile["seconds"] = 10 }; File.write(path, JSON.generate(record))' \
+  "$workspace/forged-seconds/sheet.json"
+expect_failure forged-seconds 'sheet.json differs from the displayed sheet' "$tool" select --sheet "$workspace/forged-seconds" --pattern S2
+[[ ! -e "$root/s1/selection.json" ]] || fail 'a refused storyboard selection was recorded'
+"$tool" select --sheet "$root/s1" --pattern S1 >/dev/null
+ruby -rjson -e '
+  value = JSON.parse(File.read(ARGV[0])); record = JSON.parse(File.read(ARGV[1]))
+  abort "storyboard selection" unless value.fetch("selection") == {"type" => "pattern", "patternId" => "S1"} &&
+    value.fetch("decision") == "user-explicit" && value.fetch("revision") == "s1" && value.fetch("sheetSha256") == record.fetch("sheetSha256")
+' "$root/s1/selection.json" "$root/s1/sheet.json"
+expect_failure storyboard-reselect 'a selection is already recorded for this sheet and is never replaced' "$tool" select --sheet "$root/s1" --pattern S1
+
 echo 'appstore-creative sheet tests passed'
