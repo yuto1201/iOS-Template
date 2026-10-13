@@ -113,7 +113,7 @@ tools/template-sync.sh preflight --app-root /path/to/app --repo <owner>/<repo> \
 ```
 
 - `--app-root`は取り込み先の本体のcheckoutです。linked worktreeは受け付けません。`--repo`は取り込み先のGitHubのリポジトリです。
-- ほかの作業中（`busy`）：作業中の状態（`state:claimed`、`state:in-progress`、`state:verify-passed`、`state:review-requested`、`state:changes-requested`、`state:approved-for-merge`、`state:paused`、`blocked:*`）のIssue、開いているPR、本体以外のworktree、`main`以外のブランチにいるか未commitの変更がある本体のcheckoutのどれかがあれば`busy`、どれもなければ`idle`です。未追跡のファイルは一覧に出しますが、数えません。テンプレート同期Issueも、Claimすると作業中に数えられるので、この判定はClaimの前に行います。
+- ほかの作業中（`busy`）：作業中の状態（`state:claimed`、`state:in-progress`、`state:verify-passed`、`state:review-requested`、`state:changes-requested`、`state:approved-for-merge`、`state:paused`、`blocked:*`）のIssue、開いているPR、本体以外のworktree、`main`以外のブランチにいるか未commitの変更がある本体のcheckoutのどれかがあれば`busy`、どれもなければ`idle`です。未commitの変更には、`.gitignore`で除かれていない未追跡の新しいファイルも含めます。テンプレート同期Issueも、Claimすると作業中に数えられるので、この判定はClaimの前に行います。
 - 変更の大きさ（`large`）：基準commitが記録されていない、書き込むファイルが30を超える、手で確認するファイルが10を超える、共有の設定（`mixed`のファイルと決定事項の追記）に触れる、決定事項の番号が衝突している、取り込み先のIdentityが使えない、のどれかに当たれば`large`とし、当たった理由を並べます。それ以外は`normal`です。
 - `gh`が失敗した、60秒以内に答えない、答えを読めない場合は、判定できないとして止まり、`idle`とは報告しません。
 - 出力は`preflight.json`（toolが読む）と`preflight.md`（ユーザーが読む）です。
