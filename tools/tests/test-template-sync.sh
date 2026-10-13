@@ -969,6 +969,10 @@ record_base "$analysis_known" "$new_commit"
 commit_all "$analysis_known" created
 printf '%s\n' 'アプリの手順。' >>"$analysis_known/docs/workflow.md"
 printf '%s\n' 'アプリの説明。' >>"$analysis_known/docs/new-guide.md"
+# The app alone changes one file and deletes another that the template left as it was at the base: app-only
+# changes, which the plan keeps. Both are analysed as app-side changes against the base version.
+printf '%s\n' 'アプリだけの参照。' >>"$analysis_known/docs/references.md"
+rm "$analysis_known/docs/agent-contracts/ios-reviewer.md"
 commit_all "$analysis_known" app-changes
 "$template/tools/template-sync.sh" report --app-root "$analysis_known" --output-dir "$work/analysis-known-report" --work-dir "$work/cache" >/dev/null
 run_analysis known "$analysis_known" "$work/analysis-known-report/plan.json"
@@ -983,6 +987,14 @@ DECISION="$analysis_decision" ruby -r"$template/tools/lib/template-sync.rb" -rjs
   workflow = analysis["appChanges"].find { |change| change["path"] == "docs/workflow.md" }
   abort "base reference: #{workflow}" unless workflow["reference"] == {"kind" => "base", "commit" => ENV.fetch("NEW"), "transform" => "none"} &&
     workflow["difference"].values_at("kind", "added", "removed", "excerpt") == ["lines", 1, 0, ["+アプリの手順。"]]
+  only = analysis["appChanges"].select { |change| change["status"] == "app-only-change" }.map { |change| change.values_at("path", "action", "reference") }
+  base_ref = {"kind" => "base", "commit" => ENV.fetch("NEW"), "transform" => "none"}
+  abort "app-only changes: #{only}" unless only == [["docs/agent-contracts/ios-reviewer.md", "keep", base_ref], ["docs/references.md", "keep", base_ref]]
+  references = analysis["appChanges"].find { |change| change["path"] == "docs/references.md" }
+  deleted = analysis["appChanges"].find { |change| change["path"] == "docs/agent-contracts/ios-reviewer.md" }
+  abort "app-only edit: #{references}" unless references["difference"].values_at("kind", "added", "removed", "excerpt") == ["lines", 1, 0, ["+アプリだけの参照。"]] &&
+    references["options"] == %w[keep-app take-template merge] && references["reportHint"].is_a?(Hash)
+  abort "app-only deletion: #{deleted}" unless deleted["difference"] == {"kind" => "app-missing"} && deleted["options"] == %w[keep-app take-template merge]
   decisions = analysis["updates"].find { |entry| entry["path"] == "specs/decisions.md" }
   abort "decisions update: #{decisions}" unless decisions.values_at("status", "action", "commit", "decisions") == ["safe-update", "manual", ENV.fetch("A1"), ["D-078", ENV.fetch("DECISION")]] &&
     decisions["reason"].include?("決定事項はテンプレートのD-###を末尾へ追記する形で手で確認")
@@ -994,6 +1006,8 @@ expect_analysis_text known '- 変更の大きさ: 大きい（計画から求め
 expect_analysis_text known '新しい方は計画で追加します。古い方は計画で手で確認します。'
 expect_analysis_text known '- 手で確認: `specs/decisions.md` — '
 expect_analysis_text known "- 比べた版: 基準の版\`${new_commit:0:7}\`。"
+expect_analysis_text known '- 計画の判定: アプリ側だけの変更（アプリ側だけの変更なので残します。）'
+expect_analysis_text known '- 計画の判定: アプリ側だけの変更（アプリ側で削除したファイルなので、戻しません。）'
 expect_analysis_text known '- `docs/new-guide.md`（テンプレートで削除された）: テンプレートで削除されましたが、アプリ側に変更があります。'
 ! grep -Fq '事前の判定' "$work/analysis/known/analysis.md" || { echo 'an analysis without a preflight names one' >&2; exit 1; }
 

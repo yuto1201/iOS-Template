@@ -1131,6 +1131,7 @@ module TemplateSync
   # The categories an import brings into the target.
   RECEIVED_CATEGORIES = %w[template identity mixed].freeze
   CHANGE_OPTIONS = {"keep-app" => "アプリの変更を残す", "take-template" => "テンプレートに合わせる", "merge" => "両方を合わせる"}.freeze
+  APP_CHANGE_STATUSES = %w[conflict app-only-change].freeze
   REPORT_HINTS = {"candidate" => "ありそう", "app-specific" => "なさそう", "unclear" => "分からない"}.freeze
   UPDATE_ACTIONS = {"add" => "追加", "update" => "更新", "manual" => "手で確認"}.freeze
   # A difference is summarized by counts and at most EXCERPT_LINES changed lines of EXCERPT_WIDTH
@@ -1473,7 +1474,9 @@ module TemplateSync
   # (with a recorded base, the base version; otherwise the newest), three ways to settle it, and a
   # suggested finding on whether the change might be worth reporting back to the template.
   def app_change_entries(root, commit, ownership, plan, app_root, work)
-    conflicts = plan["files"].select { |file| file["status"] == "conflict" }.sort_by { |file| file["path"] }
+    # Both kinds of app-side change (D-078): a conflict, and, with a recorded base, a change or deletion of
+    # a file the template left as it was at the base, which the plan keeps.
+    conflicts = plan["files"].select { |file| APP_CHANGE_STATUSES.include?(file["status"]) }.sort_by { |file| file["path"] }
     return [] if conflicts.empty?
     app = read_app_files(app_root, plan["app"]["head"], conflicts.map { |file| file["path"] })
     identity = plan["app"]["identity"]
@@ -1491,7 +1494,7 @@ module TemplateSync
       # That commit's own tool could not transform it, so there is nothing to compare with.
       transform = "untransformable" if transform == "applied" && reference && source.nil?
       difference, added = describe_difference(source, app[path], work)
-      record = {"path" => path, "category" => file["category"], "reason" => file["reason"],
+      record = {"path" => path, "category" => file["category"], "status" => file["status"], "action" => file["action"], "reason" => file["reason"],
                 "reference" => reference && reference.merge("transform" => transform), "difference" => difference,
                 "options" => CHANGE_OPTIONS.keys, "reportHint" => report_hint(file, difference, added, identity)}
       record["rule"] = file["rule"] if file["rule"]
@@ -1727,7 +1730,7 @@ module TemplateSync
     lines << ""
     lines << "## 3. アプリ独自の改造"
     lines << ""
-    lines << "テンプレートのファイルをアプリ側で書き換えたもの（計画の「衝突する」）です。比べたテンプレートの版との違いを要約し、次の3つの候補を示します。どれにするかは、取り込みIssueの中でファイルごとに決めます。"
+    lines << "テンプレートのファイルをアプリ側で書き換えたり削除したりしたものです。計画の「衝突する」に加え、基準commitが記録されている取り込み先で、テンプレートが基準のまま変えていないファイルをアプリ側だけで変えた「アプリ側だけの変更」（計画はアプリの版を残します）も含めます。比べたテンプレートの版との違いを要約し、次の3つの候補を示します。どれにするかは、取り込みIssueの中でファイルごとに決めます。"
     lines << ""
     lines << "- #{CHANGE_OPTIONS["keep-app"]}: テンプレートの今回の変更は入りません。"
     lines << "- #{CHANGE_OPTIONS["take-template"]}: アプリの変更はなくなります。"
@@ -1743,6 +1746,7 @@ module TemplateSync
       lines << ""
       lines << "### `#{change["path"]}`"
       lines << ""
+      lines << "- 計画の判定: #{STATUS_LABELS.fetch(change["status"], change["status"])}（#{change["reason"]}）"
       lines << "- 比べた版: #{reference_note(change["reference"])}"
       lines.concat(difference_lines(change["difference"]))
       lines << "- 候補: #{change["options"].map { |option| CHANGE_OPTIONS.fetch(option) }.join("／")}"
