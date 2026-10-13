@@ -7,7 +7,9 @@ set -euo pipefail
 # and a commit with template-side changes; synthetic target repositories cover a recorded base,
 # an unknown base judged by each file's provenance (D-078), a non-template repository, app-side
 # changes, Identity transform, and a decision-number collision. The preflight (D-078) runs on a
-# synthetic target with a fake gh that answers only read-only list queries.
+# synthetic target with a fake gh that answers only read-only list queries. The analysis (D-078) adds
+# template commits with Issue and PR numbers, decisions and renames, and analyzes synthetic targets
+# with app changes, files of their own and work that must come first.
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby swiftc tar shasum
@@ -758,5 +760,319 @@ expect_failure preflight-not-a-plan '--plan must be a plan.json file' \
   'issue list --repo test-owner/garden-notes --state open --limit 1000 --json number,title,labels' \
   'pr list --repo test-owner/garden-notes --state open --limit 1000 --json number,title,headRefName')" ]] ||
   { echo "unexpected gh calls: $(sort -u "$gh_log")" >&2; exit 1; }
+
+# --- analyze: the analysis before a plan is approved (D-078) ---------------------------------
+# Three more template commits. A1 adds a guide, appends to docs/workflow.md and appends a decision; A2
+# renames docs/new-guide.md and A3 moves it again. Their subjects carry Issue and PR numbers, and A1's
+# message and added lines mention decisions, one of which the template does not have.
+new_commit=$(git -C "$template" rev-parse HEAD)
+analysis_decision=$(ruby -e 'ids = File.read(ARGV[0]).scan(/^## D-(\d{3,}):/).flatten.map(&:to_i); printf("D-%03d", ids.max + 1)' "$template/specs/decisions.md")
+printf '%s\n' '# Analysis guide' '' 'D-074の計画を承認する前に読む。' >"$template/docs/analysis-guide.md"
+printf '%s\n' 'D-069に従って決定事項を分ける。' >>"$template/docs/workflow.md"
+printf '%s\n' '' "## ${analysis_decision}: 分析の決定" '' '- Status: 確定' >>"$template/specs/decisions.md"
+commit_all "$template" "$(printf '%s\n' 'Issue #902: add the analysis guide (#903)' '' 'Explains the analysis of D-078. D-9999 is not a decision.')"
+analysis_a1=$(git -C "$template" rev-parse HEAD)
+git -C "$template" mv docs/new-guide.md docs/sync-guide.md
+commit_all "$template" 'Rename the new guide for D-078 (#905)'
+analysis_a2=$(git -C "$template" rev-parse HEAD)
+mkdir -p "$template/docs/sync"
+git -C "$template" mv docs/sync-guide.md docs/sync/guide.md
+commit_all "$template" 'Move the sync guide into its folder (#906)'
+analysis_a3=$(git -C "$template" rev-parse HEAD)
+mkdir -p "$work/analysis"
+
+# set_template_devices APP: the dedicated Simulator declaration points at the template's devices, and the
+# Identity record lacks sourceIdentityVersion.
+set_template_devices() {
+  (cd "$1" && ruby -rjson -e '
+    identity = JSON.parse(File.read("Config/app-identity.json"))
+    identity.delete("sourceIdentityVersion")
+    File.write("Config/app-identity.json", JSON.generate(identity))
+    simulators = JSON.parse(File.read("Config/dedicated-simulators.json"))
+    simulators["devices"].each { |device| device["name"] = device["name"].sub("Garden Notes ", "iOS-Template ") }
+    File.write("Config/dedicated-simulators.json", JSON.pretty_generate(simulators) + "\n")
+  ')
+}
+
+record_base() {
+  (cd "$1" && BASE="$2" ruby -rjson -e '
+    File.write("Config/template-base.json", JSON.pretty_generate({
+      "schemaVersion" => 1, "templateRepository" => "yuto1201/iOS-Template", "baseCommit" => ENV.fetch("BASE"),
+      "recordedAt" => "2026-10-05T00:00:00Z", "method" => "created"
+    }) + "\n")
+  ')
+}
+
+# run_analysis NAME APP PLAN [OPTION...]: one analysis of APP. Afterwards the target's status, HEAD and
+# every byte, its .git included, must be what they were (AC-7).
+run_analysis() {
+  local name=$1 app=$2 plan=$3 status head before
+  shift 3
+  status=$(GIT_OPTIONAL_LOCKS=0 git -C "$app" status --porcelain --untracked-files=all)
+  head=$(git -C "$app" rev-parse HEAD)
+  before=$(snapshot "$app")
+  "$template/tools/template-sync.sh" analyze --plan "$plan" --app-root "$app" --output-dir "$work/analysis/$name" \
+    --work-dir "$work/cache" --now 2026-10-13T00:00:00Z "$@" >"$work/analysis/$name.out"
+  [[ "$(snapshot "$app")" == "$before" && "$(git -C "$app" rev-parse HEAD)" == "$head" &&
+     "$(GIT_OPTIONAL_LOCKS=0 git -C "$app" status --porcelain --untracked-files=all)" == "$status" ]] ||
+    { echo "analysis $name changed the target" >&2; exit 1; }
+  # analysis.json carries the plan's digest (and the preflight's), the printed result agrees, and
+  # analysis.md is exactly the rendering of analysis.json.
+  RESULT="$work/analysis/$name" PLAN="$plan" ruby -r"$template/tools/lib/template-sync.rb" -rjson -rdigest -e '
+    dir = ENV.fetch("RESULT")
+    analysis = JSON.parse(File.read(File.join(dir, "analysis.json")))
+    printed = JSON.parse(File.read("#{dir}.out"))
+    plan_digest = "sha256:#{Digest::SHA256.file(ENV.fetch("PLAN")).hexdigest}"
+    abort "#{dir}: plan digest #{analysis["planDigest"]}" unless analysis["planDigest"] == plan_digest && printed["planDigest"] == plan_digest
+    abort "#{dir}: printed #{printed}" unless printed.values_at("status", "output", "summary") == ["analyzed", dir, analysis["summary"]] &&
+      printed["analysisDigest"] == "sha256:#{Digest::SHA256.file(File.join(dir, "analysis.json")).hexdigest}" &&
+      printed["preflightDigest"] == analysis["preflightDigest"]
+    abort "#{dir}: analysis.md is not the rendering of analysis.json" unless TemplateSync.render_analysis(analysis) == File.read(File.join(dir, "analysis.md"))
+  '
+}
+
+expect_analysis_text() {
+  grep -Fq -- "$2" "$work/analysis/$1/analysis.md" || { echo "analysis $1 lacks: $2" >&2; exit 1; }
+}
+
+# The main analysis target: the second version without a base record, with app changes (a line naming the
+# app, a tool, an Identity-transformed file, a colliding decision), an older Identity format, the
+# template's device names, the old name of the renamed guide, and files of its own: one with the name of a
+# template file, one copied from a template file, and two of its own.
+analysis_app="$work/analysis-app"
+make_app "$analysis_app" "$new_commit"
+git -C "$analysis_app" symbolic-ref HEAD refs/heads/main
+printf '%s\n' 'Garden Notesでは毎週の確認を加える。' >>"$analysis_app/docs/AUTHORITY.md"
+printf '%s\n' '# Treat an empty input as an empty list.' >>"$analysis_app/tools/lib/workflow-json.rb"
+printf '%s\n' 'アプリ側の検証の追記。' >>"$analysis_app/docs/verification.md"
+printf '%s\n' '' "## ${analysis_decision}: アプリの決定" '' '- Status: 確定' >>"$analysis_app/specs/decisions.md"
+set_template_devices "$analysis_app"
+mkdir -p "$analysis_app/notes"
+printf '%s\n' '# Workflow notes' '' 'The steps this app follows.' >"$analysis_app/notes/workflow.md"
+git -C "$template" show "$new_commit:docs/AUTHORITY.md" >"$analysis_app/notes/authority-copy.md"
+printf '%s\n' '# Notes' '' 'Only this app keeps these notes.' 'Nothing here comes from the template.' >"$analysis_app/notes/README.md"
+printf '%s\n' 'Garden Notes plans' 'Water the roses' 'Prune the hedge' >"$analysis_app/notes/app-notes.md"
+commit_all "$analysis_app" analysis-target
+"$template/tools/template-sync.sh" report --app-root "$analysis_app" --output-dir "$work/analysis-report" --work-dir "$work/cache" >/dev/null
+analysis_plan="$work/analysis-report/plan.json"
+PATH="$fake_bin:$PATH" FAKE_GH_LOG="$gh_log" "$template/tools/template-sync.sh" preflight --app-root "$analysis_app" \
+  --repo test-owner/garden-notes --plan "$analysis_plan" --output-dir "$work/analysis-preflight" --now 2026-10-13T00:00:00Z >/dev/null
+run_analysis main "$analysis_app" "$analysis_plan" --preflight "$work/analysis-preflight/preflight.json"
+
+RESULT="$work/analysis/main/analysis.json" PREFLIGHT="$work/analysis-preflight/preflight.json" BASE="$base" NEW="$new_commit" \
+A1="$analysis_a1" A2="$analysis_a2" A3="$analysis_a3" DECISION="$analysis_decision" ruby -rjson -rdigest -e '
+  analysis = JSON.parse(File.read(ENV.fetch("RESULT")))
+  preflight = JSON.parse(File.read(ENV.fetch("PREFLIGHT")))
+  abort "preflight digest: #{analysis["preflightDigest"]}" unless analysis["preflightDigest"] == "sha256:#{Digest::SHA256.file(ENV.fetch("PREFLIGHT")).hexdigest}" && analysis["preflightStatus"] == "idle"
+  # AC-3: each missing or outdated file names the commit of its newest version, the Issue and PR numbers
+  # in its subject, and the decisions that its message or its added lines mention and the template has.
+  updates = analysis["updates"].map { |entry| entry.values_at("path", "status", "action", "commit", "issue", "pullRequest", "decisions") }
+  expected = [
+    ["docs/analysis-guide.md", "missing", "add", ENV.fetch("A1"), 902, 903, %w[D-074 D-078]],
+    ["docs/sync/guide.md", "missing", "add", ENV.fetch("A3"), nil, 906, []],
+    ["docs/workflow.md", "safe-update", "update", ENV.fetch("A1"), 902, 903, %w[D-069 D-078]]
+  ]
+  abort "updates: #{updates}" unless updates == expected
+  abort "subject: #{analysis["updates"][0]}" unless analysis["updates"][0]["subject"] == "Issue #902: add the analysis guide (#903)"
+  # AC-4: the old name the target still has and the name the template has now are one pair; the target-only
+  # files with a template file name or with similar content are possible duplicates, and nothing else is.
+  renames = analysis["renames"].map { |pair| pair.values_at("oldPath", "newPath", "via", "commit", "pullRequest", "newAction", "oldAction") }
+  abort "renames: #{renames}" unless renames == [["docs/new-guide.md", "docs/sync/guide.md", ["docs/sync-guide.md"], ENV.fetch("A2"), 905, "add", nil]]
+  duplicates = analysis["duplicates"]
+  abort "duplicates: #{duplicates}" unless duplicates == [
+    {"path" => "notes/authority-copy.md", "sameName" => [], "similar" => [{"path" => "docs/AUTHORITY.md", "similarity" => 1.0}]},
+    {"path" => "notes/workflow.md", "sameName" => ["docs/workflow.md"], "similar" => []}
+  ]
+  abort "similarity measure: #{analysis["similarity"]}" unless analysis["similarity"].values_at("measure", "threshold", "maxBytes", "minLines") == ["line-set-jaccard", 0.6, 1_048_576, 3]
+  # AC-5: each file the app changed has the nearest version, a summary of the difference and three options.
+  changes = analysis["appChanges"].to_h { |change| [change["path"], change] }
+  abort "app changes: #{changes.keys}" unless changes.keys == %w[Config/dedicated-simulators.json docs/AUTHORITY.md docs/verification.md specs/decisions.md tools/lib/workflow-json.rb]
+  abort "options: #{changes.values.map { |change| change["options"] }.uniq}" unless changes.values.map { |change| change["options"] }.uniq == [%w[keep-app take-template merge]]
+  authority = changes["docs/AUTHORITY.md"]
+  abort "authority: #{authority}" unless authority["reference"] == {"kind" => "nearest", "commit" => ENV.fetch("NEW"), "changedLines" => 1, "transform" => "none"} &&
+    authority["difference"] == {"kind" => "lines", "added" => 1, "removed" => 0, "excerpt" => ["+Garden Notesでは毎週の確認を加える。"], "templateMode" => "100644", "appMode" => "100644"} &&
+    authority["reportHint"]["kind"] == "app-specific"
+  # The Identity-transformed file is compared with the nearest version transformed by the app Identity, so
+  # the template names are not differences.
+  verification = changes["docs/verification.md"]
+  abort "verification: #{verification}" unless verification["reference"].values_at("kind", "commit", "transform") == ["nearest", ENV.fetch("NEW"), "applied"] &&
+    verification["difference"].values_at("kind", "added", "removed", "excerpt") == ["lines", 1, 0, ["+アプリ側の検証の追記。"]] &&
+    verification["reportHint"]["kind"] == "candidate"
+  tool = changes["tools/lib/workflow-json.rb"]
+  abort "tool: #{tool}" unless tool["reference"].values_at("kind", "commit", "changedLines") == ["nearest", ENV.fetch("BASE"), 1] &&
+    tool["difference"].values_at("added", "removed") == [1, 0] && tool["reportHint"]["kind"] == "candidate"
+  abort "mixed files: #{changes.values_at("specs/decisions.md", "Config/dedicated-simulators.json")}" unless
+    changes.values_at("specs/decisions.md", "Config/dedicated-simulators.json").all? { |change| change["reportHint"]["kind"] == "app-specific" }
+  abort "other manual: #{analysis["otherManual"]}" unless analysis["otherManual"] == []
+  # AC-6: what must come first, in the order it is cleared.
+  prerequisites = analysis["prerequisites"]
+  abort "prerequisites: #{prerequisites.map { |item| item.values_at("order", "kind") }}" unless
+    prerequisites.map { |item| item.values_at("order", "kind") } == [[1, "identity-format"], [2, "decision-collision"], [3, "simulators"], [4, "base-record"], [5, "outdated-tools"]]
+  items = prerequisites.to_h { |item| [item["kind"], item] }
+  abort "collision: #{items["decision-collision"]}" unless items["decision-collision"]["collisions"] == [{"id" => ENV.fetch("DECISION"), "template" => "分析の決定", "app" => "アプリの決定"}] &&
+    items["decision-collision"]["message"].include?("`specs/app-decisions.md`の`A-###`へ移します（D-069）")
+  abort "identity format: #{items["identity-format"]}" unless items["identity-format"]["issues"].any? { |issue| issue.include?("sourceIdentityVersion") }
+  abort "simulators: #{items["simulators"]}" unless items["simulators"]["problems"].any? { |problem| problem.include?("テンプレート用の端末") }
+  abort "base record: #{items["base-record"]}" unless items["base-record"].values_at("status", "reason") == ["unknown", "Config/template-base.jsonがありません。"]
+  abort "tools: #{items["outdated-tools"]}" unless items["outdated-tools"].values_at("update", "manual") == [[], ["tools/lib/workflow-json.rb"]]
+  # AC-7: the summary counts, and the size is that of the preflight, with the work that must come first added.
+  summary = analysis["summary"]
+  abort "summary: #{summary}" unless summary == {"writeFiles" => 3, "manualFiles" => 5, "renamePairs" => 1, "possibleDuplicates" => 2,
+    "prerequisites" => %w[identity-format decision-collision simulators base-record outdated-tools], "size" => "large"}
+  size = analysis["size"]
+  abort "size: #{size}" unless size["source"] == "preflight" && size["estimate"] == "large" &&
+    size["reasons"].first(preflight["size"]["reasons"].length) == preflight["size"]["reasons"] &&
+    size["reasons"].last == {"kind" => "prerequisites", "items" => %w[identity-format simulators outdated-tools],
+                             "message" => "先に必要な整理があります（Identityの形式の違い、専用Simulatorの宣言、取り込み先のtoolの更新）。"}
+'
+for text in '- 書き込むファイル: 3個（30個を超えると大きい変更）' '- 手で確認するファイル: 5個（10個を超えると大きい変更）' \
+  '- 名前の変更で古い名前が残っているもの: 1組' '- 重複の可能性: 2個' \
+  '- 先に必要な整理: 5件（Identityの形式の違い、決定事項の番号の衝突、専用Simulatorの宣言、基準commitの記録、取り込み先のtoolの更新）' \
+  '- 変更の大きさ: 大きい（`preflight.json`の判定に、この分析で見つかった先に必要な整理を加えました）' \
+  '  - 理由: 基準commitが分かりません。Config/template-base.jsonがありません。' \
+  "- 追加: \`docs/analysis-guide.md\` — \`${analysis_a1:0:7}\`「Issue #902: add the analysis guide (#903)」（Issue #902、PR #903。関係する決定事項: D-074、D-078）" \
+  "- 追加: \`docs/sync/guide.md\` — \`${analysis_a3:0:7}\`「Move the sync guide into its folder (#906)」（PR #906。関係する決定事項: なし）" \
+  "- \`docs/new-guide.md\` → \`docs/sync/guide.md\`: \`${analysis_a2:0:7}\`「Rename the new guide for D-078 (#905)」（PR #905）で名前が変わりました。途中の名前は\`docs/sync-guide.md\`です。新しい方は計画で追加します。古い方の削除は計画に含まれないため、取り込みIssueで中身を確かめてから手で削除します。" \
+  '- `notes/authority-copy.md`: 中身が似ているテンプレートのファイル`docs/AUTHORITY.md`（一致度1.0）' \
+  '- `notes/workflow.md`: 同じ名前のテンプレートのファイル`docs/workflow.md`' \
+  '扱い（残す、削除する、テンプレートのファイルへまとめる）は、ユーザーが決めます。この分析はどれも変更しません。' \
+  "- 比べた版: 最も近い版\`${new_commit:0:7}\`（計画の判定では違いは1行）。" \
+  '- 違い: アプリ側で1行を加え、0行を削っています。空白だけの行を除いた最初の1行（`-`はテンプレートの版にだけある行、`+`はアプリにだけある行）:' \
+  '  +Garden Notesでは毎週の確認を加える。' \
+  '- 候補: アプリの変更を残す／テンプレートに合わせる／両方を合わせる' \
+  '- テンプレートへ戻す価値（所見の候補）: なさそう。アプリの名前（Garden Notes）を含む変更なので、アプリ固有の変更と見られます。' \
+  '- テンプレートへ戻す価値（所見の候補）: ありそう。アプリの名前を含まない変更です。テンプレートの不具合の修正や改善であれば、テンプレートでも役に立ちます。' \
+  '- テンプレートへ戻す価値（所見の候補）: なさそう。テンプレートとアプリの内容が混ざるファイルなので、違いはアプリの値や規則と見られます。' \
+  'テンプレートへの報告は、ユーザーが頼んだときだけ`report-template-issue`で行います。この分析は報告しません。' \
+  '取り込みIssueの最初の手順として、次の順に片付けます。' \
+  '1. Identityの形式の違い: `Config/app-identity.json`の形式がテンプレートと違います。Config/app-identity.jsonにsourceIdentityVersionがありません。形式を直します。' \
+  "2. 決定事項の番号の衝突: 決定事項の番号が衝突しています（${analysis_decision}）。アプリ固有の決定事項を\`specs/app-decisions.md\`の\`A-###\`へ移します（D-069）。移すまで、適用toolはテンプレートの決定事項を追記せずに止まります。" \
+  '3. 専用Simulatorの宣言: 専用Simulatorの宣言（`Config/dedicated-simulators.json`）を、取り込み先の表示名を前置した2台に直します。アプリの専用Simulatorが表示名「Garden Notes」で始まっていません。アプリの専用Simulatorがテンプレート用の端末を指しています。直すまで、適用toolは止まります。' \
+  "4. 基準commitの記録: 基準commitが記録されていません。Config/template-base.jsonがありません。この計画は、ファイルごとの出どころで判定しています（D-078）。推定の基準は\`${new_commit:0:7}\`です（参考）。記録は、適用toolが取り込んだテンプレートのcommitで作ります。" \
+  "   - ${analysis_decision}: テンプレート「分析の決定」／アプリ「アプリの決定」" \
+  '5. 取り込み先のtoolの更新: 検証に使う取り込み先のtoolのうち1個が、テンプレートの最新と違います。アプリ側で変えた1個は、取り込み先で検証する前に、「3. アプリ独自の改造」で扱いを決めます。' \
+  '   - 手で確認: `tools/lib/workflow-json.rb`' \
+  'この分析は読み取りだけで行い、取り込み先へ何も書き込んでいません。'; do
+  expect_analysis_text main "$text"
+done
+# Notes of the app's own, a README.md, the app's module folder and its records are not duplicates.
+for path in notes/README.md notes/app-notes.md GardenNotes/ContentView.swift Config/app-identity.json docs/new-guide.md; do
+  ! grep -Fq -- "- \`$path\`:" "$work/analysis/main/analysis.md" || { echo "analysis lists $path as a duplicate" >&2; exit 1; }
+done
+
+# A recorded base: the old name is in the plan as a deletion the app changed, so it is reviewed by hand and
+# listed with the other manual files; the app's own change to a file the template also changed is compared
+# with the base version. Without a preflight, the size comes from the plan.
+analysis_known="$work/analysis-known"
+make_app "$analysis_known" "$new_commit"
+record_base "$analysis_known" "$new_commit"
+commit_all "$analysis_known" created
+printf '%s\n' 'アプリの手順。' >>"$analysis_known/docs/workflow.md"
+printf '%s\n' 'アプリの説明。' >>"$analysis_known/docs/new-guide.md"
+# The app alone changes one file and deletes another that the template left as it was at the base: app-only
+# changes, which the plan keeps. Both are analysed as app-side changes against the base version.
+printf '%s\n' 'アプリだけの参照。' >>"$analysis_known/docs/references.md"
+rm "$analysis_known/docs/agent-contracts/ios-reviewer.md"
+commit_all "$analysis_known" app-changes
+"$template/tools/template-sync.sh" report --app-root "$analysis_known" --output-dir "$work/analysis-known-report" --work-dir "$work/cache" >/dev/null
+run_analysis known "$analysis_known" "$work/analysis-known-report/plan.json"
+RESULT="$work/analysis/known/analysis.json" PLAN="$work/analysis-known-report/plan.json" NEW="$new_commit" A1="$analysis_a1" \
+DECISION="$analysis_decision" ruby -r"$template/tools/lib/template-sync.rb" -rjson -e '
+  analysis = JSON.parse(File.read(ENV.fetch("RESULT")))
+  plan = JSON.parse(File.read(ENV.fetch("PLAN")))
+  abort "preflight digest without a preflight" if analysis.key?("preflightDigest")
+  renames = analysis["renames"].map { |pair| pair.values_at("oldPath", "newPath", "newAction", "oldAction") }
+  abort "renames: #{renames}" unless renames == [["docs/new-guide.md", "docs/sync/guide.md", "add", "manual"]]
+  abort "other manual: #{analysis["otherManual"]}" unless analysis["otherManual"].map { |file| file.values_at("path", "status") } == [["docs/new-guide.md", "deleted-in-template"]]
+  workflow = analysis["appChanges"].find { |change| change["path"] == "docs/workflow.md" }
+  abort "base reference: #{workflow}" unless workflow["reference"] == {"kind" => "base", "commit" => ENV.fetch("NEW"), "transform" => "none"} &&
+    workflow["difference"].values_at("kind", "added", "removed", "excerpt") == ["lines", 1, 0, ["+アプリの手順。"]]
+  only = analysis["appChanges"].select { |change| change["status"] == "app-only-change" }.map { |change| change.values_at("path", "action", "reference") }
+  base_ref = {"kind" => "base", "commit" => ENV.fetch("NEW"), "transform" => "none"}
+  abort "app-only changes: #{only}" unless only == [["docs/agent-contracts/ios-reviewer.md", "keep", base_ref], ["docs/references.md", "keep", base_ref]]
+  references = analysis["appChanges"].find { |change| change["path"] == "docs/references.md" }
+  deleted = analysis["appChanges"].find { |change| change["path"] == "docs/agent-contracts/ios-reviewer.md" }
+  abort "app-only edit: #{references}" unless references["difference"].values_at("kind", "added", "removed", "excerpt") == ["lines", 1, 0, ["+アプリだけの参照。"]] &&
+    references["options"] == %w[keep-app take-template merge] && references["reportHint"].is_a?(Hash)
+  abort "app-only deletion: #{deleted}" unless deleted["difference"] == {"kind" => "app-missing"} && deleted["options"] == %w[keep-app take-template merge]
+  decisions = analysis["updates"].find { |entry| entry["path"] == "specs/decisions.md" }
+  abort "decisions update: #{decisions}" unless decisions.values_at("status", "action", "commit", "decisions") == ["safe-update", "manual", ENV.fetch("A1"), ["D-078", ENV.fetch("DECISION")]] &&
+    decisions["reason"].include?("決定事項はテンプレートのD-###を末尾へ追記する形で手で確認")
+  abort "prerequisites: #{analysis["prerequisites"]}" unless analysis["prerequisites"] == []
+  expected = TemplateSync.size_estimate(plan).merge("source" => "plan")
+  abort "size: #{analysis["size"]}" unless analysis["size"] == expected && expected["estimate"] == "large"
+'
+expect_analysis_text known '- 変更の大きさ: 大きい（計画から求めた判定）'
+expect_analysis_text known '新しい方は計画で追加します。古い方は計画で手で確認します。'
+expect_analysis_text known '- 手で確認: `specs/decisions.md` — '
+expect_analysis_text known "- 比べた版: 基準の版\`${new_commit:0:7}\`。"
+expect_analysis_text known '- 計画の判定: アプリ側だけの変更（アプリ側だけの変更なので残します。）'
+expect_analysis_text known '- 計画の判定: アプリ側だけの変更（アプリ側で削除したファイルなので、戻しません。）'
+expect_analysis_text known '- `docs/new-guide.md`（テンプレートで削除された）: テンプレートで削除されましたが、アプリ側に変更があります。'
+! grep -Fq '事前の判定' "$work/analysis/known/analysis.md" || { echo 'an analysis without a preflight names one' >&2; exit 1; }
+
+# A target at the newest commit with that base: nothing to write, nothing to clear first, a normal change.
+analysis_normal="$work/analysis-normal"
+make_app "$analysis_normal" "$analysis_a3"
+git -C "$analysis_normal" symbolic-ref HEAD refs/heads/main
+record_base "$analysis_normal" "$analysis_a3"
+mkdir -p "$analysis_normal/notes"
+printf '%s\n' 'Garden Notes plans' 'Water the roses' 'Prune the hedge' >"$analysis_normal/notes/app-notes.md"
+commit_all "$analysis_normal" created
+"$template/tools/template-sync.sh" report --app-root "$analysis_normal" --output-dir "$work/analysis-normal-report" --work-dir "$work/cache" >/dev/null
+normal_analysis_plan="$work/analysis-normal-report/plan.json"
+PATH="$fake_bin:$PATH" FAKE_GH_LOG="$gh_log" "$template/tools/template-sync.sh" preflight --app-root "$analysis_normal" \
+  --repo test-owner/garden-notes --plan "$normal_analysis_plan" --output-dir "$work/analysis-normal-preflight" --now 2026-10-13T00:00:00Z >/dev/null
+run_analysis normal "$analysis_normal" "$normal_analysis_plan" --preflight "$work/analysis-normal-preflight/preflight.json"
+RESULT="$work/analysis/normal/analysis.json" ruby -rjson -e '
+  analysis = JSON.parse(File.read(ENV.fetch("RESULT")))
+  abort "summary: #{analysis["summary"]}" unless analysis["summary"] == {"writeFiles" => 0, "manualFiles" => 0, "renamePairs" => 0,
+    "possibleDuplicates" => 0, "prerequisites" => [], "size" => "normal"}
+  abort "size: #{analysis["size"]}" unless analysis["size"].values_at("source", "estimate", "reasons") == ["preflight", "normal", []]
+  %w[updates renames duplicates appChanges otherManual prerequisites].each { |key| abort "#{key}: #{analysis[key]}" unless analysis[key] == [] }
+'
+for text in '- 変更の大きさ: 通常（`preflight.json`の判定）' '- 先に必要な整理: なし' '。ほかの作業中か: 作業中ではない'; do
+  expect_analysis_text normal "$text"
+done
+
+# No Identity: clearing it comes first, and an Identity file is compared with the template's version
+# before the transform, summarized in a few lines rather than the whole file.
+run_analysis no-identity "$app3" "$work/report3/plan.json"
+RESULT="$work/analysis/no-identity/analysis.json" ruby -rjson -e '
+  analysis = JSON.parse(File.read(ENV.fetch("RESULT")))
+  abort "prerequisites: #{analysis["prerequisites"].map { |item| item["kind"] }}" unless analysis["prerequisites"].map { |item| item["kind"] } == %w[identity-unavailable simulators base-record]
+  agents = analysis["appChanges"].find { |change| change["path"] == "AGENTS.md" }
+  abort "AGENTS.md: #{agents}" unless agents["reference"]["transform"] == "unavailable" && agents["difference"]["kind"] == "lines" &&
+    agents["difference"]["excerpt"].length == 5 && agents["difference"]["removed"] > 5
+  abort "missing files: #{analysis["updates"].length}" unless analysis["updates"].length > 100 && analysis["updates"].all? { |entry| entry["commit"] }
+'
+expect_analysis_text no-identity '1. Identityの未設定: 取り込み先のIdentityが使えません。Config/app-identity.jsonがありません。Identity bootstrapが未適用です。Identity bootstrapを済ませる（または`Config/app-identity.json`を直す）までは、Identity変換されるファイルを比べられず、適用toolも止まります。'
+expect_analysis_text no-identity '- 比べた版: テンプレートの最新の版'
+expect_analysis_text no-identity '。取り込み先のIdentityがないため、Identity変換の前の内容と比べました。'
+! grep -Fq -- "$(grep -v '^$' "$template/AGENTS.md" | tail -n 1)" "$work/analysis/no-identity/analysis.md" ||
+  { echo 'the analysis copied AGENTS.md instead of summarizing it' >&2; exit 1; }
+
+# AC-7: the plan must be for the target's current HEAD and a template commit the template's history has;
+# the preflight must be of that plan; the result goes outside the target. A refused analysis leaves nothing.
+expect_failure analysis-output-inside '--output-dir must not be inside the app repository' \
+  "$template/tools/template-sync.sh" analyze --plan "$analysis_plan" --app-root "$analysis_app" --output-dir "$analysis_app/analysis"
+expect_failure analysis-other-preflight 'the preflight was made for another plan' \
+  "$template/tools/template-sync.sh" analyze --plan "$analysis_plan" --app-root "$analysis_app" --output-dir "$work/analysis/other-preflight" \
+  --preflight "$work/analysis-normal-preflight/preflight.json"
+mkdir "$work/plans/unknown-commit"
+PLAN="$analysis_plan" OUT="$work/plans/unknown-commit" ruby -r"$template/tools/lib/template-sync.rb" -rjson -e '
+  plan = JSON.parse(File.read(ENV.fetch("PLAN")))
+  plan["template"]["commit"] = "0" * 40
+  File.write(File.join(ENV.fetch("OUT"), "plan.json"), TemplateSync.canonical_json(plan))
+  File.write(File.join(ENV.fetch("OUT"), "plan.md"), TemplateSync.render_markdown(plan))
+'
+expect_failure analysis-unknown-commit "the plan names template commit $(printf '0%.0s' {1..40}), which is not in the template's history" \
+  "$template/tools/template-sync.sh" analyze --plan "$work/plans/unknown-commit/plan.json" --app-root "$analysis_app" --output-dir "$work/analysis/unknown-commit"
+printf '%s\n' 'moved' >"$analysis_known/docs/moved.md"
+commit_all "$analysis_known" moved
+expect_failure analysis-moved-target 'the target moved since the plan was made' \
+  "$template/tools/template-sync.sh" analyze --plan "$work/analysis-known-report/plan.json" --app-root "$analysis_known" --output-dir "$work/analysis/moved"
+[[ ! -e "$analysis_app/analysis" && ! -e "$work/analysis/other-preflight" && ! -e "$work/analysis/unknown-commit" && ! -e "$work/analysis/moved" ]] ||
+  { echo 'a refused analysis left a result' >&2; exit 1; }
 
 echo "template sync report tests passed"
