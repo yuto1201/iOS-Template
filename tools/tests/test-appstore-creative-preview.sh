@@ -201,6 +201,27 @@ ruby -rjson -e 'path = ARGV[0]; record = JSON.parse(File.read(path)); record["vi
   "$workspace/encoded-bad-video/encode.json"
 expect_failure adopt-failed-video 'the encoded preview did not pass the quality gate' "$tool" decide --output "$decisions/bad-video/preview-decision.json" \
   --revision flower-r3 --decision adopt --reason 'x' --encode "$workspace/encoded-bad-video"
+# The saved final quality result must exist, pass, and be for the adopted video; a clip's result must
+# be for that clip. A passing flag in encode.json alone does not adopt a preview.
+cp -R "$workspace/encoded-iphone" "$workspace/encoded-no-final"
+rm "$workspace/encoded-no-final/quality/preview.json"
+expect_failure adopt-no-final 'the encoded preview has no passing quality result for this video' "$tool" decide \
+  --output "$decisions/no-final/preview-decision.json" --revision flower-r3 --decision adopt --reason 'x' --encode "$workspace/encoded-no-final"
+cp -R "$workspace/encoded-iphone" "$workspace/encoded-failed-final"
+ruby -rjson -e 'path = ARGV[0]; result = JSON.parse(File.read(path)); result["status"] = "failed"; File.write(path, JSON.generate(result))' \
+  "$workspace/encoded-failed-final/quality/preview.json"
+expect_failure adopt-failed-final 'the encoded preview has no passing quality result for this video' "$tool" decide \
+  --output "$decisions/failed-final/preview-decision.json" --revision flower-r3 --decision adopt --reason 'x' --encode "$workspace/encoded-failed-final"
+cp -R "$workspace/encoded-iphone" "$workspace/encoded-other-final"
+cp "$workspace/encoded-fives/quality/preview.json" "$workspace/encoded-other-final/quality/preview.json"
+jq -e '.status == "passed"' "$workspace/encoded-other-final/quality/preview.json" >/dev/null || fail 'the borrowed final result did not pass'
+expect_failure adopt-other-final 'the encoded preview has no passing quality result for this video' "$tool" decide \
+  --output "$decisions/other-final/preview-decision.json" --revision flower-r3 --decision adopt --reason 'x' --encode "$workspace/encoded-other-final"
+cp -R "$workspace/encoded-iphone" "$workspace/encoded-other-clip"
+cp "$workspace/encoded-fives/quality/seg1.json" "$workspace/encoded-other-clip/quality/seg1.json"
+jq -e '.status == "passed"' "$workspace/encoded-other-clip/quality/seg1.json" >/dev/null || fail 'the borrowed clip result did not pass'
+expect_failure adopt-other-clip 'a clip did not pass the quality gate: seg1' "$tool" decide \
+  --output "$decisions/other-clip/preview-decision.json" --revision flower-r3 --decision adopt --reason 'x' --encode "$workspace/encoded-other-clip"
 cp -R "$workspace/encoded-iphone" "$workspace/encoded-swapped"
 cp "$workspace/encoded-ipad/preview.mp4" "$workspace/encoded-swapped/preview.mp4"
 expect_failure adopt-swapped 'the encoded preview differs from its record' "$tool" decide --output "$decisions/swapped/preview-decision.json" \
@@ -213,7 +234,7 @@ expect_failure adopt-no-reason 'a decision needs a reason' "$tool" decide --outp
   --revision flower-r3 --decision adopt --reason '' --encode "$workspace/encoded-iphone"
 expect_failure no-video-encode 'no-video does not take --encode' "$tool" decide --output "$decisions/empty/preview-decision.json" \
   --revision flower-r3 --decision no-video --reason 'やめる' --encode "$workspace/encoded-iphone"
-for refused in bad bad-result bad-video swapped none empty; do
+for refused in bad bad-result bad-video no-final failed-final other-final other-clip swapped none empty; do
   [[ ! -e "$decisions/$refused/preview-decision.json" ]] || fail "a refused decision was recorded: $refused"
 done
 "$tool" check 2>/dev/null && fail 'unknown command accepted' || true

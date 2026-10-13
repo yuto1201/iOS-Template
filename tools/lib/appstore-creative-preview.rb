@@ -316,6 +316,15 @@ module AppStoreCreativePreview
     {"status" => "decided", "decision" => value["decision"], "output" => output}
   end
 
+  # A saved quality result counts only as a regular file that passed for exactly the given file.
+  def passed_result?(path, digest)
+    return false unless File.file?(path) && !File.symlink?(path)
+    result = JSON.parse(File.binread(path))
+    result.is_a?(Hash) && result["status"] == "passed" && result["clipSha256"] == digest
+  rescue JSON::ParserError
+    false
+  end
+
   def adopted_preview(directory)
     encode_record = regular!(File.join(directory, "encode.json"), "encode record")
     record = JSON.parse(File.binread(encode_record))
@@ -324,14 +333,18 @@ module AppStoreCreativePreview
     clips = record.fetch("clips")
     fail!("the encode record has no clips") unless clips.is_a?(Array) && !clips.empty?
     failed = clips.reject do |clip|
-      result = File.join(directory, "quality", "#{clip['segmentId']}.json")
-      clip["qualityStatus"] == "passed" && File.file?(result) && JSON.parse(File.binread(result))["status"] == "passed"
+      clip["qualityStatus"] == "passed" && passed_result?(File.join(directory, "quality", "#{clip['segmentId']}.json"), clip["sha256"])
     end
     fail!("a clip did not pass the quality gate: #{failed.map { |clip| clip['segmentId'] }.join(', ')}") unless failed.empty?
     fail!("the encoded preview did not pass the quality gate") unless record.dig("video", "qualityStatus") == "passed"
     video = regular!(File.join(directory, "preview.mp4"), "encoded preview")
     fail!("the encoded preview differs from its record") unless record.dig("video", "path") == "preview.mp4" &&
       sha256(video) == record.dig("video", "sha256")
+    # The format check below cannot see freezes, stutter or black frames, so the saved final result
+    # must be a pass for this very file.
+    unless passed_result?(File.join(directory, "quality", "preview.json"), sha256(video))
+      fail!("the encoded preview has no passing quality result for this video")
+    end
     # The adopted file is checked against the preview format once more at the moment of the choice.
     verify_video(video, target)
     {"video" => {"path" => video, "sha256" => record.dig("video", "sha256"), "device" => record["device"], "locale" => record["locale"],
