@@ -162,7 +162,13 @@ assert_only_list_and_create
 ! grep -Eq '17-Pro-Max|17 Pro Max' "$repo_root/Config/dedicated-simulators.json" || { echo 'the declaration still names iPhone 17 Pro Max' >&2; exit 1; }
 
 skill="$repo_root/.agents/skills/app-bootstrap/SKILL.md"
-grep -Fq 'tools/setup-dedicated-simulators.sh' "$skill" || { echo 'app-bootstrap skill does not run the setup tool' >&2; exit 1; }
+grep -Fq 'tools/setup-dedicated-simulators.sh' "$skill" || { echo 'app-bootstrap skill does not name the setup tool' >&2; exit 1; }
+# D-079: the user creates the dedicated Simulators; AI only checks them read-only and stops when one is missing.
+grep -Fq "Have the user create this app's dedicated Simulators" "$skill" &&
+  grep -Fq 'do not run the setup tool yourself' "$skill" &&
+  grep -Fq 'If one is missing or does not match, stop as `blocked:environment`, hand the user the command above' "$skill" || {
+  echo 'app-bootstrap skill does not leave Simulator creation to the user' >&2; exit 1;
+}
 grep -Fq '`<display name> iPhone 17 Pro` and `<display name> iPad Pro 13-inch (M5)`' "$skill" || { echo 'app-bootstrap skill does not name the derived devices' >&2; exit 1; }
 
 echo 'dedicated Simulator setup tests passed'
