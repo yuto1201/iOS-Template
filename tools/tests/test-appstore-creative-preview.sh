@@ -23,15 +23,15 @@ clip() { # path size seconds [extra filter]
 # D-079: the dedicated iPhone 17 Pro records 1206x2622 (family iphone-6.3); the dedicated iPad 2064x2752.
 iphone=1206x2622
 ipad=2064x2752
-record_dir() { # dir family locale size seconds... -> a recorder-shaped record.json
+record_dir() { # dir family locale size seconds[:planned]... -> a recorder-shaped record.json
   local dir=$1 family=$2 locale=$3 size=$4; shift 4
   mkdir -p "$dir/$locale/$family"
   local index=1 segments=()
   for seconds in "$@"; do
     local relative="$locale/$family/0$index-seg$index.mp4"
-    clip "$dir/$relative" "$size" "$seconds"
+    clip "$dir/$relative" "$size" "${seconds%%:*}"
     segments+=("$(ruby -rjson -rdigest -e 'puts JSON.generate({"id" => ARGV[0], "state" => "primary", "seconds" => Integer(ARGV[1]),
-      "allowStill" => false, "path" => ARGV[2], "sha256" => "sha256:#{Digest::SHA256.file(ARGV[3]).hexdigest}"})' "seg$index" "$seconds" "$relative" "$dir/$relative")")
+      "allowStill" => false, "path" => ARGV[2], "sha256" => "sha256:#{Digest::SHA256.file(ARGV[3]).hexdigest}"})' "seg$index" "${seconds##*:}" "$relative" "$dir/$relative")")
     index=$((index+1))
   done
   ruby -rjson -e 'puts JSON.pretty_generate({"schemaVersion" => 1, "family" => ARGV[0], "locale" => ARGV[1], "deviceType" => "test",
@@ -90,6 +90,28 @@ write_config "$workspace/app-ipad/goldie/ja" ipad-13 2
   --record "$workspace/rec-ipad" --output "$workspace/encoded-ipad" >/dev/null || fail 'iPad preview encode failed'
 assert_video "$workspace/encoded-ipad/preview.mp4" 1200 1600
 
+# AC-4: a clip is shown for one more frame than its first-to-last frame time, so an exact 15-second
+# recording and three 5-second segments make a 15-second preview, while a 14.9-second clip is refused.
+record_dir "$workspace/rec-exact" iphone-6.3 ja "$iphone" 15
+write_config "$workspace/app-one/goldie/ja" iphone-6.3 1
+"$tool" encode --config "$workspace/app-one/goldie/ja/goldie.config.mjs" --device iphone-6.3 --locale ja \
+  --record "$workspace/rec-exact" --output "$workspace/encoded-exact" >"$workspace/encode-exact.out" 2>&1 || {
+  cat "$workspace/encode-exact.out" >&2; fail 'an exact 15-second recording was refused'; }
+assert_video "$workspace/encoded-exact/preview.mp4" 886 1920
+jq -e '.clips | map(.durationSeconds) == [15]' "$workspace/encoded-exact/encode.json" >/dev/null ||
+  fail 'the exact 15-second clip was not counted as 15 seconds'
+record_dir "$workspace/rec-fives" iphone-6.3 ja "$iphone" 5 5 5
+"$tool" encode --config "$iphone_config" --device iphone-6.3 --locale ja \
+  --record "$workspace/rec-fives" --output "$workspace/encoded-fives" >"$workspace/encode-fives.out" 2>&1 || {
+  cat "$workspace/encode-fives.out" >&2; fail 'three 5-second segments were refused'; }
+assert_video "$workspace/encoded-fives/preview.mp4" 886 1920
+jq -e '.clips | map(.durationSeconds) == [5, 5, 5]' "$workspace/encoded-fives/encode.json" >/dev/null ||
+  fail 'the 5-second segments were not counted as 5 seconds each'
+record_dir "$workspace/rec-nearly" iphone-6.3 ja "$iphone" 14.9:15
+expect_failure nearly-15 'the clips run 14.90s; a preview must run 15 to 30 seconds' "$tool" encode \
+  --config "$workspace/app-one/goldie/ja/goldie.config.mjs" --device iphone-6.3 --locale ja \
+  --record "$workspace/rec-nearly" --output "$workspace/encoded-nearly"
+
 # AC-4: too short, too long, a failing clip, the former iPhone 17 Pro Max size, a changed or escaping
 # clip, the former family, and a family mismatch are refused, and a refused encode leaves nothing.
 record_dir "$workspace/rec-short" iphone-6.3 ja "$iphone" 5 5
@@ -122,7 +144,7 @@ expect_failure former-family 'device must be iphone-6.3 or ipad-13' "$tool" enco
   --device iphone-6.9 --locale ja --record "$workspace/rec-iphone" --output "$workspace/encoded-former-family"
 expect_failure wrong-family 'not ipad-13/ja' "$tool" encode --config "$iphone_config" \
   --device ipad-13 --locale ja --record "$workspace/rec-iphone" --output "$workspace/encoded-wrong"
-for refused in short long frozen former-size changed escape former-family wrong; do
+for refused in nearly short long frozen former-size changed escape former-family wrong; do
   [[ ! -e "$workspace/encoded-$refused" ]] || fail "a refused encode left output behind: $refused"
 done
 

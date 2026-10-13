@@ -111,8 +111,9 @@ module AppStoreCreativePreview
       next if quality.fetch("status") == "passed"
       fail!("clip #{clip.fetch('segmentId')} failed the quality gate: #{quality.fetch('reasons').join('; ')}")
     end
-    total = clips.sum { |clip| clip.dig("quality", "metrics", "durationSeconds") }
-    fail!(format("the clips run %.2fs; a preview must run 15 to 30 seconds", total)) unless SECONDS.cover?(total)
+    clips.each { |clip| clip["presentedSeconds"] = presented_seconds(clip) }
+    total = clips.sum { |clip| clip.fetch("presentedSeconds") }
+    fail!(format("the clips run %.2fs; a preview must run 15 to 30 seconds", total)) unless SECONDS.cover?(total.round(2))
 
     rendered = render_preview(config, device, locale, clips, options["runtime"])
     video = verify_video(rendered.fetch("path"), target)
@@ -145,7 +146,7 @@ module AppStoreCreativePreview
         "clips" => clips.map do |clip|
           clip.slice("segmentId", "source", "sha256", "originalPath", "plannedSeconds", "allowStill")
             .merge("qualityStatus" => clip.dig("quality", "status"),
-              "durationSeconds" => clip.dig("quality", "metrics", "durationSeconds"))
+              "durationSeconds" => clip.fetch("presentedSeconds"))
         end,
         "video" => video.merge("path" => "preview.mp4", "sha256" => sha256(File.join(staging, "preview.mp4")),
           "qualityStatus" => output_quality.fetch("status"))
@@ -232,12 +233,20 @@ module AppStoreCreativePreview
     process.stdout.write(`${JSON.stringify({ path, goldieVersion: version })}\n`);
   JS
 
+  # The quality gate measures from the first frame to the last; a clip plays one more frame interval,
+  # so a 15-second recording at 30 fps measures 14.967 seconds but is shown for 15.
+  def presented_seconds(clip)
+    metrics = clip.dig("quality", "metrics")
+    frames = metrics.fetch("frames")
+    (metrics.fetch("durationSeconds") * frames / (frames - 1)).round(3)
+  end
+
   def render_preview(config, device, locale, clips, runtime)
     extension = File.join(REPO_ROOT, "tools", "lib", "appstore-creative-render.mjs")
     regular!(extension, "render extension")
     payload = clips.map do |clip|
       {"segmentId" => clip.fetch("segmentId"), "file" => clip.fetch("file"),
-       "durationSeconds" => clip.dig("quality", "metrics", "durationSeconds")}
+       "durationSeconds" => clip.fetch("presentedSeconds")}
     end
     output = capture!("node", "--input-type=module", "-e", NODE_SCRIPT, config, extension, device, locale,
       JSON.generate(payload), runtime.to_s)

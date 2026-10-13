@@ -53,7 +53,7 @@ tools/appstore-creative-preview.sh encode --config goldie/ja/goldie.config.ts --
 
 The Goldie config needs a `kind: "preview"` scene whose segment ids match the recorded
 segments in order. `encode` passes each clip through the quality gate, refuses a total
-outside 15 to 30 seconds, renders with Goldie (H.264, 30 fps, a silent AAC track unless
+outside 15 to 30 seconds (each clip counts the time its last frame is shown), renders with Goldie (H.264, 30 fps, a silent AAC track unless
 the scene names `audio`), checks the result's size, codec, frame rate, length and audio
 track and passes it through the quality gate again, and writes `preview.mp4`,
 `encode.json` and every quality result to a new directory.
