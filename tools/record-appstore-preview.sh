@@ -107,6 +107,7 @@ staging=$(mktemp -d "$output_parent/.appstore-preview.XXXXXX")
 allocation_receipt_dir="$staging/simulator-allocations"
 /bin/mkdir -m 700 "$allocation_receipt_dir"
 attempt_id="appstore-preview-$$"
+allocation_output=
 active_allocation_id=
 active_allocation_udid=
 active_allocation_receipt=
@@ -115,6 +116,18 @@ sleep_pid=
 
 run_simulator_resource() {
   /usr/bin/ruby --disable-gems "$resource_manager" "$@"
+}
+
+# Bind the allocator's answer (allocation id, UDID, receipt) to the active lease. Bash runs an INT or TERM
+# trap only after the allocator returns, and that can be before the main flow reads its answer, so the
+# exit trap binds a pending answer itself and releases that lease before staging is deleted.
+bind_allocation() {
+  local physical
+  IFS=$'\t' read -r active_allocation_id active_allocation_udid active_allocation_receipt <<<"$allocation_output"
+  allocation_output=
+  physical=$(cd "$allocation_receipt_dir" && /bin/pwd -P) || return 1
+  [[ "$active_allocation_id" =~ ^[0-9a-f-]{36}$ && "$active_allocation_udid" =~ ^[0-9A-Fa-f-]+$ && \
+     "$active_allocation_receipt" == "$physical/allocation-$active_allocation_id.json" && -f "$active_allocation_receipt" ]]
 }
 
 release_active_simulator() {
@@ -169,6 +182,9 @@ cleanup() {
   if [[ -n "$sleep_pid" ]]; then kill "$sleep_pid" 2>/dev/null || true; fi
   if [[ -n "$recorder_pid" ]]; then
     stop_recorder || true
+  fi
+  if [[ -z "$active_allocation_id" && -n "$allocation_output" ]]; then
+    bind_allocation || cleanup_status=1
   fi
   if [[ -n "$active_allocation_id" ]]; then
     release_active_simulator appstore-preview-aborted || cleanup_status=1
@@ -267,11 +283,7 @@ allocation_output=$(run_simulator_resource allocate ${resource_test_flags[@]+"${
   --batch "$batch_id" --attempt "$attempt_id" --case "$case_id" --runtime "$runtime" \
   --device-type "$device_identifier" --owner-pid "$$" --wait-seconds 60 \
   --receipt-dir "$allocation_receipt_dir")
-IFS=$'\t' read -r active_allocation_id active_allocation_udid active_allocation_receipt <<<"$allocation_output"
-allocation_receipt_dir_physical=$(cd "$allocation_receipt_dir" && /bin/pwd -P)
-[[ "$active_allocation_id" =~ ^[0-9a-f-]{36}$ && "$active_allocation_udid" =~ ^[0-9A-Fa-f-]+$ && \
-   "$active_allocation_receipt" == "$allocation_receipt_dir_physical/allocation-$active_allocation_id.json" && \
-   -f "$active_allocation_receipt" ]] || { echo 'Simulator allocation receipt is invalid' >&2; exit 1; }
+bind_allocation || { echo 'Simulator allocation receipt is invalid' >&2; exit 1; }
 
 bounded_run appstore-simulator-boot "$simctl_timeout" "$xcrun_bin" simctl boot "$active_allocation_udid"
 bounded_run appstore-simulator-bootstatus "${IOS_TEMPLATE_SIMULATOR_BOOT_TIMEOUT_SECONDS:-300}" "$xcrun_bin" simctl bootstatus "$active_allocation_udid" -b

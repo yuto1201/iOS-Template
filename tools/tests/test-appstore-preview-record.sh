@@ -173,6 +173,11 @@ begin
     target.call["state"] = "Shutdown"
     File.binwrite(state_path, JSON.generate(state))
   when "erase"
+    # The lease erases inside the allocator; a signal to the recording tool here arrives mid-allocation.
+    if (signal = ENV["FAKE_SIGNAL_ON_ERASE"])
+      Process.kill(signal, Integer(File.read(ENV.fetch("FAKE_SIGNAL_PID_FILE")).strip))
+      sleep 0.5
+    end
     device = target.call
     abort "erase requires a shut down device" unless device["state"] == "Shutdown"
     device.delete("preferences")
@@ -391,6 +396,21 @@ for signal in INT TERM; do
   assert_lease_released "preview-$signal"
 done
 storyboard=$good_storyboard
+
+# INT and TERM during the allocation itself: bash runs the trap only after the allocator returns, before
+# the main flow reads its answer, so the exit trap must bind that answer and release the lease.
+for signal in INT TERM; do
+  : >"$fake_log"
+  if run_record "preview-allocating-$signal" "$workspace/refused" iphone-6.3 ja \
+    FAKE_SIGNAL_ON_ERASE="$signal" FAKE_SIGNAL_PID_FILE="$workspace/record.pid"; then
+    fail "a recording reported success after $signal during allocation"
+  fi
+  [[ "$(rg -c '^simctl erase ' "$fake_log")" == 1 ]] || fail "$signal was not sent during the allocation"
+  ! rg -q '^simctl (boot|install|launch|io) ' "$fake_log" || fail "the recording went on after $signal during allocation"
+  [[ ! -e "$workspace/refused" ]] || fail "a recording stopped by $signal during allocation published output"
+  assert_devices_intact
+  assert_lease_released "preview-allocating-$signal"
+done
 
 # A lease that cannot be released fails the run even after every clip was recorded (AC-4).
 : >"$fake_log"
