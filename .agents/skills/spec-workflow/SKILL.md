@@ -22,6 +22,10 @@ Keep `specs/` as the product truth and preserve the append-only decision history
 
 Start implementation only when the checker exits `0` and the Issue contract matches the approved acceptance criteria.
 
+## App Store Review Guidelines
+
+When a specification or Feature Issue adds or changes app behavior, apply [`app-review-guidelines`](../app-review-guidelines/SKILL.md) (D-081) before treating it as ready. Every `triggered` guideline whose `featureKinds` match the feature must appear as a concrete acceptance criterion, or the Issue states that no `triggered` guideline applies. A `user-judgment` guideline is decided by the user. An undecided guideline requirement that changes acceptance is `未決` and the Issue is `blocked:user`.
+
 ## Decision entries
 
 Copy [`templates/decision.md`](templates/decision.md) when a decision must be appended. Use the next ID in the right log and remove fields that genuinely do not apply.
