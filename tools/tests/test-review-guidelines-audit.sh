@@ -129,7 +129,10 @@ secret = 'password: SAMPLE-SECRET-VALUE'
 {
   'secret in invalid evidence' => ->(a) { a['items'].find { |x| x['id'] == '1.5' }['evidence'] = [secret] },
   'secret in an id' => ->(a) { a['items'] << { 'id' => secret, 'status' => 'satisfied', 'evidence' => ['x'] } },
-  'secret in a status' => ->(a) { a['items'].find { |x| x['id'] == '1.2' }['status'] = secret }
+  'secret in a status' => ->(a) { a['items'].find { |x| x['id'] == '1.2' }['status'] = secret },
+  'secret with a tab before the delimiter' => ->(a) { a['items'].find { |x| x['id'] == '2.1(a)' }['note'] = "password\t: SAMPLE-SECRET-VALUE" },
+  'secret with a newline before the delimiter' => ->(a) { a['items'].find { |x| x['id'] == '2.1(a)' }['note'] = "api key\n= SAMPLE-SECRET-VALUE" },
+  'secret in a key' => ->(a) { a['items'].find { |x| x['id'] == '2.1(a)' }['token: SAMPLE-SECRET-VALUE'] = 'x' }
 }.each do |label, mutate|
   audit = valid_audit(map, map_bytes, comment)
   mutate.call(audit)
@@ -207,5 +210,5 @@ require_all('skill pre-submission audit', skill, [
   require_all(path, File.read(File.join(repo_root, path), encoding: 'UTF-8'), values)
 end
 
-puts "review guidelines audit checker passed (#{mutations.size + 13} rejection cases)"
+puts "review guidelines audit checker passed (#{mutations.size + 16} rejection cases)"
 RUBY

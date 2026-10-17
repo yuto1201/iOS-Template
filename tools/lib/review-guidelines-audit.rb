@@ -127,7 +127,7 @@ module ReviewGuidelinesAudit
     errors << "guideline map retrievedAt is in the future" if age.negative?
 
     # Diagnostics never repeat submitted values, so a secret-like audit is refused before any other check.
-    return errors + ["audit contains secret-like text; remove it before checking"] if JSON.generate(audit).match?(SECRET_LIKE)
+    return errors + ["audit contains secret-like text; remove it before checking"] if secret_like?(audit)
 
     unless audit.keys.sort == AUDIT_KEYS
       errors << "audit keys must be exactly #{AUDIT_KEYS.join(', ')}"
@@ -182,6 +182,16 @@ module ReviewGuidelinesAudit
     seen.each { |id, count| errors << "audit item #{id} appears #{count} times" if count > 1 }
     (classes.keys - seen.keys).each { |id| errors << "audit misses guideline #{id}" }
     errors
+  end
+
+  # Checks every decoded key and string, so escaping in a serialized form cannot hide a separator.
+  def secret_like?(value)
+    case value
+    when Hash then value.any? { |key, child| secret_like?(key) || secret_like?(child) }
+    when Array then value.any? { |child| secret_like?(child) }
+    when String then value.match?(SECRET_LIKE)
+    else false
+    end
   end
 
   def check_item(item, klass, root, now)
