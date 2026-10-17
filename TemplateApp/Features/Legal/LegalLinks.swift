@@ -78,9 +78,13 @@ struct LegalLinksView: View {
         }
     }
 
+    /// The 44pt height is on the label, so the tappable area and the accessibility frame both get it.
     private func link(_ title: LocalizedStringKey, destination: URL, identifier: String) -> some View {
-        Link(title, destination: destination)
-            .frame(minHeight: 44)
-            .accessibilityIdentifier(identifier)
+        Link(destination: destination) {
+            Text(title)
+                .frame(minHeight: 44)
+                .contentShape(.rect)
+        }
+        .accessibilityIdentifier(identifier)
     }
 }
