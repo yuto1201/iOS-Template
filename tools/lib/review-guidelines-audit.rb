@@ -69,6 +69,9 @@ module ReviewGuidelinesAudit
   rescue InputError, OptionParser::ParseError, ArgumentError => e
     err.puts "review guidelines audit refused: #{e.message}"
     2
+  rescue SystemCallError, IOError
+    err.puts "review guidelines audit refused: an input could not be read"
+    2
   end
 
   def parse(argv)
@@ -91,9 +94,11 @@ module ReviewGuidelinesAudit
   end
 
   def read_regular(path, label)
-    raise InputError, "#{label} is missing: #{path}" unless path.file?
-    raise InputError, "#{label} must not be a symbolic link: #{path}" if path.symlink?
+    raise InputError, "#{label} is missing" unless path.file?
+    raise InputError, "#{label} must not be a symbolic link" if path.symlink?
     path.binread
+  rescue SystemCallError, IOError
+    raise InputError, "#{label} could not be read"
   end
 
   def parse_json(bytes, label)
@@ -120,6 +125,9 @@ module ReviewGuidelinesAudit
     age = (now.to_date - retrieved).to_i
     errors << "guideline map was retrieved #{age} days ago, beyond #{map['maxAgeDays']} days; recheck Apple's page first" if age > map["maxAgeDays"]
     errors << "guideline map retrievedAt is in the future" if age.negative?
+
+    # Diagnostics never repeat submitted values, so a secret-like audit is refused before any other check.
+    return errors + ["audit contains secret-like text; remove it before checking"] if JSON.generate(audit).match?(SECRET_LIKE)
 
     unless audit.keys.sort == AUDIT_KEYS
       errors << "audit keys must be exactly #{AUDIT_KEYS.join(', ')}"
@@ -159,21 +167,20 @@ module ReviewGuidelinesAudit
     seen = Hash.new(0)
     items.each_with_index do |item, index|
       unless item.is_a?(Hash) && item["id"].is_a?(String)
-        errors << "audit item #{index} must be an object with an id"
+        errors << "audit item at index #{index} must be an object with an id"
         next
       end
       id = item["id"]
-      seen[id] += 1
       klass = classes[id]
       if klass.nil?
-        errors << "audit item #{id} is not in the guideline map"
+        errors << "audit item at index #{index} is not in the guideline map"
         next
       end
+      seen[id] += 1
       errors.concat(check_item(item, klass, root, now))
     end
     seen.each { |id, count| errors << "audit item #{id} appears #{count} times" if count > 1 }
     (classes.keys - seen.keys).each { |id| errors << "audit misses guideline #{id}" }
-    errors << "audit contains secret-like text" if JSON.generate(audit).match?(SECRET_LIKE)
     errors
   end
 
@@ -181,7 +188,7 @@ module ReviewGuidelinesAudit
     id = item["id"]
     status = item["status"]
     allowed = STATUS_BY_CLASS.fetch(klass)
-    return ["audit item #{id} status #{status.inspect} is not allowed for #{klass}; use #{allowed.join(' or ')}"] unless allowed.include?(status)
+    return ["audit item #{id} status is not allowed for #{klass}; use #{allowed.join(' or ')}"] unless allowed.include?(status)
 
     required, optional = ITEM_KEYS.fetch(status)
     keys = item.keys.sort
@@ -194,7 +201,7 @@ module ReviewGuidelinesAudit
     when "satisfied"
       evidence = item["evidence"]
       if evidence.is_a?(Array) && !evidence.empty? && evidence.all? { |value| text?(value) }
-        evidence.each { |value| errors.concat(check_evidence(id, value, root)) }
+        evidence.each_with_index { |value, position| errors.concat(check_evidence("#{id} evidence #{position + 1}", value, root)) }
       else
         errors << "audit item #{id} needs at least one evidence location"
       end
@@ -210,17 +217,17 @@ module ReviewGuidelinesAudit
     value.is_a?(String) && !value.strip.empty? && value.length <= MAX_TEXT
   end
 
-  def check_evidence(id, value, root)
+  def check_evidence(label, value, root)
     return [] if value.match?(EVIDENCE_URL)
 
     relative = value.sub(/(?:#.*|:\d+(?:-\d+)?)\z/, "")
     path = Pathname.new(relative)
     if path.absolute? || relative.split("/").include?("..") || relative.empty?
-      return ["audit item #{id} evidence must be an https URL or a path inside the project: #{value}"]
+      return ["audit item #{label} must be an https URL or a path inside the project"]
     end
     target = root.join(path)
-    return ["audit item #{id} evidence path does not exist: #{relative}"] unless target.exist? || target.symlink?
-    return ["audit item #{id} evidence path must not be a symbolic link: #{relative}"] if target.symlink?
+    return ["audit item #{label} path does not exist"] unless target.exist? || target.symlink?
+    return ["audit item #{label} path must not be a symbolic link"] if target.symlink?
     []
   end
 

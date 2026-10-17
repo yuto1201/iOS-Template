@@ -103,7 +103,7 @@ mutations = {
   'user-judgment confirmed by AI' => [->(a) { a['items'].find { |x| x['id'] == '4.3' }['confirmation']['by'] = 'claude' }, /confirmed by the user/],
   'confirmation without a comment URL' => [->(a) { a['items'].find { |x| x['id'] == '4.3' }['confirmation']['reference'] = 'said yes in chat' }, /GitHub Issue comment URL/],
   'satisfied without evidence' => [->(a) { a['items'].find { |x| x['id'] == '1.5' }['evidence'] = [] }, /needs at least one evidence/],
-  'missing evidence path' => [->(a) { a['items'].find { |x| x['id'] == '1.5' }['evidence'] = ['App Store/legal/support.md'] }, /evidence path does not exist/],
+  'missing evidence path' => [->(a) { a['items'].find { |x| x['id'] == '1.5' }['evidence'] = ['App Store/legal/support.md'] }, /evidence 1 path does not exist/],
   'evidence outside the project' => [->(a) { a['items'].find { |x| x['id'] == '1.5' }['evidence'] = ['../secrets.txt'] }, /inside the project/],
   'not applicable without reason' => [->(a) { a['items'].find { |x| x['id'] == '1.2' }['reason'] = ' ' }, /needs a reason/],
   'unknown item key' => [->(a) { a['items'].find { |x| x['id'] == '1.2' }['decidedBy'] = 'ai' }, /keys must be/],
@@ -123,6 +123,55 @@ end
 
 stale_now = "#{(Date.iso8601(map['source']['retrievedAt']) + map['maxAgeDays'] + 1).iso8601}T00:00:00Z"
 expect('stale map', run_checker(checker, project(tmp, map_bytes), valid_audit(map, map_bytes, comment), stale_now), 1, /beyond 30 days/)
+
+# Diagnostics never repeat submitted values, so a secret-like value cannot leak through an error.
+secret = 'password: SAMPLE-SECRET-VALUE'
+{
+  'secret in invalid evidence' => ->(a) { a['items'].find { |x| x['id'] == '1.5' }['evidence'] = [secret] },
+  'secret in an id' => ->(a) { a['items'] << { 'id' => secret, 'status' => 'satisfied', 'evidence' => ['x'] } },
+  'secret in a status' => ->(a) { a['items'].find { |x| x['id'] == '1.2' }['status'] = secret }
+}.each do |label, mutate|
+  audit = valid_audit(map, map_bytes, comment)
+  mutate.call(audit)
+  status, out, err = run_checker(checker, project(tmp, map_bytes), audit, now)
+  fail!("#{label}: expected exit 1, got #{status}") unless status == 1
+  fail!("#{label}: diagnostics repeat the submitted value") if (out + err).include?('SAMPLE-SECRET-VALUE')
+  fail!("#{label}: secret-like text is not reported") unless out.include?('secret-like')
+end
+{
+  'invalid id' => ->(a) { a['items'] << { 'id' => 'X-SUBMITTED-ID', 'status' => 'satisfied', 'evidence' => ['x'] } },
+  'invalid status' => ->(a) { a['items'].find { |x| x['id'] == '1.2' }['status'] = 'X-SUBMITTED-STATUS' },
+  'invalid evidence' => ->(a) { a['items'].find { |x| x['id'] == '1.5' }['evidence'] = ['X-SUBMITTED-PATH'] }
+}.each do |label, mutate|
+  audit = valid_audit(map, map_bytes, comment)
+  mutate.call(audit)
+  status, out, err = run_checker(checker, project(tmp, map_bytes), audit, now)
+  fail!("#{label}: expected exit 1, got #{status}") unless status == 1
+  fail!("#{label}: diagnostics repeat the submitted value") if (out + err).include?('X-SUBMITTED')
+end
+
+# An existing input that cannot be read is refused with exit 2 and no traceback.
+unreadable_root = project(tmp, map_bytes)
+unreadable = File.join(unreadable_root, 'App Store/review/guidelines-audit.json')
+File.write(unreadable, JSON.generate(valid_audit(map, map_bytes, comment)))
+File.chmod(0o000, unreadable)
+if File.readable?(unreadable)
+  warn 'skipping the unreadable-input case: this user can read a mode-000 file'
+else
+  status, out, err = run_checker(checker, unreadable_root, nil, now)
+  File.chmod(0o600, unreadable)
+  fail!("unreadable audit: expected exit 2, got #{status}: #{out}#{err}") unless status == 2
+  fail!('unreadable audit: output must be a sanitized refusal') unless err.include?('audit could not be read') && !err.include?('Errno') && !err.include?('.rb:')
+end
+unreadable_map_root = project(tmp, map_bytes)
+File.write(File.join(unreadable_map_root, 'App Store/review/guidelines-audit.json'), JSON.generate(valid_audit(map, map_bytes, comment)))
+map_file = File.join(unreadable_map_root, '.agents/skills/app-review-guidelines/guidelines.json')
+File.chmod(0o000, map_file)
+unless File.readable?(map_file)
+  status, _out, err = run_checker(checker, unreadable_map_root, nil, now)
+  File.chmod(0o600, map_file)
+  fail!("unreadable map: expected exit 2, got #{status}") unless status == 2 && err.include?('guideline map could not be read')
+end
 
 expect('missing audit', run_checker(checker, project(tmp, map_bytes), nil, now), 2, /audit is missing/)
 expect('malformed audit', run_checker(checker, project(tmp, map_bytes), nil, now, raw: '{not json'), 2, /not valid JSON/)
@@ -158,5 +207,5 @@ require_all('skill pre-submission audit', skill, [
   require_all(path, File.read(File.join(repo_root, path), encoding: 'UTF-8'), values)
 end
 
-puts "review guidelines audit checker passed (#{mutations.size + 5} rejection cases)"
+puts "review guidelines audit checker passed (#{mutations.size + 13} rejection cases)"
 RUBY
