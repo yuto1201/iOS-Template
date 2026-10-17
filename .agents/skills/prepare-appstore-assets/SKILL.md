@@ -63,13 +63,14 @@ Each locale/family condition leases its platform's dedicated Simulator, which is
 1. Derive `metadata/`, localized English and Japanese copy, `privacy/data-use.yml`, review notes, and release notes from observable app behavior and confirmed specifications. Do not invent marketing, privacy, account-deletion, or legal claims.
 2. Draft privacy policy, terms, and support text from the same facts. For a first publication, stop until the user confirms the legal documents and an approval receipt is available. Mark their exact `Status: Confirmed`; an AI or release auditor cannot supply this approval. If public pages are required, complete the legal-page handoff above and bind the live verification record before treating their URLs as ready.
 3. Follow the Phase 6 screenshot routing above. Use `appstore-creative` for reviewed iPhone and iPad presentation, with every raw capture taken through the repository capture path. Preserve exact source/build provenance across imported and rendered images.
-4. Have the visual evaluator inspect every raw image for safe area, clipping, truthfulness, ordering, and English/Japanese parity. Then obtain `release-auditor` approval for the exact source SHA, build digest, package digest, privacy/legal declarations, and screenshots.
-5. Assemble final screenshots with `tools/build-appstore-screenshot-set.sh`. Never stretch or silently transform them.
-6. Validate the complete package with `tools/validate-appstore-package.sh --require-fresh`.
+4. Audit every App Store Review Guideline for this exact version and build in `App Store/review/guidelines-audit.json`, following the pre-submission audit of [`app-review-guidelines`](../app-review-guidelines/SKILL.md) (D-081). Recheck Apple's page date first, get the user's Issue-comment confirmation for every `user-judgment` guideline, and require `tools/check-review-guidelines.sh --project-root "$PWD" --bundle-id "$BUNDLE_ID" --version "$VERSION" --build "$BUILD"` to pass before the release-auditor review. A failing or stale audit stops preparation; never seal around it.
+5. Have the visual evaluator inspect every raw image for safe area, clipping, truthfulness, ordering, and English/Japanese parity. Then obtain `release-auditor` approval for the exact source SHA, build digest, package digest, privacy/legal declarations, screenshots, and the passing guideline audit.
+6. Assemble final screenshots with `tools/build-appstore-screenshot-set.sh`. Never stretch or silently transform them.
+7. Validate the complete package with `tools/validate-appstore-package.sh --require-fresh`.
 
 ## Seal the exact candidate
 
-Run the skill script only after the audit and, when applicable, user legal approval match the current package digest:
+Run the skill script only after the guideline audit check passes for this version and build, and the release audit and, when applicable, user legal approval match the current package digest. The guideline audit file is inside the package tree, so the package digest binds it:
 
 ```sh
 .agents/skills/prepare-appstore-assets/scripts/seal-package.sh \

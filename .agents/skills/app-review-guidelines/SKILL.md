@@ -1,13 +1,13 @@
 ---
 name: app-review-guidelines
-description: Use when planning an iOS feature, writing a Feature Issue, or checking Definition of Ready, to find which App Store Review Guidelines the feature triggers and put their concrete requirements into acceptance criteria (D-081), or when the guideline map must be rechecked against Apple's page.
+description: Use when planning an iOS feature, writing a Feature Issue, or checking Definition of Ready, to find which App Store Review Guidelines the feature triggers and put their concrete requirements into acceptance criteria (D-081); when auditing every guideline for a build before App Store submission; or when the guideline map must be rechecked against Apple's page.
 ---
 
-# App Store審査ガイドライン（計画時）
+# App Store審査ガイドライン
 
-Appleの[App Store審査ガイドライン](https://developer.apple.com/app-store/review/guidelines/)を、機能の計画時に適用する（D-081）。正本はAppleのページであり、このスキルの`guidelines.json`は、項目番号、日本語の短い要約、分類、関わる機能の種類、確かめ方だけを持つ対応表である。Appleの本文を写さない。
+Appleの[App Store審査ガイドライン](https://developer.apple.com/app-store/review/guidelines/)を、機能の計画時と提出の前の2か所で適用する（D-081）。正本はAppleのページであり、このスキルの`guidelines.json`は、項目番号、日本語の短い要約、分類、関わる機能の種類、確かめ方だけを持つ対応表である。Appleの本文を写さない。
 
-提出の前に全項目を点検する点検表と点検toolは、D-081の後続Issue(2)で扱う。このスキルは提出前の点検を行わず、点検の合格や審査の通過を示さない。
+計画時の手順は下の「計画時の手順」、提出の前の点検は「提出前の点検」に従う。どちらも審査の結果を予測・保証しない。
 
 ## 対応表
 
@@ -60,8 +60,43 @@ Appleのページの「Last Updated」が`source.lastUpdated`と違うとき、�
 4. `tools/tests/test-app-review-guidelines.sh`の`inventories`に、新しい更新日をキーとして、対応表とは別にAppleのページから数えた番号の一覧を加える。testは、対応表の`guidelines`、`containers`、`omitted`の番号がこの一覧と過不足なく一致することを確かめる。
 5. `tools/tests/test-app-review-guidelines.sh`を実行する。
 
+## 提出前の点検
+
+各アプリは、提出するbuildごとに、対応表のすべての項目を点検した点検表`App Store/review/guidelines-audit.json`を持つ。テンプレート自身は提出しないため、点検表をcommitしない。
+
+1. Appleのページの「Last Updated」を確かめる。対応表の`source.lastUpdated`と違えば提出を止め、先にテンプレートで対応表を更新して取り込む。取得日から`maxAgeDays`を超えた対応表も、確かめ直すまで使えない。
+2. 点検表を作る。形式：
+
+   ```json
+   {
+     "schemaVersion": 1,
+     "map": {"lastUpdated": "2026-10-16", "digest": "sha256:<guidelines.jsonのSHA-256>"},
+     "app": {"bundleId": "<Bundle ID>", "version": "<version>", "build": "<build>"},
+     "auditedAt": "<ISO 8601>",
+     "items": [
+       {"id": "1.5", "status": "satisfied", "evidence": ["<projectの中のpath、path:行、またはhttps URL>"]},
+       {"id": "1.2", "status": "not-applicable", "reason": "<当たらない理由>"},
+       {"id": "4.2", "status": "user-confirmed", "confirmation": {"by": "user", "confirmedAt": "<ISO 8601>", "reference": "https://github.com/<owner>/<repo>/issues/<n>#issuecomment-<id>"}}
+     ]
+   }
+   ```
+
+   - `always`は`satisfied`だけ、`triggered`は`satisfied`か`not-applicable`、`user-judgment`は`user-confirmed`だけを使う。各項目に`note`を添えてよい。
+   - `satisfied`の根拠は、実装、設定、文書、公開ページなど、確かめた場所を指す。
+   - `user-judgment`は、AIの所見をIssueのコメントに書いてユーザーに確認してもらい、ユーザーが確認したコメントのURLを`reference`に入れる。AIだけで`user-confirmed`にしない。
+   - 秘密、パスワード、デモアカウントの実値、個人情報を書かない。
+3. 点検toolを実行する。
+
+   ```sh
+   tools/check-review-guidelines.sh --project-root "$PWD" --bundle-id "$BUNDLE_ID" --version "$VERSION" --build "$BUILD"
+   ```
+
+   exit 0（`"status":"passed"`）だけを合格とする。exit 1は点検表の不備で、出力の`errors`を直す。exit 2は読めない入力である。点検toolはlocalのファイルだけを読み、network、App Store Connect、Appleのページに接続しない。
+4. `prepare-appstore-assets`は合格を確かめてからrelease auditorの承認と封印へ進み、`submit-appstore-release`は認証を伴う書き込みとその再開の前にもう一度実行する。
+
+点検toolの合格は審査通過の証拠ではない。提出packageの検査、初回の法務承認、release audit、提出の明示許可、外部操作の権限は、これまでどおり別に満たす。
+
 ## 境界
 
 - 対応表とこのスキルは、審査の結果を予測・保証しない。
-- 提出前の点検表、点検tool、提出の可否はD-081の後続Issue(2)の範囲とする。
-- 既存の提出の明示許可、初回の法務承認、release audit、外部操作の権限を変えない。
+- 既存の提出の明示許可、初回の法務承認、release audit、提出packageの検査、外部操作の権限を変えない。

@@ -187,8 +187,9 @@ require_all('skill planning workflow', skill, [
   '対応表の更新',
   'Appleの本文を写さない',
   'test-app-review-guidelines.sh',
-  '後続Issue(2)',
-  '提出前の点検を行わず'
+  '提出前の点検',
+  'tools/check-review-guidelines.sh',
+  '審査の結果を予測・保証しない'
 ])
 
 planning_docs = {
