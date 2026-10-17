@@ -1,0 +1,1226 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "url": "https://developer.apple.com/app-store/review/guidelines/",
+    "lastUpdated": "2026-10-16",
+    "retrievedAt": "2026-10-17"
+  },
+  "maxAgeDays": 30,
+  "classes": {
+    "always": "すべてのアプリに関わる",
+    "triggered": "特定の機能を持つときだけ関わる",
+    "user-judgment": "AIが機械的に判断できず、ユーザーが決める"
+  },
+  "featureKinds": {
+    "accounts": "アカウントの作成、ログイン、ログインを必要とする機能",
+    "third-party-login": "他社やSNSのログインサービスを使うログイン",
+    "digital-purchases": "アプリ内のデジタルの購入（買い切り、消耗型、通貨、試用）",
+    "subscriptions": "自動更新のサブスクリプション",
+    "external-purchases": "物や人のサービスの販売、アプリ外での購入、ほかの支払い方法への案内",
+    "advertising": "広告の表示",
+    "tracking": "トラッキング、分析SDK、他社へのデータ共有",
+    "personal-data": "個人データの収集（連絡先、写真、カメラ、マイク、利用者が入力する個人情報）",
+    "third-party-ai": "外部のAIサービスへのデータ送信",
+    "user-content": "利用者の投稿、共有、交流、チャット、AIによる生成物の公開",
+    "kids": "子ども向けのアプリ、Kids Category",
+    "health": "健康、フィットネス、医療、HealthKit",
+    "location": "位置情報",
+    "web-content": "Webページの表示、ブラウザ、SafariViewController",
+    "extensions": "拡張機能、Widget、キーボード、Safari拡張、App Clip",
+    "notifications": "Push通知",
+    "siri-shortcuts": "SiriKit、ショートカット、App Intents",
+    "review-prompts": "アプリの評価やレビューの依頼",
+    "gambling": "懸賞、コンテスト、くじ、賭け事",
+    "crypto": "暗号資産",
+    "apple-pay": "Apple Pay、Walletのパス",
+    "apple-services": "Apple Music、Game Center、Appleのサイトやデータの利用",
+    "hosted-software": "ミニアプリ、ミニゲーム、ストリーミングゲーム、チャットボット、プラグイン、エミュレータ、リモートデスクトップ",
+    "vpn-mdm": "VPN、モバイルデバイス管理（MDM）",
+    "device-capabilities": "バックグラウンド実行、録画や録音、ファイル選択、通話の遮断、顔認証、Matter、AR、外部の機器との連携",
+    "regulated-services": "金融、保険、融資、募金、医療、犯罪の通報など規制のある分野",
+    "physical-safety": "身体に危険が及びうる機能（薬、酒やたばこ、運転、危険な行動）",
+    "third-party-content": "他社のサービスやコンテンツの利用、音声や動画の保存",
+    "store-promotions": "予約注文、アプリ内イベント、App Storeのcreative assets",
+    "non-ios-platform": "Apple TVやMac App Storeでの配信"
+  },
+  "containers": [
+    "1.1",
+    "1.4",
+    "2.1",
+    "2.4",
+    "2.5",
+    "3.1",
+    "3.1.2",
+    "3.2",
+    "4.5",
+    "5.1",
+    "5.1.1",
+    "5.1.2"
+  ],
+  "omitted": [
+    "2.5.7",
+    "2.5.10",
+    "4.2.4",
+    "4.2.5",
+    "4.4.3",
+    "4.6"
+  ],
+  "guidelines": [
+    {
+      "id": "1.1.1",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "特定の集団や個人を中傷、差別、攻撃する内容を含めない。",
+      "check": "アプリ内の文章、画像、生成される内容に該当がないか、ユーザーが確認する。"
+    },
+    {
+      "id": "1.1.2",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "人や動物の殺傷や虐待の写実的な描写、暴力をあおる内容を含めない。",
+      "check": "表示する画像、動画、ゲームの内容に該当がないか、ユーザーが確認する。"
+    },
+    {
+      "id": "1.1.3",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "武器の違法・無謀な使用をあおる内容や、銃や弾薬の購入の仲介を含めない。",
+      "check": "武器に関わる内容や販売の導線がないか、ユーザーが確認する。"
+    },
+    {
+      "id": "1.1.4",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "露骨な性的内容や、売春・人身取引につながる機能を含めない。",
+      "check": "性的な内容や出会いの仲介がないか、ユーザーが確認する。"
+    },
+    {
+      "id": "1.1.5",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "宗教を扇動的に扱う内容や、宗教文書の不正確な引用を含めない。",
+      "check": "宗教に関わる内容がある場合、その扱いをユーザーが確認する。"
+    },
+    {
+      "id": "1.1.6",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "偽の情報や機能（不正確な端末データ、いたずら機能、匿名のいたずら電話やSMS）を含めない。",
+      "check": "表示する測定値や機能が実際に動作し正確か、娯楽目的と称した偽の機能がないかをユーザーが確認する。"
+    },
+    {
+      "id": "1.1.7",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "最近の事件、紛争、災害、感染症に便乗して利益を得る内容を含めない。",
+      "check": "時事的な出来事を題材にしていないか、ユーザーが確認する。"
+    },
+    {
+      "id": "1.2",
+      "class": "triggered",
+      "features": [
+        "user-content"
+      ],
+      "summary": "利用者が投稿・共有できるアプリは、不適切な内容の抑止、通報とその迅速な対応、迷惑な利用者のブロック、公開された連絡先を備える。",
+      "check": "投稿の抑止、通報、ブロック、連絡先の4つが実装され、通報への対応方法が決まっていることを確かめる。"
+    },
+    {
+      "id": "1.2.1",
+      "class": "triggered",
+      "features": [
+        "user-content"
+      ],
+      "summary": "クリエイターの作品を扱うアプリは、年齢区分を超える内容を識別でき、年齢による利用制限を持つ。",
+      "check": "年齢区分を超える内容の表示と、年齢による制限の仕組みを確かめる。"
+    },
+    {
+      "id": "1.3",
+      "class": "triggered",
+      "features": [
+        "kids"
+      ],
+      "summary": "Kids Categoryのアプリは、保護者の確認なしに外部リンクや購入を出さず、他社の分析や広告と個人情報の送信を原則含めない。",
+      "check": "保護者による確認（parental gate）、外部リンク、購入、他社SDKの有無と送信内容を確かめる。"
+    },
+    {
+      "id": "1.4.1",
+      "class": "triggered",
+      "features": [
+        "health"
+      ],
+      "summary": "医療・健康の測定や診断に関わるアプリは、精度の根拠と方法を示し、医師への相談を促す。端末のセンサーだけで測れない値を測れると称さない。",
+      "check": "測定値の根拠、方法の開示、医師への相談の案内、規制上の承認の有無を確かめる。"
+    },
+    {
+      "id": "1.4.2",
+      "class": "triggered",
+      "features": [
+        "health"
+      ],
+      "summary": "薬の用量の計算機能は、製薬会社、病院、大学、保険会社、薬局などの承認された提供者だけが提供できる。",
+      "check": "用量の計算機能があれば、提供者の資格を確かめる。"
+    },
+    {
+      "id": "1.4.3",
+      "class": "triggered",
+      "features": [
+        "physical-safety"
+      ],
+      "summary": "たばこ、電子たばこ、違法薬物、過度の飲酒を促さず、未成年に勧めず、規制物質やたばこの販売を仲介しない。",
+      "check": "該当する内容や販売の導線がないかを確かめる。"
+    },
+    {
+      "id": "1.4.4",
+      "class": "triggered",
+      "features": [
+        "physical-safety"
+      ],
+      "summary": "飲酒運転の検問は警察が公表したものだけを表示し、飲酒運転や速度超過などの危険な行動を促さない。",
+      "check": "運転に関わる表示や機能の内容を確かめる。"
+    },
+    {
+      "id": "1.4.5",
+      "class": "triggered",
+      "features": [
+        "physical-safety"
+      ],
+      "summary": "利用者や他人に身体的な危険が及ぶ行動（賭け、チャレンジなど）や端末の使い方を促さない。",
+      "check": "利用者に行動を促す機能がある場合、危険がないことを確かめる。"
+    },
+    {
+      "id": "1.5",
+      "class": "always",
+      "features": [],
+      "summary": "アプリとサポートURLに、開発者へ簡単に連絡できる方法を用意し、正確で最新に保つ。",
+      "check": "アプリ内の連絡先またはフィードバックの導線と、サポートURLの公開ページの連絡先を確かめる（D-072、D-076）。"
+    },
+    {
+      "id": "1.6",
+      "class": "always",
+      "features": [],
+      "summary": "利用者の情報を適切に扱う安全対策を行い、不正な利用、開示、第三者のアクセスを防ぐ。",
+      "check": "保存するデータ、秘密の扱い、通信の暗号化、第三者への送信を確かめる。"
+    },
+    {
+      "id": "1.7",
+      "class": "triggered",
+      "features": [
+        "regulated-services"
+      ],
+      "summary": "犯罪の通報を受け付けるアプリは、その地域の警察が関与し、関与がある地域だけで提供する。",
+      "check": "犯罪の通報機能があれば、警察の関与と提供地域を確かめる。"
+    },
+    {
+      "id": "2.1(a)",
+      "class": "always",
+      "features": [],
+      "summary": "審査に出すbuildは完成版とし、仮の文章や空のWebサイトを残さず、実機で試験し、ログインがあればデモアカウントと稼働中のサーバーを用意する。",
+      "check": "仮の内容やリンク切れがないこと、実機での動作確認、ログインがある場合のデモアカウントと審査メモを確かめる。"
+    },
+    {
+      "id": "2.1(b)",
+      "class": "triggered",
+      "features": [
+        "digital-purchases",
+        "subscriptions"
+      ],
+      "summary": "アプリ内課金は完成し、最新で、審査担当者から見えて動作する状態にする。見つからない項目は審査メモで説明する。",
+      "check": "設定したすべての課金項目がアプリ内で表示・購入でき、審査メモが必要な項目を説明していることを確かめる。"
+    },
+    {
+      "id": "2.2",
+      "class": "always",
+      "features": [],
+      "summary": "デモ版、ベータ版、試用版はApp StoreではなくTestFlightで配る。TestFlightの配布で対価を受け取らない。",
+      "check": "提出するbuildが試用や未完成の版でないことを確かめる。"
+    },
+    {
+      "id": "2.3",
+      "class": "always",
+      "features": [],
+      "summary": "説明文、スクリーンショット、プレビュー、プライバシー情報を含むmetadataが、アプリの中心の体験を正確に表し、最新である。",
+      "check": "metadataの各項目が提出するbuildの実際の機能と一致することを確かめる。"
+    },
+    {
+      "id": "2.3.1",
+      "class": "always",
+      "features": [],
+      "summary": "新しい機能や変更を審査メモで具体的に説明し、提供しない機能や偽の価格で宣伝しない。",
+      "check": "審査メモが今回の変更を具体的に説明し、宣伝に誇張がないことを確かめる。"
+    },
+    {
+      "id": "2.3.2",
+      "class": "triggered",
+      "features": [
+        "digital-purchases",
+        "subscriptions"
+      ],
+      "summary": "追加の購入が必要な項目を、説明文、スクリーンショット、プレビューで明示する。課金項目を宣伝する場合は表示名と画像を全年齢向けにする。",
+      "check": "有料の機能や内容がmetadataで有料と分かることを確かめる。"
+    },
+    {
+      "id": "2.3.3",
+      "class": "always",
+      "features": [],
+      "summary": "スクリーンショットは使用中のアプリを示し、タイトル画面、ログイン画面、起動画面だけにしない。",
+      "check": "提出する画像が実際の画面を使い、使用中の様子を示すことを確かめる（D-077）。"
+    },
+    {
+      "id": "2.3.4",
+      "class": "always",
+      "features": [],
+      "summary": "プレビュー動画はアプリ自体の画面収録だけを使う。",
+      "check": "プレビュー動画を出す場合、素材がアプリの画面収録だけであることを確かめる（D-077）。"
+    },
+    {
+      "id": "2.3.5",
+      "class": "always",
+      "features": [],
+      "summary": "最も適切なカテゴリを選ぶ。",
+      "check": "選んだカテゴリが中心の機能に合うことを確かめる。"
+    },
+    {
+      "id": "2.3.6",
+      "class": "always",
+      "features": [],
+      "summary": "年齢区分の質問に正直に答え、地域ごとの内容表示の義務に従う。",
+      "check": "年齢区分の回答がアプリの実際の内容と一致することを確かめる。"
+    },
+    {
+      "id": "2.3.7",
+      "class": "always",
+      "features": [],
+      "summary": "固有のアプリ名（30文字以内）と正確なキーワードを使い、商標、人気アプリ名、価格などで水増ししない。",
+      "check": "名前、サブタイトル、キーワードに他社名、価格、無関係な語がないことを確かめる。"
+    },
+    {
+      "id": "2.3.8",
+      "class": "always",
+      "features": [],
+      "summary": "アイコン、スクリーンショット、プレビューは4+に適した内容にし、Kids Category以外で子ども向けをうたう語を使わない。",
+      "check": "画像に4+に不適切な内容がなく、子ども向けの語を使っていないことを確かめる。"
+    },
+    {
+      "id": "2.3.9",
+      "class": "always",
+      "features": [],
+      "summary": "アイコンや画像の素材の権利を確保し、画面には実在の人ではなく架空のアカウント情報を表示する。",
+      "check": "画像の素材の出どころと、画面のデータが架空であることを確かめる（D-077）。"
+    },
+    {
+      "id": "2.3.10",
+      "class": "always",
+      "features": [],
+      "summary": "対応するAppleのプラットフォームに集中し、ほかのモバイルプラットフォームの名前や画像、無関係な情報を含めない。",
+      "check": "アプリとmetadataにほかのプラットフォームの名前や画像がないことを確かめる。"
+    },
+    {
+      "id": "2.3.11",
+      "class": "triggered",
+      "features": [
+        "store-promotions"
+      ],
+      "summary": "予約注文のアプリは、完成して提供できる状態で出し、予約中の宣伝と大きく違うものを出さない。",
+      "check": "予約注文を使う場合、宣伝と提供内容の一致を確かめる。"
+    },
+    {
+      "id": "2.3.12",
+      "class": "always",
+      "features": [],
+      "summary": "新機能と変更を「What’s New」の文章で具体的に説明する。",
+      "check": "リリースノートが今回の変更を具体的に説明することを確かめる。"
+    },
+    {
+      "id": "2.3.13",
+      "class": "triggered",
+      "features": [
+        "store-promotions"
+      ],
+      "summary": "アプリ内イベントは、選んだ種類と日時に実際に行われ、内容が正確で、ディープリンクが正しい場所へ導く。",
+      "check": "イベントを登録する場合、日時、内容、リンク先を確かめる。"
+    },
+    {
+      "id": "2.3.14",
+      "class": "triggered",
+      "features": [
+        "store-promotions"
+      ],
+      "summary": "creative assetsは、アプリの内容やブランドに関わり、全年齢向けで、誤解を招く表現や具体的な価格を含めない。",
+      "check": "creative assetsを使う場合、その内容を確かめる。"
+    },
+    {
+      "id": "2.4.1",
+      "class": "always",
+      "features": [],
+      "summary": "iPhoneのアプリは、できる限りiPadでも動くようにする。",
+      "check": "iPadでの動作と表示を確かめる。"
+    },
+    {
+      "id": "2.4.2",
+      "class": "always",
+      "features": [],
+      "summary": "電力を効率よく使い、端末を傷めない。無関係なバックグラウンド処理（暗号資産のマイニングなど）をしない。",
+      "check": "発熱や電池の消費が大きい処理、不要なバックグラウンド処理がないことを確かめる。"
+    },
+    {
+      "id": "2.4.3",
+      "class": "triggered",
+      "features": [
+        "non-ios-platform"
+      ],
+      "summary": "Apple TVのアプリは、Siri Remoteやゲームコントローラー以外の機器なしで使えるようにする。",
+      "check": "Apple TVで配信する場合だけ確かめる。"
+    },
+    {
+      "id": "2.4.4",
+      "class": "always",
+      "features": [],
+      "summary": "端末の再起動や、中心の機能に無関係なシステム設定の変更を求めない。",
+      "check": "Wi-Fiを切る、セキュリティ機能を外すなどの案内がないことを確かめる。"
+    },
+    {
+      "id": "2.4.5",
+      "class": "triggered",
+      "features": [
+        "non-ios-platform"
+      ],
+      "summary": "Mac App Storeのアプリは、sandbox、Xcodeでのpackage、自動起動の禁止、Mac App Storeでの更新などの追加の要件を満たす。",
+      "check": "Mac App Storeで配信する場合だけ確かめる。"
+    },
+    {
+      "id": "2.5.1",
+      "class": "always",
+      "features": [],
+      "summary": "公開APIだけを使い、現在のOSで動き、APIを本来の目的で使う。",
+      "check": "非公開APIを使わず、使うframeworkを本来の目的で使っていることを確かめる。"
+    },
+    {
+      "id": "2.5.2",
+      "class": "always",
+      "features": [],
+      "summary": "bundleの中で完結し、指定された領域の外を読み書きせず、機能を変えるコードをダウンロードして実行しない。",
+      "check": "外部からのコードの取得や実行、領域外へのアクセスがないことを確かめる。"
+    },
+    {
+      "id": "2.5.3",
+      "class": "always",
+      "features": [],
+      "summary": "OSやハードウェアの動作を害するウイルスやコードを送らない。",
+      "check": "通知やGame Centerを含め、有害な送信がないことを確かめる。"
+    },
+    {
+      "id": "2.5.4",
+      "class": "triggered",
+      "features": [
+        "device-capabilities"
+      ],
+      "summary": "バックグラウンドの実行は、VoIP、音声の再生、位置情報、処理の完了、ローカル通知など本来の目的だけに使う。",
+      "check": "宣言したbackground modeと実際の用途が一致することを確かめる。"
+    },
+    {
+      "id": "2.5.5",
+      "class": "always",
+      "features": [],
+      "summary": "IPv6だけのネットワークでも完全に動く。",
+      "check": "通信がある場合、IPv6だけの環境で動くことを確かめる。"
+    },
+    {
+      "id": "2.5.6",
+      "class": "triggered",
+      "features": [
+        "web-content"
+      ],
+      "summary": "Webを閲覧する機能は、適切なWebKitとWebKitのJavaScriptを使う。",
+      "check": "Webの表示にWebKitを使っていることを確かめる。"
+    },
+    {
+      "id": "2.5.8",
+      "class": "always",
+      "features": [],
+      "summary": "ホーム画面やデスクトップの代わりになる環境を作らない。",
+      "check": "ホーム画面の代替となる機能がないことを確かめる。"
+    },
+    {
+      "id": "2.5.9",
+      "class": "always",
+      "features": [],
+      "summary": "音量ボタンや消音スイッチなどの標準の操作や、ほかのアプリへのリンクなど標準の動作を変えたり止めたりしない。",
+      "check": "標準の操作や動作を妨げる実装がないことを確かめる。"
+    },
+    {
+      "id": "2.5.11",
+      "class": "triggered",
+      "features": [
+        "siri-shortcuts"
+      ],
+      "summary": "SiriKitとショートカットは、アプリだけで処理できる意図だけを登録し、語彙はアプリに関係させ、要求と結果の間に広告を挟まない。",
+      "check": "登録するintentやApp Intents、語彙、結果までの流れを確かめる。"
+    },
+    {
+      "id": "2.5.12",
+      "class": "triggered",
+      "features": [
+        "device-capabilities"
+      ],
+      "summary": "CallKitやSMSの詐欺対策の拡張は、確認された迷惑番号だけを遮断し、基準を説明し、得たデータを別の目的に使わない。",
+      "check": "通話やSMSの遮断機能がある場合、基準の説明とデータの扱いを確かめる。"
+    },
+    {
+      "id": "2.5.13",
+      "class": "triggered",
+      "features": [
+        "accounts",
+        "device-capabilities"
+      ],
+      "summary": "顔認証でアカウントを認証する場合は、できる限りLocalAuthenticationを使い、13歳未満には別の認証方法を用意する。",
+      "check": "顔認証によるログインがある場合、使う仕組みと代わりの方法を確かめる。"
+    },
+    {
+      "id": "2.5.14",
+      "class": "triggered",
+      "features": [
+        "personal-data",
+        "device-capabilities"
+      ],
+      "summary": "利用者の活動を録画、録音、記録するときは、明示の同意を得て、記録中であることを見て分かるように示す。",
+      "check": "カメラ、マイク、画面の記録がある場合、同意と記録中の表示を確かめる。"
+    },
+    {
+      "id": "2.5.15",
+      "class": "triggered",
+      "features": [
+        "device-capabilities"
+      ],
+      "summary": "ファイルを選ぶ機能は、ファイルAppとiCloudの書類を含める。",
+      "check": "ファイル選択がある場合、標準のファイル選択を使っていることを確かめる。"
+    },
+    {
+      "id": "2.5.16",
+      "class": "triggered",
+      "features": [
+        "extensions"
+      ],
+      "summary": "Widget、拡張機能、通知はアプリの内容と機能に関係させる。App Clipの機能は本体に含め、App Clipに広告を入れない。",
+      "check": "Widgetや拡張機能、通知の内容が本体の機能と関係することを確かめる。"
+    },
+    {
+      "id": "2.5.17",
+      "class": "triggered",
+      "features": [
+        "device-capabilities"
+      ],
+      "summary": "Matterに対応する場合は、Appleの仕組みでペアリングし、ほかのMatterの部品は認証を受けたものを使う。",
+      "check": "Matterに対応する場合だけ確かめる。"
+    },
+    {
+      "id": "2.5.18",
+      "class": "triggered",
+      "features": [
+        "advertising"
+      ],
+      "summary": "広告は本体だけに表示し、年齢区分に合わせ、ターゲティングに使った情報を見られるようにし、センシティブなデータで狙わず、閉じるボタンを用意し、不適切な広告を報告できるようにする。",
+      "check": "広告の表示場所、年齢区分、閉じるボタン、報告の導線、ターゲティングの設定を確かめる（AdMobを採用する場合）。"
+    },
+    {
+      "id": "2.5.19",
+      "class": "always",
+      "features": [],
+      "summary": "隠れた機能、使われていない機能、説明のない機能を含めない。",
+      "check": "利用者と審査担当者に見えない機能や、難読化で隠した機能がないことを確かめる。"
+    },
+    {
+      "id": "3.1.1",
+      "class": "triggered",
+      "features": [
+        "digital-purchases",
+        "subscriptions"
+      ],
+      "summary": "アプリ内の機能や内容を解放するにはアプリ内課金を使い、通貨は失効させず、復元できる購入には復元の手段を用意する。ルートボックスは確率を示し、試用は決められた名前の0円の商品で行う。",
+      "check": "解放の仕組みがアプリ内課金であること、復元の導線、通貨の期限、確率の表示、試用の扱いを確かめる（D-064）。"
+    },
+    {
+      "id": "3.1.1(a)",
+      "class": "triggered",
+      "features": [
+        "external-purchases"
+      ],
+      "summary": "ほかの購入方法へのリンクは、対象の地域と許可（entitlement）の範囲でだけ置ける。それ以外の地域では外部の購入へ誘導しない。",
+      "check": "外部の購入へのリンクや案内がある場合、地域と許可を確かめる。"
+    },
+    {
+      "id": "3.1.2(a)",
+      "class": "triggered",
+      "features": [
+        "subscriptions"
+      ],
+      "summary": "自動更新のサブスクリプションは、継続的な価値を提供し、期間を7日以上とし、利用者のすべての端末で使えるようにする。",
+      "check": "期間、提供する価値、端末をまたいだ利用を確かめる。"
+    },
+    {
+      "id": "3.1.2(b)",
+      "class": "triggered",
+      "features": [
+        "subscriptions"
+      ],
+      "summary": "上位や下位のプランへの変更を滑らかにし、同じものに誤って二重に加入させない。",
+      "check": "プランの構成と変更の流れを確かめる。"
+    },
+    {
+      "id": "3.1.2(c)",
+      "class": "triggered",
+      "features": [
+        "subscriptions"
+      ],
+      "summary": "加入を求める前に、価格で何が得られるかを明確に示す。",
+      "check": "購入の画面に、価格、期間、内容、更新の条件が表示されることを確かめる。"
+    },
+    {
+      "id": "3.1.3",
+      "class": "triggered",
+      "features": [
+        "external-purchases"
+      ],
+      "summary": "アプリ内課金以外の購入方法を使える場合でも、アプリ内でそれを勧めない（米国のstorefrontと例外を除く）。",
+      "check": "アプリ内で外部の購入方法を勧める表示がないことを確かめる。"
+    },
+    {
+      "id": "3.1.3(a)",
+      "class": "triggered",
+      "features": [
+        "external-purchases"
+      ],
+      "summary": "読み物、音楽、動画などの「Reader」アプリは、購入済みの内容へのアクセスを提供でき、許可があればアカウント管理のリンクを置ける。",
+      "check": "Readerアプリとして提出する場合だけ確かめる。"
+    },
+    {
+      "id": "3.1.3(b)",
+      "class": "triggered",
+      "features": [
+        "external-purchases"
+      ],
+      "summary": "複数のプラットフォームで使えるサービスは、ほかで購入した内容を使えるようにできる。ただし同じ項目をアプリ内課金でも提供する。",
+      "check": "ほかのプラットフォームでの購入を使う場合、アプリ内課金での提供を確かめる。"
+    },
+    {
+      "id": "3.1.3(c)",
+      "class": "triggered",
+      "features": [
+        "external-purchases"
+      ],
+      "summary": "組織だけに販売するアプリは、組織の利用者に購入済みの内容を使わせられる。個人向けの販売はアプリ内課金を使う。",
+      "check": "組織向けに提供する場合だけ確かめる。"
+    },
+    {
+      "id": "3.1.3(d)",
+      "class": "triggered",
+      "features": [
+        "external-purchases"
+      ],
+      "summary": "個人どうしのリアルタイムのサービスは、アプリ内課金以外で支払いを受けられる。1対多はアプリ内課金を使う。",
+      "check": "人によるサービスを販売する場合、形態と支払い方法を確かめる。"
+    },
+    {
+      "id": "3.1.3(e)",
+      "class": "triggered",
+      "features": [
+        "external-purchases"
+      ],
+      "summary": "アプリの外で使う物やサービスの販売は、アプリ内課金ではなく、Apple Payやクレジットカードなどを使う。",
+      "check": "物やサービスを販売する場合、支払い方法を確かめる。"
+    },
+    {
+      "id": "3.1.3(f)",
+      "class": "triggered",
+      "features": [
+        "external-purchases"
+      ],
+      "summary": "有料のWebツールに付属する無料のアプリは、アプリ内に購入がなければアプリ内課金を使わなくてよい。",
+      "check": "付属アプリとして提出する場合だけ確かめる。"
+    },
+    {
+      "id": "3.1.3(g)",
+      "class": "triggered",
+      "features": [
+        "external-purchases"
+      ],
+      "summary": "広告主が広告を買って管理するだけのアプリは、アプリ内課金を使わなくてよい。同じアプリ内で表示する広告の購入はアプリ内課金を使う。",
+      "check": "広告の購入機能がある場合だけ確かめる。"
+    },
+    {
+      "id": "3.1.4",
+      "class": "triggered",
+      "features": [
+        "device-capabilities"
+      ],
+      "summary": "特定のハードウェアに依存する機能は、限られた場合にアプリ内課金なしで解放できる。無関係な商品の購入を条件にしない。",
+      "check": "外部の機器で機能を解放する場合、その条件を確かめる。"
+    },
+    {
+      "id": "3.1.5",
+      "class": "triggered",
+      "features": [
+        "crypto"
+      ],
+      "summary": "暗号資産のウォレット、取引所、ICOなどは組織や認可を受けた事業者だけが提供でき、端末でのマイニングや作業の報酬としての配布をしない。",
+      "check": "暗号資産を扱う場合、提供者の資格と機能を確かめる。"
+    },
+    {
+      "id": "3.2.1",
+      "class": "triggered",
+      "features": [
+        "regulated-services",
+        "apple-pay"
+      ],
+      "summary": "自社アプリの宣伝、Walletのパス、保険、非営利団体の募金、個人間の贈与、金融取引などは、それぞれの条件の範囲で認められる。",
+      "check": "該当する機能がある場合、条件（保険は無料、募金は承認済みの団体、金融は事業者による提出など）を確かめる。"
+    },
+    {
+      "id": "3.2.2",
+      "class": "always",
+      "features": [],
+      "summary": "App Storeに似た他社アプリの一覧、広告の水増しや広告が主のアプリ、承認なしの募金、恣意的な利用制限、バイナリーオプション、条件を満たさない融資、評価やレビューの強制をしない。",
+      "check": "評価、レビュー、他アプリのダウンロードを機能の条件にしていないことと、該当する機能がないことを確かめる。"
+    },
+    {
+      "id": "4.1",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "他のアプリの模倣やなりすましをせず、他の開発者のアイコン、ブランド、製品名を許可なく使わない。",
+      "check": "名前、アイコン、UIが既存のアプリと紛らわしくないか、ユーザーが確認する。"
+    },
+    {
+      "id": "4.2",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "Webサイトの包装し直しにとどまらず、アプリらしい機能、内容、UIを持ち、継続的な価値がある。",
+      "check": "アプリが十分な機能と独自の価値を持つか、ユーザーが確認する。"
+    },
+    {
+      "id": "4.2.1",
+      "class": "triggered",
+      "features": [
+        "device-capabilities"
+      ],
+      "summary": "ARKitを使うアプリは、モデルを置くだけでない豊かなAR体験を提供する。",
+      "check": "ARを使う場合、体験の内容を確かめる。"
+    },
+    {
+      "id": "4.2.2",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "カタログを除き、主に宣伝、広告、Webの切り抜き、リンク集であってはならない。",
+      "check": "アプリの主な内容が宣伝やリンク集でないか、ユーザーが確認する。"
+    },
+    {
+      "id": "4.2.3",
+      "class": "always",
+      "features": [],
+      "summary": "ほかのアプリなしで単独で動き、初回起動で追加のダウンロードが必要なら容量を示して確認をとる。",
+      "check": "単独で動くことと、追加のダウンロードの扱いを確かめる。"
+    },
+    {
+      "id": "4.2.6",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "商用のテンプレートやアプリ生成サービスで作ったアプリは、内容の提供者自身が提出しない限り認められない。",
+      "check": "このテンプレートから作ったアプリが、内容の提供者による独自のアプリであることをユーザーが確認する。"
+    },
+    {
+      "id": "4.2.7",
+      "class": "triggered",
+      "features": [
+        "hosted-software"
+      ],
+      "summary": "リモートデスクトップのアプリは、利用者が所有する機器へのローカルな接続に限るなどの条件を満たす。",
+      "check": "リモートデスクトップの機能がある場合だけ確かめる。"
+    },
+    {
+      "id": "4.3",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "同じアプリを複数のBundle IDで出さず、既に多くある種類のアプリと見分けのつかないものを出さない。",
+      "check": "既存のアプリや自分のほかのアプリと十分に違うか、ユーザーが確認する。"
+    },
+    {
+      "id": "4.4",
+      "class": "triggered",
+      "features": [
+        "extensions"
+      ],
+      "summary": "拡張機能はAppleの指針に従い、提供する拡張機能を説明し、拡張機能に宣伝、広告、課金を入れない。",
+      "check": "拡張機能の説明、機能、広告や課金の有無を確かめる。"
+    },
+    {
+      "id": "4.4.1",
+      "class": "triggered",
+      "features": [
+        "extensions"
+      ],
+      "summary": "キーボードの拡張は、入力機能、次のキーボードへの切り替え、通信やフルアクセスなしでの動作などの条件を満たす。",
+      "check": "キーボードの拡張がある場合だけ確かめる。"
+    },
+    {
+      "id": "4.4.2",
+      "class": "triggered",
+      "features": [
+        "extensions"
+      ],
+      "summary": "Safari拡張は現在のSafariで動き、システムやSafariのUIを妨げず、必要以上のサイトへのアクセスを求めない。",
+      "check": "Safari拡張がある場合だけ確かめる。"
+    },
+    {
+      "id": "4.5.1",
+      "class": "triggered",
+      "features": [
+        "apple-services"
+      ],
+      "summary": "AppleのRSSは使えるが、Appleのサイトから情報を集めたり、それで順位を作ったりしない。",
+      "check": "Appleのサイトのデータを使う場合だけ確かめる。"
+    },
+    {
+      "id": "4.5.2",
+      "class": "triggered",
+      "features": [
+        "apple-services"
+      ],
+      "summary": "Apple Musicは利用者の操作で再生し、利用を有料化せず、音楽のファイルを共有させず、必要な権利を別に確保し、利用者のデータの利用を説明する。",
+      "check": "Apple Musicを使う場合だけ確かめる。"
+    },
+    {
+      "id": "4.5.3",
+      "class": "triggered",
+      "features": [
+        "apple-services",
+        "notifications"
+      ],
+      "summary": "Game Center、通知、Live ActivitiesなどのAppleのサービスで迷惑な送信やフィッシングをせず、Game Centerの情報を別の目的で集めない。",
+      "check": "通知やLive Activities、Game Centerの送信内容を確かめる。"
+    },
+    {
+      "id": "4.5.4",
+      "class": "triggered",
+      "features": [
+        "notifications"
+      ],
+      "summary": "Push通知を機能の前提にせず、機微な情報を送らず、宣伝の通知はアプリ内で明示の同意を得て停止の手段を用意する。",
+      "check": "通知を許可しなくても使えること、宣伝の通知の同意と停止の手段を確かめる。"
+    },
+    {
+      "id": "4.5.5",
+      "class": "triggered",
+      "features": [
+        "apple-services"
+      ],
+      "summary": "Game CenterのPlayer IDは規約の範囲で使い、アプリや第三者に表示しない。",
+      "check": "Game Centerを使う場合だけ確かめる。"
+    },
+    {
+      "id": "4.5.6",
+      "class": "always",
+      "features": [],
+      "summary": "Appleの絵文字はUnicodeの文字として使い、画像としてbundleに埋め込まない。",
+      "check": "Appleの絵文字の画像を同梱していないことを確かめる。"
+    },
+    {
+      "id": "4.7",
+      "class": "triggered",
+      "features": [
+        "hosted-software"
+      ],
+      "summary": "ミニアプリ、ミニゲーム、ストリーミングゲーム、チャットボット、プラグイン、エミュレータは、提供するソフトウェア全体がガイドラインと法律に従う責任を負う。",
+      "check": "アプリ内で提供するソフトウェアの範囲と確認の方法を確かめる。"
+    },
+    {
+      "id": "4.7.1",
+      "class": "triggered",
+      "features": [
+        "hosted-software"
+      ],
+      "summary": "アプリ内のソフトウェアは、プライバシー、不適切な内容の抑止と通報とブロック、課金の規則に従う。",
+      "check": "提供するソフトウェアのプライバシー、通報とブロック、課金を確かめる。"
+    },
+    {
+      "id": "4.7.2",
+      "class": "triggered",
+      "features": [
+        "hosted-software"
+      ],
+      "summary": "Appleの許可なく、ネイティブのAPIをアプリ内のソフトウェアに公開しない。",
+      "check": "アプリ内のソフトウェアから使えるAPIの範囲を確かめる。"
+    },
+    {
+      "id": "4.7.3",
+      "class": "triggered",
+      "features": [
+        "hosted-software"
+      ],
+      "summary": "利用者の明示の同意なく、データや権限をアプリ内のソフトウェアと共有しない。",
+      "check": "共有するデータと同意の取り方を確かめる。"
+    },
+    {
+      "id": "4.7.4",
+      "class": "triggered",
+      "features": [
+        "hosted-software"
+      ],
+      "summary": "提供するソフトウェアの一覧とmetadataを、universal link付きで用意する。",
+      "check": "ソフトウェアの一覧とリンクを確かめる。"
+    },
+    {
+      "id": "4.7.5",
+      "class": "triggered",
+      "features": [
+        "hosted-software"
+      ],
+      "summary": "年齢区分を超えるソフトウェアを識別でき、年齢による利用制限を持つ。",
+      "check": "年齢区分を超える内容の識別と制限を確かめる。"
+    },
+    {
+      "id": "4.8",
+      "class": "triggered",
+      "features": [
+        "third-party-login"
+      ],
+      "summary": "他社やSNSのログインを主なアカウントに使う場合は、名前とメールだけを集め、メールを隠せ、広告目的で利用を集めない同等のログイン（Sign in with Appleなど）も用意する。",
+      "check": "他社のログインを使う場合、同等の選択肢があること、または例外（自社のアカウントだけ、教育・企業の既存アカウント、公的なID、特定サービスの専用クライアント）に当たることを確かめる。"
+    },
+    {
+      "id": "4.9",
+      "class": "triggered",
+      "features": [
+        "apple-pay"
+      ],
+      "summary": "Apple Payは購入前に重要な情報を示し、ブランドとUIを正しく使い、定期の支払いでは更新の期間、内容、金額、解約の方法を示す。",
+      "check": "Apple Payを使う場合、表示する情報とブランドの使い方を確かめる。"
+    },
+    {
+      "id": "4.10",
+      "class": "always",
+      "features": [],
+      "summary": "通知、カメラ、ジャイロ、Apple Music、iCloudの容量、スクリーンタイムのAPIなど、OSやAppleが提供する機能そのものを有料化しない。",
+      "check": "課金の対象が、OSやAppleが提供する機能そのものでないことを確かめる。"
+    },
+    {
+      "id": "5.1.1(i)",
+      "class": "always",
+      "features": [],
+      "summary": "App Store Connectとアプリ内の分かりやすい場所に、プライバシーポリシーへのリンクを置く。ポリシーは集めるデータ、使い方、第三者による同等の保護、保存期間と削除、同意の撤回の方法を示す。",
+      "check": "アプリ内とApp Store Connectのリンク、公開ページの内容がデータの扱いと一致することを確かめる（D-072）。"
+    },
+    {
+      "id": "5.1.1(ii)",
+      "class": "always",
+      "features": [],
+      "summary": "利用者や利用状況のデータを集めるときは同意を得て、撤回の手段を用意し、有料の機能を同意の条件にせず、目的の説明文（purpose string）で用途を正確に説明する。",
+      "check": "集めるデータ、同意の取り方と撤回の手段、Info.plistの説明文を確かめる。"
+    },
+    {
+      "id": "5.1.1(iii)",
+      "class": "always",
+      "features": [],
+      "summary": "中心の機能に必要なデータだけを求め、できる限りシステムの選択画面や共有シートを使う。",
+      "check": "求める権限が必要最小限であることを確かめる。"
+    },
+    {
+      "id": "5.1.1(iv)",
+      "class": "always",
+      "features": [],
+      "summary": "利用者の権限の設定を尊重し、不要な許可を迫らず、拒否した利用者には代わりの方法を用意する。",
+      "check": "権限を拒否したときの動作と代わりの方法を確かめる。"
+    },
+    {
+      "id": "5.1.1(v)",
+      "class": "triggered",
+      "features": [
+        "accounts",
+        "third-party-login"
+      ],
+      "summary": "アカウントが重要でなければログインなしで使えるようにし、アカウントを作れるならアプリ内で削除できるようにする。SNSに関係しない機能にSNSのログインを求めず、SNSの連携を解除できるようにする。",
+      "check": "ログインなしで使える範囲、アプリ内のアカウント削除の導線、SNSの連携解除、必要以上の個人情報を求めないことを確かめる。"
+    },
+    {
+      "id": "5.1.1(vi)",
+      "class": "always",
+      "features": [],
+      "summary": "パスワードなどの個人情報をひそかに集めない。",
+      "check": "利用者が知らないうちに情報を集める処理がないことを確かめる。"
+    },
+    {
+      "id": "5.1.1(vii)",
+      "class": "triggered",
+      "features": [
+        "web-content"
+      ],
+      "summary": "SafariViewControllerは見える形で使い、利用者の知らないうちの追跡に使わない。",
+      "check": "SafariViewControllerを使う場合だけ確かめる。"
+    },
+    {
+      "id": "5.1.1(viii)",
+      "class": "triggered",
+      "features": [
+        "personal-data"
+      ],
+      "summary": "利用者から直接でない情報源や同意のない情報から個人情報を集約しない。",
+      "check": "公開データを含め、利用者以外から個人情報を集めていないことを確かめる。"
+    },
+    {
+      "id": "5.1.1(ix)",
+      "class": "triggered",
+      "features": [
+        "regulated-services"
+      ],
+      "summary": "銀行、医療、賭け事、航空などの規制のある分野や機微な情報を扱うサービスは、提供する法人が提出する。",
+      "check": "規制のある分野のサービスを提供する場合、提出者が法人であることを確かめる。"
+    },
+    {
+      "id": "5.1.1(x)",
+      "class": "triggered",
+      "features": [
+        "personal-data"
+      ],
+      "summary": "名前やメールなどの連絡先を求めるのは任意とし、機能の条件にしない。",
+      "check": "連絡先の入力が任意で、入力しなくても使えることを確かめる。"
+    },
+    {
+      "id": "5.1.2(i)",
+      "class": "triggered",
+      "features": [
+        "personal-data",
+        "tracking",
+        "third-party-ai",
+        "advertising"
+      ],
+      "summary": "個人データを使う・送る前に許可を得て、外部のAIを含む第三者との共有を明示して許可を得る。トラッキングはApp Tracking Transparencyで許可を得る。通知、位置情報、トラッキングの許可を機能や報酬の条件にしない。",
+      "check": "第三者や外部のAIへの送信の有無と同意の取り方、ATTの要否、システムの許可を条件にしていないことを確かめる。"
+    },
+    {
+      "id": "5.1.2(ii)",
+      "class": "triggered",
+      "features": [
+        "personal-data"
+      ],
+      "summary": "ある目的で集めたデータを、追加の同意なく別の目的に使わない。",
+      "check": "集めたデータの用途が説明した目的と一致することを確かめる。"
+    },
+    {
+      "id": "5.1.2(iii)",
+      "class": "triggered",
+      "features": [
+        "personal-data",
+        "tracking"
+      ],
+      "summary": "集めたデータからひそかに利用者の情報を作り上げたり、匿名の利用者を特定したりしない。",
+      "check": "データの集約や識別の処理がないことを確かめる。"
+    },
+    {
+      "id": "5.1.2(iv)",
+      "class": "triggered",
+      "features": [
+        "personal-data"
+      ],
+      "summary": "連絡先や写真のデータから自社用や販売用の連絡先のデータベースを作らず、ほかのアプリの導入状況を集めない。",
+      "check": "連絡先や写真の用途を確かめる。"
+    },
+    {
+      "id": "5.1.2(v)",
+      "class": "triggered",
+      "features": [
+        "personal-data"
+      ],
+      "summary": "連絡先や写真の情報を使った連絡は、利用者が個別に行う場合だけとし、全員の選択を既定にせず、送る内容を事前に示す。",
+      "check": "連絡先への送信機能がある場合、選択の方法と送信前の表示を確かめる。"
+    },
+    {
+      "id": "5.1.2(vi)",
+      "class": "triggered",
+      "features": [
+        "health",
+        "device-capabilities"
+      ],
+      "summary": "HomeKit、HealthKit、ClassKit、顔や奥行きの解析などから得たデータを、宣伝、広告、データマイニングに使わない。",
+      "check": "これらのAPIを使う場合、データの用途を確かめる。"
+    },
+    {
+      "id": "5.1.2(vii)",
+      "class": "triggered",
+      "features": [
+        "apple-pay"
+      ],
+      "summary": "Apple Payで得たデータは、商品やサービスの提供のためにだけ第三者と共有する。",
+      "check": "Apple Payを使う場合だけ確かめる。"
+    },
+    {
+      "id": "5.1.3",
+      "class": "triggered",
+      "features": [
+        "health"
+      ],
+      "summary": "健康、フィットネス、医療のデータを広告やデータマイニングに使わず、HealthKitへ不正確なデータを書かず、個人の健康情報をiCloudに保存しない。研究は同意と倫理審査の承認を得る。",
+      "check": "健康のデータの用途、保存先、研究の同意と承認を確かめる。"
+    },
+    {
+      "id": "5.1.4",
+      "class": "triggered",
+      "features": [
+        "kids"
+      ],
+      "summary": "子どものデータは法律に従って扱い、生年月日や保護者の連絡先は法律のためだけに求め、子ども向けのアプリは他社の分析と広告を原則含めない。",
+      "check": "対象年齢、集めるデータ、他社SDKの有無、プライバシーポリシーを確かめる。"
+    },
+    {
+      "id": "5.1.5",
+      "class": "triggered",
+      "features": [
+        "location"
+      ],
+      "summary": "位置情報は機能に直接関係するときだけ使い、集める前に通知して同意を得て、アプリ内で目的を説明する。",
+      "check": "位置情報の用途、許可の求め方、説明文を確かめる。"
+    },
+    {
+      "id": "5.2",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "自分で作ったか使用許諾のある内容だけを使う。",
+      "check": "アプリ内の文章、画像、音、フォント、3Dモデルの権利を、ユーザーが確認する。"
+    },
+    {
+      "id": "5.2.1",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "商標、著作物、特許を許可なく使わず、誤解を招く名前やmetadataを使わない。",
+      "check": "名前、アイコン、内容に第三者の権利の侵害がないか、ユーザーが確認する。"
+    },
+    {
+      "id": "5.2.2",
+      "class": "triggered",
+      "features": [
+        "third-party-content"
+      ],
+      "summary": "他社のサービスの内容を使う・表示する場合は、その利用規約で許されていることを確かめる。",
+      "check": "使う他社のサービスと、その規約上の許可を確かめる。"
+    },
+    {
+      "id": "5.2.3",
+      "class": "triggered",
+      "features": [
+        "third-party-content"
+      ],
+      "summary": "違法なファイル共有を助けず、許可なく他社のサービスから音声や動画を保存、変換、ダウンロードしない。",
+      "check": "音声や動画の保存機能がある場合、許可を確かめる。"
+    },
+    {
+      "id": "5.2.4",
+      "class": "always",
+      "features": [],
+      "summary": "Appleがアプリの提供者である、または品質を保証していると示唆しない。",
+      "check": "アプリとmetadataにAppleの推薦を示唆する表現がないことを確かめる。"
+    },
+    {
+      "id": "5.2.5",
+      "class": "user-judgment",
+      "features": [],
+      "summary": "Appleの製品、UI、アプリと紛らわしいものを作らず、Appleの絵文字を拡張機能に含めない。アクティビティリング、Appleの天気、Apple Musicの試聴は決められた方法で使う。",
+      "check": "Appleの製品に似た見た目や、Appleのデータの表示方法を、ユーザーが確認する。"
+    },
+    {
+      "id": "5.3",
+      "class": "triggered",
+      "features": [
+        "gambling"
+      ],
+      "summary": "ゲーム、賭け事、くじは、提供するすべての地域の法的な義務を確かめたうえでだけ含める。",
+      "check": "提供地域ごとの法的な確認を確かめる。"
+    },
+    {
+      "id": "5.3.1",
+      "class": "triggered",
+      "features": [
+        "gambling"
+      ],
+      "summary": "懸賞やコンテストは、アプリの開発者が主催する。",
+      "check": "主催者を確かめる。"
+    },
+    {
+      "id": "5.3.2",
+      "class": "triggered",
+      "features": [
+        "gambling"
+      ],
+      "summary": "懸賞、コンテスト、抽選の公式な規則をアプリ内に示し、Appleが関与しないことを明記する。",
+      "check": "規則の表示とAppleの非関与の明記を確かめる。"
+    },
+    {
+      "id": "5.3.3",
+      "class": "triggered",
+      "features": [
+        "gambling"
+      ],
+      "summary": "現金の賭け事に使うクレジットや通貨を、アプリ内課金で販売しない。",
+      "check": "賭け事に関わる課金がないことを確かめる。"
+    },
+    {
+      "id": "5.3.4",
+      "class": "triggered",
+      "features": [
+        "gambling"
+      ],
+      "summary": "現金の賭け事やくじは、必要な許可を得て地域を制限し、App Storeでは無料とする。",
+      "check": "許可、地域の制限、価格を確かめる。"
+    },
+    {
+      "id": "5.4",
+      "class": "triggered",
+      "features": [
+        "vpn-mdm"
+      ],
+      "summary": "VPNのアプリはNEVPNManagerを使い、組織として登録した開発者が提供し、集めるデータを事前に示し、データを第三者に渡さない。",
+      "check": "VPNを提供する場合だけ確かめる。"
+    },
+    {
+      "id": "5.5",
+      "class": "triggered",
+      "features": [
+        "vpn-mdm"
+      ],
+      "summary": "MDMのアプリは、Appleに能力を申請し、資格のある組織が提供し、集めるデータを事前に示し、データを第三者に渡さない。",
+      "check": "MDMを提供する場合だけ確かめる。"
+    },
+    {
+      "id": "5.6",
+      "class": "always",
+      "features": [],
+      "summary": "利用者、Apple、ほかの開発者に敬意をもって接し、利用者をだます課金や価格の上げ方、不要なデータの要求をしない。",
+      "check": "購入、価格、データの要求の流れに、利用者をだます設計がないことを確かめる。"
+    },
+    {
+      "id": "5.6.1",
+      "class": "triggered",
+      "features": [
+        "review-prompts"
+      ],
+      "summary": "レビューへの返信は内容に沿ったものにし、評価の依頼は提供されたAPIを使い、独自のレビュー依頼の画面を出さない。",
+      "check": "評価を依頼する場合、StoreKitのAPIを使っていることを確かめる。"
+    },
+    {
+      "id": "5.6.2",
+      "class": "always",
+      "features": [],
+      "summary": "Appleと利用者に、自分と事業と提供内容について正確で最新の情報を示す。",
+      "check": "開発者名、連絡先、販売者の情報が正確であることを確かめる。"
+    },
+    {
+      "id": "5.6.3",
+      "class": "always",
+      "features": [],
+      "summary": "ランキング、検索、レビュー、紹介を操作しない。",
+      "check": "レビューや順位を操作する仕組みや依頼がないことを確かめる。"
+    },
+    {
+      "id": "5.6.4",
+      "class": "always",
+      "features": [],
+      "summary": "高い品質を保ち、苦情や返金の要求が多くならないようにする。",
+      "check": "既知の重大な不具合や、利用者の苦情につながる問題が残っていないことを確かめる。"
+    }
+  ]
+}
