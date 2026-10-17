@@ -26,7 +26,15 @@ For the complete release workflow below, require completed English/iPad adaptati
 ruby tools/lib/release-verification.rb "$PWD" "$PACKAGE_MANIFEST" "$HEAD_SHA" "$BUNDLE_ID"
 ```
 
-This read-only check does not authorize submission or replace account, legal, build, package or independent screenshot requirements. record-section.sh rechecks the same proof before publishing each result.
+This read-only check does not authorize submission or replace account, legal, build, package or independent screenshot requirements.
+
+Before any authenticated write in this workflow, and again on its resume, also require the App Review Guidelines audit (D-081) for the sealed version and build to pass, and confirm Apple's page date still matches the guideline map:
+
+```sh
+tools/check-review-guidelines.sh --project-root "$PWD" --bundle-id "$BUNDLE_ID" --version "$VERSION" --build "$BUILD"
+```
+
+A failing, stale, or changed audit stops the workflow before the next section. The check reads local files only; it is not evidence that App Review will approve the app, and it does not replace the package check, legal approval, release audit, or the explicit submission authorization. record-section.sh rechecks the same proof before publishing each result.
 
 If support, privacy, or terms URLs are part of the candidate, also require the exact live `publication-verification.json` produced by the `prepare-appstore-assets` legal-page handoff. It must be `verified` and `appStoreEligible: true`, and its source digests, routes, Web-AppLibrary Issue, user approval references, and public checks must match the sealed package. Reject `fixture-validated`, a changed source/URL, a login-only/non-200 page, or a record from another candidate. This record verifies publication; it does not replace the user's legal approval or authorize submission.
 

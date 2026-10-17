@@ -26,7 +26,11 @@
       "domain": "app-review-guidelines",
       "paths": [
         ".claude/skills/app-review-guidelines",
-        "tools/tests/test-app-review-guidelines.sh"
+        "docs/agent-contracts/release-auditor.md",
+        "tools/check-review-guidelines.sh",
+        "tools/lib/review-guidelines-audit.rb",
+        "tools/tests/test-app-review-guidelines.sh",
+        "tools/tests/test-review-guidelines-audit.sh"
       ],
       "prefixes": [
         ".agents/skills/app-review-guidelines/"
@@ -484,6 +488,7 @@
     {"path": "tools/tests/test-report-template-issue-skill.sh", "domains": ["template-issue-reporting"]},
     {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["repository-testing"]},
+    {"path": "tools/tests/test-review-guidelines-audit.sh", "domains": ["app-review-guidelines", "appstore"]},
     {"path": "tools/tests/test-review-route.sh", "domains": ["review-contract"]},
     {"path": "tools/tests/test-review-sealing.sh", "domains": ["review-evidence-sealing"]},
     {"path": "tools/tests/test-review-shared-artifacts.sh", "domains": ["review-contract"]},

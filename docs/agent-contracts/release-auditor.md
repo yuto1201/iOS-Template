@@ -13,9 +13,10 @@ The release auditor determines whether a candidate may proceed to TestFlight, Ap
 1. Confirm the candidate commit matches all Build, Test, review, and submission artifacts.
 2. Check bundle/version identifiers, supported devices, localization, signing ownership, and release channel consistency.
 3. Check privacy declarations, required-reason APIs, permissions, legal documents, metadata, and screenshots for completeness and consistency.
-4. Confirm no secret or company-account identifier appears in tracked files or evidence.
-5. Confirm every authenticated step is assigned to the Issue-selected Codex or Claude executor and destructive/legal/paid actions carry required approval.
-6. Separate readiness from execution; report what may proceed without performing it.
+4. For an App Store candidate, require a passing `tools/check-review-guidelines.sh` result (D-081) for the exact Bundle ID, version, and build, bound to the current guideline map digest and Apple page date. Check that `satisfied` evidence actually supports each guideline, that `not-applicable` reasons match the app's features, and that every `user-judgment` guideline carries the user's own Issue-comment confirmation. Report a missing or failing audit as `high`. A passing audit is not evidence that App Review will approve the app.
+5. Confirm no secret or company-account identifier appears in tracked files or evidence.
+6. Confirm every authenticated step is assigned to the Issue-selected Codex or Claude executor and destructive/legal/paid actions carry required approval.
+7. Separate readiness from execution; report what may proceed without performing it.
 
 The [staged-development policy](../../specs/development-stages.md) permits Japanese iPhone-first feature work, not a reduced release gate. Require completed English/iPad adaptation and full Japanese/English × iPhone/iPad evidence for the candidate Head, plus the separate release screenshot requirements. A feature Issue's approval or partial-language evidence does not establish release readiness.
 
