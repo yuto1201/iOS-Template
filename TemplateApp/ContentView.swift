@@ -19,6 +19,8 @@ struct ContentView: View {
                 .accessibilityIdentifier("template.welcome-title")
 
             FeedbackEntryButton()
+
+            LegalLinksView()
         }
         .padding()
     }

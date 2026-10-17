@@ -179,3 +179,50 @@ struct FeedbackTests {
         }
     }
 }
+
+struct LegalLinksTests {
+    private func localizedValue(for key: String, language: String) -> String? {
+        guard let url = Bundle.main.url(forResource: language, withExtension: "lproj"),
+              let bundle = Bundle(url: url) else { return nil }
+        return bundle.localizedString(forKey: key, value: nil, table: nil)
+    }
+
+    @Test("Legal links follow the app slug, stay hidden in the template, and name the feedback recipient")
+    func legalLinksFollowTheAppSlug() throws {
+        // D-072 pages from a slug in the same form as Config/app-identity.json.
+        let links = try #require(LegalLinks(appSlug: "garden-notes"))
+        #expect(links.privacyPolicy == URL(string: "https://app.yutodev.com/apps/garden-notes/privacy/"))
+        #expect(links.termsOfUse == URL(string: "https://app.yutodev.com/apps/garden-notes/terms/"))
+        #expect(links.support == URL(string: "https://app.yutodev.com/apps/garden-notes/support/"))
+        for slug in [nil, "", "Garden", "garden_notes", "-garden", "garden-", "garden--notes", "garden/notes", "a b"] {
+            #expect(LegalLinks(appSlug: slug) == nil, "\(String(describing: slug))")
+        }
+
+        // The template ships an empty slug, so a fresh app hides the links until its pages exist.
+        #expect(LegalLinks.appSlug() == "")
+        #expect(LegalLinks.current(arguments: ["App"]) == nil)
+        #if DEBUG
+        #expect(LegalLinks.current(arguments: ["App", "-LegalLinksAppSlug", "sample-app"]) == LegalLinks(appSlug: "sample-app"))
+        #expect(LegalLinks.debugAppSlug(arguments: ["App", "-LegalLinksAppSlug"]) == nil)
+        #else
+        #expect(LegalLinks.debugAppSlug(arguments: ["App", "-LegalLinksAppSlug", "sample-app"]) == nil)
+        #endif
+
+        // Link titles and the feedback note, which names the recipient and keeps what is and is not sent.
+        let expected: [String: (en: String, ja: String)] = [
+            "legal.privacy-policy": ("Privacy Policy", "プライバシーポリシー"),
+            "legal.terms-of-use": ("Terms of Use", "利用規約"),
+            "legal.support": ("Support", "サポート")
+        ]
+        for (key, value) in expected {
+            #expect(localizedValue(for: key, language: "en") == value.en)
+            #expect(localizedValue(for: key, language: "ja") == value.ja)
+        }
+        let english = try #require(localizedValue(for: "feedback.disclosure", language: "en"))
+        let japanese = try #require(localizedValue(for: "feedback.disclosure", language: "ja"))
+        #expect(english.hasPrefix("Sent anonymously to the developer"))
+        #expect(english.contains("device model") && english.contains("contact details are not sent"))
+        #expect(japanese.hasPrefix("開発者へ匿名で送信します。"))
+        #expect(japanese.contains("端末の機種") && japanese.contains("連絡先は送信しません"))
+    }
+}
