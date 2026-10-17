@@ -143,13 +143,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sent anonymously with the app and iOS versions, device model, and language and region settings. Your data in the app and your contact details are not sent."
+            "value" : "Sent anonymously to the developer with the app and iOS versions, device model, and language and region settings. Your data in the app and your contact details are not sent."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "匿名で送信します。アプリとiOSのバージョン、端末の機種、言語と地域の設定を添えます。アプリ内のデータと連絡先は送信しません。"
+            "value" : "開発者へ匿名で送信します。アプリとiOSのバージョン、端末の機種、言語と地域の設定を添えます。アプリ内のデータと連絡先は送信しません。"
           }
         }
       }
@@ -337,6 +337,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "この内容は長すぎて送信できません。短くしてから、もう一度送信してください。"
+          }
+        }
+      }
+    },
+    "legal.privacy-policy" : {
+      "comment" : "Link to the app's privacy policy page.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privacy Policy"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "プライバシーポリシー"
+          }
+        }
+      }
+    },
+    "legal.support" : {
+      "comment" : "Link to the app's support page.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Support"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サポート"
+          }
+        }
+      }
+    },
+    "legal.terms-of-use" : {
+      "comment" : "Link to the app's terms of use page.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terms of Use"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用規約"
           }
         }
       }
