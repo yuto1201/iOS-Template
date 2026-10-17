@@ -23,7 +23,8 @@ final class LegalLinksUITests: XCTestCase {
             let link = app.descendants(matching: .any)[identifier]
             XCTAssertTrue(link.waitForExistence(timeout: 10), "\(identifier) is missing")
             XCTAssertEqual(link.label, title)
-            XCTAssertGreaterThanOrEqual(link.frame.height, 44, "\(identifier) is shorter than 44pt")
+            // Layout can land a hair under 44 (43.99999999999994), so allow 0.01pt of floating-point error.
+            XCTAssertGreaterThanOrEqual(link.frame.height + 0.01, 44, "\(identifier) is shorter than 44pt")
         }
     }
 }
