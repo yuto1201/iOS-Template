@@ -180,6 +180,7 @@ struct FeedbackTests {
     }
 }
 
+@MainActor
 struct LegalLinksTests {
     private func localizedValue(for key: String, language: String) -> String? {
         guard let url = Bundle.main.url(forResource: language, withExtension: "lproj"),
@@ -188,7 +189,7 @@ struct LegalLinksTests {
     }
 
     @Test("Legal links follow the app slug, stay hidden in the template, and name the feedback recipient")
-    func legalLinksFollowTheAppSlug() throws {
+    func legalLinksFollowTheAppSlug() async throws {
         // D-072 pages from a slug in the same form as Config/app-identity.json.
         let links = try #require(LegalLinks(appSlug: "garden-notes"))
         #expect(links.privacyPolicy == URL(string: "https://app.yutodev.com/apps/garden-notes/privacy/"))
@@ -224,5 +225,10 @@ struct LegalLinksTests {
         #expect(english.contains("device model") && english.contains("contact details are not sent"))
         #expect(japanese.hasPrefix("開発者へ匿名で送信します。"))
         #expect(japanese.contains("端末の機種") && japanese.contains("連絡先は送信しません"))
+
+        // The feedback note changed, so the existing feedback checks run here as the regression.
+        let feedback = FeedbackTests()
+        feedback.feedbackOpensOnLaunchOnlyWhenAsked()
+        try await feedback.payloadMatchesWorkerContract()
     }
 }
