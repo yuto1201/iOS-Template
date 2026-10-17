@@ -847,3 +847,23 @@
   - Codex primaryからClaudeを呼ぶレビューと、Grokを呼ぶレビューは変えない。
 - Consequence: Codexを起動するlauncherの中身が変わるため、これからのレビューの記録は新しいlauncherのdigestに結び付く。それより前のレビューの記録は書き換えない。派生アプリへの適用は、テンプレートの取り込み（D-074、D-078）で行う。
 - Related Issue: #302（#291を置き換え）
+
+## D-081: App Storeの審査ガイドラインを、機能の計画時と提出の前の2か所で適用する
+
+- Date: 2026-10-17
+- Status: 確定
+- Supersedes: なし。D-077の「提出の前に、Appleの最新の画像と動画の規格、審査ガイドラインを確かめる」のうち審査ガイドラインの部分を、確かめ方を定めて補う。checklistのschemaとkeys、封印済みpackage／resultの形式、提出packageの検査（`tools/validate-appstore-package.sh`）をrelease経路に残すこと（D-054、D-079）は変えない。
+- Context: テンプレートは、画像の規格と提出の要件（`App Store/submission/requirements.json`）を機械で確かめる。一方でAppleの審査ガイドライン（https://developer.apple.com/app-store/review/guidelines/ 、2026-10-17の確認で「Last Updated: October 16, 2026」）は、`appstore-creative`が2.3.3を個別に参照し、D-077が提出の前に確かめるとするだけで、機能ごとに関わる項目を計画時に洗い出す手順も、提出の前に全項目を点検した記録もない。そのため、アカウントを作れるアプリのアプリ内でのアカウント削除（5.1.1(v)）、他社ログインを主に使うときの同等の選択肢（4.8）、デジタルの購入の復元（3.1.1）、ユーザーの投稿の通報とブロック（1.2）のような要件が、提出の直前や審査の却下で初めて見つかるおそれがある。ユーザーは2026-10-17に、審査ガイドラインをテンプレートにも適用し、機能の計画時と提出の前の両方で使うこと、TemplateApp本体は点検して不足があれば別のIssueで直すことを決めた。
+- Decision:
+  - 正本：Appleの審査ガイドラインのページを正本とする。テンプレートは、項目番号、日本語の短い要約、その項目が関わる機能の種類、確かめ方を持つ対応表を持つ。Appleの本文は写さない。対応表には、ページの「Last Updated」の日付、取得日、ページのURLを記録する。
+  - 対応表の分類：各項目を次のどれか1つにする。
+    - `always`：すべてのアプリに関わる。例：2.1 完成度とデモの用意、2.3 metadataの正確さ、1.5 連絡先、5.1.1 プライバシーポリシーへのアプリ内とApp Store Connectのリンク、2.5.1 公開APIだけを使う。
+    - `triggered`：特定の機能を持つときだけ関わる。機能の種類（アカウントの作成、他社のログイン、デジタルの購入とサブスクリプション、広告とトラッキング、ユーザーの投稿と交流、子ども向け、健康と医療、位置情報、個人データや外部AIへの送信、Webの表示、拡張機能とWidget、通知、レビューの依頼、懸賞と賭け事、暗号資産、Apple Pay、VPNとMDM、ミニアプリとエミュレータなど）と結び付ける。
+    - `user-judgment`：AIが機械的に判断できない。例：4.1 模倣、4.2 最低限の機能、4.3 スパム、5.2 知的財産、1.1 不適切な内容。AIは所見を示し、ユーザーが決める。
+  - 計画時：機能を計画するとき（`plan-issue-batch`、`spec-workflow`、Feature Issueの作成）、その機能が対応表のどの`triggered`の種類に当たるかを調べ、当たる項目の具体的な要件をそのIssueの受け入れ条件へ入れる。例：アカウントを作れるならアプリ内で削除できる、他社のログインを主に使うなら同等の選択肢を出す、デジタルの購入には復元を用意する、ユーザーの投稿には通報とブロックを用意する、位置情報やトラッキングは事前に同意を得る。当たる種類がなければ、Issueの本文にその旨を書く。要件の扱いが受け入れ条件を変える未決事項なら、`blocked:user`とする。対応表と手順を実装する後続Issueが完了するまでは、Appleのページを直接確かめて同じことを行う。
+  - 提出前：各アプリは、対応表のすべての項目を、`satisfied`（満たしていて、根拠の場所がある）、`not-applicable`（理由がある）、`user-confirmed`（`user-judgment`の項目をユーザーが確認した）のどれかにした点検表を、`App Store/review/`に持つ。点検表は、使った対応表の版（Appleの更新日と対応表のdigest）と、点検したbuildのversionに結び付ける。認証を行わないlocalの点検toolが、点検表が対応表の全項目を覆い、未解決の項目がなく、版とversionが一致することを確かめる。`prepare-appstore-assets`、`release-auditor`、`submit-appstore-release`は、この点検toolが成功したときだけ提出へ進める。
+  - 鮮度：提出の前に、Appleのページの「Last Updated」を確かめる。対応表の日付と違えば提出を止め、先にテンプレートで対応表を更新するIssueを行う。派生アプリは、テンプレートの取り込み（D-074、D-078）で新しい対応表を受け取ってから点検する。対応表の取得日から30日を超えたときも、確かめ直すまで提出しない。
+  - 既存の境界：checklistのschemaとkeys、封印済みpackage／resultの形式、提出packageの検査、提出の明示許可、初回の法務承認、release audit、外部操作の権限は変えない。点検表と点検toolの成功を審査通過の証拠とせず、審査の結果を推測しない。
+  - TemplateApp：対応表と点検toolができたあと、TemplateAppを点検し、その結果をIssueに記録する。不足が見つかれば、それぞれ別のIssueで直す。テンプレート自身は提出しないため、`App Store/review/`の点検表をテンプレートにcommitしない。
+- Consequence: 実装は次の後続Issueに分ける。(1) 対応表と`app-review-guidelines`スキル、計画時の手順（`plan-issue-batch`、`spec-workflow`、`spec-reviewer`、Feature Issueのtemplate）と、その直接のtest。(2) 提出前の点検表の形式と点検tool、`prepare-appstore-assets`、`release-auditor`、`submit-appstore-release`、`docs/agent-contracts/appstore-submission.md`からの呼び出しと、その直接のtest。(3) TemplateAppの点検。(2)は(1)に、(3)は(2)に依存する。(1)と(2)の新しいファイルはApp Storeのpathの外に置き、workflow-onlyのexact allowlistと`AGENTS.md`を変えずに進める。これができない変更が必要になった場合は、その後続Issueで`AGENTS.md`の文面をユーザーに承認してもらう（D-075）。点検で見つかった不足の修正は、(3)のあとに別のIssueにする。派生アプリへの適用は、テンプレートの取り込みとそれぞれのアプリのIssueで行い、既に提出したアプリにも次の提出から適用する。
+- Related Issue: #319

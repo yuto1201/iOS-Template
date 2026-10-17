@@ -57,6 +57,7 @@ Date: 2026-10-05
 - App Icon IssueはIdentity bootstrapに依存し、確定済みの目的・方向性とIdentityから同条件・同fidelityのシンプルな画像生成候補をexactly 2案作る。提示済み候補を上書きせず、ユーザーがstable concept IDを一つ明示選択するまで`blocked:user`とする。組合せや重要な変更は新revisionへ再生成して再選択する。
 - App Icon Issueは`bounded direction-neutral` routeで、App Home Screen／Settings等のicon表示をlive UI verificationに記録し、選択が画面階層、navigation、primary-flow interactionを決めずUI Direction Gateを満たさないことをReasonと関連product anchorから復元可能にする。最初のユーザー向けUI `shape`は完了済みApp Icon Issueへ依存し、独立した非UI作業は依存しない。
 - 選択済みアプリアイコンは1024 x 1024の不透明PNGで、system masking前の正方形、単一の認識しやすい主題、単純な背景、少ない形と色を基本とする。`tools/validate-app-icon.sh`が`Config/app-identity.json`、default AppIcon entry、PNGの寸法・透明性、`Config/app-icon.json`のasset path／prompt summary／generator／exact SHA-256を一致検証する。
+- 派生アプリのFeature Issueは、[App Store審査ガイドラインの適用](product.md#62-app-store審査ガイドラインの適用)に従い、対応表で機能が当たる`triggered`の項目の具体的な要件を受け入れ条件へ入れるか、当たる項目がないことを本文に書く。要件の扱いが受け入れ条件を変える未決事項なら`blocked:user`とする。対応表と手順を実装する後続Issueが完了するまでは、Appleのページを直接確かめて同じことを行う。
 - 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更を含むIssueは`ios-3d-assets`を使い、authoringの経路（Tripo、Claude、またはCodex `gpt-6-astra`）をIssue／PR証拠へ記録する。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行う。どの経路の成果も形式検証、統合、RealityKit実装、Build／Test、視覚確認を経てから受け入れる。
 - application releaseに属するIssueは、release identifier、revision、現在Phase、依存する前Phaseの完了記録へ到達できる。Phase 1のscope承認、Phase 3のユーザー完了判断、Phase 4の独立した対応範囲、Phase 5の残件承認、Phase 6の公開権限を別々に記録する。workflow-onlyのテンプレート改善Issueへ架空のapplication Phaseを付けない。
 - 前Phaseが未完了でもread-only調査、選択肢、Issue草案、依存しない作業は可能だが、その結果を次Phaseの実装開始または完了証拠にしない。依存する実装は前Phase完了と現行revisionの再照合まで開始しない。
@@ -278,3 +279,13 @@ AppLibrary法務ページへの引き継ぎは、次を満たす。
 - [ ] Workerのひな形には特定のアプリの名前、リポジトリ、回数制限のnamespaceが残らず、アプリごとの値は準備toolが書き出す。
 - [ ] `PrivacyInfo.xcprivacy`、App Store ConnectのApp Privacy、プライバシーポリシーが、本文を「カスタマーサポート」、端末情報を「その他の診断データ」として、関連付けなし、トラッキングなし、目的はアプリの機能と申告する。
 - [ ] 新しいアプリの準備は、設定済みのGitHubとCloudflareのaccountと対象を確かめてから行い、リポジトリの作成、secretの登録、deployをユーザーの承認なしに行わない。秘密値を表示、ファイル、log、Issue、PRに残さない。
+
+## 12. App Store審査ガイドライン
+
+[App Store審査ガイドラインの適用](product.md#62-app-store審査ガイドラインの適用)を実装する後続Issueは、次を満たす。D-081とこの節の記録だけで、対応表、スキル、点検tool、点検表の形式を実装済みとは報告しない。
+
+- 対応表は、Appleのページの全項目を番号で覆い、各項目に日本語の短い要約、`always`／`triggered`／`user-judgment`の分類、`triggered`なら機能の種類、確かめ方を持つ。Appleのページの更新日、取得日、URLを記録し、Appleの本文を写さない。対応表の形式と、番号の重複や分類の欠けを、直接のtestが確かめる。
+- 計画時の手順（`plan-issue-batch`、`spec-workflow`、`spec-reviewer`、Feature Issueのtemplate）は、機能の種類から当たる項目を引き、具体的な要件を受け入れ条件へ入れるか、当たらないことを書くよう求める。
+- 点検表は、対応表の全項目に`satisfied`（根拠の場所）、`not-applicable`（理由）、`user-confirmed`（ユーザーの確認の記録）のどれかを持ち、対応表の版とbuildのversionに結び付く。点検toolは、項目の欠け、未知の項目、根拠や理由のない状態、AIだけで決めた`user-judgment`、対応表の版やversionの不一致、取得日から30日を超えた対応表を拒否することを、偽の点検表を使う直接のtestで確かめる。
+- 点検toolは認証を行わず、外部へ送信せず、秘密や個人情報を記録しない。`prepare-appstore-assets`、`release-auditor`、`submit-appstore-release`は、点検toolの成功を提出へ進む条件にする。checklistのschemaとkeys、封印済みpackage／resultの形式、提出packageの検査、提出の明示許可、法務承認、外部操作の権限を変えない。
+- 点検toolの成功を審査通過の証拠とせず、審査の結果を推測しない。TemplateAppの点検結果はIssueに記録し、不足の修正は別のIssueで行う。
