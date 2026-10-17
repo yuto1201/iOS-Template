@@ -57,7 +57,8 @@ Appleのページの「Last Updated」が`source.lastUpdated`と違うとき、�
 1. Appleのページを取得し、番号付きの全項目を確かめる。5.1.1と5.1.2はローマ数字の小項目、2.1は(a)と(b)を別の項目にする。
 2. 変わった項目の要約、分類、機能の種類、確かめ方を更新し、新しい番号を追加し、消えた番号を除く。すべての番号が`guidelines`、`containers`、`omitted`のどれか1つだけに入るようにする。
 3. `source.lastUpdated`と`source.retrievedAt`を更新する。要約と確かめ方は日本語の言い換えにし、Appleの本文を写さない。
-4. `tools/tests/test-app-review-guidelines.sh`を実行する。
+4. `tools/tests/test-app-review-guidelines.sh`の`inventories`に、新しい更新日をキーとして、対応表とは別にAppleのページから数えた番号の一覧を加える。testは、対応表の`guidelines`、`containers`、`omitted`の番号がこの一覧と過不足なく一致することを確かめる。
+5. `tools/tests/test-app-review-guidelines.sh`を実行する。
 
 ## 境界
 

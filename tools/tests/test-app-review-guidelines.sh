@@ -104,10 +104,31 @@ fail!("a guideline number appears more than once: #{duplicates.inspect}") unless
 unused = kinds.keys - used_kinds
 fail!("feature kinds are not used by any guideline: #{unused.inspect}") unless unused.empty?
 
-# Every top-level section of Apple's page must be represented.
-%w[1 2 3 4 5].each do |section|
-  fail!("section #{section} has no guideline") unless all_ids.any? { |id| id.start_with?("#{section}.") }
-end
+# The complete numbered inventory of each Apple page revision, read from the page independently of the
+# map: numbered items, the lettered items 2.1(a)-(b), 3.1.1(a), 3.1.2(a)-(c) and 3.1.3(a)-(g), and the
+# roman sub-items of 5.1.1 and 5.1.2. A new page revision needs a new inventory here before the map
+# may declare it.
+inventories = {
+  '2026-10-16' => %w[
+    1.1 1.1.1 1.1.2 1.1.3 1.1.4 1.1.5 1.1.6 1.1.7 1.2 1.2.1 1.3 1.4 1.4.1 1.4.2 1.4.3 1.4.4 1.4.5
+    1.5 1.6 1.7 2.1 2.1(a) 2.1(b) 2.2 2.3 2.3.1 2.3.2 2.3.3 2.3.4 2.3.5 2.3.6 2.3.7 2.3.8 2.3.9
+    2.3.10 2.3.11 2.3.12 2.3.13 2.3.14 2.4 2.4.1 2.4.2 2.4.3 2.4.4 2.4.5 2.5 2.5.1 2.5.2 2.5.3 2.5.4
+    2.5.5 2.5.6 2.5.7 2.5.8 2.5.9 2.5.10 2.5.11 2.5.12 2.5.13 2.5.14 2.5.15 2.5.16 2.5.17 2.5.18
+    2.5.19 3.1 3.1.1 3.1.1(a) 3.1.2 3.1.2(a) 3.1.2(b) 3.1.2(c) 3.1.3 3.1.3(a) 3.1.3(b) 3.1.3(c)
+    3.1.3(d) 3.1.3(e) 3.1.3(f) 3.1.3(g) 3.1.4 3.1.5 3.2 3.2.1 3.2.2 4.1 4.2 4.2.1 4.2.2 4.2.3 4.2.4
+    4.2.5 4.2.6 4.2.7 4.3 4.4 4.4.1 4.4.2 4.4.3 4.5 4.5.1 4.5.2 4.5.3 4.5.4 4.5.5 4.5.6 4.6 4.7
+    4.7.1 4.7.2 4.7.3 4.7.4 4.7.5 4.8 4.9 4.10 5.1 5.1.1 5.1.1(i) 5.1.1(ii) 5.1.1(iii) 5.1.1(iv)
+    5.1.1(v) 5.1.1(vi) 5.1.1(vii) 5.1.1(viii) 5.1.1(ix) 5.1.1(x) 5.1.2 5.1.2(i) 5.1.2(ii) 5.1.2(iii)
+    5.1.2(iv) 5.1.2(v) 5.1.2(vi) 5.1.2(vii) 5.1.3 5.1.4 5.1.5 5.2 5.2.1 5.2.2 5.2.3 5.2.4 5.2.5 5.3
+    5.3.1 5.3.2 5.3.3 5.3.4 5.4 5.5 5.6 5.6.1 5.6.2 5.6.3 5.6.4
+  ]
+}
+inventory = inventories[source['lastUpdated']] or fail!("no numbered inventory for page revision #{source['lastUpdated']}")
+fail!('the inventory repeats a number') unless inventory.uniq.size == inventory.size
+missing = inventory - everything
+unknown = everything - inventory
+fail!("map misses guideline numbers #{missing.inspect}") unless missing.empty?
+fail!("map has guideline numbers that are not on the page #{unknown.inspect}") unless unknown.empty?
 %w[2.5.7 2.5.10 4.2.4 4.2.5 4.4.3 4.6].each do |id|
   fail!("omitted number #{id} is not recorded") unless omitted.include?(id)
 end
