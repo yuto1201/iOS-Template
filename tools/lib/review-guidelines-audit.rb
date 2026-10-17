@@ -238,6 +238,10 @@ module ReviewGuidelinesAudit
     target = root.join(path)
     return ["audit item #{label} path does not exist"] unless target.exist? || target.symlink?
     return ["audit item #{label} path must not be a symbolic link"] if target.symlink?
+    # A symbolic link in a parent directory must not lead the evidence outside the project.
+    real_root = root.realpath.to_s
+    real_target = target.realpath.to_s
+    return ["audit item #{label} path must stay inside the project"] unless real_target == real_root || real_target.start_with?(real_root + "/")
     []
   end
 

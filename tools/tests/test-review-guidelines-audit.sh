@@ -153,6 +153,16 @@ end
   fail!("#{label}: diagnostics repeat the submitted value") if (out + err).include?('X-SUBMITTED')
 end
 
+# Evidence must not leave the project through a symbolic link in a parent directory.
+escape_root = project(tmp, map_bytes)
+outside = File.join(tmp, 'outside-evidence')
+FileUtils.mkdir_p(outside)
+File.write(File.join(outside, 'proof.md'), "outside\n")
+File.symlink(outside, File.join(escape_root, 'linked'))
+escape_audit = valid_audit(map, map_bytes, comment)
+escape_audit['items'].find { |x| x['id'] == '1.5' }['evidence'] = ['linked/proof.md']
+expect('evidence through a linked directory', run_checker(checker, escape_root, escape_audit, now), 1, /must stay inside the project/)
+
 # An existing input that cannot be read is refused with exit 2 and no traceback.
 unreadable_root = project(tmp, map_bytes)
 unreadable = File.join(unreadable_root, 'App Store/review/guidelines-audit.json')
@@ -210,5 +220,5 @@ require_all('skill pre-submission audit', skill, [
   require_all(path, File.read(File.join(repo_root, path), encoding: 'UTF-8'), values)
 end
 
-puts "review guidelines audit checker passed (#{mutations.size + 16} rejection cases)"
+puts "review guidelines audit checker passed (#{mutations.size + 17} rejection cases)"
 RUBY
