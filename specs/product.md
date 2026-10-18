@@ -177,9 +177,15 @@ permissionは起動直後に要求せず、利用者が通知を有効にする�
 
 ### 5.1 3Dモデル制作方針
 
-3Dモデルを使う場合は、ユーザーまたはClaudeがブラウザでTripoを操作して作成します。ログイン、プランや課金の変更、認証情報の入力はユーザーが行い、Claudeはユーザーのログイン済みsessionで生成とダウンロードの操作だけを行います。簡単なモデルや即効性を求める場合は、ClaudeまたはCodexの`gpt-6-astra`（reasoning effort `xhigh`）に依頼します。3D作業は共有の[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteします（[D-071](decisions.md#d-071-3dモデルはtripoで作り簡単なものはclaudeまたはcodex-gpt-6-astraに依頼する)）。
+3Dモデルを使う場合は、モデルの複雑さで作成の経路を選びます。3D作業は共有の[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteします（[D-082](decisions.md#d-082-3dモデルの作成経路をモデルの複雑さで選ぶ)）。
 
-どの経路で作ったassetも、GLB／USDZ等の形式検証、アプリへの統合、RealityKit実装、Build／Test、視覚確認、レビューは従来どおり行います。3Dを含むIssue／PR証拠には、authoringの経路（Tripo、Claude、`gpt-6-astra`）を記録し、経路を確認できない生成物を成果として承認しません。
+- ごく単純な形（箱、円柱、球のいくつかの組み合わせと単色）は、ClaudeがBlenderで直接作れます。
+- 単純なモデルと部品の単純な動きは、Codexの`gpt-6.1-sol`（reasoning effort `xhigh`）が参照画像を作り、Claudeが評価して修正をやり取りした後、その画像を添えてCodexの`gpt-6-astra`（reasoning effort `xhigh`）がBlenderでモデルを作り、Claudeの評価と修正を繰り返します。参照画像とモデルの繰り返しはそれぞれ5回までとし、超えたらユーザーが続けるかTripoへ切り替えるかを決めます。
+- 複雑で高い品質が必要なモデルと骨格で動くモデルだけを、ユーザーまたはClaudeがブラウザでTripoを操作して作ります。生成した画像とマルチビュー生成から作り、生成数を4にし、不完全ならまず無料の部分修正を使います。ログイン、プランや課金の変更、認証情報の入力はユーザーが行い、Claudeはユーザーのログイン済みsessionで操作します。クレジットを使う操作は毎回ユーザーの承認を得ます。
+
+AIは形、部品の数、テクスチャの写実さ、動きから経路を提案し、どちらとも言えないものだけユーザーに確認します。一式で作るときは、画風の基準の画像をユーザーが選んでから各モデルを作ります。アプリに入れるモデルの目安は、小物で三角形5,000以下・テクスチャ1024px・USDZ 2MB以下、主役で三角形30,000以下・テクスチャ2048px・USDZ 10MB以下です。
+
+どの経路で作ったassetも、GLB／USDZ等の形式検証、アプリへの統合、RealityKit実装、Build／Test、視覚確認、レビューは従来どおり行います。3Dを含むIssue／PR証拠には、authoringの経路（`claude`、`codex`、`tripo`）と選んだ理由を記録し、経路を確認できない生成物を成果として承認しません。
 
 ## 6. App Store 方針
 

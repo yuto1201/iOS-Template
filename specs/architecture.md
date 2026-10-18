@@ -11,7 +11,7 @@ Date: 2026-10-05
 - ディレクトリは責務が発生した時点で追加し、空の抽象層を作らない。
 - 仕様、運用、実行手順、生成証拠を混在させない。
 - Codex と Claude の機能名は揃え、ネイティブ形式だけを分ける。
-- 一般開発のClaude／Codex同等性を維持し、3D asset authoringの経路（Tripoを標準とし、簡単なモデルはClaudeまたはCodex `gpt-6-astra`）は共有skillへ閉じ込め、アプリ本体のarchitectureを実行モデルや生成サービスへ依存させない（D-071）。
+- 一般開発のClaude／Codex同等性を維持し、3D asset authoringの経路（モデルの複雑さでClaude、Codex `gpt-6.1-sol`と`gpt-6-astra`、Tripoから選ぶ）は共有skillへ閉じ込め、アプリ本体のarchitectureを実行モデルや生成サービスへ依存させない（D-082）。
 
 ## 2. 完成時のルート構成
 
@@ -173,7 +173,7 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | `ui-direction` | 現在のユーザーが対象範囲のHTML比較を明示したとき、または対象範囲のUI方向が未確定で、最初のユーザー向けUI、最上位navigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかを行うとき |
 | `supabase-ops` | アプリ仕様でSupabase使用を確定したとき |
 | `ios-media-assets` | 音声、文字起こし、効果音、音声分離、音楽、画像または動画が受け入れ条件になったとき |
-| `ios-3d-assets` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。ユーザーまたはClaudeがブラウザで操作するTripoを標準とし、簡単なモデルや即効性を求める場合はClaudeまたはCodexの`gpt-6-astra`（reasoning effort `xhigh`）へ依頼する（D-071） |
+| `ios-3d-assets` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。モデルの複雑さで経路を選び、ごく単純な形はClaude、単純なモデルと部品の単純な動きはCodexの`gpt-6.1-sol`と`gpt-6-astra`（reasoning effort `xhigh`）の往復、複雑なモデルと骨格で動くモデルはブラウザで操作するTripoで作る（D-082） |
 | `prepare-appstore-assets` | App Store原稿のread-only準備、登録前提の照合、または完全な提出packageを準備するとき |
 | `submit-appstore-release` | CodexまたはClaudeが原稿準備／先行保存と正式提出を振り分け、監査済みpackageを明示許可の下で提出・再開するとき。先行save実装は§9.2の後続Issue、API入出力は§7.2の`asc` adapter |
 
