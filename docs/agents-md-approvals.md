@@ -86,3 +86,20 @@ D-075に従い、`AGENTS.md`を書き換えるときは、変更する文面を�
 -workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression test、D-059に従い後続Issueがexact列挙するasc adapterのtool／helper／fixture／直接regression test、D-077に従い後続Issueがexact列挙する非認証creative producer（スキル、拡張層、提案シート、録画と品質確認）のtool／helper／fixture／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
 +workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression test、D-059に従い後続Issueがexact列挙するasc adapterのtool／helper／fixture／直接regression test、D-077に従い後続Issueがexact列挙する非認証creative producer（スキル、拡張層、提案シート、録画と品質確認）のtool／helper／fixture／直接regression test、D-079に従い後続Issueがexact列挙する提出の要件（`App Store/submission/requirements.json`）とそのfixture／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
 ```
+
+## #318（2026-10-18）
+
+- Issue: #318
+- 承認を記録したIssueコメント: https://github.com/yuto1201/iOS-Template/issues/318#issuecomment-6245339912（2026-10-18T03:47:56Z）
+- 承認: ユーザーが会話の中で、変更文面を示した確認に「承認する」と回答した。最初に示した文面（Claudeが作る経路をなくす案）は、ユーザーの指示でClaudeの経路を残す文面に直してから承認を得た。
+- 承認後の`AGENTS.md`（1行目を除く）のSHA-256: `sha256:1860c848e3db9fe6db9b77403e98dca73eae05a9449abdecf7cc7f089fe0d0c3`
+
+承認した変更の文面:
+
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -23 +23 @@
+-- ClaudeとCodexのどちらでも通常の仕様化・実装・検証・外部操作を担当できる。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[3D Asset skill](.agents/skills/ios-3d-assets/SKILL.md)に従う。標準はユーザーまたはClaudeがブラウザでTripoを操作して作る経路とし、簡単なモデルや即効性を求める場合だけClaudeまたはCodexの`gpt-6-astra`（reasoning effort `xhigh`）に依頼する。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行う。どの経路で作ったassetも形式検証、統合、Build／Test、視覚確認を行い、Issue／PR証拠にauthoringの経路を記録する。
++- ClaudeとCodexのどちらでも通常の仕様化・実装・検証・外部操作を担当できる。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[3D Asset skill](.agents/skills/ios-3d-assets/SKILL.md)に従い、経路をモデルの複雑さで選ぶ（D-082）。ごく単純な形はClaudeがBlenderで直接作れる。単純なモデルと部品の単純な動きは、Codexの`gpt-6.1-sol`（reasoning effort `xhigh`）が作る参照画像と`gpt-6-astra`（reasoning effort `xhigh`）が作るモデルをClaudeが評価して修正を往復させて作り、複雑で高い品質が必要なモデルと骨格で動くモデルだけを、ユーザーまたはClaudeがブラウザでTripoを操作して作る。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、クレジットを使う操作は毎回ユーザーの承認を得る。どの経路で作ったassetも形式検証、統合、Build／Test、視覚確認を行い、Issue／PR証拠にauthoringの経路を記録する。
+```

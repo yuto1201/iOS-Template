@@ -1235,7 +1235,7 @@ contracts = {
         "Ambiguity fails closed into the gate",
     ),
     ".agents/skills/ios-3d-assets/SKILL.md": (
-        "### Standard route: Tripo in the browser",
+        "## Authoring routes (D-082)",
         "reasoning effort `xhigh`",
         "RealityKit",
     ),
