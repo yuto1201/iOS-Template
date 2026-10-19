@@ -351,7 +351,7 @@ for stale in ("Pro Max を除く", "iPad Air", "4種類の読取command", "secre
         raise SystemExit(f"docs/README.md keeps a stale fact: {stale!r}")
 PYTHON
 
-ruby -ryaml -rjson -e '
+ownership_check=$(cat <<'RUBY'
   data = YAML.safe_load(File.read("Config/ownership.yml"), permitted_classes: [], aliases: false)
   abort "unexpected schema version" unless data["schemaVersion"] == 2
   abort "ownership top-level schema differs" unless data.keys.sort == %w[appStore cloudflare elevenlabs github linear schemaVersion supabase vercel].sort
@@ -360,7 +360,14 @@ ruby -ryaml -rjson -e '
   abort "unexpected Supabase organization name" unless data.dig("supabase", "organizationName") == "yuto1201#{39.chr}s Org"
   %w[projectRef].each { |key| abort "#{key} must be null" unless data.dig("supabase", key).nil? }
   abort "unexpected Cloudflare account" unless data.dig("cloudflare", "accountId") == "7ea8e713d76506f9e303f58624829aa5" && data.dig("cloudflare", "accountName") == "Yuto Dev" && data.dig("cloudflare", "plan") == "free"
-  abort "Cloudflare target must be null" unless data.dig("cloudflare", "target").nil?
+  # The app-feedback skill (D-076) records the app's Worker as the target once the Identity exists.
+  cloudflare_target = data.dig("cloudflare", "target")
+  if File.exist?("Config/app-identity.json")
+    worker = "#{JSON.parse(File.read("Config/app-identity.json"))["appSlug"]}-feedback"
+    abort "Cloudflare target must be null or #{worker}" unless cloudflare_target.nil? || cloudflare_target == worker
+  else
+    abort "Cloudflare target must be null" unless cloudflare_target.nil?
+  end
   abort "unexpected Linear identity" unless data["linear"] == {"workspaceSlug"=>"yuto33004", "workspaceUrl"=>"https://linear.app/yuto33004", "teamKey"=>"YUT"}
   abort "unexpected Vercel team" unless data.dig("vercel", "teamId") == "team_ANEUn6gVL8dccPaY08wkvxFt" && data.dig("vercel", "teamSlug") == "yuto16" && data.dig("vercel", "plan") == "hobby"
   abort "Vercel projectId must be null" unless data.dig("vercel", "projectId").nil?
@@ -374,7 +381,42 @@ ruby -ryaml -rjson -e '
   else
     abort "App Store bundleId must be null before identity bootstrap" unless data.dig("appStore", "bundleId").nil?
   end
-'
+RUBY
+)
+ruby -ryaml -rjson -e "$ownership_check"
+
+# #332: the Cloudflare target before and after Identity bootstrap, on disposable copies of the ownership file.
+ownership_fixture=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-ownership.XXXXXX")
+check_ownership_fixture() {
+  local expected=$1 target=$2 identity=$3 dir
+  dir=$(mktemp -d "$ownership_fixture/case.XXXXXX")
+  mkdir -p "$dir/Config"
+  TARGET="$target" IDENTITY="$identity" ruby -ryaml -rjson -e '
+    data = YAML.safe_load(File.read(ARGV.fetch(0)), permitted_classes: [], aliases: false)
+    data["cloudflare"]["target"] = ENV.fetch("TARGET") == "null" ? nil : ENV.fetch("TARGET")
+    if ENV.fetch("IDENTITY") == "bootstrapped"
+      identity = {"appSlug" => "garden-notes", "bundleId" => "com.yuto.GardenNotes", "displayName" => "Garden Notes",
+                  "moduleName" => "GardenNotes", "schemaVersion" => 1, "sourceIdentityVersion" => 1}
+      File.write(File.join(ARGV.fetch(1), "Config/app-identity.json"), JSON.generate(identity))
+      data["appStore"]["bundleId"] = identity.fetch("bundleId")
+    else
+      data["appStore"]["bundleId"] = nil
+    end
+    File.write(File.join(ARGV.fetch(1), "Config/ownership.yml"), data.to_yaml)
+  ' Config/ownership.yml "$dir"
+  if (cd "$dir" && ruby -ryaml -rjson -e "$ownership_check" 2>"$dir/stderr"); then
+    [[ "$expected" == pass ]] || { echo "ownership check accepted Cloudflare target $target ($identity)" >&2; exit 1; }
+  else
+    [[ "$expected" == fail ]] && grep -Fq 'Cloudflare target' "$dir/stderr" ||
+      { echo "ownership check gave an unexpected result for Cloudflare target $target ($identity): $(cat "$dir/stderr")" >&2; exit 1; }
+  fi
+}
+check_ownership_fixture pass null template
+check_ownership_fixture fail garden-notes-feedback template
+check_ownership_fixture pass null bootstrapped
+check_ownership_fixture pass garden-notes-feedback bootstrapped
+check_ownership_fixture fail other-feedback bootstrapped
+rm -rf -- "$ownership_fixture"
 
 ruby -rjson -e '
   manifest = JSON.parse(File.read("Config/template-identity.json"))
