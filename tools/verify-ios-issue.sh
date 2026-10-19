@@ -190,6 +190,21 @@ fail() {
   exit 1
 }
 
+# A broad fixed message plus the validator's own reason: the last "verify.json validation failed:" line, with
+# the repository and home paths removed, printable ASCII only, and bounded so the failure record accepts it.
+with_validator_reason() {
+  local message="$1" reason home_mark='~' root_prefix="$repository_root/"
+  reason="$(printf '%s\n' "$2" | sed -n 's/^verify\.json validation failed: //p' | tail -n 1)"
+  reason="${reason//"$root_prefix"/}"
+  [[ -z "${HOME-}" ]] || reason="${reason//"$HOME"/$home_mark}"
+  reason="$(printf '%s' "$reason" | LC_ALL=C tr -cd ' -~' | cut -c1-120 | sed 's/ *$//')"
+  if [[ -n "$reason" ]]; then
+    printf '%s; validator: %s' "$message" "$reason"
+  else
+    printf '%s' "$message"
+  fi
+}
+
 run_git rev-parse --verify "${expected_base}^{commit}" >/dev/null 2>&1 || fail "expected Base is not a commit"
 [[ "$expected_base" != "$head_sha" ]] || fail "Base and Head must differ"
 run_git merge-base --is-ancestor "$expected_base" "$head_sha" || fail "expected Base is not an ancestor of current Git Head"
@@ -212,7 +227,7 @@ if [[ "$mode" == "finalize" ]]; then
       *"draft digest"*) fail "visual draft digest mismatch" ;;
       *"current Git range"*) fail "draft does not match current Git Head" ;;
       *"already exists"*) fail "canonical verify.json already exists" ;;
-      *) fail "visual result is invalid" ;;
+      *) fail "$(with_validator_reason "visual result is invalid" "$diagnostic")" ;;
     esac
   fi
   printf '%s\n' "$final_output"
@@ -232,10 +247,10 @@ if ! snapshot_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift
   case "$diagnostic" in
     *"lock"*) fail "verification lock is already held" ;;
     *"full verification is required"*) fail "full verification is required for this change" ;;
-    *"verification"*) fail "verification contract is absent or incomplete" ;;
-    *"tracked"*|*"source bytes"*|*"source mode"*) fail "working tree must be clean" ;;
-    *"project"*) fail "project path or contents are invalid" ;;
-    *) fail "contract or matrix validation failed" ;;
+    *"verification"*) fail "$(with_validator_reason "verification contract is absent or incomplete" "$diagnostic")" ;;
+    *"tracked"*|*"source bytes"*|*"source mode"*) fail "$(with_validator_reason "working tree must be clean" "$diagnostic")" ;;
+    *"project"*) fail "$(with_validator_reason "project path or contents are invalid" "$diagnostic")" ;;
+    *) fail "$(with_validator_reason "contract or matrix validation failed" "$diagnostic")" ;;
   esac
 fi
 stage="input-validation"

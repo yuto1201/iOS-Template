@@ -7,6 +7,47 @@ require_test_commands "$0" rg git jq ruby /usr/bin/ruby /usr/bin/swiftc
 [[ $# == 0 ]] || exit 64
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ios-runner-fixture.sh"
 
+# #328: when the validator fails for a reason the runner maps only to a broad fixed message, the message
+# and the failure record carry the validator's own reason (repository and home paths removed).
+assert_validator_reason() {
+  local stderr="$1" fixed="$2" reason record
+  reason="$(sed -n "s/^iOS verification failed: $fixed; validator: //p" "$stderr" | tail -n 1)"
+  [[ -n "$reason" ]] || { echo "the failure hides the validator's reason behind: $fixed" >&2; cat "$stderr" >&2; exit 1; }
+  [[ "$reason" != *"$repo"* && "$reason" != *"$HOME"* ]] || { echo "the validator's reason keeps a local path: $reason" >&2; exit 1; }
+  record="$(/bin/ls -t "$repo/.artifacts/issues/42/$head_sha/failures/"failure-*.json | head -n 1)"
+  jq -e --arg error "$fixed; validator: $reason" '.error == $error and .status == "failed"' "$record" >/dev/null ||
+    { echo "the failure record lacks the validator's reason: $(jq -c . "$record")" >&2; exit 1; }
+  echo "validator reason kept for $fixed: $reason"
+}
+
+# Snapshot: a source symlink that leaves the repository.
+prepare_repo snapshot-reason
+git -C "$repo" rm -q Sources/App.swift
+/bin/mkdir -p "$repo/Sources"
+/bin/ln -s ../../outside.swift "$repo/Sources/App.swift"
+git -C "$repo" add -- Sources/App.swift
+git -C "$repo" commit -q -m 'add escaping source symlink'
+refresh_head_paths
+expect_execute_failure snapshot-reason "contract or matrix validation failed"
+assert_validator_reason "$scratch/snapshot-reason.stderr" "contract or matrix validation failed"
+
+# Finalize: a substituted candidate.
+prepare_repo finalize-reason
+run_execute
+write_visual approved
+FAKE_CANDIDATE_MODE=substitute expect_finalize_failure finalize-reason "visual result is invalid"
+assert_validator_reason "$scratch/finalize-reason.finalize.stderr" "visual result is invalid"
+
+# Known fixed messages stay as they were, without a validator suffix.
+prepare_repo finalize-known
+run_execute
+write_visual approved
+if FAKE_COLLIDE_FINAL=1 run_finalize >"$scratch/finalize-known.stdout" 2>"$scratch/finalize-known.stderr"; then
+  echo "finalizer replaced an existing canonical winner" >&2; exit 1
+fi
+grep -Fxq "iOS verification failed: canonical verify.json already exists" "$scratch/finalize-known.stderr" ||
+  { echo "a known finalize failure changed its message" >&2; cat "$scratch/finalize-known.stderr" >&2; exit 1; }
+
 prepare_repo valid
 FAKE_OBSERVE_CLEANUP=1 run_execute
 assert_no_failed_attempts
