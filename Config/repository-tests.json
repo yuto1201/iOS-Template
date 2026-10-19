@@ -419,7 +419,7 @@
   ],
   "tests": [
     {"path": "tools/tests/test-admob-integration.sh", "domains": ["admob-monetization"]},
-    {"path": "tools/tests/test-adopted-app-imported-tests.sh", "domains": ["credential-scan", "ios-verification", "template-sync"]},
+    {"path": "tools/tests/test-adopted-app-imported-tests.sh", "domains": ["credential-scan", "foundation", "ios-verification", "template-sync"]},
     {"path": "tools/tests/test-agents-md-approval.sh", "domains": ["specification"]},
     {"path": "tools/tests/test-app-bootstrap.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-app-feedback-provision.sh", "domains": ["app-feedback", "provider-security"]},

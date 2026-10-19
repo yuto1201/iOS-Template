@@ -46,6 +46,7 @@ service_role_allowed = {
     "specs/product.md",
     "tools/install-app-icon.sh",
     "tools/tests/fixtures/bootstrap-template/source-identity.json",
+    "tools/tests/test-adopted-app-imported-tests.sh",
     "tools/tests/test-supabase-skill.sh",
     "tools/tests/test-tracked-credential-scan.sh",
     "tools/validate-app-icon.sh",
