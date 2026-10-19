@@ -13,6 +13,9 @@ FINAL_SIGNAL_WAIT_SECONDS = 2.0
 # Test-only hook: "0" weakens the final signal so a survivor can be simulated. It can only make the
 # wrapper fail, because emptiness is always checked with kill(0) against the owned group.
 FINAL_SIGNAL_HOOK = "IOS_TEMPLATE_BOUNDED_COMMAND_TEST_FINAL_SIGNAL"
+# Test-only hook: "1" makes every signal to the owned group fail with EPERM, as when a member runs
+# with other credentials. No signal is sent, so it too can only make the wrapper fail.
+SIGNAL_EPERM_HOOK = "IOS_TEMPLATE_BOUNDED_COMMAND_TEST_SIGNAL_EPERM"
 
 options = {grace_seconds: 5}
 parser = OptionParser.new do |cli|
@@ -42,6 +45,9 @@ begin
   final_signal = ENV.fetch(FINAL_SIGNAL_HOOK, "KILL")
   raise OptionParser::InvalidArgument, "invalid #{FINAL_SIGNAL_HOOK}" unless %w[KILL 0].include?(final_signal)
   final_signal = final_signal == "0" ? 0 : "KILL"
+  simulate_signal_eperm = ENV.fetch(SIGNAL_EPERM_HOOK, "0")
+  raise OptionParser::InvalidArgument, "invalid #{SIGNAL_EPERM_HOOK}" unless %w[0 1].include?(simulate_signal_eperm)
+  simulate_signal_eperm = simulate_signal_eperm == "1"
 rescue OptionParser::ParseError => error
   warn error.message
   warn parser
@@ -56,9 +62,15 @@ started = monotonic_now
 child = nil
 forwarded_signal = nil
 
+# A member that runs with other credentials makes kill fail with EPERM. That member is not reclaimed,
+# so the remaining-member count reports it; the wrapper must not crash before reporting.
 signal_group = lambda do |signal|
+  raise Errno::EPERM if simulate_signal_eperm
   Process.kill(signal, -child)
 rescue Errno::ESRCH
+  nil
+rescue Errno::EPERM
+  warn format("bounded command could not signal process-group members: stage=%s signal=%s error=EPERM", stage, signal)
   nil
 end
 

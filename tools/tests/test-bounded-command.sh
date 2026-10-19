@@ -178,6 +178,40 @@ fi
 
 run_bounded env IOS_TEMPLATE_BOUNDED_COMMAND_TEST_FINAL_SIGNAL=HUP ruby "$bounded" --stage bad-hook --timeout-seconds 5 -- /usr/bin/true
 [[ "$status" -eq 2 ]] || fail "an unknown final-signal hook value returned $status"
+run_bounded env IOS_TEMPLATE_BOUNDED_COMMAND_TEST_SIGNAL_EPERM=yes ruby "$bounded" --stage bad-eperm-hook --timeout-seconds 5 -- /usr/bin/true
+[[ "$status" -eq 2 ]] || fail "an unknown signal-EPERM hook value returned $status"
+
+# #342: a group member that cannot be signalled (EPERM, e.g. other credentials) must be reported as
+# unreclaimed with the usual diagnostic, never crash the wrapper with a Ruby backtrace. The hook makes
+# every group signal fail with EPERM and sends nothing, so the fixtures are cleaned up here.
+assert_no_crash() {
+  ! rg -q 'Errno::EPERM|\.rb:[0-9]+:in ' "$workspace/stderr" || fail "$1 crashed: $(cat "$workspace/stderr")"
+}
+# After a timeout.
+BOUNDED_CHILD_PID_FILE="$workspace/eperm-timeout.pid" IOS_TEMPLATE_BOUNDED_COMMAND_TEST_SIGNAL_EPERM=1 \
+  run_bounded ruby "$bounded" --stage eperm-timeout --timeout-seconds 1 --grace-seconds 1 -- "$workspace/stubborn-leader.sh"
+survivor_pid=$(<"$workspace/eperm-timeout.pid")
+assert_no_crash 'EPERM after a timeout'
+[[ "$status" -eq 123 ]] || fail "EPERM after a timeout returned $status"
+rg -q 'could not signal process-group members: stage=eperm-timeout signal=TERM error=EPERM' "$workspace/stderr" || fail 'EPERM after a timeout lacks the signal diagnostic'
+rg -q 'could not reclaim process-group members: stage=eperm-timeout' "$workspace/stderr" || fail 'EPERM after a timeout lacks the unreclaimed diagnostic'
+rg -q 'timeoutSeconds=1' "$workspace/stderr" || fail 'EPERM after a timeout lacks the timeout'
+kill -KILL "$survivor_pid" >/dev/null 2>&1 || true
+assert_gone "$survivor_pid" 'EPERM timeout fixture cleanup'
+survivor_pid=''
+# After the leader exits normally and leaves a member behind.
+BOUNDED_CHILD_PID_FILE="$workspace/eperm-residual.pid" IOS_TEMPLATE_BOUNDED_COMMAND_TEST_SIGNAL_EPERM=1 \
+  run_bounded ruby "$bounded" --stage eperm-residual --timeout-seconds 10 --grace-seconds 1 -- "$workspace/leave.sh"
+survivor_pid=$(<"$workspace/eperm-residual.pid")
+assert_no_crash 'EPERM after the leader exits'
+[[ "$status" -eq 123 ]] || fail "EPERM after the leader exits returned $status"
+rg -q 'could not signal process-group members: stage=eperm-residual signal=TERM error=EPERM' "$workspace/stderr" || fail 'EPERM residual lacks the signal diagnostic'
+rg -q 'could not reclaim process-group members: stage=eperm-residual' "$workspace/stderr" || fail 'EPERM residual lacks the unreclaimed diagnostic'
+rg -q 'residualMembers=1' "$workspace/stderr" || fail 'EPERM residual lacks the member count'
+rg -q 'leaderStatus=0' "$workspace/stderr" || fail 'EPERM residual lacks the leader status'
+kill -KILL "$survivor_pid" >/dev/null 2>&1 || true
+assert_gone "$survivor_pid" 'EPERM residual fixture cleanup'
+survivor_pid=''
 
 # INT and TERM delivered to the wrapper are forwarded to the group and reclaim it.
 for forwarded in TERM INT; do
