@@ -366,6 +366,11 @@
       ]
     },
     {
+      "domain": "supabase-schema",
+      "paths": ["specs/product.md"],
+      "prefixes": [".agents/skills/supabase-ops/", "supabase/"]
+    },
+    {
       "domain": "system-experiences",
       "paths": [
         ".claude/skills/ios-system-experiences",
@@ -498,6 +503,7 @@
     {"path": "tools/tests/test-simulator-lifecycle.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-simulator-resolver.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-spec-state.sh", "domains": ["repository-lint", "specification"]},
+    {"path": "tools/tests/test-supabase-schema.sh", "domains": ["supabase-schema"]},
     {"path": "tools/tests/test-supabase-skill.sh", "domains": ["provider-security"]},
     {"path": "tools/tests/test-template-sync-apply.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-template-sync-derived.sh", "domains": ["template-sync"]},

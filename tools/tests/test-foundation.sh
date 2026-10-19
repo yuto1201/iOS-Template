@@ -283,10 +283,25 @@ for executable in \
   [[ -x "$executable" ]] || { echo "integration executable is not executable: $executable" >&2; exit 1; }
 done
 
-if [[ -e supabase || -L supabase ]]; then
-  echo 'Supabase must remain dormant until an app specification explicitly activates it' >&2
-  exit 1
-fi
+# The product specification adopts Supabase with the same two exact lines that
+# .agents/skills/supabase-ops/scripts/activate.sh requires before it creates supabase/ (#329).
+supabase_adopted() {
+  /usr/bin/grep -Eq '^Status:[[:space:]]*確定[[:space:]]*$' "$1" &&
+    /usr/bin/grep -Eq '^Supabase:[[:space:]]*required[[:space:]]*$' "$1"
+}
+# check_supabase_directory ROOT STATE: dormant means no supabase/ at all; adopted means supabase/ is absent
+# or a real directory, never a symlink or a file.
+check_supabase_directory() {
+  local path="$1/supabase"
+  if [[ "$2" == adopted ]]; then
+    [[ ! -L "$path" && ( ! -e "$path" || -d "$path" ) ]] || { echo 'An adopted Supabase keeps supabase/ as a real directory' >&2; return 1; }
+  else
+    [[ ! -e "$path" && ! -L "$path" ]] || { echo 'Supabase must remain dormant until an app specification explicitly activates it' >&2; return 1; }
+  fi
+}
+supabase_state=dormant
+supabase_adopted specs/product.md && supabase_state=adopted
+check_supabase_directory . "$supabase_state" || exit 1
 if [[ -e .superpowers || -L .superpowers ]]; then
   echo 'Root .superpowers implementation artifacts must not ship in the template' >&2
   exit 1
@@ -358,7 +373,14 @@ ownership_check=$(cat <<'RUBY'
   abort "unexpected GitHub login" unless data.dig("github", "login") == "yuto1201"
   abort "unexpected Supabase organization ID" unless data.dig("supabase", "organizationId") == "kmjpkzaqlewqnypyqwkg"
   abort "unexpected Supabase organization name" unless data.dig("supabase", "organizationName") == "yuto1201#{39.chr}s Org"
-  %w[projectRef].each { |key| abort "#{key} must be null" unless data.dig("supabase", key).nil? }
+  project_ref = data.dig("supabase", "projectRef")
+  if ENV.fetch("SUPABASE_STATE", "dormant") == "adopted"
+    # A configured ref is the 20-letter Supabase project ref, never the organization ID (#329).
+    abort "Supabase projectRef must be null or a 20-letter project ref" unless project_ref.nil? ||
+      (project_ref.is_a?(String) && project_ref.match?(/\A[a-z]{20}\z/) && project_ref != data.dig("supabase", "organizationId"))
+  else
+    abort "projectRef must be null" unless project_ref.nil?
+  end
   abort "unexpected Cloudflare account" unless data.dig("cloudflare", "accountId") == "7ea8e713d76506f9e303f58624829aa5" && data.dig("cloudflare", "accountName") == "Yuto Dev" && data.dig("cloudflare", "plan") == "free"
   # The app-feedback skill (D-076) records the app's Worker as the target once the Identity exists.
   cloudflare_target = data.dig("cloudflare", "target")
@@ -383,7 +405,7 @@ ownership_check=$(cat <<'RUBY'
   end
 RUBY
 )
-ruby -ryaml -rjson -e "$ownership_check"
+SUPABASE_STATE="$supabase_state" ruby -ryaml -rjson -e "$ownership_check"
 
 # #332: the Cloudflare target before and after Identity bootstrap, on disposable copies of the ownership file.
 ownership_fixture=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-ownership.XXXXXX")
@@ -782,6 +804,53 @@ if "$spec_checker" "$spec_fixture_dir/unlinked-issue.md" >/dev/null 2>&1; then
   echo "Specification state checker accepted an Issue without specification references" >&2
   exit 1
 fi
+
+# #329: only a confirmed specification with the exact activation line lifts the Supabase dormancy checks.
+supabase_fixture_dir="$fixture_dir/supabase-adoption"
+mkdir -p "$supabase_fixture_dir"
+printf '%s\n' '# Product' '' 'Status: 確定' 'Supabase: required' > "$supabase_fixture_dir/adopted.md"
+printf '%s\n' '# Product' '' 'Status: 確定' 'Supabase: not required' > "$supabase_fixture_dir/not-required.md"
+printf '%s\n' '# Product' '' 'Status: 提案' 'Supabase: required' > "$supabase_fixture_dir/proposed.md"
+printf '%s\n' '# Product' '' 'Status: 確定' '- Supabase: required' > "$supabase_fixture_dir/list-item.md"
+printf '%s\n' '# Product' '' 'Status: 確定' 'Supabase: required later' > "$supabase_fixture_dir/qualified.md"
+printf '%s\n' '# Product' '' 'Status: 確定' 'Supabaseの採用は別のIssueで決める。' > "$supabase_fixture_dir/undeclared.md"
+supabase_adopted "$supabase_fixture_dir/adopted.md" || { echo 'a confirmed Supabase: required specification was not treated as adopted' >&2; exit 1; }
+for dormant_spec in not-required proposed list-item qualified undeclared; do
+  if supabase_adopted "$supabase_fixture_dir/$dormant_spec.md"; then
+    echo "Supabase adoption accepted a specification without the exact confirmed line: $dormant_spec" >&2
+    exit 1
+  fi
+done
+# supabase/ itself: a real directory only once adopted; a symlink or a file never.
+for case_spec in 'dormant none pass' 'dormant directory fail' 'adopted none pass' 'adopted directory pass' 'adopted symlink fail' 'adopted file fail'; do
+  read -r case_state case_kind case_expected <<<"$case_spec"
+  case_root="$supabase_fixture_dir/root-$case_state-$case_kind"
+  mkdir -p "$case_root" "$supabase_fixture_dir/elsewhere"
+  case "$case_kind" in
+    directory) mkdir -p "$case_root/supabase/migrations" ;;
+    symlink) ln -s ../elsewhere "$case_root/supabase" ;;
+    file) printf '%s\n' file > "$case_root/supabase" ;;
+  esac
+  if check_supabase_directory "$case_root" "$case_state" 2>/dev/null; then case_result=pass; else case_result=fail; fi
+  [[ "$case_result" == "$case_expected" ]] || { echo "supabase/ check for $case_state $case_kind gave $case_result" >&2; exit 1; }
+done
+# projectRef: null or a 20-letter ref other than the organization ID once adopted; null only while dormant.
+for case_spec in 'dormant null pass' 'dormant abcdefghijklmnopqrst fail' 'adopted null pass' 'adopted abcdefghijklmnopqrst pass' \
+  'adopted kmjpkzaqlewqnypyqwkg fail' 'adopted ABCDEFGHIJKLMNOPQRST fail' 'adopted short fail'; do
+  read -r case_state case_ref case_expected <<<"$case_spec"
+  case_root="$supabase_fixture_dir/ref-$case_state-$case_ref"
+  mkdir -p "$case_root/Config"
+  REF="$case_ref" ruby -ryaml -e '
+    data = YAML.safe_load(File.read(ARGV.fetch(0)), permitted_classes: [], aliases: false)
+    data["supabase"]["projectRef"] = ENV.fetch("REF") == "null" ? nil : ENV.fetch("REF")
+    data["cloudflare"]["target"] = nil
+    data["appStore"]["bundleId"] = nil
+    File.write(ARGV.fetch(1), data.to_yaml)
+  ' Config/ownership.yml "$case_root/Config/ownership.yml"
+  if (cd "$case_root" && SUPABASE_STATE="$case_state" ruby -ryaml -rjson -e "$ownership_check" 2>"$case_root/stderr"); then case_result=pass; else case_result=fail; fi
+  [[ "$case_result" == "$case_expected" ]] || { echo "projectRef $case_ref ($case_state) gave $case_result: $(cat "$case_root/stderr")" >&2; exit 1; }
+  [[ "$case_result" == pass ]] || grep -Fq 'projectRef' "$case_root/stderr" || { echo "projectRef $case_ref ($case_state) failed for another reason: $(cat "$case_root/stderr")" >&2; exit 1; }
+done
 
 swift tools/check-markdown-links.swift
 
