@@ -61,15 +61,12 @@ if rg -n 'GoogleMobileAds|UserMessagingPlatform|XCRemoteSwiftPackageReference' "
   fail 'tracked fixture must remain network-free'
 fi
 
-# The live project keeps the template's names until Identity bootstrap renames it; read them from the
-# app's Identity record when there is one (#345).
-live_identity=$(ruby -rjson -e '
+# The live project keeps the template's name until Identity bootstrap renames it; read the module from the
+# app's Identity record when there is one (#345). It is used only to check that the live project is untouched.
+live_module=$(ruby -rjson -e '
   path = File.join(ARGV.fetch(0), "Config/app-identity.json")
-  identity = File.file?(path) ? JSON.parse(File.read(path)) : {}
-  puts identity.fetch("moduleName", "TemplateApp"), identity.fetch("bundleId", "com.yuto.TemplateApp")
+  puts File.file?(path) ? JSON.parse(File.read(path)).fetch("moduleName") : "TemplateApp"
 ' "$repo_root")
-live_module=$(sed -n 1p <<<"$live_identity")
-live_bundle=$(sed -n 2p <<<"$live_identity")
 [[ "$live_module" =~ ^[A-Za-z][A-Za-z0-9]*$ && -f "$repo_root/$live_module.xcodeproj/project.pbxproj" && -d "$repo_root/$live_module" ]] ||
   fail "the live project for module $live_module is missing"
 template_project_digest=$(sha256_file "$repo_root/$live_module.xcodeproj/project.pbxproj")
@@ -77,13 +74,23 @@ template_source_digest=$(find "$repo_root/$live_module" -type f -print0 | sort -
 
 derived="$temp_root/derived-app"
 mkdir -p "$derived/Config" "$derived/GardenNotes" "$derived/GardenNotesTests" "$derived/GardenNotesUITests" "$derived/tools/lib" "$derived/.agents/skills" "$derived/App Store/metadata"
-cp "$repo_root/$live_module.xcodeproj/project.pbxproj" "$temp_root/project.pbxproj"
+# The sample starts from the template's own project, kept in the frozen bootstrap fixture, so an app's
+# module name never has to be reversed out of its project (a name such as Debug also labels configurations).
+ruby -rjson -rdigest - "$repo_root/tools/tests/fixtures/bootstrap-template/source-identity.json" "$temp_root/project.pbxproj" <<'RUBY' ||
+fixture, destination = ARGV
+entry = JSON.parse(File.read(fixture)).fetch("files").find { |file| file["path"] == "TemplateApp.xcodeproj/project.pbxproj" }
+abort "the bootstrap fixture lacks the template project" unless entry
+bytes = entry.fetch("lines").join("\n")
+abort "the bootstrap fixture's template project does not match its digest" unless Digest::SHA256.hexdigest(bytes) == entry.fetch("sha256")
+File.binwrite(destination, bytes)
+RUBY
+  fail 'the template project could not be read from the bootstrap fixture'
 mkdir -p "$derived/GardenNotes.xcodeproj"
-ruby - "$temp_root/project.pbxproj" "$derived/GardenNotes.xcodeproj/project.pbxproj" "$live_module" "$live_bundle" <<'RUBY'
-source, destination, live_module, live_bundle = ARGV
+ruby - "$temp_root/project.pbxproj" "$derived/GardenNotes.xcodeproj/project.pbxproj" <<'RUBY'
+source, destination = ARGV
 bytes = File.binread(source)
-bytes = bytes.gsub(live_bundle, "com.example.GardenNotes")
-bytes = bytes.gsub(live_module, "GardenNotes")
+bytes = bytes.gsub("TemplateApp", "GardenNotes")
+bytes = bytes.gsub("com.yuto.GardenNotes", "com.example.GardenNotes")
 File.binwrite(destination, bytes)
 RUBY
 printf '%s\n' '// fixture source' >"$derived/GardenNotes/App.swift"
@@ -575,19 +582,22 @@ if [[ -z "${IOS_TEMPLATE_ADMOB_ADOPTED_RUN-}" && ! -e "$repo_root/Config/app-ide
   before_head=$(git -C "$repo_root" rev-parse HEAD)
   before_status=$(git -C "$repo_root" status --porcelain)
   before_index=$(git -C "$repo_root" ls-files -s | shasum -a 256)
-  adopted="$temp_root/adopted-app"
-  git clone -q --no-hardlinks "$repo_root" "$adopted"
-  git -C "$adopted" checkout -q --detach "$before_head"
-  xcrun swiftc -o "$temp_root/bootstrap-app" "$adopted/tools/bootstrap-app.swift" >/dev/null 2>&1 || fail 'bootstrap tool did not compile'
-  "$temp_root/bootstrap-app" apply --root "$adopted" --manifest "$adopted/Config/template-identity.json" \
-    --display-name 'Trail Log' --module-name TrailLog --app-slug trail-log --bundle-id com.example.TrailLog >/dev/null ||
-    fail 'Identity bootstrap of the disposable clone failed'
-  [[ -f "$adopted/TrailLog.xcodeproj/project.pbxproj" && ! -e "$adopted/TemplateApp.xcodeproj" ]] || fail 'the disposable clone was not renamed'
-  git -C "$adopted" add -A
-  git -C "$adopted" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false \
-    -c gc.auto=0 -c maintenance.auto=false commit -q -m 'Bootstrap Trail Log'
-  (cd "$adopted" && IOS_TEMPLATE_ADMOB_ADOPTED_RUN=1 bash tools/tests/test-admob-integration.sh >"$temp_root/adopted.log" 2>&1) ||
-    fail "the test failed in a renamed project: $(tail -3 "$temp_root/adopted.log")"
+  xcrun swiftc -o "$temp_root/bootstrap-app" "$repo_root/tools/bootstrap-app.swift" >/dev/null 2>&1 || fail 'bootstrap tool did not compile'
+  # TrailLog, and Debug, a valid module name that also labels the build configurations.
+  for module in TrailLog Debug; do
+    adopted="$temp_root/adopted-$module"
+    git clone -q --no-hardlinks "$repo_root" "$adopted"
+    git -C "$adopted" checkout -q --detach "$before_head"
+    "$temp_root/bootstrap-app" apply --root "$adopted" --manifest "$adopted/Config/template-identity.json" \
+      --display-name "$module App" --module-name "$module" --app-slug "$(tr '[:upper:]' '[:lower:]' <<<"$module")-app" \
+      --bundle-id "com.example.$module" >/dev/null || fail "Identity bootstrap of the disposable clone as $module failed"
+    [[ -f "$adopted/$module.xcodeproj/project.pbxproj" && ! -e "$adopted/TemplateApp.xcodeproj" ]] || fail "the disposable clone was not renamed to $module"
+    git -C "$adopted" add -A
+    git -C "$adopted" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false \
+      -c gc.auto=0 -c maintenance.auto=false commit -q -m "Bootstrap $module"
+    (cd "$adopted" && IOS_TEMPLATE_ADMOB_ADOPTED_RUN=1 bash tools/tests/test-admob-integration.sh >"$temp_root/adopted-$module.log" 2>&1) ||
+      fail "the test failed in a project renamed to $module: $(tail -3 "$temp_root/adopted-$module.log")"
+  done
   [[ "$(git -C "$repo_root" rev-parse HEAD)" == "$before_head" ]] || fail 'the running repository HEAD changed'
   [[ "$(git -C "$repo_root" status --porcelain)" == "$before_status" ]] || fail 'the running repository working tree changed'
   [[ "$(git -C "$repo_root" ls-files -s | shasum -a 256)" == "$before_index" ]] || fail 'the running repository index changed'
