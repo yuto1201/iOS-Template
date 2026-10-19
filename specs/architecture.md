@@ -76,6 +76,8 @@ Config/app-icon.json
 
 採用後の差し替えはD-065に従い、初回とは別のIssueでinstallerの明示replace modeだけを使う。replace modeは、callerが宣言した現行採用SHA-256、新revisionのユーザー明示選択record、その選択候補のbytes、clean worktreeが揃う場合だけasset／recordを置き換える。差し替え後のschema 2 recordは、新しい採用値に加えて`selectionRevision`と、直前の採用concept ID／generator／SHA-256を持つ`supersedes`を持つ。ユーザー提供の参照画像を編集入力にする場合は`builtin-imagegen-reference-edit`とし、権利のユーザー確認を必須とし、参照画像をGitへ入れずSHA-256だけを`referenceSha256`へ記録する。初回installのschema 1 recordは変えない。
 
+ユーザーが用意した完成済みのアイコンへそのまま差し替える場合はD-083に従い、同じreplace modeで、生成の候補の`selection.json`の代わりにユーザーの画像と権利のユーザー確認の明示入力を受け取る。schema 2 recordの`generator`は`user-provided`とし、採用したassetはユーザーの画像をそのまま不透明なPNGとして書き出したもので、ほかに編集の入力がないため`referenceSha256`は`null`とする。`supersedes`の`generator`にも`user-provided`を許す。
+
 Asset Catalogへはsystem mask前の正方形かつ不透明な1024 x 1024 PNGをdefault iconとして設定し、既存のdark／tinted appearance entryを削除・置換しない。App Icon Issueは画面階層、navigation、primary-flow interactionを決めないため、その選択はUI Direction Gateの代わりにならない。
 
 ## 3. iOS ソースの初期構成
