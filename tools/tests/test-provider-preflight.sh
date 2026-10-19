@@ -96,11 +96,20 @@ run_preflight() {
 assert_fails_without_artifact() {
   local label=$1 provider=$2 response_file=$3
   shift 3
+  # The executor leads the command line, so each case reaches its own refusal instead of usage.
+  [[ $# -ge 2 && $1 == --executor ]] || { echo "negative case must name the executor first: $label" >&2; exit 1; }
+  local executor=$2
+  shift 2
   rm -rf -- "$artifact_root/issues/42/provider-preflights"
-  if run_preflight "$response_file" --issue 42 "$provider" "$@" >"$test_workspace/stdout" 2>"$test_workspace/stderr"; then
+  if run_preflight "$response_file" --executor "$executor" --issue 42 "$provider" "$@" >"$test_workspace/stdout" 2>"$test_workspace/stderr"; then
     echo "expected failure: $label" >&2
     exit 1
   fi
+  /usr/bin/grep -q '^provider preflight refused: ' "$test_workspace/stderr" || {
+    echo "preflight did not refuse with a diagnostic: $label" >&2
+    /bin/cat "$test_workspace/stderr" >&2
+    exit 1
+  }
   local found=''
   if [[ $provider == app-store ]]; then
     found=$(find "$artifact_root/issues/42/provider-preflights" -maxdepth 1 -name 'app-store*.json' -print 2>/dev/null || true)
@@ -231,6 +240,29 @@ assert_fails_without_artifact 'unknown Cloudflare operation' cloudflare /dev/nul
 for scenario in other-account logged-out not-logged-in-json malformed; do
   FAKE_WRANGLER_SCENARIO="$scenario" assert_fails_without_artifact "Cloudflare $scenario" cloudflare /dev/null --executor codex --target personal-worker
 done
+
+# supabase.apply_migrations evidence is issued only for a sealed declaration; inspection stays the default.
+rm -rf -- "$artifact_root/issues/42/provider-preflights"
+run_preflight "$fixture_root/supabase-personal.json" --executor codex --issue 42 supabase --environment production --operation supabase.inspect_project >/dev/null
+assert_record supabase codex kmjpkzaqlewqnypyqwkg personal-project production supabase.inspect_project
+write_sealed_contract 'github.read_issue,supabase.apply_migrations'
+rm -rf -- "$artifact_root/issues/42/provider-preflights"
+: > "$adapter_argv"
+run_preflight "$fixture_root/supabase-personal.json" --executor claude --issue 42 supabase --environment production --operation supabase.apply_migrations >/dev/null
+assert_record supabase claude kmjpkzaqlewqnypyqwkg personal-project production supabase.apply_migrations
+[[ "$(/usr/bin/tr '\0' ' ' < "$adapter_argv")" == 'supabase supabase.apply_migrations ' ]] || { echo 'Supabase inspection did not receive the declared operation' >&2; exit 1; }
+write_sealed_contract 'github.read_issue,supabase.inspect_project'
+: > "$adapter_argv"
+assert_fails_without_artifact 'undeclared Supabase migration apply' supabase "$fixture_root/supabase-personal.json" --executor claude --environment production --operation supabase.apply_migrations
+/usr/bin/grep -Fq 'Supabase operation is not in the sealed Issue contract' "$test_workspace/stderr" || { echo 'undeclared Supabase migration apply was not refused by the sealed contract' >&2; exit 1; }
+rm -f -- "$artifact_root/issues/42/issue-contract.json" "$artifact_root/issues/42/state.json"
+assert_fails_without_artifact 'Supabase migration apply without a sealed contract' supabase "$fixture_root/supabase-personal.json" --executor codex --environment production --operation supabase.apply_migrations
+/usr/bin/grep -Fq 'sealed Issue contract is unavailable' "$test_workspace/stderr" || { echo 'Supabase migration apply without a contract was not refused' >&2; exit 1; }
+assert_fails_without_artifact 'unknown Supabase operation' supabase "$fixture_root/supabase-personal.json" --executor claude --environment production --operation supabase.reset_database
+/usr/bin/grep -Fq 'Supabase operation is invalid' "$test_workspace/stderr" || { echo 'unknown Supabase operation was not refused as invalid' >&2; exit 1; }
+assert_fails_without_artifact 'Cloudflare operation for Supabase' supabase "$fixture_root/supabase-personal.json" --executor claude --environment production --operation cloudflare.deploy
+[[ ! -s "$adapter_argv" ]] || { echo 'a refused Supabase operation reached the provider' >&2; exit 1; }
+write_sealed_contract 'github.read_issue'
 ln -s "$fake_wrangler" "$test_workspace/wrangler-link"
 IOS_TEMPLATE_TEST_WRANGLER_BIN="$test_workspace/wrangler-link" assert_fails_without_artifact 'symlinked test wrangler' cloudflare /dev/null --executor codex --target personal-worker
 if IOS_TEMPLATE_TEST_WRANGLER_BIN="$fake_wrangler" "$repo_root/tools/provider-preflight.sh" --executor codex --issue 42 cloudflare --target personal-worker >"$test_workspace/stdout" 2>"$test_workspace/stderr"; then
@@ -243,6 +275,7 @@ assert_fails_without_artifact 'wrong Vercel team' vercel "$fixture_root/vercel-w
 assert_fails_without_artifact 'ElevenLabs music entitlement' elevenlabs "$fixture_root/elevenlabs-personal.json" --executor claude --operation music
 assert_fails_without_artifact 'ElevenLabs video entitlement' elevenlabs "$fixture_root/elevenlabs-personal.json" --executor codex --operation video
 assert_fails_without_artifact 'ElevenLabs invalid operation' elevenlabs "$fixture_root/elevenlabs-personal.json" --executor claude --operation dubbing
+write_sealed_contract 'appstore.inspect_app'
 assert_fails_without_artifact 'App Store version mismatch' app-store "$fixture_root/app-store-personal.json" --executor claude --version 2.0
 assert_fails_without_artifact 'unknown executor' github "$fixture_root/github-personal.json" --executor unsupported --target yuto1201/iOS-Template
 

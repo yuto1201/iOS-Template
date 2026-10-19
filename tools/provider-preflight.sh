@@ -12,7 +12,7 @@ usage() {
   cat >&2 <<'USAGE'
 usage:
   provider-preflight.sh --executor codex|claude --issue NUMBER github --target OWNER/REPO
-  provider-preflight.sh --executor codex|claude --issue NUMBER supabase --environment local|preview|staging|production
+  provider-preflight.sh --executor codex|claude --issue NUMBER supabase --environment local|preview|staging|production [--operation supabase.inspect_project|supabase.apply_migrations]
   provider-preflight.sh --executor codex|claude --issue NUMBER cloudflare --target IDENTIFIER [--operation cloudflare.inspect_account|cloudflare.deploy]
   provider-preflight.sh --executor codex|claude --issue NUMBER linear --target TEAM_KEY
   provider-preflight.sh --executor codex|claude --issue NUMBER vercel --target TEAM_SLUG
@@ -58,10 +58,14 @@ case "$provider" in
     evidence_operation=github.read_issue
     ;;
   supabase)
-    [[ -n "$requested_environment" && -z "$requested_target$requested_media_operation$requested_version" ]] || usage
+    [[ -n "$requested_environment" && -z "$requested_target$requested_version" ]] || usage
     [[ "$requested_environment" =~ ^(local|preview|staging|production)$ ]] || fail 'Supabase environment is invalid'
     evidence_environment=$requested_environment
-    evidence_operation=supabase.inspect_project
+    evidence_operation=${requested_media_operation:-supabase.inspect_project}
+    case "$evidence_operation" in
+      supabase.inspect_project|supabase.apply_migrations) ;;
+      *) fail 'Supabase operation is invalid' ;;
+    esac
     ;;
   cloudflare)
     [[ -n "$requested_target" && -z "$requested_environment$requested_version" ]] || usage
@@ -166,6 +170,9 @@ if [[ "$provider" == cloudflare ]]; then
   [[ "$evidence_operation" != cloudflare.deploy ]] || require_sealed_operation 'Cloudflare'
   # Refuses before any wrangler call while the account or the deploy target is not configured.
   expected_cloudflare_account=$(/usr/bin/ruby --disable-gems "$repo_root/tools/lib/ownership.rb" --file "$ownership_file" --provider cloudflare 2>/dev/null | jq -er '.account | strings') || fail 'configured Cloudflare account or target is missing or invalid'
+fi
+if [[ "$provider" == supabase ]]; then
+  [[ "$evidence_operation" != supabase.apply_migrations ]] || require_sealed_operation 'Supabase'
 fi
 
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-provider-preflight.XXXXXX")

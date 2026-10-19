@@ -98,6 +98,7 @@ App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.
 - Organization IDが`kmjpkzaqlewqnypyqwkg`
 - Project Ref、region、health、environment
 - migrationとdry-run結果。Project Ref未設定中はremote Project操作を拒否
+- `tools/provider-preflight.sh --executor EXECUTOR --issue N supabase --environment ENV [--operation supabase.apply_migrations]`は、設定済みOrganization IDとProject Ref、healthを照合し、宣言したoperationの証拠を出します。既定は`supabase.inspect_project`です。`supabase.apply_migrations`の証拠は、sealed Issue contractが同じoperationを宣言している場合だけ出し、それ以外はSupabaseへ照会する前に拒否します。pre-merge gateはIssueごとにSupabaseの証拠を一つだけ受け取るため、migrationを適用するIssueは`supabase.apply_migrations`だけを宣言します
 
 ### Cloudflare
 

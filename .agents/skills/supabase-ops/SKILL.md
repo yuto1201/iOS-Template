@@ -25,6 +25,8 @@ Keep `supabase/migrations/*.sql` as the only schema source of truth. Do not acti
 supabase db reset --local
 ```
 
+The repository test `tools/tests/test-supabase-schema.sh` runs the same static checks. It checks its rules on fixtures on every run, passes as dormant while `supabase/` is absent, and checks `supabase/` itself once the product specification adopts Supabase. It does not start a local database.
+
 ## Security gates
 
 - Enable RLS and add explicit policies for every new `public` table in the same migration history.
@@ -34,6 +36,6 @@ supabase db reset --local
 
 ## Remote operation
 
-Before an authenticated operation, have the selected executor run `tools/provider-preflight.sh --executor "$EXECUTOR"` for the exact Issue and environment. Report the configured Organization ID, Project Ref, health, pending migration names, and dry-run result without credentials. Use only the operation declared in the Issue contract.
+Before an authenticated operation, have the selected executor run `tools/provider-preflight.sh --executor "$EXECUTOR" --issue "$ISSUE" supabase --environment "$ENVIRONMENT" --operation "$OPERATION"` for the exact Issue and environment. Report the configured Organization ID, Project Ref, health, pending migration names, and dry-run result without credentials. Use only the operation declared in the Issue contract: `supabase.inspect_project` (the default) or `supabase.apply_migrations`. The pre-merge gate takes one Supabase evidence file per Issue, so an apply Issue declares only `supabase.apply_migrations`; the preflight issues that evidence only when the sealed Issue contract declares it.
 
 Require separate user approval for destructive production SQL. Apply only committed pending migrations from `supabase/migrations`; never reconstruct schema from the remote dashboard.

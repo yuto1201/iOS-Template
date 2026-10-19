@@ -477,4 +477,29 @@ write_cloudflare_preflight cloudflare.deploy
 FAKE_SKIP_SWIFT=1 run_gate > "$scratch/feedback-provisioning-gate.json"
 jq -e '.status == "passed"' "$scratch/feedback-provisioning-gate.json" >/dev/null
 
+# A migration Issue declares supabase.apply_migrations alone; its one Supabase evidence file must
+# record that operation for the declared environment.
+cp "$scratch/before-appstore.md" "$issue_body"
+ruby -e 'path=ARGV.fetch(0); text=File.binread(path); block="- Operation: supabase.apply_migrations\n- Service: Supabase\n- Environment: production\n- Executor: Codex\n- Approval required: no\n\n"; text.sub!("## User approvals",block+"## User approvals") or abort; File.binwrite(path,text)' "$issue_body"
+refresh_provider_contract
+write_supabase_preflight() {
+  local recorded_operation=$1 environment=${2:-production}
+  mkdir -p "$repo/.artifacts/issues/42/provider-preflights"
+  OPERATION="$recorded_operation" ENVIRONMENT="$environment" CHECKED_AT="$preflight_at" ruby -rjson -rdigest -e '
+    def canonical(v); v.is_a?(Hash) ? v.keys.sort.to_h { |k| [k, canonical(v[k])] } : v; end
+    value={"schemaVersion"=>2,"issue"=>42,"executor"=>"codex","provider"=>"supabase","account"=>"kmjpkzaqlewqnypyqwkg","target"=>"personal-project","environment"=>ENV.fetch("ENVIRONMENT"),"operation"=>ENV.fetch("OPERATION"),"health"=>"healthy","checkedAt"=>ENV.fetch("CHECKED_AT")}
+    value["digest"]="sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical(value)))}"
+    File.binwrite(ARGV.fetch(0),JSON.generate(canonical(value)))
+  ' "$repo/.artifacts/issues/42/provider-preflights/supabase.json"
+}
+rm -f "$repo/.artifacts/issues/42/provider-preflights/supabase.json"
+FAKE_SKIP_SWIFT=1 assert_fails_with 'the Supabase migration evidence is missing' 'supabase.apply_migrations provider preflight' run_gate
+write_supabase_preflight supabase.inspect_project
+FAKE_SKIP_SWIFT=1 assert_fails_with 'Supabase evidence for another operation' 'provider operation does not match the Issue contract' run_gate
+write_supabase_preflight supabase.apply_migrations staging
+FAKE_SKIP_SWIFT=1 assert_fails_with 'Supabase evidence for another environment' 'supabase provider environment differs from the Issue contract' run_gate
+write_supabase_preflight supabase.apply_migrations
+FAKE_SKIP_SWIFT=1 run_gate > "$scratch/supabase-migration-gate.json"
+jq -e '.status == "passed"' "$scratch/supabase-migration-gate.json" >/dev/null
+
 echo 'PASS: per-operation App Store evidence is required while other providers retain one-operation gating'
