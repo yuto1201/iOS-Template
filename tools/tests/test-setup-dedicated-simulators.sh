@@ -142,7 +142,12 @@ assert_blocked 'missing Runtime' 'declared Runtime com.apple.CoreSimulator.SimRu
 sed 's/iPad-Pro-13-inch-M5-12GB/iPad-Z99/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/missing-type.json"
 prepare missing-type
 assert_blocked 'missing Device Type' 'declared Device Type com.apple.CoreSimulator.SimDeviceType.iPad-Z99 is not available' --config "$workspace/missing-type.json"
-sed 's/"iOS-Template iPhone 17 Pro"/"iOS-Template-shared"/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/protected-name.json"
+ruby -rjson -e '
+  value = JSON.parse(File.read(ARGV[0]))
+  value.fetch("devices").each { |device| device["name"] = "iOS-Template-shared" if device["name"] == ARGV[1] }
+  File.write(ARGV[2], JSON.generate(value))
+' "$repo_root/Config/dedicated-simulators.json" "$iphone_name" "$workspace/protected-name.json"
+grep -Fq '"iOS-Template-shared"' "$workspace/protected-name.json" || { echo 'the protected-name declaration was not prepared' >&2; exit 1; }
 prepare protected-name
 assert_blocked 'protected name' 'Simulator declaration name is invalid' --config "$workspace/protected-name.json"
 ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["devices"].pop; File.write(ARGV[1], JSON.generate(value))' \
