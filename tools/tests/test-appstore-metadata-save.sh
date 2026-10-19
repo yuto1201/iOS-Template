@@ -625,4 +625,5 @@ done
 [[ "$(git -C "$root" status --porcelain)" == "$before_status" ]] || adopted_fail 'the running repository working tree changed'
 [[ "$(git -C "$root" ls-files -s | shasum -a 256)" == "$before_index" ]] || adopted_fail 'the running repository index changed'
 
+echo 'PASS: both App Store tests pass in an adopted project with entitlements and a Swift package'
 fi
