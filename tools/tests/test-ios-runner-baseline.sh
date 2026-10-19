@@ -20,6 +20,39 @@ assert_validator_reason() {
   echo "validator reason kept for $fixed: $reason"
 }
 
+# The reason is taken in pure Bash: filters named in the caller's PATH must never run during failure handling.
+reason_filters="sed tail tr cut head grep awk"
+for filter in $reason_filters; do
+  /usr/bin/sed "s|@NAME@|$filter|g; s|@LOG@|$poison_log|g" >"$poison_bin/$filter" <<'SH'
+#!/bin/sh
+printf '%s\n' '@NAME@' >>'@LOG@'
+printf '%s\n' 'iOS verification failed: injected'
+exit 0
+SH
+  chmod +x "$poison_bin/$filter"
+done
+assert_no_reason_filter() {
+  [[ ! -s "$poison_log" ]] || { echo "failure handling ran a filter from the caller's PATH: $(cat "$poison_log")" >&2; exit 1; }
+}
+
+# Snapshot: a contract without verification keeps its established message exactly.
+prepare_repo snapshot-known absent
+expect_execute_failure snapshot-known "verification contract is absent or incomplete"
+assert_no_reason_filter
+grep -Fxq "iOS verification failed: verification contract is absent or incomplete" "$scratch/snapshot-known.stderr" ||
+  { echo "a known snapshot failure changed its message" >&2; cat "$scratch/snapshot-known.stderr" >&2; exit 1; }
+known_record="$(/bin/ls -t "$repo/.artifacts/issues/42/$head_sha/failures/"failure-*.json | head -n 1)"
+jq -e '.error == "verification contract is absent or incomplete"' "$known_record" >/dev/null ||
+  { echo "a known snapshot failure record changed: $(jq -c . "$known_record")" >&2; exit 1; }
+
+# Snapshot: a failure that only mentions verification (a matrix whose scope differs from the contract)
+# keeps the broad message and adds the validator's reason.
+prepare_repo snapshot-scope valid present iphone-ja
+write_matrix "$matrix" full
+expect_execute_failure snapshot-scope "verification contract is absent or incomplete"
+assert_validator_reason "$scratch/snapshot-scope.stderr" "verification contract is absent or incomplete"
+assert_no_reason_filter
+
 # Snapshot: a source symlink that leaves the repository.
 prepare_repo snapshot-reason
 git -C "$repo" rm -q Sources/App.swift
@@ -30,6 +63,7 @@ git -C "$repo" commit -q -m 'add escaping source symlink'
 refresh_head_paths
 expect_execute_failure snapshot-reason "contract or matrix validation failed"
 assert_validator_reason "$scratch/snapshot-reason.stderr" "contract or matrix validation failed"
+assert_no_reason_filter
 
 # Finalize: a substituted candidate.
 prepare_repo finalize-reason
@@ -37,6 +71,7 @@ run_execute
 write_visual approved
 FAKE_CANDIDATE_MODE=substitute expect_finalize_failure finalize-reason "visual result is invalid"
 assert_validator_reason "$scratch/finalize-reason.finalize.stderr" "visual result is invalid"
+assert_no_reason_filter
 
 # Known fixed messages stay as they were, without a validator suffix.
 prepare_repo finalize-known
@@ -47,6 +82,8 @@ if FAKE_COLLIDE_FINAL=1 run_finalize >"$scratch/finalize-known.stdout" 2>"$scrat
 fi
 grep -Fxq "iOS verification failed: canonical verify.json already exists" "$scratch/finalize-known.stderr" ||
   { echo "a known finalize failure changed its message" >&2; cat "$scratch/finalize-known.stderr" >&2; exit 1; }
+assert_no_reason_filter
+for filter in $reason_filters; do /bin/rm -f "$poison_bin/$filter"; done
 
 prepare_repo valid
 FAKE_OBSERVE_CLEANUP=1 run_execute
