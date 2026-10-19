@@ -78,3 +78,26 @@ tools/install-app-icon.sh \
 ```
 
 The installer first validates the accepted icon. Before changing any file, it refuses a declared digest that differs from the current record, a selection that is not `user-explicit`, a source that is not the selected candidate stored in that revision, an unchanged icon, a selection revision that any committed version of `Config/app-icon.json` already accepted, and a dirty worktree. The resulting schema 2 record keeps the new accepted values, `selectionRevision`, and `supersedes` with the previous concept ID, generator, and SHA-256; Git history keeps earlier records. Rerunning the same replacement reports `already-complete`. Then validate, inspect the previews, verify, and commit the replaced PNG and record as in Integrate.
+
+### Replace with a finished icon the user provides
+
+D-083 adds one exception to the replacement above. When the user hands over a finished icon image and explicitly says to use it as it is, replace the accepted icon with it without generating candidates. The first icon of a new app still comes from the generated candidates (D-031).
+
+1. Confirm in the conversation that the user holds the rights to use the image as the app icon, and record that confirmation on the replacement Issue.
+2. Check the image as for a generated one: a square opaque 1024 x 1024 PNG before the system mask, with no text, initials, numbers, screenshots, copies of Apple products, third-party marks, identifiable human faces, watermarks, or baked masks. The simple-composition defaults (one subject, a plain background, few shapes and colors) do not apply to a finished icon.
+3. Store the original outside Git in a new revision folder, such as `.artifacts/app-icon/<revision>/`. A dark appearance image the user provides stays in the app's existing dark entry; the installer leaves the dark and tinted entries untouched.
+4. Write the provenance and the date of the rights confirmation, without secrets, to the prompt file, and run:
+
+```sh
+tools/install-app-icon.sh \
+  --root "$PWD" \
+  --source "/absolute/path/.artifacts/app-icon/<revision>/<image>.png" \
+  --concept-id "user-<revision>" \
+  --prompt-file "/absolute/path/to/provenance.txt" \
+  --generator user-provided \
+  --provided-rights user-confirmed \
+  --replace-accepted "sha256:<current accepted digest>" \
+  --revision "<revision>"
+```
+
+The installer refuses a missing or other rights value, a first install, a candidate selection or reference image, a source outside its revision folder, a tracked original, and every condition of the replacement above. The schema 2 record has `generator: "user-provided"`, `referenceSha256: null` (the asset is the user's image written as an opaque PNG, with no other edit input), `selectionRevision`, and `supersedes`. Then validate, inspect the previews, verify, and commit as in Integrate.
