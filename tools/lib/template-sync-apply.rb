@@ -195,6 +195,7 @@ module TemplateSync
     fail!("the dedicated Simulator declaration needs attention first: #{problems.join(" ")} Nothing was written.") unless problems.empty?
 
     files = plan.fetch("files").select { |file| %w[add update delete].include?(file["action"]) }
+    tracked_case = case_index(git(app_root, "ls-files", "-z").force_encoding(Encoding::UTF_8).split("\0").reject(&:empty?))
     changes = files.map do |file|
       path = file.fetch("path")
       # A deleted file is no longer in the template, so the current manifest may not list it, or may
@@ -202,6 +203,10 @@ module TemplateSync
       entry = file["action"] == "delete" ? base_ownership && classify(base_ownership, path) : classify(ownership, path)
       fail!("#{path} is not a template or identity file, so it is never applied") unless entry && %w[template identity].include?(entry[:category]) && file["category"] == entry[:category]
       safe_parents!(app_root, path)
+      if file["action"] == "add"
+        twin = case_twin(tracked_case, path) || working_case_twin(app_root, path)
+        fail!("#{path} differs only in case from #{twin} in the target, so writing it would overwrite #{twin} on a case-insensitive file system. Nothing was written.") if twin
+      end
       current = read_working(app_root, path)
       if file["action"] == "add"
         fail!("#{path} already exists in the working tree (an ignored or untracked file), so it is not overwritten") unless current.nil?
@@ -359,6 +364,20 @@ module TemplateSync
       next unless File.exist?(parent) || File.symlink?(parent)
       fail!("#{parts.first(count).join("/")} is not a folder in the target") if File.symlink?(parent) || !File.directory?(parent)
     end
+  end
+
+  # A file or folder in the working tree (an ignored one, for example) whose name differs only in case.
+  def working_case_twin(app_root, path)
+    parts = path.split("/")
+    parts.each_with_index do |part, index|
+      parent = File.join(app_root, *parts.first(index))
+      return nil unless File.directory?(parent) && !File.symlink?(parent)
+      names = Dir.children(parent)
+      twin = names.reject { |name| name == part }.find { |name| name.casecmp?(part) }
+      return [*parts.first(index), twin].join("/") if twin
+      return nil unless names.include?(part)
+    end
+    nil
   end
 
   def read_working(app_root, path)

@@ -376,6 +376,25 @@ commit_all "$ignored" later
 expect_untouched apply-target-moved 'the target moved since the plan was made' "$ignored" \
   "$sync" apply --plan "$work/plan-ignored/plan.json" --approval "$work/approval-ignored.json" --app-root "$ignored" --work-dir "$work/cache"
 
+# --- #316: an ignored file whose name differs only in case is not overwritten ------------------
+# The report lists Git's tracked paths, so an ignored docs/NEW-GUIDE.md leaves docs/new-guide.md as an
+# add in the plan. The apply compares names itself, so it stops on any file system.
+case_ignored="$work/app-case-ignored"
+make_app "$case_ignored"
+commit_all "$case_ignored" app-changes
+printf '%s\n' 'docs/NEW-GUIDE.md' >>"$case_ignored/.git/info/exclude"
+printf '%s\n' 'local notes' >"$case_ignored/docs/NEW-GUIDE.md"
+git -C "$case_ignored" checkout -q -b template-sync/13
+report "$case_ignored" "$work/plan-case-ignored"
+PLAN="$work/plan-case-ignored/plan.json" ruby -rjson -e '
+  file = JSON.parse(File.read(ENV.fetch("PLAN"))).fetch("files").find { |entry| entry["path"] == "docs/new-guide.md" }
+  abort "the plan does not add docs/new-guide.md: #{file}" unless file && file.values_at("status", "action") == %w[missing add]
+'
+"$sync" approve --plan "$work/plan-case-ignored/plan.json" --approver user --reference "$comment_url" --output "$work/approval-case-ignored.json" >/dev/null
+expect_untouched apply-case-twin 'docs/new-guide.md differs only in case from docs/NEW-GUIDE.md in the target' "$case_ignored" \
+  "$sync" apply --plan "$work/plan-case-ignored/plan.json" --approval "$work/approval-case-ignored.json" --app-root "$case_ignored" --work-dir "$work/cache"
+[[ "$(cat "$case_ignored/docs/NEW-GUIDE.md")" == 'local notes' ]] || { echo 'the case twin was overwritten' >&2; exit 1; }
+
 # --- an ignored base record in a target without one is not overwritten -----------------------
 nobase="$work/app-nobase"
 make_app "$nobase"

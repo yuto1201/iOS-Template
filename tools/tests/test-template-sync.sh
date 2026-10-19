@@ -1159,4 +1159,38 @@ expect_failure analysis-moved-target 'the target moved since the plan was made' 
 [[ ! -e "$analysis_app/analysis" && ! -e "$work/analysis/other-preflight" && ! -e "$work/analysis/unknown-commit" && ! -e "$work/analysis/moved" ]] ||
   { echo 'a refused analysis left a result' >&2; exit 1; }
 
+# #316: a path that differs from a template path only in case. The template added docs/analysis-guide.md and
+# docs/sync/guide.md after new_commit; this app tracks docs/Analysis-Guide.md and a docs/Sync folder. Git
+# lists both spellings on any file system, so the collision is made without a case-insensitive one.
+case_app="$work/case-app"
+make_app "$case_app" "$new_commit"
+record_base "$case_app" "$new_commit"
+mkdir -p "$case_app/docs/Sync"
+printf '%s\n' 'アプリの分析メモ。' >"$case_app/docs/Analysis-Guide.md"
+printf '%s\n' 'アプリの同期メモ。' >"$case_app/docs/Sync/app-notes.md"
+commit_all "$case_app" case-twins
+[[ "$(git -C "$case_app" ls-files docs/Analysis-Guide.md docs/Sync/app-notes.md | wc -l | tr -d ' ')" == 2 ]] || { echo 'case twins are not tracked' >&2; exit 1; }
+"$template/tools/template-sync.sh" report --app-root "$case_app" --output-dir "$work/case-report" \
+  --work-dir "$work/cache" --now 2026-10-13T00:00:00Z >/dev/null
+PLAN="$work/case-report/plan.json" ruby -rjson -e '
+  files = JSON.parse(File.read(ENV.fetch("PLAN"))).fetch("files").to_h { |file| [file["path"], file] }
+  {"docs/analysis-guide.md" => "docs/Analysis-Guide.md", "docs/sync/guide.md" => "docs/Sync"}.each do |path, twin|
+    file = files.fetch(path) { abort "missing #{path}" }
+    abort "#{path}: #{file}" unless file.values_at("status", "action", "caseCollision") == ["conflict", "manual", twin] &&
+                                   file["reason"].include?("大文字と小文字だけが違う#{twin}")
+  end
+  others = files.values.select { |file| file["caseCollision"] }.map { |file| file["path"] }.sort
+  abort "unexpected case collisions: #{others}" unless others == %w[docs/analysis-guide.md docs/sync/guide.md]
+'
+grep -Fq '大文字と小文字だけが違うdocs/Analysis-Guide.md' "$work/case-report/plan.md" || { echo 'plan.md does not explain the case collision' >&2; exit 1; }
+run_analysis case-collision "$case_app" "$work/case-report/plan.json"
+ANALYSIS="$work/analysis/case-collision/analysis.json" ruby -rjson -e '
+  analysis = JSON.parse(File.read(ENV.fetch("ANALYSIS")))
+  item = analysis["prerequisites"].find { |entry| entry["kind"] == "case-collision" } or abort "no case-collision prerequisite: #{analysis["prerequisites"]}"
+  abort "pairs: #{item["pairs"]}" unless item["pairs"] == [{"template" => "docs/analysis-guide.md", "app" => "docs/Analysis-Guide.md"},
+                                                         {"template" => "docs/sync/guide.md", "app" => "docs/Sync"}]
+  abort "message: #{item["message"]}" unless item["message"].include?("`docs/Analysis-Guide.md`（テンプレートは`docs/analysis-guide.md`）")
+'
+grep -Fq '大文字と小文字だけが違うパス' "$work/analysis/case-collision/analysis.md" || { echo 'analysis.md does not list the case collision' >&2; exit 1; }
+
 echo "template sync report tests passed"

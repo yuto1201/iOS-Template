@@ -295,12 +295,15 @@ module TemplateSync
     # A file the template deleted keeps the ownership it had at the base; the current manifest may
     # no longer list it, or may now place it under a different rule.
     base_ownership = base_raw && historical_ownership(base_raw)
+    app_case_index = case_index(app_paths)
     files = (paths | base_paths).sort.map do |path|
       entry = current.include?(path) ? classify(ownership, path) : base_ownership && classify(base_ownership, path)
       unless entry
         fail!("unclassified template file: #{path}") if current.include?(path)
         next unknown_deleted_file(path, app[path])
       end
+      twin = current.include?(path) && app[path].nil? ? case_twin(app_case_index, path) : nil
+      next case_collision_file(path, entry, twin) if twin
       blocked = path_blocked?(app_paths, path)
       next blocked_file(path, entry, blocked) if blocked && app[path].nil?
       compare_file(path, entry, new_raw: new_raw, new_xf: new_xf, base_raw: base_raw, base_xf: base_xf,
@@ -342,6 +345,31 @@ module TemplateSync
     return "アプリでは親のパス#{parent_file}がファイルです。" if parent_file
     prefix = "#{path}/"
     app_paths.any? { |candidate| candidate.start_with?(prefix) } ? "アプリでは同じ名前のフォルダがあります。" : nil
+  end
+
+  # Every tracked path and each of its parent folders, by the lowercase spelling, to the spellings in use.
+  def case_index(paths)
+    paths.each_with_object(Hash.new { |hash, key| hash[key] = Set.new }) do |path, index|
+      parts = path.split("/")
+      (1..parts.length).each { |count| prefix = parts.first(count).join("/"); index[prefix.downcase] << prefix }
+    end
+  end
+
+  # A tracked path (or a parent folder) that differs from the template path only in case. On a case-insensitive
+  # file system, such as the default APFS on macOS, writing the template path would write over it.
+  def case_twin(index, path)
+    parts = path.split("/")
+    (1..parts.length).each do |count|
+      prefix = parts.first(count).join("/")
+      twin = index.fetch(prefix.downcase, nil)&.reject { |spelling| spelling == prefix }&.min
+      return twin if twin
+    end
+    nil
+  end
+
+  def case_collision_file(path, entry, twin)
+    record = blocked_file(path, entry, "アプリには、大文字と小文字だけが違う#{twin}があります。大文字と小文字を区別しないファイルシステムでは、書き込むとそれを上書きします。")
+    record["status"] == "conflict" ? record.merge("caseCollision" => twin) : record
   end
 
   def blocked_file(path, entry, reason)
@@ -1148,7 +1176,8 @@ module TemplateSync
   PREREQUISITES = {
     "identity-unavailable" => "Identityの未設定", "identity-format" => "Identityの形式の違い",
     "decision-collision" => "決定事項の番号の衝突", "simulators" => "専用Simulatorの宣言",
-    "base-record" => "基準commitの記録", "outdated-tools" => "取り込み先のtoolの更新"
+    "case-collision" => "大文字と小文字だけが違うパス", "base-record" => "基準commitの記録",
+    "outdated-tools" => "取り込み先のtoolの更新"
   }.freeze
   # The size estimate counts the others itself (D-078); these only the analysis finds.
   UNCOUNTED_PREREQUISITES = %w[identity-format simulators outdated-tools].freeze
@@ -1612,6 +1641,13 @@ module TemplateSync
     unless problems.empty?
       items << {"kind" => "simulators", "problems" => problems,
                 "message" => "専用Simulatorの宣言（`#{SIMULATORS_PATH}`）を、取り込み先の表示名を前置した2台に直します。#{problems.join}直すまで、適用toolは止まります。"}
+    end
+    collided = plan["files"].select { |file| file["caseCollision"] }
+    unless collided.empty?
+      pairs = collided.map { |file| {"template" => file["path"], "app" => file["caseCollision"]} }
+      listed = pairs.map { |pair| "`#{pair["app"]}`（テンプレートは`#{pair["template"]}`）" }.join("、")
+      items << {"kind" => "case-collision", "pairs" => pairs,
+                "message" => "アプリには、テンプレートのパスと大文字と小文字だけが違うファイルかフォルダがあります: #{listed}。大文字と小文字を区別しないファイルシステムでは、書き込むとアプリのものを上書きするため、計画はこれらを書き込まずに手で確認します。取り込みの前に、アプリ側の名前を変えるか移して、計画を作り直します。"}
     end
     base = plan["base"]
     unless base["status"] == "known"
