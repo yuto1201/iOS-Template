@@ -10,11 +10,12 @@ fail() {
 
 usage() {
   echo 'usage: install-app-icon.sh --root REPOSITORY --source PNG --concept-id ID --prompt-file FILE --generator builtin-imagegen|builtin-imagegen-reference-edit [--reference-image FILE --reference-rights user-confirmed] [--replace-accepted sha256:HEX --selection FILE]' >&2
+  echo '       install-app-icon.sh --root REPOSITORY --source PNG --concept-id ID --prompt-file FILE --generator user-provided --provided-rights user-confirmed --replace-accepted sha256:HEX --revision REVISION' >&2
   exit 2
 }
 
 root='' source_file='' concept_id='' prompt_file='' generator=''
-reference_image='' reference_rights='' replace_accepted='' selection_file=''
+reference_image='' reference_rights='' replace_accepted='' selection_file='' provided_rights='' provided_revision=''
 seen=' '
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 && "$seen" != *" $1 "* ]] || usage
@@ -29,6 +30,8 @@ while [[ $# -gt 0 ]]; do
     --reference-rights) reference_rights=$2 ;;
     --replace-accepted) replace_accepted=$2 ;;
     --selection) selection_file=$2 ;;
+    --provided-rights) provided_rights=$2 ;;
+    --revision) provided_revision=$2 ;;
     *) usage ;;
   esac
   shift 2
@@ -53,7 +56,16 @@ fi
 [[ "$source_file" == /* && -f "$source_file" && ! -L "$source_file" ]] || fail 'source must be an absolute regular non-symlink file'
 [[ "$prompt_file" == /* && -f "$prompt_file" && ! -L "$prompt_file" ]] || fail 'prompt file must be an absolute regular non-symlink file'
 [[ "$concept_id" =~ ^[a-z][a-z0-9-]{0,63}$ ]] || fail 'concept ID is invalid'
+[[ "$generator" == user-provided || ( "$seen" != *' --provided-rights '* && "$seen" != *' --revision '* ) ]] || fail 'provided rights and revision belong to the user-provided generator'
 case "$generator" in
+  user-provided)
+    # D-083: a finished icon the user supplied replaces an accepted icon as it is; the first icon still
+    # comes from the generated candidates (D-031).
+    [[ "$provided_rights" == user-confirmed ]] || fail 'the user must explicitly confirm the rights to use the provided icon'
+    [[ "$seen" != *' --reference-image '* && "$seen" != *' --reference-rights '* && "$seen" != *' --selection '* ]] || fail 'a user-provided icon takes no reference image or candidate selection'
+    [[ "$seen" == *' --replace-accepted '* ]] || fail 'a user-provided icon only replaces an accepted app icon'
+    [[ "$provided_revision" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || fail 'revision is invalid'
+    ;;
   builtin-imagegen)
     [[ "$seen" != *' --reference-image '* && "$seen" != *' --reference-rights '* ]] || fail 'reference inputs require the builtin-imagegen-reference-edit generator'
     ;;
@@ -61,12 +73,14 @@ case "$generator" in
     [[ "$reference_rights" == user-confirmed ]] || fail 'reference image rights must be explicitly confirmed by the user'
     [[ "$reference_image" == /* && -f "$reference_image" && ! -L "$reference_image" ]] || fail 'reference image must be an absolute regular non-symlink file'
     ;;
-  *) fail 'generator must be builtin-imagegen or builtin-imagegen-reference-edit' ;;
+  *) fail 'generator must be builtin-imagegen, builtin-imagegen-reference-edit or user-provided' ;;
 esac
 replacing=false
 if [[ "$seen" == *' --replace-accepted '* || "$seen" == *' --selection '* ]]; then
   [[ "$replace_accepted" =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'replacement must declare the accepted sha256 digest'
-  [[ "$selection_file" == /* && -f "$selection_file" && ! -L "$selection_file" ]] || fail 'replacement requires an absolute regular non-symlink selection file'
+  if [[ "$generator" != user-provided ]]; then
+    [[ "$selection_file" == /* && -f "$selection_file" && ! -L "$selection_file" ]] || fail 'replacement requires an absolute regular non-symlink selection file'
+  fi
   replacing=true
 fi
 source_raw_digest="sha256:$(/usr/bin/shasum -a 256 "$source_file" | /usr/bin/awk '{print $1}')"
@@ -137,6 +151,17 @@ selection_revision='' supersedes='' replacement_mode=''
 if [[ "$replacing" == true ]]; then
   [[ -f "$record" && ! -L "$record" && -f "$asset" && ! -L "$asset" ]] || fail 'replacement requires an accepted app icon'
   "$script_directory/validate-app-icon.sh" --root "$root" >/dev/null 2>&1 || fail 'the accepted app icon must validate before replacement'
+  if [[ "$generator" == user-provided ]]; then
+    # The provided original stays outside Git, in a folder named after its revision.
+    source_real="$(cd "$(dirname "$source_file")" && /bin/pwd -P)/$(basename "$source_file")"
+    [[ "$(basename "$(dirname "$source_real")")" == "$provided_revision" ]] || fail 'the provided icon is not stored in its revision folder'
+    if [[ "$source_real" == "$root"/* ]]; then
+      source_relative=${source_real#"$root"/}
+      ! git -C "$root" ls-files --error-unmatch -- "$source_relative" >/dev/null 2>&1 || fail 'the provided original must not be tracked by Git'
+      git -C "$root" check-ignore -q -- "$source_relative" || fail 'the provided original inside the repository must be ignored by Git'
+    fi
+    selection_revision=$provided_revision
+  else
   selection_revision=$(SELECTION="$selection_file" SOURCE="$source_file" CONCEPT_ID="$concept_id" SOURCE_DIGEST="$source_raw_digest" /usr/bin/ruby -rjson -e '
     def refuse(message); warn message; exit 1; end
     value=JSON.parse(File.binread(ENV.fetch("SELECTION"))) rescue refuse("selection is invalid")
@@ -153,6 +178,7 @@ if [[ "$replacing" == true ]]; then
     refuse("source is not stored in the selection revision") unless File.dirname(File.realpath(ENV.fetch("SOURCE"))) == directory && File.basename(directory) == value["revision"]
     puts value["revision"]
   ') || fail 'the explicit selection does not bind the source candidate'
+  fi
   accepted=$(RECORD="$record" /usr/bin/ruby -rjson -e '
     value=JSON.parse(File.binread(ENV.fetch("RECORD")))
     puts JSON.generate({"current"=>{"conceptId"=>value.fetch("conceptId"),"generator"=>value.fetch("generator"),"sha256"=>value.fetch("sha256")},"selectionRevision"=>value["selectionRevision"],"supersedes"=>value["supersedes"]})

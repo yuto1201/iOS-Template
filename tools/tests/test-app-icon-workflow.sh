@@ -120,6 +120,9 @@ grep -Fq -- '--replace-accepted' "$skill"
 grep -Fq '"selection":"user-explicit"' "$skill"
 grep -Fq 'explicitly confirms they hold the rights' "$skill"
 grep -Fq 'Keep the reference image outside Git' "$skill"
+grep -Fq -- '--generator user-provided' "$skill"
+grep -Fq -- '--provided-rights user-confirmed' "$skill"
+grep -Fq 'The first icon of a new app still comes from the generated candidates' "$skill"
 
 valid_png="$workspace/valid.png"
 alternate_png="$workspace/alternate.png"
@@ -345,6 +348,86 @@ tamper_record 'schema 1 with replacement fields' '.schemaVersion = 1'
 tamper_record 'superseded icon with extra fields' '.supersedes.promptSummary = "kept"'
 "$validator" --root "$replace_fixture" >/dev/null
 
+# D-083 (#341): a finished icon the user provided replaces the accepted icon as it is, only with the user's
+# explicit rights confirmation, from its own revision folder outside Git. The app keeps a dark appearance with
+# its own file (as CafLog does) and a tinted entry without one; both stay as they were.
+icon_set="$replace_fixture/GardenNotes/Assets.xcassets/AppIcon.appiconset"
+make_png "$icon_set/AppIcon-1024-dark.png" 1024 1024 0 20
+python3 - "$icon_set/Contents.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    value = json.load(source)
+dark = [entry for entry in value["images"] if any(item.get("value") == "dark" for item in entry.get("appearances", []))]
+assert len(dark) == 1
+dark[0]["filename"] = "AppIcon-1024-dark.png"
+with open(path, "w", encoding="utf-8") as output:
+    json.dump(value, output, indent=2)
+    output.write("\n")
+PY
+git -C "$replace_fixture" add -A
+git -C "$replace_fixture" commit -qm 'add a dark appearance file'
+"$validator" --root "$replace_fixture" >/dev/null
+appearance_entries=$(jq -c '[.images[] | select(.appearances)]' "$icon_set/Contents.json")
+dark_digest=$(sha_of "$icon_set/AppIcon-1024-dark.png")
+third_record=$(sha_of "$replace_record")
+provided_revision="$workspace/provided/u1"
+mkdir -p "$provided_revision"
+make_png "$provided_revision/finished.png" 1024 1024 255 200
+provided_prompt="$workspace/provided-prompt.txt"
+printf '%s\n' 'User-provided finished artwork (a steaming cup on yellow), used as it is; the user confirmed the rights on 2026-10-19.' >"$provided_prompt"
+provide_with() {
+  "$installer" --root "$replace_fixture" --prompt-file "$provided_prompt" --source "$provided_revision/finished.png" --concept-id user-u1 --generator user-provided "$@"
+}
+assert_fails 'provided icon without rights' provide_with --replace-accepted "$third_digest" --revision u1
+grep -Fq 'the user must explicitly confirm the rights to use the provided icon' "$workspace/stderr" || { echo 'missing provided rights were not explained' >&2; exit 1; }
+assert_fails 'provided icon with assumed rights' provide_with --provided-rights assumed --replace-accepted "$third_digest" --revision u1
+assert_fails 'provided icon with a candidate selection' provide_with --provided-rights user-confirmed --replace-accepted "$third_digest" --revision u1 --selection "$revision_three/selection.json"
+assert_fails 'provided icon with a reference image' provide_with --provided-rights user-confirmed --replace-accepted "$third_digest" --revision u1 --reference-image "$reference_image"
+assert_fails 'provided icon outside its revision folder' provide_with --provided-rights user-confirmed --replace-accepted "$third_digest" --revision u2
+grep -Fq 'the provided icon is not stored in its revision folder' "$workspace/stderr" || { echo 'revision folder mismatch was not explained' >&2; exit 1; }
+assert_fails 'provided icon with a wrong accepted digest' provide_with --provided-rights user-confirmed --replace-accepted "$first_digest" --revision u1
+assert_fails 'provided rights on a generated icon' replace_with --source "$revision_three/concept-e.png" --concept-id concept-e --generator builtin-imagegen --provided-rights user-confirmed --replace-accepted "$third_digest" --selection "$revision_three/selection.json"
+assert_unchanged "$replace_fixture" 'rejected provided icon' "$third_digest" "$third_record"
+[[ -z "$(git -C "$replace_fixture" status --porcelain=v1)" ]] || { echo 'rejected provided icons left repository changes' >&2; exit 1; }
+first_provided_fixture="$workspace/first-provided-app"
+make_fixture "$first_provided_fixture"
+assert_fails 'provided icon as the first icon' "$installer" --root "$first_provided_fixture" --prompt-file "$provided_prompt" --source "$provided_revision/finished.png" --concept-id user-u1 --generator user-provided --provided-rights user-confirmed --revision u1
+grep -Fq 'a user-provided icon only replaces an accepted app icon' "$workspace/stderr" || { echo 'a first provided icon was not refused' >&2; exit 1; }
+[[ ! -e "$first_provided_fixture/Config/app-icon.json" ]] || { echo 'a first provided icon wrote a record' >&2; exit 1; }
+provided=$(provide_with --provided-rights user-confirmed --replace-accepted "$third_digest" --revision u1)
+[[ "$provided" == *'"status":"replaced"'* && "$provided" == *"\"supersedes\":\"$third_digest\""* ]] || { echo "unexpected provided replacement: $provided" >&2; exit 1; }
+provided_digest=$(sha_of "$replace_asset")
+[[ "$(record_field "$replace_fixture" '[.schemaVersion, .conceptId, .generator, .sha256, .referenceSha256, .selectionRevision, .supersedes.conceptId, .supersedes.sha256]')" == "[2,\"user-u1\",\"user-provided\",\"$provided_digest\",null,\"u1\",\"concept-e\",\"$third_digest\"]" ]] || { echo 'provided record values differ' >&2; exit 1; }
+[[ "$(jq -c '[.images[] | select(.appearances)]' "$icon_set/Contents.json")" == "$appearance_entries" && "$(sha_of "$icon_set/AppIcon-1024-dark.png")" == "$dark_digest" ]] ||
+  { echo 'the provided icon changed the dark or tinted appearance entries' >&2; exit 1; }
+[[ "$("$validator" --root "$replace_fixture")" == *'"status":"valid"'* ]] || { echo 'the provided icon did not validate' >&2; exit 1; }
+provided_record=$(sha_of "$replace_record")
+provided_rerun=$(provide_with --provided-rights user-confirmed --replace-accepted "$third_digest" --revision u1)
+[[ "$provided_rerun" == *'"status":"already-complete"'* ]] || { echo "provided replacement rerun was not idempotent: $provided_rerun" >&2; exit 1; }
+assert_unchanged "$replace_fixture" 'provided replacement rerun' "$provided_digest" "$provided_record"
+git -C "$replace_fixture" add -A
+git -C "$replace_fixture" commit -qm 'replace with the provided icon'
+for label_filter in \
+  'provided icon with a reference digest|.referenceSha256 = "sha256:'"$(printf '1%.0s' {1..64})"'"' \
+  'provided icon without a superseded icon|.supersedes = null | .selectionRevision = null' \
+  'provided icon in a schema 1 record|.schemaVersion = 1 | del(.referenceSha256, .selectionRevision, .supersedes)'; do
+  cp "$replace_record" "$workspace/record.backup"
+  jq -c "${label_filter#*|}" "$workspace/record.backup" >"$replace_record"
+  assert_fails "${label_filter%%|*}" "$validator" --root "$replace_fixture"
+  cp "$workspace/record.backup" "$replace_record"
+done
+# A generated icon can later replace the provided one; its record names the provided icon it supersedes.
+revision_four="$workspace/candidates/r4"
+mkdir -p "$revision_four"
+make_png "$revision_four/concept-f.png" 1024 1024 255 30
+write_selection "$revision_four" r4 concept-f user-explicit "$revision_four/concept-f.png"
+replace_with --source "$revision_four/concept-f.png" --concept-id concept-f --generator builtin-imagegen --replace-accepted "$provided_digest" --selection "$revision_four/selection.json" >/dev/null
+[[ "$(record_field "$replace_fixture" '.supersedes')" == "{\"conceptId\":\"user-u1\",\"generator\":\"user-provided\",\"sha256\":\"$provided_digest\"}" ]] || { echo 'a generated icon does not trace the provided icon it supersedes' >&2; exit 1; }
+"$validator" --root "$replace_fixture" >/dev/null
+
 for case_name in transparent wrong-size; do
   case_fixture="$workspace/$case_name-app"
   make_fixture "$case_fixture"
@@ -453,4 +536,4 @@ git -C "$escaping_fixture" commit -qm 'malformed escaping identity'
 assert_fails 'escaping module identity' "$installer" --root "$escaping_fixture" --source "$valid_png" --concept-id concept-a --prompt-file "$prompt_file" --generator builtin-imagegen
 [[ ! -e "$workspace/Escape/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" ]] || { echo 'escaping identity wrote outside the repository' >&2; exit 1; }
 
-echo 'PASS: app-icon workflow requires simple generated selection and validates deterministic asset-catalog integration'
+echo 'PASS: app-icon workflow requires simple generated selection, accepts a provided finished icon only as a confirmed replacement, and validates deterministic asset-catalog integration'

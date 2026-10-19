@@ -29,7 +29,8 @@ metadata=$(ROOT="$root" IDENTITY="$identity" RECORD="$record" /usr/bin/ruby -rjs
   replacement_keys=(record_keys+%w[referenceSha256 selectionRevision supersedes]).sort
   concept_pattern=/\A[a-z][a-z0-9-]{0,63}\z/
   digest_pattern=/\Asha256:[0-9a-f]{64}\z/
-  generators=%w[builtin-imagegen builtin-imagegen-reference-edit]
+  # D-083: a finished icon the user provided can replace an accepted icon (schema 2 only).
+  generators=%w[builtin-imagegen builtin-imagegen-reference-edit user-provided]
   refuse("app icon record schema differs") unless record.is_a?(Hash)
   case record["schemaVersion"]
   when 1
@@ -47,6 +48,7 @@ metadata=$(ROOT="$root" IDENTITY="$identity" RECORD="$record" /usr/bin/ruby -rjs
     end
     superseded=record["supersedes"]
     revision=record["selectionRevision"]
+    refuse("a user-provided icon must supersede an accepted icon") if record["generator"] == "user-provided" && superseded.nil?
     if superseded.nil?
       refuse("selection revision requires a superseded icon") unless revision.nil?
       refuse("schema 2 record must add a reference or supersede an accepted icon") if reference.nil?
