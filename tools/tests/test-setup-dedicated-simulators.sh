@@ -9,11 +9,21 @@ tool="$repo_root/tools/setup-dedicated-simulators.sh"
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/ios-template-dedicated-setup-test.XXXXXX")"
 trap 'rm -rf -- "$workspace"' EXIT
 
-iphone_name='iOS-Template iPhone 17 Pro'
-ipad_name='iOS-Template iPad Pro 13-inch (M5)'
-iphone_type='com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro'
-ipad_type='com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB'
-runtime='com.apple.CoreSimulator.SimRuntime.iOS-27-0'
+# The tool reads the running repository's declaration, so the test does too: in an app that adopted
+# the template the names carry the app's display name instead of `iOS-Template`.
+declaration() {
+  ruby -rjson -e '
+    devices = JSON.parse(File.read(ARGV[0])).fetch("devices")
+    device = devices.find { |entry| entry["family"] == ARGV[1] } or abort "no #{ARGV[1]} in the declaration"
+    puts device.fetch(ARGV[2])
+  ' "$repo_root/Config/dedicated-simulators.json" "$1" "$2"
+}
+iphone_name="$(declaration iphone name)"
+ipad_name="$(declaration ipad name)"
+iphone_type="$(declaration iphone deviceTypeIdentifier)"
+ipad_type="$(declaration ipad deviceTypeIdentifier)"
+runtime="$(declaration iphone runtimeIdentifier)"
+[[ "$(declaration ipad runtimeIdentifier)" == "$runtime" ]] || { echo 'the declaration uses two Runtimes' >&2; exit 1; }
 
 mkdir -p "$workspace/bin"
 cat >"$workspace/bin/xcrun" <<'FAKE'
@@ -132,7 +142,12 @@ assert_blocked 'missing Runtime' 'declared Runtime com.apple.CoreSimulator.SimRu
 sed 's/iPad-Pro-13-inch-M5-12GB/iPad-Z99/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/missing-type.json"
 prepare missing-type
 assert_blocked 'missing Device Type' 'declared Device Type com.apple.CoreSimulator.SimDeviceType.iPad-Z99 is not available' --config "$workspace/missing-type.json"
-sed 's/"iOS-Template iPhone 17 Pro"/"iOS-Template-shared"/' "$repo_root/Config/dedicated-simulators.json" >"$workspace/protected-name.json"
+ruby -rjson -e '
+  value = JSON.parse(File.read(ARGV[0]))
+  value.fetch("devices").each { |device| device["name"] = "iOS-Template-shared" if device["name"] == ARGV[1] }
+  File.write(ARGV[2], JSON.generate(value))
+' "$repo_root/Config/dedicated-simulators.json" "$iphone_name" "$workspace/protected-name.json"
+grep -Fq '"iOS-Template-shared"' "$workspace/protected-name.json" || { echo 'the protected-name declaration was not prepared' >&2; exit 1; }
 prepare protected-name
 assert_blocked 'protected name' 'Simulator declaration name is invalid' --config "$workspace/protected-name.json"
 ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["devices"].pop; File.write(ARGV[1], JSON.generate(value))' \

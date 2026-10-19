@@ -46,6 +46,7 @@ service_role_allowed = {
     "specs/product.md",
     "tools/install-app-icon.sh",
     "tools/tests/fixtures/bootstrap-template/source-identity.json",
+    "tools/tests/test-adopted-app-imported-tests.sh",
     "tools/tests/test-supabase-skill.sh",
     "tools/tests/test-tracked-credential-scan.sh",
     "tools/validate-app-icon.sh",
@@ -86,7 +87,11 @@ def scan(root, allowed):
             violations.append(f"password assignment in {name}")
         if dedicated_filename.search(data):
             violations.append(f"dedicated secret filename in {name}")
-    if service_role_paths != allowed:
+    # The template pins the exact set. An app that adopted the template (it records
+    # Config/template-base.json) may lack template-only files and owns specs/product.md, so
+    # there only a new occurrence outside the allowed set is a violation.
+    adopted = (root / "Config/template-base.json").is_file()
+    if (service_role_paths - allowed) if adopted else (service_role_paths != allowed):
         violations.append(f"service_role policy occurrence set changed: {sorted(service_role_paths)!r}")
     return violations
 
