@@ -447,7 +447,9 @@ module AppStoreLegalHandoff
   def content_matches!(source, html, url)
     source_blocks = source.lines.map(&:strip).reject(&:empty?).reject { |line| line == "Status: Confirmed" }
                           .map { |line| normalize_text(line.sub(/\A#+\s*/, "")) }.reject(&:empty?)
-    public_text = normalize_text(CGI.unescapeHTML(html.gsub(/<script\b.*?<\/script>/mi, " ").gsub(/<style\b.*?<\/style>/mi, " ").gsub(/<[^>]+>/m, " ")))
+    # Inline tags (a link or emphasis inside a sentence) add no space when rendered; only the other tags separate text.
+    public_text = normalize_text(CGI.unescapeHTML(html.gsub(/<script\b.*?<\/script>/mi, " ").gsub(/<style\b.*?<\/style>/mi, " ")
+                                                      .gsub(%r{</?(?:a|span|em|strong|b|i|code|small|abbr)\b[^>]*>}mi, "").gsub(/<[^>]+>/m, " ")))
     fail!("public page does not match approved source text: #{url}") unless source_blocks.all? { |block| public_text.include?(block) }
   end
 

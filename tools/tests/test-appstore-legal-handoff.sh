@@ -227,6 +227,13 @@ verified=$(verify "$verification" "$publication" "$responses")
 jq -e '.pages | all(.httpStatus == 200 and .contentMatched == true and .locales == ["en-US","ja"]
   and (.sourceDigests | keys) == ["en-US","ja"] and (.interlinks | length) == 2)' <<<"$verified" >/dev/null
 
+# #317: a link and emphasis inside a Japanese sentence add no space, so the published page still matches.
+inline_filter='.responses[0].body |= sub("サポート窓口"; "<a href=\"mailto:support@example.com\">サポート窓口</a>") | .responses[0].body |= sub("サポートチーム"; "<strong>サポートチーム</strong>")'
+jq "$inline_filter" "$responses" > "$workspace/inline-responses.json"
+grep -Fq '<strong>サポートチーム</strong>' "$workspace/inline-responses.json" || { echo 'inline fixture was not applied' >&2; exit 1; }
+inline_verified=$(verify "$workspace/inline-verification.json" "$publication" "$workspace/inline-responses.json")
+jq -e '.pages | all(.contentMatched == true)' <<<"$inline_verified" >/dev/null
+
 reject_response() {
   local label=$1 message=$2 filter=$3
   jq "$filter" "$responses" > "$workspace/$label-responses.json"
@@ -237,6 +244,7 @@ reject_response unauthorized 'HTTP 200' '.responses[0].status=401'
 reject_response missing-link 'interlink' ".responses[0].body |= sub(\"<a href=\\\"$web_base/terms/\\\">terms</a>\"; \"\")"
 reject_response missing-japanese "approved source text: $web_base/privacy/ (ja)" '.responses[1].body |= sub("<section lang=\"ja\">.*?</section>"; ""; "p")'
 reject_response missing-english "approved source text: $web_base/terms/ (en-US)" '.responses[2].body |= sub("<section lang=\"en-US\">.*?</section>"; ""; "p")'
+reject_response inline-text-differs "approved source text: $web_base/support/ (ja)" "$inline_filter"' | .responses[0].body |= sub("連絡できます"; "連結できます")'
 reject_response redirected-host 'public URL must use HTTPS and the approved host' '.responses[0].finalURL="https://app.example.com/apps/pay-cycle/support/"'
 
 reject_publication() {
