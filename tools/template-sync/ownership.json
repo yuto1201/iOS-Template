@@ -83,6 +83,7 @@
         "tools/link-user-skill.sh",
         "tools/template-sync-codex-review.sh",
         "tools/template-sync.sh",
+        "tools/tests/test-adopted-app-imported-tests.sh",
         "tools/tests/test-link-user-skill.sh",
         "tools/tests/test-template-sync-apply.sh",
         "tools/tests/test-template-sync-derived.sh",

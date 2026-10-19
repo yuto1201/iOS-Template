@@ -24,7 +24,7 @@ app="$work/app"
 git clone -q --no-hardlinks "$repo_root" "$app"
 git -C "$app" checkout -q --detach "$before_head"
 
-# The derived-app test of the template sync tools is template-only, like the tools it exercises.
+# The derived-app test of the template sync tools and this regression are template-only, like the sync library they load.
 removed="$(ruby -r"$app/tools/lib/template-sync.rb" -e '
   root = ARGV.fetch(0)
   ownership = TemplateSync.load_ownership(File.read(File.join(root, TemplateSync::OWNERSHIP_PATH)))
@@ -33,6 +33,8 @@ removed="$(ruby -r"$app/tools/lib/template-sync.rb" -e '
   end
 ' "$app")"
 grep -Fxq 'tools/tests/test-template-sync-derived.sh' <<<"$removed" || fail 'test-template-sync-derived.sh is not template-only'
+# This regression loads the template-only sync library, so an adopted app must not receive it either.
+grep -Fxq 'tools/tests/test-adopted-app-imported-tests.sh' <<<"$removed" || fail 'this regression is not template-only'
 grep -Fxq 'tools/tests/fixtures/template-sync/template-sample.sh' <<<"$removed" || fail 'the template-sync fixture is not template-only'
 
 (
