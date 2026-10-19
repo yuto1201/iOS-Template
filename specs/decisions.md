@@ -896,3 +896,19 @@
   - 証拠の記録：経路（`claude`、`codex`、`tripo`）、使ったmodel、繰り返しの回数、生成日、指示や参照の説明、採用した参照画像、書き出しの形式を記録する。Tripoでは、ユーザーが承認したクレジットを記録する。アカウントの識別子、session、課金の情報は記録しない。
 - Consequence: `ios-3d-assets` skill、`AGENTS.md`の3Dの規則（ユーザーが2026-10-18に承認した文面）、`docs/workflow.md` §2.3、`specs/product.md` §5.1、`specs/acceptance.md`、`specs/architecture.md`、`docs/README.md`、`docs/verification.md`を#318で合わせる。D-071の経路で作った既存のassetは作り直さない。派生アプリへの適用は、テンプレートの取り込み（D-074、D-078）で行う。
 - Related Issue: #318
+
+## D-083: 採用済みのアプリアイコンを、ユーザーが用意した完成済みのアイコンへそのまま差し替えられるようにする
+
+- Date: 2026-10-19
+- Status: 確定
+- Supersedes: None。D-031の初回App Icon Gate（生成の候補exactly 2案と明示選択）と、D-065の生成の候補からの差し替え（新revisionの候補の明示選択、参照画像の編集）を既定の経路として維持し、差し替えに限る例外の経路を加える。
+- Context: 派生アプリCafLogは2026-10-14、生成の候補から採用していたアイコンを、ユーザーが用意した完成済みのアイコン（不透明な黄色の背景の画像と、透明なdark appearance用の画像）へ、編集せずにそのまま差し替えた。今の仕様には、ユーザーの画像を編集の入力にする経路（`builtin-imagegen-reference-edit`）しかなく、`tools/validate-app-icon.sh`は`generator: "user-provided"`の記録を`generator is invalid`で拒否した（#341）。ユーザーは2026-10-19に、この経路を含むテンプレートの残りの作業を進めることを承認した。初回の採用で完成済みのアイコンを使うことは、新しいアプリの最初のアイコンを生成の2案から選ぶ`AGENTS.md`の規則の変更が必要なため、このDecisionに含めない（#343を#344で置き換えた）。
+- Decision:
+  - 採用済みのアイコンを差し替えるとき、ユーザーが完成済みのアイコン画像を明示的に渡し、そのまま採用すると指示した場合だけ、新しい生成の候補を作らずにその画像へ差し替えられる。指示がなければ、D-065の経路を使う。初回の採用はD-031のとおりとする。
+  - 差し替えの前に、ユーザーがその画像をアプリアイコンに使う権利を持つことを明示的に確認する。installerは明示の確認の入力がなければ止まり、確認はIssueの証拠に記録する。
+  - D-065と同じく、installerの明示replace mode、callerが宣言した現行採用SHA-256、clean worktreeを必須とする。生成の候補の選択記録（`selection.json`）の代わりに、ユーザーの画像と権利の確認を入力にする。過去に採用した画像への戻し、変化のない差し替えは、D-065と同じく変更前に止まる。
+  - 採用記録はD-065と同じschema 2とし、`generator`は`"user-provided"`、`selectionRevision`と`supersedes`を必須にする。採用したassetはユーザーの画像をそのまま不透明なPNGとして書き出したもので、ほかに編集の入力がないため、`referenceSha256`は`null`とし、記録の`sha256`が採用したassetを指す。`supersedes`の`generator`にも`"user-provided"`を許す。`promptSummary`には生成の指示の代わりに、画像の出所と権利を確認した日をsanitizedに書く。
+  - 画像は、system mask前の正方形で、実透明pixelのない1024 x 1024のPNGとする。文字、イニシャル、数字、スクリーンショット、Apple製品の複製、第三者mark、識別可能な人物の顔、watermark、焼き込んだ角丸maskを含めない条件は、生成と同じく守る。一つの主題、単純な背景、少ない形と色という構成の既定は生成の指針であり、完成済みのアイコンには求めない。
+  - Asset Catalogの既存のdark／tintedのappearance entryを削除・置換せず、validatorもそれを理由に拒否しない。
+- Consequence: 派生アプリは、採用済みのアイコンを、ユーザーが用意した完成済みのアイコンへ、installerを迂回せずに差し替えられ、CafLogの今の採用記録はD-083の形を満たす。validator、installer、`app-icon`スキル、その直接のtestは#341で合わせる。ユーザーの元の画像のうちGitに入れるのは採用したassetだけで、ほかの画像は`.artifacts/`などGitの外に置く。初回の採用で完成済みのアイコンを使う経路は、`AGENTS.md`の文面の承認とともに別に判断する。外部サイトやApp Store Connectに掲載したアイコンの更新は、別Issueで行う。
+- Related Issue: #344
