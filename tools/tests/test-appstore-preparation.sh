@@ -378,14 +378,46 @@ puts "PASS: duplicate JSON and YAML keys cannot override preparation identity"
 # This is still a read-only metadata fixture, not an Xcode Build/Test claim.
 pbx_path = File.join(project, "GardenNotes.xcodeproj/project.pbxproj")
 FileUtils.mkdir_p(File.dirname(pbx_path))
-pbx = File.binread(File.join(repo_root, "TemplateApp.xcodeproj/project.pbxproj"))
-pbx = pbx.gsub("com.yuto.TemplateApp", "com.example.garden").gsub("TemplateApp", "GardenNotes")
+# A derived app's bootstrap renames the live project, so read its module and Bundle ID from the record.
+live_identity_path = File.join(repo_root, "Config/app-identity.json")
+live_identity = File.file?(live_identity_path) ? JSON.parse(File.binread(live_identity_path)) : {}
+live_module = live_identity.fetch("moduleName", "TemplateApp")
+live_bundle = live_identity.fetch("bundleId", "com.yuto.TemplateApp")
+live_pbx = File.binread(File.join(repo_root, "#{live_module}.xcodeproj/project.pbxproj"))
+# The bootstrap also records the display name, which the fixture sets below.
+pbx = live_pbx.gsub(/^[ \t]*INFOPLIST_KEY_CFBundleDisplayName = .*;\n/, "")
+pbx = pbx.gsub(live_bundle, "com.example.garden").gsub(live_module, "GardenNotes")
 pbx = pbx.gsub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;", 'PRODUCT_BUNDLE_IDENTIFIER = com.example.garden; INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";')
+# Garden Notes supports English and Japanese (supportedLocales below), whichever languages the live app ships.
+pbx = pbx.sub(/knownRegions = \([^)]*\);/, "knownRegions = (\n\t\t\t\ten,\n\t\t\t\tja,\n\t\t\t\tBase,\n\t\t\t);")
+abort "fixture project has no knownRegions" unless pbx.include?("knownRegions = (\n\t\t\t\ten,\n\t\t\t\tja,\n")
+# Garden Notes links no Swift package: the package cases below add their own. Drop any the live app links.
+object = "[0-9A-F]{24}"
+product_ids = pbx.scan(/^\t\t(#{object}) \/\*[^\n]*\*\/ = \{\n\t\t\tisa = XCSwiftPackageProductDependency;/).flatten
+package_ids = pbx.scan(/^\t\t(#{object}) \/\*[^\n]*\*\/ = \{\n\t\t\tisa = XC(?:Remote|Local)SwiftPackageReference;/).flatten
+product_file_ids = product_ids.flat_map { |id| pbx.scan(/^\t\t(#{object}) \/\*[^\n]*\*\/ = \{isa = PBXBuildFile; productRef = #{id} /).flatten }
+product_file_ids.each { |id| pbx = pbx.gsub(/^\t\t#{id} \/\*[^\n]*\*\/ = \{isa = PBXBuildFile; [^\n]*\};\n/, "") }
+(product_file_ids + product_ids + package_ids).each { |id| pbx = pbx.gsub(/^\t+#{id} \/\*[^\n]*\*\/,\n/, "") }
+pbx = pbx.gsub(/\/\* Begin (XCRemoteSwiftPackageReference|XCLocalSwiftPackageReference|XCSwiftPackageProductDependency) section \*\/\n.*?\/\* End \1 section \*\/\n\n?/m, "")
+pbx = pbx.sub("\t\t\tpackageReferences = (\n\t\t\t);\n", "").sub("/* Begin PBXBuildFile section */\n/* End PBXBuildFile section */\n\n", "")
+abort "fixture project still links a Swift package" if pbx.match?(/SwiftPackage|productRef =|packageReferences/) ||
+  !pbx.include?("\t\t\tpackageProductDependencies = (\n\t\t\t);")
 File.write(pbx_path, pbx)
+# The copied build settings keep naming the live target's input files (its entitlements, for example),
+# so carry those files under the renamed module.
+build_inputs = live_pbx.scan(/^\s*(?:CODE_SIGN_ENTITLEMENTS|INFOPLIST_FILE|GCC_PREFIX_HEADER|INFOPLIST_PREFIX_HEADER|MODULEMAP_FILE|SWIFT_OBJC_BRIDGING_HEADER) = (?:"([^"\n]*)"|([^";\s]+));$/).map(&:compact).flatten.uniq
+build_inputs.each do |relative|
+  abort "live build input #{relative} is not a repository file" unless !relative.include?("$") && File.file?(File.join(repo_root, relative))
+  destination = File.join(project, relative.gsub(live_module, "GardenNotes"))
+  FileUtils.mkdir_p(File.dirname(destination))
+  File.binwrite(destination, File.binread(File.join(repo_root, relative)))
+end
+# The module's source root exists, as in a bootstrapped app, so each inventory below reaches the case it checks.
+FileUtils.mkdir_p(File.join(project, "GardenNotes"))
 scheme_relative = "GardenNotes.xcodeproj/xcshareddata/xcschemes/GardenNotes.xcscheme"
 scheme_path = File.join(project, scheme_relative)
 FileUtils.mkdir_p(File.dirname(scheme_path))
-scheme = File.binread(File.join(repo_root, "TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme")).gsub("TemplateApp", "GardenNotes")
+scheme = File.binread(File.join(repo_root, "#{live_module}.xcodeproj/xcshareddata/xcschemes/#{live_module}.xcscheme")).gsub(live_module, "GardenNotes")
 File.write(scheme_path, scheme)
 public_config = File.join(project, "Config/Public.xcconfig")
 FileUtils.cp(File.join(repo_root, "Config/Public.xcconfig"), public_config)
@@ -526,7 +558,35 @@ unsafe_sdk_pbx = unsafe_sdk_pbx.sub(
 )
 abort "unsafe SDKROOT framework fixture did not update the project" if unsafe_sdk_pbx == pbx
 File.write(pbx_path, unsafe_sdk_pbx)
-xcode_check.call("SDKROOT label cannot trust an absolute framework path", "privacy.collectsData", "code-inventory-unavailable")
+xcode_check.call("SDKROOT label cannot trust an absolute framework path", "privacy.collectsData", "code-target-sources-unresolved")
+File.write(pbx_path, pbx)
+# A file a build setting names (here the entitlements) is inventoried. When it is absent, the inventory
+# names it as an unavailable source and still finishes, instead of stopping as code-inventory-unavailable.
+probe_relative = "GardenNotes/Probe.entitlements"
+probe_path = File.join(project, probe_relative)
+probe_pbx = pbx.gsub(/^[ \t]*CODE_SIGN_ENTITLEMENTS = .*;\n/, "").gsub(
+  "ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;",
+  "ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_ENTITLEMENTS = #{probe_relative};"
+)
+abort "entitlements fixture did not update both app configurations" unless probe_pbx.scan("CODE_SIGN_ENTITLEMENTS = #{probe_relative};").length == 2
+File.write(pbx_path, probe_pbx)
+File.write(probe_path, '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>com.apple.developer.weatherkit</key><true/></dict></plist>' + "\n")
+inventory_row = lambda do |label|
+  before = snapshot.call
+  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+  abort "#{label}: public result or preservation differs" unless status.exitstatus == 1 && stderr.empty? && before == snapshot.call
+  JSON.parse(stdout).fetch("fields").find { |field| field["fieldId"] == "privacy.collectsData" }
+end
+row = inventory_row.call("present entitlements")
+probe_digest = "sha256:#{Digest::SHA256.file(probe_path).hexdigest}"
+abort "present entitlements were not inventoried: #{row['reasons']}" unless
+  row["sources"].any? { |source| source["path"] == probe_relative && source["digest"] == probe_digest } &&
+  (row["reasons"] & %w[code-source-unavailable code-inventory-unavailable]).empty?
+File.unlink(probe_path)
+row = inventory_row.call("missing entitlements")
+abort "missing entitlements were not named as an unavailable source: #{row['reasons']}" unless
+  row["reasons"].include?("code-source-unavailable") && !row["reasons"].include?("code-inventory-unavailable") &&
+  row["sources"].any? { |source| source["path"] == probe_relative && source["digest"].nil? }
 File.write(pbx_path, pbx)
 File.write(public_config, '#include "Public.xcconfig"' + "\n")
 xcode_check.call("recursive xcconfig include", "identity.bundleId", "xcconfig-include-cycle")
@@ -1721,7 +1781,8 @@ end
   relative = "App Store/metadata/localizations/#{locale}.yml"
   template_copy_check.call(
     "#{locale} template localization",
-    %w[name subtitle description keywords promotionalText].map { |field_id| [field_id, locale] },
+    # A derived app's bootstrap already replaced the template app name with its own.
+    (%w[name subtitle description keywords promotionalText] - (live_identity.empty? ? [] : %w[name])).map { |field_id| [field_id, locale] },
     relative => File.binread(File.join(repo_root, relative))
   )
   notes_relative = "App Store/release-notes/#{locale}.md"

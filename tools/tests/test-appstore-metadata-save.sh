@@ -64,10 +64,24 @@ write(project, 'App Store/metadata/localizations/ja.yml', {'name'=>'庭ノート
 write(project, 'App Store/release-notes/en-US.md', "New garden journal notes.\n")
 write(project, 'specs/product.md', "# Garden journal\n\nStatus: Confirmed\n\nKeep a garden journal.\n")
 write(project, 'GardenNotes/Journal.swift', "struct Journal { var entries: [String] = [] }\n")
-pbx = File.binread(File.join(root, 'TemplateApp.xcodeproj/project.pbxproj')).gsub('com.yuto.TemplateApp','com.example.garden').gsub('TemplateApp','GardenNotes')
+# A derived app's bootstrap renames the live project, so read its module and Bundle ID from the record.
+live_identity = File.file?(File.join(root, 'Config/app-identity.json')) ? JSON.parse(File.binread(File.join(root, 'Config/app-identity.json'))) : {}
+live_module = live_identity.fetch('moduleName', 'TemplateApp')
+live_bundle = live_identity.fetch('bundleId', 'com.yuto.TemplateApp')
+live_pbx = File.binread(File.join(root, "#{live_module}.xcodeproj/project.pbxproj"))
+pbx = live_pbx.gsub(live_bundle,'com.example.garden').gsub(live_module,'GardenNotes')
 pbx = pbx.gsub('PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;', 'PRODUCT_BUNDLE_IDENTIFIER = com.example.garden; INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";')
 write(project, 'GardenNotes.xcodeproj/project.pbxproj', pbx)
-scheme = File.binread(File.join(root, 'TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme')).gsub('TemplateApp','GardenNotes')
+# The copied build settings keep naming the live target's input files (its entitlements, for example)
+# and its remote packages need their lock, so carry those files under the renamed module.
+build_inputs = live_pbx.scan(/^\s*(?:CODE_SIGN_ENTITLEMENTS|INFOPLIST_FILE|GCC_PREFIX_HEADER|INFOPLIST_PREFIX_HEADER|MODULEMAP_FILE|SWIFT_OBJC_BRIDGING_HEADER) = (?:"([^"\n]*)"|([^";\s]+));$/).map(&:compact).flatten.uniq
+package_lock = "#{live_module}.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+build_inputs << package_lock if live_pbx.include?('isa = XCRemoteSwiftPackageReference;')
+build_inputs.each do |relative|
+  check(!relative.include?('$') && File.file?(File.join(root, relative)), "live build input #{relative} is a repository file")
+  write(project, relative.gsub(live_module, 'GardenNotes'), File.binread(File.join(root, relative)))
+end
+scheme = File.binread(File.join(root, "#{live_module}.xcodeproj/xcshareddata/xcschemes/#{live_module}.xcscheme")).gsub(live_module,'GardenNotes')
 write(project, 'GardenNotes.xcodeproj/xcshareddata/xcschemes/GardenNotes.xcscheme', scheme)
 write(project, '.artifacts/appstore-preparation/account-observation.json', {'schemaVersion'=>1,'recordType'=>'appstore-account-observation','source'=>'synthetic-fixture','observedAt'=>Time.now.utc.iso8601,'status'=>'observed','inventoryComplete'=>true,'teamId'=>'TEAM123456','role'=>'APP_MANAGER','agreements'=>'current','bundles'=>['com.example.garden'],'apps'=>[{'appId'=>'1234567890','bundleId'=>'com.example.garden','name'=>'Garden Notes','sku'=>'garden-notes-ios','primaryLocale'=>'en-US','platforms'=>['IOS'],'userAccess'=>'all'}]})
 git(project, 'init', '-q')
