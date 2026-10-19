@@ -32,8 +32,43 @@ cp "$repo_root/tools/render-pr-body.sh" "$repo/tools/"
 cp -R "$repo_root/tools/lib" "$repo/tools/"
 cp -R "$repo_root/.agents" "$repo/"
 cp -R "$repo_root/specs" "$repo/"
-cp "$repo_root/Config/ownership.yml" "$repo/Config/"
-ruby -e 'path=ARGV.fetch(0); text=File.binread(path); text.sub!("projectRef: null","projectRef: personal-project") or abort; File.binwrite(path,text)' "$repo/Config/ownership.yml"
+# The sample ownership file replaces the line whatever the live file records there (#331).
+sample_ownership() {
+  ruby -e '
+    text = File.binread(ARGV.fetch(0))
+    text.sub!(/(^supabase:\n(?:  [^\n]*\n)*?)  projectRef: [^\n]*/) { "#{$1}  projectRef: personal-project" } or abort "sample ownership: the supabase.projectRef line is missing"
+    File.binwrite(ARGV.fetch(1), text)
+  ' "$1" "$2"
+}
+sample_ownership "$repo_root/Config/ownership.yml" "$repo/Config/ownership.yml"
+
+# #331: the sample is the same whether the live file records null or the app's own value, and a missing
+# line names its key.
+ownership_variants=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-sample-ownership.XXXXXX")
+VARIANTS="$ownership_variants" ruby -e '
+  text = File.binread(ARGV.fetch(0))
+  edits = ARGV.drop(1).each_slice(3).to_a
+  [["null", "null"], ["filled", nil]].each do |name, forced|
+    variant = text.dup
+    edits.each do |block, key, filled|
+      value = forced || filled
+      variant.sub!(/(^#{block}:\n(?:  [^\n]*\n)*?)  #{key}: [^\n]*/) { "#{$1}  #{key}: #{value}" } or abort "live ownership lacks #{block}.#{key}"
+    end
+    File.binwrite(File.join(ENV.fetch("VARIANTS"), "#{name}.yml"), variant)
+  end
+' "$repo_root/Config/ownership.yml" supabase projectRef abcdefghijklmnopqrst
+for variant in null filled; do
+  sample_ownership "$ownership_variants/$variant.yml" "$ownership_variants/$variant-sample.yml"
+  cmp -s "$ownership_variants/$variant-sample.yml" "$repo/Config/ownership.yml" ||
+    { echo "the sample ownership differs when the live values are $variant" >&2; exit 1; }
+done
+ruby -e 'text = File.binread(ARGV.fetch(0)); text.sub!(/^  projectRef: [^\n]*\n/, "") or abort; File.binwrite(ARGV.fetch(1), text)' \
+  "$ownership_variants/null.yml" "$ownership_variants/missing-projectRef.yml"
+if sample_ownership "$ownership_variants/missing-projectRef.yml" "$ownership_variants/missing-projectRef-sample.yml" 2>"$ownership_variants/missing-projectRef.err"; then
+  echo "the sample ownership accepted a file without supabase.projectRef" >&2; exit 1
+fi
+grep -Fq 'supabase.projectRef' "$ownership_variants/missing-projectRef.err" || { echo "the missing supabase.projectRef line was not named: $(cat "$ownership_variants/missing-projectRef.err")" >&2; exit 1; }
+rm -rf -- "$ownership_variants"
 mkdir -p "$repo/Config/releases/premerge-v1/phase-records"
 PHASE_RECORD="$repo/Config/releases/premerge-v1/phase-records/phase6.json" ruby -I "$repo/tools/lib" -rworkflow-release-phase -e '
   bytes=IOSTemplate::ReleasePhase.create(release_identifier:"premerge-v1",revision:1,scope:["workflow"],goal:"Validate release workflow gates.",actor:"yuto1201",reason:"Start the fixture release.",recorded_at:"2026-09-15T08:00:00Z")
