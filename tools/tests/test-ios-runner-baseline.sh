@@ -203,4 +203,45 @@ run_finalize
 
 
 assert_runner_publication_cleanup
+# #324: the validator's runGitProcess closes each call's pipe. Finalize reads every tracked blob through it,
+# and the interpreter drains no autorelease pool between calls, so a leaked pipe per call ran large apps
+# out of descriptors. The probe runs the validator's own function under the same interpreter.
+pipe_repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
+pipe_probe=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-git-pipes.XXXXXX")
+/usr/bin/ruby - "$pipe_repo/tools/validate-verify-json.swift" "$pipe_probe/probe.swift" <<'RUBY'
+source = File.read(ARGV.fetch(0))
+block = lambda do |head|
+  start = source.index("\n#{head}") or abort "validator lacks #{head}"
+  finish = source.index("\n}\n", start) or abort "validator #{head} is not closed"
+  source[(start + 1)..(finish + 2)]
+end
+probe = source.scan(/^import .+$/).join("\n") + "\n\n"
+probe += ["struct ValidationFailure", "struct ProcessResult", "func runGitProcess("].map { |head| block.call(head) }.join("\n")
+probe += <<~SWIFT
+
+  func openDescriptors() -> Int {
+      (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
+  }
+  let calls = 400
+  let before = openDescriptors()
+  for _ in 0..<calls {
+      let result = try runGitProcess(["rev-parse", "--verify", "HEAD^{commit}"])
+      guard result.status == 0, result.stdout.count == 41 else {
+          FileHandle.standardError.write(Data("git rev-parse failed through runGitProcess\\n".utf8))
+          exit(1)
+      }
+  }
+  let growth = openDescriptors() - before
+  print("descriptor growth after \\(calls) calls: \\(growth)")
+  exit(before > 0 && growth < calls / 10 ? 0 : 1)
+SWIFT
+File.write(ARGV.fetch(1), probe)
+RUBY
+if ! (cd "$pipe_repo" && xcrun swift "$pipe_probe/probe.swift" >"$pipe_probe/probe.out" 2>&1); then
+  echo "runGitProcess leaks a descriptor per call: $(tail -3 "$pipe_probe/probe.out")" >&2
+  rm -rf -- "$pipe_probe"
+  exit 1
+fi
+rm -rf -- "$pipe_probe"
+
 echo "baseline iOS runner tests passed"

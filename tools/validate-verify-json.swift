@@ -408,34 +408,43 @@ struct ProcessResult {
 }
 
 func runGitProcess(_ arguments: [String]) throws -> ProcessResult {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-    process.arguments = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"] + arguments
-    process.currentDirectoryURL = URL(
-        fileURLWithPath: FileManager.default.currentDirectoryPath,
-        isDirectory: true
-    )
-    var environment = ProcessInfo.processInfo.environment
-    for key in Array(environment.keys) where key.hasPrefix("GIT_") {
-        environment.removeValue(forKey: key)
+    // Each call closes both ends of its own pipe. The interpreter drains no autorelease pool between
+    // calls, so pipes left for deallocation pile up until a large repository runs the process out of
+    // descriptors and `process.run()` fails.
+    try autoreleasepool { () throws -> ProcessResult in
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"] + arguments
+        process.currentDirectoryURL = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        var environment = ProcessInfo.processInfo.environment
+        for key in Array(environment.keys) where key.hasPrefix("GIT_") {
+            environment.removeValue(forKey: key)
+        }
+        environment["GIT_CONFIG_NOSYSTEM"] = "1"
+        environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        environment["GIT_CONFIG_SYSTEM"] = "/dev/null"
+        environment["GIT_CONFIG_COUNT"] = "0"
+        environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+        process.environment = environment
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            try? stdout.fileHandleForReading.close()
+            try? stdout.fileHandleForWriting.close()
+            throw ValidationFailure("unable to execute trusted Git inspection")
+        }
+        try? stdout.fileHandleForWriting.close()
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        try? stdout.fileHandleForReading.close()
+        return ProcessResult(status: process.terminationStatus, stdout: data)
     }
-    environment["GIT_CONFIG_NOSYSTEM"] = "1"
-    environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
-    environment["GIT_CONFIG_SYSTEM"] = "/dev/null"
-    environment["GIT_CONFIG_COUNT"] = "0"
-    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
-    process.environment = environment
-    let stdout = Pipe()
-    process.standardOutput = stdout
-    process.standardError = FileHandle.nullDevice
-    do {
-        try process.run()
-    } catch {
-        throw ValidationFailure("unable to execute trusted Git inspection")
-    }
-    let data = stdout.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    return ProcessResult(status: process.terminationStatus, stdout: data)
 }
 
 func runGitString(_ arguments: [String], failure: String) throws -> String {
