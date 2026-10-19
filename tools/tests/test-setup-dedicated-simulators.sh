@@ -9,11 +9,21 @@ tool="$repo_root/tools/setup-dedicated-simulators.sh"
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/ios-template-dedicated-setup-test.XXXXXX")"
 trap 'rm -rf -- "$workspace"' EXIT
 
-iphone_name='iOS-Template iPhone 17 Pro'
-ipad_name='iOS-Template iPad Pro 13-inch (M5)'
-iphone_type='com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro'
-ipad_type='com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB'
-runtime='com.apple.CoreSimulator.SimRuntime.iOS-27-0'
+# The tool reads the running repository's declaration, so the test does too: in an app that adopted
+# the template the names carry the app's display name instead of `iOS-Template`.
+declaration() {
+  ruby -rjson -e '
+    devices = JSON.parse(File.read(ARGV[0])).fetch("devices")
+    device = devices.find { |entry| entry["family"] == ARGV[1] } or abort "no #{ARGV[1]} in the declaration"
+    puts device.fetch(ARGV[2])
+  ' "$repo_root/Config/dedicated-simulators.json" "$1" "$2"
+}
+iphone_name="$(declaration iphone name)"
+ipad_name="$(declaration ipad name)"
+iphone_type="$(declaration iphone deviceTypeIdentifier)"
+ipad_type="$(declaration ipad deviceTypeIdentifier)"
+runtime="$(declaration iphone runtimeIdentifier)"
+[[ "$(declaration ipad runtimeIdentifier)" == "$runtime" ]] || { echo 'the declaration uses two Runtimes' >&2; exit 1; }
 
 mkdir -p "$workspace/bin"
 cat >"$workspace/bin/xcrun" <<'FAKE'
