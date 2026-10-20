@@ -576,7 +576,7 @@ timeoutはexit 124と`stage`、`elapsedSeconds`、`timeoutSeconds`を返しま�
 
 ソース実装は独立Issueなら並行化できます。Simulator検証は各repository内では既存lockにより1ジョブずつ実行し、Mac全体では別repositoryを含めてiPhone／iPad合計最大4 allocation、同一session最大1 allocationをMac共通stateで原子的に強制します。一つのrunner内の複数caseは必ず直列です。lock順はrepository lock、Mac共通state lockで統一し、逆順に取得しません。これにより、Boot状態、Locale、アプリデータ、Screenshotの取り違えとdeadlockを防ぎます。
 
-各worktreeは専用DerivedDataを使います。検証中にHead SHAが変わった場合、結果を破棄して新しいSHAでやり直します。
+各worktreeは専用DerivedDataを使います。runnerは各attemptの中のDerivedDataを使い、runnerを通さない検証のBuild／Testは、D-084のとおりworktreeごとに1つの決まったDerivedDataを使い回し、`.xcresult`を読み終えたら消します。Issueの後片付けは、消したworktreeに結び付いたDerivedDataと検証の一時データを回収します。検証中にHead SHAが変わった場合、結果を破棄して新しいSHAでやり直します。
 
 ## 7. Pre-merge条件
 
