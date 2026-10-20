@@ -2,7 +2,9 @@
 # frozen_string_literal: true
 
 require "digest"
+require "etc"
 require "fileutils"
+require "find"
 require "json"
 require "open3"
 require "securerandom"
@@ -27,6 +29,8 @@ module IOSTemplate
     ACTIVE_STATUSES = %w[reserved active cleanup-failed].freeze
     LEGACY_ACTIVE_STATUSES = %w[reserved active deleting cleanup-failed].freeze
     SHUTDOWN_WAIT_SECONDS = 30
+    POSTER_DATA_PATH = ["data", "Library", "Application Support", "PRBPosterExtensionDataStore"].freeze
+    DEVICE_PLIST_SHUTDOWN_STATE = 1
     SESSION_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\z/
     BATCH_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9-]{0,63}\z/
     CASE_PATTERN = /\A(?:iphone|ipad)-(?:en|ja)\z/
@@ -50,6 +54,7 @@ module IOSTemplate
         "/usr/bin/xcrun"
       end
       @developer_dir = options["--developer-dir"]
+      @ps = @test_mode && options["--ps"] ? File.realpath(options["--ps"]) : "/bin/ps"
       @command_timeout = positive_integer(options.fetch("--command-timeout", "180"), "command timeout")
       @root = resolve_root(options["--state-root"])
       ensure_secure_root
@@ -247,7 +252,116 @@ module IOSTemplate
       puts JSON.pretty_generate(result)
     end
 
+    # D-084 (#370): reports, and with --apply removes, the poster data (PRBPosterExtensionDataStore) of the
+    # repository's two dedicated Simulators. A device qualifies only while the lease lock is held and it has no
+    # active lease, simctl reports Shutdown, its device.plist state is Shutdown, and no launchd_sim runs for
+    # its UDID. It never erases, deletes, boots, or creates a device, and touches no other device.
+    def poster_data(apply:)
+      repository = File.realpath(required("--repository"))
+      devices_root = poster_devices_root
+      result = nil
+      with_state(write: false) do |_legacy_active, state|
+        leased = state.fetch("leases").select { |record| ACTIVE_STATUSES.include?(record["status"]) }
+          .map { |record| record["deviceName"] }
+        devices = FAMILIES.map do |family|
+          declared = declared_device!(repository, family)
+          entry = {"family" => family, "deviceName" => declared.fetch("name")}
+          begin
+            device = dedicated_live_device!(
+              "deviceName" => declared.fetch("name"),
+              "runtimeIdentifier" => declared.fetch("runtimeIdentifier"),
+              "deviceTypeIdentifier" => declared.fetch("deviceTypeIdentifier")
+            )
+          rescue SimulatorResourceError => error
+            next entry.merge("eligible" => false, "removed" => false, "reason" => error.message)
+          end
+          udid = device.fetch("udid")
+          device_root = File.join(devices_root, udid)
+          target = poster_data_path!(device_root)
+          entry.merge!("udid" => udid, "posterBytes" => target ? tree_bytes(target) : 0)
+          reason = poster_data_blocker(device, device_root, udid, leased.include?(declared.fetch("name")))
+          entry["eligible"] = reason.nil?
+          entry["reason"] = reason if reason
+          entry["removed"] = false
+          if apply && reason.nil? && target
+            # The device could be booted outside a lease at any time, so check launchd_sim once more.
+            raise SimulatorResourceError, "launchd_sim started for #{udid}; nothing was removed" if launchd_sim_running?(udid)
+            FileUtils.remove_entry_secure(target)
+            entry["removed"] = true
+          end
+          entry
+        end
+        result = {"schemaVersion" => 1, "dryRun" => !apply, "observedAt" => timestamp, "devices" => devices}
+      end
+      puts JSON.pretty_generate(result)
+    end
+
     private
+
+    def poster_devices_root
+      requested = @options["--devices-root"]
+      raise SimulatorResourceError, "custom devices root requires test mode" if requested && !@test_mode
+      root = requested || File.join(Etc.getpwuid(Process.uid).dir, "Library", "Developer", "CoreSimulator", "Devices")
+      raise SimulatorResourceError, "Simulator devices root must be absolute" unless root.start_with?("/")
+      raise SimulatorResourceError, "Simulator devices root must not pass through a symbolic link" unless File.realpath(root) == root
+      root
+    rescue Errno::ENOENT
+      raise SimulatorResourceError, "Simulator devices root is missing"
+    end
+
+    # Returns the poster data directory, nil when it is absent, and refuses a symbolic link or a component
+    # that this user does not own on the way.
+    def poster_data_path!(device_root)
+      path = device_root
+      [nil, *POSTER_DATA_PATH].each do |component|
+        path = File.join(path, component) if component
+        info = begin
+          File.lstat(path)
+        rescue Errno::ENOENT
+          return nil
+        end
+        unless info.directory? && !info.symlink? && info.uid == Process.uid
+          raise SimulatorResourceError, "#{path} is not a directory owned by this user"
+        end
+      end
+      path
+    end
+
+    def tree_bytes(path)
+      total = 0
+      Find.find(path) { |entry| total += File.lstat(entry).size }
+      total
+    end
+
+    def poster_data_blocker(device, device_root, udid, leased)
+      return "leased" if leased
+      return "simctl state is #{device["state"]}" unless device["state"] == "Shutdown"
+      return "device.plist state is not Shutdown" unless device_plist_state(device_root, udid) == DEVICE_PLIST_SHUTDOWN_STATE
+      return "launchd_sim is running" if launchd_sim_running?(udid)
+      nil
+    end
+
+    def device_plist_state(device_root, udid)
+      path = File.join(device_root, "device.plist")
+      info = File.lstat(path)
+      return nil unless info.file? && !info.symlink? && info.uid == Process.uid
+      # A real device.plist holds dates and data that JSON cannot represent, so read the two keys alone.
+      value = lambda do |key|
+        output, status = Open3.capture2({"PATH" => "/usr/bin:/bin"}, "/usr/bin/plutil", "-extract", key, "raw", "-o", "-", path)
+        status.success? ? output.strip : nil
+      end
+      return nil unless value.call("UDID") == udid
+      state = value.call("state")
+      state&.match?(/\A\d+\z/) ? state.to_i : nil
+    rescue Errno::ENOENT
+      nil
+    end
+
+    def launchd_sim_running?(udid)
+      output, status = Open3.capture2({"PATH" => "/usr/bin:/bin"}, @ps, "-axo", "command=")
+      raise SimulatorResourceError, "unable to list processes" unless status.success?
+      output.each_line.any? { |line| line.include?("launchd_sim") && line.include?("/#{udid}/") }
+    end
 
     def allocation_identity
       session_id = required("--session")
@@ -885,12 +999,12 @@ module IOSTemplate
 
     def parse(arguments)
       command = arguments.shift
-      raise SimulatorResourceError, usage unless %w[allocate release validate inventory recover].include?(command)
+      raise SimulatorResourceError, usage unless %w[allocate release validate inventory recover poster-data].include?(command)
       options = {}
       until arguments.empty?
         key = arguments.shift
         raise SimulatorResourceError, usage unless key&.start_with?("--") && !options.key?(key)
-        if key == "--test-mode" || key == "--dry-run"
+        if key == "--test-mode" || key == "--dry-run" || key == "--apply"
           options[key] = "true"
         else
           value = arguments.shift
@@ -902,7 +1016,7 @@ module IOSTemplate
     end
 
     def usage
-      "usage: ios-simulator-resource.rb allocate|release|validate|inventory|recover [options]"
+      "usage: ios-simulator-resource.rb allocate|release|validate|inventory|recover|poster-data [options]"
     end
 
     def run(arguments)
@@ -914,6 +1028,7 @@ module IOSTemplate
       when "validate" then manager.validate
       when "inventory" then manager.inventory(dry_run: true)
       when "recover" then manager.inventory(dry_run: options["--dry-run"] == "true")
+      when "poster-data" then manager.poster_data(apply: options["--apply"] == "true")
       end
     end
   end
