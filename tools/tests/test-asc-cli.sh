@@ -232,8 +232,10 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   # run into a timeout. A run slower than the old limit still succeeds; the timeout case below keeps 1 second.
   invoke.call(runner, read_args+['--name','fixture-slow'])
   started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-  invoke.call(runner, read_args+['--name','fixture-timeout'], {'IOS_TEMPLATE_TEST_ASC_TIMEOUT'=>'1'}, 124)
+  _, err = invoke.call(runner, read_args+['--name','fixture-timeout'], {'IOS_TEMPLATE_TEST_ASC_TIMEOUT'=>'1'}, 124)
   check(Process.clock_gettime(Process::CLOCK_MONOTONIC)-started < 8, 'bounded timeout')
+  # The failure output says that the run was a timeout, of which stage, and under which limit.
+  check(err.match?(/bounded command timed out: stage=asc-cli elapsedSeconds=\d+\.\d{3} timeoutSeconds=1\b/), "the timeout is not identifiable from its output: #{err}")
   File.chmod(0644, key)
   invoke.call(runner, read_args, {}, :failure)
   File.chmod(0600, key)
