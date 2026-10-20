@@ -4,7 +4,7 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" rg git jq ruby
 
-[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim || "$1" == nested-resume || "$1" == probe-silent-check || "$1" == probe-json-assertion ) ) ]] || exit 64
+[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim || "$1" == nested-resume || "$1" == probe-silent-check || "$1" == probe-json-assertion || "$1" == probe-injected-failure ) ) ]] || exit 64
 scope="${1:-full}"
 
 # #363: many checks here are bare commands under set -e (`[[ ]]`, `cmp -s`, `abort unless`), which end the
@@ -24,6 +24,24 @@ assert_fails() {
   fi
 }
 
+# #363: an injected interruption must end exactly as injected (exit 97 and its message). An earlier failure for
+# another reason is a test failure that shows the transition's own output, which assert_fails would discard.
+assert_injected_failure() {
+  local boundary=$1 message=$2 expected status=0 output
+  shift 2
+  case "$boundary" in
+    LABEL) expected='injected failure after state label' ;;
+    COMMENT) expected='injected failure after state comment' ;;
+    DURABLE) expected='injected failure after durable state' ;;
+    *) echo "unknown injection boundary: $boundary" >&2; exit 1 ;;
+  esac
+  output=$(env "IOS_TEMPLATE_STATE_FAIL_AFTER_$boundary=1" "$@" 2>&1 >/dev/null) || status=$?
+  if [[ "$status" != 97 || "$output" != *"$expected"* ]]; then
+    echo "expected the injected failure after $boundary: $message; got exit $status: $output" >&2
+    exit 1
+  fi
+}
+
 assert_json() {
   local path=$1 code=$2
   ruby -rjson -e "$code" "$path" || { echo "test-workflow-state: JSON assertion failed at line ${BASH_LINENO[0]} on $path: $code" >&2; return 1; }
@@ -31,6 +49,9 @@ assert_json() {
 
 if [[ "$scope" == probe-silent-check ]]; then
   test probe = reported
+fi
+if [[ "$scope" == probe-injected-failure ]]; then
+  assert_injected_failure DURABLE 'a transition that stops early' bash -c 'echo "compare-and-set failed: probe" >&2; exit 1'
 fi
 if [[ "$scope" == probe-json-assertion ]]; then
   printf '[]' | assert_json /dev/stdin 'abort unless JSON.parse(File.read(ARGV[0])) == ["probe"]'
@@ -40,6 +61,8 @@ if [[ "$scope" == full || "$scope" == scoped ]]; then
   [[ "$probe_output" == *'unexpected failure (exit 1) near line '*': test probe = reported'* ]] || { echo "an unexpected exit does not name its check: $probe_output" >&2; exit 1; }
   probe_output=$("$BASH" "$self" probe-json-assertion 2>&1) && { echo 'the JSON assertion probe did not fail' >&2; exit 1; }
   [[ "$probe_output" == *'JSON assertion failed at line '*' on /dev/stdin: abort unless JSON.parse(File.read(ARGV[0])) == ["probe"]'* ]] || { echo "a failed JSON assertion does not name its check: $probe_output" >&2; exit 1; }
+  probe_output=$("$BASH" "$self" probe-injected-failure 2>&1) && { echo 'the injected-failure probe did not fail' >&2; exit 1; }
+  [[ "$probe_output" == *'expected the injected failure after DURABLE: a transition that stops early; got exit 1: compare-and-set failed: probe'* ]] || { echo "an early stop of an injected transition does not show its reason: $probe_output" >&2; exit 1; }
 fi
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
@@ -426,7 +449,7 @@ assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) 
 # durable transition, and clears the pending state instead of resolving its own marker as new history.
 replay_after_comment() {
   local label="$1" from="$2" to="$3"
-  IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT=1 assert_fails "interrupted $label resume" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$from" --to "$to"
+  assert_injected_failure COMMENT "interrupted $label resume" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$from" --to "$to"
   [[ -e ".artifacts/issues/$test_issue/state-transition.pending.json" ]] || { echo "interrupted $label resume left no pending edge" >&2; exit 1; }
   state_transition "$from" "$to"
   assert_json "$FAKE_GH_LABELS_FILE" "abort unless JSON.parse(File.read(ARGV[0])) == [\"state:$to\"]"
@@ -803,7 +826,7 @@ mv "$workspace/original-issue-directory" "$artifact_issue"
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused >/dev/null
 [[ ! -e "$pending_path" ]] || { echo 'recovered transition left pending state' >&2; exit 1; }
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress >/dev/null
-IOS_TEMPLATE_STATE_FAIL_AFTER_DURABLE=1 assert_fails 'interruption after durable state leaves a recoverable pending' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
+assert_injected_failure DURABLE 'interruption after durable state leaves a recoverable pending' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
 [[ -f "$pending_path" ]]
 assert_json "$artifact_issue/state.json" 'abort unless JSON.parse(File.binread(ARGV[0]))["state"]=="paused"'
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress >/dev/null
@@ -811,8 +834,7 @@ assert_json "$artifact_issue/state.json" 'abort unless JSON.parse(File.binread(A
 # Earlier interruptions must retain two-phase retry of the original edge.
 for boundary in LABEL COMMENT; do
   printf '[]' > "$FAKE_GH_COMMENTS_FILE"
-  injection="IOS_TEMPLATE_STATE_FAIL_AFTER_$boundary"
-  assert_fails "interruption after $boundary leaves unapplied pending" env "$injection=1" "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
+  assert_injected_failure "$boundary" "interruption after $boundary leaves unapplied pending" "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
   cp "$pending_path" "$workspace/unapplied-pending.json"
   cp "$artifact_issue/state.json" "$workspace/unapplied-state.json"
   : > "$FAKE_GH_LOG"
@@ -852,7 +874,7 @@ printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
 rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 
 printf '0' > "$FAKE_GIT_HEAD_COUNT_FILE"
-IOS_TEMPLATE_STATE_FAIL_AFTER_DURABLE=1 assert_fails 'verification Head remains bound after durable interruption' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha"
+assert_injected_failure DURABLE 'verification Head remains bound after durable interruption' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha"
 EXPECTED_HEAD="$head_sha" assert_json "$pending_path" 'abort unless JSON.parse(File.binread(ARGV[0]))["headSha"]==ENV.fetch("EXPECTED_HEAD")'
 EXPECTED_HEAD="$head_sha" assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="verify-passed" && value["headSha"]==ENV.fetch("EXPECTED_HEAD")'
 assert_fails 'strict harden Issue cannot skip opposite review' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to approved-for-merge
