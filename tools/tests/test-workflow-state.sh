@@ -25,7 +25,8 @@ assert_fails() {
 }
 
 # #363: an injected interruption must end exactly as injected (exit 97 and its message). An earlier failure for
-# another reason is a test failure that shows the transition's own output, which assert_fails would discard.
+# another reason is a test failure that names the caller's line and the command and shows the transition's own
+# output, which assert_fails would discard. The explicit exit bypasses the ERR trap, so the message says both.
 assert_injected_failure() {
   local boundary=$1 message=$2 expected status=0 output
   shift 2
@@ -37,7 +38,7 @@ assert_injected_failure() {
   esac
   output=$(env "IOS_TEMPLATE_STATE_FAIL_AFTER_$boundary=1" "$@" 2>&1 >/dev/null) || status=$?
   if [[ "$status" != 97 || "$output" != *"$expected"* ]]; then
-    echo "expected the injected failure after $boundary: $message; got exit $status: $output" >&2
+    echo "expected the injected failure after $boundary at line ${BASH_LINENO[0]}: $message; command: $*; got exit $status: $output" >&2
     exit 1
   fi
 }
@@ -62,7 +63,7 @@ if [[ "$scope" == full || "$scope" == scoped ]]; then
   probe_output=$("$BASH" "$self" probe-json-assertion 2>&1) && { echo 'the JSON assertion probe did not fail' >&2; exit 1; }
   [[ "$probe_output" == *'JSON assertion failed at line '*' on /dev/stdin: abort unless JSON.parse(File.read(ARGV[0])) == ["probe"]'* ]] || { echo "a failed JSON assertion does not name its check: $probe_output" >&2; exit 1; }
   probe_output=$("$BASH" "$self" probe-injected-failure 2>&1) && { echo 'the injected-failure probe did not fail' >&2; exit 1; }
-  [[ "$probe_output" == *'expected the injected failure after DURABLE: a transition that stops early; got exit 1: compare-and-set failed: probe'* ]] || { echo "an early stop of an injected transition does not show its reason: $probe_output" >&2; exit 1; }
+  [[ "$probe_output" == *'expected the injected failure after DURABLE at line '[1-9]*': a transition that stops early; command: bash -c echo "compare-and-set failed: probe" >&2; exit 1; got exit 1: compare-and-set failed: probe'* ]] || { echo "an early stop of an injected transition does not show its reason: $probe_output" >&2; exit 1; }
 fi
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
