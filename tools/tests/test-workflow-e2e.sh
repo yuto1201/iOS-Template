@@ -180,10 +180,17 @@ cat >"$fake_bin/date" <<'DATE'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$#" -eq 2 && "$1" == -u && "$2" == '+%Y-%m-%dT%H:%M:%SZ' ]]; then
-  count=$(cat "${FAKE_DATE_COUNTER:?}")
-  count=$((count + 1))
-  printf '%s' "$count" >"$FAKE_DATE_COUNTER"
-  FAKE_EPOCH=$(( ${FAKE_DATE_BASE_EPOCH:?} + count * 2 )) /usr/bin/ruby -rtime -e 'puts Time.at(Integer(ENV.fetch("FAKE_EPOCH"))).utc.iso8601'
+  # Each call is 2 seconds after the previous one, starting at the base. With FAKE_DATE_FOLLOW_REAL_CLOCK=1
+  # it is also never earlier than 2 seconds after the real clock: evidence (verify.json, review.json) carries
+  # real times, so on a slow host a clock that only counted calls fell behind it (#363). The counter file
+  # keeps the last epoch; 0 restarts.
+  last=$(cat "${FAKE_DATE_COUNTER:?}")
+  (( last >= FAKE_DATE_BASE_EPOCH )) || last=$(( ${FAKE_DATE_BASE_EPOCH:?} - 2 ))
+  next=$(( last + 2 ))
+  now=$(/bin/date -u +%s)
+  [[ "${FAKE_DATE_FOLLOW_REAL_CLOCK:-0}" != 1 ]] || (( next >= now + 2 )) || next=$(( now + 2 ))
+  printf '%s' "$next" >"$FAKE_DATE_COUNTER"
+  FAKE_EPOCH=$next /usr/bin/ruby -rtime -e 'puts Time.at(Integer(ENV.fetch("FAKE_EPOCH"))).utc.iso8601'
   exit 0
 fi
 exec /bin/date "$@"
@@ -307,6 +314,25 @@ puts JSON.generate(result)
 CLAUDE
 
 chmod +x "$fake_bin/git" "$fake_bin/date" "$fake_bin/gh" "$fake_bin/claude"
+
+# #363: the fake clock steps 2 seconds per call from its base, and when the real clock has passed the base
+# (a slow host), it stays 2 seconds after the real clock instead of falling behind real evidence times.
+clock_counter="$workspace/clock-check-counter"
+fake_clock() { FAKE_DATE_COUNTER="$clock_counter" FAKE_DATE_BASE_EPOCH="$1" FAKE_DATE_FOLLOW_REAL_CLOCK="${2:-1}" "$fake_bin/date" -u '+%Y-%m-%dT%H:%M:%SZ'; }
+epoch_of() { /usr/bin/ruby -rtime -e 'puts Time.iso8601(ARGV.fetch(0)).to_i' "$1"; }
+printf '%s' 0 >"$clock_counter"
+future_base=$(( $(/bin/date -u +%s) + 600 ))
+[[ "$(epoch_of "$(fake_clock "$future_base")")" == "$future_base" && "$(epoch_of "$(fake_clock "$future_base")")" == "$(( future_base + 2 ))" ]] ||
+  fail 'the fake clock no longer steps 2 seconds per call from its base'
+printf '%s' 0 >"$clock_counter"
+past_base=$(( $(/bin/date -u +%s) - 600 ))
+before_call=$(/bin/date -u +%s)
+first=$(epoch_of "$(fake_clock "$past_base")")
+second=$(epoch_of "$(fake_clock "$past_base")")
+(( first >= before_call + 2 && second >= first + 2 )) || fail "the fake clock fell behind the real clock: $first, $second after $before_call"
+# Without following the real clock (the pre-cutover contract phase), a past base stays as it is.
+printf '%s' 0 >"$clock_counter"
+[[ "$(epoch_of "$(fake_clock "$past_base" 0)")" == "$past_base" ]] || fail 'the pre-cutover fake clock followed the real clock'
 export PATH="$fake_bin:$PATH"
 export REAL_GIT="$real_git"
 export FAKE_OPERATION_LOG="$operation_log"
@@ -336,6 +362,7 @@ export FAKE_BRANCH="$branch"
 # Only the sealed contract belongs to the pre-plan cutover fixture. Subsequent
 # evidence and provider preflights must remain fresh relative to the real run.
 export FAKE_DATE_BASE_EPOCH=$(( $(/bin/date +%s) + 30 ))
+export FAKE_DATE_FOLLOW_REAL_CLOCK=1
 printf '%s' '0' >"$date_counter"
 
 [[ -L "$issue_worktree/.artifacts" && "$(readlink "$issue_worktree/.artifacts")" == '../../.artifacts' ]] || fail 'Claim did not install the canonical shared artifact link'
