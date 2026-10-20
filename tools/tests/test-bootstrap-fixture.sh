@@ -110,6 +110,69 @@ def remove_temporary_tree(path, failing:)
   failing ? warn(message) : raise(message)
 end
 
+# AC-4: the cleanup, deterministically and without Git. FileUtils.remove_entry raises the queued errors
+# without removing anything, then removes for real.
+def with_failing_removals(errors)
+  calls = 0
+  original = FileUtils.method(:remove_entry)
+  FileUtils.define_singleton_method(:remove_entry) do |path, *rest|
+    calls += 1
+    raise errors[calls - 1] if calls <= errors.length
+    original.call(path, *rest)
+  end
+  yield
+  calls
+ensure
+  FileUtils.define_singleton_method(:remove_entry, original) if original
+end
+def cleanup_case_tree
+  tree = Dir.mktmpdir("bootstrap-cleanup-case.")
+  File.write(File.join(tree, "pack"), "x")
+  tree
+end
+def captured_stderr
+  original, $stderr = $stderr, StringIO.new
+  yield
+  $stderr.string
+ensure
+  $stderr = original
+end
+require "stringio"
+tree = cleanup_case_tree
+calls = with_failing_removals([Errno::ENOENT, Errno::ENOTEMPTY]) { remove_temporary_tree(tree, failing: false) }
+assert(calls == 3 && !File.exist?(tree), "cleanup did not retry ENOENT and ENOTEMPTY until the tree was gone")
+exhausted = Array.new(5, Errno::ENOTEMPTY)
+tree = cleanup_case_tree
+raised = begin
+  with_failing_removals(exhausted) { remove_temporary_tree(tree, failing: false) }
+  nil
+rescue RuntimeError => error
+  error.message
+end
+assert(raised == "temporary tree could not be removed: #{tree}" && File.exist?(tree), "a remaining tree did not fail the test: #{raised.inspect}")
+FileUtils.remove_entry(tree)
+tree = cleanup_case_tree
+warning = captured_stderr { with_failing_removals(exhausted) { remove_temporary_tree(tree, failing: true) } }
+assert(warning.include?("temporary tree could not be removed: #{tree}"), "a remaining tree was not reported while the body was failing")
+FileUtils.remove_entry(tree)
+tree = cleanup_case_tree
+body_error = begin
+  captured_stderr do
+    with_failing_removals(exhausted) do
+      begin
+        raise "body failed first"
+      ensure
+        remove_temporary_tree(tree, failing: !$!.nil?)
+      end
+    end
+  end
+  nil
+rescue RuntimeError => error
+  error.message
+end
+assert(body_error == "body failed first", "the cleanup hid the earlier body failure: #{body_error.inspect}")
+FileUtils.remove_entry(tree)
+
 instruction = BootstrapFixture::UPDATE_INSTRUCTION
 before = snapshot(root)
 temp = File.realpath(Dir.mktmpdir("bootstrap-fixture-test."))
