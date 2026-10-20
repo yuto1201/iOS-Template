@@ -5,6 +5,21 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" rg git jq ruby swift python3 /usr/bin/xcrun
 require_test_python_tomllib "$0"
 
+# Git 2.54 runs `git maintenance run --auto --detach` after a commit, and its default geometric strategy
+# repacks in the background while this test removes its temporary seed and clones. Every git this test
+# and its children run keeps the caller's settings, skips automatic maintenance, and would run any that
+# still starts in the foreground.
+disable_git_auto_maintenance() {
+  local count=${GIT_CONFIG_COUNT:-0} setting
+  [[ "$count" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "GIT_CONFIG_COUNT is not a count: $count" >&2; return 1; }
+  for setting in maintenance.auto=false maintenance.autoDetach=false gc.auto=0 gc.autoDetach=false; do
+    export "GIT_CONFIG_KEY_$count=${setting%%=*}" "GIT_CONFIG_VALUE_$count=${setting#*=}"
+    count=$((count + 1))
+  done
+  export GIT_CONFIG_COUNT=$count
+}
+disable_git_auto_maintenance
+
 mode="${1:-}"
 if [[ "$mode" != "validation" && "$mode" != "transform" && "$mode" != "transaction" && "$mode" != "trunk-default" && "$mode" != "cleanup-failure" && "$mode" != "safety" && "$mode" != "all" ]]; then
   echo "usage: $0 validation|transform|transaction|trunk-default|cleanup-failure|safety|all" >&2

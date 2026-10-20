@@ -4,6 +4,36 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby bash python3 swift /usr/bin/xcrun
 
+# Git 2.54 runs `git maintenance run --auto --detach` after a commit, and its default geometric strategy
+# repacks in the background (objects/bitmap-ref-tips_*, packs, multi-pack-index) while this test removes its
+# temporary repositories. Every git this test and its children run keeps the caller's settings, skips
+# automatic maintenance, and would run any that still starts in the foreground.
+disable_git_auto_maintenance() {
+  local count=${GIT_CONFIG_COUNT:-0} setting
+  [[ "$count" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "GIT_CONFIG_COUNT is not a count: $count" >&2; return 1; }
+  for setting in maintenance.auto=false maintenance.autoDetach=false gc.auto=0 gc.autoDetach=false; do
+    export "GIT_CONFIG_KEY_$count=${setting%%=*}" "GIT_CONFIG_VALUE_$count=${setting#*=}"
+    count=$((count + 1))
+  done
+  export GIT_CONFIG_COUNT=$count
+}
+# #325: in both tests, the setting keeps the caller's entries, turns automatic maintenance off for every
+# child git, and refuses a GIT_CONFIG_COUNT that is not a count.
+for test_file in test-bootstrap-fixture.sh test-app-bootstrap.sh; do
+  definition=$(sed -n '/^disable_git_auto_maintenance() {$/,/^}$/p' "${BASH_SOURCE[0]%/*}/$test_file")
+  [[ -n "$definition" ]] || { echo "$test_file does not turn off Git's automatic maintenance" >&2; exit 1; }
+  probe=$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0='Caller Name' bash -c "$definition"'
+    disable_git_auto_maintenance
+    printf "%s|%s|%s|%s|%s\n" "$(git config --get user.name)" "$(git config --get maintenance.auto)" \
+      "$(git config --get maintenance.autoDetach)" "$(git config --get gc.auto)" "$(git config --get gc.autoDetach)"')
+  [[ "$probe" == 'Caller Name|false|false|0|false' ]] || { echo "$test_file Git settings for children: $probe" >&2; exit 1; }
+  if env GIT_CONFIG_COUNT=one bash -c "$definition"'
+    disable_git_auto_maintenance' 2>/dev/null; then
+    echo "$test_file accepted a GIT_CONFIG_COUNT that is not a count" >&2; exit 1
+  fi
+done
+disable_git_auto_maintenance
+
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 ruby - "$root" <<'RUBY'
 require "digest"
@@ -64,10 +94,89 @@ def snapshot(root)
       Digest::SHA256.file(File.join(root, "Config/app-identity.json")).hexdigest : nil]
 end
 
+# Removes a temporary tree. A process that adds or deletes entries during the walk makes one pass fail with
+# ENOENT or ENOTEMPTY, so retry a few times and fail only when the tree remains. While the test body is
+# already failing, report a leftover tree without hiding that failure.
+def remove_temporary_tree(path, failing:)
+  5.times do |attempt|
+    begin
+      FileUtils.remove_entry(path)
+    rescue Errno::ENOENT, Errno::ENOTEMPTY
+      sleep(0.2 * (attempt + 1))
+    end
+    return unless File.exist?(path) || File.symlink?(path)
+  end
+  message = "temporary tree could not be removed: #{path}"
+  failing ? warn(message) : raise(message)
+end
+
+# AC-4: the cleanup, deterministically and without Git. FileUtils.remove_entry raises the queued errors
+# without removing anything, then removes for real.
+def with_failing_removals(errors)
+  calls = 0
+  original = FileUtils.method(:remove_entry)
+  FileUtils.define_singleton_method(:remove_entry) do |path, *rest|
+    calls += 1
+    raise errors[calls - 1] if calls <= errors.length
+    original.call(path, *rest)
+  end
+  yield
+  calls
+ensure
+  FileUtils.define_singleton_method(:remove_entry, original) if original
+end
+def cleanup_case_tree
+  tree = Dir.mktmpdir("bootstrap-cleanup-case.")
+  File.write(File.join(tree, "pack"), "x")
+  tree
+end
+def captured_stderr
+  original, $stderr = $stderr, StringIO.new
+  yield
+  $stderr.string
+ensure
+  $stderr = original
+end
+require "stringio"
+tree = cleanup_case_tree
+calls = with_failing_removals([Errno::ENOENT, Errno::ENOTEMPTY]) { remove_temporary_tree(tree, failing: false) }
+assert(calls == 3 && !File.exist?(tree), "cleanup did not retry ENOENT and ENOTEMPTY until the tree was gone")
+exhausted = Array.new(5, Errno::ENOTEMPTY)
+tree = cleanup_case_tree
+raised = begin
+  with_failing_removals(exhausted) { remove_temporary_tree(tree, failing: false) }
+  nil
+rescue RuntimeError => error
+  error.message
+end
+assert(raised == "temporary tree could not be removed: #{tree}" && File.exist?(tree), "a remaining tree did not fail the test: #{raised.inspect}")
+FileUtils.remove_entry(tree)
+tree = cleanup_case_tree
+warning = captured_stderr { with_failing_removals(exhausted) { remove_temporary_tree(tree, failing: true) } }
+assert(warning.include?("temporary tree could not be removed: #{tree}"), "a remaining tree was not reported while the body was failing")
+FileUtils.remove_entry(tree)
+tree = cleanup_case_tree
+body_error = begin
+  captured_stderr do
+    with_failing_removals(exhausted) do
+      begin
+        raise "body failed first"
+      ensure
+        remove_temporary_tree(tree, failing: !$!.nil?)
+      end
+    end
+  end
+  nil
+rescue RuntimeError => error
+  error.message
+end
+assert(body_error == "body failed first", "the cleanup hid the earlier body failure: #{body_error.inspect}")
+FileUtils.remove_entry(tree)
+
 instruction = BootstrapFixture::UPDATE_INSTRUCTION
 before = snapshot(root)
-Dir.mktmpdir("bootstrap-fixture-test.") do |temp|
-  temp = File.realpath(temp)
+temp = File.realpath(Dir.mktmpdir("bootstrap-fixture-test."))
+begin
   helper = File.join(root, "tools/tests/lib/bootstrap-fixture.rb")
   ok, output = command("ruby", helper, "check", root)
   assert(ok, "current source file set differs: #{output}")
@@ -79,6 +188,8 @@ Dir.mktmpdir("bootstrap-fixture-test.") do |temp|
   assert(File.binread(File.join(seed, "Config/template-identity.json")) ==
     File.binread(File.join(root, "Config/template-identity.json")), "current manifest was replaced")
   assert(git(seed, "status", "--porcelain=v1").empty?, "seed is dirty")
+  assert(git(seed, "config", "--get", "maintenance.auto").strip == "false" && git(seed, "config", "--get", "gc.auto").strip == "0",
+    "Git's automatic maintenance is still on in the temporary repositories")
 
   ok, = command("ruby", helper, "create", root, seed)
   assert(!ok && File.file?(File.join(seed, "TemplateApp/TemplateAppApp.swift")),
@@ -175,6 +286,8 @@ Dir.mktmpdir("bootstrap-fixture-test.") do |temp|
   ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => git(shared, "rev-parse", "HEAD").strip},
     "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
   assert(!ok && output.include?("shared bootstrap seed no longer has the template identity"), "a bootstrapped shared seed was used: #{output}")
+ensure
+  remove_temporary_tree(temp, failing: !$!.nil?)
 end
 
 # A template-only change under any frozen source directory selects this fixture regression.
