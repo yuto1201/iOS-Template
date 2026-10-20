@@ -20,6 +20,7 @@ exec /usr/bin/ruby --disable-gems -rjson -e '
   abort "secret argv" if ARGV.any? { |arg| ENV.values_at("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH").any? { |s| arg.include?(s) } }
   abort "wrong output" unless ARGV.last(2) == ["--output", "json"] && ARGV.count("--output") == 1
   sleep 10 if ARGV.include?("fixture-timeout")
+  sleep 3 if ARGV.include?("fixture-slow")
   if ARGV.include?("fixture-leak") || ARGV.include?("fixture-fail")
     ENV.values_at("ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_PRIVATE_KEY_PATH").each { |v| STDOUT.write(v); STDERR.write(v) }
     exit(ARGV.include?("fixture-fail") ? 17 : 0)

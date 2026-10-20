@@ -58,7 +58,7 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   reset_release.call
   install_root = File.join(temporary, 'installed')
   binary = File.join(install_root, original_pin.fetch('version'), 'asc')
-  env = {'PATH'=>'/usr/bin:/bin', 'LANG'=>'en_US.UTF-8', 'HOME'=>home, 'IOS_TEMPLATE_TEST_MODE'=>'1', 'IOS_TEMPLATE_TEST_ASC_PIN'=>pin_path, 'IOS_TEMPLATE_TEST_ASC_INSTALL_ROOT'=>install_root, 'IOS_TEMPLATE_TEST_ASC_RELEASE_DIR'=>release, 'IOS_TEMPLATE_TEST_SECURITY_BIN'=>File.join(fixture, 'fake-security'), 'IOS_TEMPLATE_TEST_ASC_TIMEOUT'=>'2'}
+  env = {'PATH'=>'/usr/bin:/bin', 'LANG'=>'en_US.UTF-8', 'HOME'=>home, 'IOS_TEMPLATE_TEST_MODE'=>'1', 'IOS_TEMPLATE_TEST_ASC_PIN'=>pin_path, 'IOS_TEMPLATE_TEST_ASC_INSTALL_ROOT'=>install_root, 'IOS_TEMPLATE_TEST_ASC_RELEASE_DIR'=>release, 'IOS_TEMPLATE_TEST_SECURITY_BIN'=>File.join(fixture, 'fake-security'), 'IOS_TEMPLATE_TEST_ASC_TIMEOUT'=>'30'}
   installer = File.join(repo, 'tools/install-asc-cli.sh')
   runner = File.join(repo, 'tools/asc-run.sh')
   count = 0
@@ -228,6 +228,9 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   out, err = invoke.call(runner, read_args+['--name','fixture-leak'])
   check(out.include?('[REDACTED]') && err.include?('[REDACTED]'), 'both streams redacted')
   invoke.call(runner, read_args+['--name','fixture-fail'], {}, 17)
+  # #363: the normal cases run under a 30-second limit, not 2 seconds, so a slow host does not turn an ordinary
+  # run into a timeout. A run slower than the old limit still succeeds; the timeout case below keeps 1 second.
+  invoke.call(runner, read_args+['--name','fixture-slow'])
   started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   invoke.call(runner, read_args+['--name','fixture-timeout'], {'IOS_TEMPLATE_TEST_ASC_TIMEOUT'=>'1'}, 124)
   check(Process.clock_gettime(Process::CLOCK_MONOTONIC)-started < 8, 'bounded timeout')
