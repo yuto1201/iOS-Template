@@ -213,7 +213,17 @@ module IOSTemplate
         @xcode.fetch("sourceFiles", []).each { |path| inspect_file(path) }
         @xcode.fetch("buildFiles", []).each do |path|
           next if @paths.include?(path)
-          if @sources.kind(path) == "directory"
+          kind = begin
+            @sources.kind(path)
+          rescue Errno::ENOENT, Errno::ENOTDIR
+            "missing"
+          end
+          if kind == "missing"
+            # A build setting or phase names an absent file, such as an entitlements file. Reading it records
+            # the path as missing and the inventory as incomplete (code-source-unavailable), and the rest of
+            # the inventory still runs.
+            inspect_file(path)
+          elsif kind == "directory"
             walk(path)
           elsif TEXT_EXTENSIONS.include?(File.extname(path)) || DEPENDENCIES.include?(File.basename(path))
             inspect_file(path)
