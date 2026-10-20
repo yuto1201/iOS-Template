@@ -175,7 +175,7 @@ authorityは次の三つだけを許可する。`review-finding`は同じIssue�
 
 AI検証とApp Store撮影は専用2台だけを使い、deviceを作成、clone、rename、削除しない。専用device以外を起動、erase、install、test対象にしない。専用deviceの排他はMac共通resource managerのleaseで取り、起動中のAI検証用deviceは同じMac全体で最大4台、一つのsessionで1台とする。同じdeviceを使うcaseは一件ずつ実行し、満杯または使用中なら有限・取消可能に待機する。
 
-各caseの前に専用deviceを停止してeraseし、caseのlocale／languageを設定してから起動する。証拠をdevice外へ保存した後に停止し、成功、失敗、timeout、cancelのいずれでも停止を確認してからleaseを返す。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`で実行し、clone deviceを作らない。手動device、他repository／session、使用中、不明なdevice、Runtime、Xcode、共通cache、ユーザーDerivedData、canonical evidenceを保護する。
+各caseの前に専用deviceを停止してeraseし、caseのlocale／languageを設定してから起動する。証拠をdevice外へ保存した後に停止し、成功、失敗、timeout、cancelのいずれでも停止を確認してからleaseを返す。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`で実行し、clone deviceを作らない。手動device、他repository／session、使用中、不明なdevice、Runtime、Xcode、共通cache、ユーザーDerivedData、canonical evidenceを保護する。Issueの後片付けが回収する、消したworktreeに結び付いたDerivedDataと検証の一時データは、D-084のとおりユーザーのDerivedDataに含めない。
 
 容量／memoryが不足すれば新規caseと長時間反復を止める。専用device契約のtoolが実装されるまで、canonical native検証とApp Store撮影を実行しない。実装を含まないBaseで封印済みのcontractはnative検証を行えず、native証拠が必要ならsuccessor Issueへ移す。旧schema v1の固定UDID matrix、#93以後のschema v2 matrix、既存証拠はimmutable legacyとして受理し、遡及変換しない。
 

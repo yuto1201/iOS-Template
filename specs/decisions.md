@@ -912,3 +912,20 @@
   - Asset Catalogの既存のdark／tintedのappearance entryを削除・置換せず、validatorもそれを理由に拒否しない。
 - Consequence: 派生アプリは、採用済みのアイコンを、ユーザーが用意した完成済みのアイコンへ、installerを迂回せずに差し替えられ、CafLogの今の採用記録はD-083の形を満たす。validator、installer、`app-icon`スキル、その直接のtestは#341で合わせる。ユーザーの元の画像のうちGitに入れるのは採用したassetだけで、ほかの画像は`.artifacts/`などGitの外に置く。初回の採用で完成済みのアイコンを使う経路は、`AGENTS.md`の文面の承認とともに別に判断する。外部サイトやApp Store Connectに掲載したアイコンの更新は、別Issueで行う。
 - Related Issue: #344
+
+## D-084: 開発中のディスク容量を、worktreeとIssueに結び付けて際限なく増やさない
+
+- Date: 2026-10-20
+- Status: 確定
+- Supersedes: None。D-063の専用device 2台と各caseの前のerase、verify runnerのattemptの削除、所有の確認、split-lockの回避（`.verify.lock`を残すこと）、lease時の空き容量の確認は維持する。`specs/acceptance.md`と`specs/development-stages.md`の「ユーザーのDerivedDataを保護する」は、Issueの後片付けが回収する範囲を除く形に読み替える。
+- Context: 2026-10-20、派生アプリ6本の開発環境で、Macの空き容量が2日で51GBから14GBまで減った（ユーザーの実測）。主な原因は、runnerを通さずにエージェントがその場で実行する`xcodebuild`が作業やIssueごとに新しい`-derivedDataPath`と`.xcresult`を作り、セッションの一時フォルダに約46GBたまったこと、ある派生アプリの専用Simulatorの壁紙データ（`PRBPosterExtensionDataStore`）が約23GBになったこと、テンプレートのtestが`~/Library/Developer/Xcode/DerivedData`へ中身が`Logs`だけのフォルダを残すこと（このMacで`GardenNotes-*`が414個など）である。verify runnerは自分のattemptを消しており、`tools/cleanup-issue.sh`はbranchとworktreeだけを消す。Simulator runtimeを消す外部の掃除toolで、iOS 27のruntimeが消えたこともあった。ユーザーは2026-10-20に、#367〜#373に分けて対策することを承認した。
+- Decision:
+  - runnerを通さない検証のBuild／Testは、worktreeごとに1つの決まったDerivedDataを使い回し、作業やIssueごとに新しい場所を作らない。置き場所はリポジトリの外の`~/Library/Caches/ios-template/derived-data/<worktree識別子>/`とし、worktree識別子はverify runnerと同じく、worktreeの物理pathの最後の要素と物理path全体のSHA-256から作る。置き場所には、どのworktreeのものかを示す所有の印として物理pathを記録する。決まった場所を使う入口のtoolを用意し、文書から案内する（#368）。
+  - `.xcresult`は、必要な情報を読み終えたら消す。明示して残す場合だけ、worktreeごとに新しい3件までとする。ミューテーション検証などで別のDerivedDataが必要な場合は、成功、失敗、signalのいずれの終了でも消す。
+  - Issueの後片付け（`tools/cleanup-issue.sh`）は、worktreeを消した後に、そのworktreeの決まったDerivedData、`info.plist`の`WorkspacePath`がそのworktreeの中を指すXcode既定のDerivedData、`/tmp/ios-template-verify/<worktree識別子>/`の下の`Retained/`と残った`Attempts/`を回収する（#369）。これらはIssueが作ったデータであり、仕様が保護するユーザーのDerivedDataには含めない。`/tmp/ios-template-verify`の下は、各Headの`.verify.lock`を待たずに取れたときだけ回収し、`.verify.lock`と空のdirectoryはsplit-lockを防ぐために残す。回収は、記述子で確かめた所有者、所有の印、pathが一致するものだけとし、名前や経過時間だけでは消さない。`.artifacts`、`failures/*.json`、ほかのworktreeやrepositoryのデータ、`info.plist`のないフォルダ、ユーザーのfile、動いているセッションの一時フォルダは回収しない。
+  - 専用Simulatorの壁紙データ（`data/Library/Application Support/PRBPosterExtensionDataStore`）は、このrepositoryが宣言した専用deviceについて、Mac共通のresource managerのlockの中で貸し出し中でなく、`simctl`の一覧、`device.plist`の`state`、その端末の`launchd_sim`の有無のすべてが停止を示す場合だけ、保守用のtoolで消せる（#370）。eraseとdeleteは使わない。D-063の各caseの前のeraseは変えない。壁紙データが大きくなった原因は#371で調べる。
+  - テンプレートのtestとbootstrapのtoolが見本アプリへ実行する`xcodebuild`は、その実行の一時フォルダの中の`-derivedDataPath`を使い、`~/Library/Developer/Xcode/DerivedData`へフォルダを増やさない（#372）。すでにあるフォルダは名前だけでは判断できないため、テンプレートでは消さない。
+  - verify runnerは、Buildとleaseの前にattemptの置き場所のvolumeの空き容量を確かめ、既定20 GiB（環境変数`IOS_TEMPLATE_MINIMUM_FREE_GIB`で変更できる）を下回れば`blocked:environment`として止め、回収の手段を案内する（#373）。lease時の既存の8 GiBの確認は変えない。
+  - テンプレートのtoolと文書は、Simulator runtimeを削除する処理、`simctl delete`、`simctl delete unavailable`、新しいeraseを含めない。
+- Consequence: その場の検証のDerivedDataはworktreeごとに1つとなり、Issueが終わると後片付けで回収されるため、作業の数に比例して増えない。専用Simulatorの壁紙データは停止中に小さくでき、Buildの前の確認で、空き容量が少ないまま検証を始めない。新しいtool、test、文書は既存の所有区分（D-074、D-078）で派生アプリへ取り込まれ、`Config/repository-tests.json`は従来どおり手で合わせる。すでにたまったscratchpadやDerivedDataのフォルダはこのDecisionでは消さず、ユーザーが別に扱う。端末ごとのMobileAssetは消しても再び入るため削除の対象にせず、専用deviceをrepositoryごとに2台とするD-063で増え方を抑える。
+- Related Issue: #367
