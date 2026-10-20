@@ -60,6 +60,58 @@ run_in_app() { (cd "$app" && bash "tools/tests/$1" >"$work/$1.log" 2>&1); }
 run_in_app test-tracked-credential-scan.sh || fail "credential scan failed in the adopted app: $(tail -3 "$work/test-tracked-credential-scan.sh.log")"
 run_in_app test-setup-dedicated-simulators.sh || fail "dedicated Simulator setup test failed in the adopted app: $(tail -3 "$work/test-setup-dedicated-simulators.sh.log")"
 
+# #349: the plan leaves out the manifest's template-only entries that an adopted app does not have, and the
+# workflow evidence test no longer reads the app-owned App Store/submission/. First, the plan's list of
+# template-only entries is exactly what the ownership manifest makes template-only, and the template's own
+# manifest is used unchanged.
+ruby -rjson -r"$repo_root/tools/lib/template-sync.rb" -I"$repo_root/tools/lib" -rrepository-test-plan -e '
+  root = ARGV.fetch(0)
+  ownership = TemplateSync.load_ownership(File.read(File.join(root, TemplateSync::OWNERSHIP_PATH)))
+  manifest = JSON.parse(File.read(File.join(root, "Config/repository-tests.json")))
+  template_only = ->(path) { TemplateSync.classify(ownership, path)&.dig(:category) == "template-only" }
+  plan = IOSTemplate::RepositoryTestPlan
+  tests = manifest.fetch("tests").map { |entry| entry.fetch("path") }.select(&template_only).sort
+  paths = manifest.fetch("domainRules").flat_map { |rule| rule.fetch("paths") }.select(&template_only).uniq.sort
+  abort "template-only manifest tests differ from the plan: #{tests}" unless tests == plan::TEMPLATE_ONLY_TESTS.sort
+  abort "template-only manifest paths differ from the plan: #{paths}" unless paths == plan::TEMPLATE_ONLY_PATHS.sort
+  tracked = IO.popen(["git", "-C", root, "ls-files"], &:read).split("\n")
+  same, testless = plan.adopted_manifest(manifest, tracked)
+  abort "the template manifest is not used unchanged" unless same == manifest && testless.empty?
+' "$repo_root" || fail 'the plan does not track the template-only manifest entries'
+(
+  cd "$app"
+  git rm -q -r -- "App Store/submission"
+  printf '\nAdopted app note.\n' >> docs/template-sync.md
+  git add -A
+  git -c user.name=test -c user.email=test@example.invalid commit -q -m 'An adopted app without submission requirements'
+)
+plan_in_app() {
+  (cd "$app" && ruby -Itools/lib -rjson -rrepository-test-plan -e '
+    plan = IOSTemplate::RepositoryTestPlan
+    base, head = ARGV
+    criteria = [{"id" => "AC-1", "text" => "UI-direction route: not-applicable; Scope: tests; Reason: no UI."},
+                {"id" => "AC-2", "text" => "Repository-test scope: targeted; Reason: adopted app fixture."}]
+    contract = JSON.generate({"schemaVersion"=>1, "issue"=>42, "repository"=>"example/repo", "goal"=>"Adopted plan",
+      "specAnchors"=>["specs/test.md#plan"], "acceptanceCriteria"=>criteria, "dependencies"=>[], "externalOperations"=>[],
+      "externalOperationDetailsDigest"=>"sha256:#{"0" * 64}", "fetchedAt"=>"2026-09-13T13:03:38Z",
+      "deliveryStage"=>{"name"=>"harden", "timeBudgetMinutes"=>60, "reason"=>"fixture"},
+      "deliveryProfile"=>{"name"=>"strict", "reason"=>"fixture"}})
+    manifest = JSON.parse(IO.popen(["git", "show", "#{head}:Config/repository-tests.json"], &:read))
+    tracked = plan.tracked_paths(".", head)
+    adopted, testless = plan.adopted_manifest(manifest, tracked)
+    # The manifest check runs first, as in build, so the template check stops on the manifest.
+    plan.validate_manifest!(adopted, tracked.grep(plan::TEST_PATH), tracked_paths: tracked, testless_domains: testless)
+    _, _, selected = plan.resolve(adopted, "targeted", plan.changed_paths(".", base, head))
+    built = plan.build(repo: ".", issue: 42, base_sha: base, head_sha: head, contract_bytes: contract,
+      mappings: {"AC-1" => selected, "AC-2" => selected})
+    abort "unexpected plan: #{built["testPaths"]}" unless built["testPaths"] == selected && (selected & plan::TEMPLATE_ONLY_TESTS).empty?
+    abort "the template-sync domain should be left without tests: #{testless}" unless testless.include?("template-sync")
+    puts selected.length
+  ' "$(git rev-parse HEAD~1)" "$(git rev-parse HEAD)") >"$work/plan-in-app.log" 2>&1
+}
+plan_in_app || fail "the repository-test plan did not start in the adopted app: $(tail -3 "$work/plan-in-app.log")"
+run_in_app test-workflow-evidence-publisher.sh || fail "workflow evidence test failed in the adopted app: $(tail -3 "$work/test-workflow-evidence-publisher.sh.log")"
+
 # An app may not add a new occurrence of the restricted word outside the allowed files.
 (
   cd "$app"
@@ -83,6 +135,12 @@ if run_in_app test-tracked-credential-scan.sh; then
   fail 'the template check accepted a missing allowed occurrence'
 fi
 grep -Fq 'service_role policy occurrence set changed' "$work/test-tracked-credential-scan.sh.log" || fail "unexpected template credential scan failure: $(tail -3 "$work/test-tracked-credential-scan.sh.log")"
+# The template check of the manifest stays exact: without the adoption record, missing template-only tests
+# stop the plan.
+if plan_in_app; then
+  fail 'the template manifest check accepted missing template-only tests'
+fi
+grep -Fq 'repository-test manifest inventory differs from tracked tests' "$work/plan-in-app.log" || fail "unexpected template plan failure: $(tail -3 "$work/plan-in-app.log")"
 
 [[ "$(git -C "$repo_root" rev-parse HEAD)" == "$before_head" ]] || fail 'the running repository HEAD changed'
 [[ "$(git -C "$repo_root" status --porcelain)" == "$before_status" ]] || fail 'the running repository working tree changed'

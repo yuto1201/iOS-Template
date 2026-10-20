@@ -29,6 +29,25 @@ module IOSTemplate
     SHELL_LINT_TESTS = %w[tools/tests/test-prerequisites.sh tools/tests/test-spec-state.sh].freeze
     CREDENTIAL_SCAN_DOMAIN = "credential-scan"
     CREDENTIAL_SCAN_TESTS = %w[tools/tests/test-tracked-credential-scan.sh].freeze
+    # An app that adopted the template records its base here (D-074). The template sync never brings the
+    # template-only files below into such an app (tools/template-sync/ownership.json), so their manifest
+    # entries are left out there when the files are absent at Head (#349). The template keeps them exactly.
+    TEMPLATE_BASE_PATH = "Config/template-base.json"
+    TEMPLATE_ONLY_TESTS = %w[
+      tools/tests/test-adopted-app-imported-tests.sh
+      tools/tests/test-link-user-skill.sh
+      tools/tests/test-template-sync-apply.sh
+      tools/tests/test-template-sync-derived.sh
+      tools/tests/test-template-sync.sh
+    ].freeze
+    TEMPLATE_ONLY_PATHS = %w[
+      tools/lib/template-sync-apply.rb
+      tools/lib/template-sync.rb
+      tools/link-user-skill.sh
+      tools/template-sync-codex-review.sh
+      tools/template-sync.sh
+      tools/tests/test-adopted-app-imported-tests.sh
+    ].freeze
 
     def policy(contract)
       criteria = contract.fetch("acceptanceCriteria")
@@ -62,9 +81,10 @@ module IOSTemplate
 
       manifest_bytes = git!(repo, "show", "#{head_sha}:#{MANIFEST_PATH}").b
       head_paths = tracked_paths(repo, head_sha)
+      adopted, testless_domains = adopted_manifest(parse_object(manifest_bytes, "repository-test manifest"), head_paths)
       manifest = validate_manifest!(
-        parse_object(manifest_bytes, "repository-test manifest"),
-        head_paths.select { |path| path.match?(TEST_PATH) }, tracked_paths: head_paths
+        adopted, head_paths.select { |path| path.match?(TEST_PATH) }, tracked_paths: head_paths,
+        testless_domains: testless_domains
       )
       paths = changed_paths(repo, base_sha, head_sha)
       resolved_scope, resolution_reason, selected_tests = resolve(manifest, selected_policy.fetch("requestedScope"), paths)
@@ -114,7 +134,26 @@ module IOSTemplate
       []
     end
 
-    def validate_manifest!(manifest, inventory, tracked_paths: nil)
+    # In an app that adopted the template, leaves out the template-only tests and exact paths that are absent
+    # at Head, and names the domains whose only tests were those. Anywhere else the manifest is unchanged.
+    def adopted_manifest(manifest, head_paths)
+      return [manifest, []] unless head_paths.include?(TEMPLATE_BASE_PATH) && manifest.is_a?(Hash) &&
+        manifest["tests"].is_a?(Array) && manifest["domainRules"].is_a?(Array)
+
+      absent = ->(path) { !head_paths.include?(path) }
+      tests, dropped = manifest["tests"].partition do |entry|
+        !(entry.is_a?(Hash) && TEMPLATE_ONLY_TESTS.include?(entry["path"]) && absent.call(entry["path"]))
+      end
+      rules = manifest["domainRules"].map do |rule|
+        next rule unless rule.is_a?(Hash) && rule["paths"].is_a?(Array)
+        rule.merge("paths" => rule["paths"].reject { |path| TEMPLATE_ONLY_PATHS.include?(path) && absent.call(path) })
+      end
+      remaining = tests.flat_map { |entry| entry.is_a?(Hash) && entry["domains"].is_a?(Array) ? entry["domains"] : [] }
+      testless = dropped.flat_map { |entry| entry["domains"].is_a?(Array) ? entry["domains"] : [] }.uniq - remaining
+      [manifest.merge("tests" => tests, "domainRules" => rules), testless.sort]
+    end
+
+    def validate_manifest!(manifest, inventory, tracked_paths: nil, testless_domains: [])
       exact_keys!(manifest, %w[schemaVersion headAllPaths headAllPrefixes domainRules tests], "manifest")
       reject("repository-test manifest schemaVersion is invalid") unless manifest["schemaVersion"] == 1
       head_all_paths = unique_paths!(manifest["headAllPaths"], "manifest.headAllPaths")
@@ -155,7 +194,7 @@ module IOSTemplate
       reject("repository-test manifest tests must be sorted and unique") unless test_paths == test_paths.sort && test_paths.uniq == test_paths
       reject("repository-test manifest inventory differs from tracked tests") unless test_paths == inventory
       referenced = tests.flat_map { |entry| entry.fetch("domains") }.uniq.sort
-      reject("repository-test manifest contains a domain without tests") unless (referenced - [SHELL_LINT_DOMAIN, CREDENTIAL_SCAN_DOMAIN]) == domains
+      reject("repository-test manifest contains a domain without tests") unless (referenced - [SHELL_LINT_DOMAIN, CREDENTIAL_SCAN_DOMAIN]) == domains - testless_domains
       if tracked_paths
         exact_coverage = rules.flat_map { |rule| rule.fetch("paths") }
         reject("repository-test manifest exact path is not tracked at Head") unless exact_coverage.all? { |path| tracked_paths.include?(path) }
