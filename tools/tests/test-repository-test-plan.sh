@@ -166,9 +166,9 @@ abort "head-all unexpectedly narrowed a test" unless
     runner.test_arguments("tools/tests/test-workflow-e2e.sh", "head-all") == []
 abort "bootstrap core entrypoint changed" unless
   %w[targeted head-all base-and-head].all? { |scope| runner.test_arguments("tools/tests/test-app-bootstrap.sh", scope) == ["core"] }
-abort "a bootstrap group entrypoint gained arguments" unless (bootstrap_tests + fixture_tests - ["tools/tests/test-app-bootstrap.sh"]).all? do |path|
+abort "a bootstrap group entrypoint gained arguments" unless (bootstrap_tests + fixture_tests - ["tools/tests/test-app-bootstrap.sh"]).all? { |path|
   %w[targeted head-all base-and-head].all? { |scope| runner.test_arguments(path, scope) == [] }
-end
+}
 Dir.mktmpdir("repository-test-plan-") do |scratch|
   repo = File.join(scratch, "repo")
   FileUtils.mkdir_p(File.join(repo, "Config"))
