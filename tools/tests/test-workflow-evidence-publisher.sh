@@ -590,7 +590,8 @@ for requirements_path in "${requirements_paths[@]}"; do
   case "$requirements_path" in
     *.sh) printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/$requirements_path"; /bin/chmod +x "$repo/$requirements_path" ;;
     *.swift) printf '%s\n' '// local capture helper' >"$repo/$requirements_path" ;;
-    *) /bin/cp "$source_repo/App Store/submission/requirements.json" "$repo/$requirements_path" ;;
+    # The imported fixture, not the app-owned App Store/submission/ that an adopted app may not have yet (#349).
+    *) /bin/cp "$source_repo/tools/tests/fixtures/appstore/requirements.json" "$repo/$requirements_path" ;;
   esac
 done
 previous_head="$head_sha"
