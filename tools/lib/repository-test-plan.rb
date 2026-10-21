@@ -108,7 +108,8 @@ module IOSTemplate
     end
 
     def test_arguments(path, scope)
-      return ["all"] if path == "tools/tests/test-app-bootstrap.sh"
+      # #327: the other app-bootstrap groups have their own tools/tests/test-app-bootstrap-*.sh entrypoints.
+      return ["core"] if path == "tools/tests/test-app-bootstrap.sh"
       return ["scoped"] if scope == "targeted" && TARGETED_SCOPED_TESTS.include?(path)
 
       []
