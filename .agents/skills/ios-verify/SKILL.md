@@ -187,8 +187,7 @@ When review is required, pass that exact `REVIEW_PACKET` path to the next `cross
 
 ## Dedicated Simulators outside a lease
 
-Only a lease erases a dedicated Simulator before it boots (D-063). A dedicated device booted any other way keeps its data, and the poster snapshots under `data/Library/Application Support/PRBPosterExtensionDataStore` are never pruned. In one derived app on the template from before D-063, agents booted, tested, and shut down the dedicated iPhone by hand; that store gained a new set of snapshots (about 150 MB) about 40 times in under two days, reached 8.2 GB, and stopped growing while the device stayed booted (#371).
+Only a lease erases a dedicated Simulator before it boots (D-063). A dedicated device booted any other way keeps its data. In one derived app on the template from before D-063, agents booted, tested, and shut down the dedicated iPhone by hand; its poster snapshot store under `data/Library/Application Support/PRBPosterExtensionDataStore` gained a new set of snapshots (about 150 MB) about 40 times in under two days, was not pruned during that period, reached 8.2 GB, and stopped growing while the device stayed booted (#371, #380).
 
-- Run verification and App Store capture through the lease-based tools, never by booting the dedicated device yourself.
-- Keep ad-hoc use of a dedicated device (a quick launch to look at the app, a single `xcodebuild` run by UDID, the Claude app's Simulator panel) rare. Shut the device down when you are done instead of booting it again for each check.
+- Boot, install to, and test on a dedicated Simulator only through the repository's lease-based tools: the verify runner and the App Store capture and recording tools. This applies to a quick check as well. Do not boot a dedicated device yourself, open it in the Claude app's Simulator panel, or point an ad-hoc `xcodebuild` destination at it outside a lease.
 - When a dedicated device's poster data has grown, reclaim it with the repository's poster-data command for shut-down devices (D-084), never by erasing or deleting the device yourself.
