@@ -120,6 +120,13 @@ tools/verify-ios-issue.sh --finalize \
   --visual-result ".artifacts/issues/${ISSUE}/${HEAD_SHA}/visual-result.json"
 ```
 
+## Dedicated Simulator poster data
+
+A dedicated Simulator's poster data (`data/Library/Application Support/PRBPosterExtensionDataStore`) can grow to many gigabytes when the device is booted outside a lease, because only a lease erases it first. Do not erase or delete the device to reclaim it (D-063, D-084). Report the sizes with `ruby tools/lib/ios-simulator-resource.rb poster-data --repository .`, and remove the poster data with `--apply`.
+
+The command takes the lease lock and acts only on this repository's two declared devices. It removes the poster data only when all of these hold: the device has no active lease, `simctl` reports `Shutdown`, its `device.plist` state is Shutdown, and no `launchd_sim` runs for its UDID. App data and the device itself stay; the lock screen wallpaper returns to the default. It never erases, deletes, boots, or creates a device, and it refuses a symbolic link on the way.
+
+
 ## Documentation-only verification
 
 Do not acquire the Simulator lock, resolve a matrix, call Xcode, capture images, or request visual evaluation. Write only the narrow input `.artifacts/issues/${ISSUE}/documentation-evidence-input.json`:
