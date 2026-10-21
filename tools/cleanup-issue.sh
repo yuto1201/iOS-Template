@@ -19,230 +19,349 @@ fail() { echo "cleanup refused: $*" >&2; exit 1; }
 # DerivedData of tools/xcodebuild-in-worktree.sh whose owner record names this worktree, Xcode's default
 # DerivedData folders whose info.plist WorkspacePath is inside it, and the Retained/ and leftover Attempts/
 # contents of each verify Head whose .verify.lock can be taken without waiting. .verify.lock files and the
-# emptied directories stay (split-lock prevention). Nothing is removed by name or age alone: every entry must
-# be a real directory owned by this user at its exact path, bound by descriptor before and after. Skipped
-# entries are reported; any failure exits non-zero and a rerun finishes the rest. The three roots can be
-# replaced only in the explicit test mode.
+# emptied directories stay (split-lock prevention). Nothing is removed by name or age alone. Every step is
+# anchored to directory descriptors opened with O_NOFOLLOW|O_DIRECTORY from the root down (openat, fstatat,
+# fdopendir, unlinkat), so a renamed or substituted path never redirects a removal; the owner record or
+# info.plist is validated through the same descriptor that is emptied and is removed last, so an interrupted
+# removal keeps the evidence that a rerun needs. Skipped entries are reported; any failure exits non-zero and
+# a rerun finishes the rest. The three roots and a step hook can be replaced only in the explicit test mode.
 reclaim_worktree_data() {
-  ruby --disable-gems -rjson -rdigest -retc -ropen3 -e '
-    UID = Process.uid
-    $failed = 0
-    $removed = 0
-    $skipped = 0
-    def report(message)
-      warn "cleanup reclaim: #{message}"
-    end
-    def skip(path, reason)
-      $skipped += 1
-      report "skipped #{path} (#{reason})"
-    end
-    def failure(path, error)
-      $failed += 1
-      report "failed #{path}: #{error.is_a?(Exception) ? error.message : error}"
-    end
-    def lstat_or_nil(path)
-      File.lstat(path)
-    rescue Errno::ENOENT
-      nil
-    end
-    def owned_directory?(stat)
-      !stat.nil? && stat.directory? && stat.uid == UID
-    end
-    def open_bound_directory(path)
-      before = File.lstat(path)
-      raise "#{path} is not a directory owned by this user" unless owned_directory?(before)
-      io = File.open(path, File::RDONLY | File::NOFOLLOW)
-      bound = io.stat
-      unless bound.directory? && bound.uid == UID && bound.dev == before.dev && bound.ino == before.ino
-        io.close
-        raise "#{path} changed while it was opened"
-      end
-      io
-    end
-    def still_bound!(path, io)
-      now = File.lstat(path)
-      bound = io.stat
-      raise "#{path} changed during the reclaim" unless owned_directory?(now) && now.dev == bound.dev && now.ino == bound.ino
-    end
-    def read_owned_regular(path, limit)
-      before = lstat_or_nil(path)
-      return nil unless before && before.file? && before.uid == UID && before.nlink == 1 && before.size <= limit
-      File.open(path, File::RDONLY | File::NOFOLLOW) do |io|
-        bound = io.stat
-        return nil unless bound.file? && bound.dev == before.dev && bound.ino == before.ino && bound.nlink == 1
-        bytes = io.read(limit + 1).to_s
-        return nil unless bytes.bytesize == bound.size
-        bytes
-      end
-    rescue SystemCallError
-      nil
-    end
-    # Each directory is bound by descriptor, made owner-writable through it (Xcode keeps read-only package
-    # checkouts), and emptied without following a symbolic link. An entry owned by someone else stops it.
-    def remove_tree(path)
-      io = open_bound_directory(path)
-      begin
-        io.chmod(0o700)
-        Dir.children(path).each do |name|
-          child = File.join(path, name)
-          stat = File.lstat(child)
-          raise "#{child} is not owned by this user" unless stat.uid == UID
-          stat.directory? ? remove_tree(child) : File.unlink(child)
-        end
-        still_bound!(path, io)
-      ensure
-        io.close
-      end
-      Dir.rmdir(path)
-    end
-    def reclaim(path, held)
-      held.each { |held_path, held_io| still_bound!(held_path, held_io) }
-      before = lstat_or_nil(path)
-      raise "#{path} is not a directory owned by this user" unless owned_directory?(before)
-      remove_tree(path)
-      raise "#{path} still exists" if lstat_or_nil(path)
-      $removed += 1
-      report "removed #{path}"
-    rescue StandardError => error
-      failure(path, error)
-    end
-    def open_root(path)
-      return nil if lstat_or_nil(path).nil?
-      open_bound_directory(path)
-    rescue StandardError => error
-      failure(path, error)
-      nil
-    end
+  local expected_owner
+  # The owner record bytes come from the same generator that tools/xcodebuild-in-worktree.sh uses.
+  expected_owner=$(ruby --disable-gems -rjson -e 'print %({"schemaVersion":1,"worktree":#{ARGV.fetch(0).to_json}})' "$1") || return 1
+  /usr/bin/python3 -I - "$1" "$expected_owner" <<'PY'
+import errno, fcntl, hashlib, os, pwd, re, stat, subprocess, sys
 
-    root = ARGV.fetch(0)
-    components = root.split("/", -1)
-    unless root.start_with?("/") && components.length >= 3 && components.drop(1).none? { |part| part.empty? || part == "." || part == ".." } && !root.include?("\0")
-      abort "cleanup reclaim: the worktree root is not a canonical absolute path"
-    end
-    abort "cleanup reclaim: the worktree still exists" if lstat_or_nil(root)
-    parent = File.dirname(root)
-    abort "cleanup reclaim: the worktree parent is not physical" unless File.realpath(parent) == parent
-    worktree_id = "#{File.basename(root).gsub(/[^A-Za-z0-9_.-]/, "-")}-#{Digest::SHA256.hexdigest(root)}"
-    if ENV["IOS_TEMPLATE_TEST_MODE"] == "1"
-      fixed_root = ENV.fetch("IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT")
-      xcode_root = ENV.fetch("IOS_TEMPLATE_TEST_XCODE_DERIVED_DATA_ROOT")
-      verify_root = ENV.fetch("IOS_TEMPLATE_TEST_VERIFY_ROOT")
-      abort "cleanup reclaim: test roots must be absolute" unless [fixed_root, xcode_root, verify_root].all? { |path| path.start_with?("/") }
-    else
-      home = Etc.getpwuid(UID).dir
-      fixed_root = File.join(home, "Library", "Caches", "ios-template", "derived-data")
-      xcode_root = File.join(home, "Library", "Developer", "Xcode", "DerivedData")
-      verify_root = "/tmp/ios-template-verify"
-    end
+UID = os.getuid()
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY | os.O_CLOEXEC
+TEST_MODE = os.environ.get("IOS_TEMPLATE_TEST_MODE") == "1"
+HOOK = os.environ.get("IOS_TEMPLATE_TEST_RECLAIM_HOOK") if TEST_MODE else None
+counts = {"removed": 0, "skipped": 0, "failed": 0}
 
-    # 1. The fixed DerivedData of tools/xcodebuild-in-worktree.sh, only with the exact owner record.
-    begin
-      if (fixed = open_root(fixed_root))
-        entry = File.join(fixed_root, worktree_id)
-        stat = lstat_or_nil(entry)
-        if stat && !owned_directory?(stat)
-          skip(entry, "not a directory owned by this user")
-        elsif stat
-          expected = %({"schemaVersion":1,"worktree":#{root.to_json}}\n)
-          if read_owned_regular(File.join(entry, "owner.json"), 65_536) == expected
-            reclaim(entry, [[fixed_root, fixed]])
-          else
-            skip(entry, "its owner record does not name this worktree")
-          end
-        end
-        fixed.close
-      end
-    rescue StandardError => error
-      failure(fixed_root, error)
-    end
 
-    # 2. Xcode default DerivedData whose info.plist WorkspacePath is inside the removed worktree.
-    begin
-      if (xcode = open_root(xcode_root))
-        Dir.children(xcode_root).sort.each do |name|
-          entry = File.join(xcode_root, name)
-          next unless owned_directory?(lstat_or_nil(entry))
-          bytes = read_owned_regular(File.join(entry, "info.plist"), 1_048_576)
-          next if bytes.nil?
-          workspace, status = Open3.capture2("/usr/bin/plutil", "-extract", "WorkspacePath", "raw", "-o", "-", "-", stdin_data: bytes, err: File::NULL)
-          next unless status.success?
-          workspace = workspace.chomp("\n")
-          next unless workspace == root || workspace.start_with?("#{root}/")
-          reclaim(entry, [[xcode_root, xcode]])
-        end
-        xcode.close
-      end
-    rescue StandardError => error
-      failure(xcode_root, error)
-    end
+class ReclaimError(Exception):
+    pass
 
-    # 3. Retained/ and leftover Attempts/ of each verify Head whose .verify.lock is free right now.
-    begin
-      if (verify = open_root(verify_root))
-        worktree_path = File.join(verify_root, worktree_id)
-        stat = lstat_or_nil(worktree_path)
-        if stat && !owned_directory?(stat)
-          skip(worktree_path, "not a directory owned by this user")
-        elsif stat
-          worktree_io = open_bound_directory(worktree_path)
-          Dir.children(worktree_path).sort.each do |issue_name|
-            issue_path = File.join(worktree_path, issue_name)
-            next skip(issue_path, "not an Issue directory") unless issue_name.match?(/\Aissue-[1-9][0-9]*\z/) && owned_directory?(lstat_or_nil(issue_path))
-            issue_io = open_bound_directory(issue_path)
-            Dir.children(issue_path).sort.each do |head_name|
-              head_path = File.join(issue_path, head_name)
-              next skip(head_path, "not a Head directory") unless head_name.match?(/\A[0-9a-f]{40}\z/) && owned_directory?(lstat_or_nil(head_path))
-              head_io = nil
-              lock_io = nil
-              begin
-                head_io = open_bound_directory(head_path)
-                lock_path = File.join(head_path, ".verify.lock")
-                lock_stat = lstat_or_nil(lock_path)
-                next skip(head_path, "no usable .verify.lock") unless lock_stat && lock_stat.file? && lock_stat.uid == UID && lock_stat.nlink == 1
-                lock_io = File.open(lock_path, File::RDWR | File::NOFOLLOW)
-                next skip(head_path, "its verification lock is held") unless lock_io.flock(File::LOCK_EX | File::LOCK_NB)
-                locked = lock_io.stat
-                current = File.lstat(lock_path)
-                raise "#{lock_path} changed while it was locked" unless locked.file? && locked.nlink == 1 && current.dev == locked.dev && current.ino == locked.ino
-                %w[Retained Attempts].each do |area|
-                  area_path = File.join(head_path, area)
-                  area_stat = lstat_or_nil(area_path)
-                  next if area_stat.nil?
-                  next skip(area_path, "not a directory owned by this user") unless owned_directory?(area_stat)
-                  area_io = open_bound_directory(area_path)
-                  begin
-                    held = [[verify_root, verify], [worktree_path, worktree_io], [issue_path, issue_io], [head_path, head_io], [area_path, area_io]]
-                    Dir.children(area_path).sort.each do |name|
-                      entry = File.join(area_path, name)
-                      if owned_directory?(lstat_or_nil(entry))
-                        reclaim(entry, held)
-                      else
-                        skip(entry, "not a directory owned by this user")
-                      end
-                    end
-                  ensure
-                    area_io.close
-                  end
-                end
-              rescue StandardError => error
-                failure(head_path, error)
-              ensure
-                lock_io&.close
-                head_io&.close
-              end
-            end
-            issue_io.close
-          end
-          worktree_io.close
-        end
-        verify.close
-      end
-    rescue StandardError => error
-      failure(verify_root, error)
-    end
-    report "removed=#{$removed} skipped=#{$skipped} failed=#{$failed}"
-    exit($failed.zero? ? 0 : 1)
-  ' "$1"
+
+def report(message):
+    sys.stderr.write("cleanup reclaim: %s\n" % message)
+
+
+def skip(path, reason):
+    counts["skipped"] += 1
+    report("skipped %s (%s)" % (path, reason))
+
+
+def failure(path, error):
+    counts["failed"] += 1
+    report("failed %s: %s" % (path, error))
+
+
+def hook(step, path):
+    if HOOK:
+        subprocess.run([HOOK, step, path], check=True)
+
+
+def stat_at(parent, name):
+    try:
+        return os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def owned_directory(info):
+    return info is not None and stat.S_ISDIR(info.st_mode) and info.st_uid == UID
+
+
+def same_identity(left, right):
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def open_directory_at(parent, name):
+    before = stat_at(parent, name)
+    if not owned_directory(before):
+        raise ReclaimError("%s is not a directory owned by this user" % name)
+    descriptor = os.open(name, DIRECTORY_FLAGS, dir_fd=parent)
+    bound = os.fstat(descriptor)
+    if not (owned_directory(bound) and same_identity(before, bound)):
+        os.close(descriptor)
+        raise ReclaimError("%s changed while it was opened" % name)
+    return descriptor
+
+
+def still_at(parent, name, descriptor, path):
+    now = stat_at(parent, name)
+    if not (owned_directory(now) and same_identity(now, os.fstat(descriptor))):
+        raise ReclaimError("%s changed during the reclaim" % path)
+
+
+def read_regular_at(parent, name, limit):
+    """Returns the bytes of a single-link regular file owned by this user, or None when it is absent or unsafe."""
+    before = stat_at(parent, name)
+    if before is None or not stat.S_ISREG(before.st_mode) or before.st_uid != UID or before.st_nlink != 1 or before.st_size > limit:
+        return None
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=parent)
+    except OSError:
+        return None
+    try:
+        bound = os.fstat(descriptor)
+        if not (stat.S_ISREG(bound.st_mode) and same_identity(before, bound) and bound.st_nlink == 1):
+            return None
+        data = os.read(descriptor, limit + 1)
+        return data if len(data) == bound.st_size else None
+    finally:
+        os.close(descriptor)
+
+
+def remove_child(parent, name, path):
+    info = stat_at(parent, name)
+    if info is None:
+        raise ReclaimError("%s disappeared during the reclaim" % path)
+    if info.st_uid != UID:
+        raise ReclaimError("%s is not owned by this user" % path)
+    if stat.S_ISDIR(info.st_mode):
+        descriptor = open_directory_at(parent, name)
+        try:
+            empty_directory(descriptor, path)
+            still_at(parent, name, descriptor, path)
+        finally:
+            os.close(descriptor)
+        os.rmdir(name, dir_fd=parent)
+    else:
+        os.unlink(name, dir_fd=parent)
+
+
+def empty_directory(descriptor, path, last=None):
+    """Empties the directory behind the descriptor; `last` (the ownership evidence) goes only after the rest."""
+    info = os.fstat(descriptor)
+    if not owned_directory(info):
+        raise ReclaimError("%s is not a directory owned by this user" % path)
+    # Xcode keeps read-only package checkouts, so the owner regains write access through the descriptor.
+    os.fchmod(descriptor, 0o700)
+    # Test mode can substitute the path here, between opening and enumeration, to prove nothing follows it.
+    hook("opened", path)
+    names = sorted(os.listdir(descriptor))
+    for name in names:
+        if name != last:
+            remove_child(descriptor, name, "%s/%s" % (path, name))
+    remaining = os.listdir(descriptor)
+    if any(name != last for name in remaining):
+        raise ReclaimError("%s gained entries during the reclaim" % path)
+    if last is not None and last in remaining:
+        os.unlink(last, dir_fd=descriptor)
+
+
+def reclaim(parent, name, descriptor, path, last=None):
+    """Removes one validated entry through the descriptor that was validated."""
+    try:
+        empty_directory(descriptor, path, last)
+        still_at(parent, name, descriptor, path)
+        os.rmdir(name, dir_fd=parent)
+        counts["removed"] += 1
+        report("removed %s" % path)
+    except Exception as error:  # noqa: BLE001 - every failure is reported and makes the cleanup fail
+        failure(path, error)
+
+
+def open_root(path):
+    """Opens a root directory (its own last component never a symbolic link), or returns None when absent."""
+    try:
+        parent = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    try:
+        if stat_at(parent, os.path.basename(path)) is None:
+            return None
+        return open_directory_at(parent, os.path.basename(path))
+    finally:
+        os.close(parent)
+
+
+def canonical_components(value):
+    """Splits an absolute path without empty, `.` or `..` components; returns None for anything else."""
+    if not value.startswith(b"/") or b"\0" in value:
+        return None
+    parts = value.split(b"/")[1:]
+    if not parts or any(part in (b"", b".", b"..") for part in parts):
+        return None
+    return parts
+
+
+root = sys.argv[1]
+expected_owner = os.fsencode(sys.argv[2]) + b"\n"
+root_bytes = os.fsencode(root)
+root_parts = canonical_components(root_bytes)
+if root_parts is None or len(root_parts) < 2:
+    sys.exit("cleanup reclaim: the worktree root is not a canonical absolute path")
+if os.path.lexists(root):
+    sys.exit("cleanup reclaim: the worktree still exists")
+if os.path.realpath(os.path.dirname(root)) != os.path.dirname(root):
+    sys.exit("cleanup reclaim: the worktree parent is not physical")
+worktree_id = "%s-%s" % (re.sub(r"[^A-Za-z0-9_.-]", "-", os.path.basename(root)), hashlib.sha256(root_bytes).hexdigest())
+if TEST_MODE:
+    roots = [os.environ.get(name, "") for name in ("IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT", "IOS_TEMPLATE_TEST_XCODE_DERIVED_DATA_ROOT", "IOS_TEMPLATE_TEST_VERIFY_ROOT")]
+    if not all(path.startswith("/") for path in roots):
+        sys.exit("cleanup reclaim: test mode needs three absolute roots")
+    fixed_root, xcode_root, verify_root = roots
+else:
+    home = pwd.getpwuid(UID).pw_dir
+    fixed_root = os.path.join(home, "Library", "Caches", "ios-template", "derived-data")
+    xcode_root = os.path.join(home, "Library", "Developer", "Xcode", "DerivedData")
+    verify_root = "/tmp/ios-template-verify"
+
+# 1. The fixed DerivedData of tools/xcodebuild-in-worktree.sh, only with the exact owner record.
+try:
+    fixed = open_root(fixed_root)
+    if fixed is not None:
+        try:
+            path = os.path.join(fixed_root, worktree_id)
+            info = stat_at(fixed, worktree_id)
+            if info is not None and not owned_directory(info):
+                skip(path, "not a directory owned by this user")
+            elif info is not None:
+                entry = open_directory_at(fixed, worktree_id)
+                try:
+                    if stat_at(entry, "owner.json") is None:
+                        # The owner record is removed last, so only an emptied directory may lack it.
+                        if os.listdir(entry):
+                            failure(path, "it holds data without an owner record, so its ownership cannot be proved")
+                        else:
+                            reclaim(fixed, worktree_id, entry, path)
+                    elif read_regular_at(entry, "owner.json", 65536) == expected_owner:
+                        reclaim(fixed, worktree_id, entry, path, last="owner.json")
+                    else:
+                        skip(path, "its owner record does not name this worktree")
+                finally:
+                    os.close(entry)
+        finally:
+            os.close(fixed)
+except Exception as error:  # noqa: BLE001
+    failure(fixed_root, error)
+
+# 2. Xcode default DerivedData whose info.plist WorkspacePath is inside the removed worktree.
+try:
+    xcode = open_root(xcode_root)
+    if xcode is not None:
+        try:
+            for name in sorted(os.listdir(xcode)):
+                path = os.path.join(xcode_root, name)
+                try:
+                    if not owned_directory(stat_at(xcode, name)):
+                        continue
+                    entry = open_directory_at(xcode, name)
+                    try:
+                        data = read_regular_at(entry, "info.plist", 1048576)
+                        if data is None:
+                            continue
+                        result = subprocess.run(["/usr/bin/plutil", "-extract", "WorkspacePath", "raw", "-o", "-", "-"],
+                                                input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                        if result.returncode != 0:
+                            continue
+                        workspace = result.stdout[:-1] if result.stdout.endswith(b"\n") else result.stdout
+                        parts = canonical_components(workspace)
+                        if parts is None:
+                            if workspace.startswith(root_bytes):
+                                skip(path, "its WorkspacePath is not a canonical absolute path")
+                            continue
+                        if parts[:len(root_parts)] != root_parts:
+                            continue
+                        reclaim(xcode, name, entry, path, last="info.plist")
+                    finally:
+                        os.close(entry)
+                except Exception as error:  # noqa: BLE001
+                    failure(path, error)
+        finally:
+            os.close(xcode)
+except Exception as error:  # noqa: BLE001
+    failure(xcode_root, error)
+
+# 3. Retained/ and leftover Attempts/ of each verify Head whose .verify.lock is free right now.
+try:
+    verify = open_root(verify_root)
+    if verify is not None:
+        try:
+            worktree_path = os.path.join(verify_root, worktree_id)
+            info = stat_at(verify, worktree_id)
+            if info is not None and not owned_directory(info):
+                skip(worktree_path, "not a directory owned by this user")
+            elif info is not None:
+                worktree = open_directory_at(verify, worktree_id)
+                try:
+                    for issue_name in sorted(os.listdir(worktree)):
+                        issue_path = os.path.join(worktree_path, issue_name)
+                        if not (re.fullmatch(r"issue-[1-9][0-9]*", issue_name) and owned_directory(stat_at(worktree, issue_name))):
+                            skip(issue_path, "not an Issue directory")
+                            continue
+                        issue = open_directory_at(worktree, issue_name)
+                        try:
+                            for head_name in sorted(os.listdir(issue)):
+                                head_path = os.path.join(issue_path, head_name)
+                                if not (re.fullmatch(r"[0-9a-f]{40}", head_name) and owned_directory(stat_at(issue, head_name))):
+                                    skip(head_path, "not a Head directory")
+                                    continue
+                                head = lock = None
+                                try:
+                                    head = open_directory_at(issue, head_name)
+                                    lock_info = stat_at(head, ".verify.lock")
+                                    if lock_info is None or not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != UID or lock_info.st_nlink != 1:
+                                        skip(head_path, "no usable .verify.lock")
+                                        continue
+                                    lock = os.open(".verify.lock", os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=head)
+                                    try:
+                                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                    except BlockingIOError:
+                                        skip(head_path, "its verification lock is held")
+                                        continue
+                                    locked = os.fstat(lock)
+                                    current = stat_at(head, ".verify.lock")
+                                    if not (stat.S_ISREG(locked.st_mode) and locked.st_nlink == 1 and current is not None and same_identity(current, locked)):
+                                        raise ReclaimError("%s/.verify.lock changed while it was locked" % head_path)
+                                    for area_name in ("Retained", "Attempts"):
+                                        area_path = os.path.join(head_path, area_name)
+                                        area_info = stat_at(head, area_name)
+                                        if area_info is None:
+                                            continue
+                                        if not owned_directory(area_info):
+                                            skip(area_path, "not a directory owned by this user")
+                                            continue
+                                        area = open_directory_at(head, area_name)
+                                        try:
+                                            for name in sorted(os.listdir(area)):
+                                                path = os.path.join(area_path, name)
+                                                if not owned_directory(stat_at(area, name)):
+                                                    skip(path, "not a directory owned by this user")
+                                                    continue
+                                                try:
+                                                    entry = open_directory_at(area, name)
+                                                except Exception as error:  # noqa: BLE001
+                                                    failure(path, error)
+                                                    continue
+                                                try:
+                                                    reclaim(area, name, entry, path)
+                                                finally:
+                                                    os.close(entry)
+                                        finally:
+                                            os.close(area)
+                                except Exception as error:  # noqa: BLE001
+                                    failure(head_path, error)
+                                finally:
+                                    if lock is not None:
+                                        os.close(lock)
+                                    if head is not None:
+                                        os.close(head)
+                        finally:
+                            os.close(issue)
+                finally:
+                    os.close(worktree)
+        finally:
+            os.close(verify)
+except Exception as error:  # noqa: BLE001
+    failure(verify_root, error)
+
+report("removed=%d skipped=%d failed=%d" % (counts["removed"], counts["skipped"], counts["failed"]))
+sys.exit(1 if counts["failed"] else 0)
+PY
 }
 
 identity=$(ruby "$identity_tool" validate-primary "$repo_root" "$repo" "$issue") || fail 'durable Issue identity is invalid'

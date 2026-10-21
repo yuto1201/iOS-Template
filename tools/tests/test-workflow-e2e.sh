@@ -2,7 +2,7 @@
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" rg git jq ruby swift /usr/bin/ruby /usr/bin/swiftc
+require_test_commands "$0" rg git jq ruby swift /usr/bin/ruby /usr/bin/swiftc /usr/bin/python3
 
 [[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
 scope="${1:-full}"

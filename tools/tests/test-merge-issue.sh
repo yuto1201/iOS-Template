@@ -2,7 +2,7 @@
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" git jq ruby swift
+require_test_commands "$0" git jq ruby swift python3
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 [[ $# == 0 || ( $# == 1 && "$1" == scoped ) ]] || exit 64
