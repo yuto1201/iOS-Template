@@ -112,6 +112,51 @@ plan_in_app() {
 plan_in_app || fail "the repository-test plan did not start in the adopted app: $(tail -3 "$work/plan-in-app.log")"
 run_in_app test-workflow-evidence-publisher.sh || fail "workflow evidence test failed in the adopted app: $(tail -3 "$work/test-workflow-evidence-publisher.sh.log")"
 
+# #366: the canonical runner itself starts the formal repository tests in the adopted app. A change to the
+# imported authority document selects the imported provider-ownership test and the always-selected credential
+# scan, which both finish in a few seconds. The Issue number is used only inside the disposable clone, and
+# the runner's artifacts, detached worktree, and any kept failure output stay outside the running repository.
+(
+  cd "$app"
+  printf '\nAdopted app note.\n' >> docs/AUTHORITY.md
+  git add -A
+  git -c user.name=test -c user.email=test@example.invalid commit -q -m 'Change an imported document'
+)
+runner_base="$(git -C "$app" rev-parse HEAD~1)"
+runner_head="$(git -C "$app" rev-parse HEAD)"
+runner_contract="$app/.artifacts/issues/42/issue-contract.json"
+mkdir -p "$app/.artifacts/issues/42/$runner_head"
+ruby -I"$app/tools/lib" -rjson -rissue-contract -e '
+  criteria = [{"id" => "AC-1", "text" => "UI-direction route: not-applicable; Scope: tests; Reason: no UI."},
+              {"id" => "AC-2", "text" => "Repository-test scope: targeted; Reason: adopted app fixture."}]
+  contract = {"schemaVersion"=>1, "issue"=>42, "repository"=>"example/repo", "goal"=>"Adopted runner",
+    "specAnchors"=>["specs/test.md#runner"], "acceptanceCriteria"=>criteria, "dependencies"=>[], "externalOperations"=>[],
+    "externalOperationDetailsDigest"=>"sha256:#{"0" * 64}", "fetchedAt"=>"2026-10-21T00:00:00Z",
+    "deliveryStage"=>{"name"=>"harden", "timeBudgetMinutes"=>60, "reason"=>"fixture"},
+    "deliveryProfile"=>{"name"=>"strict", "reason"=>"fixture"}}
+  File.binwrite(ARGV.fetch(0), IOSTemplate::IssueContract.canonical_json(contract))
+' "$runner_contract"
+run_runner_in_app() {
+  (cd "$app" && IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT="$(cd "$work" && pwd -P)/kept-output" \
+    tools/run-repository-tests.sh --issue 42 --expected-base "$runner_base" "$@") >"$work/runner.out" 2>"$work/runner.err"
+}
+run_runner_in_app \
+  --map AC-1=tools/tests/test-provider-ownership.sh \
+  --map AC-2=tools/tests/test-provider-ownership.sh,tools/tests/test-tracked-credential-scan.sh ||
+  fail "the canonical repository-test runner failed in the adopted app: $(tail -3 "$work/runner.err")"
+EVIDENCE="$app/.artifacts/issues/42/$runner_head/repository-tests.json" BASE="$runner_base" HEAD_SHA="$runner_head" \
+  ruby -rjson -I"$repo_root/tools/lib" -rrepository-test-plan -e '
+  value = JSON.parse(File.binread(ENV.fetch("EVIDENCE")))
+  expected = %w[tools/tests/test-provider-ownership.sh tools/tests/test-tracked-credential-scan.sh]
+  abort "wrong evidence identity" unless value.values_at("status", "issue", "baseSha", "headSha") == ["passed", 42, ENV.fetch("BASE"), ENV.fetch("HEAD_SHA")]
+  abort "the evidence scope is not targeted: #{value["scope"]}" unless value["scope"] == "targeted"
+  executed = value.fetch("tests").map { |entry| entry.fetch("path") }
+  abort "unexpected executed tests: #{executed}" unless executed == expected
+  abort "a template-only test ran: #{executed}" unless (executed & IOSTemplate::RepositoryTestPlan::TEMPLATE_ONLY_TESTS).empty?
+  abort "an executed test did not pass" unless value.fetch("tests").all? { |entry| entry.fetch("status") == "passed" && entry.fetch("exitStatus") == 0 }
+  abort "wrong suite totals" unless value.fetch("suite").values_at("total", "passed", "failed") == [2, 2, 0]
+' || fail 'the adopted app repository-test evidence differs'
+
 # An app may not add a new occurrence of the restricted word outside the allowed files.
 (
   cd "$app"
