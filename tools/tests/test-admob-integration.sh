@@ -91,6 +91,10 @@ source, destination = ARGV
 bytes = File.binread(source)
 bytes = bytes.gsub("TemplateApp", "GardenNotes")
 bytes = bytes.gsub("com.yuto.GardenNotes", "com.example.GardenNotes")
+# Identity bootstrap adds the display name to the application target only, as in a real derived app.
+anchor = "\t\t\t\tINFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;\n"
+abort "the template project lacks the application INFOPLIST_KEY anchor" unless bytes.scan(anchor).length == 2
+bytes = bytes.gsub(anchor, "\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = \"Garden Notes\";\n#{anchor}")
 File.binwrite(destination, bytes)
 RUBY
 printf '%s\n' '// fixture source' >"$derived/GardenNotes/App.swift"
@@ -263,12 +267,10 @@ git -C "$package_derived" checkout -qb codex/test-admob-existing-package
 ruby -I"$repo_root/tools/lib" -radmob-activation - "$package_derived/GardenNotes.xcodeproj/project.pbxproj" <<'RUBY'
 path = ARGV.fetch(0)
 identity = {"moduleName" => "GardenNotes", "bundleId" => "com.example.UnrelatedSeed"}
-bytes = IOSTemplate::AdMobActivation.mutate_project(File.binread(path), identity)
+bytes = IOSTemplate::AdMobActivation.add_package_dependency(File.binread(path), identity)
 bytes = bytes.gsub("GoogleMobileAds", "ExamplePackage")
 bytes = bytes.gsub(IOSTemplate::AdMobActivation::PACKAGE_URL, "https://example.invalid/example-package.git")
 bytes = bytes.gsub(IOSTemplate::AdMobActivation::PACKAGE_VERSION, "1.2.3")
-bytes = bytes.gsub("GENERATE_INFOPLIST_FILE = NO;", "GENERATE_INFOPLIST_FILE = YES;")
-bytes = bytes.gsub(/^\s*INFOPLIST_FILE = GardenNotes\/AdMob\/Info-(?:Debug|Release)\.plist;\n/, "")
 File.binwrite(path, bytes)
 RUBY
 package_resolved="$package_derived/GardenNotes.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"
@@ -292,13 +294,53 @@ project="$derived/GardenNotes.xcodeproj/project.pbxproj"
 grep -Fq 'repositoryURL = "https://github.com/googleads/swift-package-manager-google-mobile-ads.git";' "$project" || fail 'official package URL was not added'
 grep -Fq 'version = 13.10.0;' "$project" || fail 'exact package version was not added'
 grep -Fq 'productName = GoogleMobileAds;' "$project" || fail 'GoogleMobileAds product was not linked'
-grep -Fq 'GardenNotes/AdMob/Info-Debug.plist' "$project" || fail 'Debug Info.plist route is missing'
-grep -Fq 'GardenNotes/AdMob/Info-Release.plist' "$project" || fail 'Release Info.plist route is missing'
 
-debug_plist="$derived/GardenNotes/AdMob/Info-Debug.plist"
-release_plist="$derived/GardenNotes/AdMob/Info-Release.plist"
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :GADApplicationIdentifier' "$debug_plist")" == 'ca-app-pub-3940256099942544~1458002511' ]] || fail 'Debug App ID is not the official demo ID'
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :GADApplicationIdentifier' "$release_plist")" == 'ca-app-pub-1234567890123456~1234567890' ]] || fail 'Release App ID is not app-specific'
+# #374: activation keeps the template project's own Info.plist sources. In the application Debug and Release
+# configurations GENERATE_INFOPLIST_FILE stays YES and every INFOPLIST_KEY_* line (scene manifest, launch
+# screen, orientations, display name) stays as it was; only the App ID setting and the ad-only plist are added.
+app_settings_report() {
+  ruby - "$1" <<'RUBY'
+bytes = File.binread(ARGV.fetch(0))
+list = bytes[/Build configuration list for PBXNativeTarget "GardenNotes" \*\/ = \{.*?\n\t\t\};/m] or abort "no application configuration list"
+%w[Debug Release].each do |name|
+  identifier = list[/([A-F0-9]{24}) \/\* #{name} \*\//, 1] or abort "no #{name} configuration"
+  block = bytes[/\t\t#{identifier} \/\* #{name} \*\/ = \{.*?\n\t\t\};/m] or abort "no #{name} block"
+  settings = block.lines.grep(/\A\t\t\t\t(?:GENERATE_INFOPLIST_FILE|INFOPLIST_FILE|INFOPLIST_KEY_|ADMOB_APPLICATION_IDENTIFIER)/)
+  puts settings.map { |line| "#{name} #{line.strip}" }
+end
+RUBY
+}
+git -C "$derived" show HEAD:GardenNotes.xcodeproj/project.pbxproj >"$temp_root/source.pbxproj"
+app_settings_report "$temp_root/source.pbxproj" >"$temp_root/source-settings.txt"
+app_settings_report "$project" >"$temp_root/activated-settings.txt"
+grep -cE '^(Debug|Release) INFOPLIST_KEY_' "$temp_root/source-settings.txt" | grep -qx 12 || fail 'the sample template project lost its INFOPLIST_KEY_* baseline'
+for key in UIApplicationSceneManifest_Generation UILaunchScreen_Generation UISupportedInterfaceOrientations_iPhone UISupportedInterfaceOrientations_iPad CFBundleDisplayName; do
+  for configuration in Debug Release; do
+    grep -q "^$configuration INFOPLIST_KEY_$key = " "$temp_root/activated-settings.txt" || fail "$configuration lost INFOPLIST_KEY_$key"
+  done
+done
+{
+  cat "$temp_root/source-settings.txt"
+  printf '%s\n' \
+    'Debug ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-3940256099942544~1458002511";' \
+    'Debug INFOPLIST_FILE = GardenNotes/AdMob/Info.plist;' \
+    'Release ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-1234567890123456~1234567890";' \
+    'Release INFOPLIST_FILE = GardenNotes/AdMob/Info.plist;'
+} | LC_ALL=C sort >"$temp_root/expected-settings.txt"
+LC_ALL=C sort "$temp_root/activated-settings.txt" | cmp -s - "$temp_root/expected-settings.txt" ||
+  fail "activation changed the application's Info.plist settings: $(LC_ALL=C sort "$temp_root/activated-settings.txt" | diff "$temp_root/expected-settings.txt" - || true)"
+grep -Fq 'GENERATE_INFOPLIST_FILE = NO;' "$project" && fail 'activation turned off the generated Info.plist'
+grep -Fq 'Debug GENERATE_INFOPLIST_FILE = YES;' "$temp_root/activated-settings.txt" || fail 'Debug no longer generates its Info.plist'
+grep -Fq 'Release GENERATE_INFOPLIST_FILE = YES;' "$temp_root/activated-settings.txt" || fail 'Release no longer generates its Info.plist'
+# The synchronized GardenNotes folder must not also copy the ad-only plist into the bundle as a resource.
+ruby -e 'exit(File.binread(ARGV.fetch(0)).include?("membershipExceptions = (\n\t\t\t\tAdMob/Info.plist,\n") ? 0 : 1)' "$project" || fail 'the ad-only plist is not excluded from the synchronized resources'
+[[ ! -e "$derived/GardenNotes/AdMob/Info-Debug.plist" && ! -e "$derived/GardenNotes/AdMob/Info-Release.plist" ]] || fail 'activation still writes replacement Info.plist files'
+
+info_plist="$derived/GardenNotes/AdMob/Info.plist"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :GADApplicationIdentifier' "$info_plist")" == '$(ADMOB_APPLICATION_IDENTIFIER)' ]] || fail 'the Info.plist App ID does not reference the per-configuration setting'
+[[ "$(plutil -extract SKAdNetworkItems json -o - "$info_plist")" == '[{"SKAdNetworkIdentifier":"cstr6suwn9.skadnetwork"}]' ]] || fail 'SKAdNetworkItems were not added'
+[[ "$(plutil -convert json -o - "$info_plist" | ruby -rjson -e 'puts JSON.parse(STDIN.read).keys.sort.join(",")')" == 'GADApplicationIdentifier,SKAdNetworkItems' ]] ||
+  fail 'the ad-only plist must hold only the advertising keys'
 if rg -n 'ATTrackingManager|requestTrackingAuthorization|NSUserTrackingUsageDescription' "$derived/GardenNotes/AdMob" >/dev/null; then
   fail 'non-tracking activation introduced ATT'
 fi
@@ -405,60 +447,78 @@ cp "$temp_root/AdMobCore.swift" "$core"
 # The validator compares on-disk identifiers, SKAdNetwork items, and sources with the recorded input
 # itself, so an edit that also rewrites the record's file digest still fails.
 configuration="$derived/GardenNotes/AdMob/AdMobConfiguration.swift"
-for path in "$record" "$release_plist" "$debug_plist" "$configuration" "$core"; do
+pinned_files=("$record" "$info_plist" "$configuration" "$core" "$project")
+for path in "${pinned_files[@]}"; do
   cp "$path" "$temp_root/$(basename "$path").pristine"
 done
 restore_activation() {
-  for path in "$record" "$release_plist" "$debug_plist" "$configuration" "$core"; do
+  for path in "${pinned_files[@]}"; do
     cp "$temp_root/$(basename "$path").pristine" "$path"
   done
 }
-tamper_with_digest() {
-  local label=$1 relative=$2 pattern=$3 replacement=$4 expected=$5
-  ruby -rdigest -rjson - "$derived" "$relative" "$pattern" "$replacement" "$record" <<'RUBY'
-root, relative, pattern, replacement, record_path = ARGV
+tamper_file() {
+  local label=$1 relative=$2 pattern=$3 replacement=$4 expected=$5 pin=$6
+  ruby -rdigest -rjson - "$derived" "$relative" "$pattern" "$replacement" "$record" "$pin" <<'RUBY'
+root, relative, pattern, replacement, record_path, pin = ARGV
 path = File.join(root, relative)
 bytes = File.binread(path)
 changed = bytes.sub(pattern, replacement)
 abort "tamper pattern not found: #{pattern}" if changed == bytes
 File.binwrite(path, changed)
-value = JSON.parse(File.binread(record_path))
-value["fileDigests"][relative] = Digest::SHA256.hexdigest(changed)
-File.binwrite(record_path, JSON.generate(value) + "\n")
+if pin == "pin"
+  value = JSON.parse(File.binread(record_path))
+  value["fileDigests"][relative] = Digest::SHA256.hexdigest(changed)
+  File.binwrite(record_path, JSON.generate(value) + "\n")
+end
 RUBY
   expect_failure "$label" "$repo_root/tools/validate-admob-integration.sh" --root "$derived"
   grep -Fq "$expected" "$temp_root/$label.stderr" || fail "$label failed for another reason: $(<"$temp_root/$label.stderr")"
   restore_activation
 }
-tamper_with_digest release-plist-app-id GardenNotes/AdMob/Info-Release.plist \
-  'ca-app-pub-1234567890123456~1234567890' 'ca-app-pub-1234567890123456~1111111111' \
-  'Info-Release.plist GADApplicationIdentifier differs from the activation record'
-tamper_with_digest release-plist-demo GardenNotes/AdMob/Info-Release.plist \
-  'ca-app-pub-1234567890123456~1234567890' 'ca-app-pub-3940256099942544~1458002511' \
-  'Info-Release.plist GADApplicationIdentifier differs from the activation record'
-tamper_with_digest release-config-unit GardenNotes/AdMob/AdMobConfiguration.swift \
-  'ca-app-pub-1234567890123456/0987654321' 'ca-app-pub-1234567890123456/0000000001' \
-  'Release identifiers in AdMobConfiguration.swift differ from the activation record'
-tamper_with_digest release-config-demo GardenNotes/AdMob/AdMobConfiguration.swift \
-  'ca-app-pub-1234567890123456/0987654321' 'ca-app-pub-3940256099942544/2435281174' \
-  'Release identifiers in AdMobConfiguration.swift differ from the activation record'
-tamper_with_digest debug-config-production GardenNotes/AdMob/AdMobConfiguration.swift \
-  'ca-app-pub-3940256099942544/2435281174' 'ca-app-pub-1234567890123456/0987654321' \
-  'Debug identifiers in AdMobConfiguration.swift differ from the activation record'
-# A declaration that keeps the recorded literal but computes another identifier at runtime still fails,
-# because the whole configuration must equal its render from the template and the recorded input.
-tamper_with_digest release-config-expression GardenNotes/AdMob/AdMobConfiguration.swift \
-  '"ca-app-pub-1234567890123456/0987654321"' '"ca-app-pub-1234567890123456/0987654321".replacingOccurrences(of: "0987654321", with: "0000000001")' \
-  'AdMobConfiguration.swift differs from the configuration rendered from the activation record'
-tamper_with_digest debug-config-expression GardenNotes/AdMob/AdMobConfiguration.swift \
-  '"ca-app-pub-3940256099942544/2435281174"' '"ca-app-pub-3940256099942544/2435281174" + ""' \
-  'AdMobConfiguration.swift differs from the configuration rendered from the activation record'
-tamper_with_digest config-placement-override GardenNotes/AdMob/AdMobConfiguration.swift \
-  'adUnitID: bannerID)' 'adUnitID: "ca-app-pub-1234567890123456/0000000002") // bannerID' \
-  'AdMobConfiguration.swift differs from the configuration rendered from the activation record'
-tamper_with_digest skadnetwork-extra GardenNotes/AdMob/Info-Release.plist \
+tamper_with_digest() { tamper_file "$@" pin; }
+# The Info.plist is the app's file and is not pinned by digest; its advertising keys are still checked.
+tamper_info_plist() { tamper_file "$1" GardenNotes/AdMob/Info.plist "$2" "$3" "$4" unpinned; }
+tamper_with_digest release-setting-app-id GardenNotes.xcodeproj/project.pbxproj \
+  'ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-1234567890123456~1234567890";' 'ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-1234567890123456~1111111111";' \
+  'Release ADMOB_APPLICATION_IDENTIFIER differs from the activation record'
+tamper_with_digest release-setting-demo GardenNotes.xcodeproj/project.pbxproj \
+  'ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-1234567890123456~1234567890";' 'ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-3940256099942544~1458002511";' \
+  'Release ADMOB_APPLICATION_IDENTIFIER differs from the activation record'
+tamper_with_digest debug-setting-production GardenNotes.xcodeproj/project.pbxproj \
+  'ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-3940256099942544~1458002511";' 'ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-1234567890123456~1234567890";' \
+  'Debug ADMOB_APPLICATION_IDENTIFIER differs from the activation record'
+tamper_with_digest generated-info-plist-off GardenNotes.xcodeproj/project.pbxproj \
+  $'GENERATE_INFOPLIST_FILE = YES;\n\t\t\t\tINFOPLIST_FILE = GardenNotes/AdMob/Info.plist;' $'GENERATE_INFOPLIST_FILE = NO;\n\t\t\t\tINFOPLIST_FILE = GardenNotes/AdMob/Info.plist;' \
+  'GENERATE_INFOPLIST_FILE changed from the activation source'
+tamper_with_digest second-info-plist-file GardenNotes.xcodeproj/project.pbxproj \
+  'INFOPLIST_FILE = GardenNotes/AdMob/Info.plist;' $'INFOPLIST_FILE = GardenNotes/AdMob/Info.plist;\n\t\t\t\tINFOPLIST_FILE = GardenNotes/Info.plist;' \
+  'configuration must declare exactly one INFOPLIST_FILE'
+tamper_with_digest att-build-setting GardenNotes.xcodeproj/project.pbxproj \
+  'INFOPLIST_KEY_UILaunchScreen_Generation = YES;' $'INFOPLIST_KEY_NSUserTrackingUsageDescription = "Track";\n\t\t\t\tINFOPLIST_KEY_UILaunchScreen_Generation = YES;' \
+  'configuration must not declare NSUserTrackingUsageDescription'
+tamper_with_digest resource-exception-removed GardenNotes.xcodeproj/project.pbxproj \
+  $'\t\t\t\tAdMob/Info.plist,\n' '' \
+  'GardenNotes/AdMob/Info.plist must be excluded from the application target'"'"'s synchronized resources'
+tamper_info_plist plist-app-id-literal \
+  '<string>$(ADMOB_APPLICATION_IDENTIFIER)</string>' '<string>ca-app-pub-1234567890123456~1234567890</string>' \
+  'GardenNotes/AdMob/Info.plist GADApplicationIdentifier must be $(ADMOB_APPLICATION_IDENTIFIER)'
+tamper_info_plist plist-app-id-demo \
+  '<string>$(ADMOB_APPLICATION_IDENTIFIER)</string>' '<string>ca-app-pub-3940256099942544~1458002511</string>' \
+  'GardenNotes/AdMob/Info.plist GADApplicationIdentifier must be $(ADMOB_APPLICATION_IDENTIFIER)'
+tamper_info_plist skadnetwork-extra \
   '<string>cstr6suwn9.skadnetwork</string>' '<string>cstr6suwn9.skadnetwork</string></dict><dict><key>SKAdNetworkIdentifier</key><string>4fzdc2evr5.skadnetwork</string>' \
-  'Info-Release.plist SKAdNetworkItems differ from the activation record'
+  'GardenNotes/AdMob/Info.plist SKAdNetworkItems differ from the activation record'
+tamper_info_plist skadnetwork-missing \
+  '<string>cstr6suwn9.skadnetwork</string>' '<string>4fzdc2evr5.skadnetwork</string>' \
+  'GardenNotes/AdMob/Info.plist SKAdNetworkItems differ from the activation record'
+tamper_info_plist att-usage \
+  '<key>SKAdNetworkItems</key>' '<key>NSUserTrackingUsageDescription</key><string>Track</string><key>SKAdNetworkItems</key>' \
+  'GardenNotes/AdMob/Info.plist must not declare ATT usage'
+# An Info.plist key unrelated to ads, added after activation, keeps the app valid (#374).
+plutil -insert NSCameraUsageDescription -string 'Capture garden photos' "$info_plist"
+plutil -insert UIBackgroundModes -json '["remote-notification"]' "$info_plist"
+"$repo_root/tools/validate-admob-integration.sh" --root "$derived" >/dev/null || fail 'an unrelated Info.plist key broke validation'
+restore_activation
 tamper_with_digest fixture-route GardenNotes/AdMob/AdMobCore.swift \
   'import Foundation' "import Foundation
 // let failure = ProcessInfo.processInfo.arguments.contains(\"--fixture-banner-failure\")" \
@@ -572,6 +632,214 @@ printf '\n// drift\n' >>"$core"
 expect_failure readiness-after-drift readiness
 restore_activation
 "$repo_root/tools/validate-admob-integration.sh" --root "$derived" >/dev/null
+
+# #374: an app that already uses its own Info.plist file (INFOPLIST_FILE with GENERATE_INFOPLIST_FILE = YES,
+# like an app with HealthKit usage strings, URL schemes, and background modes) keeps that file and every key in
+# it; activation only adds the two advertising keys, and each configuration still has one INFOPLIST_FILE.
+new_clone() {
+  local destination=$1 branch=$2
+  git clone -q "$remote" "$destination"
+  git -C "$destination" config user.name 'iOS Template Test'
+  git -C "$destination" config user.email 'test@example.invalid'
+  git -C "$destination" checkout -qb "$branch"
+}
+# Points the application Debug and Release configurations at the given Info.plist files; a third argument
+# adds a second INFOPLIST_FILE line to Debug.
+set_info_plist_file() {
+  ruby -I"$repo_root/tools/lib" -radmob-activation - "$@" <<'RUBY'
+path, debug, release, extra = ARGV
+bytes = File.binread(path)
+IOSTemplate::AdMobActivation.application_configurations(bytes, "GardenNotes").each do |name, (_, block)|
+  lines = "\t\t\t\tINFOPLIST_FILE = #{name == 'Debug' ? debug : release};\n"
+  lines += "\t\t\t\tINFOPLIST_FILE = #{extra};\n" if extra && name == "Debug"
+  anchor = "\t\t\t\tGENERATE_INFOPLIST_FILE = YES;\n"
+  changed = block.sub(anchor, anchor + lines)
+  abort "#{name} has no GENERATE_INFOPLIST_FILE anchor" if changed == block
+  bytes = bytes.sub(block, changed)
+end
+File.binwrite(path, bytes)
+RUBY
+}
+write_app_info_plist() {
+  cat >"$1" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Reads caffeine &amp; water intake from Health.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Saves caffeine intake to Health.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.example.GardenNotes</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>gardennotes</string>
+			</array>
+		</dict>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+</dict>
+</plist>
+PLIST
+}
+plist_json_without_ads() {
+  plutil -convert json -o - "$1" | ruby -rjson -e 'value = JSON.parse(STDIN.read); value.delete("GADApplicationIdentifier"); value.delete("SKAdNetworkItems"); puts JSON.generate(value.sort.to_h)'
+}
+
+own_plist_derived="$temp_root/own-plist-derived"
+new_clone "$own_plist_derived" codex/test-admob-own-info-plist
+write_app_info_plist "$own_plist_derived/GardenNotes/Info.plist"
+set_info_plist_file "$own_plist_derived/GardenNotes.xcodeproj/project.pbxproj" GardenNotes/Info.plist GardenNotes/Info.plist
+git -C "$own_plist_derived" add -A
+git -C "$own_plist_derived" commit -qm 'fixture app-owned Info.plist'
+app_keys_before=$(plist_json_without_ads "$own_plist_derived/GardenNotes/Info.plist")
+app_settings_report "$own_plist_derived/GardenNotes.xcodeproj/project.pbxproj" >"$temp_root/own-source-settings.txt"
+"$repo_root/tools/activate-admob-integration.sh" --root "$own_plist_derived" --input "$input" >/dev/null ||
+  fail 'activation refused an app with its own INFOPLIST_FILE'
+"$repo_root/tools/validate-admob-integration.sh" --root "$own_plist_derived" >/dev/null || fail 'an app with its own INFOPLIST_FILE did not validate'
+own_plist="$own_plist_derived/GardenNotes/Info.plist"
+[[ "$(plist_json_without_ads "$own_plist")" == "$app_keys_before" ]] || fail 'activation changed the app-owned Info.plist keys'
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :GADApplicationIdentifier' "$own_plist")" == '$(ADMOB_APPLICATION_IDENTIFIER)' ]] || fail 'the app-owned Info.plist did not get the App ID reference'
+[[ "$(plutil -extract SKAdNetworkItems json -o - "$own_plist")" == '[{"SKAdNetworkIdentifier":"cstr6suwn9.skadnetwork"}]' ]] || fail 'the app-owned Info.plist did not get SKAdNetworkItems'
+head -1 "$own_plist" | grep -Fqx '<?xml version="1.0" encoding="UTF-8"?>' || fail 'the app-owned Info.plist is no longer an XML property list'
+[[ ! -e "$own_plist_derived/GardenNotes/AdMob/Info.plist" ]] || fail 'activation added a second Info.plist for an app that has one'
+app_settings_report "$own_plist_derived/GardenNotes.xcodeproj/project.pbxproj" >"$temp_root/own-activated-settings.txt"
+for configuration in Debug Release; do
+  [[ "$(grep -c "^$configuration INFOPLIST_FILE = " "$temp_root/own-activated-settings.txt")" == 1 ]] || fail "$configuration does not have exactly one INFOPLIST_FILE"
+  grep -Fqx "$configuration INFOPLIST_FILE = GardenNotes/Info.plist;" "$temp_root/own-activated-settings.txt" || fail "$configuration no longer uses the app-owned Info.plist"
+done
+{
+  cat "$temp_root/own-source-settings.txt"
+  printf '%s\n' \
+    'Debug ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-3940256099942544~1458002511";' \
+    'Release ADMOB_APPLICATION_IDENTIFIER = "ca-app-pub-1234567890123456~1234567890";'
+} | LC_ALL=C sort >"$temp_root/own-expected-settings.txt"
+LC_ALL=C sort "$temp_root/own-activated-settings.txt" | cmp -s - "$temp_root/own-expected-settings.txt" ||
+  fail 'activation changed the Info.plist settings of an app with its own INFOPLIST_FILE'
+git -C "$own_plist_derived" diff --name-only HEAD | grep -Fqx 'GardenNotes/Info.plist' || fail 'the app-owned Info.plist change is not part of the activation'
+# The app may keep editing its own Info.plist; only the advertising keys are checked.
+plutil -insert NSCameraUsageDescription -string 'Capture garden photos' "$own_plist"
+"$repo_root/tools/validate-admob-integration.sh" --root "$own_plist_derived" >/dev/null || fail 'an unrelated key in the app-owned Info.plist broke validation'
+plutil -replace NSHealthShareUsageDescription -string 'Reads caffeine intake from Health.' "$own_plist"
+"$repo_root/tools/validate-admob-integration.sh" --root "$own_plist_derived" >/dev/null || fail 'an edited app key in the app-owned Info.plist broke validation'
+plutil -replace GADApplicationIdentifier -string 'ca-app-pub-1234567890123456~1234567890' "$own_plist"
+expect_failure own-plist-literal-app-id "$repo_root/tools/validate-admob-integration.sh" --root "$own_plist_derived"
+grep -Fq 'GardenNotes/Info.plist GADApplicationIdentifier must be $(ADMOB_APPLICATION_IDENTIFIER)' "$temp_root/own-plist-literal-app-id.stderr" ||
+  fail "a literal App ID in the app-owned Info.plist failed for another reason: $(<"$temp_root/own-plist-literal-app-id.stderr")"
+plutil -replace GADApplicationIdentifier -string '$(ADMOB_APPLICATION_IDENTIFIER)' "$own_plist"
+plutil -insert NSUserTrackingUsageDescription -string 'Track' "$own_plist"
+expect_failure own-plist-att "$repo_root/tools/validate-admob-integration.sh" --root "$own_plist_derived"
+grep -Fq 'GardenNotes/Info.plist must not declare ATT usage' "$temp_root/own-plist-att.stderr" || fail "ATT in the app-owned Info.plist failed for another reason: $(<"$temp_root/own-plist-att.stderr")"
+
+# A synchronized app folder that already excludes a file from the application target keeps that exception
+# and gains the ad-only plist in the same exception set.
+exception_derived="$temp_root/exception-derived"
+new_clone "$exception_derived" codex/test-admob-existing-exception
+printf '%s\n' 'notes' >"$exception_derived/GardenNotes/Notes.md"
+ruby - "$exception_derived/GardenNotes.xcodeproj/project.pbxproj" <<'RUBY'
+path = ARGV.fetch(0)
+bytes = File.binread(path)
+target = bytes[/\t\t([A-F0-9]{24}) \/\* GardenNotes \*\/ = \{\n\t\t\tisa = PBXNativeTarget;/, 1] or abort "no application target"
+group = bytes[/\t\t([A-F0-9]{24}) \/\* GardenNotes \*\/ = \{\n\t\t\tisa = PBXFileSystemSynchronizedRootGroup;/, 1] or abort "no synchronized group"
+set = "\t\tBBBBBBBBBBBBBBBBBBBBBBBB /* Exceptions for \"GardenNotes\" folder in \"GardenNotes\" target */ = {\n\t\t\tisa = PBXFileSystemSynchronizedBuildFileExceptionSet;\n\t\t\tmembershipExceptions = (\n\t\t\t\tNotes.md,\n\t\t\t);\n\t\t\ttarget = #{target} /* GardenNotes */;\n\t\t};\n"
+bytes = bytes.sub("/* Begin PBXFileSystemSynchronizedRootGroup section */", "/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */\n#{set}/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */\n\n/* Begin PBXFileSystemSynchronizedRootGroup section */")
+changed = bytes.sub("\t\t#{group} /* GardenNotes */ = {\n\t\t\tisa = PBXFileSystemSynchronizedRootGroup;\n", "\t\t#{group} /* GardenNotes */ = {\n\t\t\tisa = PBXFileSystemSynchronizedRootGroup;\n\t\t\texceptions = (\n\t\t\t\tBBBBBBBBBBBBBBBBBBBBBBBB /* Exceptions for \"GardenNotes\" folder in \"GardenNotes\" target */,\n\t\t\t);\n")
+abort "group anchor" if changed == bytes
+File.binwrite(path, changed)
+RUBY
+git -C "$exception_derived" add -A
+git -C "$exception_derived" commit -qm 'fixture existing membership exception'
+"$repo_root/tools/activate-admob-integration.sh" --root "$exception_derived" --input "$input" >/dev/null || fail 'activation refused an app with an existing membership exception'
+"$repo_root/tools/validate-admob-integration.sh" --root "$exception_derived" >/dev/null || fail 'an app with an existing membership exception did not validate'
+ruby -e '
+bytes = File.binread(ARGV.fetch(0))
+abort "exception sets: #{bytes.scan("isa = PBXFileSystemSynchronizedBuildFileExceptionSet;").length}" unless bytes.scan("isa = PBXFileSystemSynchronizedBuildFileExceptionSet;").length == 1
+abort "membership exceptions were not merged" unless bytes.include?("membershipExceptions = (\n\t\t\t\tAdMob/Info.plist,\n\t\t\t\tNotes.md,\n\t\t\t);")
+' "$exception_derived/GardenNotes.xcodeproj/project.pbxproj" || fail 'the existing membership exception set was not reused'
+
+# #374: a project whose Info.plist the activation cannot keep stops before any change, with the reason.
+refusal_case() {
+  local label=$1 expected=$2 setup=$3 clone="$temp_root/refuse-$1"
+  new_clone "$clone" "codex/test-admob-refuse-$label"
+  "$setup" "$clone"
+  git -C "$clone" add -A
+  git -C "$clone" commit -qm "fixture $label"
+  local head_before tree_before
+  head_before=$(git -C "$clone" rev-parse HEAD)
+  tree_before=$(find "$clone" -path "$clone/.git" -prune -o -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}')
+  expect_failure "refuse-$label" "$repo_root/tools/activate-admob-integration.sh" --root "$clone" --input "$input"
+  grep -Fq "$expected" "$temp_root/refuse-$label.stderr" || fail "refusal $label failed for another reason: $(<"$temp_root/refuse-$label.stderr")"
+  [[ "$(git -C "$clone" rev-parse HEAD)" == "$head_before" && -z "$(git -C "$clone" status --porcelain=v1 --untracked-files=all)" ]] || fail "refusal $label changed the app"
+  [[ "$(find "$clone" -path "$clone/.git" -prune -o -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}')" == "$tree_before" ]] ||
+    fail "refusal $label changed a file"
+  [[ "$(git -C "$clone" worktree list --porcelain | grep -c '^worktree ')" == 1 ]] || fail "refusal $label left a staging worktree"
+}
+setup_different_app_id() {
+  write_app_info_plist "$1/GardenNotes/Info.plist"
+  plutil -insert GADApplicationIdentifier -string 'ca-app-pub-1234567890123456~1234567890' "$1/GardenNotes/Info.plist"
+  set_info_plist_file "$1/GardenNotes.xcodeproj/project.pbxproj" GardenNotes/Info.plist GardenNotes/Info.plist
+}
+setup_different_networks() {
+  write_app_info_plist "$1/GardenNotes/Info.plist"
+  plutil -insert SKAdNetworkItems -json '[{"SKAdNetworkIdentifier":"4fzdc2evr5.skadnetwork"}]' "$1/GardenNotes/Info.plist"
+  set_info_plist_file "$1/GardenNotes.xcodeproj/project.pbxproj" GardenNotes/Info.plist GardenNotes/Info.plist
+}
+setup_split_files() {
+  write_app_info_plist "$1/GardenNotes/Info.plist"
+  write_app_info_plist "$1/GardenNotes/Info-Release.plist"
+  set_info_plist_file "$1/GardenNotes.xcodeproj/project.pbxproj" GardenNotes/Info.plist GardenNotes/Info-Release.plist
+}
+setup_one_side_only() {
+  write_app_info_plist "$1/GardenNotes/Info.plist"
+  ruby -I"$repo_root/tools/lib" -radmob-activation - "$1/GardenNotes.xcodeproj/project.pbxproj" <<'RUBY'
+path = ARGV.fetch(0)
+bytes = File.binread(path)
+_, block = IOSTemplate::AdMobActivation.application_configurations(bytes, "GardenNotes").fetch("Release")
+anchor = "\t\t\t\tGENERATE_INFOPLIST_FILE = YES;\n"
+File.binwrite(path, bytes.sub(block, block.sub(anchor, anchor + "\t\t\t\tINFOPLIST_FILE = GardenNotes/Info.plist;\n")))
+RUBY
+}
+setup_duplicate_file() {
+  write_app_info_plist "$1/GardenNotes/Info.plist"
+  write_app_info_plist "$1/GardenNotes/Other.plist"
+  set_info_plist_file "$1/GardenNotes.xcodeproj/project.pbxproj" GardenNotes/Info.plist GardenNotes/Info.plist GardenNotes/Other.plist
+}
+setup_missing_file() {
+  set_info_plist_file "$1/GardenNotes.xcodeproj/project.pbxproj" GardenNotes/Info.plist GardenNotes/Info.plist
+}
+setup_symlinked_file() {
+  write_app_info_plist "$1/GardenNotes/Real.plist"
+  ln -s Real.plist "$1/GardenNotes/Info.plist"
+  set_info_plist_file "$1/GardenNotes.xcodeproj/project.pbxproj" GardenNotes/Info.plist GardenNotes/Info.plist
+}
+setup_att_usage() {
+  write_app_info_plist "$1/GardenNotes/Info.plist"
+  plutil -insert NSUserTrackingUsageDescription -string 'Track' "$1/GardenNotes/Info.plist"
+  set_info_plist_file "$1/GardenNotes.xcodeproj/project.pbxproj" GardenNotes/Info.plist GardenNotes/Info.plist
+}
+setup_existing_sdk() {
+  ruby -I"$repo_root/tools/lib" -radmob-activation - "$1/GardenNotes.xcodeproj/project.pbxproj" <<'RUBY'
+path = ARGV.fetch(0)
+identity = {"moduleName" => "GardenNotes", "bundleId" => "com.example.OwnAdIntegration"}
+File.binwrite(path, IOSTemplate::AdMobActivation.add_package_dependency(File.binread(path), identity))
+RUBY
+}
+refusal_case different-app-id 'GardenNotes/Info.plist already declares a different GADApplicationIdentifier' setup_different_app_id
+refusal_case different-networks 'GardenNotes/Info.plist already declares SKAdNetworkItems that differ' setup_different_networks
+refusal_case split-files 'Debug and Release use different INFOPLIST_FILE values' setup_split_files
+refusal_case one-side-only 'Debug and Release use different INFOPLIST_FILE values (none, GardenNotes/Info.plist)' setup_one_side_only
+refusal_case duplicate-file 'Debug configuration must declare at most one INFOPLIST_FILE' setup_duplicate_file
+refusal_case missing-file 'INFOPLIST_FILE GardenNotes/Info.plist must identify an existing regular file' setup_missing_file
+refusal_case symlinked-file 'INFOPLIST_FILE GardenNotes/Info.plist must not traverse a symlink' setup_symlinked_file
+refusal_case att-usage 'GardenNotes/Info.plist declares NSUserTrackingUsageDescription' setup_att_usage
+refusal_case existing-sdk 'the project already links Google Mobile Ads outside this activation' setup_existing_sdk
 
 [[ "$(sha256_file "$repo_root/$live_module.xcodeproj/project.pbxproj")" == "$template_project_digest" ]] || fail "root $live_module project changed"
 [[ "$(find "$repo_root/$live_module" -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}')" == "$template_source_digest" ]] || fail "root $live_module source changed"

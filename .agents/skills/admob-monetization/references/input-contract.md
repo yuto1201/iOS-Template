@@ -55,6 +55,10 @@ Unknown keys are rejected. Arrays that express a set must be nonempty where note
 
 The activation record retains the canonical sanitized input, its digest, the exact source Head/project digest, fixed package facts, and policy facts. Validation recomputes and cross-checks those fields; changing only record metadata cannot authorize a different input. Production identifiers are not secrets and already exist in the derived app's Release configuration, but do not copy a derived record back into this template repository.
 
+## Info.plist output
+
+The input carries no Info.plist path. Activation reads the application target's Debug and Release configurations: when they share one `INFOPLIST_FILE`, that file receives `GADApplicationIdentifier` (`$(ADMOB_APPLICATION_IDENTIFIER)`) and the exact `SKAdNetworkItems` built from `skAdNetworkIdentifiers`; when there is none and both keep `GENERATE_INFOPLIST_FILE = YES`, activation adds `<Module>/AdMob/Info.plist` with only those two keys. `ADMOB_APPLICATION_IDENTIFIER` is set per configuration from `identifiers.debug.appId` and `identifiers.release.appId`. An existing `GADApplicationIdentifier` or `SKAdNetworkItems` that differs, split or duplicated `INFOPLIST_FILE` settings, and a missing or symlinked file stop activation before any change. The record pins the generated Swift files and the project, not the Info.plist, so the app may change its other Info.plist keys later. See the skill's Info.plist handling and migration sections.
+
 ## Environment separation
 
 The generated configuration must keep three routes distinct:

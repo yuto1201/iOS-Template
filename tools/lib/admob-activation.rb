@@ -27,6 +27,11 @@ module IOSTemplate
     DEBUG_APP_ID = "ca-app-pub-3940256099942544~1458002511"
     DEBUG_BANNER_ID = "ca-app-pub-3940256099942544/2435281174"
     DEMO_PUBLISHER = "3940256099942544"
+    # The App ID reaches Info.plist through this per-configuration build setting, so one Info.plist serves
+    # Debug (Google's demo App ID) and Release (the app's own App ID).
+    APP_ID_SETTING = "ADMOB_APPLICATION_IDENTIFIER"
+    APP_ID_REFERENCE = "$(ADMOB_APPLICATION_IDENTIFIER)"
+    ATT_USAGE_KEY = "NSUserTrackingUsageDescription"
     OFFICIAL_SNAPSHOT_PATH = ".agents/skills/admob-monetization/references/official-snapshot.json"
     OFFICIAL_MAX_AGE_DAYS = 30
     # The network-free UI-test route lives only in the fixture; activated app sources must never carry it.
@@ -386,17 +391,184 @@ module IOSTemplate
       bytes.sub(pattern, replacement)
     end
 
-    def mutate_project(bytes, identity)
+    def application_target(bytes, module_name)
+      target_pattern = /(\t\t([A-F0-9]{24}) \/\* #{Regexp.escape(module_name)} \*\/ = \{\n\t\t\tisa = PBXNativeTarget;.*?\n\t\t\};)/m
+      target_match = bytes.match(target_pattern)
+      fail!("application target #{module_name} must occur exactly once") unless target_match && bytes.scan(target_pattern).length == 1
+      target_match
+    end
+
+    # The application target's Debug and Release build configurations, as {name => [identifier, block]}.
+    def application_configurations(bytes, module_name)
+      target_block = application_target(bytes, module_name)[1]
+      config_list_id = target_block[/buildConfigurationList = ([A-F0-9]{24}) /, 1]
+      fail!("application target framework/configuration anchors are missing") unless config_list_id
+      config_list_pattern = /(\t\t#{config_list_id} \/\* Build configuration list for PBXNativeTarget "#{Regexp.escape(module_name)}" \*\/ = \{.*?\n\t\t\};)/m
+      config_list = bytes.match(config_list_pattern)&.[](1)
+      fail!("application configuration list is missing") unless config_list
+      %w[Debug Release].to_h do |name|
+        identifier = config_list[/\n\t\t\t\t([A-F0-9]{24}) \/\* #{name} \*\/,/, 1]
+        fail!("application Debug/Release configuration identifiers are missing") unless identifier
+        config_pattern = /(\t\t#{identifier} \/\* #{name} \*\/ = \{\n\t\t\tisa = XCBuildConfiguration;.*?\n\t\t\};)/m
+        blocks = bytes.scan(config_pattern)
+        fail!("application build configuration #{identifier} is missing") unless blocks.length == 1
+        [name, [identifier, blocks.first.first]]
+      end
+    end
+
+    # Values of one build setting written as a plain `KEY = value;` line in a configuration block.
+    def setting_values(block, key)
+      block.scan(/^\t\t\t\t#{Regexp.escape(key)} = (?:"((?:[^"\\\n]|\\.)*)"|([^";\s]+));$/).map do |quoted, bare|
+        quoted ? quoted.gsub(/\\(.)/, '\1') : bare
+      end
+    end
+
+    def setting_line_count(block, key)
+      block.scan(/^[ \t]*"?#{Regexp.escape(key)}\b/).length
+    end
+
+    # Inserts one build setting line where Xcode's alphabetical order would place it.
+    def insert_build_setting(block, key, line)
+      head, separator, rest = block.partition("\t\t\tbuildSettings = {\n")
+      fail!("build configuration has no buildSettings") if separator.empty?
+      settings, closing, tail = rest.partition("\n\t\t\t};\n")
+      fail!("build configuration buildSettings are not closed") if closing.empty?
+      lines = settings.split("\n", -1)
+      index = lines.index { |entry| entry.match?(/\A\t\t\t\t[^\t]/) && entry.sub(/\A\t\t\t\t"?/, "").split(/[ "\[]/, 2).first > key }
+      index ||= lines.length
+      lines.insert(index, "\t\t\t\t#{line}")
+      head + separator + lines.join("\n") + closing + tail
+    end
+
+    def created_info_plist_path(identity)
+      "#{identity.fetch('moduleName')}/AdMob/Info.plist"
+    end
+
+    def expected_network_items(networks)
+      networks.map { |identifier| {"SKAdNetworkIdentifier" => identifier} }
+    end
+
+    # Reads one top-level key of a property list without converting the whole file, so app values that
+    # JSON cannot hold (dates, data) never block activation. Returns [present, value].
+    def plist_entry(path, key)
+      output, _, status = Open3.capture3("/usr/bin/plutil", "-type", key, path)
+      return [false, nil] unless status.success?
+
+      type = output.strip
+      value = case type
+              when "string" then capture!("/usr/bin/plutil", "-extract", key, "raw", "-expect", "string", "-o", "-", path).chomp
+              when "array", "dictionary" then JSON.parse(capture!("/usr/bin/plutil", "-extract", key, "json", "-o", "-", path))
+              else {"type" => type}
+              end
+      [true, value]
+    rescue JSON::ParserError
+      [true, {"type" => "unreadable"}]
+    end
+
+    def info_plist_dictionary!(path, label)
+      xml = capture!("/usr/bin/plutil", "-convert", "xml1", "-o", "-", path)
+      fail!("#{label} must be a property list whose root is a dictionary") unless xml.match?(/<plist version="1\.0">\s*<dict\s*\/?>/)
+    end
+
+    # Decides, before any write, how the app's Info.plist receives the advertising keys. The app's own
+    # Info.plist sources (INFOPLIST_FILE, GENERATE_INFOPLIST_FILE, INFOPLIST_KEY_*) are never removed or
+    # replaced: an existing INFOPLIST_FILE gets the two keys; otherwise one ad-only plist is added and Xcode
+    # merges it with the generated keys. Anything this cannot preserve stops here with the reason.
+    def info_plist_plan(root, bytes, identity, networks)
+      module_name = identity.fetch("moduleName")
+      if bytes.include?(PACKAGE_URL) || bytes.include?("productName = GoogleMobileAds;")
+        fail!("the project already links Google Mobile Ads outside this activation; remove that integration first (see the skill's migration steps)")
+      end
+      fail!("the project already declares #{APP_ID_SETTING}; remove it before activation") if bytes.include?(APP_ID_SETTING)
+
+      configurations = application_configurations(bytes, module_name)
+      files = configurations.map do |name, (_, block)|
+        fail!("#{name} configuration uses a conditional INFOPLIST_FILE; activation cannot tell which Info.plist is used") if block.match?(/INFOPLIST_FILE\[/)
+        values = setting_values(block, "INFOPLIST_FILE")
+        unless values.length == setting_line_count(block, "INFOPLIST_FILE") && values.length <= 1
+          fail!("#{name} configuration must declare at most one INFOPLIST_FILE")
+        end
+        if block.match?(/^\t\t\t\tINFOPLIST_KEY_#{ATT_USAGE_KEY} =/)
+          fail!("#{name} configuration declares #{ATT_USAGE_KEY}; the non-tracking route must not request ATT")
+        end
+        values.first
+      end
+      unless files.uniq.length == 1
+        fail!("Debug and Release use different INFOPLIST_FILE values (#{files.map { |file| file || 'none' }.join(', ')}); point both at one Info.plist before activation")
+      end
+
+      project_target = bytes[/\t\t[A-F0-9]{24} \/\* Project object \*\/ = \{\n\t\t\tisa = PBXProject;.*?buildConfigurationList = ([A-F0-9]{24}) /m, 1]
+      if project_target
+        project_list = bytes[/\t\t#{project_target} \/\* Build configuration list for PBXProject [^\n]*\*\/ = \{.*?\n\t\t\};/m].to_s
+        project_list.scan(/\n\t\t\t\t([A-F0-9]{24}) \/\*/).flatten.each do |identifier|
+          block = bytes[/\t\t#{identifier} \/\* [^\n]*\*\/ = \{\n\t\t\tisa = XCBuildConfiguration;.*?\n\t\t\};/m].to_s
+          fail!("the project-level build settings declare INFOPLIST_FILE; set it on the application target before activation") if block.match?(/^[ \t]*"?INFOPLIST_FILE\b/)
+        end
+      end
+      tracked_xcconfigs = capture!("git", "-C", root, "ls-files", "-z", "--", "*.xcconfig").split("\0").reject(&:empty?)
+      tracked_xcconfigs.each do |relative|
+        path = File.join(root, relative)
+        next unless File.file?(path) && !File.symlink?(path)
+
+        content = File.binread(path)
+        if content.match?(/^[ \t]*(?:INFOPLIST_FILE|#{APP_ID_SETTING})\b/)
+          fail!("#{relative} sets INFOPLIST_FILE or #{APP_ID_SETTING}; activation edits only the application target's build settings")
+        end
+      end
+
+      existing = files.first
+      if existing.nil?
+        configurations.each do |name, (_, block)|
+          unless setting_values(block, "GENERATE_INFOPLIST_FILE") == ["YES"] && setting_line_count(block, "GENERATE_INFOPLIST_FILE") == 1
+            fail!("#{name} configuration has no INFOPLIST_FILE and does not generate its Info.plist (GENERATE_INFOPLIST_FILE = YES)")
+          end
+        end
+        return {"mode" => "created", "path" => created_info_plist_path(identity)}
+      end
+
+      cleaned = Pathname.new(existing)
+      if existing.include?("$") || cleaned.absolute? || cleaned.cleanpath.to_s != existing || cleaned.each_filename.any? { |part| part == ".." }
+        fail!("INFOPLIST_FILE #{existing} must be a plain path relative to the repository root")
+      end
+      path = repository_relative_file!(root, existing, "INFOPLIST_FILE #{existing}")
+      info_plist_dictionary!(path, existing)
+      present, value = plist_entry(path, "GADApplicationIdentifier")
+      if present && value != APP_ID_REFERENCE
+        fail!("#{existing} already declares a different GADApplicationIdentifier; remove it (the activation adds #{APP_ID_REFERENCE})")
+      end
+      present, value = plist_entry(path, "SKAdNetworkItems")
+      if present && value != expected_network_items(networks)
+        fail!("#{existing} already declares SKAdNetworkItems that differ from the activation input; remove them or match the input")
+      end
+      fail!("#{existing} declares #{ATT_USAGE_KEY}; the non-tracking route must not request ATT") if plist_entry(path, ATT_USAGE_KEY).first
+      {"mode" => "existing", "path" => existing}
+    end
+
+    # Adds GADApplicationIdentifier and SKAdNetworkItems to a copy of the app's own Info.plist with plutil,
+    # which keeps every other key and value and the file's format (XML keys come back in sorted order).
+    def info_plist_with_ad_keys(path, networks)
+      Dir.mktmpdir("ios-template-admob-plist.") do |directory|
+        copy = File.join(directory, "Info.plist")
+        File.binwrite(copy, File.binread(path))
+        unless plist_entry(copy, "GADApplicationIdentifier").first
+          capture!("/usr/bin/plutil", "-insert", "GADApplicationIdentifier", "-string", APP_ID_REFERENCE, copy)
+        end
+        unless plist_entry(copy, "SKAdNetworkItems").first
+          capture!("/usr/bin/plutil", "-insert", "SKAdNetworkItems", "-json", JSON.generate(expected_network_items(networks)), copy)
+        end
+        capture!("/usr/bin/plutil", "-lint", copy)
+        File.binread(copy)
+      end
+    end
+
+    def add_package_dependency(bytes, identity)
       module_name = identity.fetch("moduleName")
       existing_ids = bytes.scan(/\b[A-F0-9]{24}\b/).uniq
       build_file_id = deterministic_id(identity, "package-build-file", existing_ids)
       package_id = deterministic_id(identity, "package-reference", existing_ids + [build_file_id])
       product_id = deterministic_id(identity, "package-product", existing_ids + [build_file_id, package_id])
 
-      target_pattern = /(\t\t([A-F0-9]{24}) \/\* #{Regexp.escape(module_name)} \*\/ = \{\n\t\t\tisa = PBXNativeTarget;.*?\n\t\t\};)/m
-      target_match = bytes.match(target_pattern)
-      fail!("application target #{module_name} must occur exactly once") unless target_match && bytes.scan(target_pattern).length == 1
-      target_block = target_match[1]
+      target_block = application_target(bytes, module_name)[1]
       frameworks_id = target_block[/\n\t\t\t\t([A-F0-9]{24}) \/\* Frameworks \*\/,/, 1]
       config_list_id = target_block[/buildConfigurationList = ([A-F0-9]{24}) /, 1]
       fail!("application target framework/configuration anchors are missing") unless frameworks_id && config_list_id
@@ -406,7 +578,7 @@ module IOSTemplate
         "\\1\\2\t\t\t\t#{product_id} /* GoogleMobileAds */,\n\\3",
         "application package dependencies"
       )
-      bytes = bytes.sub(target_block, new_target)
+      bytes = bytes.sub(target_block) { new_target }
 
       framework_pattern = /(\t\t#{frameworks_id} \/\* Frameworks \*\/ = \{.*?\n\t\t\};)/m
       framework_block = bytes.match(framework_pattern)&.[](1)
@@ -417,7 +589,7 @@ module IOSTemplate
         "\\1\\2\t\t\t\t#{build_file_id} /* GoogleMobileAds in Frameworks */,\n\\3",
         "application Frameworks files"
       )
-      bytes = bytes.sub(framework_block, new_framework)
+      bytes = bytes.sub(framework_block) { new_framework }
 
       build_file_entry = "\t\t#{build_file_id} /* GoogleMobileAds in Frameworks */ = {isa = PBXBuildFile; productRef = #{product_id} /* GoogleMobileAds */; };\n"
       if bytes.include?("/* Begin PBXBuildFile section */")
@@ -445,28 +617,7 @@ module IOSTemplate
           "PBXProject package insertion"
         )
       end
-      bytes = bytes.sub(project_block, new_project)
-
-      config_list_pattern = /(\t\t#{config_list_id} \/\* Build configuration list for PBXNativeTarget "#{Regexp.escape(module_name)}" \*\/ = \{.*?\n\t\t\};)/m
-      config_list = bytes.match(config_list_pattern)&.[](1)
-      fail!("application configuration list is missing") unless config_list
-      debug_id = config_list[/\n\t\t\t\t([A-F0-9]{24}) \/\* Debug \*\/,/, 1]
-      release_id = config_list[/\n\t\t\t\t([A-F0-9]{24}) \/\* Release \*\/,/, 1]
-      fail!("application Debug/Release configuration identifiers are missing") unless debug_id && release_id
-
-      {debug_id => "Info-Debug.plist", release_id => "Info-Release.plist"}.each do |identifier, plist|
-        config_pattern = /(\t\t#{identifier} \/\* (?:Debug|Release) \*\/ = \{.*?\n\t\t\};)/m
-        config_block = bytes.match(config_pattern)&.[](1)
-        fail!("application build configuration #{identifier} is missing") unless config_block
-        changed = replace_once(config_block, /GENERATE_INFOPLIST_FILE = YES;/, "GENERATE_INFOPLIST_FILE = NO;", "generated Info.plist setting")
-        changed = replace_once(
-          changed,
-          /\n\t\t\t\tLD_RUNPATH_SEARCH_PATHS =/,
-          "\n\t\t\t\tINFOPLIST_FILE = #{module_name}/AdMob/#{plist};\n\t\t\t\tLD_RUNPATH_SEARCH_PATHS =",
-          "Info.plist path insertion"
-        )
-        bytes = bytes.sub(config_block, changed)
-      end
+      bytes = bytes.sub(project_block) { new_project }
 
       package_reference_entry = <<~PBX
         \t\t#{package_id} /* XCRemoteSwiftPackageReference "GoogleMobileAds" */ = {
@@ -511,6 +662,99 @@ module IOSTemplate
       bytes
     end
 
+    # The application's file-system-synchronized folder for the module, as [group identifier, group block],
+    # or nil when the module folder is a classic group (whose files are not added to the target implicitly).
+    def synchronized_module_group(bytes, module_name)
+      target_block = application_target(bytes, module_name)[1]
+      groups = target_block[/fileSystemSynchronizedGroups = \(\n(.*?)\t\t\t\);/m, 1].to_s.scan(/([A-F0-9]{24}) \/\*/).flatten
+      matches = groups.map do |identifier|
+        block = bytes[/\t\t#{identifier} \/\* [^\n]*\*\/ = \{\n\t\t\tisa = PBXFileSystemSynchronizedRootGroup;.*?\n\t\t\};/m]
+        block && block.match?(/^\t\t\tpath = "?#{Regexp.escape(module_name)}"?;$/) ? [identifier, block] : nil
+      end.compact
+      fail!("the application target synchronizes the #{module_name} folder more than once") if matches.length > 1
+      matches.first
+    end
+
+    # Exception sets of a synchronized group that apply to the application target, as [identifier, block].
+    def application_exception_sets(bytes, group_block, target_id)
+      identifiers = group_block[/exceptions = \(\n(.*?)\t\t\t\);/m, 1].to_s.scan(/([A-F0-9]{24}) \/\*/).flatten
+      identifiers.map do |identifier|
+        block = bytes[/\t\t#{identifier} \/\* [^\n]*\*\/ = \{\n\t\t\tisa = PBXFileSystemSynchronizedBuildFileExceptionSet;.*?\n\t\t\};/m]
+        block && block.include?("\n\t\t\ttarget = #{target_id} ") ? [identifier, block] : nil
+      end.compact
+    end
+
+    INFO_PLIST_MEMBERSHIP_EXCEPTION = "AdMob/Info.plist"
+
+    # A synchronized folder would also copy the ad-only plist into the bundle as a resource, which collides
+    # with the processed Info.plist. Xcode's own fix is a membership exception for the application target.
+    def exclude_created_plist(bytes, identity)
+      module_name = identity.fetch("moduleName")
+      group = synchronized_module_group(bytes, module_name)
+      return bytes unless group
+
+      _, group_block = group
+      target_id = application_target(bytes, module_name)[2]
+      sets = application_exception_sets(bytes, group_block, target_id)
+      fail!("the #{module_name} folder has more than one exception set for the application target") if sets.length > 1
+      if sets.length == 1
+        _, set_block = sets.first
+        return bytes if set_block.match?(/^\t\t\t\t"?#{Regexp.escape(INFO_PLIST_MEMBERSHIP_EXCEPTION)}"?,$/)
+
+        new_set = if set_block.include?("\n\t\t\tmembershipExceptions = (\n")
+          replace_once(set_block, /(\n\t\t\tmembershipExceptions = \(\n)/, "\\1\t\t\t\t#{INFO_PLIST_MEMBERSHIP_EXCEPTION},\n", "membership exceptions")
+        else
+          replace_once(set_block, /(\n\t\t\tisa = PBXFileSystemSynchronizedBuildFileExceptionSet;\n)/, "\\1\t\t\tmembershipExceptions = (\n\t\t\t\t#{INFO_PLIST_MEMBERSHIP_EXCEPTION},\n\t\t\t);\n", "membership exceptions")
+        end
+        return bytes.sub(set_block) { new_set }
+      end
+
+      set_id = deterministic_id(identity, "info-plist-membership-exception", bytes.scan(/\b[A-F0-9]{24}\b/).uniq)
+      comment = "/* Exceptions for \"#{module_name}\" folder in \"#{module_name}\" target */"
+      set_entry = <<~PBX
+        \t\t#{set_id} #{comment} = {
+        \t\t\tisa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+        \t\t\tmembershipExceptions = (
+        \t\t\t\t#{INFO_PLIST_MEMBERSHIP_EXCEPTION},
+        \t\t\t);
+        \t\t\ttarget = #{target_id} /* #{module_name} */;
+        \t\t};
+      PBX
+      new_group = if group_block.include?("\n\t\t\texceptions = (\n")
+        replace_once(group_block, /(\n\t\t\texceptions = \(\n(?:.*?\n)?)(\t\t\t\);)/m, "\\1\t\t\t\t#{set_id} #{comment},\n\\2", "synchronized group exceptions")
+      else
+        replace_once(group_block, /(\n\t\t\tisa = PBXFileSystemSynchronizedRootGroup;\n)/, "\\1\t\t\texceptions = (\n\t\t\t\t#{set_id} #{comment},\n\t\t\t);\n", "synchronized group exceptions")
+      end
+      bytes = bytes.sub(group_block) { new_group }
+      if bytes.include?("/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */")
+        replace_once(
+          bytes,
+          %r{/\* End PBXFileSystemSynchronizedBuildFileExceptionSet section \*/},
+          "#{set_entry}/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */",
+          "PBXFileSystemSynchronizedBuildFileExceptionSet section"
+        )
+      else
+        section = "/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */\n#{set_entry}/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */\n\n"
+        replace_once(bytes, %r{/\* Begin PBXFileSystemSynchronizedRootGroup section \*/}, "#{section}/* Begin PBXFileSystemSynchronizedRootGroup section */", "PBXFileSystemSynchronizedRootGroup section")
+      end
+    end
+
+    # Adds the per-configuration App ID setting and, only when the app has no INFOPLIST_FILE, the ad-only
+    # plist path. GENERATE_INFOPLIST_FILE, INFOPLIST_KEY_*, and an existing INFOPLIST_FILE stay untouched.
+    def add_info_plist_settings(bytes, identity, input, plan)
+      app_ids = {"Debug" => input.dig("identifiers", "debug", "appId"), "Release" => input.dig("identifiers", "release", "appId")}
+      application_configurations(bytes, identity.fetch("moduleName")).each do |name, (_, block)|
+        changed = insert_build_setting(block, APP_ID_SETTING, "#{APP_ID_SETTING} = \"#{app_ids.fetch(name)}\";")
+        changed = insert_build_setting(changed, "INFOPLIST_FILE", "INFOPLIST_FILE = #{plan.fetch('path')};") if plan.fetch("mode") == "created"
+        bytes = bytes.sub(block) { changed }
+      end
+      plan.fetch("mode") == "created" ? exclude_created_plist(bytes, identity) : bytes
+    end
+
+    def mutate_project(bytes, identity, input, plan)
+      add_info_plist_settings(add_package_dependency(bytes, identity), identity, input, plan)
+    end
+
     def swift_string(value)
       JSON.generate(value).gsub("\\/", "/")
     end
@@ -540,6 +784,9 @@ module IOSTemplate
       File.join(root, ".agents/skills/admob-monetization/templates")
     end
 
+    # The record and the files whose exact bytes the record pins. The Info.plist that carries the advertising
+    # keys is not pinned: it belongs to the app, which may add unrelated keys later, so validation reads the
+    # advertising keys from it instead.
     def generated_paths(identity)
       module_name = identity.fetch("moduleName")
       project = "#{module_name}.xcodeproj"
@@ -549,8 +796,6 @@ module IOSTemplate
         "#{module_name}/AdMob/AdMobCore.swift",
         "#{module_name}/AdMob/AdaptiveBannerHost.swift",
         "#{module_name}/AdMob/GoogleMobileAdsProvider.swift",
-        "#{module_name}/AdMob/Info-Debug.plist",
-        "#{module_name}/AdMob/Info-Release.plist",
         "#{project}/project.pbxproj",
       ]
     end
@@ -607,7 +852,7 @@ module IOSTemplate
       templates = template_root(stage_root)
       required_templates = %w[
         AdMobConfiguration.swift.template AdMobCore.swift AdaptiveBannerHost.swift
-        GoogleMobileAdsProvider.swift Info-Debug.plist.template Info-Release.plist.template
+        GoogleMobileAdsProvider.swift Info.plist.template
       ]
       required_templates.each do |name|
         relative = ".agents/skills/admob-monetization/templates/#{name}"
@@ -615,24 +860,25 @@ module IOSTemplate
       end
 
       module_name = identity.fetch("moduleName")
-      network_items = plist_network_items(input.fetch("skAdNetworkIdentifiers"))
+      networks = input.fetch("skAdNetworkIdentifiers")
+      plan = info_plist_plan(stage_root, original_project, identity, networks)
 
       outputs = {}
       outputs["#{module_name}/AdMob/AdMobCore.swift"] = File.binread(File.join(templates, "AdMobCore.swift"))
       outputs["#{module_name}/AdMob/AdaptiveBannerHost.swift"] = File.binread(File.join(templates, "AdaptiveBannerHost.swift"))
       outputs["#{module_name}/AdMob/GoogleMobileAdsProvider.swift"] = File.binread(File.join(templates, "GoogleMobileAdsProvider.swift"))
       outputs["#{module_name}/AdMob/AdMobConfiguration.swift"] = render_configuration(templates, input)
-      outputs["#{module_name}/AdMob/Info-Debug.plist"] = render_template(
-        File.join(templates, "Info-Debug.plist.template"),
-        {"__DEBUG_APP_ID__" => input.dig("identifiers", "debug", "appId"), "__SKADNETWORK_ITEMS__" => network_items}
-      )
-      outputs["#{module_name}/AdMob/Info-Release.plist"] = render_template(
-        File.join(templates, "Info-Release.plist.template"),
-        {"__RELEASE_APP_ID__" => input.dig("identifiers", "release", "appId"), "__SKADNETWORK_ITEMS__" => network_items}
-      )
-      outputs[project_relative] = mutate_project(original_project, identity)
-
+      outputs[project_relative] = mutate_project(original_project, identity, input, plan)
       file_digests = outputs.transform_values { |bytes| digest(bytes) }
+
+      info_plist = plan.fetch("path")
+      if plan.fetch("mode") == "created"
+        outputs[info_plist] = render_template(File.join(templates, "Info.plist.template"), {"__SKADNETWORK_ITEMS__" => plist_network_items(networks)})
+      else
+        source = File.join(stage_root, info_plist)
+        bytes = info_plist_with_ad_keys(source, networks)
+        outputs[info_plist] = bytes unless bytes == File.binread(source)
+      end
       record = {
         "schemaVersion" => SCHEMA_VERSION,
         "status" => "activated",
@@ -664,17 +910,58 @@ module IOSTemplate
       outputs
     end
 
-    # Compares the plist with the recorded activation input itself, so editing a plist together with the
-    # record's file digests still fails.
-    def validate_plist!(path, expected_app_id, expected_networks)
-      bytes = capture!("/usr/bin/plutil", "-convert", "json", "-o", "-", path)
-      value = JSON.parse(bytes)
-      fail!("#{File.basename(path)} GADApplicationIdentifier differs from the activation record") unless value["GADApplicationIdentifier"] == expected_app_id
-      fail!("#{File.basename(path)} must not declare ATT usage") if value.key?("NSUserTrackingUsageDescription")
-      networks = Array(value["SKAdNetworkItems"]).map { |entry| entry.is_a?(Hash) ? entry["SKAdNetworkIdentifier"] : nil }
-      fail!("#{File.basename(path)} SKAdNetworkItems differ from the activation record") unless networks.sort == expected_networks.sort && networks.uniq.length == networks.length
-    rescue JSON::ParserError
-      fail!("#{File.basename(path)} could not be parsed")
+    # Compares the build settings and the Info.plist in use with the recorded activation input itself, so an
+    # edit made together with the record's file digests still fails. Only the advertising keys are checked;
+    # the app's other Info.plist keys may change freely.
+    def validate_info_plist!(root, identity, project, source_project, input)
+      module_name = identity.fetch("moduleName")
+      app_ids = {"Debug" => DEBUG_APP_ID, "Release" => input.dig("identifiers", "release", "appId")}
+      fail!("Release App ID must not use Google's demo publisher") if app_ids.fetch("Release").include?(DEMO_PUBLISHER)
+      unless project.scan(/\b#{APP_ID_SETTING}\b/).length == 2
+        fail!("#{APP_ID_SETTING} must be declared only in the application Debug and Release configurations")
+      end
+      source = application_configurations(source_project, module_name)
+      plists = application_configurations(project, module_name).map do |name, (_, block)|
+        source_block = source.fetch(name).last
+        unless setting_values(block, APP_ID_SETTING) == [app_ids.fetch(name)] && setting_line_count(block, APP_ID_SETTING) == 1
+          fail!("#{name} #{APP_ID_SETTING} differs from the activation record")
+        end
+        unless setting_values(block, "GENERATE_INFOPLIST_FILE") == setting_values(source_block, "GENERATE_INFOPLIST_FILE") &&
+               setting_line_count(block, "GENERATE_INFOPLIST_FILE") == setting_line_count(source_block, "GENERATE_INFOPLIST_FILE")
+          fail!("#{name} GENERATE_INFOPLIST_FILE changed from the activation source")
+        end
+        fail!("#{name} configuration must not declare #{ATT_USAGE_KEY}") if block.match?(/\bINFOPLIST_KEY_#{ATT_USAGE_KEY}\b/)
+        files = setting_values(block, "INFOPLIST_FILE")
+        unless files.length == 1 && setting_line_count(block, "INFOPLIST_FILE") == 1
+          fail!("#{name} configuration must declare exactly one INFOPLIST_FILE")
+        end
+        expected = setting_values(source_block, "INFOPLIST_FILE").first || created_info_plist_path(identity)
+        fail!("#{name} INFOPLIST_FILE must remain #{expected}") unless files.first == expected
+        files.first
+      end
+      fail!("Debug and Release must use the same Info.plist") unless plists.uniq.length == 1
+
+      relative = plists.first
+      path = repository_relative_file!(root, relative, "Info.plist #{relative}")
+      info_plist_dictionary!(path, relative)
+      present, value = plist_entry(path, "GADApplicationIdentifier")
+      fail!("#{relative} GADApplicationIdentifier must be #{APP_ID_REFERENCE}") unless present && value == APP_ID_REFERENCE
+      present, value = plist_entry(path, "SKAdNetworkItems")
+      unless present && value == expected_network_items(input.fetch("skAdNetworkIdentifiers"))
+        fail!("#{relative} SKAdNetworkItems differ from the activation record")
+      end
+      fail!("#{relative} must not declare ATT usage") if plist_entry(path, ATT_USAGE_KEY).first
+
+      return unless relative == created_info_plist_path(identity)
+
+      group = synchronized_module_group(project, module_name)
+      return unless group
+
+      target_id = application_target(project, module_name)[2]
+      excluded = application_exception_sets(project, group.last, target_id).any? do |_, block|
+        block.match?(/^\t\t\t\t"?#{Regexp.escape(INFO_PLIST_MEMBERSHIP_EXCEPTION)}"?,$/)
+      end
+      fail!("#{relative} must be excluded from the application target's synchronized resources") unless excluded
     end
 
     # Reads the one DEBUG/Release identifier block of the generated configuration and checks both branches
@@ -749,14 +1036,8 @@ module IOSTemplate
       project = File.binread(project_path)
       fail!("project package URL/version is missing") unless project.include?("repositoryURL = \"#{PACKAGE_URL}\";") && project.include?("kind = exactVersion;") && project.include?("version = #{PACKAGE_VERSION};")
       fail!("project does not link GoogleMobileAds") unless project.include?("productName = GoogleMobileAds;") && project.include?("GoogleMobileAds in Frameworks")
-      fail!("project must use configuration-specific Info.plist sources") unless project.include?("#{module_name}/AdMob/Info-Debug.plist") && project.include?("#{module_name}/AdMob/Info-Release.plist")
       capture!("/usr/bin/plutil", "-convert", "json", "-o", "-", project_path)
-
-      networks = activation_input.fetch("skAdNetworkIdentifiers")
-      release_app_id = activation_input.dig("identifiers", "release", "appId")
-      validate_plist!(File.join(root, "#{module_name}/AdMob/Info-Debug.plist"), DEBUG_APP_ID, networks)
-      validate_plist!(File.join(root, "#{module_name}/AdMob/Info-Release.plist"), release_app_id, networks)
-      fail!("Release Info.plist must not use Google's demo publisher") if release_app_id.include?(DEMO_PUBLISHER)
+      validate_info_plist!(root, identity, project, source_project, activation_input)
 
       source_bytes = %w[AdMobConfiguration.swift AdMobCore.swift AdaptiveBannerHost.swift GoogleMobileAdsProvider.swift].map do |name|
         File.binread(File.join(root, module_name, "AdMob", name))
@@ -852,7 +1133,7 @@ module IOSTemplate
           outputs.each { |relative, bytes| ensure_parent_and_write(stage, relative, bytes) }
           validate_activated(stage)
 
-          allowed = generated_paths(stage_identity)
+          allowed = outputs.keys
           capture!("git", "-C", stage, "add", "--", *allowed)
           names = capture!("git", "-C", stage, "diff", "--cached", "--name-only", "--diff-filter=ACMRTUXB", "HEAD").lines.map(&:strip).reject(&:empty?)
           fail!("staged activation changed an unexpected path") unless names.sort == allowed.sort
