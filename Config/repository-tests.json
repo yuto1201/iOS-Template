@@ -420,6 +420,11 @@
         "tools/tests/fixtures/gh"
       ],
       "prefixes": ["tools/lib/workflow-"]
+    },
+    {
+      "domain": "worktree-build",
+      "paths": ["tools/xcodebuild-in-worktree.sh"],
+      "prefixes": []
     }
   ],
   "tests": [
@@ -517,6 +522,7 @@
     {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["ios-verification", "workflow-evidence"]},
     {"path": "tools/tests/test-workflow-state-nested-resume.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-workflow-state-post-claim.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-workflow-state.sh", "domains": ["workflow-state"]}
+    {"path": "tools/tests/test-workflow-state.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-xcodebuild-in-worktree.sh", "domains": ["worktree-build"]}
   ]
 }

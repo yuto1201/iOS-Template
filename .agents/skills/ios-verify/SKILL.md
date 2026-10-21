@@ -31,6 +31,15 @@ Never start canonical Simulator verification for an intermediate commit. After a
 
 When XcodeBuildMCP is callable, you may inspect its session defaults to identify future compatibility work. No canonical XcodeBuildMCP evidence producer exists in this repository, so inspection never selects it as an execution route. Always use `tools/verify-ios-issue.sh`, the tested `xcodebuild-simctl` producer, until a canonical MCP producer and integration coverage are added. Do not bypass it with manual `xcodebuild`, `simctl`, screenshots, or JSON. Tool unavailability is never test success.
 
+## Ad-hoc builds during development
+
+Builds and tests that you run outside the verify runners while developing (affected tests, diagnosis, mutation checks) are never evidence. Run them with `tools/xcodebuild-in-worktree.sh [--keep-result] [--scratch] XCODEBUILD_ARGUMENTS...` from the Issue worktree instead of passing a new `-derivedDataPath` per task (D-084). The tool reuses the worktree's one DerivedData under `~/Library/Caches/ios-template/derived-data/<worktree ID>/` and bounds the run with the repository's timeout wrapper. It also removes the result bundle when the run ends. Name `-scheme`, `-testProductsPath`, or `-xctestrun`, because xcodebuild accepts `-derivedDataPath` only with one of them. Do not pass `-derivedDataPath` or `-resultBundlePath`.
+
+- Read what you need from the output. Use `--keep-result` only when you must open the result bundle afterwards; the tool keeps the newest three per worktree and prints the kept path.
+- Use `--scratch` for work that must not share the worktree's DerivedData, such as a mutation check. That DerivedData is removed when the run ends, including on failure, INT, or TERM.
+- Do not create DerivedData or result bundles in the session's scratchpad or temporary folders.
+
+
 ## Release-phase evidence routing
 
 Read the sealed Acceptance criteria before selecting commands. A phase-aware contract has exactly one `Release-phase binding:` whose record identity was already validated by Claim; verification consumes that identity and never rewrites it. A sealed contract without the declaration is `legacy-unbound` and follows its original stage/profile/scope path without a synthesized phase record.
