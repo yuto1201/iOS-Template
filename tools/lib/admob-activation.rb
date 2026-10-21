@@ -16,6 +16,7 @@ module IOSTemplate
 
     SCHEMA_VERSION = 1
     RECORD_PATH = "Config/admob-activation.json"
+    PLACEMENT_CONTAINERS = %w[safe-area-bottom safe-area-top].freeze
     PACKAGE_URL = "https://github.com/googleads/swift-package-manager-google-mobile-ads.git"
     PACKAGE_VERSION = "13.10.0"
     PACKAGE_REVISION = "12b7af0f844723a86fd3c0089b02f64b1e495605"
@@ -293,7 +294,10 @@ module IOSTemplate
         allow_empty: true
       )
       fail!("included and excluded screens must not overlap") unless (included & excluded).empty?
-      fail!("placement.container must be safe-area-bottom") unless placement["container"] == "safe-area-bottom"
+      # #375: the anchored adaptive banner may sit at the bottom (default) or the top safe-area edge.
+      unless PLACEMENT_CONTAINERS.include?(placement["container"])
+        fail!("placement.container must be one of #{PLACEMENT_CONTAINERS.join(", ")}")
+      end
       nonempty_string!(placement["privacyOptionsEntry"], "placement.privacyOptionsEntry", pattern: screen_pattern)
 
       audience = value["audience"]

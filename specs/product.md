@@ -119,6 +119,8 @@ Google Mobile Adsは全アプリの標準依存にせず、派生アプリの確
 
 有効化入力は、アプリIdentity／Deployment Target、対象年齢／地域、実行時にGoogle／Apple公式sourceで再確認したSDK版と対応Xcode／iOS、Debug用Google demo identifier、Release用のアプリ固有production App ID／Banner Unit ID、配置／eligibilityのsource of truth、アプリ内privacy options入口、SKAdNetwork／privacy／App Store申告の対応を含む。参照した公式URL、取得時刻、採用versionと判断結果を有効化記録へ残す。未有効化の`TemplateApp`と生成直後の派生アプリは、Google Mobile Ads SDK／package、AdMob設定、identifier、広告sourceを持たず、有効化しない場合の出力を不変とする。
 
+バナーは画面下端（`safe-area-bottom`、既定）または上端（`safe-area-top`）のsafe areaに固定し、中身に重ならない専用の枠に置き、スクロールで動かさず、navigation bar、tab bar、ボタンのすぐ横に置かない。Googleのanchored adaptive bannerは上端と下端のどちらにも固定でき、禁止されるのは中身への重なり、スクロールでの移動、誤タップを招く操作要素の隣の配置であるため、上端も受け付ける（#375）。
+
 DebugはGoogle公式demo identifierのみ、UI Testはネットワークと実SDK requestに依存しないoffline fixture、Releaseは確認済みproduction identifierのみを使う。欠落、demo／productionの混在、対象configurationとidentifierの不整合は配信前に拒否する。offline fixture、Google demo smoke、AdMob remote state、productionのApp Store readiness／配信状態は別の証拠とし、一つの成功から他を推測しない。
 
 AdMob Consoleでのaccount／app／ad unit作成、契約・支払・税務情報、consent message公開、app-ads.txt公開、production identifier取得、App Store Connectの保存／提出はこの採用に含めない。それぞれに明示的なIssue contract、設定済みaccount／target、必要なユーザー承認とreadbackを要求する。決定の経緯は[D-057](decisions.md#d-057-広告収益化を非trackingの条件付きadmob統合として採用する)を参照する。
