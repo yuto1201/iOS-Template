@@ -343,5 +343,5 @@ if group == "fixture"
   end
 end
 assert(snapshot(root) == before, "fixture regression mutated source HEAD, status, tracked files, or identity")
-puts "bootstrap fixture #{group} tests passed"
+puts group == "fixture" ? "bootstrap fixture tests passed" : "bootstrap fixture #{group} tests passed"
 RUBY
