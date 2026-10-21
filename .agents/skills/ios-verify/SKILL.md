@@ -200,3 +200,10 @@ printf '%s %s\n' "$EVIDENCE" "$DIGEST"
 ```
 
 When review is required, pass that exact `REVIEW_PACKET` path to the next `cross-model-review` invocation. The canonical review tools own schema-v2, sealed reviewer-route selection, and `reviewPacketDigest` validation; do not recompute, translate, edit, or override their output. A changed Head restarts stage-required verification and, when applicable, review. An unavailable reviewer selected by the default pair or an explicitly sealed user-approved Grok fallback is `blocked:review`, never an ad hoc substitution or self-approval. A non-release standard shape/harden Issue stops after canonical evidence and does not prepare a review packet.
+
+## Dedicated Simulators outside a lease
+
+Only a lease erases a dedicated Simulator before it boots (D-063). A dedicated device booted any other way keeps its data. In one derived app on the template from before D-063, agents booted, tested, and shut down the dedicated iPhone by hand; its poster snapshot store under `data/Library/Application Support/PRBPosterExtensionDataStore` gained a new set of snapshots (about 150 MB) about 40 times in under two days, was not pruned during that period, reached 8.2 GB, and stopped growing while the device stayed booted (#371, #380).
+
+- Boot, install to, and test on a dedicated Simulator only through the repository's lease-based tools: the verify runner and the App Store capture and recording tools. This applies to a quick check as well. Do not boot a dedicated device yourself, open it in the Claude app's Simulator panel, or point an ad-hoc `xcodebuild` destination at it outside a lease.
+- When a dedicated device's poster data has grown, reclaim it with the repository's poster-data command for shut-down devices (D-084), never by erasing or deleting the device yourself.
