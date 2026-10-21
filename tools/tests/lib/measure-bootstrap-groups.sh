@@ -1,9 +1,11 @@
 #!/bin/bash
 # #327 (AC-6): records the elapsed time of every split app-bootstrap and bootstrap-fixture entrypoint, once in a
 # disposable clone of the current Head run as the template, and once in a disposable clone of the same Head that
-# was Identity-bootstrapped and committed. Each entrypoint runs with its repository as the source root and a
-# 300-second limit. The record is canonical JSON written to --output, outside the repository. This is a manual
-# measurement helper, not a test entrypoint; the repository suite does not run it.
+# was Identity-bootstrapped and committed. Each entrypoint runs with its repository as the source root through
+# tools/lib/bounded-command.rb with a 300-second limit: the entrypoint gets its own process group, and on timeout
+# (exit 124) or leftover members (122/123) the whole group is terminated and reaped before the next entrypoint
+# starts. The record is canonical JSON written to --output, outside the repository. This is a manual measurement
+# helper, not a test entrypoint; the repository suite does not run it.
 set -euo pipefail
 export LANG=en_US.UTF-8
 
@@ -19,6 +21,8 @@ output_dir=$(cd "$(dirname "$output")" && pwd -P) || { echo 'the output director
   { echo 'write the record outside the tracked repository' >&2; exit 1; }
 output="$output_dir/$(basename "$output")"
 script_path="$repo_root/tools/tests/lib/measure-bootstrap-groups.sh"
+bounded_command="$repo_root/tools/lib/bounded-command.rb"
+timeout_seconds=300
 
 now() { perl -MTime::HiRes=time -e 'printf "%.6f\n", time'; }
 
@@ -68,14 +72,14 @@ for context in template-clone bootstrapped-clone; do
   for entry in "${entrypoints[@]}"; do
     path=${entry%%|*}
     argument=${entry#*|}
-    log=$work/$context-$(basename "$path" .sh)${argument:+-$argument}.log
+    name=$(basename "$path" .sh)${argument:+-$argument}
+    log=$work/$context-$name.log
+    command=(/bin/bash "$path")
+    [[ -z "$argument" ]] || command+=("$argument")
     start=$(now)
     set +e
-    if [[ -n "$argument" ]]; then
-      (cd "$repo" && perl -e 'alarm 300; exec @ARGV' /bin/bash "$path" "$argument") >"$log" 2>&1
-    else
-      (cd "$repo" && perl -e 'alarm 300; exec @ARGV' /bin/bash "$path") >"$log" 2>&1
-    fi
+    (cd "$repo" && /usr/bin/ruby --disable-gems "$bounded_command" --stage "measure-$name" \
+      --timeout-seconds "$timeout_seconds" --grace-seconds 5 -- "${command[@]}") >"$log" 2>&1
     status=$?
     set -e
     end=$(now)
@@ -88,8 +92,8 @@ done
 
 umask 077
 ruby -rjson - "$results" "$output" "$head_sha" "$measured_at" "$load_at_start" "$script_sha" \
-  "$template_head" "$bootstrapped_head" "$bootstrapped_files" <<'RUBY'
-results, output, head_sha, measured_at, load, script_sha, template_head, bootstrapped_head, files = ARGV
+  "$template_head" "$bootstrapped_head" "$bootstrapped_files" "$timeout_seconds" <<'RUBY'
+results, output, head_sha, measured_at, load, script_sha, template_head, bootstrapped_head, files, timeout = ARGV
 def canonical(value)
   case value
   when Hash then value.keys.sort.each_with_object({}) { |key, result| result[key] = canonical(value[key]) }
@@ -116,7 +120,7 @@ end
 all = contexts.values.flat_map { |context| context["entrypoints"] }
 document = {
   "schemaVersion" => 1, "headSha" => head_sha, "measuredAt" => measured_at,
-  "hostLoadAtStart" => load, "measurementScriptSha256" => script_sha,
+  "hostLoadAtStart" => load, "measurementScriptSha256" => script_sha, "timeoutSeconds" => Integer(timeout),
   "contexts" => contexts, "maxElapsedSeconds" => all.map { |entry| entry["elapsedSeconds"] }.max,
   "allWithin150Seconds" => all.length == 18 && all.all? { |entry| entry["exitStatus"].zero? && entry["elapsedSeconds"] <= 150 }
 }
