@@ -93,13 +93,13 @@ set_clone_default_for_detached_root() {
   fi
 }
 
+# One shasum process hashes the sorted list (#327): the per-file lines and the digest are the same as one
+# shasum per file, but the validation suite no longer grows by a process per file for every invalid case.
 fixture_hash() {
   {
     find TemplateApp TemplateAppTests TemplateAppUITests TemplateApp.xcodeproj Config specs docs -type f -print
     printf '%s\n' AGENTS.md
-  } | LC_ALL=C sort | while IFS= read -r path; do
-    shasum "$path"
-  done | shasum | awk '{print $1}'
+  } | LC_ALL=C sort | tr '\n' '\0' | xargs -0 shasum | shasum | awk '{print $1}'
 }
 
 source_tree_digest() {
