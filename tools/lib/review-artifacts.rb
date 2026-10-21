@@ -70,7 +70,9 @@ else
   reject("checkout has unsupported Git metadata")
 end
 
-puts JSON.generate({
+# Write and flush before exiting, so the whole line leaves through an ordinary write rather than the
+# flush at process exit (#363: a caller once received only the first 512 bytes).
+$stdout.write(JSON.generate({
   "schemaVersion" => 1,
   "layout" => layout,
   "repositoryRoot" => repo,
@@ -82,4 +84,5 @@ puts JSON.generate({
   "artifactsInode" => File.lstat(artifacts).ino,
   "gitDir" => git_dir,
   "gitCommon" => git_common
-})
+}) + "\n")
+$stdout.flush

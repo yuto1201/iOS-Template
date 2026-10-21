@@ -123,13 +123,23 @@ module IOSTemplate
       value
     end
 
+    # The topology tool is read-only and prints one newline-terminated object. On a heavily loaded host its
+    # output once arrived cut at 512 bytes with a successful exit (#363), so a cut output is read again, a
+    # bounded number of times, and then refused as cut short instead of as invalid JSON.
+    TOPOLOGY_READS = 3
+
     def topology!(repo_root, require_linked: false)
       root = File.realpath(repo_root)
-      output, status = Open3.capture2e(
-        {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil},
-        "/usr/bin/ruby", File.join(root, "tools/lib/review-artifacts.rb"), root
-      )
-      reject("artifact topology is invalid: #{output.strip}") unless status.success?
+      output = nil
+      TOPOLOGY_READS.times do
+        output, status = Open3.capture2e(
+          {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil},
+          "/usr/bin/ruby", File.join(root, "tools/lib/review-artifacts.rb"), root
+        )
+        reject("artifact topology is invalid: #{output.strip}") unless status.success?
+        break if output.end_with?("\n")
+      end
+      reject("artifact topology output was cut short after #{TOPOLOGY_READS} reads (#{output.bytesize} bytes)") unless output.end_with?("\n")
       value = parse_object(output, "artifact topology")
       if require_linked
         reject("contract revision must run from the canonical Issue worktree") unless value.fetch("layout") == "linked"

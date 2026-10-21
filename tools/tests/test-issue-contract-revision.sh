@@ -365,4 +365,29 @@ RECORD="$record" ruby -rjson -e 'path=ENV.fetch("RECORD"); value=JSON.parse(File
 assert_fails 'tampered immutable revision record' ruby "$tool" validate --repo-root "$worktree" --repo "$repository" --issue "$issue"
 cp "$workspace/record.good" "$record"
 
+# #363: the topology tool's output once arrived cut at 512 bytes with a successful exit. A cut output is read
+# again, and an output that stays cut is refused as cut short. A fake tool stands in for review-artifacts.rb.
+topology_root="$workspace/topology-root"
+mkdir -p "$topology_root/tools/lib"
+cat >"$topology_root/tools/lib/review-artifacts.rb" <<'RUBY'
+count_path = File.join(ARGV.fetch(0), "reads")
+count = File.exist?(count_path) ? File.read(count_path).to_i + 1 : 1
+File.write(count_path, count.to_s)
+line = %({"schemaVersion":1,"layout":"direct","repositoryRoot":"#{"x" * 600}"}\n)
+cut_reads = Integer(ENV.fetch("FAKE_TOPOLOGY_CUT_READS"))
+$stdout.write(count <= cut_reads ? line.byteslice(0, 512) : line)
+RUBY
+read_topology() {
+  rm -f "$topology_root/reads"
+  FAKE_TOPOLOGY_CUT_READS="$1" ruby -I"$source_repo/tools/lib" -rissue-contract-revision -e '
+    value = IOSTemplate::IssueContractRevision.topology!(ARGV.fetch(0))
+    puts "#{value.fetch("layout")} #{File.read(File.join(ARGV.fetch(0), "reads"))}"
+  ' "$topology_root"
+}
+[[ "$(read_topology 0)" == "direct 1" ]] || fail 'a complete topology output was not read once'
+[[ "$(read_topology 2)" == "direct 3" ]] || fail 'a cut topology output was not read again'
+if read_topology 3 >"$workspace/topology-cut.out" 2>&1; then fail 'a topology output that stayed cut was accepted'; fi
+grep -Fq 'artifact topology output was cut short after 3 reads (512 bytes)' "$workspace/topology-cut.out" ||
+  fail "a cut topology output was not refused as cut short: $(cat "$workspace/topology-cut.out")"
+
 echo 'PASS: audited Issue contract revisions enforce three authority routes, immutable chains, bounded fields, recovery, and evidence invalidation'

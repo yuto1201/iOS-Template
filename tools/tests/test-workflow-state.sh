@@ -4,13 +4,97 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" rg git jq ruby
 
-[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim || "$1" == nested-resume ) ) ]] || exit 64
+[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim || "$1" == nested-resume || "$1" == probe-silent-check || "$1" == probe-json-assertion || "$1" == probe-injected-failure ) ) ]] || exit 64
 scope="${1:-full}"
+
+# #363: many checks here are bare commands under set -e (`[[ ]]`, `cmp -s`, `abort unless`), which end the
+# run with exit 1 and no reason. Every such exit now names its line and command, and a JSON assertion names
+# its check. The probe modes fail on purpose so the full and scoped runs can confirm this. Bash 3.2 gives
+# only an approximate line inside functions and compound commands, so the message also names the command.
+self="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
+set -E
+trap 'failed_status=$? failed_line=$LINENO failed_command=$BASH_COMMAND; [[ $BASH_SUBSHELL != 0 ]] || echo "test-workflow-state: unexpected failure (exit $failed_status) near line $failed_line${FUNCNAME:+ in ${FUNCNAME[0]} called at line ${BASH_LINENO[0]}}: $failed_command" >&2' ERR
+trap 'exit 143' TERM
+assert_fails() {
+  local message=$1
+  shift
+  if "$@" >/dev/null 2>&1; then
+    echo "expected failure: $message" >&2
+    exit 1
+  fi
+}
+
+# #363: an injected interruption must end exactly as injected (exit 97 and its message). An earlier failure for
+# another reason is a test failure that names the caller's line and the command and shows the transition's own
+# output, which assert_fails would discard. The explicit exit bypasses the ERR trap, so the message says both.
+assert_injected_failure() {
+  local boundary=$1 message=$2 expected status=0 output
+  shift 2
+  case "$boundary" in
+    LABEL) expected='injected failure after state label' ;;
+    COMMENT) expected='injected failure after state comment' ;;
+    DURABLE) expected='injected failure after durable state' ;;
+    *) echo "unknown injection boundary: $boundary" >&2; exit 1 ;;
+  esac
+  output=$(env "IOS_TEMPLATE_STATE_FAIL_AFTER_$boundary=1" "$@" 2>&1 >/dev/null) || status=$?
+  if [[ "$status" != 97 || "$output" != *"$expected"* ]]; then
+    echo "expected the injected failure after $boundary at line ${BASH_LINENO[0]}: $message; command: $*; got exit $status: $output" >&2
+    exit 1
+  fi
+}
+
+assert_json() {
+  local path=$1 code=$2
+  ruby -rjson -e "$code" "$path" || { echo "test-workflow-state: JSON assertion failed at line ${BASH_LINENO[0]} on $path: $code" >&2; return 1; }
+}
+
+if [[ "$scope" == probe-silent-check ]]; then
+  test probe = reported
+fi
+if [[ "$scope" == probe-injected-failure ]]; then
+  assert_injected_failure DURABLE 'a transition that stops early' bash -c 'echo "compare-and-set failed: probe" >&2; exit 1'
+fi
+if [[ "$scope" == probe-json-assertion ]]; then
+  printf '[]' | assert_json /dev/stdin 'abort unless JSON.parse(File.read(ARGV[0])) == ["probe"]'
+fi
+if [[ "$scope" == full || "$scope" == scoped ]]; then
+  probe_output=$("$BASH" "$self" probe-silent-check 2>&1) && { echo 'the silent-check probe did not fail' >&2; exit 1; }
+  [[ "$probe_output" == *'unexpected failure (exit 1) near line '*': test probe = reported'* ]] || { echo "an unexpected exit does not name its check: $probe_output" >&2; exit 1; }
+  probe_output=$("$BASH" "$self" probe-json-assertion 2>&1) && { echo 'the JSON assertion probe did not fail' >&2; exit 1; }
+  [[ "$probe_output" == *'JSON assertion failed at line '*' on /dev/stdin: abort unless JSON.parse(File.read(ARGV[0])) == ["probe"]'* ]] || { echo "a failed JSON assertion does not name its check: $probe_output" >&2; exit 1; }
+  probe_output=$("$BASH" "$self" probe-injected-failure 2>&1) && { echo 'the injected-failure probe did not fail' >&2; exit 1; }
+  [[ "$probe_output" == *'expected the injected failure after DURABLE at line '[1-9]*': a transition that stops early; command: bash -c echo "compare-and-set failed: probe" >&2; exit 1; got exit 1: compare-and-set failed: probe'* ]] || { echo "an early stop of an injected transition does not show its reason: $probe_output" >&2; exit 1; }
+fi
+
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-workflow-state.XXXXXX")
 workspace=$(cd "$workspace" && pwd -P)
+
+# #363: run alone, the full run took about 770 seconds because it ran the nested-resume and post-Claim parts
+# after the scoped part, one after another. It now starts those two parts at once, each as its own mode in its
+# own clone (the same runs as test-workflow-state-nested-resume.sh and test-workflow-state-post-claim.sh), runs
+# the scoped part meanwhile, and requires both parts to pass.
+part_pids=''
+if [[ "$scope" == full ]]; then
+  mkdir "$workspace/parts"
+  IOS_TEMPLATE_WORKFLOW_STATE_CLONE=1 "$BASH" "$self" nested-resume >"$workspace/parts/nested-resume.log" 2>&1 &
+  nested_resume_pid=$!
+  IOS_TEMPLATE_WORKFLOW_STATE_CLONE=1 "$BASH" "$self" post-claim >"$workspace/parts/post-claim.log" 2>&1 &
+  post_claim_pid=$!
+  part_pids="$nested_resume_pid $post_claim_pid"
+fi
+wait_for_part() {
+  local name=$1 pid=$2 pass=$3 status=0
+  wait "$pid" || status=$?
+  if (( status != 0 )) || ! grep -Fqx -- "$pass" "$workspace/parts/$name.log"; then
+    cat "$workspace/parts/$name.log" >&2
+    echo "test-workflow-state: the $name part failed (exit $status)" >&2
+    exit 1
+  fi
+}
+
 repo_root="$source_root"
-if [[ -f "$source_root/.git" ]]; then
+if [[ -f "$source_root/.git" || "${IOS_TEMPLATE_WORKFLOW_STATE_CLONE:-}" == 1 ]]; then
   source_head=$(git -C "$source_root" rev-parse HEAD)
   repo_root="$workspace/repository"
   git clone --quiet --no-local "$source_root" "$repo_root"
@@ -29,6 +113,10 @@ artifact_issue="$primary_root/.artifacts/issues/$test_issue"
 [[ ! -e "$artifact_issue" ]] || { echo "refusing to overwrite existing $artifact_issue" >&2; exit 1; }
 state_worktree=''
 cleanup() {
+  for pid in $part_pids; do
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
   if [[ -n "$state_worktree" && -e "$state_worktree" ]]; then git -C "$primary_root" worktree remove --force "$state_worktree" >/dev/null 2>&1 || true; fi
   git -C "$primary_root" branch -D "codex/$test_issue-workflow-state" >/dev/null 2>&1 || true
   rm -rf "$workspace" "$artifact_issue"
@@ -121,20 +209,6 @@ EOF
 printf '["state:approved"]' > "$FAKE_GH_LABELS_FILE"
 printf '[]' > "$FAKE_GH_COMMENTS_FILE"
 
-assert_fails() {
-  local message=$1
-  shift
-  if "$@" >/dev/null 2>&1; then
-    echo "expected failure: $message" >&2
-    exit 1
-  fi
-}
-
-assert_json() {
-  local path=$1 code=$2
-  ruby -rjson -e "$code" "$path"
-}
-
 ruby "$repo_root/tools/lib/workflow-release-phase-test.rb"
 phase_cli="$repo_root/tools/lib/workflow-release-phase-cli.rb"
 phase_record="$workspace/phase-record-0001.json"
@@ -197,8 +271,8 @@ EOF
 cp "$artifact_issue/state.json" "$workspace/full-approved-state.json"
 }
 
-# Nested stop-state resume regressions. The full run executes them in place; the nested-resume mode runs
-# them as their own direct test so a targeted suite reaches them within its per-test limit.
+# Nested stop-state resume regressions. The nested-resume mode runs them as their own direct test so a
+# targeted suite reaches them within its per-test limit, and the full run starts that mode in its own clone.
 run_nested_resume_regressions() {
 # Nested stops resume to the immediate stop state or to the original working state. Markers for
 # the same state within one second are ambiguous by design, so the transitions are spaced apart.
@@ -376,7 +450,7 @@ assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) 
 # durable transition, and clears the pending state instead of resolving its own marker as new history.
 replay_after_comment() {
   local label="$1" from="$2" to="$3"
-  IOS_TEMPLATE_STATE_FAIL_AFTER_COMMENT=1 assert_fails "interrupted $label resume" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$from" --to "$to"
+  assert_injected_failure COMMENT "interrupted $label resume" "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from "$from" --to "$to"
   [[ -e ".artifacts/issues/$test_issue/state-transition.pending.json" ]] || { echo "interrupted $label resume left no pending edge" >&2; exit 1; }
   state_transition "$from" "$to"
   assert_json "$FAKE_GH_LABELS_FILE" "abort unless JSON.parse(File.read(ARGV[0])) == [\"state:$to\"]"
@@ -632,7 +706,13 @@ ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --typ
 assert_fails 'blocked resume without history fails closed' "$repo_root/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from blocked:ops --to in-progress
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:blocked:ops"]'
 
-[[ "$scope" == scoped ]] || run_nested_resume_regressions
+if [[ "$scope" == full ]]; then
+  wait_for_part nested-resume "$nested_resume_pid" 'PASS: nested stop-state resume regressions'
+  wait_for_part post-claim "$post_claim_pid" 'PASS: GitHub preflight and model-neutral durable state transitions'
+  part_pids=''
+  echo 'PASS: GitHub preflight and model-neutral durable state transitions'
+  exit 0
+fi
 
 if [[ "$scope" == scoped ]]; then
   echo 'PASS: scoped GitHub preflight and revised-contract state boundaries'
@@ -747,7 +827,7 @@ mv "$workspace/original-issue-directory" "$artifact_issue"
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused >/dev/null
 [[ ! -e "$pending_path" ]] || { echo 'recovered transition left pending state' >&2; exit 1; }
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress >/dev/null
-IOS_TEMPLATE_STATE_FAIL_AFTER_DURABLE=1 assert_fails 'interruption after durable state leaves a recoverable pending' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
+assert_injected_failure DURABLE 'interruption after durable state leaves a recoverable pending' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
 [[ -f "$pending_path" ]]
 assert_json "$artifact_issue/state.json" 'abort unless JSON.parse(File.binread(ARGV[0]))["state"]=="paused"'
 "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from paused --to in-progress >/dev/null
@@ -755,8 +835,7 @@ assert_json "$artifact_issue/state.json" 'abort unless JSON.parse(File.binread(A
 # Earlier interruptions must retain two-phase retry of the original edge.
 for boundary in LABEL COMMENT; do
   printf '[]' > "$FAKE_GH_COMMENTS_FILE"
-  injection="IOS_TEMPLATE_STATE_FAIL_AFTER_$boundary"
-  assert_fails "interruption after $boundary leaves unapplied pending" env "$injection=1" "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
+  assert_injected_failure "$boundary" "interruption after $boundary leaves unapplied pending" "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to paused
   cp "$pending_path" "$workspace/unapplied-pending.json"
   cp "$artifact_issue/state.json" "$workspace/unapplied-state.json"
   : > "$FAKE_GH_LOG"
@@ -796,7 +875,7 @@ printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
 rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 
 printf '0' > "$FAKE_GIT_HEAD_COUNT_FILE"
-IOS_TEMPLATE_STATE_FAIL_AFTER_DURABLE=1 assert_fails 'verification Head remains bound after durable interruption' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha"
+assert_injected_failure DURABLE 'verification Head remains bound after durable interruption' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from in-progress --to verify-passed --head-sha "$head_sha"
 EXPECTED_HEAD="$head_sha" assert_json "$pending_path" 'abort unless JSON.parse(File.binread(ARGV[0]))["headSha"]==ENV.fetch("EXPECTED_HEAD")'
 EXPECTED_HEAD="$head_sha" assert_json ".artifacts/issues/$test_issue/state.json" 'value=JSON.parse(File.read(ARGV[0])); abort unless value["state"]=="verify-passed" && value["headSha"]==ENV.fetch("EXPECTED_HEAD")'
 assert_fails 'strict harden Issue cannot skip opposite review' "$state_worktree/tools/issue-state.sh" transition --repo yuto1201/iOS-Template --issue "$test_issue" --from verify-passed --to approved-for-merge
