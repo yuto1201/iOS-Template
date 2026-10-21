@@ -87,6 +87,61 @@ layouts for movement.
 needs no capture. Place it after the first three tiles, at most twice and in no more
 than a third of the set.
 
+## Techniques that make a set distinctive
+
+Top apps (researched on before.click, 2026-10-21) rarely let the screenshot carry the
+tile alone. Combine these with the tile kinds above; record the ones you take in the
+research record and the pattern's `techniques`.
+
+- **Story across tiles** (`story-across`): the tiles read as one argument — a problem,
+  then the answer, then the habit — and a sentence may continue onto the next tile.
+- **The world around the app** (`off-screen-world`): illustration, objects, hands or a
+  setting that show where and why the app is used, through `scene`, `continuous` and
+  generated backgrounds.
+- **A piece of UI leaving the device** (`popout`): one card or number magnified next to
+  the device (`callout`), so the benefit reads at thumbnail size.
+- **A character or object with a role** (`mascot`): a mascot or object that recurs on
+  every tile, in one consistent style.
+- **Art across the seam** (`cross-tile-art`): an illustration or background that crosses
+  into the next tile, within the quality bar below.
+- **The app's own typeface and color** (`app-typeface`): headlines in the face and color
+  the app uses itself, from `brand.json`.
+
+## Quality bar
+
+Adapted from ParthJadhav/app-store-screenshots (MIT, see [upstream](upstream.md)) to the
+App Store sizes of D-079. Proportions are of the tile, so they hold for iPhone and
+iPad. Check every tile against it before the user sees a sheet; the `failures` of the
+pattern's style spec add to it.
+
+- **Composition.** A device fills 68–82% of the tile height; headline and device
+  together cover at least 80%, and no empty band is taller than 22%. Anchor the device
+  to an edge rather than floating it with empty bands above and below. At most three
+  visual layers per tile: background, device or illustration, headline with one accent.
+- **Headlines.** At most three lines, two preferred; break lines by hand so they are
+  about equal or deliberately short-long. A word wider than 88% of the tile is broken,
+  resized or hyphenated, never cut off. Display leading at most 1.05 and slightly
+  negative tracking (−0.01 to −0.03 em). The sheet marks candidates longer than the
+  headline guide.
+- **Contrast.** Headline text clears 4.5:1 against the worst pixel under it, not the
+  average; an emphasis color clears 4.5:1 on its own; labels under the size of body text
+  clear 7:1. Over a busy picture add a scrim or move the text.
+- **Illustrations and objects (not clip art).** Each one clears at least three of: two
+  or more tones per major shape; a soft contact shadow; a surface texture (grain,
+  paper, halftone); a volume cue (shaded side, highlight, or a line that thickens in
+  shadow); detail suited to its size. A mascot on a cover tile is at least 13% of the
+  tile height; a hero object is at least 38% of the tile width.
+- **Across tiles.** In a set of five or more, use one cross-tile moment (two at most in
+  eight to ten). 10–30% of an element may cross the seam, more only for backgrounds and
+  abstract paths. Never let a headline, the app name, a face, a key number or a claim
+  cross. Each exported tile still reads alone at thumbnail size.
+- **Variety.** Adjacent tiles change layout or device placement; the sheet marks a
+  layout used on three adjacent tiles. Each tile sells one strength; the sheet marks a
+  strength repeated within a pattern.
+- **Generic AI look.** Reject before showing: meaningless gradients and light orbs,
+  flat single-tone shapes, objects without shadow or texture, the same picture on every
+  tile, stock-photo smiles, and anything in the `avoid` list of `brand.json`.
+
 ## iPad
 
 Render iPad 13-inch tiles (2064×2752, bare screen) with the render extension and

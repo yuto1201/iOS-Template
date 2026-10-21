@@ -17,6 +17,42 @@ CC BY 4.0. Bundled fonts are SIL OFL 1.1. Keep the npm package's
 using a bezel-free layout avoids using that device artwork. No frame/font binaries
 are vendored into this template skill.
 
+## Style spec format and quality bar (D-085)
+
+The style spec format ([proposal](proposal.md#style-spec-one-per-pattern)) and the
+[quality bar](patterns.md#quality-bar) are adapted from
+[ParthJadhav/app-store-screenshots](https://github.com/ParthJadhav/app-store-screenshots)
+(`skills/app-store-screenshots/style-prompts/` and `_QUALITY_BAR.md`, inspected
+2026-10-21). Its code, Next.js editor and the text of its eighteen named styles are not
+included; the numbers of the quality bar are restated as proportions of the App Store
+tile. The techniques list draws on the before.click gallery and the ShotStudio template
+library, inspected the same day; nothing from either is copied. The adapted parts are
+used under this license:
+
+```text
+MIT License
+
+Copyright (c) 2026 Parth Jadhav
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 Before upgrading, inspect package version, upstream license, config schema, locale
 capture behavior, device selection, output cleanup behavior and Apple rule changes.
 Re-run version/help and both starter locales. Only claim capture/render parity after
