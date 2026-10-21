@@ -58,8 +58,6 @@ if [[ "${IOS_TEMPLATE_TEST_MODE:-}" == 1 ]]; then
   XCODE_DEVELOPER_DIR=''
 else
   derived_data_root="$user_home/Library/Caches/ios-template/derived-data"
-  resolve_xcode_environment || fail 'Xcode is not available'
-  xcodebuild_path="$XCODEBUILD_PATH"
 fi
 
 # The worktree directory and every component below the root must be real directories that this user owns.
@@ -81,21 +79,26 @@ worktree_root="$(/usr/bin/ruby --disable-gems -rjson -rfileutils -e '
   end
   owned.call(root)
   worktree = File.join(root, id)
-  begin
+  created = begin
     Dir.mkdir(worktree, 0o700)
+    true
   rescue Errno::EEXIST
+    false
   end
   owned.call(worktree)
-  File.chmod(0o700, worktree)
+  # An existing directory must carry the owner record of this worktree before anything in it changes.
   marker = File.join(worktree, "owner.json")
   expected = %({"schemaVersion":1,"worktree":#{repository.to_json}}\n)
   if File.exist?(marker) || File.symlink?(marker)
     stat = File.lstat(marker)
     stop("owner.json is not a regular file owned by this user") unless stat.file? && stat.uid == Process.uid && stat.nlink == 1
     stop("#{worktree} belongs to another worktree") unless File.binread(marker) == expected
-  else
+  elsif created || Dir.empty?(worktree)
     File.open(marker, File::WRONLY | File::CREAT | File::EXCL | File::NOFOLLOW, 0o600) { |file| file.write(expected) }
+  else
+    stop("#{worktree} has no owner record")
   end
+  File.chmod(0o700, worktree)
   %w[DerivedData Results Runs Scratch].each do |name|
     path = File.join(worktree, name)
     begin
@@ -106,6 +109,12 @@ worktree_root="$(/usr/bin/ruby --disable-gems -rjson -rfileutils -e '
   end
   puts worktree
 ' "$derived_data_root" "$worktree_id" "$repository_root" "$common_git_dir")" || exit 2
+
+# Xcode is located only after the location is verified, because locating it runs `xcodebuild -version`.
+if [[ "${IOS_TEMPLATE_TEST_MODE:-}" != 1 ]]; then
+  resolve_xcode_environment || fail 'Xcode is not available'
+  xcodebuild_path="$XCODEBUILD_PATH"
+fi
 
 run_folder="" scratch_folder="" child_pid=""
 remove_owned_folder() {
@@ -150,11 +159,12 @@ wait "$child_pid" || status=$?
 child_pid=""
 
 if [[ "$keep_result" == 1 && -d "$result_bundle" && ! -L "$result_bundle" ]]; then
-  kept="$worktree_root/Results/result-$(/bin/date -u +%Y%m%dT%H%M%SZ)-${run_folder##*.}.xcresult"
+  # Names sort in completion order: nanosecond UTC time, then the process ID as a fixed tie-breaker.
+  kept="$worktree_root/Results/result-$(/usr/bin/ruby --disable-gems -e 'print Time.now.utc.strftime("%Y%m%dT%H%M%S.%9NZ")')-$(printf '%010d' "$$").xcresult"
   /bin/mv -- "$result_bundle" "$kept"
   /usr/bin/ruby --disable-gems -rfileutils -e '
     results = ARGV.fetch(0)
-    kept = Dir.children(results).grep(/\Aresult-\d{8}T\d{6}Z-[A-Za-z0-9]+\.xcresult\z/).sort
+    kept = Dir.children(results).grep(/\Aresult-\d{8}T\d{6}\.\d{9}Z-\d{10}\.xcresult\z/).sort
     kept[0...-3].each do |name|
       path = File.join(results, name)
       stat = File.lstat(path)

@@ -30,7 +30,7 @@ for argument in "\$@"; do
   [[ "\$previous" == -resultBundlePath ]] && bundle="\$argument"
   previous="\$argument"
 done
-[[ -n "\$bundle" ]] && mkdir -p "\$bundle" && printf 'result\n' > "\$bundle/Info.plist"
+[[ -n "\$bundle" ]] && mkdir -p "\$bundle" && wc -l < "\$log" | tr -d ' ' > "\$bundle/run"
 case "\$mode" in
   ok) exit 0 ;;
   fail) exit 65 ;;
@@ -94,12 +94,14 @@ run_tool "$alpha" -scheme Example test >/dev/null 2>&1 || status=$?
 
 # --keep-result keeps only the newest three result bundles of the worktree.
 echo ok > "$work/fake-mode"
+# The four runs finish within the same second, so the order cannot come from whole seconds.
+rm -f "$work/fake.log"
 for run in 1 2 3 4; do
   run_tool "$alpha" --keep-result -scheme Example test >/dev/null 2>&1 || fail "kept run $run failed"
-  sleep 1
 done
 kept="$(ls "$root/$alpha_id/Results")"
 [[ "$(wc -l <<<"$kept" | tr -d ' ')" == 3 ]] || fail "unexpected kept results: $kept"
+[[ "$(for name in $kept; do cat "$root/$alpha_id/Results/$name/run"; done | tr '\n' ' ')" == '2 3 4 ' ]] || fail "the newest three runs were not kept: $kept"
 [[ -z "$(ls -A "$root/$beta_id/Results")" ]] || fail 'another worktree kept a result'
 
 # --scratch uses a separate DerivedData that is removed after success and after failure.
@@ -150,10 +152,30 @@ rm -rf "$root/$alpha_id/Results"
 ln -s "$work" "$root/$alpha_id/Results"
 refused 'is not a directory owned by this user' run_tool "$alpha" -scheme Example build
 rm "$root/$alpha_id/Results"
+# A directory recorded for another worktree keeps its permissions and contents when it is refused.
+mkdir -p "$root/$alpha_id/Results"
+cp "$root/$beta_id/owner.json" "$root/$alpha_id/owner.json"
+chmod 755 "$root/$alpha_id"
+printf 'keep\n' > "$root/$alpha_id/Results/note"
+refused 'belongs to another worktree' run_tool "$alpha" -scheme Example build
+[[ "$(stat -f '%Lp' "$root/$alpha_id")" == 755 && "$(cat "$root/$alpha_id/Results/note")" == keep ]] || fail 'a refused directory was changed'
+printf '{"schemaVersion":1,"worktree":"%s"}\n' "$(cd "$alpha" && pwd -P)" > "$root/$alpha_id/owner.json"
+rm "$root/$alpha_id/Results/note"
+# An existing non-empty directory without an owner record is refused as well.
+mkdir -p "$root/unrecorded-$alpha_id"
+rm "$root/$alpha_id/owner.json"
+refused 'has no owner record' run_tool "$alpha" -scheme Example build
+printf '{"schemaVersion":1,"worktree":"%s"}\n' "$(cd "$alpha" && pwd -P)" > "$root/$alpha_id/owner.json"
+rmdir "$root/unrecorded-$alpha_id"
 refused 'sets -derivedDataPath itself' run_tool "$alpha" -scheme Example -derivedDataPath "$work/elsewhere" build
 refused 'sets -resultBundlePath itself' run_tool "$alpha" -scheme Example -resultBundlePath "$work/elsewhere.xcresult" build
 refused 'name -scheme, -testProductsPath or -xctestrun' run_tool "$alpha" -list -project Example.xcodeproj
 refused 'inside a Git worktree' bash -c 'cd "$1" && IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT="$2" IOS_TEMPLATE_TEST_XCODEBUILD="$3" "$4" -scheme Example build' _ "$work" "$root" "$fake" "$tool"
 [[ -e "$root/$beta_id/owner.json" ]] || fail 'a refusal touched another worktree'
+
+# In production the tool locates Xcode, which runs `xcodebuild -version`, only after it has verified the location.
+location_line="$(grep -n '^worktree_root="\$(' "$tool" | cut -d: -f1)"
+resolve_line="$(grep -n 'resolve_xcode_environment ||' "$tool" | cut -d: -f1)"
+[[ -n "$location_line" && -n "$resolve_line" ]] && (( resolve_line > location_line )) || fail 'Xcode is located before the location is verified'
 
 echo 'xcodebuild-in-worktree regressions passed'
