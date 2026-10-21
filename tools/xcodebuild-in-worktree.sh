@@ -71,13 +71,28 @@ worktree_root="$(/usr/bin/ruby --disable-gems -rjson -rfileutils -e '
   [repository, common].each do |protected|
     stop("the location must be outside the repository") if root == protected || root.start_with?("#{protected}/")
   end
-  FileUtils.mkdir_p(root, mode: 0o700)
-  stop("the location must not pass through a symbolic link") unless File.realpath(root) == root
   owned = lambda do |path|
     stat = File.lstat(path)
     stop("#{path} is not a directory owned by this user") unless stat.directory? && !stat.symlink? && stat.uid == Process.uid
   end
-  owned.call(root)
+  # Before creating anything, the deepest existing ancestor must be a real path that this user owns, so a
+  # symbolic link on the way can never place a new directory somewhere else (another worktree, for example).
+  missing = []
+  existing = root
+  until File.exist?(existing) || File.symlink?(existing)
+    missing.unshift(File.basename(existing))
+    existing = File.dirname(existing)
+  end
+  stop("the location must not pass through a symbolic link") unless File.realpath(existing) == existing
+  owned.call(existing)
+  missing.each do |component|
+    existing = File.join(existing, component)
+    begin
+      Dir.mkdir(existing, 0o700)
+    rescue Errno::EEXIST
+    end
+    owned.call(existing)
+  end
   worktree = File.join(root, id)
   created = begin
     Dir.mkdir(worktree, 0o700)

@@ -174,6 +174,11 @@ echo ok > "$work/fake-mode"
 refused 'outside the repository' bash -c 'cd "$1" && IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT="$1/derived-data" IOS_TEMPLATE_TEST_XCODEBUILD="$2" "$3" -scheme Example build' _ "$alpha" "$fake" "$tool"
 ln -s "$root" "$work/linked-root"
 refused 'symbolic link' bash -c 'cd "$1" && IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT="$2" IOS_TEMPLATE_TEST_XCODEBUILD="$3" "$4" -scheme Example build' _ "$alpha" "$work/linked-root" "$fake" "$tool"
+# A symbolic link above a missing location is refused before anything is created through it.
+mkdir -p "$work/other-worktree-target"
+ln -s "$work/other-worktree-target" "$work/linked-ancestor"
+refused 'symbolic link' bash -c 'cd "$1" && IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT="$2" IOS_TEMPLATE_TEST_XCODEBUILD="$3" "$4" -scheme Example build' _ "$alpha" "$work/linked-ancestor/derived-data" "$fake" "$tool"
+[[ -z "$(ls -A "$work/other-worktree-target")" ]] || fail 'a directory was created through a symbolic link ancestor'
 cp "$root/$beta_id/owner.json" "$root/$alpha_id/owner.json"
 refused 'belongs to another worktree' run_tool "$alpha" -scheme Example build
 printf '{"schemaVersion":1,"worktree":"%s"}\n' "$(cd "$alpha" && pwd -P)" > "$root/$alpha_id/owner.json"
