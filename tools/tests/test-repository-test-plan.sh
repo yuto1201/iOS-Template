@@ -115,10 +115,22 @@ runner.validate_manifest!(source_manifest, source_tests)
 live_content = JSON.parse(File.binread(File.join(source_repo, "Config/template-identity.json"))).fetch("liveContentPaths")
 bootstrap_paths = live_content.reject { |path| path.start_with?("TemplateApp") } +
   %w[tools/bootstrap-app.swift tools/bootstrap-app.sh Config/template-identity.json]
+# #327: a bootstrap-assets change selects every app-bootstrap group, and a bootstrap-fixture change selects
+# every fixture group.
+bootstrap_tests = %w[tools/tests/test-app-bootstrap-safety-rejection.sh tools/tests/test-app-bootstrap-safety-rerun.sh
+  tools/tests/test-app-bootstrap-transform.sh tools/tests/test-app-bootstrap.sh]
+fixture_tests = %w[tools/tests/test-bootstrap-fixture-derived-core.sh tools/tests/test-bootstrap-fixture-derived-safety-rejection.sh
+  tools/tests/test-bootstrap-fixture-derived-safety-rerun.sh tools/tests/test-bootstrap-fixture-derived-transform.sh
+  tools/tests/test-bootstrap-fixture.sh]
+abort "bootstrap groups differ from the manifest" unless
+  source_tests.select { |path| path.start_with?("tools/tests/test-app-bootstrap") } == bootstrap_tests &&
+    source_tests.select { |path| path.start_with?("tools/tests/test-bootstrap-fixture") } == fixture_tests
+_, _, tests = runner.resolve(source_manifest, "targeted", ["tools/bootstrap-app.swift"])
+abort "a bootstrap-fixture change did not select every fixture group" unless (fixture_tests - tests).empty?
 bootstrap_paths.each do |changed_path|
   scope, reason, tests = runner.resolve(source_manifest, "targeted", [changed_path])
   abort "bootstrap regression was not selected for #{changed_path}" unless scope == "targeted" &&
-    reason.include?("bootstrap-assets") && tests.include?("tools/tests/test-app-bootstrap.sh")
+    reason.include?("bootstrap-assets") && (bootstrap_tests - tests).empty?
 end
 %w[docs/verification.md tools/bootstrap-app.sh tools/tests/test-appstore-preparation.sh].each do |changed_path|
   _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
@@ -152,8 +164,11 @@ abort "head-all unexpectedly narrowed a test" unless
   runner.test_arguments("tools/tests/test-premerge-gate.sh", "head-all") == [] &&
     runner.test_arguments("tools/tests/test-workflow-state.sh", "head-all") == [] &&
     runner.test_arguments("tools/tests/test-workflow-e2e.sh", "head-all") == []
-abort "bootstrap full entrypoint changed" unless
-  runner.test_arguments("tools/tests/test-app-bootstrap.sh", "targeted") == ["all"]
+abort "bootstrap core entrypoint changed" unless
+  %w[targeted head-all base-and-head].all? { |scope| runner.test_arguments("tools/tests/test-app-bootstrap.sh", scope) == ["core"] }
+abort "a bootstrap group entrypoint gained arguments" unless (bootstrap_tests + fixture_tests - ["tools/tests/test-app-bootstrap.sh"]).all? do |path|
+  %w[targeted head-all base-and-head].all? { |scope| runner.test_arguments(path, scope) == [] }
+end
 Dir.mktmpdir("repository-test-plan-") do |scratch|
   repo = File.join(scratch, "repo")
   FileUtils.mkdir_p(File.join(repo, "Config"))
