@@ -32,7 +32,33 @@ Then validate the resulting derived app:
 tools/validate-admob-integration.sh --root /absolute/path/to/derived-app
 ```
 
-The validator compares the Debug and Release Info.plist App IDs, the SKAdNetworkItems, and both branches of the generated configuration with the recorded activation input itself, so a file edited together with the record's digest still fails. Release must hold only the app's own pair, never Google's demo publisher, and the activated sources must not contain the network-free UI-test fixture route.
+The validator compares the Debug and Release App ID build settings, the SKAdNetworkItems, and both branches of the generated configuration with the recorded activation input itself, so a file edited together with the record's digest still fails. Release must hold only the app's own pair, never Google's demo publisher, and the activated sources must not contain the network-free UI-test fixture route.
+
+## Info.plist handling
+
+Activation keeps every Info.plist source the app already has. It never changes `GENERATE_INFOPLIST_FILE`, never removes or edits an `INFOPLIST_KEY_*` setting (scene manifest, launch screen, orientations, display name), and never replaces or duplicates an existing `INFOPLIST_FILE`. It adds only:
+
+- `ADMOB_APPLICATION_IDENTIFIER` to the application target's Debug (Google's demo App ID) and Release (the app's own App ID) build configurations;
+- `GADApplicationIdentifier` = `$(ADMOB_APPLICATION_IDENTIFIER)` and the input's exact `SKAdNetworkItems` to the Info.plist the app uses.
+
+Where the two keys go depends on the project:
+
+- When Debug and Release already point at the same `INFOPLIST_FILE`, the keys are added to that file with `plutil`. Every other key and value stays; `plutil` rewrites an XML plist with its keys in sorted order and keeps a binary plist binary.
+- When the application has no `INFOPLIST_FILE` and both configurations keep `GENERATE_INFOPLIST_FILE = YES`, activation adds `<Module>/AdMob/Info.plist` holding only the two keys and points both configurations at it. Xcode merges that file with the generated keys. In a file-system-synchronized app folder the file is also excluded from the target's resources with a membership exception, as Xcode itself does, so it is not copied into the bundle a second time.
+
+Activation stops before any change, with the reason, when Debug and Release use different `INFOPLIST_FILE` values, when one configuration declares more than one or a conditional `INFOPLIST_FILE`, when the file is missing, symlinked, outside the repository, or not a dictionary plist, when it already has a different `GADApplicationIdentifier` or different `SKAdNetworkItems`, when the app declares `NSUserTrackingUsageDescription`, when the project-level settings or a tracked `.xcconfig` set `INFOPLIST_FILE` or `ADMOB_APPLICATION_IDENTIFIER`, or when the project already links Google Mobile Ads.
+
+The Info.plist file is the app's own file, so its bytes are not pinned in the activation record: the app may add or edit unrelated keys later. The validator reads the Info.plist in use and requires exactly the `$(ADMOB_APPLICATION_IDENTIFIER)` reference, the recorded `SKAdNetworkItems`, no `NSUserTrackingUsageDescription`, one `INFOPLIST_FILE` per configuration, and `GENERATE_INFOPLIST_FILE` unchanged from the activation source. Do not use `INFOPLIST_KEY_GADApplicationIdentifier`; Xcode accepts only its own fixed key set there.
+
+## Moving an app that integrated ads outside the template
+
+An app that added Google Mobile Ads by hand (for example its own `<Module>/AdMob/` code, its own package reference, and App ID keys in its own Info.plist) can move to this activation in a dedicated Issue when all of these hold:
+
+1. Its confirmed specification satisfies [references/input-contract.md](references/input-contract.md): the non-tracking UMP route with one anchored-adaptive banner, minimum age 18 or more, the exact pinned SDK and UMP versions, and verified Release identifiers for this Bundle ID.
+2. On a feature branch with a clean worktree, it first removes its own integration in one commit: the `<Module>/AdMob/` folder, the Google Mobile Ads package reference and product, any `ADMOB_APPLICATION_IDENTIFIER` or other App ID build settings, and `GADApplicationIdentifier` and `SKAdNetworkItems` from its Info.plist. It keeps every other Info.plist key and the existing `INFOPLIST_FILE`.
+3. Debug and Release use the same `INFOPLIST_FILE` (or none, with `GENERATE_INFOPLIST_FILE = YES`).
+
+Then run the activation and the validator as above, wire `AdMobRuntimeCoordinator` and `AdaptiveBannerHost` in place of the removed code, and rebuild and retest the app. When a condition cannot be met, for example a tracking or other ad format, a different SDK version, an App ID that differs by configuration in another way, or separate Debug and Release Info.plist files that must stay separate, keep the app's own integration under its own decision and record why; do not edit the activation output or the record by hand to make it pass.
 
 ## Readiness report
 
