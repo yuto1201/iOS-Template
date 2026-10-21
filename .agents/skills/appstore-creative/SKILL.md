@@ -31,36 +31,61 @@ or updating. This is a local asset workflow, not App Store Connect submission.
 Respect a user's named platform and previously selected scope. Infer App Store
 for a native iOS-only project. Ask about platforms only if genuinely unresolved.
 
-## The flow (D-077)
+## The flow (D-077, D-085)
+
+The images must say what the app does, what makes it different and why it is worth
+installing. A plain background with a screenshot and a headline does not; the world
+around the app, a story across the tiles and real illustrations do.
 
 1. **Prepare.** Confirm real captures exist for each locale; capture missing ones
    with the repository tool. Read `App Store/metadata/`, confirmed specs and the app.
-2. **Brief.** Write a short brief: the app's core benefit, mood, colors to use or
-   avoid, the real screens worth showing, the tile count (up to 10), and locales.
-3. **Stage 1 — compare patterns.** Design three or four whole-set patterns that
-   differ in story and composition, not only color. Draw every tile for real with
-   Goldie and the render extension at full size, Japanese iPhone only. Each pattern
-   may use one generated key image; use real captures and solid or gradient
-   backgrounds elsewhere. Build the sheet:
+2. **Find the app's identity.** Write `goldie/brand.json`: its strengths (each tied
+   to a real screen), who uses it and where, its world, the story the tiles tell in
+   order, colors (including the app's `AccentColor` and icon colors), fonts with
+   source and license, voice, motifs and what to avoid. Check it with
+   `tools/appstore-creative-sheet.sh check --brand goldie/brand.json`. See
+   [identity and style specs](references/proposal.md#identity-brandjson).
+3. **Research.** Look at three to five top apps of the same category (before.click
+   and the App Store) every time, and record only the techniques they use. Never copy
+   their designs, illustrations, copy or logos. See
+   [research](references/proposal.md#research-record).
+4. **Write one style spec per pattern** from `brand.json`, in the format and against
+   the [quality bar](references/patterns.md#quality-bar) adapted from
+   ParthJadhav/app-store-screenshots. A color or font outside `brand.json` needs a
+   written reason.
+5. **Make and show the materials.** Generate as many illustrations, objects and
+   settings as the patterns need ([image generation](references/imagegen.md)); there
+   is no per-pattern limit. Reject anything that looks like generic AI art before
+   showing it, then show the materials to the user and use only what the user
+   explicitly adopts.
+6. **Stage 1 — compare patterns.** Design three to six whole-set patterns (three or
+   four by default; five or six only when the ideas do not fit in four) that
+   differ in world, story and composition, not only color. Mark exactly one as
+   recommended, with the reason: the one you think is best. Draw every tile for real
+   with Goldie and the render extension at full size, Japanese iPhone only. Headlines
+   are provisional: give two or more candidates per tile and locale, and align them
+   with the App Store copy guide (ASO) when it exists. Build the sheet:
 
    ```sh
    tools/appstore-creative-sheet.sh build --spec pattern-definition.json \
      --root .artifacts/store-creative --revision <revision>
    ```
 
-   The sheet checks every pattern against the rules below and marks violations.
-4. **Show the sheet and ask for a choice.** The local `sheet.html` is the canonical
+   The sheet checks every pattern against the rules below and marks violations,
+   refuses patterns that repeat another's signature or layouts and backgrounds, and
+   marks repeated layouts, repeated strengths and long headlines.
+7. **Show the sheet and ask for a choice.** The local `sheet.html` is the canonical
    sheet. Claude also publishes that exact file as a private Artifact and gives the
    link, so the user can see it on any device; Codex opens the local file in its
    browser. Ask for one pattern ID, or an explicit tile-by-tile combination.
-5. **Record the choice.** `tools/appstore-creative-sheet.sh select --sheet
+8. **Record the choice.** `tools/appstore-creative-sheet.sh select --sheet
    .artifacts/store-creative/<revision> --pattern <ID>` or `--tiles 1=A:1,2=C:2,...`.
    A vague answer ("like A, but brighter") is not a choice: build a new revision
    that applies it and ask again. Never edit a revision the user has seen.
-6. **Stage 2 — the full sample.** Generate the remaining images, render Japanese and
+9. **Stage 2 — the full sample.** Generate the remaining images, render Japanese and
    English for iPhone and iPad, build a `preview` sheet,
    and repeat the choice for changes in a new revision.
-7. **Finish.** Export at the exact store sizes, inspect every image, and hand the
+10. **Finish.** Export at the exact store sizes, inspect every image, and hand the
    adopted images to `prepare-appstore-assets`. Commit only `goldie/<locale>/`
    configs, adopted generated images in `goldie/assets/`, and
    `goldie/assets/provenance.json`; keep sheets and rejected images out of Git.
@@ -187,10 +212,14 @@ absolute build path. Each output directory is disposable and **owned by Goldie**
 
 ## Copy and typography
 
-Aim for short benefit-led Japanese/English headlines. Use a Japanese-capable
-installed font (for example Hiragino Sans), and inspect the actual export for tofu,
-wrong glyph forms, wrapping and cropping. Bundled Noto Sans SC is not a Japanese
-typography guarantee. Studio listing scaffolding is a local preview only.
+Aim for short benefit-led Japanese/English headlines in the voice of `brand.json`.
+They are provisional until the App Store copy guide (ASO) exists; follow that guide
+once it does. Fonts come from `brand.json`, each with its source and license. Prefer
+free fonts (Noto Sans JP, the M PLUS family, the Zen family, Shippori Mincho) and
+inspect the actual export for tofu, wrong glyph forms, wrapping and cropping.
+Bundled Noto Sans SC is not a Japanese typography guarantee. **Before using a paid
+font, a credit-consuming generator or any paid tool, stop and ask the user**; record
+a font approval in `brand.json`. Studio listing scaffolding is a local preview only.
 
 ## Completion
 

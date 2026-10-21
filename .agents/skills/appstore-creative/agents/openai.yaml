@@ -1,4 +1,4 @@
 interface:
   display_name: "App Store creative — ストア用スクショ"
   short_description: "パターンを提案して選んでもらい、日英のApp Store用画像を作る"
-  default_prompt: "$appstore-creative で、このアプリのストア用スクショのパターンを3〜4案提案してください。動画は不要です。"
+  default_prompt: "$appstore-creative で、このアプリのストア用スクショのパターンを3〜4案（収まらなければ6案まで）提案し、いちばん良い案を示してください。動画は不要です。"

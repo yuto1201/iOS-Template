@@ -76,7 +76,22 @@ require_text() { # file pattern message
 }
 require_text "$creative_skill/SKILL.md" 'appstore-creative-sheet\.sh build' 'skill does not build a proposal sheet'
 require_text "$creative_skill/SKILL.md" 'appstore-creative-sheet\.sh select' 'skill does not record the choice'
-require_text "$creative_skill/SKILL.md" 'three or four whole-set patterns' 'skill does not compare patterns first'
+require_text "$creative_skill/SKILL.md" 'three to six whole-set patterns' 'skill does not compare patterns first'
+# D-085: identity first, research every time without copying, one style spec per pattern against the
+# quality bar, exactly one recommendation, provisional headlines, and a stop before anything paid.
+require_text "$creative_skill/SKILL.md" 'appstore-creative-sheet\.sh check --brand goldie/brand\.json' 'skill does not check the identity record'
+require_text "$creative_skill/SKILL.md" 'Never copy' 'skill does not forbid copying reference apps'
+require_text "$creative_skill/SKILL.md" 'Mark exactly one as' 'skill does not recommend one pattern'
+require_text "$creative_skill/SKILL.md" 'stop and ask the user' 'skill does not stop before paid fonts or tools'
+require_text "$creative_skill/SKILL.md" 'Headlines' 'skill does not mark headlines provisional'
+require_text "$creative_refs/proposal.md" '^## Identity \(`brand\.json`\)' 'proposal guide lacks the identity record'
+require_text "$creative_refs/proposal.md" '^## Style spec' 'proposal guide lacks the style spec'
+require_text "$creative_refs/proposal.md" '^## Research record' 'proposal guide lacks the research record'
+require_text "$creative_refs/proposal.md" 'never copy a design, illustration, headline or' 'proposal guide does not forbid copying'
+require_text "$creative_refs/patterns.md" '^## Quality bar' 'patterns guide lacks the quality bar'
+require_text "$creative_refs/patterns.md" 'Generic AI look' 'quality bar does not reject generic AI images'
+require_text "$creative_refs/upstream.md" 'ParthJadhav/app-store-screenshots' 'upstream guide does not credit the style spec source'
+require_text "$creative_refs/upstream.md" 'Copyright \(c\) 2026 Parth Jadhav' 'upstream guide lacks the MIT notice'
 require_text "$creative_skill/SKILL.md" 'private Artifact' 'skill does not publish the sheet for Claude'
 require_text "$creative_skill/SKILL.md" 'Codex opens the local file' 'skill does not show the sheet in Codex'
 require_text "$creative_skill/SKILL.md" 'first three tiles show the app in use' 'skill drops the first-three-tiles rule'
