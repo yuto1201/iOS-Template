@@ -261,8 +261,9 @@ module IOSTemplate
       devices_root = poster_devices_root
       result = nil
       with_state(write: false) do |_legacy_active, state|
-        leased = state.fetch("leases").select { |record| ACTIVE_STATUSES.include?(record["status"]) }
-          .map { |record| record["deviceName"] }
+        # An outstanding lease blocks a device by its UDID as well as by its name, so a lease taken under
+        # another name (for example before a rename) still protects the device.
+        outstanding = state.fetch("leases").select { |record| ACTIVE_STATUSES.include?(record["status"]) }
         devices = FAMILIES.map do |family|
           declared = declared_device!(repository, family)
           entry = {"family" => family, "deviceName" => declared.fetch("name")}
@@ -279,7 +280,8 @@ module IOSTemplate
           device_root = File.join(devices_root, udid)
           target = poster_data_path!(device_root)
           entry.merge!("udid" => udid, "posterBytes" => target ? tree_bytes(target) : 0)
-          reason = poster_data_blocker(device, device_root, udid, leased.include?(declared.fetch("name")))
+          leased = outstanding.any? { |record| record["udid"] == udid || record["deviceName"] == declared.fetch("name") }
+          reason = poster_data_blocker(device, device_root, udid, leased)
           entry["eligible"] = reason.nil?
           entry["reason"] = reason if reason
           entry["removed"] = false

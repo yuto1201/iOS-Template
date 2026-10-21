@@ -153,6 +153,31 @@ IFS=$'\t' read -r lease_id _ _ <<<"$lease"
 "${manager[@]}" release "${common[@]}" --session poster-session --allocation-id "$lease_id" \
   --reason test-complete --receipt-dir "$receipts" >/dev/null || fail 'the test lease was not released'
 
+# A lease taken for the same UDID under another name (another repository's declaration, then a rename) also
+# blocks the device.
+other_repository="$scratch/other-repository"
+mkdir -p "$other_repository/Config"
+git -C "$other_repository" init -q
+jq '.devices |= map(.name |= sub("^iOS-Template "; "Other "))' Config/dedicated-simulators.json >"$other_repository/Config/dedicated-simulators.json"
+other_iphone_name="$(jq -r '.devices[] | select(.family == "iphone") | .name' "$other_repository/Config/dedicated-simulators.json")"
+rename_device() {
+  ruby -rjson -e 'path, udid, value = ARGV; state = JSON.parse(File.read(path)); state["devices"].values.flatten.find { |d| d["udid"] == udid }["name"] = value; File.write(path, JSON.generate(state))' "$simctl_state" "$1" "$2"
+}
+reset_devices
+rename_device "$iphone_udid" "$other_iphone_name"
+lease="$("${manager[@]}" allocate "${common[@]}" --minimum-free-bytes 0 \
+  --session other-session --repository "$other_repository" --issue 378 --head "$head_sha" --batch poster-test \
+  --attempt other-attempt --case iphone-ja --runtime "$runtime" --device-type "$iphone_type" \
+  --owner-pid "$$" --wait-seconds 0 --receipt-dir "$receipts")" || fail 'the other-name test lease failed'
+rename_device "$iphone_udid" "$iphone_name"
+report="$(poster_data --apply)"
+[[ "$(field "$report" iphone .reason)" == leased && -d "$(poster "$iphone_udid")" ]] || fail "a device leased under another name was changed: $report"
+IFS=$'\t' read -r lease_id _ _ <<<"$lease"
+rename_device "$iphone_udid" "$other_iphone_name"
+"${manager[@]}" release "${common[@]}" --session other-session --allocation-id "$lease_id" \
+  --reason test-complete --receipt-dir "$receipts" >/dev/null || fail 'the other-name test lease was not released'
+rename_device "$iphone_udid" "$iphone_name"
+
 # A symbolic link on the way stops the run before anything is removed.
 reset_devices
 mv "$(poster "$iphone_udid")" "$scratch/outside-poster"
