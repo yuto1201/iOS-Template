@@ -973,3 +973,16 @@
   - 入口のtool、`Config/development-device.json`、そのtestはテンプレートだけのfile（`template-only`）とし、派生アプリへ取り込まない。
 - Consequence: ユーザーは、テンプレートの変更を自分の実機ですぐに試せる。AIの検証は、これまでどおり専用Simulatorのleaseの中だけで行い、実機の結果を完了条件や証拠に使わない。派生アプリには入口がなく、派生アプリで同じことをする場合は別のIssueで決める。自動署名に必要なprovisioning profileがまだない場合、最初の1回はユーザーがXcodeで用意する。
 - Related Issue: #379、#407
+
+## D-087: AdMobの有効化で受け付ける対象年齢の下限を16歳にする
+
+- Date: 2026-10-21
+- Status: 確定
+- Supersedes: D-057の有効化の入力で、テンプレートが安全側に定めていた対象年齢の下限の18歳。D-057の非trackingの既定の経路、UMP、子ども向けと同意年齢未満の扱いを別の判断とすることは維持する。
+- Context: AdMobの有効化（`tools/activate-admob-integration.sh`）は`audience.minimumAge`に18以上の整数だけを受け付けていた。派生アプリCafLogはApp Storeの年齢区分が17+で、この制限のため対象を18歳以上にし、年齢区分を18+へ上げると決めていた（#376）。Googleの公式の資料にも、AppleのApp Review Guidelinesにも、非personalizedの広告の対象年齢を18歳以上とする決まりはなく、18はテンプレートの安全側の判断だった。Googleは子ども（COPPAの13歳未満）と同意年齢未満の利用者に別の扱いを定め（https://support.google.com/admob/answer/6219315 、https://developers.google.com/admob/ios/targeting ）、Appleは広告がアプリの年齢区分に合うことを求める（App Review Guidelines 2.5.18、https://developer.apple.com/app-store/review/guidelines/ ）。ユーザーは2026-10-21に、16歳以上に広げることを選んだ。
+- Decision:
+  - `audience.minimumAge`は16以上の整数を受け付ける。16は、EUの各国が13〜16で定めるデジタルの同意年齢の上限であり、地域ごとの場合分けを要しない。
+  - `childDirected`と`underAgeOfConsent`は今までどおり`false`だけを受け付け、それ以外は変更の前に止める。
+  - 18歳未満を含むアプリ（`minimumAge`が18未満）では、AdMobの共通のcoreが広告の内容のレーティングの上限をTと決め、生成するprovider（`GoogleMobileAdsProvider.swift`）がSDKへ設定する（T（teen、App Storeの12+向け）にする（`maxAdContentRating = .teen`、https://support.google.com/admob/answer/7562142 ）。18以上では、今までどおり制限しない。
+- Consequence: 入力の検査、skillの文書、coreとproviderのレーティングの上限は#398で実装し、追跡済みのfixture appのBuild、Unit Test、日本語iPhoneのSmoke Testで確かめる。#398がmergeされるまで、有効化は今までどおり18以上だけを受け付ける。年齢区分が16+または17+のアプリが、年齢区分を上げずに非trackingの既定の経路で広告を有効化できる。16歳未満を対象に含むアプリは、子ども向けや同意年齢未満の扱いを別の判断として決めるまで有効化できない。実際の年齢の確認は利用者の自己申告に頼らず、アプリの仕様と年齢区分で決める。TFCD／TFUAの後継の`ageRestrictedTreatment`への移行は、このDecisionに含めない。
+- Related Issue: #376、#397、#398、#408
