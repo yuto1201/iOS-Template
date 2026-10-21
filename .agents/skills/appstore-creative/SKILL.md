@@ -42,8 +42,9 @@ around the app, a story across the tiles and real illustrations do.
 2. **Find the app's identity.** Write `goldie/brand.json`: its strengths (each tied
    to a real screen), who uses it and where, its world, the story the tiles tell in
    order, colors (including the app's `AccentColor` and icon colors), fonts with
-   source and license, voice, motifs and what to avoid. Check it with
-   `tools/appstore-creative-sheet.sh check --brand goldie/brand.json`. See
+   source and license, voice, motifs and what to avoid. Check it against the real
+   captures with
+   `tools/appstore-creative-sheet.sh check --brand goldie/brand.json --captures goldie/ja/out/raw/iphone-6.3/manifest.json`. See
    [identity and style specs](references/proposal.md#identity-brandjson).
 3. **Research.** Look at three to five top apps of the same category (before.click
    and the App Store) every time, and record only the techniques they use. Never copy

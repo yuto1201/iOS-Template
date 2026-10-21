@@ -10,7 +10,8 @@ Every app keeps one `goldie/brand.json` (D-085). Write it before any pattern, fr
 the confirmed specs, `App Store/metadata/` and the real app, and check it:
 
 ```sh
-tools/appstore-creative-sheet.sh check --brand goldie/brand.json [--style style-A.json]
+tools/appstore-creative-sheet.sh check --brand goldie/brand.json \
+  --captures goldie/ja/out/raw/iphone-6.3/manifest.json [--style style-A.json]
 ```
 
 ```json
@@ -35,7 +36,10 @@ tools/appstore-creative-sheet.sh check --brand goldie/brand.json [--style style-
 
 - `strengths` (one to five): what the app does better, each tied to the capture states
   (`screens`) that show it. A strength no real screen shows is refused: it would be an
-  invented claim.
+  invented claim. `--captures` (and `captures` in a proposal) names the Goldie raw
+  manifest of the real captures (see [config](config.md#import-existing-captures)); every
+  screen must be one of its `sceneId`s and its `file` a real PNG or JPEG, so an invented
+  screen name is refused even next to a real one.
 - `colors.accent` is the app's `AccentColor`; `colors.icon` are colors taken from the
   adopted icon.
 - Every font names its `source` and `license`. A font with `"paid": true` is refused
@@ -105,6 +109,7 @@ Keep the record with the revision under `.artifacts/store-creative/`, outside Gi
   "brief": "雨と風に揺れる花の動きを主役にする。",
   "brand": "../../goldie/brand.json",
   "research": "research.json",
+  "captures": "../../goldie/ja/out/raw/iphone-6.3/manifest.json",
   "headlineLimits": {"ja": 16, "en-US": 36},
   "patterns": [
     {
@@ -131,7 +136,7 @@ Keep the record with the revision under `.artifacts/store-creative/`, outside Gi
 - `kind` is `proposal` (stage 1: three to six patterns with the same tile count from the
   brief, Japanese iPhone tiles only; three or four by default) or
   `preview` (stage 2: the chosen pattern, Japanese and English, iPhone and iPad).
-- A `proposal` needs `brand`, `research` and, per pattern, `recommended`, `style` and
+- A `proposal` needs `brand`, `research`, `captures` and, per pattern, `recommended`, `style` and
   `techniques`; per tile `highlight` (the one brand strength the tile sells), `layout`,
   `background` and `headlines` (two to six candidates per locale). `decorations` is
   optional. `headlineLimits` is optional; the default guide is 16 Japanese characters
@@ -169,7 +174,8 @@ SHA-256 of `brand.json`, the research record and each style spec. The build refu
 
 - fewer than three or more than six patterns, or not exactly one recommendation;
 - a `brand.json`, style spec or research record with a missing item, a font without a
-  license record, an unapproved paid font, a strength tied to no screen, a color or
+  license record, an unapproved paid font, a strength tied to no screen or to a screen name with no real
+  capture in the `captures` manifest, a color or
   font outside `brand.json` without a reason, or fewer than three reference apps;
 - a pattern without a style spec, or using a technique the research does not list;
 - two patterns that share the signature element, or that use the same layouts and

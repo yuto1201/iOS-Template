@@ -60,12 +60,17 @@ ruby -rjson -e '
     {"id" => "gentler", "app" => "Gentler Streak", "site" => "before.click", "url" => "https://before.click/explore?app=gentler",
      "techniques" => ["popout", "mascot"]}]}
   File.write(File.join(dir, "research.json"), JSON.generate(research))
+  # The capture inventory is the Goldie raw manifest of real captures; brand strengths name its scene IDs.
+  manifest = {"device" => "iphone-6.3", "udid" => "", "capturedAt" => "", "screenshots" =>
+    [["home-rain", "device.png"], ["forecast", "pair.png"], ["widget", "scene.png"]].map { |scene, file| {"sceneId" => scene, "file" => File.join(dir, file)} },
+    "preview" => nil}
+  File.write(File.join(dir, "captures.json"), JSON.generate(manifest))
 ' "$workspace"
 
 write_spec() { # path kind patterns-json [extra-json]
   ruby -rjson -e 'value = {"schemaVersion" => 1, "kind" => ARGV[1], "app" => "テストアプリ",
     "title" => "ストア画像の提案", "brief" => "雨と風の動きを主役にする。", "patterns" => JSON.parse(ARGV[2])}
-    value.merge!("brand" => "brand.json", "research" => "research.json") if ARGV[1] == "proposal"
+    value.merge!("brand" => "brand.json", "research" => "research.json", "captures" => "captures.json") if ARGV[1] == "proposal"
     value.merge!(JSON.parse(ARGV[3])) if ARGV[3]
     File.write(ARGV[0], JSON.generate(value.compact))' "$@"
 }
@@ -204,7 +209,7 @@ cp "$workspace/research.good.json" "$workspace/research.json"
 [[ ! -e "$root/r9" ]] || fail 'a refused proposal left a revision behind'
 
 # brand.json and style specs are also checked on their own.
-"$tool" check --brand "$workspace/brand.json" --style "$workspace/style-A.json" >"$workspace/check.out"
+"$tool" check --brand "$workspace/brand.json" --captures "$workspace/captures.json" --style "$workspace/style-A.json" >"$workspace/check.out"
 ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0]))
   abort "check output" unless value.fetch("status") == "valid" && value.fetch("strengths") == %w[sway forecast widget] && value.key?("styleSha256")' "$workspace/check.out"
 brand_variant() { # name ruby-edit -> brand-<name>.json
@@ -212,31 +217,48 @@ brand_variant() { # name ruby-edit -> brand-<name>.json
     "$workspace/brand.json" "$workspace/brand-$1.json" "$2"
 }
 brand_variant no-avoid 'value.delete("avoid")'
-expect_failure brand-missing 'brand.json is missing: avoid' "$tool" check --brand "$workspace/brand-no-avoid.json"
+expect_failure brand-missing 'brand.json is missing: avoid' "$tool" check --brand "$workspace/brand-no-avoid.json" --captures "$workspace/captures.json"
 brand_variant no-world 'value.delete("world"); value.delete("story")'
-expect_failure brand-missing-two 'brand.json is missing: world, story' "$tool" check --brand "$workspace/brand-no-world.json"
+expect_failure brand-missing-two 'brand.json is missing: world, story' "$tool" check --brand "$workspace/brand-no-world.json" --captures "$workspace/captures.json"
 brand_variant no-license 'value["fonts"][0].delete("license")'
-expect_failure font-license 'font Zen Maru Gothic has no license record' "$tool" check --brand "$workspace/brand-no-license.json"
+expect_failure font-license 'font Zen Maru Gothic has no license record' "$tool" check --brand "$workspace/brand-no-license.json" --captures "$workspace/captures.json"
 brand_variant paid 'value["fonts"][0]["paid"] = true'
-expect_failure paid-font 'font Zen Maru Gothic is paid; ask the user before using it' "$tool" check --brand "$workspace/brand-paid.json"
+expect_failure paid-font 'font Zen Maru Gothic is paid; ask the user before using it' "$tool" check --brand "$workspace/brand-paid.json" --captures "$workspace/captures.json"
 brand_variant paid-approved 'value["fonts"][0]["paid"] = true; value["fonts"][0]["approval"] = "2026-10-21 ユーザーが承認"'
-"$tool" check --brand "$workspace/brand-paid-approved.json" >/dev/null
+"$tool" check --brand "$workspace/brand-paid-approved.json" --captures "$workspace/captures.json" >/dev/null
+expect_failure no-captures 'missing option: --captures' "$tool" check --brand "$workspace/brand.json"
 brand_variant no-screen 'value["strengths"][1]["screens"] = []'
-expect_failure strength-screen 'strength forecast is not tied to a real screen' "$tool" check --brand "$workspace/brand-no-screen.json"
+expect_failure strength-screen 'strength forecast is not tied to a real screen' "$tool" check --brand "$workspace/brand-no-screen.json" --captures "$workspace/captures.json"
+# A screen name with no real capture behind it is refused, even next to a real one.
+brand_variant invented-screen 'value["strengths"][1]["screens"] = ["forecast", "teleport"]'
+expect_failure invented-screen 'strength forecast names the screen teleport, which has no real capture' \
+  "$tool" check --brand "$workspace/brand-invented-screen.json" --captures "$workspace/captures.json"
+ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["screenshots"][1]["file"] = File.join(File.dirname(ARGV[0]), "missing.png")
+  File.write(ARGV[1], JSON.generate(value))' "$workspace/captures.json" "$workspace/captures-missing.json"
+expect_failure missing-capture 'capture forecast is not a real image' "$tool" check --brand "$workspace/brand.json" --captures "$workspace/captures-missing.json"
+ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); value["screenshots"][1]["file"] = File.join(File.dirname(ARGV[0]), "broken.png")
+  File.write(ARGV[1], JSON.generate(value))' "$workspace/captures.json" "$workspace/captures-broken.json"
+expect_failure broken-capture 'capture forecast is not a real image' "$tool" check --brand "$workspace/brand.json" --captures "$workspace/captures-broken.json"
+cp "$workspace/brand.json" "$workspace/brand.good.json"
+cp "$workspace/brand-invented-screen.json" "$workspace/brand.json"
+expect_failure proposal-invented-screen 'strength forecast names the screen teleport, which has no real capture' \
+  "$tool" build --spec "$workspace/proposal.json" --root "$root" --revision r9
+cp "$workspace/brand.good.json" "$workspace/brand.json"
+[[ ! -e "$root/r9" ]] || fail 'a proposal with an invented screen left a revision behind'
 brand_variant bad-color 'value["colors"]["accent"] = "blue"'
-expect_failure brand-color 'brand.json colors.accent must be a #RRGGBB color' "$tool" check --brand "$workspace/brand-bad-color.json"
+expect_failure brand-color 'brand.json colors.accent must be a #RRGGBB color' "$tool" check --brand "$workspace/brand-bad-color.json" --captures "$workspace/captures.json"
 style_variant() { # name ruby-edit -> style-<name>.json from style-A.json
   ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); eval(ARGV[2]); File.write(ARGV[1], JSON.generate(value))' \
     "$workspace/style-A.json" "$workspace/style-$1.json" "$2"
 }
 style_variant no-signature 'value.delete("signature")'
-expect_failure style-missing 'style spec is missing: signature' "$tool" check --brand "$workspace/brand.json" --style "$workspace/style-no-signature.json"
+expect_failure style-missing 'style spec is missing: signature' "$tool" check --brand "$workspace/brand.json" --captures "$workspace/captures.json" --style "$workspace/style-no-signature.json"
 style_variant off-color 'value["tokens"] << {"name" => "neon", "hex" => "#FF00AA", "use" => "飾り"}'
-expect_failure style-color 'style spec uses #FF00AA outside brand.json without a reason' "$tool" check --brand "$workspace/brand.json" --style "$workspace/style-off-color.json"
+expect_failure style-color 'style spec uses #FF00AA outside brand.json without a reason' "$tool" check --brand "$workspace/brand.json" --captures "$workspace/captures.json" --style "$workspace/style-off-color.json"
 style_variant off-color-reason 'value["tokens"] << {"name" => "neon", "hex" => "#FF00AA", "use" => "飾り"}; value["deviations"] = [{"item" => "#ff00aa", "reason" => "夜の場面だけに使う"}]'
-"$tool" check --brand "$workspace/brand.json" --style "$workspace/style-off-color-reason.json" >/dev/null
+"$tool" check --brand "$workspace/brand.json" --captures "$workspace/captures.json" --style "$workspace/style-off-color-reason.json" >/dev/null
 style_variant off-font 'value["fonts"]["headline"] = "Shippori Mincho"'
-expect_failure style-font 'style spec uses the font Shippori Mincho outside brand.json without a reason' "$tool" check --brand "$workspace/brand.json" --style "$workspace/style-off-font.json"
+expect_failure style-font 'style spec uses the font Shippori Mincho outside brand.json without a reason' "$tool" check --brand "$workspace/brand.json" --captures "$workspace/captures.json" --style "$workspace/style-off-font.json"
 
 # A revision the user may have seen is never replaced.
 before=$(shasum -a 256 "$sheet")

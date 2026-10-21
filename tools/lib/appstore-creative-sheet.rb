@@ -22,7 +22,8 @@ require "tmpdir"
 # and a research record of the reference apps the patterns drew techniques from. It compares three to
 # six patterns, recommends exactly one, refuses two patterns that share a signature element or the same
 # layouts and backgrounds, and marks repeated layouts, repeated strengths and long headline candidates.
-# `check` validates a brand record, and optionally a style spec against it, on its own.
+# `check` validates a brand record against the real-capture inventory, and optionally a style spec
+# against the brand record, on its own.
 module AppStoreCreativeSheet
   SCHEMA_VERSION = 1
   SHEET_KINDS = %w[proposal preview storyboard].freeze
@@ -161,6 +162,7 @@ module AppStoreCreativeSheet
       }
       if spec.fetch("kind") == "proposal"
         record.merge!("brandSha256" => spec.fetch("brandRecord").fetch("sha256"),
+                      "capturesSha256" => spec.fetch("capturesRecord").fetch("sha256"),
                       "researchSha256" => spec.fetch("researchRecord").fetch("sha256"))
       end
       File.binwrite(File.join(staging, "sheet.json"), "#{JSON.pretty_generate(record)}\n")
@@ -183,7 +185,7 @@ module AppStoreCreativeSheet
   def validate_spec(spec, base)
     fail!("pattern definition must be an object") unless spec.is_a?(Hash)
     allowed = %w[schemaVersion kind app title brief patterns]
-    allowed += %w[brand research headlineLimits] if spec["kind"] == "proposal"
+    allowed += %w[brand research captures headlineLimits] if spec["kind"] == "proposal"
     extra = spec.keys - allowed
     fail!("unknown pattern definition field: #{extra.first}") unless extra.empty?
     fail!("pattern definition schemaVersion must be #{SCHEMA_VERSION}") unless spec["schemaVersion"] == SCHEMA_VERSION
@@ -204,11 +206,16 @@ module AppStoreCreativeSheet
       # The identity and the research come first: every pattern is checked against them.
       fail!("a proposal needs brand: the path of goldie/brand.json") unless spec["brand"].is_a?(String) && !spec["brand"].empty?
       fail!("a proposal needs research: the path of its research record") unless spec["research"].is_a?(String) && !spec["research"].empty?
+      unless spec["captures"].is_a?(String) && !spec["captures"].empty?
+        fail!("a proposal needs captures: the path of the Goldie raw manifest of the real captures")
+      end
       brand_record = load_json(File.expand_path(spec["brand"], base), "brand record")
       brand = validate_brand(brand_record.fetch("value"))
+      captures_record = load_json(File.expand_path(spec["captures"], base), "capture manifest")
+      verify_screens!(brand, capture_inventory(captures_record))
       research_record = load_json(File.expand_path(spec["research"], base), "research record")
       research = validate_research(research_record.fetch("value"))
-      spec = spec.merge("brandRecord" => brand_record.merge("value" => brand),
+      spec = spec.merge("brandRecord" => brand_record.merge("value" => brand), "capturesRecord" => captures_record,
                         "researchRecord" => research_record.merge("value" => research),
                         "headlineLimits" => headline_limits(spec["headlineLimits"]))
     end
@@ -377,6 +384,42 @@ module AppStoreCreativeSheet
     texts!(brand["motifs"], "brand.json motifs")
     texts!(brand["avoid"], "brand.json avoid")
     brand
+  end
+
+  # The capture inventory is the Goldie raw manifest (`goldie/<locale>/out/raw/<device>/manifest.json`)
+  # of the real captures: every scene ID names one PNG or JPEG. A relative file resolves against the
+  # manifest.
+  def capture_inventory(record)
+    manifest = record.fetch("value")
+    unless manifest.is_a?(Hash) && manifest["screenshots"].is_a?(Array) && !manifest["screenshots"].empty?
+      fail!("capture manifest must be an object with screenshots")
+    end
+    base = File.dirname(record.fetch("path"))
+    manifest["screenshots"].each_with_object({}) do |entry, inventory|
+      scene = entry.is_a?(Hash) ? entry["sceneId"] : nil
+      fail!("capture manifest scene IDs must be lowercase letters, digits and hyphens") unless scene.is_a?(String) && scene.match?(STATE_PATTERN)
+      fail!("capture manifest lists #{scene} twice") if inventory.key?(scene)
+      file = entry["file"]
+      fail!("capture #{scene} has no file") unless file.is_a?(String) && !file.empty?
+      inventory[scene] = File.expand_path(file, base)
+    end
+  end
+
+  # A strength is tied to a real screen only when every screen it names is a scene of the capture
+  # inventory whose file is a real image; an invented name is refused even next to a real one.
+  def verify_screens!(brand, inventory)
+    brand.fetch("strengths").each do |strength|
+      strength.fetch("screens").each do |screen|
+        path = inventory[screen]
+        unless path
+          fail!("strength #{strength.fetch('id')} names the screen #{screen}, which has no real capture in the capture manifest")
+        end
+        bytes = File.file?(path) && !File.symlink?(path) ? File.binread(path, 8) : nil
+        unless bytes && (bytes.start_with?("\x89PNG\r\n\x1A\n".b) || bytes.start_with?("\xFF\xD8\xFF".b))
+          fail!("capture #{screen} is not a real image: #{path}")
+        end
+      end
+    end
   end
 
   def brand_colors(brand)
@@ -557,12 +600,14 @@ module AppStoreCreativeSheet
   # --- check ---------------------------------------------------------------------------------------
 
   def check(options)
-    require_options(options, "brand")
-    unknown = options.keys - %w[brand style]
+    require_options(options, "brand", "captures")
+    unknown = options.keys - %w[brand captures style]
     fail!("unknown option: --#{unknown.first}") unless unknown.empty?
     brand_record = load_json(File.expand_path(options.fetch("brand")), "brand record")
     brand = validate_brand(brand_record.fetch("value"))
-    value = {"status" => "valid", "brandSha256" => brand_record.fetch("sha256"),
+    captures_record = load_json(File.expand_path(options.fetch("captures")), "capture manifest")
+    verify_screens!(brand, capture_inventory(captures_record))
+    value = {"status" => "valid", "brandSha256" => brand_record.fetch("sha256"), "capturesSha256" => captures_record.fetch("sha256"),
              "strengths" => brand.fetch("strengths").map { |strength| strength.fetch("id") }}
     if options.key?("style")
       style_record = load_json(File.expand_path(options.fetch("style")), "style spec")
