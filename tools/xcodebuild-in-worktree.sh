@@ -126,11 +126,24 @@ cleanup() {
   remove_owned_folder "$run_folder" "$worktree_root/Runs"
   remove_owned_folder "$scratch_folder" "$worktree_root/Scratch"
 }
+# The cancellation goes to the bounded supervisor, which reclaims the xcodebuild process group (TERM, a
+# grace period, then KILL) before it exits, and the cleanup waits for it, so nothing in that group writes
+# after the run folders are removed. A watchdog keeps the wait finite.
 stop_on_signal() {
   if [[ -n "$child_pid" ]]; then
-    /usr/bin/pkill -TERM -P "$child_pid" 2>/dev/null || true
-    kill -TERM "$child_pid" 2>/dev/null || true
+    local supervisor watchdog
+    for supervisor in $(/usr/bin/pgrep -P "$child_pid"); do
+      kill -TERM "$supervisor" 2>/dev/null || true
+    done
+    (
+      sleep 60
+      /usr/bin/pkill -KILL -P "$child_pid" 2>/dev/null || true
+      kill -KILL "$child_pid" 2>/dev/null || true
+    ) &
+    watchdog=$!
     wait "$child_pid" 2>/dev/null || true
+    kill "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
   fi
   exit "$1"
 }

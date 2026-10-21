@@ -35,6 +35,18 @@ case "\$mode" in
   ok) exit 0 ;;
   fail) exit 65 ;;
   sleep) touch "$work/sleeping"; sleep 60; exit 0 ;;
+  stubborn)
+    # Ignores TERM and keeps writing into its DerivedData until the supervisor's KILL.
+    trap '' TERM
+    derived=""
+    previous=""
+    for argument in "\$@"; do
+      [[ "\$previous" == -derivedDataPath ]] && derived="\$argument"
+      previous="\$argument"
+    done
+    touch "$work/sleeping"
+    for _ in \$(seq 1 200); do mkdir -p "\$derived" && date +%s > "\$derived/writing"; sleep 0.1; done
+    exit 0 ;;
 esac
 EOF
 chmod +x "$fake"
@@ -130,6 +142,23 @@ wait "$tool_pid" || status=$?
 [[ -z "$(ls -A "$root/$alpha_id/Scratch")" && -z "$(ls -A "$root/$alpha_id/Runs")" ]] || fail 'TERM left the scratch DerivedData or the run folder'
 for _ in $(seq 1 50); do pgrep -f "$fake" >/dev/null || break; sleep 0.2; done
 ! pgrep -f "$fake" >/dev/null || fail 'TERM left xcodebuild running'
+
+# An xcodebuild that ignores TERM and keeps writing is reclaimed before the cleanup, so its scratch
+# DerivedData does not come back after the tool exits.
+echo stubborn > "$work/fake-mode"
+rm -f "$work/sleeping"
+(cd "$alpha" && IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT="$root" \
+  IOS_TEMPLATE_TEST_XCODEBUILD="$fake" exec "$tool" --scratch -scheme Example test >/dev/null 2>&1) &
+tool_pid=$!
+for _ in $(seq 1 100); do [[ -e "$work/sleeping" ]] && break; sleep 0.1; done
+[[ -e "$work/sleeping" ]] || fail 'the stubborn fake xcodebuild did not start'
+kill -TERM "$tool_pid"
+status=0
+wait "$tool_pid" || status=$?
+[[ "$status" == 143 ]] || fail "TERM did not stop the tool with a stubborn xcodebuild: $status"
+pgrep -f "$fake" >/dev/null && fail 'the stubborn xcodebuild was still running when the tool exited'
+sleep 1
+[[ -z "$(ls -A "$root/$alpha_id/Scratch")" && -z "$(ls -A "$root/$alpha_id/Runs")" ]] || fail 'the scratch DerivedData came back after the cleanup'
 
 # Unsafe locations and arguments stop before xcodebuild runs.
 refused() {
