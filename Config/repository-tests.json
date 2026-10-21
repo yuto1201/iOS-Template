@@ -127,7 +127,7 @@
     },
     {
       "domain": "bootstrap-fixture",
-      "paths": ["Config/template-identity.json", "tools/bootstrap-app.sh", "tools/bootstrap-app.swift", "tools/tests/lib/bootstrap-fixture.rb", "tools/tests/test-app-bootstrap.sh"],
+      "paths": ["Config/template-identity.json", "tools/bootstrap-app.sh", "tools/bootstrap-app.swift", "tools/tests/lib/bootstrap-fixture.rb", "tools/tests/lib/measure-bootstrap-groups.sh", "tools/tests/test-app-bootstrap.sh"],
       "prefixes": ["TemplateApp.xcodeproj/", "TemplateApp/", "TemplateAppTests/", "TemplateAppUITests/", "tools/tests/fixtures/bootstrap-template/"]
     },
     {
