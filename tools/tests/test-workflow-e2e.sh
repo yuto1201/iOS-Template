@@ -463,7 +463,10 @@ assert_fails stale-head-one-packet bash -c "cd '$issue_worktree' && tools/cross-
 (cd "$issue_worktree" && tools/merge-issue.sh --repo "$repository" --issue "$issue") >"$workspace/merge.json"
 HEAD_TWO="$head_two" assert_json "$workspace/merge.json" 'value=JSON.parse(File.binread(ARGV.fetch(0))); abort unless value == {"status"=>"merged","issue"=>42,"pullRequest"=>77,"headSha"=>ENV.fetch("HEAD_TWO")}'
 
-(cd "$primary" && tools/cleanup-issue.sh --repo "$repository" --issue "$issue") >"$workspace/cleanup.json"
+# Test mode keeps the cleanup's D-084 reclaim on fixture roots instead of the user's DerivedData and /tmp data.
+(cd "$primary" && IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT="$workspace/roots/derived-data" \
+  IOS_TEMPLATE_TEST_XCODE_DERIVED_DATA_ROOT="$workspace/roots/Xcode-DerivedData" IOS_TEMPLATE_TEST_VERIFY_ROOT="$workspace/roots/ios-template-verify" \
+  tools/cleanup-issue.sh --repo "$repository" --issue "$issue") >"$workspace/cleanup.json"
 [[ ! -e "$issue_worktree" ]] || fail 'cleanup retained the exact Issue worktree'
 git -C "$primary" show-ref --verify --quiet refs/heads/unrelated-preserved || fail 'cleanup deleted an unrelated Branch'
 [[ -d "$primary/.worktrees/unrelated-preserved" && -f "$primary/.worktrees/unrelated-preserved/user-owned-untracked.txt" ]] || fail 'cleanup changed an unrelated worktree'

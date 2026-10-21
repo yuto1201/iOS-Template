@@ -475,9 +475,11 @@ HTML、HTML screenshot、revision IDまたはHTML digestはnative検証の代用
 7. `tools/premerge-gate.sh --repo ${OWNER_REPO} --issue ${ISSUE_NUMBER} --head-sha ${HEAD_SHA} --merge-pr ${PR_NUMBER}` を実行する。このfinal modeが全descriptor/lockを保持したままPR identityを再取得し、exact `gh pr merge --squash --match-head-commit` まで一続きで実行する。
 8. Gate外でPR identityを再取得してmergeする経路は使わない。
 9. PRのマージ状態とIssueのCloseを確認する。
-10. remote Branch、worktree、local Branchの順に対象を再確認して後片付けする。
+10. remote Branch、worktree、local Branchの順に対象を再確認して後片付けし、消したworktreeが使ったDerivedDataと検証の一時データを回収する。
 
 `gh pr merge --delete-branch` に後片付け全体を任せません。各対象を明示して、別worktreeやユーザーBranchを削除しないようにします。
+
+`tools/cleanup-issue.sh`は、worktreeとlocal Branchを消した後に、そのworktreeのデータを回収します（D-084）。対象は、所有の印`owner.json`が消したworktreeの物理pathと一致する`~/Library/Caches/ios-template/derived-data/<worktree識別子>/`、`info.plist`の`WorkspacePath`がそのworktreeの中を指す`~/Library/Developer/Xcode/DerivedData`の下のフォルダ、`/tmp/ios-template-verify/<worktree識別子>/`の下の各Headの`Retained/`と`Attempts/`の中身です。Headの`.verify.lock`を待たずに取れないときはそのHeadを飛ばして報告し、`.verify.lock`と空のdirectoryは残します。symlink、自分以外の所有者、所有の印やpathが一致しないもの、`info.plist`のないフォルダ、`.artifacts`、`failures/*.json`、ほかのworktreeのデータには触れません。回収に失敗した場合は0以外で終了して`cleaned`を出さないため`merged -> done`へ進まず、同じ引数で再実行すると残りを回収します。
 
 認証済みmutationはIssue contractに同じoperation IDと実行モデルの`Executor`が宣言されている場合だけ実行します。Gateとmergeには`github.merge_pr`、Push直前には`github.push_branch`、新しいPRを作る経路だけ`github.create_pr`、remote Branch削除直前には`github.delete_branch`が必要です。新規PR経路では`github.create_pr`の欠落をPushより前にも検査し、必要宣言が一つでも欠ける場合は外部mutationをゼロのまま拒否します。既存の正確なPRを再利用する経路は`github.create_pr`を要求しません。
 

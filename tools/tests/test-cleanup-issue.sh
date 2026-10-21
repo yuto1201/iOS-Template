@@ -2,12 +2,18 @@
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" git jq ruby
+require_test_commands "$0" git jq ruby plutil shasum chflags
 
 source_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-cleanup.XXXXXX")
 scratch=$(cd "$scratch" && pwd -P)
-trap 'rm -rf "$scratch"' EXIT
+# Reclaim fixtures include read-only directories and a user-immutable file, so the trap undoes both first.
+lock_holder=''
+finish() {
+  if [[ -n "$lock_holder" ]]; then kill "$lock_holder" 2>/dev/null || true; wait "$lock_holder" 2>/dev/null || true; fi
+  chflags -R nouchg "$scratch" 2>/dev/null || true; chmod -R u+w "$scratch" 2>/dev/null || true; rm -rf "$scratch"
+}
+trap finish EXIT
 repo_name='yuto1201/iOS-Template'; issue=42; branch='codex/42-cleanup-safety'; worktree_relative='.worktrees/42-cleanup-safety'; pr=57; merge_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 fail_test() { echo "FAIL: $*" >&2; exit 1; }
@@ -18,6 +24,7 @@ make_case() {
   local name=$1
   CASE_ROOT="$scratch/$name"; CASE_PRIMARY="$CASE_ROOT/repo"; CASE_REMOTE="$CASE_ROOT/remote.git"; CASE_WORKTREE="$CASE_PRIMARY/$worktree_relative"
   CASE_BIN="$CASE_ROOT/bin"; CASE_LOG="$CASE_ROOT/operations.log"; CASE_MUTATIONS="$CASE_ROOT/mutations.log"
+  CASE_FIXED_ROOT="$CASE_ROOT/roots/derived-data"; CASE_XCODE_ROOT="$CASE_ROOT/roots/Xcode-DerivedData"; CASE_VERIFY_ROOT="$CASE_ROOT/roots/ios-template-verify"
   mkdir -p "$CASE_ROOT" "$CASE_BIN"
   git init --bare "$CASE_REMOTE" >/dev/null
   git init -b main "$CASE_PRIMARY" >/dev/null
@@ -71,7 +78,7 @@ EOF
 }
 
 run_cleanup() {
-  env PATH="$CASE_BIN:$PATH" REAL_GIT="$REAL_GIT" FAKE_PRIMARY="$CASE_PRIMARY" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_PR="$pr" FAKE_PR_NUMBER="${FAKE_PR_NUMBER:-$pr}" FAKE_PR_STATE="${FAKE_PR_STATE:-MERGED}" FAKE_BASE_REF="${FAKE_BASE_REF:-main}" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR_HEAD="${FAKE_PR_HEAD:-$CASE_HEAD}" FAKE_SOURCE_REPO="${FAKE_SOURCE_REPO:-$repo_name}" FAKE_CROSS_REPO="${FAKE_CROSS_REPO:-false}" FAKE_CLOSING_ISSUE="${FAKE_CLOSING_ISSUE:-$issue}" FAKE_MERGE="${FAKE_MERGE:-$merge_sha}" FAKE_PR_URL="${FAKE_PR_URL:-https://github.com/$repo_name/pull/$pr}" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_STEP="${FAIL_STEP:-}" "$CASE_PRIMARY/tools/cleanup-issue.sh" --repo "$repo_name" --issue "$issue"
+  env PATH="$CASE_BIN:$PATH" IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT="$CASE_FIXED_ROOT" IOS_TEMPLATE_TEST_XCODE_DERIVED_DATA_ROOT="$CASE_XCODE_ROOT" IOS_TEMPLATE_TEST_VERIFY_ROOT="$CASE_VERIFY_ROOT" REAL_GIT="$REAL_GIT" FAKE_PRIMARY="$CASE_PRIMARY" FAKE_REPO="$repo_name" FAKE_ISSUE="$issue" FAKE_PR="$pr" FAKE_PR_NUMBER="${FAKE_PR_NUMBER:-$pr}" FAKE_PR_STATE="${FAKE_PR_STATE:-MERGED}" FAKE_BASE_REF="${FAKE_BASE_REF:-main}" FAKE_BRANCH="$branch" FAKE_HEAD="$CASE_HEAD" FAKE_PR_HEAD="${FAKE_PR_HEAD:-$CASE_HEAD}" FAKE_SOURCE_REPO="${FAKE_SOURCE_REPO:-$repo_name}" FAKE_CROSS_REPO="${FAKE_CROSS_REPO:-false}" FAKE_CLOSING_ISSUE="${FAKE_CLOSING_ISSUE:-$issue}" FAKE_MERGE="${FAKE_MERGE:-$merge_sha}" FAKE_PR_URL="${FAKE_PR_URL:-https://github.com/$repo_name/pull/$pr}" FAKE_LOG="$CASE_LOG" FAKE_MUTATIONS="$CASE_MUTATIONS" FAIL_STEP="${FAIL_STEP:-}" "$CASE_PRIMARY/tools/cleanup-issue.sh" --repo "$repo_name" --issue "$issue"
 }
 
 make_case open-pr
@@ -145,4 +152,113 @@ if git -C "$CASE_PRIMARY" show-ref --verify --quiet "refs/heads/$branch"; then f
 if ! run_cleanup >"$CASE_ROOT/retry-result.json" 2>"$CASE_ROOT/idempotent.err"; then cat "$CASE_ROOT/idempotent.err" >&2; fail_test 'idempotent cleanup retry failed'; fi
 jq -e '.status=="cleaned"' "$CASE_ROOT/retry-result.json" >/dev/null
 
-echo 'PASS: cleanup binds the exact persisted merged PR and Head, rejects reused targets, and resumes each deletion boundary'
+# D-084 (#369): after the worktree is removed, cleanup reclaims only that worktree's build data.
+worktree_id() { printf '%s-%s' "$(basename "$1" | sed 's/[^A-Za-z0-9_.-]/-/g')" "$(printf '%s' "$1" | shasum -a 256 | cut -c1-64)"; }
+write_owner() { ruby -rjson -e 'File.binwrite(ARGV[0], %({"schemaVersion":1,"worktree":#{ARGV[1].to_json}}\n))' "$1" "$2"; }
+write_plist() { plutil -create binary1 "$1" && plutil -insert WorkspacePath -string "$2" "$1"; }
+attempt_name='attempt-0f0e0d0c-0b0a-4908-8706-050403020100'; failure_name='failure-01020304-0506-4708-890a-0b0c0d0e0f10'
+head_free=1111111111111111111111111111111111111111; head_locked=2222222222222222222222222222222222222222
+# Fills the three roots for one worktree root; $2 names the Xcode folder so two worktrees do not collide.
+seed_worktree_data() {
+  local root=$1 label=$2 id head
+  id=$(worktree_id "$root")
+  mkdir -p "$CASE_FIXED_ROOT/$id/DerivedData/SourcePackages/checkouts/package" "$CASE_FIXED_ROOT/$id/Results" "$CASE_FIXED_ROOT/$id/Runs" "$CASE_FIXED_ROOT/$id/Scratch"
+  [[ -f "$CASE_FIXED_ROOT/$id/owner.json" ]] || write_owner "$CASE_FIXED_ROOT/$id/owner.json" "$root"
+  printf 'source\n' >"$CASE_FIXED_ROOT/$id/DerivedData/SourcePackages/checkouts/package/Package.swift"
+  chmod 0555 "$CASE_FIXED_ROOT/$id/DerivedData/SourcePackages/checkouts/package"
+  mkdir -p "$CASE_XCODE_ROOT/TemplateApp-$label/Build/Products"; printf 'product\n' >"$CASE_XCODE_ROOT/TemplateApp-$label/Build/Products/app"
+  write_plist "$CASE_XCODE_ROOT/TemplateApp-$label/info.plist" "$root/TemplateApp.xcodeproj"
+  for head in "$head_free" "$head_locked"; do
+    mkdir -p "$CASE_VERIFY_ROOT/$id/issue-42/$head/Retained/$failure_name/Build.xcresult" "$CASE_VERIFY_ROOT/$id/issue-42/$head/Attempts/$attempt_name/DerivedData"
+    : >"$CASE_VERIFY_ROOT/$id/issue-42/$head/.verify.lock"
+    printf 'log\n' >"$CASE_VERIFY_ROOT/$id/issue-42/$head/Retained/$failure_name/build.log"
+    printf 'data\n' >"$CASE_VERIFY_ROOT/$id/issue-42/$head/Attempts/$attempt_name/DerivedData/info"
+  done
+}
+reclaim_case() {
+  make_case "$1"
+  REMOVED_ROOT="$CASE_WORKTREE"; OTHER_ROOT="$CASE_PRIMARY/.worktrees/43-other-work"; SIBLING_ROOT="$CASE_WORKTREE-extra"
+  REMOVED_ID=$(worktree_id "$REMOVED_ROOT"); OTHER_ID=$(worktree_id "$OTHER_ROOT")
+  mkdir -p "$CASE_FIXED_ROOT" "$CASE_XCODE_ROOT" "$CASE_VERIFY_ROOT"
+  # The real tools/xcodebuild-in-worktree.sh creates the removed worktree's fixed DerivedData and owner record,
+  # so the cleanup must agree with its worktree ID and owner.json bytes.
+  printf '#!/bin/bash\nexit 0\n' >"$CASE_ROOT/fake-xcodebuild"; chmod +x "$CASE_ROOT/fake-xcodebuild"
+  (cd "$REMOVED_ROOT" && IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT="$CASE_FIXED_ROOT" IOS_TEMPLATE_TEST_XCODEBUILD="$CASE_ROOT/fake-xcodebuild" \
+    "$source_root/tools/xcodebuild-in-worktree.sh" -scheme TemplateApp build) || fail_test 'xcodebuild-in-worktree fixture run failed'
+  [[ -f "$CASE_FIXED_ROOT/$REMOVED_ID/owner.json" && -d "$CASE_FIXED_ROOT/$REMOVED_ID/DerivedData" ]] || fail_test 'fixed DerivedData was not created at the expected worktree ID'
+  seed_worktree_data "$REMOVED_ROOT" removed
+  seed_worktree_data "$OTHER_ROOT" other
+}
+assert_absent() { [[ ! -e "$1" && ! -L "$1" ]] || fail_test "$2 survived reclaim: $1"; }
+assert_present() { [[ -e "$1" || -L "$1" ]] || fail_test "$2 was removed: $1"; }
+
+reclaim_case reclaim
+# Data that must survive: another worktree, Xcode folders without info.plist or pointing elsewhere (also at a
+# sibling path that only shares the prefix), symbolic links, canonical .artifacts and failure records.
+mkdir -p "$CASE_XCODE_ROOT/NoInfo-abc/Logs" "$CASE_XCODE_ROOT/Elsewhere-abc/Build" "$CASE_XCODE_ROOT/Sibling-abc/Build" "$CASE_ROOT/link-target/Build"
+write_plist "$CASE_XCODE_ROOT/Elsewhere-abc/info.plist" "$CASE_ROOT/user-project/App.xcodeproj"
+write_plist "$CASE_XCODE_ROOT/Sibling-abc/info.plist" "$SIBLING_ROOT/TemplateApp.xcodeproj"
+write_plist "$CASE_ROOT/link-target/info.plist" "$REMOVED_ROOT/TemplateApp.xcodeproj"
+ln -s "$CASE_ROOT/link-target" "$CASE_XCODE_ROOT/Linked-abc"
+mkdir -p "$CASE_ROOT/plist-source"; write_plist "$CASE_ROOT/plist-source/info.plist" "$REMOVED_ROOT/TemplateApp.xcodeproj"
+mkdir -p "$CASE_XCODE_ROOT/LinkedPlist-abc/Build"; ln -s "$CASE_ROOT/plist-source/info.plist" "$CASE_XCODE_ROOT/LinkedPlist-abc/info.plist"
+mkdir -p "$CASE_ROOT/retained-target/kept"; ln -s "$CASE_ROOT/retained-target" "$CASE_VERIFY_ROOT/$REMOVED_ID/issue-42/$head_free/Retained/failure-link"
+printf 'note\n' >"$CASE_VERIFY_ROOT/$REMOVED_ID/issue-42/$head_free/Attempts/stray-file"
+printf '{}\n' >"$CASE_VERIFY_ROOT/$OTHER_ID/issue-42/$head_free/.artifacts"
+mkdir -p "$CASE_PRIMARY/.artifacts/issues/42/$head_free/failures"; printf '{}\n' >"$CASE_PRIMARY/.artifacts/issues/42/$head_free/failures/failure-x.json"
+# A held .verify.lock is skipped and reported; a user-immutable file makes one reclaim fail on the first run.
+ruby -e 'file = File.open(ARGV[0], "r+"); file.flock(File::LOCK_EX); File.write(ARGV[1], "locked\n"); sleep 120' "$CASE_VERIFY_ROOT/$REMOVED_ID/issue-42/$head_locked/.verify.lock" "$CASE_ROOT/lock-ready" &
+lock_holder=$!
+for _ in $(seq 1 100); do [[ -s "$CASE_ROOT/lock-ready" ]] && break; sleep 0.1; done
+[[ -s "$CASE_ROOT/lock-ready" ]] || fail_test 'lock holder did not start'
+chflags uchg "$CASE_VERIFY_ROOT/$REMOVED_ID/issue-42/$head_free/Attempts/$attempt_name/DerivedData/info"
+removed_verify="$CASE_VERIFY_ROOT/$REMOVED_ID/issue-42"
+assert_fails 'injected reclaim failure' run_cleanup
+[[ ! -s "$CASE_ROOT/out" ]] || fail_test 'failed reclaim still reported cleaned'
+grep -Fq 'rerun the same command' "$CASE_ROOT/err" || { cat "$CASE_ROOT/err" >&2; fail_test 'failed reclaim did not explain the rerun'; }
+grep -Fq "skipped $removed_verify/$head_locked (its verification lock is held)" "$CASE_ROOT/err" || { cat "$CASE_ROOT/err" >&2; fail_test 'held lock was not reported'; }
+grep -Fq "failed $removed_verify/$head_free/Attempts/$attempt_name" "$CASE_ROOT/err" || { cat "$CASE_ROOT/err" >&2; fail_test 'reclaim failure was not reported'; }
+assert_absent "$CASE_WORKTREE" 'removed worktree'
+assert_absent "$CASE_FIXED_ROOT/$REMOVED_ID" 'fixed DerivedData of the removed worktree'
+assert_absent "$CASE_XCODE_ROOT/TemplateApp-removed" 'Xcode DerivedData of the removed worktree'
+assert_absent "$removed_verify/$head_free/Retained/$failure_name" 'Retained of a free Head'
+assert_present "$removed_verify/$head_free/Attempts/$attempt_name/DerivedData/info" 'immutable attempt item'
+assert_present "$removed_verify/$head_locked/Retained/$failure_name/build.log" 'Retained of a locked Head'
+assert_present "$removed_verify/$head_locked/Attempts/$attempt_name/DerivedData/info" 'Attempts of a locked Head'
+chflags nouchg "$removed_verify/$head_free/Attempts/$attempt_name/DerivedData/info"
+kill "$lock_holder"; wait "$lock_holder" 2>/dev/null || true; lock_holder=''
+: >"$CASE_MUTATIONS"
+if ! run_cleanup >"$CASE_ROOT/out" 2>"$CASE_ROOT/err"; then cat "$CASE_ROOT/err" >&2; fail_test 'reclaim rerun failed'; fi
+jq -e '.status=="cleaned" and .pullRequest==57' "$CASE_ROOT/out" >/dev/null || fail_test 'reclaim rerun did not report cleaned'
+assert_no_mutation 'reclaim rerun'
+for head in "$head_free" "$head_locked"; do
+  assert_absent "$removed_verify/$head/Retained/$failure_name" 'Retained of the removed worktree'
+  assert_absent "$removed_verify/$head/Attempts/$attempt_name" 'Attempts of the removed worktree'
+  [[ -f "$removed_verify/$head/.verify.lock" && -d "$removed_verify/$head/Retained" && -d "$removed_verify/$head/Attempts" ]] || fail_test '.verify.lock or emptied directories were removed'
+done
+assert_present "$removed_verify/$head_free/Retained/failure-link" 'symbolic link in Retained'
+assert_present "$CASE_ROOT/retained-target/kept" 'symbolic link target'
+assert_present "$removed_verify/$head_free/Attempts/stray-file" 'regular file in Attempts'
+for path in "$CASE_FIXED_ROOT/$OTHER_ID/owner.json" "$CASE_FIXED_ROOT/$OTHER_ID/DerivedData/SourcePackages/checkouts/package/Package.swift" \
+  "$CASE_XCODE_ROOT/TemplateApp-other/Build/Products/app" "$CASE_XCODE_ROOT/NoInfo-abc/Logs" "$CASE_XCODE_ROOT/Elsewhere-abc/info.plist" \
+  "$CASE_XCODE_ROOT/Sibling-abc/info.plist" "$CASE_XCODE_ROOT/Linked-abc" "$CASE_ROOT/link-target/info.plist" "$CASE_XCODE_ROOT/LinkedPlist-abc/Build" \
+  "$CASE_VERIFY_ROOT/$OTHER_ID/issue-42/$head_free/Retained/$failure_name/build.log" "$CASE_VERIFY_ROOT/$OTHER_ID/issue-42/$head_locked/Attempts/$attempt_name/DerivedData/info" \
+  "$CASE_VERIFY_ROOT/$OTHER_ID/issue-42/$head_free/.artifacts" "$CASE_PRIMARY/.artifacts/issues/42/$head_free/failures/failure-x.json"; do
+  assert_present "$path" 'data outside the removed worktree'
+done
+if ! run_cleanup >"$CASE_ROOT/out" 2>"$CASE_ROOT/err"; then cat "$CASE_ROOT/err" >&2; fail_test 'idempotent reclaim rerun failed'; fi
+
+# An entry at the removed worktree's ID whose owner record names another worktree, and a verify worktree
+# directory that is a symbolic link, are both left alone.
+make_case reclaim-guard
+REMOVED_ID=$(worktree_id "$CASE_WORKTREE")
+mkdir -p "$CASE_FIXED_ROOT/$REMOVED_ID/DerivedData" "$CASE_VERIFY_ROOT" "$CASE_XCODE_ROOT" "$CASE_ROOT/verify-target/issue-42/$head_free/Retained/$failure_name"
+write_owner "$CASE_FIXED_ROOT/$REMOVED_ID/owner.json" "$CASE_PRIMARY/.worktrees/43-other-work"
+: >"$CASE_ROOT/verify-target/issue-42/$head_free/.verify.lock"
+ln -s "$CASE_ROOT/verify-target" "$CASE_VERIFY_ROOT/$REMOVED_ID"
+if ! run_cleanup >"$CASE_ROOT/out" 2>"$CASE_ROOT/err"; then cat "$CASE_ROOT/err" >&2; fail_test 'guarded reclaim failed'; fi
+assert_present "$CASE_FIXED_ROOT/$REMOVED_ID/DerivedData" 'foreign-marked fixed DerivedData'
+assert_present "$CASE_ROOT/verify-target/issue-42/$head_free/Retained/$failure_name" 'symbolic-link verify worktree target'
+grep -Fq "skipped $CASE_FIXED_ROOT/$REMOVED_ID (its owner record does not name this worktree)" "$CASE_ROOT/err" || { cat "$CASE_ROOT/err" >&2; fail_test 'foreign owner record was not reported'; }
+
+echo 'PASS: cleanup binds the exact persisted merged PR and Head, rejects reused targets, resumes each deletion boundary, and reclaims only the removed worktree build data'

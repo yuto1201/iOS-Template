@@ -546,7 +546,10 @@ reset_recovery_inputs
 run_recovery >"$CASE_ROOT/recovery-before-cleanup.json"
 git -C "$CASE_WORKTREE" push origin "$branch" >/dev/null
 : >"$CASE_MUTATIONS"
-run_recovery_command "$CASE_PRIMARY/tools/cleanup-issue.sh" --repo "$repo_name" --issue "$issue" >"$CASE_ROOT/cleanup-result.json"
+# Test mode keeps the cleanup's D-084 reclaim on fixture roots instead of the user's DerivedData and /tmp data.
+run_recovery_command env IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_DERIVED_DATA_ROOT="$CASE_ROOT/roots/derived-data" \
+  IOS_TEMPLATE_TEST_XCODE_DERIVED_DATA_ROOT="$CASE_ROOT/roots/Xcode-DerivedData" IOS_TEMPLATE_TEST_VERIFY_ROOT="$CASE_ROOT/roots/ios-template-verify" \
+  "$CASE_PRIMARY/tools/cleanup-issue.sh" --repo "$repo_name" --issue "$issue" >"$CASE_ROOT/cleanup-result.json"
 jq -e '.status=="cleaned" and .pullRequest==57' "$CASE_ROOT/cleanup-result.json" >/dev/null
 [[ ! -e "$CASE_WORKTREE" && ! -L "$CASE_WORKTREE" ]] || fail_test 'manual recovery cleanup left worktree'
 if git -C "$CASE_PRIMARY" show-ref --verify --quiet "refs/heads/$branch"; then fail_test 'manual recovery cleanup left local branch'; fi
