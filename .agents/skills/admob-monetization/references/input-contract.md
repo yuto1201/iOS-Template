@@ -19,7 +19,7 @@ Unknown keys are rejected. Arrays that express a set must be nonempty where note
 - `placement`:
   - `includedScreens`: nonempty sorted unique screen identifiers backed by the confirmed app UI specification.
   - `excludedScreens`: sorted unique identifiers, disjoint from `includedScreens`.
-  - `container`: exact `safe-area-bottom`.
+  - `container`: `safe-area-bottom` (the default) or `safe-area-top`. The banner is anchored to that safe-area edge; see "Banner placement" in `SKILL.md`. Any other value stops before changes.
   - `privacyOptionsEntry`: a nonempty, confirmed native entry-point identifier.
 - `audience`:
   - `minimumAge`: integer `18` or greater.

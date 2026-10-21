@@ -34,6 +34,14 @@ tools/validate-admob-integration.sh --root /absolute/path/to/derived-app
 
 The validator compares the Debug and Release App ID build settings, the SKAdNetworkItems, and both branches of the generated configuration with the recorded activation input itself, so a file edited together with the record's digest still fails. Release must hold only the app's own pair, never Google's demo publisher, and the activated sources must not contain the network-free UI-test fixture route.
 
+## Banner placement
+
+`placement.container` chooses the safe-area edge that the anchored adaptive banner is pinned to: `safe-area-bottom` (the default) or `safe-area-top`. Google's anchored adaptive banners are anchored to the top or the bottom of the screen (https://developers.google.com/admob/ios/banner/anchored-adaptive). The value is recorded in the activation record; the app's UI code places `AdaptiveBannerHost` there. On either edge:
+
+- Give the banner its own fixed slot that never overlaps app content, and do not let it float or move while the user scrolls (https://support.google.com/admob/answer/6275345).
+- Keep it apart from interactive controls: do not put it directly against a navigation bar's buttons, a tab bar, a toolbar, or other buttons, which causes accidental clicks (https://support.google.com/admob/answer/6128877). Leave space or a non-interactive separator between them.
+- With `safe-area-top`, place the slot below the navigation bar (including large titles) and clear of the status bar and Dynamic Island, and check that layout in the app's UI verification. For scrollable content, Google recommends inline adaptive banners instead; this integration does not provide them.
+
 ## Info.plist handling
 
 Activation keeps every Info.plist source the app already has. It never changes `GENERATE_INFOPLIST_FILE`, never removes or edits an `INFOPLIST_KEY_*` setting (scene manifest, launch screen, orientations, display name), and never replaces or duplicates an existing `INFOPLIST_FILE`. It adds only:

@@ -222,6 +222,16 @@ expect_failure invalid-input "$repo_root/tools/activate-admob-integration.sh" --
 [[ -z "$(git -C "$derived" status --porcelain=v1)" ]] || fail 'invalid input changed the derived app'
 [[ "$(sha256_file "$derived/GardenNotes.xcodeproj/project.pbxproj")" == "$project_before" ]] || fail 'invalid input changed the project'
 
+# #375: a container other than the two safe-area edges stops before any change.
+for container in inline safe-area-middle SAFE-AREA-TOP; do
+  ruby -rjson -e 'value = JSON.parse(File.binread(ARGV[0])); value["placement"]["container"] = ARGV[2]; File.binwrite(ARGV[1], JSON.generate(value) + "\n")' "$input" "$invalid" "$container"
+  expect_failure "invalid-container-$container" "$repo_root/tools/activate-admob-integration.sh" --root "$derived" --input "$invalid"
+  grep -Fq 'placement.container must be one of safe-area-bottom, safe-area-top' "$temp_root/invalid-container-$container.stderr" ||
+    fail "container $container was not refused with its reason: $(cat "$temp_root/invalid-container-$container.stderr")"
+  [[ -z "$(git -C "$derived" status --porcelain=v1)" ]] || fail "container $container changed the derived app"
+  [[ "$(sha256_file "$derived/GardenNotes.xcodeproj/project.pbxproj")" == "$project_before" ]] || fail "container $container changed the project"
+done
+
 wrong_binding="$temp_root/wrong-binding.json"
 ruby -rjson - "$input" "$wrong_binding" <<'RUBY'
 source, destination = ARGV
@@ -756,7 +766,12 @@ File.binwrite(path, changed)
 RUBY
 git -C "$exception_derived" add -A
 git -C "$exception_derived" commit -qm 'fixture existing membership exception'
-"$repo_root/tools/activate-admob-integration.sh" --root "$exception_derived" --input "$input" >/dev/null || fail 'activation refused an app with an existing membership exception'
+# #375: this app places the banner at the top safe-area edge; the value is accepted and recorded.
+top_input="$temp_root/top-input.json"
+ruby -rjson -e 'value = JSON.parse(File.binread(ARGV[0])); value["placement"]["container"] = "safe-area-top"; File.binwrite(ARGV[1], JSON.generate(value) + "\n")' "$input" "$top_input"
+"$repo_root/tools/activate-admob-integration.sh" --root "$exception_derived" --input "$top_input" >/dev/null || fail 'activation refused an app with an existing membership exception'
+[[ "$(ruby -rjson -e 'puts JSON.parse(File.binread(ARGV[0])).fetch("activationInput").fetch("placement").fetch("container")' "$exception_derived/Config/admob-activation.json")" == safe-area-top ]] ||
+  fail 'the top placement container was not recorded'
 "$repo_root/tools/validate-admob-integration.sh" --root "$exception_derived" >/dev/null || fail 'an app with an existing membership exception did not validate'
 ruby -e '
 bytes = File.binread(ARGV.fetch(0))
