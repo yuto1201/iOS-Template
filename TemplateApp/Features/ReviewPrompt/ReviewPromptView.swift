@@ -76,10 +76,10 @@ struct ReviewPromptSheet: View {
                     center.answerPositive()
                 }
             }
-            // The 44pt height is on the label, so the tappable area and the accessibility frame both get it.
+            // The height is on the label, so the tappable area and the accessibility frame both get it.
             Button { center.close() } label: {
                 Text("review-prompt.later")
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .frame(maxWidth: .infinity, minHeight: Self.minimumButtonHeight)
                     .contentShape(.rect)
             }
             .accessibilityIdentifier("review-prompt.later")
@@ -116,7 +116,12 @@ struct ReviewPromptSheet: View {
         center.followUpActions == [.close] ? "review-prompt.thanks" : "review-prompt.feedback-invitation"
     }
 
-    /// Full width and at least 44pt tall, so each answer is easy to hit.
+    /// The sheet at its medium height floats inset from the screen edges and is drawn about 4% smaller
+    /// (on a 402pt-wide iPhone, 386/402), so 44pt in layout is about 42pt on screen. 48pt keeps every
+    /// answer at least 44pt tall where the person taps.
+    static let minimumButtonHeight: CGFloat = 48
+
+    /// Full width and at least 44pt tall on screen, so each answer is easy to hit.
     @ViewBuilder
     private func promptButton(
         _ title: LocalizedStringKey,
@@ -126,7 +131,7 @@ struct ReviewPromptSheet: View {
     ) -> some View {
         let button = Button(action: action) {
             Text(title)
-                .frame(maxWidth: .infinity, minHeight: 44)
+                .frame(maxWidth: .infinity, minHeight: Self.minimumButtonHeight)
                 .contentShape(.rect)
         }
         .accessibilityIdentifier(identifier)
