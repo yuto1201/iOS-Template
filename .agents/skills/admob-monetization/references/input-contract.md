@@ -22,10 +22,16 @@ Unknown keys are rejected. Arrays that express a set must be nonempty where note
   - `container`: `safe-area-bottom` (the default) or `safe-area-top`. The banner is anchored to that safe-area edge; see "Banner placement" in `SKILL.md`. Any other value stops before changes.
   - `privacyOptionsEntry`: a nonempty, confirmed native entry-point identifier.
 - `audience`:
-  - `minimumAge`: integer `18` or greater.
+  - `minimumAge`: integer `16` or greater (D-087). A value below 16, a non-integer such as `16.5`, or a string such as `"16"` stops before changes. The activation record keeps the value in `activationInput`, and the generated configuration declares it as `ActivatedAdMobConfiguration.minimumAudienceAge`.
   - `regions`: nonempty sorted unique region identifiers.
   - `childDirected`: exact `false`.
   - `underAgeOfConsent`: exact `false`.
+
+### Audience floor and ad content rating
+
+The floor is 16 because 16 is the highest age of digital consent that EU member states may set (GDPR Article 8 lets each state choose an age from 13 to 16, https://eur-lex.europa.eu/eli/reg/2016/679/oj ), so the default route needs no regional split. The earlier floor of 18 was the template's own conservative choice, not a Google or Apple rule. Google gives children and users under the age of consent a separate treatment (https://support.google.com/admob/answer/6219315 , https://developers.google.com/admob/ios/targeting ); this route still refuses both, so `childDirected` and `underAgeOfConsent` stay `false`. Apple requires ads to be appropriate for the app's age rating (App Review Guideline 2.5.18, https://developer.apple.com/app-store/review/guidelines/ ).
+
+When `minimumAge` is below 18, the shared core (`AdMobMaxAdContentRating.cap(forMinimumAudienceAge:)`) decides the maximum ad content rating T (teen, suitable for App Store 12+), and the generated provider sets `maxAdContentRating = .teen` on the SDK request configuration before the SDK starts (https://support.google.com/admob/answer/7562142 , https://developers.google.com/admob/ios/targeting ). At 18 or more the app sets no cap, as before. Moving to `ageRestrictedTreatment`, the successor of the child-directed and under-age-of-consent tags, is outside this contract.
 - `tracking`: exact non-tracking policy: `mode` is `non-tracking`; `attPrompt`, `publisherFirstPartyIDEnabled`, and `personalizedAds` are all `false`.
 - `ump`: `enabled` and `privacyOptionsEnabled` are both `true`.
 - `adFreeEntitlement`: `enabled` is a boolean and `source` is a nonempty name of the app-owned source of truth. The generated integration records this name; the app must inject the actual entitlement lookup.

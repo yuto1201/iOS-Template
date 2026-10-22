@@ -34,6 +34,16 @@ tools/validate-admob-integration.sh --root /absolute/path/to/derived-app
 
 The validator compares the Debug and Release App ID build settings, the SKAdNetworkItems, and both branches of the generated configuration with the recorded activation input itself, so a file edited together with the record's digest still fails. Release must hold only the app's own pair, never Google's demo publisher, and the activated sources must not contain the network-free UI-test fixture route.
 
+## Audience and ad content rating
+
+`audience.minimumAge` accepts an integer of 16 or more (D-087); `childDirected` and `underAgeOfConsent` must stay `false`. Anything else, including 15, `16.5`, or `"16"`, stops before any change. The reason and the official sources are in [references/input-contract.md](references/input-contract.md):
+
+- 16 is the highest age of digital consent that EU member states may set (GDPR Article 8), so the default route needs no regional split. The earlier 18 was the template's own conservative choice, not a Google or Apple rule.
+- Google treats children and users under the age of consent separately (https://support.google.com/admob/answer/6219315 , https://developers.google.com/admob/ios/targeting ); this route does not support them.
+- Apple requires ads to match the app's age rating (App Review Guideline 2.5.18, https://developer.apple.com/app-store/review/guidelines/ ).
+
+When the minimum age is below 18, the shared core's `AdMobMaxAdContentRating.cap(forMinimumAudienceAge:)` returns T (teen, App Store 12+), and `GoogleMobileAdsSDKStarter` sets `maxAdContentRating = .teen` on the request configuration from `ActivatedAdMobConfiguration.minimumAudienceAge` before the SDK starts (https://support.google.com/admob/answer/7562142 ). At 18 or more the app sets no cap. The app does not wire the age itself, and the validator requires the cap in the activated sources whenever the recorded age is below 18. Decide the minimum age from the app's specification and App Store age rating, not from a user's self-declared age.
+
 ## Banner placement
 
 `placement.container` chooses the safe-area edge that the anchored adaptive banner is pinned to: `safe-area-bottom` (the default) or `safe-area-top`. Google's anchored adaptive banners are anchored to the top or the bottom of the screen (https://developers.google.com/admob/ios/banner/anchored-adaptive). The value is recorded in the activation record; the app's UI code places `AdaptiveBannerHost` there. On either edge:
@@ -62,7 +72,7 @@ The Info.plist file is the app's own file, so its bytes are not pinned in the ac
 
 An app that added Google Mobile Ads by hand (for example its own `<Module>/AdMob/` code, its own package reference, and App ID keys in its own Info.plist) can move to this activation in a dedicated Issue when all of these hold:
 
-1. Its confirmed specification satisfies [references/input-contract.md](references/input-contract.md): the non-tracking UMP route with one anchored-adaptive banner, minimum age 18 or more, the exact pinned SDK and UMP versions, and verified Release identifiers for this Bundle ID.
+1. Its confirmed specification satisfies [references/input-contract.md](references/input-contract.md): the non-tracking UMP route with one anchored-adaptive banner, minimum age 16 or more (with the T content-rating cap below 18), the exact pinned SDK and UMP versions, and verified Release identifiers for this Bundle ID.
 2. On a feature branch with a clean worktree, it first removes its own integration in one commit: the `<Module>/AdMob/` folder, the Google Mobile Ads package reference and product, any `ADMOB_APPLICATION_IDENTIFIER` or other App ID build settings, and `GADApplicationIdentifier` and `SKAdNetworkItems` from its Info.plist. It keeps every other Info.plist key and the existing `INFOPLIST_FILE`.
 3. Debug and Release use the same `INFOPLIST_FILE` (or none, with `GENERATE_INFOPLIST_FILE = YES`).
 

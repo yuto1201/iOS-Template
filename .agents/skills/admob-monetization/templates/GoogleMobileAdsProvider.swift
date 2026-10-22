@@ -50,6 +50,14 @@ final class GoogleMobileAdsSDKStarter: AdMobSDKStarting {
         let requestConfiguration = MobileAds.shared.requestConfiguration
         requestConfiguration.setPublisherFirstPartyIDEnabled(false)
         requestConfiguration.publisherPrivacyPersonalizationState = .disabled
+        // D-087: an audience that includes users under 18 receives ads rated T (teen) or lower, so the ads
+        // stay appropriate for the app's App Store age rating. An 18+ audience keeps the SDK default.
+        switch AdMobMaxAdContentRating.cap(forMinimumAudienceAge: ActivatedAdMobConfiguration.minimumAudienceAge) {
+        case .teen:
+            requestConfiguration.maxAdContentRating = .teen
+        case .unrestricted:
+            break
+        }
     }
 
     func start() async {

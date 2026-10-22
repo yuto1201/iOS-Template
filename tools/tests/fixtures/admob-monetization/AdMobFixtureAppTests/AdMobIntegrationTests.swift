@@ -52,6 +52,14 @@ final class AdMobIntegrationTests: XCTestCase {
             allowed.sdk.configuration?.publisherFirstPartyIDEnabled ?? true
         )
 
+        // D-087: an audience that includes users under 18 receives ads rated T (teen) at most; an 18+
+        // audience is not capped by the app.
+        XCTAssertEqual(AdMobMaxAdContentRating.cap(forMinimumAudienceAge: 16), .teen)
+        XCTAssertEqual(AdMobMaxAdContentRating.cap(forMinimumAudienceAge: 17), .teen)
+        XCTAssertEqual(AdMobMaxAdContentRating.cap(forMinimumAudienceAge: 18), .unrestricted)
+        XCTAssertEqual(AdMobMaxAdContentRating.cap(forMinimumAudienceAge: 21), .unrestricted)
+        XCTAssertEqual(AdMobMaxAdContentRating.unrestrictedMinimumAudienceAge, 18)
+
         let excluded = makeSystem()
         let excludedState = await excluded.runtime.prepare(
             context: .excluded,

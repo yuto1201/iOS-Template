@@ -17,6 +17,10 @@ module IOSTemplate
     SCHEMA_VERSION = 1
     RECORD_PATH = "Config/admob-activation.json"
     PLACEMENT_CONTAINERS = %w[safe-area-bottom safe-area-top].freeze
+    # D-087: the lowest accepted audience age, and the age below which the generated provider caps the ad
+    # content rating at T (teen).
+    MINIMUM_AUDIENCE_AGE = 16
+    UNRESTRICTED_AD_CONTENT_AGE = 18
     PACKAGE_URL = "https://github.com/googleads/swift-package-manager-google-mobile-ads.git"
     PACKAGE_VERSION = "13.10.0"
     PACKAGE_REVISION = "12b7af0f844723a86fd3c0089b02f64b1e495605"
@@ -302,7 +306,11 @@ module IOSTemplate
 
       audience = value["audience"]
       exact_keys!(audience, %w[childDirected minimumAge regions underAgeOfConsent], "audience")
-      fail!("audience.minimumAge must be an integer of at least 18 for the default non-tracking route") unless audience["minimumAge"].is_a?(Integer) && audience["minimumAge"] >= 18
+      # D-087: 16 is the highest age of digital consent the EU member states set, so no regional split is
+      # needed; below 18 the generated provider caps the ad content rating at T.
+      unless audience["minimumAge"].is_a?(Integer) && audience["minimumAge"] >= MINIMUM_AUDIENCE_AGE
+        fail!("audience.minimumAge must be an integer of at least #{MINIMUM_AUDIENCE_AGE} for the default non-tracking route")
+      end
       sorted_unique_strings!(audience["regions"], "audience.regions", pattern: /\A[a-z0-9][a-z0-9-]{0,31}\z/)
       fail!("child-directed or under-age treatment requires a separate decision") unless audience["childDirected"] == false && audience["underAgeOfConsent"] == false
 
@@ -1059,6 +1067,15 @@ module IOSTemplate
       fail!("activated provider must disable publisher personalization") unless source_bytes.include?("publisherPrivacyPersonalizationState = .disabled")
       fail!("activated provider must use the current large anchored adaptive API") unless source_bytes.include?("largeAnchoredAdaptiveBanner(width:")
       fail!("activated provider must update consent before checking canRequestAds") unless source_bytes.include?("requestConsentInfoUpdate") && source_bytes.include?("canRequestAds")
+      # Activations made before D-087 have an 18+ audience and no cap; an audience under 18 must carry it.
+      if activation_input.dig("audience", "minimumAge") < UNRESTRICTED_AD_CONTENT_AGE
+        unless source_bytes.include?("AdMobMaxAdContentRating.cap(forMinimumAudienceAge: ActivatedAdMobConfiguration.minimumAudienceAge)") &&
+               source_bytes.include?("requestConfiguration.maxAdContentRating = .teen") &&
+               source_bytes.include?("static let unrestrictedMinimumAudienceAge = #{UNRESTRICTED_AD_CONTENT_AGE}\n") &&
+               source_bytes.include?("minimumAge < unrestrictedMinimumAudienceAge ? .teen : .unrestricted")
+          fail!("activated core and provider must cap the ad content rating at T for an audience under #{UNRESTRICTED_AD_CONTENT_AGE}")
+        end
+      end
 
       record
     end

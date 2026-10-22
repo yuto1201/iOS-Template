@@ -222,6 +222,23 @@ expect_failure invalid-input "$repo_root/tools/activate-admob-integration.sh" --
 [[ -z "$(git -C "$derived" status --porcelain=v1)" ]] || fail 'invalid input changed the derived app'
 [[ "$(sha256_file "$derived/GardenNotes.xcodeproj/project.pbxproj")" == "$project_before" ]] || fail 'invalid input changed the project'
 
+# D-087 (#398): an audience below 16, a minimum age that is not an integer, a child-directed audience, and an
+# under-age-of-consent audience stop before any change, with their reasons.
+age_case() {
+  local label=$1 expression=$2 message=$3
+  ruby -rjson -e 'value = JSON.parse(File.binread(ARGV[0])); eval(ARGV[2]); File.binwrite(ARGV[1], JSON.generate(value) + "\n")' "$input" "$invalid" "$expression"
+  expect_failure "audience-$label" "$repo_root/tools/activate-admob-integration.sh" --root "$derived" --input "$invalid"
+  grep -Fq "$message" "$temp_root/audience-$label.stderr" || fail "audience $label was not refused with its reason: $(cat "$temp_root/audience-$label.stderr")"
+  [[ -z "$(git -C "$derived" status --porcelain=v1 --untracked-files=all)" ]] || fail "audience $label changed the derived app"
+  [[ "$(sha256_file "$derived/GardenNotes.xcodeproj/project.pbxproj")" == "$project_before" ]] || fail "audience $label changed the project"
+}
+age_case under-16 'value["audience"]["minimumAge"] = 15' 'audience.minimumAge must be an integer of at least 16'
+age_case fractional 'value["audience"]["minimumAge"] = 16.5' 'audience.minimumAge must be an integer of at least 16'
+age_case string 'value["audience"]["minimumAge"] = "16"' 'audience.minimumAge must be an integer of at least 16'
+age_case child-directed 'value["audience"]["childDirected"] = true' 'child-directed or under-age treatment requires a separate decision'
+age_case under-age-of-consent 'value["audience"]["underAgeOfConsent"] = true' 'child-directed or under-age treatment requires a separate decision'
+age_case child-directed-16 'value["audience"]["minimumAge"] = 16; value["audience"]["childDirected"] = true' 'child-directed or under-age treatment requires a separate decision'
+
 # #375: a container other than the two safe-area edges stops before any change.
 for container in inline safe-area-middle SAFE-AREA-TOP; do
   ruby -rjson -e 'value = JSON.parse(File.binread(ARGV[0])); value["placement"]["container"] = ARGV[2]; File.binwrite(ARGV[1], JSON.generate(value) + "\n")' "$input" "$invalid" "$container"
@@ -369,6 +386,14 @@ grep -Fxq '    static let adFreeEntitlementSource = "entitlements.hasAdFreeAcces
 grep -Rq 'func invalidateEligibility()' "$derived/GardenNotes/AdMob" || fail 'eligibility changes cannot invalidate banner hosts'
 grep -Rq 'self.gate.accepts(token)' "$derived/GardenNotes/AdMob/AdaptiveBannerHost.swift" || fail 'host accepts callbacks from suppressed generations'
 grep -Rq 'stateDidChange = nil' "$derived/GardenNotes/AdMob/GoogleMobileAdsProvider.swift" || fail 'detached hosts keep receiving SDK callbacks'
+# D-087 (#398): the core decides the ad content rating cap from the recorded minimum age, and the provider sets
+# it on the SDK request configuration. This app records 18, so the app sets no cap at run time.
+grep -Fxq '    static let minimumAudienceAge = 18' "$derived/GardenNotes/AdMob/AdMobConfiguration.swift" || fail 'the 18+ audience was not generated'
+grep -Fq 'minimumAge < unrestrictedMinimumAudienceAge ? .teen : .unrestricted' "$derived/GardenNotes/AdMob/AdMobCore.swift" || fail 'the core does not decide the ad content rating cap'
+grep -Fxq '    static let unrestrictedMinimumAudienceAge = 18' "$derived/GardenNotes/AdMob/AdMobCore.swift" || fail 'the core does not cap audiences under 18'
+grep -Fq 'switch AdMobMaxAdContentRating.cap(forMinimumAudienceAge: ActivatedAdMobConfiguration.minimumAudienceAge) {' "$derived/GardenNotes/AdMob/GoogleMobileAdsProvider.swift" ||
+  fail 'the provider does not apply the core decision for the recorded audience'
+grep -Fq 'requestConfiguration.maxAdContentRating = .teen' "$derived/GardenNotes/AdMob/GoogleMobileAdsProvider.swift" || fail 'the provider does not set the T cap on the SDK'
 
 provider_modules="$temp_root/provider-modules"
 mkdir -p "$provider_modules"
@@ -767,12 +792,39 @@ RUBY
 git -C "$exception_derived" add -A
 git -C "$exception_derived" commit -qm 'fixture existing membership exception'
 # #375: this app places the banner at the top safe-area edge; the value is accepted and recorded.
+# D-087 (#398): it also has a 16+ audience, which is accepted, recorded, generated, and capped at T.
 top_input="$temp_root/top-input.json"
-ruby -rjson -e 'value = JSON.parse(File.binread(ARGV[0])); value["placement"]["container"] = "safe-area-top"; File.binwrite(ARGV[1], JSON.generate(value) + "\n")' "$input" "$top_input"
+ruby -rjson -e 'value = JSON.parse(File.binread(ARGV[0])); value["placement"]["container"] = "safe-area-top"; value["audience"]["minimumAge"] = 16; File.binwrite(ARGV[1], JSON.generate(value) + "\n")' "$input" "$top_input"
 "$repo_root/tools/activate-admob-integration.sh" --root "$exception_derived" --input "$top_input" >/dev/null || fail 'activation refused an app with an existing membership exception'
 [[ "$(ruby -rjson -e 'puts JSON.parse(File.binread(ARGV[0])).fetch("activationInput").fetch("placement").fetch("container")' "$exception_derived/Config/admob-activation.json")" == safe-area-top ]] ||
   fail 'the top placement container was not recorded'
+[[ "$(ruby -rjson -e 'puts JSON.parse(File.binread(ARGV[0])).fetch("activationInput").fetch("audience").fetch("minimumAge").inspect' "$exception_derived/Config/admob-activation.json")" == 16 ]] ||
+  fail 'the 16+ audience was not recorded'
+grep -Fxq '    static let minimumAudienceAge = 16' "$exception_derived/GardenNotes/AdMob/AdMobConfiguration.swift" || fail 'the 16+ audience was not generated'
+grep -Fq 'requestConfiguration.maxAdContentRating = .teen' "$exception_derived/GardenNotes/AdMob/GoogleMobileAdsProvider.swift" || fail 'the provider does not cap the ad content rating below 18'
 "$repo_root/tools/validate-admob-integration.sh" --root "$exception_derived" >/dev/null || fail 'an app with an existing membership exception did not validate'
+# The validator requires the T cap in the activated sources of an audience under 18, even when the edit
+# also rewrites the record's file digest.
+exception_provider="$exception_derived/GardenNotes/AdMob/GoogleMobileAdsProvider.swift"
+exception_record="$exception_derived/Config/admob-activation.json"
+cp "$exception_provider" "$temp_root/exception-provider.pristine"
+cp "$exception_record" "$temp_root/exception-record.pristine"
+ruby -rdigest -rjson - "$exception_provider" "$exception_record" <<'RUBY'
+provider, record = ARGV
+bytes = File.binread(provider)
+changed = bytes.sub("requestConfiguration.maxAdContentRating = .teen", "break")
+abort "the provider has no T cap to remove" if changed == bytes
+File.binwrite(provider, changed)
+value = JSON.parse(File.binread(record))
+value["fileDigests"]["GardenNotes/AdMob/GoogleMobileAdsProvider.swift"] = Digest::SHA256.hexdigest(changed)
+File.binwrite(record, JSON.generate(value) + "\n")
+RUBY
+expect_failure rating-cap-removed "$repo_root/tools/validate-admob-integration.sh" --root "$exception_derived"
+grep -Fq 'activated core and provider must cap the ad content rating at T for an audience under 18' "$temp_root/rating-cap-removed.stderr" ||
+  fail "removing the T cap failed for another reason: $(<"$temp_root/rating-cap-removed.stderr")"
+cp "$temp_root/exception-provider.pristine" "$exception_provider"
+cp "$temp_root/exception-record.pristine" "$exception_record"
+"$repo_root/tools/validate-admob-integration.sh" --root "$exception_derived" >/dev/null || fail 'the restored 16+ activation did not validate'
 ruby -e '
 bytes = File.binread(ARGV.fetch(0))
 abort "exception sets: #{bytes.scan("isa = PBXFileSystemSynchronizedBuildFileExceptionSet;").length}" unless bytes.scan("isa = PBXFileSystemSynchronizedBuildFileExceptionSet;").length == 1

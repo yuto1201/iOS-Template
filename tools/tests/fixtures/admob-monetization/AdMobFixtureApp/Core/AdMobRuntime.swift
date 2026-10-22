@@ -52,6 +52,23 @@ struct AdMobPrivacyConfiguration: Equatable, Sendable {
     )
 }
 
+/// The highest content rating of the ads an app may receive, decided from the app's minimum audience age
+/// (D-087). The provider sets it on the SDK's request configuration before the SDK starts.
+enum AdMobMaxAdContentRating: Equatable, Sendable {
+    /// No cap from the app; the AdMob account's own settings apply. Every user is 18 or older.
+    case unrestricted
+    /// T (teen): ads suitable for teens and older, matching the App Store 12+ age rating. The audience
+    /// includes users younger than 18.
+    case teen
+
+    /// Audiences whose minimum age is below this receive ads rated T or lower.
+    static let unrestrictedMinimumAudienceAge = 18
+
+    static func cap(forMinimumAudienceAge minimumAge: Int) -> AdMobMaxAdContentRating {
+        minimumAge < unrestrictedMinimumAudienceAge ? .teen : .unrestricted
+    }
+}
+
 enum AdMobEligibilityDecision: Equatable, Sendable {
     case eligible
     case ineligible(AdMobBannerCollapseReason)
