@@ -79,8 +79,6 @@ required_files=(
   .agents/skills/submit-appstore-release/scripts/record-section.sh
   docs/agent-contracts/appstore-submission.md
   "App Store/README.md"
-  "App Store/submission/requirements.json"
-  "App Store/screenshots/states.json"
   tools/secret-store.sh
   tools/run-with-secret.sh
   tools/run-with-private-key.sh
@@ -96,6 +94,16 @@ required_files=(
   tools/tests/test-appstore-screenshots.sh
   tools/tests/test-appstore-skills.sh
 )
+
+# #356: these App Store files belong to the app (tools/template-sync/ownership.json), and the template sync
+# never brings them into an app that adopted the template (it records Config/template-base.json, D-074). The
+# app prepares its own when it releases, so they are required here only in the template itself.
+if [[ ! -f Config/template-base.json ]]; then
+  required_files+=(
+    "App Store/submission/requirements.json"
+    "App Store/screenshots/states.json"
+  )
+fi
 
 workflow_skills=(
   ui-direction
@@ -924,7 +932,31 @@ for case_spec in 'dormant null pass' 'dormant abcdefghijklmnopqrst fail' 'adopte
   [[ "$case_result" == pass ]] || grep -Fq 'projectRef' "$case_root/stderr" || { echo "projectRef $case_ref ($case_state) failed for another reason: $(cat "$case_root/stderr")" >&2; exit 1; }
 done
 
-swift tools/check-markdown-links.swift
+if [[ ! -f Config/template-base.json ]]; then
+  swift tools/check-markdown-links.swift
+else
+  # #356: docs/superpowers/ is template-only (tools/template-sync/ownership.json), so in an app that adopted the
+  # template (it records Config/template-base.json, D-074) the imported documents' links into it have no
+  # target. Only those are left out there; every other missing target still fails, and the template is
+  # checked as before.
+  if ! link_errors=$(swift tools/check-markdown-links.swift 2>&1); then
+    python3 - "$link_errors" <<'PYTHON'
+import os
+import sys
+
+lines = sys.argv[1].splitlines()
+remaining = [] if lines else ["the Markdown link check failed without naming a target"]
+for line in lines:
+    source, separator, destination = line.partition(": missing local Markdown target: ")
+    resolved = os.path.normpath(os.path.join(os.path.dirname(source), destination)) if separator else ""
+    if not (separator and resolved.startswith("docs/superpowers/")):
+        remaining.append(line)
+if remaining:
+    print("\n".join(remaining), file=sys.stderr)
+    sys.exit(1)
+PYTHON
+  fi
+fi
 
 # #333: the Ruby checks above read UTF-8 files whatever the caller's locale. With LANG and LC_ALL set to C,
 # Ruby's default external encoding is US-ASCII, so the same checks run once more there and must pass the same way.

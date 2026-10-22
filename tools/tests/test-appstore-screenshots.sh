@@ -12,6 +12,28 @@ builder="$repo_root/tools/build-appstore-screenshot-set.sh"
 capture="$repo_root/tools/capture-appstore-screenshots.sh"
 requirements="$workspace/requirements.json"
 states="$repo_root/App Store/screenshots/states.json"
+# #356: the capture states belong to the app, and an app that adopted the template (it records
+# Config/template-base.json, D-074) has its own or none yet. There the capture reads the template's sample
+# states below; the template itself keeps reading its own App Store/screenshots/states.json.
+if [[ -f "$repo_root/Config/template-base.json" ]]; then
+  states="$workspace/states.json"
+  cat >"$states" <<'JSON'
+{
+  "schemaVersion": 1,
+  "locales": [
+    {"id": "en-US", "appleLanguage": "en", "appleLocale": "en_US"},
+    {"id": "ja", "appleLanguage": "ja", "appleLocale": "ja_JP"}
+  ],
+  "states": [
+    {
+      "id": "primary",
+      "order": 1,
+      "launchArguments": ["--appstore-screenshot", "--fixture", "primary"]
+    }
+  ]
+}
+JSON
+fi
 raw="$workspace/raw"
 final="$workspace/final"
 review="$workspace/review.json"
@@ -562,7 +584,9 @@ leases = ENV.fetch("FAKE_RESOURCE_STATE")
 case command
 when "allocate"
   devices = JSON.parse(File.read(ENV.fetch("FAKE_SIMCTL_STATE"))).fetch("devices").values.flatten
-  udid = devices.find { |device| device["deviceTypeIdentifier"] == options.fetch("--device-type") && device["name"].start_with?("iOS-Template ") }.fetch("udid")
+  # The copy's declared dedicated names: iOS-Template in the template, the app's display name in an app (#356).
+  declared = JSON.parse(File.read(File.join(__dir__, "../../Config/dedicated-simulators.json"))).fetch("devices").map { |device| device.fetch("name") }
+  udid = devices.find { |device| device["deviceTypeIdentifier"] == options.fetch("--device-type") && declared.include?(device["name"]) }.fetch("udid")
   id = SecureRandom.uuid
   receipt = File.join(File.realpath(options.fetch("--receipt-dir")), "allocation-#{id}.json")
   File.write(receipt, "{}\n")

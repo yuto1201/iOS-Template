@@ -7,8 +7,22 @@ set -euo pipefail
 # app's own text, and the dedicated Simulators carry the app's display name. The imported credential
 # scan and dedicated-Simulator setup tests run inside it, and the template keeps the exact checks.
 
+# #356: the same kind of app, Identity-bootstrapped with another module name and without the app's App Store
+# files, also runs the imported foundation, App Store, 3D asset and app-bootstrap tests. The two bootstrap groups
+# take longer, so each runs on its own through tools/tests/test-adopted-app-bootstrap-*.sh and stays well inside
+# the targeted per-test limit; with no argument this test runs the `imported` group.
+
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" git ruby python3 shasum
+require_test_commands "$0" git ruby python3 shasum swift
+
+group="${1:-imported}"
+case "$group" in
+  imported|bootstrap-transform|bootstrap-fixture) ;;
+  *)
+    echo "usage: $0 [imported|bootstrap-transform|bootstrap-fixture]" >&2
+    exit 64
+    ;;
+esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/ios-template-adopted-app-tests.XXXXXX")"
@@ -19,6 +33,68 @@ fail() { echo "adopted-app imported tests: $*" >&2; exit 1; }
 before_head="$(git -C "$repo_root" rev-parse HEAD)"
 before_status="$(git -C "$repo_root" status --porcelain)"
 before_index="$(git -C "$repo_root" ls-files -s | shasum -a 256)"
+
+check_running_repository() {
+  [[ "$(git -C "$repo_root" rev-parse HEAD)" == "$before_head" ]] || fail 'the running repository HEAD changed'
+  [[ "$(git -C "$repo_root" status --porcelain)" == "$before_status" ]] || fail 'the running repository working tree changed'
+  [[ "$(git -C "$repo_root" ls-files -s | shasum -a 256)" == "$before_index" ]] || fail 'the running repository index changed'
+}
+commit_all() {
+  git -C "$1" add -A
+  git -C "$1" -c user.name=test -c user.email=test@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+    -c gc.auto=0 -c maintenance.auto=false commit -q -m "$2"
+}
+
+# #356: a disposable clone of this HEAD becomes an app that adopted the template after its Identity bootstrap.
+# Its project is SampleNotes.xcodeproj, the template-only files (docs/superpowers/ among them) and the app's
+# own App Store files are gone, it records Config/template-base.json, and specs/product.md holds the app's text.
+make_bootstrapped_adopted_app() {
+  local dest="$1" path
+  git clone -q --no-hardlinks "$repo_root" "$dest"
+  git -C "$dest" checkout -q --detach "$before_head"
+  swift "$dest/tools/bootstrap-app.swift" apply --root "$dest" --manifest "$dest/Config/template-identity.json" \
+    --display-name 'Sample Notes' --module-name SampleNotes --app-slug sample-notes --bundle-id com.example.SampleNotes \
+    >"$work/bootstrap-$group.log" 2>&1 || fail "Identity bootstrap of the adopted app failed: $(tail -3 "$work/bootstrap-$group.log")"
+  [[ -f "$dest/SampleNotes.xcodeproj/project.pbxproj" && -f "$dest/Config/app-identity.json" && ! -e "$dest/TemplateApp.xcodeproj" ]] ||
+    fail 'the adopted app was not renamed to SampleNotes'
+  commit_all "$dest" 'Bootstrap Sample Notes'
+  ruby -r"$dest/tools/lib/template-sync.rb" -e '
+    root = ARGV.fetch(0)
+    ownership = TemplateSync.load_ownership(File.read(File.join(root, TemplateSync::OWNERSHIP_PATH)))
+    TemplateSync.tracked_paths(root, "HEAD").each do |path|
+      category = TemplateSync.classify(ownership, path)&.dig(:category)
+      puts path if category == "template-only" || (category == "app" && path.start_with?("App Store/"))
+    end
+  ' "$dest" >"$work/adopted-removed.txt"
+  for path in 'App Store/screenshots/states.json' 'App Store/metadata/app.yml' 'App Store/submission/requirements.json' \
+    docs/superpowers/plans/2026-08-22-app-bootstrap.md; do
+    grep -Fxq -- "$path" "$work/adopted-removed.txt" || fail "the adopted app would keep $path"
+  done
+  while IFS= read -r path; do
+    [[ -n "$path" ]] && git -C "$dest" rm -q -- "$path"
+  done <"$work/adopted-removed.txt"
+  printf '{\n  "baseCommit": "%s",\n  "method": "adopted",\n  "recordedAt": "2026-10-19T00:00:00Z",\n  "schemaVersion": 1,\n  "templateRepository": "yuto1201/iOS-Template"\n}\n' "$before_head" >"$dest/Config/template-base.json"
+  printf '# Sample Notes product\n\nSample Notes keeps notes on the device. It has no server and no database.\n' >"$dest/specs/product.md"
+  commit_all "$dest" 'Adopt the template as Sample Notes'
+  [[ -z "$(git -C "$dest" ls-files -- 'App Store/metadata/app.yml' 'App Store/screenshots/states.json' 'App Store/submission' docs/superpowers)" ]] ||
+    fail 'the adopted app still tracks app-owned App Store files or template-only documents'
+}
+run_in() { (cd "$1" && bash "tools/tests/$2" "${@:3}" >"$work/$2${3:+-$3}.log" 2>&1); }
+
+if [[ "$group" != imported ]]; then
+  adopted="$work/adopted-app"
+  make_bootstrapped_adopted_app "$adopted"
+  if [[ "$group" == bootstrap-transform ]]; then
+    run_in "$adopted" test-app-bootstrap.sh transform ||
+      fail "test-app-bootstrap.sh transform failed in the adopted app: $(tail -3 "$work/test-app-bootstrap.sh-transform.log")"
+  else
+    run_in "$adopted" test-bootstrap-fixture.sh ||
+      fail "test-bootstrap-fixture.sh failed in the adopted app: $(tail -3 "$work/test-bootstrap-fixture.sh.log")"
+  fi
+  check_running_repository
+  echo "adopted-app imported $group test regressions passed"
+  exit 0
+fi
 
 app="$work/app"
 git clone -q --no-hardlinks "$repo_root" "$app"
@@ -35,6 +111,9 @@ removed="$(ruby -r"$app/tools/lib/template-sync.rb" -e '
 grep -Fxq 'tools/tests/test-template-sync-derived.sh' <<<"$removed" || fail 'test-template-sync-derived.sh is not template-only'
 # This regression loads the template-only sync library, so an adopted app must not receive it either.
 grep -Fxq 'tools/tests/test-adopted-app-imported-tests.sh' <<<"$removed" || fail 'this regression is not template-only'
+for entrypoint in tools/tests/test-adopted-app-bootstrap-fixture.sh tools/tests/test-adopted-app-bootstrap-transform.sh; do
+  grep -Fxq "$entrypoint" <<<"$removed" || fail "$entrypoint is not template-only"
+done
 grep -Fxq 'tools/tests/fixtures/template-sync/template-sample.sh' <<<"$removed" || fail 'the template-sync fixture is not template-only'
 
 (
@@ -187,8 +266,28 @@ if plan_in_app; then
 fi
 grep -Fq 'repository-test manifest inventory differs from tracked tests' "$work/plan-in-app.log" || fail "unexpected template plan failure: $(tail -3 "$work/plan-in-app.log")"
 
-[[ "$(git -C "$repo_root" rev-parse HEAD)" == "$before_head" ]] || fail 'the running repository HEAD changed'
-[[ "$(git -C "$repo_root" status --porcelain)" == "$before_status" ]] || fail 'the running repository working tree changed'
-[[ "$(git -C "$repo_root" ls-files -s | shasum -a 256)" == "$before_index" ]] || fail 'the running repository index changed'
+# #356: in the bootstrapped adopted app, the imported foundation, App Store and 3D asset tests pass. The app has
+# no App Store/screenshots/states.json, App Store/metadata/app.yml or App Store/submission/requirements.json, no
+# TemplateApp.xcodeproj, no docs/superpowers/, and its own specs/product.md.
+adopted="$work/adopted-app"
+make_bootstrapped_adopted_app "$adopted"
+for test_name in test-foundation.sh test-appstore-screenshots.sh test-appstore-preparation-migration.sh \
+  test-appstore-build.sh test-ios-3d-assets-skill.sh; do
+  run_in "$adopted" "$test_name" || fail "$test_name failed in the adopted app: $(tail -3 "$work/$test_name.log")"
+done
+# Without the adoption record the same repository is checked as the template, which needs the template's files.
+git -C "$adopted" rm -q -- Config/template-base.json
+commit_all "$adopted" 'Check the adopted app as the template'
+expect_template_failure() {
+  if run_in "$adopted" "$1"; then
+    fail "$1 accepted a repository without the template's files and without the adoption record"
+  fi
+  grep -Fq -- "$2" "$work/$1.log" || fail "unexpected template failure of $1: $(tail -3 "$work/$1.log")"
+}
+expect_template_failure test-foundation.sh 'missing required foundation file: App Store/submission/requirements.json'
+expect_template_failure test-appstore-preparation-migration.sh 'App Store/metadata/app.yml'
+expect_template_failure test-ios-3d-assets-skill.sh "specs/product.md lacks '### 5.1 3Dモデル制作方針'"
+
+check_running_repository
 
 echo 'adopted-app imported test regressions passed'

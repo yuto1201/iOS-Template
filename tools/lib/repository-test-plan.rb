@@ -34,6 +34,8 @@ module IOSTemplate
     # entries are left out there when the files are absent at Head (#349). The template keeps them exactly.
     TEMPLATE_BASE_PATH = "Config/template-base.json"
     TEMPLATE_ONLY_TESTS = %w[
+      tools/tests/test-adopted-app-bootstrap-fixture.sh
+      tools/tests/test-adopted-app-bootstrap-transform.sh
       tools/tests/test-adopted-app-imported-tests.sh
       tools/tests/test-build-for-device.sh
       tools/tests/test-link-user-skill.sh

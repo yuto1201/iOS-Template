@@ -619,7 +619,17 @@ RUBY
 
 "$fixture_spec_checker" "$workspace/direction-issue.md" >/dev/null
 
-cat > "$workspace/non-ui-fast-issue.md" <<'EOF'
+# #356: specs/product.md belongs to the app (tools/template-sync/ownership.json). An app that adopted the
+# template (it records Config/template-base.json, D-074) keeps its own product specification, which need not
+# have the template's section 3.1, so there the non-UI fixture anchors the imported Identity Bootstrap
+# boundary instead. The template keeps its product anchor.
+non_ui_title='New app startup order'
+non_ui_anchor='specs/product.md#31-新しいアプリの開始順序'
+if [[ -f Config/template-base.json ]]; then
+  non_ui_title='Identity Bootstrap boundary'
+  non_ui_anchor='specs/architecture.md#21-identity-bootstrap境界'
+fi
+cat > "$workspace/non-ui-fast-issue.md" <<EOF
 ## Goal
 
 Audit the app Identity metadata within the repository configuration only because this is pure non-UI work.
@@ -639,7 +649,7 @@ Audit the app Identity metadata within the repository configuration only because
 
 ## Spec anchors
 
-- [New app startup order](specs/product.md#31-新しいアプリの開始順序)
+- [${non_ui_title}](${non_ui_anchor})
 
 ## Dependencies
 
@@ -678,7 +688,7 @@ ruby tools/lib/issue-contract.rb \
   --repo yuto1201/iOS-Template \
   --fetched-at 2026-09-06T00:31:41Z > "$workspace/non-ui-fast-contract.json"
 
-ruby -E UTF-8 -rjson - "$workspace/non-ui-fast-issue.md" "$workspace/non-ui-fast-contract.json" <<'RUBY'
+NON_UI_ANCHOR="$non_ui_anchor" ruby -E UTF-8 -rjson - "$workspace/non-ui-fast-issue.md" "$workspace/non-ui-fast-contract.json" <<'RUBY'
 # encoding: UTF-8
 body = File.read(ARGV.fetch(0), encoding: "UTF-8")
 contract = JSON.parse(File.binread(ARGV.fetch(1)))
@@ -688,7 +698,7 @@ abort "non-UI fixture must use exact UI verification Not applicable" unless ui_s
 abort "non-UI fixture Goal must carry exact scope and non-UI reason" unless body.match?(/^## Goal\s*$.*Identity metadata within the repository configuration only because this is pure non-UI work\./m)
 abort "non-UI fixture In scope must carry scope and reason" unless body.match?(/^## In scope\s*$.*Scope: Identity metadata in Config files and bootstrap documentation\..*Reason: The change validates repository Identity without creating or changing user-facing UI\./m)
 
-expected_anchor = ["specs/product.md#31-新しいアプリの開始順序"]
+expected_anchor = [ENV.fetch("NON_UI_ANCHOR").dup.force_encoding(Encoding::UTF_8)]
 abort "non-UI fixture must seal its relevant product specification anchor" unless contract["specAnchors"] == expected_anchor
 abort "non-UI fixture Goal was not sealed" unless contract["goal"] == "Audit the app Identity metadata within the repository configuration only because this is pure non-UI work."
 acceptance_text = contract.fetch("acceptanceCriteria").fetch(0).fetch("text")
