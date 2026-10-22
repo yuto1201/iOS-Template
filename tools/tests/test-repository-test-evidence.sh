@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# repository-test-execution: exclusive
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
@@ -11,6 +12,8 @@ trap 'rm -rf -- "$scratch"' EXIT
 # #268: a failed test's own output is kept outside the fixture repository, here inside this scratch area.
 export IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT="$(cd "$scratch" && pwd -P)/kept-output"
 kept_root="$IOS_TEMPLATE_REPOSITORY_TEST_OUTPUT_ROOT/repo-$(printf '%s' "$(cd "$scratch" && pwd -P)/repo" | shasum -a 256 | awk '{print $1}')"
+# #411: these scenarios check the sequential run (one worker); test-repository-test-parallel.sh checks several workers.
+export IOS_TEMPLATE_REPOSITORY_TEST_JOBS=1
 
 git init -q -b main "$repo"
 git -C "$repo" config user.name Test

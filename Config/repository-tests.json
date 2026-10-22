@@ -164,7 +164,7 @@
     },
     {
       "domain": "ios-runner-finalization",
-      "paths": ["tools/tests/test-ios-runner-finalization.sh"],
+      "paths": ["tools/tests/test-ios-runner-finalization-mutation.sh", "tools/tests/test-ios-runner-finalization.sh"],
       "prefixes": []
     },
     {
@@ -251,7 +251,7 @@
     },
     {
       "domain": "ios-visual-review",
-      "paths": ["tools/tests/test-visual-review-packet.sh"],
+      "paths": ["tools/tests/test-visual-review-packet.sh", "tools/visual-review-packet.sh"],
       "prefixes": []
     },
     {
@@ -371,6 +371,11 @@
       "prefixes": [".agents/skills/supabase-ops/", "supabase/"]
     },
     {
+      "domain": "swift-tool-cache",
+      "paths": ["tools/lib/swift-tool-cache.sh", "tools/tests/test-swift-tool-cache.sh"],
+      "prefixes": []
+    },
+    {
       "domain": "system-experiences",
       "paths": [
         ".claude/skills/ios-system-experiences",
@@ -416,6 +421,7 @@
         "tools/lib/workflow-json.rb",
         "tools/lib/workflow.sh",
         "tools/lib/xcode.sh",
+        "tools/publish-documentation-verify.sh",
         "tools/resume-issue.sh",
         "tools/tests/fixtures/gh"
       ],
@@ -464,7 +470,7 @@
     {"path": "tools/tests/test-cleanup-issue.sh", "domains": ["descriptor-files", "workflow-state", "worktree-build"]},
     {"path": "tools/tests/test-cross-model-review.sh", "domains": ["descriptor-files", "review-contract"]},
     {"path": "tools/tests/test-delivery-stages.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["swift-tool-cache", "workflow-state"]},
     {"path": "tools/tests/test-evidence-applicability.sh", "domains": ["evidence-applicability", "release-disposition"]},
     {"path": "tools/tests/test-feedback-worker.sh", "domains": ["app-feedback"]},
     {"path": "tools/tests/test-foundation.sh", "domains": ["foundation"]},
@@ -474,6 +480,7 @@
     {"path": "tools/tests/test-ios-runner-baseline.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-ios-runner-cleanup.sh", "domains": ["ios-runner-cleanup"]},
     {"path": "tools/tests/test-ios-runner-finalization-integrity.sh", "domains": ["ios-runner-finalization-integrity"]},
+    {"path": "tools/tests/test-ios-runner-finalization-mutation.sh", "domains": ["ios-runner-finalization"]},
     {"path": "tools/tests/test-ios-runner-finalization.sh", "domains": ["ios-runner-finalization"]},
     {"path": "tools/tests/test-ios-runner-identity.sh", "domains": ["ios-runner-identity"]},
     {"path": "tools/tests/test-ios-runner-inputs.sh", "domains": ["ios-runner-inputs"]},
@@ -505,6 +512,7 @@
     {"path": "tools/tests/test-render-pr-body.sh", "domains": ["descriptor-files", "review-contract"]},
     {"path": "tools/tests/test-report-template-issue-skill.sh", "domains": ["template-issue-reporting"]},
     {"path": "tools/tests/test-repository-test-evidence.sh", "domains": ["repository-testing"]},
+    {"path": "tools/tests/test-repository-test-parallel.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-repository-test-plan.sh", "domains": ["repository-testing"]},
     {"path": "tools/tests/test-review-guidelines-audit.sh", "domains": ["app-review-guidelines", "appstore"]},
     {"path": "tools/tests/test-review-route.sh", "domains": ["review-contract"]},
@@ -518,15 +526,17 @@
     {"path": "tools/tests/test-spec-state.sh", "domains": ["repository-lint", "specification"]},
     {"path": "tools/tests/test-supabase-schema.sh", "domains": ["supabase-schema"]},
     {"path": "tools/tests/test-supabase-skill.sh", "domains": ["provider-security"]},
+    {"path": "tools/tests/test-swift-tool-cache.sh", "domains": ["swift-tool-cache"]},
     {"path": "tools/tests/test-template-sync-apply.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-template-sync-derived.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-template-sync.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-tracked-credential-scan.sh", "domains": ["credential-scan"]},
     {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["ui-direction"]},
     {"path": "tools/tests/test-verification-contract.sh", "domains": ["ios-verification"]},
-    {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-visual-review"]},
+    {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-visual-review", "swift-tool-cache"]},
     {"path": "tools/tests/test-workflow-e2e.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["ios-verification", "workflow-evidence"]},
+    {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["ios-verification", "swift-tool-cache", "workflow-evidence"]},
+    {"path": "tools/tests/test-workflow-state-nested-resume-recovery.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-workflow-state-nested-resume.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-workflow-state-post-claim.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-workflow-state.sh", "domains": ["workflow-state"]},

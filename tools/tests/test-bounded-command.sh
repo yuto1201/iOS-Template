@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# repository-test-execution: exclusive
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"

@@ -4,7 +4,7 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" rg git jq ruby
 
-[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim || "$1" == nested-resume || "$1" == probe-silent-check || "$1" == probe-json-assertion || "$1" == probe-injected-failure ) ) ]] || exit 64
+[[ $# == 0 || ( $# == 1 && ( "$1" == scoped || "$1" == post-claim || "$1" == nested-resume || "$1" == nested-resume-recovery || "$1" == probe-silent-check || "$1" == probe-json-assertion || "$1" == probe-injected-failure ) ) ]] || exit 64
 scope="${1:-full}"
 
 # #363: many checks here are bare commands under set -e (`[[ ]]`, `cmp -s`, `abort unless`), which end the
@@ -71,17 +71,20 @@ workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-workflow-state.XXXXXX")
 workspace=$(cd "$workspace" && pwd -P)
 
 # #363: run alone, the full run took about 770 seconds because it ran the nested-resume and post-Claim parts
-# after the scoped part, one after another. It now starts those two parts at once, each as its own mode in its
-# own clone (the same runs as test-workflow-state-nested-resume.sh and test-workflow-state-post-claim.sh), runs
-# the scoped part meanwhile, and requires both parts to pass.
+# after the scoped part, one after another. It now starts those parts at once, each as its own mode in its
+# own clone (the same runs as test-workflow-state-nested-resume.sh, test-workflow-state-nested-resume-recovery.sh
+# and test-workflow-state-post-claim.sh), runs the scoped part meanwhile, and requires every part to pass.
+# #411 split the nested-resume part in two so each direct test stays within its per-test limit.
 part_pids=''
 if [[ "$scope" == full ]]; then
   mkdir "$workspace/parts"
   IOS_TEMPLATE_WORKFLOW_STATE_CLONE=1 "$BASH" "$self" nested-resume >"$workspace/parts/nested-resume.log" 2>&1 &
   nested_resume_pid=$!
+  IOS_TEMPLATE_WORKFLOW_STATE_CLONE=1 "$BASH" "$self" nested-resume-recovery >"$workspace/parts/nested-resume-recovery.log" 2>&1 &
+  nested_resume_recovery_pid=$!
   IOS_TEMPLATE_WORKFLOW_STATE_CLONE=1 "$BASH" "$self" post-claim >"$workspace/parts/post-claim.log" 2>&1 &
   post_claim_pid=$!
-  part_pids="$nested_resume_pid $post_claim_pid"
+  part_pids="$nested_resume_pid $nested_resume_recovery_pid $post_claim_pid"
 fi
 wait_for_part() {
   local name=$1 pid=$2 pass=$3 status=0
@@ -271,9 +274,10 @@ EOF
 cp "$artifact_issue/state.json" "$workspace/full-approved-state.json"
 }
 
-# Nested stop-state resume regressions. The nested-resume mode runs them as their own direct test so a
-# targeted suite reaches them within its per-test limit, and the full run starts that mode in its own clone.
-run_nested_resume_regressions() {
+# Nested stop-state resume regressions. The nested-resume and nested-resume-recovery modes run them as two
+# direct tests so a targeted suite reaches each within its per-test limit, and the full run starts both modes,
+# each in its own clone. Both halves define the same helpers first; a snapshot is rebuilt when absent.
+define_nested_resume_helpers() {
 # Nested stops resume to the immediate stop state or to the original working state. Markers for
 # the same state within one second are ambiguous by design, so the transitions are spaced apart.
 state_transition() {
@@ -306,6 +310,25 @@ reset_nested_state() {
   cp "$workspace/full-approved-state.json" ".artifacts/issues/$test_issue/state.json"
   rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
 }
+# The working state of the in-progress nested stops below and of the recovery half.
+reset_in_progress_state() {
+  printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
+  printf '[]' > "$FAKE_GH_COMMENTS_FILE"
+  jq -c '.state = "in-progress" | .previousState = "claimed" | .from = "claimed" | .to = "in-progress"' \
+    "$workspace/full-approved-state.json" > ".artifacts/issues/$test_issue/state.json"
+  rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
+}
+nested_in_progress_stop() {
+  restore_snapshot nested-in-progress && return 0
+  reset_in_progress_state
+  state_transition in-progress blocked:environment
+  state_transition blocked:environment paused
+  save_snapshot nested-in-progress
+}
+}
+
+run_nested_resume_regressions() {
+define_nested_resume_helpers
 nested_approved_stop
 [[ "$("$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" | jq -r '.resumeState')" == approved ]] ||
   { echo 'nested pause did not report the original working state' >&2; exit 1; }
@@ -328,20 +351,6 @@ reset_nested_state
 
 # The same nested stops from a claimed working state: in-progress -> blocked:environment -> paused ->
 # blocked:environment returns to in-progress, and only a resume target, paused or superseded may leave.
-reset_in_progress_state() {
-  printf '["state:in-progress"]' > "$FAKE_GH_LABELS_FILE"
-  printf '[]' > "$FAKE_GH_COMMENTS_FILE"
-  jq -c '.state = "in-progress" | .previousState = "claimed" | .from = "claimed" | .to = "in-progress"' \
-    "$workspace/full-approved-state.json" > ".artifacts/issues/$test_issue/state.json"
-  rm -f ".artifacts/issues/$test_issue/state-transition.pending.json"
-}
-nested_in_progress_stop() {
-  restore_snapshot nested-in-progress && return 0
-  reset_in_progress_state
-  state_transition in-progress blocked:environment
-  state_transition blocked:environment paused
-  save_snapshot nested-in-progress
-}
 nested_in_progress_stop
 state_transition paused blocked:environment
 [[ "$("$repo_root/tools/issue-state.sh" get --repo yuto1201/iOS-Template --issue "$test_issue" | jq -r '.resumeState')" == in-progress ]] ||
@@ -416,7 +425,10 @@ done
 two_stop_episodes
 state_transition paused changes-requested
 assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) == ["state:changes-requested"]'
+}
 
+run_nested_resume_recovery_regressions() {
+define_nested_resume_helpers
 # The newest owned marker must enter the current stop state. With an earlier completed pause kept in the
 # history, a missing, corrupted, or foreign entry into the current pause must not reach that older pause.
 two_pause_episodes() {
@@ -526,6 +538,16 @@ if [[ "$scope" == nested-resume ]]; then
   write_full_approved_state
   run_nested_resume_regressions
   echo 'PASS: nested stop-state resume regressions'
+  exit 0
+fi
+
+if [[ "$scope" == nested-resume-recovery ]]; then
+  ruby "$repo_root/tools/lib/issue-contract.rb" --body "$FAKE_GH_ISSUE_BODY" --type feature --format contract \
+    --issue "$test_issue" --repo yuto1201/iOS-Template --fetched-at 2026-08-24T00:00:00Z \
+    > "$artifact_issue/issue-contract.json"
+  write_full_approved_state
+  run_nested_resume_recovery_regressions
+  echo 'PASS: nested stop-state resume recovery regressions'
   exit 0
 fi
 if [[ "$scope" == post-claim ]]; then
@@ -708,6 +730,7 @@ assert_json "$FAKE_GH_LABELS_FILE" 'abort unless JSON.parse(File.read(ARGV[0])) 
 
 if [[ "$scope" == full ]]; then
   wait_for_part nested-resume "$nested_resume_pid" 'PASS: nested stop-state resume regressions'
+  wait_for_part nested-resume-recovery "$nested_resume_recovery_pid" 'PASS: nested stop-state resume recovery regressions'
   wait_for_part post-claim "$post_claim_pid" 'PASS: GitHub preflight and model-neutral durable state transitions'
   part_pids=''
   echo 'PASS: GitHub preflight and model-neutral durable state transitions'

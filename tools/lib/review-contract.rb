@@ -350,7 +350,6 @@ module IOSTemplate
         expected = revision_context.fetch("inventories").fetch(index)
         reject("repositoryTests full revision inventory differs") unless tests.is_a?(Array) && !expected.empty? && tests.map { |t| t.is_a?(Hash) ? t.slice("path", "sourceDigest") : nil } == expected
         reject("repositoryTests suite totals differ") unless revision["suite"] == {"path"=>"tools/tests", "pattern"=>"test-*.sh", "total"=>tests.length, "passed"=>tests.length, "failed"=>0}
-        test_previous = revision_start
         tests.each do |test|
           exact_keys!(test, %w[path sourceDigest arguments command status exitStatus outputDigest timeoutSeconds elapsedSeconds startedAt completedAt], "repositoryTests test")
           arguments = RepositoryTestPlan.test_arguments(test["path"], value["scope"], revision_tests: expected.map { |entry| entry.fetch("path") })
@@ -362,8 +361,7 @@ module IOSTemplate
           digest!(test["outputDigest"], "repositoryTests outputDigest")
           test_start = iso8601!(test["startedAt"], "test startedAt")
           test_finish = iso8601!(test["completedAt"], "test completedAt")
-          reject("repositoryTests test interval is invalid") if test_start < test_previous || test_finish < test_start || test_finish > revision_finish
-          test_previous = test_finish
+          reject("repositoryTests test interval is invalid") if test_start < revision_start || test_finish < test_start || test_finish > revision_finish
         end
         previous = revision_finish
         tests.map { |test| test.fetch("path") }
@@ -499,7 +497,6 @@ module IOSTemplate
       start = iso8601!(value["startedAt"], "repositoryTests.startedAt")
       finish = iso8601!(value["completedAt"], "repositoryTests.completedAt")
       reject("repositoryTests interval is invalid") if finish < start || finish > Time.now.utc + 300
-      previous = start
       head_tests = revision_context.fetch("inventories").fetch(1).map { |entry| entry.fetch("path") }
       tests.each do |test|
         exact_keys!(test, %w[path sourceDigest arguments command status exitStatus outputDigest timeoutSeconds elapsedSeconds startedAt completedAt], "repositoryTests test")
@@ -510,8 +507,7 @@ module IOSTemplate
         digest!(test["outputDigest"], "repositoryTests outputDigest")
         test_start = iso8601!(test["startedAt"], "test startedAt")
         test_finish = iso8601!(test["completedAt"], "test completedAt")
-        reject("repositoryTests test interval is invalid") if test_start < previous || test_finish < test_start || test_finish > finish
-        previous = test_finish
+        reject("repositoryTests test interval is invalid") if test_start < start || test_finish < test_start || test_finish > finish
       end
       expected_acceptance = plan.fetch("acceptanceMappings").map { |entry| entry.merge("status"=>"passed") }
       reject("repositoryTests acceptance mappings differ from plan") unless value["acceptanceEvidence"] == expected_acceptance

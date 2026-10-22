@@ -3298,7 +3298,7 @@
     {
       "path": "docs/verification.md",
       "mode": "100644",
-      "sha256": "fea7b9bc9a49f0d3aa37fa863b83679e848875c574af89eaafb78ba50848ae8d",
+      "sha256": "95ea4babd4bede1cc4257dbcf5b108f4fdd4dcaffd06ade900267b8e92d6d7a8",
       "lines": [
         "# iOS verification",
         "",
@@ -3524,6 +3524,10 @@
         "",
         "Issueの受け入れ条件がRepositoryのdelivery tool、guard、workflow、evidence producer自体へ依存する場合は、iOSのUnit Testだけで代用しません。`tools/run-repository-tests.sh` を使い、runner所有のclean detached worktreeでcontractが決めたrepository testsを実行します。成功したtestのexit status、sanitized output digest、時刻、source／runner bytes、AC別mappingを `.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-tests.json` へno-replaceで保存します。test本文のstdout/stderrはartifactへ保存しません。失敗、Head変更、dirty caller、contract／plan不一致、mapping不足、既存artifact衝突のどれかがあればcanonical evidenceは発行しません。",
         "",
+        "runnerは、互いに独立したtestを複数のworkerで同時に実行します（#411）。worker数の既定は4で、`IOS_TEMPLATE_REPOSITORY_TEST_JOBS`に1〜8の整数を指定すると変えられます。不正な値はtestを始める前に止まり、1を指定すると従来と同じ順次実行になります。各workerは同じrevisionの自分のclean detached worktreeを持ち、plan順に次のtestを取ります。各testは従来どおり自分のprocess groupと1件の上限時間で動き、timeoutではそのgroupだけを回収します。最初の失敗またはtimeoutの後は新しいtestを始めず、実行中のtestは上限時間内に終わらせ、始めなかったtestを`unexecutedTestPaths`へ記録します。runnerが中断されたときは、実行中のすべてのtestのprocess groupを回収してからworktreeを消します。evidenceはplan順の結果を持ち、各testの時間帯は重なってよいが、suiteまたはrevisionの時間帯の中に収まります。Simulator、Macで共有するlock／state、固定pathなど、ほかのtestと同時に動かせないtestは、本文の先頭10行のどれかをexact `# repository-test-execution: exclusive`とし、ほかのtestが動いていないときだけ一つで実行します。testへは`IOS_TEMPLATE_REPOSITORY_TEST_JOBS`を渡さず、test内で使うrunnerは既定のworker数で動きます。",
+        "",
+        "`tools/publish-workflow-verify.sh`、`tools/publish-documentation-verify.sh`、`tools/visual-review-packet.sh`は、`tools/validate-verify-json.swift`を毎回interpretせず、`tools/lib/swift-tool-cache.sh`がsourceとtoolchainごとに一度だけcompileしたbinaryで実行します。cacheはrepositoryの外のこのuser専用のcache directory（`getconf DARWIN_USER_CACHE_DIR`配下、`IOS_TEMPLATE_SWIFT_TOOL_CACHE`で絶対pathへ変更可）に置き、key（cacheの形式、`DEVELOPER_DIR`、選択中のdeveloper directory、`swift --version`、file名、sourceのbytes）が一致し、binaryのbytesが名前のSHA-256と一致するときだけ使います。壊れた、差し替えられた、書き込み可能なbinaryは消してcompileし直し、このuserの0700のdirectoryでないcacheでは止まります。",
+        "",
         "#### Repository test planと対象実行",
         "",
         "`2026-09-13T13:03:38Z`以後にClaimするworkflow-only `harden + strict` Issueは、一つのAC本文先頭へexact `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`を置きます。Issue contractは要求scopeと理由だけを封印します。exact test pathは実装後、current Headのproducerがimmutable Base／Head／contract bytes、Headの`Config/repository-tests.json`、sorted Base..Head changed pathsから解決し、`.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-test-plan.json`へno-replaceで保存します。",
@@ -3541,7 +3545,7 @@
         "",
         "iOS runner回帰は、共通の`tools/tests/lib/ios-runner-fixture.sh`と独立した17個のtracked entrypointへ分けています。引数なしの`bash tools/tests/test-ios-runner.sh`はshape／scope／timeout群だけを実行します。`scoped`も同じ群、`stubborn`は従来のTERM無視probe診断です。残る群はallocation、cleanup、startup、baseline、identity、inputs、publication、resources、recovery、recovery-before-rename、recovery-after-rename、recovery-final、locking、finalization、finalization-integrity、system-localeで、`tools/tests/test-ios-runner-<群名>.sh`を実行します。各群は自身のtemporary repository、fake Xcode／Simulator、adapter stateを作り、終了時に自身のscratchだけを回収します。",
         "",
-        "全runner回帰だけをrelease／明示診断する場合は`bash tools/tests/test-ios-runner.sh all`を使います。このコマンドは各群を900秒上限で順番に実行し、一つでも失敗すれば失敗します。通常のcanonical repository runnerは、共通runner／validator変更ではstage、legacy baseline、対象lifecycle統合を含む`ios-verification` coreだけを選び、cleanup、finalization、identity、input、locking、publication、recovery、resource、startup、locale、visualの各adversarial群は対応するtestを直接変更した場合、明示診断、または`head-all`／`base-and-head`だけで追加します。これにより一つの対象変更から全17群へ暗黙昇格せず、単一群の成功を全suiteの成功とも扱いません。正式証拠には引き続き`tools/run-repository-tests.sh`を使い、productionの検証、case、assertion、timeout、証拠公開条件は変更しません。",
+        "全runner回帰だけをrelease／明示診断する場合は`bash tools/tests/test-ios-runner.sh all`を使います。このコマンドは各群を900秒上限で順番に実行し、一つでも失敗すれば失敗します。通常のcanonical repository runnerは、共通runner／validator変更ではstage、legacy baseline、対象lifecycle統合を含む`ios-verification` coreだけを選び、cleanup、finalization、identity、input、locking、publication、recovery、resource、startup、locale、visualの各adversarial群は対応するtestを直接変更した場合、明示診断、または`head-all`／`base-and-head`だけで追加します。これにより一つの対象変更から全群へ暗黙昇格せず、単一群の成功を全suiteの成功とも扱いません。正式証拠には引き続き`tools/run-repository-tests.sh`を使い、productionの検証、case、assertion、timeout、証拠公開条件は変更しません。",
         "",
         "`tools/tests/test-ios-evidence.sh`はapplication evidence validator全体の広い改ざん・path境界を繰り返すrelease／nightly向けのexhaustive testです。通常の`targeted`変更では、変更対象のrunner／publisher／matrix群と対応する統合testを選び、fixture自体またはこのtestを変更した場合だけexhaustive domainを追加します。`head-all`／`base-and-head`では従来どおり実行し、関連する新しい境界を狭い統合testで検証せず省略する理由には使いません。",
         "",

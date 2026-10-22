@@ -34,10 +34,17 @@ safe_home="${HOME-}"
 }
 safe_user="$(/usr/bin/id -un)"
 
+# #411: the validator runs from a binary compiled once per source and toolchain (tools/lib/swift-tool-cache.sh).
+source "$script_dir/lib/swift-tool-cache.sh"
+validator_binary="$(swift_tool_binary "$validator")" || {
+  echo "visual packet failed: trusted validator unavailable" >&2
+  exit 1
+}
+
 if ! /usr/bin/env -i \
     HOME="$safe_home" TMPDIR=/tmp USER="$safe_user" LOGNAME="$safe_user" \
     LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 PATH=/usr/bin:/bin \
-    /usr/bin/swift "$validator" --visual-packet "$@"; then
+    "$validator_binary" --visual-packet "$@"; then
   echo "visual packet failed" >&2
   exit 1
 fi
