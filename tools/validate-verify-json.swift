@@ -2748,8 +2748,10 @@ func validateWorkflowPath(_ path: String) throws {
     // needs the strict opposite-model review and the pre-merge gate like every workflow-only change.
     // Config/template-base.json (D-073, D-074) is the non-secret record of the template commit a repository
     // is based on; adding or changing it also needs that review and the pre-merge gate.
+    // Config/development-device.json (D-086, #379) holds only the name of the user's development iPhone that
+    // the template-only device build tool reads; it holds no identifier or secret.
     let exact: Set<String> = [
-        "AGENTS.md", "Config/dedicated-simulators.json", "Config/ownership.yml",
+        "AGENTS.md", "Config/dedicated-simulators.json", "Config/development-device.json", "Config/ownership.yml",
         "Config/repository-tests.json", "Config/template-base.json", "Config/template-identity.json"
     ]
     let prefixes = ["tools/", "docs/", "specs/", ".agents/", ".codex/", ".claude/", ".github/"]

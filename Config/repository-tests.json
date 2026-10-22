@@ -136,6 +136,11 @@
       "prefixes": []
     },
     {
+      "domain": "device-build",
+      "paths": ["Config/dedicated-simulators.json", "Config/development-device.json", "tools/build-for-device.sh", "tools/xcodebuild-in-worktree.sh"],
+      "prefixes": []
+    },
+    {
       "domain": "evidence-applicability",
       "paths": [
         "tools/evaluate-evidence-applicability.sh",
@@ -459,6 +464,7 @@
     {"path": "tools/tests/test-bootstrap-fixture-derived-transform.sh", "domains": ["bootstrap-fixture"]},
     {"path": "tools/tests/test-bootstrap-fixture.sh", "domains": ["bootstrap-fixture"]},
     {"path": "tools/tests/test-bounded-command.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-build-for-device.sh", "domains": ["device-build"]},
     {"path": "tools/tests/test-claim-recovery.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-resume.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-cleanup-issue.sh", "domains": ["descriptor-files", "workflow-state", "worktree-build"]},

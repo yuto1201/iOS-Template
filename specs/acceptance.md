@@ -173,7 +173,7 @@ authorityは次の三つだけを許可する。`review-finding`は同じIssue�
 
 `iphone-ja`は1行だけ、`targeted`は表の非空canonical部分集合、`full`は4行すべてを固定順で使う。専用deviceはTemplateでは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリでは表示名を前置した同じDevice Type／Runtimeの2台とする（D-063、D-070、[D-079](decisions.md#d-079-専用iphoneをapp-storeの必須画像サイズになったiphone-17-proにする)）。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台でなければ`blocked:environment`とする。Claim済みscopeを暗黙に縮小せず、別scope／別Headのmatrixや証拠を流用しない。
 
-AI検証とApp Store撮影は専用2台だけを使い、deviceを作成、clone、rename、削除しない。専用device以外を起動、erase、install、test対象にしない。専用deviceの排他はMac共通resource managerのleaseで取り、起動中のAI検証用deviceは同じMac全体で最大4台、一つのsessionで1台とする。同じdeviceを使うcaseは一件ずつ実行し、満杯または使用中なら有限・取消可能に待機する。
+AI検証とApp Store撮影は専用2台だけを使い、deviceを作成、clone、rename、削除しない。専用device以外を起動、erase、install、test対象にしない。ただしテンプレートのリポジトリだけは、`Config/development-device.json`が名前で宣言するユーザーの開発用の実機1台へ、開発用の署名でビルドしてinstallできる。起動、test、eraseはせず、AIの検証の証拠にしない（[D-086](decisions.md#d-086-テンプレートのリポジトリだけでユーザーの開発用の実機1台へビルドしてインストールできるようにする)）。専用deviceの排他はMac共通resource managerのleaseで取り、起動中のAI検証用deviceは同じMac全体で最大4台、一つのsessionで1台とする。同じdeviceを使うcaseは一件ずつ実行し、満杯または使用中なら有限・取消可能に待機する。
 
 各caseの前に専用deviceを停止してeraseし、caseのlocale／languageを設定してから起動する。証拠をdevice外へ保存した後に停止し、成功、失敗、timeout、cancelのいずれでも停止を確認してからleaseを返す。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`で実行し、clone deviceを作らない。手動device、他repository／session、使用中、不明なdevice、Runtime、Xcode、共通cache、ユーザーDerivedData、canonical evidenceを保護する。Issueの後片付けが回収する、消したworktreeに結び付いたDerivedDataと検証の一時データは、D-084のとおりユーザーのDerivedDataに含めない。
 

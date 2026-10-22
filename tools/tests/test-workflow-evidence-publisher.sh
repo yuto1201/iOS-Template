@@ -411,6 +411,12 @@ printf '%s\n' '{"baseCommit":"0000000000000000000000000000000000000003"}' >"$rep
 commit_config_change
 expect_published 'changing the template base record'
 
+# D-086 (#379): the development device record holds only a name and may be added or changed.
+prepare_fixture development-device-add
+printf '%s\n' '{"name":"iPhone19","schemaVersion":1}' >"$repo/Config/development-device.json"
+commit_config_change
+expect_published 'adding the development device record'
+
 # D-038: phase records are append-only, so only a new regular record file is accepted.
 prepare_fixture phase-record-add recorded
 printf '%s\n' '{"recordId":"0002-phase-2"}' >"$repo/Config/releases/anygps-mvp/phase-records/0002-phase-2.json"

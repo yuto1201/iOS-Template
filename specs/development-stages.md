@@ -129,7 +129,7 @@ D-050対象candidateはDelivery profileによる通常のreview省略経路を�
 
 全PhaseのAI検証とApp Store撮影は、repository専用のiPhone 1台とiPad 1台だけを使う（D-063、D-070、[D-079](decisions.md#d-079-専用iphoneをapp-storeの必須画像サイズになったiphone-17-proにする)）。Templateは`iOS-Template iPhone 17 Pro`（Device Type iPhone 17 Pro、Runtime iOS 27.0）と`iOS-Template iPad Pro 13-inch (M5)`（Device Type iPad Pro 13-inch (M5)、Runtime iOS 27.0）、派生アプリは表示名を前置した同じDevice Type／Runtimeの2台とする。UDIDはcommitせず、実行時にexact name、Device Type、Runtimeが一致するdeviceがちょうど1台であることを確認する。0台または2台以上なら`blocked:environment`とし、代わりのdeviceを作成・流用しない。専用deviceの作成は、後続Issueが定める明示的な初期設定手順だけで行う。
 
-検証とApp Store撮影はdeviceを作成、clone、rename、削除しない。専用device以外を起動、erase、install、test対象にしない。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`とし、clone deviceを作らない。
+検証とApp Store撮影はdeviceを作成、clone、rename、削除しない。専用device以外を起動、erase、install、test対象にしない。ただしテンプレートのリポジトリだけは、`Config/development-device.json`が名前で宣言するユーザーの開発用の実機1台へ、開発用の署名でビルドしてinstallできる。起動、test、eraseはせず、AIの検証の証拠にしない（[D-086](decisions.md#d-086-テンプレートのリポジトリだけでユーザーの開発用の実機1台へビルドしてインストールできるようにする)）。`xcodebuild`のtestは常に`-parallel-testing-enabled NO`とし、clone deviceを作らない。
 
 専用deviceの排他は、repository lockの内側でMac共通resource managerのleaseとして原子的に取得する。同じMacの全application、repository、worktree、AI sessionを合計して、起動中のAI検証用iPhone／iPad Simulatorを最大4台とし、一つのsessionが同時にleaseできる専用deviceは1台とする。子process／test workerは親sessionの枠を継承する。active durable recordを持たない管理外の`iOS-Template-` deviceは保護対象のままとし、削除・停止・変更しない。その状態がexactに`Shutdown`なら4枠へ数えず、`Shutdown`以外なら数える（D-062）。満杯または同じ専用deviceが使用中なら、取消可能かつ有限の待機にする。空き容量／memoryが不足する場合は新規caseと長時間検証を止め、現在のユーザー資源を削除して枠を作らない。
 

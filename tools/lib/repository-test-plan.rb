@@ -35,12 +35,15 @@ module IOSTemplate
     TEMPLATE_BASE_PATH = "Config/template-base.json"
     TEMPLATE_ONLY_TESTS = %w[
       tools/tests/test-adopted-app-imported-tests.sh
+      tools/tests/test-build-for-device.sh
       tools/tests/test-link-user-skill.sh
       tools/tests/test-template-sync-apply.sh
       tools/tests/test-template-sync-derived.sh
       tools/tests/test-template-sync.sh
     ].freeze
     TEMPLATE_ONLY_PATHS = %w[
+      Config/development-device.json
+      tools/build-for-device.sh
       tools/lib/template-sync-apply.rb
       tools/lib/template-sync.rb
       tools/link-user-skill.sh

@@ -957,3 +957,19 @@
     - ポスターフレームと規格の照合（#392）：App previewのポスターフレームの記録と、書き出した素材をAppleの最新の規格の表と照らす検査。
 - Consequence: 提案シートのtool、スキルの文書、直接のtestは#390で合わせ、ほかの方向は上の後続Issueで作る。派生アプリでは、次にストア画像を作るときに`goldie/brand.json`、参考の調査の記録、パターンごとのスタイル仕様を用意する。テンプレートのtestは試験用の画像と記録で行い、実際の画像の質や購買意欲への効果を主張しない。好みの確認は、派生アプリのPhase 6のIssueでユーザーが行う。`specs/architecture.md`の§9の本文は、bootstrapの固定fixtureに含まれるため別の小さなIssueで直す。
 - Related Issue: #390
+
+## D-086: テンプレートのリポジトリだけで、ユーザーの開発用の実機1台へビルドしてインストールできるようにする
+
+- Date: 2026-10-22
+- Status: 確定
+- Supersedes: D-063と`AGENTS.md`の「専用device以外をinstall対象にしない」を、テンプレートのリポジトリでユーザーの開発用の実機1台へinstallする場合だけ除く形に読み替える。D-063の専用device 2台、各caseの前のerase、AI検証とApp Store撮影の資源契約、D-084の決まったDerivedDataは維持する。
+- Context: 2026-10-21、ユーザーが、テンプレートのアプリを専用Simulator 2台と自分の開発用の実機（iPhone19）向けにビルドできるようにすることを依頼した。今の規則では、専用device以外へのinstallを許していない。ユーザーは、実機へのビルドとインストール、テンプレートだけへの導入、Xcodeの自動署名と今のTeamを使うことを選び、`AGENTS.md`の文面を承認した（#379）。
+- Decision:
+  - テンプレートのリポジトリだけで、`Config/development-device.json`が名前で宣言するユーザーの開発用の実機1台へ、AIが開発用の署名でビルドしてinstallできる。入口は`tools/build-for-device.sh`の`device`とする。起動、test、erase、deviceの設定の変更はしない。動作の確認はユーザーが行い、AIの検証の証拠にしない。
+  - 実機は実行時に`xcrun devicectl list devices`で名前を探す。名前が一致する物理deviceがちょうど1台で、接続されている（ペアリング済みで到達できる）場合だけビルドし、0台、2台以上、未接続ならビルドの前に止まる。UDIDなどのdeviceの識別子はcommitせず、`Config/development-device.json`は名前だけを持つ。
+  - 署名はprojectのXcodeの自動署名と、projectに設定された今のTeamを使う。`-allowProvisioningUpdates`を渡さず、署名の設定をコマンドで上書きせず、証明書、鍵、provisioning profile、Teamを作成・変更しない。署名が足りなければ止まり、Xcodeで用意するようユーザーへ案内する。
+  - 専用Simulator 2台（`iphone-simulator`、`ipad-simulator`）へはビルドだけを行う。`Config/dedicated-simulators.json`のexact name、Device Type、Runtimeで実行時にちょうど1台を探し、`xcodebuild build -destination id=<UDID>`でビルドする。起動とinstallはしない。leaseのeraseを通らずに起動すると、データがたまるためである（D-084、#371、#380）。
+  - ビルドはD-084の決まったDerivedData（`tools/xcodebuild-in-worktree.sh`）を使い、すべての`xcodebuild`、`xcrun`、`devicectl`の呼び出しに有限のtimeoutを置く。
+  - 入口のtool、`Config/development-device.json`、そのtestはテンプレートだけのfile（`template-only`）とし、派生アプリへ取り込まない。
+- Consequence: ユーザーは、テンプレートの変更を自分の実機ですぐに試せる。AIの検証は、これまでどおり専用Simulatorのleaseの中だけで行い、実機の結果を完了条件や証拠に使わない。派生アプリには入口がなく、派生アプリで同じことをする場合は別のIssueで決める。自動署名に必要なprovisioning profileがまだない場合、最初の1回はユーザーがXcodeで用意する。
+- Related Issue: #379、#407

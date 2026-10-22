@@ -67,6 +67,6 @@ UI方向比較のHTMLは選択を助ける作業artifactであり、仕様の正
 - 専用 iPad（iOS 27.0 の iPad Pro 13-inch (M5)）、英語
 - 専用 iPad（iOS 27.0 の iPad Pro 13-inch (M5)）、日本語
 
-AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリは表示名を前置した同じ機種とする。どちらもApp Storeの必須画像サイズで撮影できる機種である。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063、D-070とD-079。
+AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリは表示名を前置した同じ機種とする。どちらもApp Storeの必須画像サイズで撮影できる機種である。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。ただしTemplateのリポジトリだけは、`Config/development-device.json`が名前で宣言するユーザーの開発用の実機1台へ、開発用の署名でビルドしてinstallできる。起動・test・eraseはせず、AIの検証の証拠にしない（D-086）。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063、D-070とD-079。
 
 ユーザーの実機確認は AI の完了条件に含めません。詳細は `docs/verification.md` を参照してください。

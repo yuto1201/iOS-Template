@@ -103,3 +103,21 @@ D-075に従い、`AGENTS.md`を書き換えるときは、変更する文面を�
 -- ClaudeとCodexのどちらでも通常の仕様化・実装・検証・外部操作を担当できる。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[3D Asset skill](.agents/skills/ios-3d-assets/SKILL.md)に従う。標準はユーザーまたはClaudeがブラウザでTripoを操作して作る経路とし、簡単なモデルや即効性を求める場合だけClaudeまたはCodexの`gpt-6-astra`（reasoning effort `xhigh`）に依頼する。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行う。どの経路で作ったassetも形式検証、統合、Build／Test、視覚確認を行い、Issue／PR証拠にauthoringの経路を記録する。
 +- ClaudeとCodexのどちらでも通常の仕様化・実装・検証・外部操作を担当できる。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[3D Asset skill](.agents/skills/ios-3d-assets/SKILL.md)に従い、経路をモデルの複雑さで選ぶ（D-082）。ごく単純な形はClaudeがBlenderで直接作れる。単純なモデルと部品の単純な動きは、Codexの`gpt-6.1-sol`（reasoning effort `xhigh`）が作る参照画像と`gpt-6-astra`（reasoning effort `xhigh`）が作るモデルをClaudeが評価して修正を往復させて作り、複雑で高い品質が必要なモデルと骨格で動くモデルだけを、ユーザーまたはClaudeがブラウザでTripoを操作して作る。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、クレジットを使う操作は毎回ユーザーの承認を得る。どの経路で作ったassetも形式検証、統合、Build／Test、視覚確認を行い、Issue／PR証拠にauthoringの経路を記録する。
 ```
+
+## #379（2026-10-22）
+
+- Issue: #379
+- 承認を記録したIssueコメント: https://github.com/yuto1201/iOS-Template/issues/379#issuecomment-6305042373（2026-10-21T00:37:19Z）
+- 承認: ユーザーが会話の中で、変更前と変更後の文面を示した確認に「この文面で承認する」と回答した。その後、決定の番号D-085がほかの決定に使われたため、参照する決定の番号だけをD-085からD-086へ変えることを「D-086 に変えて承認する」と回答して承認した（https://github.com/yuto1201/iOS-Template/issues/379#issuecomment-6315721467、2026-10-21T12:18:50Z）。
+- 後継の#407に記録したIssueコメント: https://github.com/yuto1201/iOS-Template/issues/407#issuecomment-6339960272（文面は変えず、上の二つの承認を#407に記録した）
+- 承認後の`AGENTS.md`（1行目を除く）のSHA-256: `sha256:7796ce0dfa77d01d5e3282793583069cd8752e4c9c9eccb80612d3a0779ea1d7`
+
+承認した変更の文面:
+
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -70 +70 @@
+-AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリは表示名を前置した同じ機種とする。どちらもApp Storeの必須画像サイズで撮影できる機種である。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063、D-070とD-079。
++AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリは表示名を前置した同じ機種とする。どちらもApp Storeの必須画像サイズで撮影できる機種である。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。ただしTemplateのリポジトリだけは、`Config/development-device.json`が名前で宣言するユーザーの開発用の実機1台へ、開発用の署名でビルドしてinstallできる。起動・test・eraseはせず、AIの検証の証拠にしない（D-086）。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063、D-070とD-079。
+```
