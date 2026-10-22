@@ -219,6 +219,53 @@ cross 0.87 0.2 decoration
 expect_render_failure cross-decoration 'layer 1 of home crosses 35% into the next tile; at most 30%'
 cross 0.9 0.12 face
 expect_render_failure cross-face 'layer 1 of home is marked face and must not cross a tile seam'
+# Every exported seam counts, including the seam inside a two-tile panorama scene.
+panorama() { # x width role
+  write_config "$config" "[
+    { kind: \"screenshot\", id: \"home\", flow: \"store-ja-home\", layout: \"panorama\", headline: { ja: \"広い空\" },
+      layers: [{ src: \"../assets/magenta.png\", position: \"front\", x: $1, y: 0.85, width: $2, role: \"$3\" }] }]"
+}
+panorama 0.85 0.2 decoration
+render63 >/dev/null
+ruby -rjson -e 'layer = JSON.parse(File.read(ARGV[0])).fetch("layers").first
+  abort "panorama crossing record: #{layer}" unless layer.fetch("tiles") == [1, 2] && (layer.fetch("crossing") - 0.25).abs < 0.001' "$record63"
+panorama 0.9 0.2 decoration
+expect_render_failure panorama-too-far 'layer 1 of home crosses 50% into the next tile; at most 30%'
+panorama 0.95 0.1 face
+expect_render_failure panorama-face 'layer 1 of home is marked face and must not cross a tile seam'
+# A rotated layer is checked by the bounds it is drawn with: a tall image turned 90 degrees.
+ruby -rzlib -e '
+  rows = (0...400).map { "\x00".b + ([255, 128, 0, 255].pack("C4") * 100) }
+  chunk = ->(type, data) { [data.bytesize].pack("N") + type + data + [Zlib.crc32(type + data)].pack("N") }
+  File.binwrite(ARGV[0], "\x89PNG\r\n\x1A\n".b + chunk.("IHDR", [100, 400, 8, 6, 0, 0, 0].pack("N2C5")) +
+    chunk.("IDAT", Zlib::Deflate.deflate(rows.join)) + chunk.("IEND", "".b))' "$workspace/app/goldie/assets/tall.png"
+rotated() { # role
+  write_config "$config" "[
+    { kind: \"screenshot\", id: \"home\", flow: \"store-ja-home\", headline: { ja: \"回す\" },
+      layers: [{ src: \"../assets/tall.png\", position: \"front\", x: 0.75, y: 0.45, width: 0.2, rotate: 90, role: \"$1\" }] },
+    { kind: \"screenshot\", id: \"next\", flow: \"store-ja-home\", headline: { ja: \"次\" } }]"
+}
+rotated decoration
+expect_render_failure rotated-too-far 'layer 1 of home crosses 31% into the next tile; at most 30%'
+rotated abstract
+render63 >/dev/null
+(( $(pixels "$tile2" 255,128,0) > 10000 )) || fail 'a rotated layer across the seam did not continue on the next tile'
+rotated face
+expect_render_failure rotated-face 'layer 1 of home is marked face and must not cross a tile seam'
+# A back layer may cross into a neighbor whose background is a #RRGGBB color.
+write_config "$config" '[
+  { kind: "screenshot", id: "home", flow: "store-ja-home", headline: { ja: "雨の日も" },
+    layers: [{ src: "../assets/cyan.png", position: "back", x: 0.9, y: 0.5, width: 0.12 }] },
+  { kind: "screenshot", id: "next", flow: "store-ja-home", headline: { ja: "風の日も" } }]'
+render63 >/dev/null
+(( $(pixels "$tile2" 0,255,255) > 100 )) || fail 'a back layer did not continue onto a solid-background neighbor'
+(( $(pixels "$tile2" 233,239,245) > 1000000 )) || fail 'the neighbor lost its solid background'
+write_config "$config" '[
+  { kind: "screenshot", id: "home", flow: "store-ja-home", headline: { ja: "雨の日も" },
+    layers: [{ src: "../assets/cyan.png", position: "back", x: 0.9, y: 0.5, width: 0.12 }] },
+  { kind: "screenshot", id: "next", flow: "store-ja-home", headline: { ja: "風の日も" }, background: "linear-gradient(160deg, #1B3B6F 0%, #4E8CCB 100%)" }]'
+expect_render_failure back-gradient-neighbor 'a back layer of home runs into next, which needs a backgroundImage or a #RRGGBB background'
+
 # The limits are settings of the config.
 write_config "$config" '[
   { kind: "screenshot", id: "home", flow: "store-ja-home", headline: { ja: "雨の日も" },

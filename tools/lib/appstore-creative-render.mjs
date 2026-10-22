@@ -220,7 +220,7 @@ function applyStories(cfg, locale) {
 // Validates layers, popouts and frames, switches bare and cropped screens to the device-free concept
 // layout, and renders scenes with a back layer on a transparent background so the tool can paint the
 // background, the back layers and then Goldie's device and copy in that order.
-export function creativePlan(cfg, device, backgrounds) {
+export function creativePlan(cfg, device, backgrounds, tile, spanOf) {
   const crossTile = { ...CROSS_TILE_DEFAULTS, ...(cfg.theme.crossTile ?? {}) };
   number(crossTile.max, "theme.crossTile.max", { min: 0, max: 1 });
   number(crossTile.abstractMax, "theme.crossTile.abstractMax", { min: 0, max: 1 });
@@ -284,7 +284,42 @@ export function creativePlan(cfg, device, backgrounds) {
     scenes.set(scene.id, { frame, layers, screen, popouts, fill, transparent: backgrounds.has(scene.id) || fill !== null,
                            headline: Boolean(scene.headline), device: frame !== "device" || !concept });
   }
+  // A back layer that runs out of its scene also sits under the neighbor's device, so the neighbor is
+  // rendered transparent too and its own #RRGGBB background is painted underneath.
+  const order = cfg.scenes.filter((item) => item.kind === "screenshot");
+  const prepare = (neighbor, owner) => {
+    const entry = scenes.get(neighbor.id);
+    if (entry.transparent) return;
+    const fill = neighbor.background ?? cfg.theme.background;
+    if (typeof fill !== "string" || !HEX.test(fill)) {
+      fail(`a back layer of ${owner.id} runs into ${neighbor.id}, which needs a backgroundImage or a #RRGGBB background`);
+    }
+    neighbor.background = "transparent";
+    entry.fill = fill;
+    entry.transparent = true;
+  };
+  order.forEach((scene, index) => {
+    for (const layer of scenes.get(scene.id).layers.filter((item) => item.position === "back")) {
+      const { bounds } = layerGeometry(layer, 1, tile);
+      if (bounds.left < 0 && index > 0) prepare(order[index - 1], scene);
+      if (bounds.right > spanOf(scene) * tile.width && index < order.length - 1) prepare(order[index + 1], scene);
+    }
+  });
   return { scenes, crossTile, layerLimit };
+}
+
+// The layer's size and position on the strip of all tiles, and the axis-aligned bounds it is drawn with
+// after rotation about its center. `start` is the scene's first tile (1-based).
+function layerGeometry(layer, start, tile) {
+  const size = pngSize(layer.src);
+  const width = layer.width * tile.width;
+  const height = width * size.height / size.width;
+  const left = (start - 1) * tile.width + layer.x * tile.width;
+  const top = layer.y * tile.height;
+  const angle = (layer.rotate * Math.PI) / 180;
+  const boundsWidth = Math.abs(width * Math.cos(angle)) + Math.abs(height * Math.sin(angle));
+  const center = left + width / 2;
+  return { width, height, left, top, bounds: { left: center - boundsWidth / 2, right: center + boundsWidth / 2, width: boundsWidth } };
 }
 
 function tileMap(files, ids) {
@@ -331,23 +366,22 @@ async function composeCreative(canvasModule, files, plan, creative, tile, locale
     if (!firstTile.has(id)) continue;
     const start = firstTile.get(id);
     for (const layer of scene.layers) {
-      const size = pngSize(layer.src);
-      const width = layer.width * tile.width;
-      const height = width * size.height / size.width;
-      const left = (start - 1) * tile.width + layer.x * tile.width;
-      const top = layer.y * tile.height;
-      const originLeft = (start - 1) * tile.width;
-      const originRight = (start - 1 + spans.get(id)) * tile.width;
-      const outside = Math.max(0, originLeft - left) + Math.max(0, left + width - originRight);
-      const crossing = Math.min(1, outside / width);
+      const { width, height, left, top, bounds } = layerGeometry(layer, start, tile);
+      // Every exported seam counts, including seams inside a multi-tile scene: the crossing is the
+      // share of the drawn (rotated) bounds outside the one tile that holds most of the layer.
+      const overlaps = tiles.map((entry) => ({ tile: entry.tile,
+        share: Math.max(0, Math.min(bounds.right, entry.tile * tile.width) - Math.max(bounds.left, (entry.tile - 1) * tile.width)) / bounds.width }))
+        .filter((entry) => entry.share > 1e-9);
+      const touched = overlaps.map((entry) => entry.tile);
+      const main = overlaps.reduce((best, entry) => (entry.share > best.share ? entry : best), { tile: start, share: 0 });
+      const crossing = Math.max(0, 1 - main.share);
       const label = `layer ${layer.index} of ${id}`;
-      if (crossing > 0 && creative.crossTile.protectedRoles.includes(layer.role)) fail(`${label} is marked ${layer.role} and must not cross a tile seam`);
+      if (crossing > 1e-9 && creative.crossTile.protectedRoles.includes(layer.role)) fail(`${label} is marked ${layer.role} and must not cross a tile seam`);
       const limit = ABSTRACT_ROLES.includes(layer.role) ? creative.crossTile.abstractMax : creative.crossTile.max;
       if (crossing > limit + 1e-9) {
-        const side = left + width > originRight ? "next" : "previous";
+        const side = touched.some((number) => number > main.tile) ? "next" : "previous";
         fail(`${label} crosses ${Math.round(crossing * 100)}% into the ${side} tile; at most ${Math.round(limit * 100)}%`);
       }
-      const touched = tiles.filter((entry) => left < entry.tile * tile.width && left + width > (entry.tile - 1) * tile.width).map((entry) => entry.tile);
       for (const number of touched) {
         const neighbor = tiles.find((entry) => entry.tile === number);
         if (layer.position === "back" && !creative.scenes.get(neighbor.scene).transparent) {
@@ -460,7 +494,8 @@ export async function render({ runtime, config, device, locale }) {
   }
   const plan = backgroundPlan(cfg);
   const stories = applyStories(cfg, locale);
-  const creative = creativePlan(cfg, device, plan);
+  const creative = creativePlan(cfg, device, plan, goldie.DEVICES[device].screenshot,
+    (scene) => goldie.LAYOUTS[scene.layout ?? cfg.theme.layout]?.span ?? 1);
   const canvasModule = createRequire(join(root, "package.json"))("@napi-rs/canvas");
   // Goldie reports progress on stdout; keep stdout for this tool's JSON result.
   const log = console.log;
