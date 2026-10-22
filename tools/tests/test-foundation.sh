@@ -329,8 +329,17 @@ check_storekit_boundary() {
       return 1
     }
   done < <(git -C "$root" grep -n -I -e StoreKit -- TemplateApp || true)
-  if git -C "$root" grep -n -I -E -- 'Product\.(products|purchase)|Transaction\.(updates|currentEntitlements|all|latest|unfinished)|AppStore\.(sync|showManageSubscriptions)|SKPaymentQueue|SKProduct|SKPayment' -- TemplateApp >/dev/null 2>&1; then
+  if git -C "$root" grep -n -I -E -- 'Product\.(products|purchase)|Transaction\.(updates|currentEntitlements|all|latest|unfinished)|AppStore\.(sync|showManageSubscriptions)|\.purchase\(|ProductView|StoreView|SubscriptionStoreView|SubscriptionOfferView|AppTransaction|VerificationResult|RenewalInfo|currentEntitlement|subscriptionStatus|inAppPurchaseOptions|onInAppPurchase|storeButton|offerCodeRedemption|manageSubscriptionsSheet|refundRequestSheet|SKPaymentQueue|SKProduct|SKPayment|SKReceipt|SKRequest' -- TemplateApp >/dev/null 2>&1; then
     echo 'TemplateApp contains in-app purchase code before activation' >&2
+    return 1
+  fi
+  # In a file that imports StoreKit, the StoreKit purchase types are refused by name as well (SwiftUI's own
+  # Transaction elsewhere in TemplateApp is not affected).
+  local storekit_files=()
+  while IFS= read -r path; do storekit_files+=("$path"); done < <(git -C "$root" grep -l -I -e '^import StoreKit$' -- TemplateApp || true)
+  if (( ${#storekit_files[@]} > 0 )) &&
+     git -C "$root" grep -n -I -w -E -- 'Product|Transaction|AppStore' -- "${storekit_files[@]}" >/dev/null 2>&1; then
+    echo 'the review prompt uses StoreKit purchase types' >&2
     return 1
   fi
   if git -C "$root" grep -n -I -e StoreKit -- TemplateApp.xcodeproj >/dev/null 2>&1; then
@@ -357,6 +366,10 @@ storekit_case() {
     other-mention) printf '%s\n' '// StoreKit purchases' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
     purchase-code) printf '%s\n' 'let products = try await Product.products(for: ["remove_ads"])' >"$root/TemplateApp/Purchases.swift" ;;
     legacy-purchase-code) printf '%s\n' 'SKPaymentQueue.default().add(payment)' >"$root/TemplateApp/Purchases.swift" ;;
+    prompt-product-view) printf '%s\n' 'ProductView(id: "com.example.remove_ads")' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
+    prompt-instance-purchase) printf '%s\n' 'func buy(_ item: Item) async throws { _ = try await item.purchase() }' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
+    prompt-product-type) printf '%s\n' 'let item: Product? = nil' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
+    prompt-store-view) printf '%s\n' 'SubscriptionStoreView(groupID: "group")' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
     project-reference) printf '%s\n' 'StoreKit.framework in Frameworks' >>"$root/TemplateApp.xcodeproj/project.pbxproj" ;;
     configuration-file) printf '%s\n' '{}' >"$root/Config/Products.storekit" ;;
   esac
@@ -364,7 +377,8 @@ storekit_case() {
   check_storekit_boundary "$root" 2>"$storekit_workspace/$name.err"
 }
 storekit_case baseline || { cat "$storekit_workspace/baseline.err" >&2; echo 'the review prompt import was refused' >&2; exit 1; }
-for storekit_mutation in import-elsewhere other-mention purchase-code legacy-purchase-code project-reference configuration-file; do
+for storekit_mutation in import-elsewhere other-mention purchase-code legacy-purchase-code prompt-product-view \
+  prompt-instance-purchase prompt-product-type prompt-store-view project-reference configuration-file; do
   if storekit_case "$storekit_mutation"; then
     echo "the StoreKit boundary accepted $storekit_mutation" >&2
     exit 1
