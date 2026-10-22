@@ -121,6 +121,8 @@ Google Mobile Adsは全アプリの標準依存にせず、派生アプリの確
 
 バナーは画面下端（`safe-area-bottom`、既定）または上端（`safe-area-top`）のsafe areaに固定し、中身に重ならない専用の枠に置き、スクロールで動かさず、navigation bar、tab bar、ボタンのすぐ横に置かない。Googleのanchored adaptive bannerは上端と下端のどちらにも固定でき、禁止されるのは中身への重なり、スクロールでの移動、誤タップを招く操作要素の隣の配置であるため、上端も受け付ける（#375）。
 
+対象年齢の下限は16歳とする（D-087）。`childDirected`と`underAgeOfConsent`は`false`だけを受け付け、それ以外は変更の前に止める。18歳未満を含むアプリは、広告の内容のレーティングの上限をT（12+向け）以下に制限する。有効化の入力の検査とレーティングの上限は#398で実装する。
+
 DebugはGoogle公式demo identifierのみ、UI Testはネットワークと実SDK requestに依存しないoffline fixture、Releaseは確認済みproduction identifierのみを使う。欠落、demo／productionの混在、対象configurationとidentifierの不整合は配信前に拒否する。offline fixture、Google demo smoke、AdMob remote state、productionのApp Store readiness／配信状態は別の証拠とし、一つの成功から他を推測しない。
 
 AdMob Consoleでのaccount／app／ad unit作成、契約・支払・税務情報、consent message公開、app-ads.txt公開、production identifier取得、App Store Connectの保存／提出はこの採用に含めない。それぞれに明示的なIssue contract、設定済みaccount／target、必要なユーザー承認とreadbackを要求する。決定の経緯は[D-057](decisions.md#d-057-広告収益化を非trackingの条件付きadmob統合として採用する)を参照する。
