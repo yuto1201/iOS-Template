@@ -40,6 +40,17 @@ module AppStoreCreativeSheet
   TOKEN_PATTERN = /\A[a-z0-9][a-z0-9-]{0,31}\z/
   HEX_PATTERN = /\A#[0-9A-Fa-f]{6}\z/
   DATE_PATTERN = /\A\d{4}-\d{2}-\d{2}\z/
+  # D-085 (#393): generated materials are shown on a `material` sheet and used only after the user
+  # adopts each one; a cut-out material must have a transparent background and no key-color residue.
+  MATERIAL_KIND = "material"
+  MATERIAL_COUNT = (1..60).freeze
+  MATERIAL_DECISIONS = %w[adopted rejected].freeze
+  CUTOUT_EDGE = 2
+  CUTOUT_MIN_TRANSPARENT = 0.10
+  CUTOUT_MAX_RESIDUE = 0.005
+  CUTOUT_KEY_DISTANCE = 60
+  # The render extension marks a record that lists every image input of every tile (D-085, #401).
+  RENDER_INVENTORY = "complete-v1"
   STORYBOARD_COUNT = 2
   PREVIEW_SECONDS = (15..30).freeze
   STATE_PATTERN = /\A[a-z0-9][a-z0-9-]{0,31}\z/
@@ -68,12 +79,15 @@ module AppStoreCreativeSheet
   module_function
 
   def run(argv)
-    command = argv.shift or fail!("command is required: build, select or check")
+    command = argv.shift or fail!("command is required: build, select, review, check, cutout or provenance")
     options = parse_options(argv)
     value = case command
             when "build" then build(options)
             when "select" then select(options)
             when "check" then check(options)
+            when "review" then review(options)
+            when "cutout" then cutout(options)
+            when "provenance" then provenance(options)
             else fail!("unknown command: #{command}")
             end
     puts JSON.generate(value)
@@ -118,9 +132,13 @@ module AppStoreCreativeSheet
 
     spec_path = File.expand_path(options.fetch("spec"))
     spec_bytes = read_regular(spec_path, "pattern definition")
-    spec = validate_spec(JSON.parse(spec_bytes), File.dirname(spec_path))
-
+    parsed = JSON.parse(spec_bytes)
     root = File.expand_path(options.fetch("root"))
+    if parsed.is_a?(Hash) && parsed["kind"] == MATERIAL_KIND
+      return build_material(validate_material_spec(parsed, File.dirname(spec_path)), spec_bytes, root, revision, max_dimension)
+    end
+    spec = validate_spec(parsed, File.dirname(spec_path))
+
     FileUtils.mkdir_p(root, mode: 0o700)
     destination = File.join(root, revision)
     fail!("revision already exists and is never replaced: #{revision}") if File.exist?(destination) || File.symlink?(destination)
@@ -155,7 +173,8 @@ module AppStoreCreativeSheet
           }
           if spec.fetch("kind") == "proposal"
             entry.merge!("recommended" => pattern.fetch("recommended"), "styleSha256" => pattern.fetch("styleRecord").fetch("sha256"),
-                         "techniques" => pattern.fetch("techniques"), "marks" => marks.fetch(pattern.fetch("id")))
+                         "techniques" => pattern.fetch("techniques"), "marks" => marks.fetch(pattern.fetch("id")),
+                         "materials" => pattern.fetch("materialRecords").map { |material| material.fetch("sha256") })
           end
           entry
         end
@@ -185,7 +204,7 @@ module AppStoreCreativeSheet
   def validate_spec(spec, base)
     fail!("pattern definition must be an object") unless spec.is_a?(Hash)
     allowed = %w[schemaVersion kind app title brief patterns]
-    allowed += %w[brand research captures headlineLimits] if spec["kind"] == "proposal"
+    allowed += %w[brand research captures headlineLimits materialReviews renders] if spec["kind"] == "proposal"
     extra = spec.keys - allowed
     fail!("unknown pattern definition field: #{extra.first}") unless extra.empty?
     fail!("pattern definition schemaVersion must be #{SCHEMA_VERSION}") unless spec["schemaVersion"] == SCHEMA_VERSION
@@ -213,6 +232,10 @@ module AppStoreCreativeSheet
       brand = validate_brand(brand_record.fetch("value"))
       captures_record = load_json(File.expand_path(spec["captures"], base), "capture manifest")
       verify_screens!(brand, capture_inventory(captures_record))
+      reviews = spec.fetch("materialReviews", [])
+      fail!("materialReviews must be a list of material sheet directories") unless reviews.is_a?(Array) && reviews.all? { |item| item.is_a?(String) && !item.empty? }
+      spec = spec.merge("materialReviewRecords" => reviews.map { |item| load_review(File.expand_path(item, base)) },
+                        "renderIndex" => render_index(spec["renders"], base))
       research_record = load_json(File.expand_path(spec["research"], base), "research record")
       research = validate_research(research_record.fetch("value"))
       spec = spec.merge("brandRecord" => brand_record.merge("value" => brand), "capturesRecord" => captures_record,
@@ -263,6 +286,7 @@ module AppStoreCreativeSheet
       fail!("a proposal shows only Japanese iPhone tiles; pattern #{id} has #{groups.keys.map { |key| key.join('/') }.join(', ')}")
     end
     fail!("storyboard #{id} must use one device and locale") if kind == "storyboard" && groups.length != 1
+    pattern = pattern.merge("materialRecords" => verify_tile_materials!(id, validated, spec)) if kind == "proposal"
     pattern.merge("tiles" => validated)
   end
 
@@ -795,6 +819,10 @@ module AppStoreCreativeSheet
         recommendation = %(<p class="recommend"><span class="badge rec">おすすめ</span> #{h.(pattern.fetch('recommendation'))}</p>)
       end
       style = proposal ? style_block(pattern, h) : ""
+      if proposal
+        count = pattern.fetch("materialRecords").length
+        style += %(<p class="meta">使う生成素材：#{count}点#{count.positive? ? '（すべて素材の確認で採用済み）' : ''}</p>)
+      end
       groups = pattern.fetch("tiles").group_by { |tile| [tile.fetch("device"), tile.fetch("locale")] }
       strips = groups.map do |(device, locale), tiles|
         figures = tiles.sort_by { |tile| tile.fetch("slot") }.map do |tile|
@@ -877,6 +905,380 @@ module AppStoreCreativeSheet
     HTML
   end
 
+  # --- material sheets (D-085, #393) ---------------------------------------------------------------
+
+  # A material sheet shows generated material (backgrounds, objects, mascots, settings, strips) before
+  # any pattern uses it. Each material names the pattern it was made for, its role and its prompt; a
+  # cut-out material names the key color it was generated on.
+  def validate_material_spec(spec, base)
+    object!(spec, "material definition", %w[schemaVersion kind app title materials], %w[brief])
+    fail!("material definition schemaVersion must be #{SCHEMA_VERSION}") unless spec["schemaVersion"] == SCHEMA_VERSION
+    %w[app title].each { |key| text!(spec[key], key, required: true) }
+    text!(spec["brief"], "brief", required: false)
+    materials = list!(spec["materials"], "materials", MATERIAL_COUNT).map do |material|
+      object!(material, "material", %w[id pattern role image prompt], %w[cutout note])
+      id = token!(material["id"], "material id")
+      fail!("material #{id} pattern is invalid") unless material["pattern"].is_a?(String) && material["pattern"].match?(ID_PATTERN)
+      token!(material["role"], "material #{id} role")
+      %w[prompt].each { |key| text!(material[key], "material #{id} #{key}", required: true) }
+      text!(material["note"], "material #{id} note", required: false)
+      image = material["image"]
+      fail!("material #{id} image must be a path") unless image.is_a?(String) && !image.empty?
+      cut = material["cutout"]
+      unless cut.nil?
+        object!(cut, "material #{id} cutout", %w[key])
+        hex!(cut["key"], "material #{id} cutout key")
+      end
+      material.merge("source" => File.expand_path(image, base))
+    end
+    ids = materials.map { |material| material.fetch("id") }
+    fail!("material ids must be unique") unless ids.uniq.length == ids.length
+    spec.merge("materials" => materials)
+  end
+
+  def material_display(spec, revision, images)
+    {"schemaVersion" => SCHEMA_VERSION, "revision" => revision, "kind" => MATERIAL_KIND,
+     "materials" => spec.fetch("materials").map do |material|
+       {"id" => material.fetch("id"), "pattern" => material.fetch("pattern"), "role" => material.fetch("role"),
+        "sha256" => images.fetch(material.fetch("source")).fetch("sha256")}
+     end}
+  end
+
+  def build_material(spec, spec_bytes, root, revision, max_dimension)
+    FileUtils.mkdir_p(root, mode: 0o700)
+    destination = File.join(root, revision)
+    fail!("revision already exists and is never replaced: #{revision}") if File.exist?(destination) || File.symlink?(destination)
+    # A cut-out that keeps its background or key-color fringe is refused before the user sees it.
+    cutouts = spec.fetch("materials").select { |material| material["cutout"] }.to_h do |material|
+      [material.fetch("id"), cutout_check(material.fetch("source"), material.fetch("cutout").fetch("key"), "material #{material.fetch('id')}")]
+    end
+    staging = Dir.mktmpdir(".#{revision}.", root)
+    begin
+      images = {}
+      spec.fetch("materials").each { |material| images[material.fetch("source")] ||= embed_image(material.fetch("source"), max_dimension, staging) }
+      display = material_display(spec, revision, images)
+      html = render_material_html(spec, revision, images, display)
+      File.binwrite(File.join(staging, "sheet.html"), html)
+      record = {
+        "schemaVersion" => SCHEMA_VERSION, "revision" => revision, "kind" => MATERIAL_KIND,
+        "sheetSha256" => "sha256:#{Digest::SHA256.hexdigest(html)}",
+        "definitionSha256" => "sha256:#{Digest::SHA256.hexdigest(spec_bytes)}",
+        "builtAt" => Time.now.utc.iso8601,
+        "materials" => display.fetch("materials").zip(spec.fetch("materials")).map do |shown, material|
+          entry = shown.merge("source" => material.fetch("source"))
+          entry["cutout"] = cutouts.fetch(material.fetch("id")) if cutouts.key?(material.fetch("id"))
+          entry
+        end
+      }
+      File.binwrite(File.join(staging, "sheet.json"), "#{JSON.pretty_generate(record)}\n")
+      Dir.children(staging).each { |name| File.unlink(File.join(staging, name)) if name.start_with?(".thumb-") }
+      File.rename(staging, destination)
+      staging = nil
+      {"status" => "built", "revision" => revision, "sheet" => File.join(destination, "sheet.html"),
+       "sheetSha256" => record.fetch("sheetSha256"), "materials" => record.fetch("materials").length}
+    ensure
+      FileUtils.rm_rf(staging) if staging
+    end
+  end
+
+  def render_material_html(spec, revision, images, record)
+    h = ->(text) { CGI.escapeHTML(text.to_s) }
+    groups = spec.fetch("materials").group_by { |material| material.fetch("pattern") }
+    sections = groups.map do |pattern, materials|
+      figures = materials.map do |material|
+        note = material["note"] ? "<span>#{h.(material['note'])}</span>" : ""
+        cut = material["cutout"] ? "<span>切り抜き（キー色 #{h.(material['cutout']['key'])}）：確認済み</span>" : ""
+        %(<figure class="material"><img src="#{images.fetch(material.fetch('source')).fetch('dataUri')}" alt="#{h.(material.fetch('id'))}">) +
+          %(<figcaption><b>#{h.(material.fetch('id'))}</b> <code>#{h.(material.fetch('role'))}</code>#{cut}#{note}) +
+          %(<span class="prompt">#{h.(material.fetch('prompt'))}</span></figcaption></figure>)
+      end.join
+      %(<section class="pattern"><h2><span class="badge">#{h.(pattern)}</span> の素材</h2><div class="grid">#{figures}</div></section>)
+    end.join
+    brief = spec["brief"] ? %(<p class="brief">#{h.(spec['brief'])}</p>) : ""
+    <<~HTML
+      <!doctype html>
+      <html lang="ja">
+      <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta http-equiv="Content-Security-Policy" content="#{CONTENT_SECURITY_POLICY}">
+      <meta name="#{DISPLAY_RECORD_META}" content="#{Base64.strict_encode64(JSON.generate(record))}">
+      <title>#{h.(spec.fetch('title'))}</title>
+      <style>
+      :root { color-scheme: light dark; --bg: #f6f5f2; --fg: #1d1d1f; --muted: #5b5b60; --card: #ffffff; --line: #d9d7d2; --check: #e4e2dd; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #f2f2f4; --muted: #a8a8ae; --card: #212124; --line: #3a3a3e; --check: #2c2c30; } }
+      body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg); font: 15px/1.6 -apple-system, "Hiragino Sans", sans-serif; }
+      header, section { max-width: 1200px; margin: 0 auto 24px; }
+      .meta { color: var(--muted); font-size: 13px; }
+      .brief, .pattern { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+      .badge { display: inline-block; min-width: 2em; text-align: center; border-radius: 8px; background: var(--fg); color: var(--bg); padding: 0 8px; }
+      .grid { display: flex; flex-wrap: wrap; gap: 16px; }
+      .material { margin: 0; width: 240px; }
+      .material img { display: block; width: 240px; height: auto; border-radius: 10px; border: 1px solid var(--line);
+        background-color: var(--card); background-image: linear-gradient(45deg, var(--check) 25%, transparent 25%, transparent 75%, var(--check) 75%),
+        linear-gradient(45deg, var(--check) 25%, transparent 25%, transparent 75%, var(--check) 75%); background-size: 16px 16px; background-position: 0 0, 8px 8px; }
+      figcaption { font-size: 12px; color: var(--muted); } figcaption span { display: block; } .prompt { margin-top: 4px; }
+      </style>
+      </head>
+      <body>
+      <header>
+      <h1>#{h.(spec.fetch('title'))}</h1>
+      <p class="meta">#{h.(spec.fetch('app'))} ・ 素材の確認 ・ revision #{h.(revision)}</p>
+      #{brief}
+      <p class="meta">素材ごとに「採用」か「不採用」を決めてください。採用した素材だけがパターンに使われます。AIっぽくありきたりなもの、買いたくならないものは不採用にしてください。</p>
+      </header>
+      #{sections}
+      </body>
+      </html>
+    HTML
+  end
+
+  # Verifies a sheet directory: sheet.html matches its record and the record matches the page's
+  # displayed record (the source paths are local and never shown).
+  def verified_sheet(directory)
+    record = JSON.parse(read_regular(File.join(directory, "sheet.json"), "sheet record"))
+    html = read_regular(File.join(directory, "sheet.html"), "sheet")
+    actual = "sha256:#{Digest::SHA256.hexdigest(html)}"
+    fail!("sheet.html differs from the sheet record") unless record["sheetSha256"].is_a?(String) &&
+      record["sheetSha256"].match?(DIGEST_PATTERN) && record["sheetSha256"] == actual
+    matches = html.scan(DISPLAY_RECORD_PATTERN)
+    fail!("the sheet does not carry exactly one displayed record") unless matches.length == 1
+    displayed = JSON.parse(Base64.strict_decode64(matches.first.first))
+    [record, displayed, actual]
+  end
+
+  def review(options)
+    require_options(options, "sheet")
+    unknown = options.keys - %w[sheet adopt reject]
+    fail!("unknown option: --#{unknown.first}") unless unknown.empty?
+    directory = File.expand_path(options.fetch("sheet"))
+    record, displayed, actual = verified_sheet(directory)
+    fail!("review applies only to a material sheet; use select for patterns") unless record["kind"] == MATERIAL_KIND && displayed["kind"] == MATERIAL_KIND
+    listed = {"schemaVersion" => record["schemaVersion"], "revision" => record["revision"], "kind" => record["kind"],
+              "materials" => (record["materials"] || []).map { |material| material.slice("id", "pattern", "role", "sha256") }}
+    fail!("sheet.json differs from the displayed sheet") unless listed == displayed
+    target = File.join(directory, "material-review.json")
+    fail!("a review is already recorded for this sheet and is never replaced") if File.exist?(target) || File.symlink?(target)
+    split = ->(name) { options.key?(name) ? options.fetch(name).split(",", -1).map(&:strip) : [] }
+    adopt = split.("adopt")
+    reject = split.("reject")
+    known = displayed.fetch("materials").map { |material| material.fetch("id") }
+    (adopt + reject).each { |id| fail!("unknown material id: #{id}") unless known.include?(id) }
+    both = adopt & reject
+    fail!("material #{both.first} is both adopted and rejected") unless both.empty?
+    duplicate = (adopt + reject).group_by(&:itself).find { |_, names| names.length > 1 }
+    fail!("material #{duplicate.first} is named twice") if duplicate
+    # Only a decision on every material counts; praise or "the blue ones" is not one.
+    missing = known - adopt - reject
+    fail!("every material needs --adopt or --reject; missing: #{missing.join(', ')}") unless missing.empty?
+    value = {
+      "schemaVersion" => SCHEMA_VERSION, "revision" => record.fetch("revision"), "sheetSha256" => actual,
+      "decisions" => displayed.fetch("materials").map do |material|
+        material.slice("id", "pattern", "sha256").merge("decision" => adopt.include?(material.fetch("id")) ? "adopted" : "rejected")
+      end,
+      "decision" => "user-explicit", "recordedAt" => Time.now.utc.iso8601
+    }
+    File.open(target, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |file| file.write("#{JSON.pretty_generate(value)}\n") }
+    {"status" => "reviewed", "review" => target, "adopted" => adopt.length, "rejected" => reject.length}
+  end
+
+  # Loads a material review together with its sheet, so a review whose sheet changed is never trusted.
+  def load_review(directory)
+    record, displayed, actual = verified_sheet(directory)
+    fail!("#{directory} is not a material sheet") unless record["kind"] == MATERIAL_KIND
+    review = JSON.parse(read_regular(File.join(directory, "material-review.json"), "material review"))
+    unless review["sheetSha256"] == actual && review["revision"] == record["revision"] && review["decision"] == "user-explicit" &&
+           review["decisions"].is_a?(Array)
+      fail!("material review of #{record['revision']} does not match its sheet")
+    end
+    shown = displayed.fetch("materials").to_h { |material| [material.fetch("id"), material.fetch("sha256")] }
+    review.fetch("decisions").each do |entry|
+      unless shown[entry["id"]] == entry["sha256"] && MATERIAL_DECISIONS.include?(entry["decision"])
+        fail!("material review of #{record['revision']} does not match its sheet")
+      end
+    end
+    sources = (record["materials"] || []).to_h { |material| [material["source"], material["sha256"]] }
+    {"revision" => record.fetch("revision"), "decisions" => review.fetch("decisions"), "sources" => sources,
+     "reviewSha256" => "sha256:#{Digest::SHA256.file(File.join(directory, 'material-review.json')).hexdigest}"}
+  end
+
+  # The render records of tools/appstore-creative-render.sh (creative-render-<device>-<locale>.json) say,
+  # for each output tile, which generated images it was drawn from: its background slice and every
+  # layer that touches it. The index maps each tile's SHA-256 to those inputs.
+  def render_index(paths, base)
+    fail!("a proposal needs renders: the creative-render records of its tiles") unless paths.is_a?(Array) && !paths.empty? &&
+      paths.all? { |item| item.is_a?(String) && !item.empty? }
+    paths.each_with_object({}) do |item, index|
+      path = File.expand_path(item, base)
+      record = JSON.parse(read_regular(path, "render record"))
+      unless record.is_a?(Hash) && record["schemaVersion"] == SCHEMA_VERSION && record["files"].is_a?(Array) && !record["files"].empty?
+        fail!("render record #{File.basename(path)} must have schemaVersion 1 and files")
+      end
+      # Only a record that lists every image input of every tile can show that a tile is clean.
+      unless record["inputInventory"] == RENDER_INVENTORY
+        fail!("render record #{File.basename(path)} has no complete input inventory; render the tiles again with tools/appstore-creative-render.sh")
+      end
+      backgrounds = record.fetch("backgrounds", [])
+      layers = record.fetch("layers", [])
+      decorations = record.fetch("decorations", [])
+      unless backgrounds.is_a?(Array) && layers.is_a?(Array) && decorations.is_a?(Array)
+        fail!("render record #{File.basename(path)} backgrounds, layers and decorations must be lists")
+      end
+      layers += decorations
+      record.fetch("files").each_with_index do |file, position|
+        unless file.is_a?(Hash) && file["path"].is_a?(String) && file["sha256"].is_a?(String) && file["sha256"].match?(DIGEST_PATTERN)
+          fail!("render record #{File.basename(path)} lists a file without path and sha256")
+        end
+        inputs = backgrounds.select { |entry| entry.is_a?(Hash) && entry["file"] == file["path"] }
+                            .map { |entry| {"sha256" => entry["sourceSha256"], "path" => entry["source"]} }
+        inputs += layers.select { |entry| entry.is_a?(Hash) && entry["tiles"].is_a?(Array) && entry["tiles"].include?(position + 1) }
+                        .map { |entry| {"sha256" => entry["sha256"], "path" => entry["src"]} }
+        inputs.each do |input|
+          next if input["sha256"].is_a?(String) && input["sha256"].match?(DIGEST_PATTERN) && input["path"].is_a?(String)
+          fail!("render record #{File.basename(path)} lists an input without source and sha256")
+        end
+        (index[file["sha256"]] ||= []).concat(inputs)
+      end
+    end
+  end
+
+  # A tile may draw only on generated material the user adopted, byte for byte: every input its render
+  # record names, and the tile image itself when it is a reviewed material.
+  def verify_tile_materials!(id, tiles, spec)
+    reviews = spec.fetch("materialReviewRecords")
+    index = spec.fetch("renderIndex")
+    decisions_for = ->(digest) { reviews.flat_map { |review| review.fetch("decisions").select { |entry| entry.fetch("sha256") == digest } } }
+    adopted = []
+    tiles.each do |tile|
+      label = "tile #{tile.fetch('slot')} of #{id}"
+      source = tile.fetch("source")
+      digest = "sha256:#{Digest::SHA256.hexdigest(read_regular(source, "#{label} image"))}"
+      inputs = index[digest] or
+        fail!("#{label} is in no render record; render it with tools/appstore-creative-render.sh and list the record in renders")
+      direct = decisions_for.(digest)
+      if direct.any? && direct.none? { |entry| entry.fetch("decision") == "adopted" }
+        fail!("#{label} uses #{File.basename(source)}, which the user rejected")
+      end
+      inputs.each do |input|
+        decisions = decisions_for.(input.fetch("sha256"))
+        name = File.basename(input.fetch("path"))
+        if decisions.any? { |entry| entry.fetch("decision") == "adopted" }
+          adopted << input.fetch("sha256")
+        elsif decisions.any?
+          fail!("#{label} uses #{name}, which the user rejected")
+        elsif reviews.any? { |review| review.fetch("sources").key?(File.expand_path(input.fetch("path"))) }
+          fail!("#{label} uses #{name}, which changed after the user reviewed it")
+        else
+          fail!("#{label} uses #{name}, which the user has not adopted on a material sheet")
+        end
+      end
+    end
+    adopted.uniq.map { |digest| {"sha256" => digest} }
+  end
+
+  # --- cutout --------------------------------------------------------------------------------------
+
+  def png_header(path)
+    bytes = File.binread(path, 33)
+    fail!("#{path} is not a PNG") unless bytes&.start_with?("\x89PNG\r\n\x1A\n".b) && bytes.length >= 26
+    {"width" => bytes[16, 4].unpack1("N"), "height" => bytes[20, 4].unpack1("N"), "colorType" => bytes.getbyte(25)}
+  end
+
+  # A cut-out (an object or mascot generated on a solid key color and then separated) must be a PNG
+  # with alpha, fully transparent along its edges and over a real share of the image, and must not keep
+  # visible pixels close to the key color.
+  def cutout_check(path, key, label)
+    read_regular(path, "#{label} image")
+    header = png_header(path)
+    fail!("#{label} has no transparent background: the PNG has no alpha channel") unless [4, 6].include?(header.fetch("colorType"))
+    width = header.fetch("width")
+    height = header.fetch("height")
+    data, status = Open3.capture2("ffmpeg", "-loglevel", "error", "-i", path, "-f", "rawvideo", "-pix_fmt", "rgba", "-", binmode: true)
+    fail!("could not read #{label}") unless status.success? && data.bytesize == width * height * 4
+    target = key.delete_prefix("#").scan(/../).map { |pair| pair.to_i(16) }
+    transparent = 0
+    visible = 0
+    residue = 0
+    edge = 0
+    limit = CUTOUT_KEY_DISTANCE**2
+    height.times do |y|
+      row = y * width * 4
+      width.times do |x|
+        offset = row + x * 4
+        alpha = data.getbyte(offset + 3)
+        if alpha <= 8
+          transparent += 1
+          next
+        end
+        visible += 1
+        edge += 1 if x < CUTOUT_EDGE || y < CUTOUT_EDGE || x >= width - CUTOUT_EDGE || y >= height - CUTOUT_EDGE
+        dr = data.getbyte(offset) - target[0]
+        dg = data.getbyte(offset + 1) - target[1]
+        db = data.getbyte(offset + 2) - target[2]
+        residue += 1 if dr * dr + dg * dg + db * db <= limit
+      end
+    end
+    total = width * height
+    fail!("#{label} background is not transparent at its edges") if edge.positive?
+    if transparent < total * CUTOUT_MIN_TRANSPARENT
+      fail!("#{label} background is not transparent: only #{(100.0 * transparent / total).round(1)}% of it is clear")
+    end
+    share = visible.zero? ? 0.0 : residue.to_f / visible
+    if share > CUTOUT_MAX_RESIDUE
+      fail!("#{label} keeps #{(100 * share).round(1)}% of the key color #{key.upcase} at its edges; separate it again")
+    end
+    {"key" => key.upcase, "transparent" => (transparent.to_f / total).round(4), "keyResidue" => share.round(4)}
+  end
+
+  def cutout(options)
+    require_options(options, "image", "key")
+    unknown = options.keys - %w[image key]
+    fail!("unknown option: --#{unknown.first}") unless unknown.empty?
+    hex!(options.fetch("key"), "--key")
+    path = File.expand_path(options.fetch("image"))
+    {"status" => "clean", "image" => path}.merge(cutout_check(path, options.fetch("key"), File.basename(path)))
+  end
+
+  # --- provenance ----------------------------------------------------------------------------------
+
+  # goldie/assets/provenance.json lists every adopted generated image with how it was made and the
+  # material review that adopted it; the review is read from its sheet under --root.
+  def provenance(options)
+    require_options(options, "file", "root")
+    unknown = options.keys - %w[file root]
+    fail!("unknown option: --#{unknown.first}") unless unknown.empty?
+    path = File.expand_path(options.fetch("file"))
+    value = JSON.parse(read_regular(path, "provenance record"))
+    object!(value, "provenance record", %w[schemaVersion images])
+    fail!("provenance schemaVersion must be #{SCHEMA_VERSION}") unless value["schemaVersion"] == SCHEMA_VERSION
+    root = File.expand_path(options.fetch("root"))
+    reviews = {}
+    images = list!(value["images"], "provenance images", (1..200)).map do |image|
+      fail!("each provenance image must be an object") unless image.is_a?(Hash)
+      file = image["file"]
+      fail!("provenance image file must be a relative path") unless file.is_a?(String) && !file.empty? && !file.start_with?("/") && !file.split("/").include?("..")
+      review_ref = image["materialReview"]
+      fail!("image #{file} has no material review record") unless review_ref.is_a?(Hash)
+      object!(image, "provenance image #{file}", %w[file sha256 prompt mode generator generatedAt revision materialReview], %w[referenceSha256])
+      %w[prompt generator generatedAt].each { |key| text!(image[key], "image #{file} #{key}", required: true) }
+      fail!("image #{file} mode must be generate or edit") unless %w[generate edit].include?(image["mode"])
+      source = File.join(File.dirname(path), file)
+      fail!("image #{file} is missing") unless File.file?(source) && !File.symlink?(source)
+      digest = "sha256:#{Digest::SHA256.file(source).hexdigest}"
+      fail!("image #{file} does not match its recorded sha256") unless image["sha256"] == digest
+      object!(review_ref, "image #{file} materialReview", %w[revision reviewSha256 decision])
+      revision = review_ref["revision"]
+      fail!("image #{file} materialReview revision is invalid") unless revision.is_a?(String) && revision.match?(REVISION_PATTERN)
+      review = reviews[revision] ||= load_review(File.join(root, revision))
+      fail!("image #{file} names a material review that differs from #{revision}") unless review_ref["reviewSha256"] == review.fetch("reviewSha256")
+      entry = review.fetch("decisions").find { |decision| decision.fetch("sha256") == digest }
+      fail!("image #{file} is not on the material review #{revision}") unless entry
+      fail!("image #{file} was rejected on the material review #{revision}") unless entry.fetch("decision") == "adopted" && review_ref["decision"] == "adopted"
+      {"file" => file, "sha256" => digest, "materialReview" => revision}
+    end
+    {"status" => "valid", "images" => images.length}
+  end
+
   # --- select --------------------------------------------------------------------------------------
 
   def select(options)
@@ -886,6 +1288,7 @@ module AppStoreCreativeSheet
     fail!("give exactly one of --pattern or --tiles") unless options.key?("pattern") ^ options.key?("tiles")
     directory = File.expand_path(options.fetch("sheet"))
     record = JSON.parse(read_regular(File.join(directory, "sheet.json"), "sheet record"))
+    fail!("a material sheet takes review --adopt/--reject, not select") if record["kind"] == MATERIAL_KIND
     html = read_regular(File.join(directory, "sheet.html"), "sheet")
     actual = "sha256:#{Digest::SHA256.hexdigest(html)}"
     fail!("sheet.html differs from the sheet record") unless record["sheetSha256"].is_a?(String) &&

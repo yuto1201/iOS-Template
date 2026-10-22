@@ -98,6 +98,35 @@ magnified piece of UI leaving the device), `mascot`, `hands`, `cross-tile-art`,
 logo. The URLs stay in the record; the sheet shows only the apps, sites and techniques.
 Keep the record with the revision under `.artifacts/store-creative/`, outside Git.
 
+## Material sheet
+
+Generated material is shown to the user before any pattern uses it (D-085). Write a
+material definition and build it like any sheet:
+
+```json
+{
+  "schemaVersion": 1, "kind": "material", "app": "花島", "title": "素材の確認",
+  "brief": "雨上がりの窓辺の庭。",
+  "materials": [
+    {"id": "cloud", "pattern": "A", "role": "object", "image": "generated/cloud.png",
+     "prompt": "雨上がりの小さな雲、水彩、文字なし", "cutout": {"key": "#00FF00"}},
+    {"id": "garden", "pattern": "A", "role": "background", "image": "generated/garden.png",
+     "prompt": "窓辺の小さな庭、朝の光", "note": "panoramaの左半分に使う"}
+  ]
+}
+```
+
+- `id` and `role` are short lowercase names; `pattern` is the pattern the material is
+  for; `prompt` is the generation prompt. `cutout.key` is the key color a cut-out was
+  generated on: the build runs the cut-out check on it and refuses a fringe or an opaque
+  background before the user sees it.
+- The page shows the materials per pattern on a checkerboard, with role, prompt and
+  note, and asks for a decision on each. It has the same Content Security Policy,
+  embedded images, SHA-256 record and no-replace rule as the other sheets.
+- Record the decision with `review --adopt <ids> --reject <ids>`, naming every material
+  exactly once. `material-review.json` is written once; `select` does not apply to a
+  material sheet.
+
 ## Pattern definition
 
 ```json
@@ -110,6 +139,8 @@ Keep the record with the revision under `.artifacts/store-creative/`, outside Gi
   "brand": "../../goldie/brand.json",
   "research": "research.json",
   "captures": "../../goldie/ja/out/raw/iphone-6.3/manifest.json",
+  "materialReviews": ["../flower-m1"],
+  "renders": ["../../goldie/ja/out/creative-render-iphone-6.3-ja.json"],
   "headlineLimits": {"ja": 16, "en-US": 36},
   "patterns": [
     {
@@ -141,6 +172,14 @@ Keep the record with the revision under `.artifacts/store-creative/`, outside Gi
   `background` and `headlines` (two to six candidates per locale). `decorations` is
   optional. `headlineLimits` is optional; the default guide is 16 Japanese characters
   (spaces not counted) and 36 English characters.
+- `renders` names the render records of the tiles (`out/creative-render-<device>-<locale>.json`
+  from `tools/appstore-creative-render.sh`) and `materialReviews` the reviewed material
+  sheets. Every tile must appear in a render record by its SHA-256; its generated inputs
+  (the background slice, each layer that touches it and Goldie's image decorations) must
+  all be adopted on a listed review, byte for byte. A record without
+  `inputInventory: "complete-v1"` (rendered before the record listed every input) is
+  refused; render the tiles again. The sheet shows how many adopted materials each pattern uses, and
+  `sheet.json` keeps their SHA-256.
 - Exactly one pattern is `recommended`, with the `recommendation`: the one you think is
   best. The others carry `"recommended": false` and no reason.
 - Headlines are provisional until the App Store copy guide (ASO) exists; then align
@@ -178,6 +217,9 @@ SHA-256 of `brand.json`, the research record and each style spec. The build refu
   capture in the `captures` manifest, a color or
   font outside `brand.json` without a reason, or fewer than three reference apps;
 - a pattern without a style spec, or using a technique the research does not list;
+- a tile in no render record, or drawn from a generated image that no material review
+  adopted, that the user rejected, or that changed after the review, and a rejected
+  material placed directly as a tile;
 - two patterns that share the signature element, or that use the same layouts and
   backgrounds in the same order (one pattern shown twice).
 

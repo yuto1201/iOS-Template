@@ -520,14 +520,31 @@ export async function render({ runtime, config, device, locale }) {
     if (size.colorType !== 2) fail(`${file} has an alpha channel or is not RGB`);
     return { path: file, sha256: sha256(file), width: size.width, height: size.height };
   });
+  // D-085 (#401): Goldie's own image decorations (scene and theme) are generated material too, so the
+  // record lists them with the tiles they appear on. With backgrounds and layers this is every image
+  // input of every tile apart from the real captures; `inputInventory` says so to the proposal sheet.
+  const screenshotScenes = cfg.scenes.filter((scene) => scene.kind === "screenshot");
+  const tilesOf = new Map();
+  for (const entry of tileMap(files, screenshotScenes.map((scene) => scene.id))) {
+    tilesOf.set(entry.scene, [...(tilesOf.get(entry.scene) ?? []), entry.tile]);
+  }
+  const decorations = screenshotScenes.flatMap((scene) => [...(scene.decorations ?? []), ...(cfg.theme.decorations ?? [])]
+    .filter((decoration) => decoration?.kind === "image")
+    .map((decoration) => {
+      const src = resolve(cfg.root, decoration.src);
+      if (!existsSync(src)) fail(`decoration image of ${scene.id} not found: ${src}`);
+      return { scene: scene.id, src, sha256: sha256(src), tiles: tilesOf.get(scene.id) ?? [] };
+    }));
   const record = {
     schemaVersion: 1,
     goldieVersion: version,
     device,
     locale,
     config: configPath,
+    inputInventory: "complete-v1",
     extensions: { layouts: [CONCEPT_LAYOUT], devices: { [IPHONE_KEY]: IPHONE_DEVICE, [IPAD_KEY]: IPAD_DEVICE } },
     backgrounds: composed.backgrounds,
+    decorations,
     layers: composed.layers,
     popouts: composed.popouts,
     screens: composed.screens,
