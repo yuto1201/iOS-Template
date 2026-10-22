@@ -108,6 +108,7 @@ Identity/bootstrap完了後の通常機能開発は、まず`shape`で日本語i
 - 認証、同期、共有、サーバー側データが必要な場合: Supabase を標準とする。
 - Supabase のリモート操作: 実行モデルが設定済みOrganization／Projectを確認したうえで行う。
 - Supabase のスキーマ正本: `supabase/migrations/*.sql`。
+- Supabase のserver側の処理: Edge Functionを使う場合は、承認のある`strict`のIssueで、列挙したfunctionだけを設定済みのProjectへdeployする（D-088）。秘密の値はユーザーが設定する。
 - iOS アプリに渡せる鍵: Project URL と Publishable Key のみ。
 - Secret Key、旧 `service_role`、管理権限のある鍵: iOS アプリへ入れない。
 

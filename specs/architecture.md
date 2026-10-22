@@ -197,7 +197,7 @@ Codex は `.codex/agents/*.toml`、Claude は `.claude/agents/*.md` を使いま
 外部サービスはすべてAdapterとして扱い、アプリ本体と認証操作を分離します。
 
 - GitHub: Issue、PR、レビュー記録、Squash Merge
-- Supabase: 認証・DB・Storageが必要な場合だけ
+- Supabase: 認証・DB・Storage、またはserver側の処理のEdge Function（[D-088](decisions.md#d-088-supabaseを採用したアプリにedge-functionのdeployの経路を許可する)）が必要な場合だけ
 - Cloudflare: ドメイン、公開サイト、Workerが必要な場合。全アプリ標準のアプリ内フィードバックのWorker（[§7.4](#74-アプリ内フィードバック境界)）を含む
 - Linear: Issue／Project連携が必要な場合だけ
 - Vercel: Web配信または補助サービスのdeployが必要な場合だけ
@@ -282,6 +282,7 @@ Supabaseを採用したアプリだけ、次を作成します。
 ```text
 supabase/
 ├── config.toml
+├── functions/        # Edge Functionを採用した場合だけ（D-088）
 ├── migrations/
 └── seed.sql
 ```
@@ -292,6 +293,7 @@ supabase/
 - 公開スキーマのテーブルはRLSを有効化する。
 - ローカル検証は `--local`、リモート操作は `--linked` を明示する。
 - 本番で `db reset --linked` を実行しない。
+- Edge Functionは `functions/<name>/` に置き、functionごとにremoteへ接続しないlocalのtestを持つ。remoteへのdeployは `supabase.deploy_functions`（D-088）として、設定済みのProject RefとIssue contractに列挙したfunctionだけを、ユーザーの承認のある`strict`のIssueで行い、migrationの適用とは別のIssueにする。functionの秘密の値はユーザーが `supabase secrets set` で設定し、AIは名前の有無だけを確かめる。
 
 ## 9. App Store構成
 
