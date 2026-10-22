@@ -41,6 +41,8 @@ struct FeedbackEntryButton: View {
 struct FeedbackView: View {
     @Environment(\.dismiss) private var dismiss
     let sender: any FeedbackSending
+    /// Called once the feedback was sent (the review prompt then stops asking, #383).
+    var onSent: () -> Void = {}
 
     @State private var draft = FeedbackDraft()
     @State private var phase = Phase.editing
@@ -224,6 +226,7 @@ struct FeedbackView: View {
             do {
                 try await sender.send(payload)
                 phase = .sent
+                onSent()
             } catch let error as FeedbackSendError {
                 sendError = error
                 phase = .editing

@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "minimumLaunchCount": 5,
+  "minimumDaysSinceFirstLaunch": 7,
+  "minimumSignificantEvents": 0,
+  "cooldownDays": 120,
+  "maximumDismissals": 2,
+  "oncePerVersion": true,
+  "presentationDelaySeconds": 1.5
+}

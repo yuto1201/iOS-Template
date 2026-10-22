@@ -232,3 +232,237 @@ struct LegalLinksTests {
         try await feedback.payloadMatchesWorkerContract()
     }
 }
+
+/// Keeps the review prompt's record in memory for the tests.
+final class MemoryReviewPromptStore: ReviewPromptStore {
+    var record = ReviewPromptRecord()
+    func load() -> ReviewPromptRecord { record }
+    func save(_ record: ReviewPromptRecord) { self.record = record }
+}
+
+/// The review prompt (#383): its rules, settings, answers, wording and App Review Guideline 5.6.1. The
+/// runner runs one Unit Test, so the first test calls the others and the existing feedback and legal
+/// link checks, whose view the prompt opens.
+@MainActor
+struct ReviewPromptPolicyTests {
+    private let start = Date(timeIntervalSince1970: 1_800_000_000)
+    private let day: TimeInterval = 24 * 60 * 60
+
+    @Test("The review prompt respects its thresholds, cool-down and stops, and only uses Apple's API")
+    func promptRespectsThresholdsAndCooldowns() async throws {
+        rulesBlockUntilEveryThresholdIsMet()
+        try settingsComeFromTheBundledFile()
+        await answersUpdateTheRecordAndOnlyGoodRequestsAReview()
+        try wordingIsNeutralInBothLanguages()
+        try guidelineAndIdentifiersHold()
+        try await LegalLinksTests().legalLinksFollowTheAppSlug()
+    }
+
+    private func reason(
+        _ record: ReviewPromptRecord,
+        config: ReviewPromptConfig = ReviewPromptConfig(),
+        days: Double,
+        version: String = "1.0",
+        suppressed: Bool = false
+    ) -> ReviewPromptPolicy.Reason? {
+        ReviewPromptPolicy.blockingReason(
+            config: config, record: record, now: start.addingTimeInterval(days * day), appVersion: version, suppressed: suppressed
+        )
+    }
+
+    func rulesBlockUntilEveryThresholdIsMet() {
+        let ready = ReviewPromptRecord(launchCount: 5, firstLaunchDate: start, significantEvents: 3)
+        #expect(reason(ready, days: 7) == nil)
+
+        // Never on the first launch, even when every threshold is 0.
+        let open = ReviewPromptConfig(minimumLaunchCount: 0, minimumDaysSinceFirstLaunch: 0, minimumSignificantEvents: 0)
+        #expect(reason(ReviewPromptRecord(launchCount: 1, firstLaunchDate: start), config: open, days: 30) == .firstLaunch)
+        #expect(reason(ReviewPromptRecord(launchCount: 2, firstLaunchDate: start), config: open, days: 0) == nil)
+
+        // Each threshold blocks until it is reached.
+        var record = ready
+        record.launchCount = 4
+        #expect(reason(record, days: 7) == .fewLaunches)
+        #expect(reason(ready, days: 6.9) == .tooSoonAfterFirstLaunch)
+        record = ready
+        record.significantEvents = 2
+        #expect(reason(record, days: 7) == .fewSignificantEvents)
+
+        // Once per version, and after "Not great" or a close, not again within the cool-down.
+        record = ready
+        record.lastAskedDate = start.addingTimeInterval(7 * day)
+        record.lastAskedVersion = "1.0"
+        record.lastAnswer = .negative
+        #expect(reason(record, days: 7 + 200) == .alreadyAskedThisVersion)
+        #expect(reason(record, config: ReviewPromptConfig(oncePerVersion: false), days: 7 + 200) == nil)
+        #expect(reason(record, days: 7 + 119, version: "1.1") == .coolingDown)
+        #expect(reason(record, days: 7 + 120, version: "1.1") == nil)
+
+        // Closed without an answer too often: never again.
+        record.dismissals = 2
+        #expect(reason(record, days: 7 + 200, version: "1.1") == .dismissedTooOften)
+        record.dismissals = 1
+        #expect(reason(record, days: 7 + 200, version: "1.1") == nil)
+
+        // After "Good" or sent feedback, while the app says "not now", or when turned off: not at all.
+        record.stopped = true
+        #expect(reason(record, days: 7 + 200, version: "1.1") == .stopped)
+        #expect(reason(ready, days: 7, suppressed: true) == .suppressed)
+        #expect(reason(ready, config: .disabled, days: 7) == .disabled)
+    }
+
+    func settingsComeFromTheBundledFile() throws {
+        let full = Data("""
+        {"enabled": true, "minimumLaunchCount": 3, "minimumDaysSinceFirstLaunch": 2, "minimumSignificantEvents": 1,
+         "cooldownDays": 30, "maximumDismissals": 1, "oncePerVersion": false, "presentationDelaySeconds": 0.5}
+        """.utf8)
+        #expect(ReviewPromptConfig.decode(full) == ReviewPromptConfig(
+            minimumLaunchCount: 3, minimumDaysSinceFirstLaunch: 2, minimumSignificantEvents: 1, cooldownDays: 30,
+            maximumDismissals: 1, oncePerVersion: false, presentationDelaySeconds: 0.5
+        ))
+        // A missing value uses its default.
+        #expect(ReviewPromptConfig.decode(Data(#"{"cooldownDays": 30}"#.utf8)) == ReviewPromptConfig(cooldownDays: 30))
+        #expect(ReviewPromptConfig.decode(Data("{}".utf8)) == ReviewPromptConfig())
+        // A negative number, a wrong type or a broken file turns the prompt off.
+        for broken in [#"{"minimumLaunchCount": -1}"#, #"{"cooldownDays": -5}"#, #"{"presentationDelaySeconds": -1}"#,
+                       #"{"enabled": "yes"}"#, #"{"maximumDismissals": 1.5}"#, "not json"] {
+            #expect(ReviewPromptConfig.decode(Data(broken.utf8)) == .disabled, "\(broken)")
+        }
+        // The template's own file: on, and with no moments of success to wait for.
+        let bundled = ReviewPromptConfig.load()
+        #expect(bundled.enabled && bundled.minimumSignificantEvents == 0 && bundled.minimumLaunchCount == 5)
+        #expect(bundled.minimumDaysSinceFirstLaunch == 7 && bundled.cooldownDays == 120 && bundled.maximumDismissals == 2)
+        #expect(bundled.oncePerVersion && bundled.presentationDelaySeconds == 1.5)
+        #expect(ReviewPromptConfig.load(bundle: Bundle(for: MemoryReviewPromptStore.self)) == .disabled)
+    }
+
+    func answersUpdateTheRecordAndOnlyGoodRequestsAReview() async {
+        var now = start
+        let store = MemoryReviewPromptStore()
+        let config = ReviewPromptConfig(minimumSignificantEvents: 1, presentationDelaySeconds: 0)
+        let center = ReviewPromptCenter(config: config, store: store, appName: "Sample", appVersion: "1.0", now: { now })
+        var reviewRequests = 0
+        center.requestReview = { reviewRequests += 1 }
+
+        for _ in 0..<5 { center.recordLaunch() }
+        #expect(store.record.launchCount == 5 && store.record.firstLaunchDate == start)
+        now = start.addingTimeInterval(8 * day)
+        await center.presentIfEligible()
+        #expect(!center.isPresented, "no moment of success yet")
+        center.recordSignificantEvent()
+        center.suppress("purchase")
+        await center.presentIfEligible()
+        #expect(!center.isPresented, "the app said not now")
+        center.resume("purchase")
+        await center.presentIfEligible()
+        #expect(center.isPresented && center.phase == .question)
+        #expect(store.record.lastAskedDate == now && store.record.lastAskedVersion == "1.0")
+
+        // Closed without an answer: counted, no review request, and the cool-down starts.
+        center.close()
+        center.sheetDidDismiss()
+        #expect(store.record.dismissals == 1 && reviewRequests == 0)
+        #expect(center.blockingReason == .coolingDown)
+
+        // "Not great" offers feedback when the build has it, else the support page, else only a thank-you.
+        await center.presentIfEligible(force: true)
+        center.answerNegative()
+        #expect(center.phase == .followUp && store.record.lastAnswer == .negative)
+        #expect(center.followUpActions == [.close])
+        let support = URL(string: "https://app.yutodev.com/apps/sample/support/")!
+        center.supportURL = support
+        #expect(center.followUpActions == [.openSupport(support), .close])
+        center.feedbackAvailable = true
+        #expect(center.followUpActions == [.sendFeedback, .close])
+        center.close()
+        center.sheetDidDismiss()
+        #expect(store.record.dismissals == 1 && reviewRequests == 0 && !store.record.stopped)
+
+        // Sent feedback stops the prompt.
+        await center.presentIfEligible(force: true)
+        center.answerNegative()
+        center.feedbackSent()
+        #expect(store.record.stopped && center.feedbackWasSent && reviewRequests == 0)
+
+        // "Good" closes the sheet first, then asks Apple once, and stops the prompt.
+        store.record.stopped = false
+        await center.presentIfEligible(force: true)
+        center.answerPositive()
+        #expect(!center.isPresented && reviewRequests == 0, "the request waits until the sheet has gone")
+        center.sheetDidDismiss()
+        #expect(reviewRequests == 1 && store.record.stopped && store.record.lastAnswer == .positive)
+        center.sheetDidDismiss()
+        #expect(reviewRequests == 1)
+        now = start.addingTimeInterval(400 * day)
+        await center.presentIfEligible()
+        #expect(!center.isPresented && center.blockingReason == .stopped)
+
+        // The forced launch argument exists only in Debug builds.
+        #if DEBUG
+        #expect(ReviewPromptCenter.forcesShow(arguments: ["App", "-ReviewPromptForceShow"]))
+        #else
+        #expect(!ReviewPromptCenter.forcesShow(arguments: ["App", "-ReviewPromptForceShow"]))
+        #endif
+        #expect(!ReviewPromptCenter.forcesShow(arguments: ["App"]))
+    }
+
+    private func localized(_ key: String, _ language: String) -> String? {
+        guard let url = Bundle.main.url(forResource: language, withExtension: "lproj"),
+              let bundle = Bundle(url: url) else { return nil }
+        let value = bundle.localizedString(forKey: key, value: nil, table: nil)
+        return value == key ? nil : value
+    }
+
+    func wordingIsNeutralInBothLanguages() throws {
+        let expected: [String: (en: String, ja: String)] = [
+            "review-prompt.question %@": ("How do you like %@?", "%@はどうですか？"),
+            "review-prompt.positive": ("Good", "良い"),
+            "review-prompt.negative": ("Not Great", "いまいち"),
+            "review-prompt.later": ("Not Now", "あとで"),
+            "review-prompt.feedback-invitation": ("If you like, tell us how we could make it better.", "よろしければ、改善のためにご意見をお聞かせください。"),
+            "review-prompt.support": ("Open Support Page", "サポートページを開く"),
+            "review-prompt.close": ("Close", "閉じる"),
+            "review-prompt.thanks": ("Thanks for letting us know.", "お答えいただきありがとうございました。")
+        ]
+        // Neither a rating nor anything in return is promised for an answer.
+        let promises = ["★", "☆", "星", "評価", "レビュー", "特典", "無料", "プレゼント", "ポイント", "クーポン", "お得",
+                        "rate", "rating", "review", "star", "reward", "free", "gift", "coupon", "bonus"]
+        for (key, value) in expected {
+            let english = try #require(localized(key, "en"), "\(key) en")
+            let japanese = try #require(localized(key, "ja"), "\(key) ja")
+            #expect(english == value.en && japanese == value.ja, "\(key)")
+            for text in [english.lowercased(), japanese] {
+                #expect(!promises.contains { text.contains($0) }, "\(key): \(text)")
+            }
+        }
+    }
+
+    func guidelineAndIdentifiersHold() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        // App Review Guideline 5.6.1 applies to review prompts: Apple's API only.
+        let map = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: root.appending(path: ".agents/skills/app-review-guidelines/guidelines.json"))
+        ) as? [String: Any]
+        let guidelines = try #require(map?["guidelines"] as? [[String: Any]])
+        let rule = try #require(guidelines.first { $0["id"] as? String == "5.6.1" })
+        #expect(rule["class"] as? String == "triggered")
+        #expect((rule["features"] as? [String])?.contains("review-prompts") == true)
+
+        // The prompt asks through `requestReview` and draws no rating of its own; and the new files name no
+        // template identifier, so Identity bootstrap needs nothing in them.
+        let module = String(reflecting: ReviewPromptCenter.self).split(separator: ".")[0]
+        let feature = root.appending(path: "\(module)/Features/ReviewPrompt")
+        let sources = try FileManager.default.contentsOfDirectory(at: feature, includingPropertiesForKeys: nil)
+        #expect(sources.count == 4)
+        var swift = ""
+        for file in sources + [root.appending(path: "\(module)UITests/ReviewPromptUITests.swift")] {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            #expect(!text.contains(module), "\(file.lastPathComponent)")
+            if file.pathExtension == "swift" { swift += text }
+        }
+        #expect(swift.contains("requestReview()"))
+        for custom in ["star.fill", "systemName: \"star", "write-review", "itms-apps"] {
+            #expect(!swift.contains(custom), "\(custom)")
+        }
+    }
+}
