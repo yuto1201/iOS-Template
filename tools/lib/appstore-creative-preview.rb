@@ -329,7 +329,7 @@ module AppStoreCreativePreview
 
   def probe(path)
     JSON.parse(capture!("ffprobe", "-v", "error", "-show_entries",
-      "stream=codec_type,codec_name,width,height,avg_frame_rate:format=duration", "-of", "json", path))
+      "stream=codec_type,codec_name,width,height,avg_frame_rate:format=duration,format_name", "-of", "json", path))
   end
 
   def frame_rate(stream)
@@ -466,6 +466,28 @@ module AppStoreCreativePreview
     (Date.parse(today) - Date.parse(ASSET_SPECS.fetch("checkedOn"))).to_i
   end
 
+  # Returns why a PNG is transparent, or nil: an alpha channel (color types 4 and 6) or a tRNS chunk,
+  # which gives palette, grey or RGB images transparency without an alpha channel.
+  def png_transparency(path)
+    File.open(path, "rb") do |file|
+      file.read(8)
+      loop do
+        header = file.read(8)
+        return nil unless header && header.bytesize == 8
+        length, type = header.unpack("Na4")
+        if type == "IHDR"
+          data = file.read(length)
+          return " (an alpha channel)" if [4, 6].include?(data.getbyte(9))
+          file.read(4)
+          next
+        end
+        return " (tRNS)" if type == "tRNS"
+        return nil if %w[IDAT IEND].include?(type)
+        file.seek(length + 4, IO::SEEK_CUR)
+      end
+    end
+  end
+
   # Checks one exported asset against the table, after checking that the table itself is recent.
   def check_assets(options)
     %w[kind file].each { |name| fail!("missing option: --#{name}") unless options.key?(name) }
@@ -485,8 +507,23 @@ module AppStoreCreativePreview
     problems = []
     extension = File.extname(path).delete_prefix(".").downcase
     problems << "format .#{extension} is not one of #{spec.fetch('formats').map { |item| ".#{item}" }.join(', ')}" unless spec.fetch("formats").include?(extension)
+    # The content must be what the name says: a PNG or JPEG image by its signature (and, for PNG, its
+    # chunks), or a MOV/MP4 video by its container, never only by the extension.
+    name = File.basename(path)
+    if spec.fetch("type") == "image"
+      head = File.binread(path, 8).to_s
+      png = head.start_with?("\x89PNG\r\n\x1A\n".b)
+      jpeg = head.start_with?("\xFF\xD8\xFF".b)
+      fail!("#{name} is not a PNG image") if extension == "png" && !png
+      fail!("#{name} is not a JPEG image") if %w[jpg jpeg].include?(extension) && !jpeg
+      problems << "the PNG has transparency#{png_transparency(path)}" if png && spec["alpha"] == false && png_transparency(path)
+    end
     info = probe(path)
-    video = info.fetch("streams").find { |stream| stream["codec_type"] == "video" } or fail!("asset #{File.basename(path)} has no image or video stream")
+    if spec.fetch("type") == "video"
+      container = info.dig("format", "format_name").to_s.split(",")
+      fail!("#{name} is not a MOV/MP4 video") unless container.include?("mov") || container.include?("mp4")
+    end
+    video = info.fetch("streams").find { |stream| stream["codec_type"] == "video" } or fail!("asset #{name} has no image or video stream")
     size = [video["width"], video["height"]]
     if spec["sizes"]
       problems << "size #{size.join('x')} is not one of #{spec['sizes'].map { |item| item.join('x') }.join(', ')}" unless spec["sizes"].include?(size)
@@ -498,10 +535,8 @@ module AppStoreCreativePreview
       end
     end
     if spec.fetch("type") == "image"
-      if extension == "png"
-        color = File.binread(path, 26).getbyte(25)
-        problems << "the PNG has an alpha channel" if [4, 6].include?(color) && spec["alpha"] == false
-      end
+      codec = video["codec_name"]
+      problems << "the image is encoded as #{codec}" unless %w[png mjpeg].include?(codec)
     else
       duration = Float(info.dig("format", "duration"))
       low, high = spec.fetch("seconds")

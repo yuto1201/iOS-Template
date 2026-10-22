@@ -348,12 +348,29 @@ check --kind screenshot-iphone --file "$sa/iphone.png" | jq -e '.status == "conf
 check --kind search-image --file "$sa/search.png" | jq -e '.status == "conforms"' >/dev/null || fail 'a conforming search image was refused'
 check --kind header-video --file "$hv/loop.mp4" | jq -e '.status == "conforms"' >/dev/null || fail 'a conforming header video was refused'
 expect_failure asset-old-size 'size 1320x2868 is not one of 1206x2622, 1179x2556, 2622x1206, 2556x1179' check --kind screenshot-iphone --file "$sa/old-iphone.png"
-expect_failure asset-alpha 'the PNG has an alpha channel' check --kind screenshot-iphone --file "$sa/alpha.png"
+expect_failure asset-alpha 'the PNG has transparency (an alpha channel)' check --kind screenshot-iphone --file "$sa/alpha.png"
 expect_failure asset-ratio 'size 2000x1280 is not 3:2 from 1920x1280 to 3840x2560' check --kind search-image --file "$sa/search-wide.png"
 expect_failure asset-format 'format .jpg is not one of .png' check --kind universal-image --file "$sa/universal.jpg"
 expect_failure asset-video 'does not meet the preview-iphone specification: size 3840x1646 is not one of 886x1920, 1920x886; duration 7.50s is outside 15 to 30 seconds' \
   check --kind preview-iphone --file "$hv/loop.mp4"
 expect_failure asset-kind 'unknown asset kind: banner' check --kind banner --file "$sa/header.png"
+# The content is checked, not only the name: a video renamed to .jpg, a JPEG renamed to .png, and a
+# palette PNG that is transparent through its tRNS chunk are refused.
+cp "$hv/loop.mp4" "$sa/video-as.jpg"
+expect_failure asset-video-as-jpg 'video-as.jpg is not a JPEG image' check --kind header-image --file "$sa/video-as.jpg"
+ffmpeg -y -loglevel error -f lavfi -i "color=c=0x336699:s=3840x1646" -frames:v 1 "$sa/jpeg.jpg"
+cp "$sa/jpeg.jpg" "$sa/jpeg-as.png"
+expect_failure asset-jpeg-as-png 'jpeg-as.png is not a PNG image' check --kind header-image --file "$sa/jpeg-as.png"
+check --kind header-image --file "$sa/jpeg.jpg" | jq -e '.status == "conforms"' >/dev/null || fail 'a conforming JPEG header was refused'
+ruby -rzlib -e '
+  width, height = 3840, 1646
+  chunk = ->(type, data) { [data.bytesize].pack("N") + type + data + [Zlib.crc32(type + data)].pack("N") }
+  rows = ("\x00".b + ("\x00".b * width)) * height
+  File.binwrite(ARGV[0], "\x89PNG\r\n\x1A\n".b + chunk.("IHDR", [width, height, 8, 3, 0, 0, 0].pack("N2C5")) +
+    chunk.("PLTE", [51, 102, 153].pack("C3")) + chunk.("tRNS", "\x00".b) + chunk.("IDAT", Zlib::Deflate.deflate(rows)) + chunk.("IEND", "".b))' "$sa/palette-trns.png"
+expect_failure asset-trns 'the PNG has transparency (tRNS)' check --kind header-image --file "$sa/palette-trns.png"
+cp "$sa/header.png" "$sa/still-as.mp4"
+expect_failure asset-still-as-mp4 'still-as.mp4 is not a MOV/MP4 video' check --kind header-video --file "$sa/still-as.mp4"
 # A table read more than maxAgeDays ago stops the check until Apple's pages are read again; the limit is a setting.
 expect_failure asset-stale 'the asset spec table was checked on 2026-10-22, 222 days ago (more than 90)' \
   "$tool" check-assets --today 2027-06-01 --kind header-image --file "$sa/header.png"

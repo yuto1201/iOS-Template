@@ -140,8 +140,9 @@ Before handing anything to `prepare-appstore-assets`, check each file:
 tools/appstore-creative-preview.sh check-assets --kind header-video --file goldie/header/header.mp4
 ```
 
-It refuses a file whose size, format, alpha, length, frame rate or codec is outside its
-kind, and stops when the table was read more than `maxAgeDays` (90) days ago
+It reads the content, not only the name (a PNG or JPEG signature, PNG transparency
+through an alpha channel or a `tRNS` chunk, a MOV/MP4 container), and refuses a file
+whose size, format, transparency, length, frame rate or codec is outside its kind, and stops when the table was read more than `maxAgeDays` (90) days ago
 (`--max-age-days` changes the limit for one run). Then read Apple's pages again, update the
 table and its `checkedOn` date in a change of its own, and check again. Apple changes these
 rules; a passing check is not a substitute for reading them before a real submission.
