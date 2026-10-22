@@ -31,17 +31,30 @@ module AppStoreCreativePreview
   REVISION_PATTERN = /\A[a-z0-9][a-z0-9-]{0,63}\z/
   DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
   REPO_ROOT = File.expand_path("../..", __dir__)
+  # D-085 (#391): App Store product page header video (Creative assets specifications, checked
+  # 2026-10-22): 21:9, 3840x1646, 30 or 60 fps, 5 to 30 seconds, .mov/.m4v/.mp4; it always loops and is
+  # muted by default. The safe area is the one the render extension measured from Apple's template.
+  HEADER = {"width" => 3840, "height" => 1646}.freeze
+  HEADER_FPS = [30, 60].freeze
+  HEADER_SECONDS = (5.0..30.0).freeze
+  HEADER_SAFE_AREA = {"x" => 1097, "y" => 493, "width" => 1646, "height" => 661}.freeze
+  HEADER_CROSSFADE = 0.5
+  # Mean absolute difference (0-255) between the first and last frames, downscaled 10x, above which the
+  # loop visibly jumps.
+  HEADER_SEAM_THRESHOLD = 6.0
 
   class Failure < StandardError; end
 
   module_function
 
   def run(argv)
-    command = argv.shift or fail!("command is required: encode or decide")
+    command = argv.shift or fail!("command is required: encode, decide, encode-header or verify-header")
     options = parse_options(argv)
     value = case command
             when "encode" then encode(options)
             when "decide" then decide(options)
+            when "encode-header" then encode_header(options)
+            when "verify-header" then verify_header_command(options)
             else fail!("unknown command: #{command}")
             end
     puts JSON.generate(value)
@@ -273,6 +286,141 @@ module AppStoreCreativePreview
     fail!("encoded preview breaks the preview format: #{problems.join('; ')}") unless problems.empty?
     {"width" => video["width"], "height" => video["height"], "codec" => "h264", "fps" => FPS,
      "durationSeconds" => duration.round(3), "audioCodec" => audio["codec_name"], "bytes" => File.size(path)}
+  end
+
+  # --- product page header video (D-085, #391) -----------------------------------------------------
+
+  def probe(path)
+    JSON.parse(capture!("ffprobe", "-v", "error", "-show_entries",
+      "stream=codec_type,codec_name,width,height,avg_frame_rate:format=duration", "-of", "json", path))
+  end
+
+  def frame_rate(stream)
+    numerator, denominator = stream.fetch("avg_frame_rate").split("/").map(&:to_f)
+    denominator.to_f.positive? ? numerator / denominator : 0.0
+  end
+
+  # Places a recording (or nothing, for a still header) on a rendered header background and writes a
+  # silent H.264 loop. By default the last half second crossfades into the start, so the loop has no jump.
+  def encode_header(options)
+    %w[background output].each { |name| fail!("missing option: --#{name}") unless options.key?(name) }
+    unknown = options.keys - %w[background output clip screen seconds fps loop seam-threshold screen-role]
+    fail!("unknown option: --#{unknown.first}") unless unknown.empty?
+    background = regular!(File.expand_path(options.fetch("background")), "header background")
+    output = File.expand_path(options.fetch("output"))
+    fail!("output already exists and is never replaced: #{output}") if File.exist?(output) || File.symlink?(output)
+    fail!("header output must be .mp4, .mov or .m4v") unless %w[.mp4 .mov .m4v].include?(File.extname(output).downcase)
+    fps = Integer(options.fetch("fps", "30"), 10)
+    fail!("header fps must be 30 or 60") unless HEADER_FPS.include?(fps)
+    loop_mode = options.fetch("loop", "crossfade")
+    fail!("--loop must be crossfade or none") unless %w[crossfade none].include?(loop_mode)
+    still = probe(background).fetch("streams").find { |stream| stream["codec_type"] == "video" } or fail!("header background is not an image")
+    unless [still["width"], still["height"]] == HEADER.values_at("width", "height")
+      fail!("header background is #{still['width']}x#{still['height']}; a product page header is 3840x1646")
+    end
+    filter = nil
+    inputs = ["-loop", "1", "-framerate", fps.to_s, "-i", background]
+    if options.key?("clip")
+      clip = regular!(File.expand_path(options.fetch("clip")), "header clip")
+      info = probe(clip)
+      video = info.fetch("streams").find { |stream| stream["codec_type"] == "video" } or fail!("header clip has no video")
+      length = Float(info.dig("format", "duration"))
+      fade = loop_mode == "crossfade" ? HEADER_CROSSFADE : 0.0
+      seconds = (length - fade).round(3)
+      unless HEADER_SECONDS.cover?(seconds)
+        fail!(format("the header video would run %.2f seconds; a product page header runs 5 to 30 seconds", seconds))
+      end
+      screen = (options["screen"] or fail!("--clip needs --screen x,y,width as fractions of the header")).split(",").map { |part| Float(part) }
+      fail!("--screen must be x,y,width") unless screen.length == 3 && screen[2].positive?
+      width = (screen[2] * HEADER["width"] / 2).round * 2
+      height = (width * video.fetch("height").to_f / video.fetch("width") / 2).round * 2
+      x = (screen[0] * HEADER["width"]).round
+      y = (screen[1] * HEADER["height"]).round
+      role = options.fetch("screen-role", "focal")
+      fail!("--screen-role must be focal or decoration") unless %w[focal decoration].include?(role)
+      area = HEADER_SAFE_AREA
+      if role == "focal" && !(x >= area["x"] && y >= area["y"] && x + width <= area["x"] + area["width"] && y + height <= area["y"] + area["height"])
+        fail!("the clip on the header runs outside the safe area (#{area['x']},#{area['y']} #{area['width']}x#{area['height']}); move or shrink it")
+      end
+      inputs += ["-i", clip]
+      scaled = "[1:v]fps=#{fps},scale=#{width}:#{height},setsar=1"
+      filter = if fade.positive?
+                 "#{scaled},split[s1][s2];[s1]trim=start=#{fade},setpts=PTS-STARTPTS[a];[s2]trim=end=#{fade},setpts=PTS-STARTPTS[b];" \
+                   "[a][b]xfade=transition=fade:duration=#{fade}:offset=#{(length - 2 * fade).round(3)}[c];" \
+                   "[0:v]fps=#{fps}[bg];[bg][c]overlay=#{x}:#{y}:shortest=1,format=yuv420p[v]"
+               else
+                 "#{scaled}[c];[0:v]fps=#{fps}[bg];[bg][c]overlay=#{x}:#{y}:shortest=1,format=yuv420p[v]"
+               end
+    else
+      seconds = Float(options["seconds"] || fail!("a still header needs --seconds"))
+      fail!(format("the header video would run %.2f seconds; a product page header runs 5 to 30 seconds", seconds)) unless HEADER_SECONDS.cover?(seconds)
+      filter = "[0:v]fps=#{fps},format=yuv420p[v]"
+    end
+    FileUtils.mkdir_p(File.dirname(output))
+    # The video is made in a directory this run creates, published with a hard link (which refuses an
+    # existing destination), and only that directory is removed: nothing else beside the output is touched.
+    work = Dir.mktmpdir(".encode-header-", File.dirname(output))
+    begin
+      staging = File.join(work, "header#{File.extname(output)}")
+      capture!("ffmpeg", "-loglevel", "error", *inputs, "-filter_complex", filter, "-map", "[v]", "-t", seconds.to_s,
+        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", fps.to_s,
+        "-movflags", "+faststart", staging)
+      result = verify_header(staging, fps, Float(options.fetch("seam-threshold", HEADER_SEAM_THRESHOLD.to_s)))
+      begin
+        File.link(staging, output)
+      rescue Errno::EEXIST
+        fail!("output already exists and is never replaced: #{output}")
+      end
+      result.merge("status" => "encoded", "output" => output, "sha256" => sha256(output), "loop" => loop_mode,
+                   "backgroundSha256" => sha256(background), "clipSha256" => options.key?("clip") ? sha256(File.expand_path(options["clip"])) : nil)
+    ensure
+      FileUtils.rm_rf(work)
+    end
+  end
+
+  def raw_frame(arguments)
+    data = capture!("ffmpeg", "-loglevel", "error", *arguments, "-vf", "scale=384:164", "-f", "rawvideo", "-pix_fmt", "rgb24", "-")
+    frame = 384 * 164 * 3
+    fail!("could not read a frame of the header video") if data.bytesize < frame
+    data.byteslice(data.bytesize - frame, frame)
+  end
+
+  # Checks a header video against the format and the loop seam: the first and last frames must match.
+  def verify_header(path, fps = nil, threshold = HEADER_SEAM_THRESHOLD)
+    regular!(path, "header video")
+    info = probe(path)
+    video = info.fetch("streams").find { |stream| stream["codec_type"] == "video" } or fail!("header video has no video")
+    audio = info.fetch("streams").any? { |stream| stream["codec_type"] == "audio" }
+    duration = Float(info.dig("format", "duration"))
+    rate = frame_rate(video)
+    problems = []
+    problems << "size #{video['width']}x#{video['height']} is not 3840x1646" unless [video["width"], video["height"]] == HEADER.values_at("width", "height")
+    problems << "codec #{video['codec_name']} is not h264" unless video["codec_name"] == "h264"
+    actual_fps = HEADER_FPS.find { |value| (rate - value).abs < 0.01 }
+    problems << format("frame rate %.2f is not 30 or 60", rate) unless actual_fps
+    problems << format("frame rate %.2f is not the requested %d", rate, fps) if fps && actual_fps && actual_fps != fps
+    problems << format("duration %.2fs is outside 5 to 30 seconds", duration) unless HEADER_SECONDS.cover?(duration.round(2))
+    problems << "it has an audio track; a header is silent by default" if audio
+    fail!("header video breaks the header format: #{problems.join('; ')}") unless problems.empty?
+    first = raw_frame(["-i", path, "-frames:v", "1"])
+    last = raw_frame(["-sseof", "-0.5", "-i", path])
+    total = 0
+    first.bytesize.times { |index| total += (first.getbyte(index) - last.getbyte(index)).abs }
+    seam = (total.to_f / first.bytesize).round(2)
+    if seam > threshold
+      fail!(format("the loop seam differs by %.2f between the first and last frames; at most %.2f", seam, threshold))
+    end
+    {"width" => video["width"], "height" => video["height"], "codec" => "h264", "fps" => actual_fps,
+     "durationSeconds" => duration.round(3), "audio" => false, "seam" => seam, "safeArea" => HEADER_SAFE_AREA}
+  end
+
+  def verify_header_command(options)
+    fail!("missing option: --video") unless options.key?("video")
+    unknown = options.keys - %w[video seam-threshold]
+    fail!("unknown option: --#{unknown.first}") unless unknown.empty?
+    path = File.expand_path(options.fetch("video"))
+    verify_header(path, nil, Float(options.fetch("seam-threshold", HEADER_SEAM_THRESHOLD.to_s)))
+      .merge("status" => "valid", "video" => path, "sha256" => sha256(path))
   end
 
   # --- decide --------------------------------------------------------------------------------------

@@ -98,6 +98,29 @@ magnified piece of UI leaving the device), `mascot`, `hands`, `cross-tile-art`,
 logo. The URLs stay in the record; the sheet shows only the apps, sites and techniques.
 Keep the record with the revision under `.artifacts/store-creative/`, outside Git.
 
+## Header sheet
+
+A product page header (D-085, see [extension](extension.md#product-page-header-d-085)) is
+chosen on its own sheet. Show two to six options; "no header" is always offered:
+
+```json
+{
+  "schemaVersion": 1, "kind": "header", "app": "花島", "title": "ヘッダーの提案",
+  "options": [
+    {"id": "A", "title": "庭の世界", "hypothesis": "雨上がりの庭で世界観を伝える。", "tradeoffs": "機能は伝わりにくい。",
+     "image": "../../goldie/header/a.png", "video": "../../goldie/header/a.mp4"},
+    {"id": "B", "title": "画面が主役", "hypothesis": "揺れる花の画面を大きく見せる。", "tradeoffs": "世界観が弱い。",
+     "image": "../../goldie/header/b.png"}
+  ]
+}
+```
+
+`image` is the 3840×1646 PNG header still (`render-header`); `video` is the optional loop
+(`encode-header`), recorded by SHA-256 and played from the local file, since the page
+embeds no video. Record the choice with `select --pattern <ID>` or `select --pattern none`;
+`selection.json` keeps the option's image and video SHA-256, or `no-header`, with
+`user-explicit`, once.
+
 ## Material sheet
 
 Generated material is shown to the user before any pattern uses it (D-085). Write a

@@ -43,6 +43,12 @@ module AppStoreCreativeSheet
   # D-085 (#393): generated materials are shown on a `material` sheet and used only after the user
   # adopts each one; a cut-out material must have a transparent background and no key-color residue.
   MATERIAL_KIND = "material"
+  # D-085 (#391): a header sheet compares product page header options (a 3840x1646 still, with its loop
+  # video when there is one); "none" (no header) is always a valid choice.
+  HEADER_KIND = "header"
+  HEADER_OPTIONS = (2..6).freeze
+  HEADER_SIZE = [3840, 1646].freeze
+  NO_HEADER = "none"
   MATERIAL_COUNT = (1..60).freeze
   MATERIAL_DECISIONS = %w[adopted rejected].freeze
   CUTOUT_EDGE = 2
@@ -136,6 +142,9 @@ module AppStoreCreativeSheet
     root = File.expand_path(options.fetch("root"))
     if parsed.is_a?(Hash) && parsed["kind"] == MATERIAL_KIND
       return build_material(validate_material_spec(parsed, File.dirname(spec_path)), spec_bytes, root, revision, max_dimension)
+    end
+    if parsed.is_a?(Hash) && parsed["kind"] == HEADER_KIND
+      return build_header(validate_header_spec(parsed, File.dirname(spec_path)), spec_bytes, root, revision, max_dimension)
     end
     spec = validate_spec(parsed, File.dirname(spec_path))
 
@@ -1279,6 +1288,144 @@ module AppStoreCreativeSheet
     {"status" => "valid", "images" => images.length}
   end
 
+  # --- header sheets (D-085, #391) -----------------------------------------------------------------
+
+  def validate_header_spec(spec, base)
+    object!(spec, "header definition", %w[schemaVersion kind app title options], %w[brief])
+    fail!("header definition schemaVersion must be #{SCHEMA_VERSION}") unless spec["schemaVersion"] == SCHEMA_VERSION
+    %w[app title].each { |key| text!(spec[key], key, required: true) }
+    text!(spec["brief"], "brief", required: false)
+    options = spec["options"]
+    unless options.is_a?(Array) && HEADER_OPTIONS.cover?(options.length)
+      fail!("a header sheet compares two to six header options; found #{options.is_a?(Array) ? options.length : 0}")
+    end
+    validated = options.map do |option|
+      object!(option, "header option", %w[id title hypothesis tradeoffs image], %w[video])
+      id = option["id"]
+      fail!("header option id is invalid: #{id.inspect}") unless id.is_a?(String) && id.match?(ID_PATTERN)
+      fail!("header option id #{NO_HEADER} is reserved for no header") if id.downcase == NO_HEADER
+      %w[title hypothesis tradeoffs].each { |key| text!(option[key], "#{id}.#{key}", required: true) }
+      image = File.expand_path(option["image"].to_s, base)
+      fail!("header option #{id} image must be a regular file: #{image}") unless File.file?(image) && !File.symlink?(image)
+      header = File.binread(image, 33).to_s
+      unless header.start_with?("\x89PNG\r\n\x1A\n".b) && [header[16, 4].unpack1("N"), header[20, 4].unpack1("N")] == HEADER_SIZE
+        fail!("header option #{id} image is not a 3840x1646 PNG header")
+      end
+      video = nil
+      if option["video"]
+        video = File.expand_path(option["video"], base)
+        read_regular(video, "header option #{id} video")
+        fail!("header option #{id} video must be .mp4, .mov or .m4v") unless %w[.mp4 .mov .m4v].include?(File.extname(video).downcase)
+      end
+      option.merge("source" => image, "videoSource" => video)
+    end
+    ids = validated.map { |option| option.fetch("id") }
+    fail!("header option ids must be unique") unless ids.uniq.length == ids.length
+    spec.merge("options" => validated)
+  end
+
+  def header_display(spec, revision, images)
+    {"schemaVersion" => SCHEMA_VERSION, "revision" => revision, "kind" => HEADER_KIND,
+     "options" => spec.fetch("options").map do |option|
+       {"id" => option.fetch("id"), "sha256" => images.fetch(option.fetch("source")).fetch("sha256"),
+        "videoSha256" => option["videoSource"] ? "sha256:#{Digest::SHA256.file(option['videoSource']).hexdigest}" : nil}
+     end}
+  end
+
+  def build_header(spec, spec_bytes, root, revision, max_dimension)
+    FileUtils.mkdir_p(root, mode: 0o700)
+    destination = File.join(root, revision)
+    fail!("revision already exists and is never replaced: #{revision}") if File.exist?(destination) || File.symlink?(destination)
+    staging = Dir.mktmpdir(".#{revision}.", root)
+    begin
+      images = {}
+      spec.fetch("options").each { |option| images[option.fetch("source")] ||= embed_image(option.fetch("source"), max_dimension, staging) }
+      display = header_display(spec, revision, images)
+      h = ->(text) { CGI.escapeHTML(text.to_s) }
+      sections = spec.fetch("options").zip(display.fetch("options")).map do |option, shown|
+        video = shown["videoSha256"] ? %(<p class="meta">ループ動画あり（#{h.(File.basename(option['videoSource']))}、#{h.(shown['videoSha256'][0, 19])}…）。動画は手元のファイルで再生して確かめてください。</p>) : %(<p class="meta">静止画のみ</p>)
+        <<~SECTION
+          <section class="pattern"><h2><span class="badge">#{h.(option.fetch('id'))}</span> #{h.(option.fetch('title'))}</h2>
+          <dl><dt>狙い</dt><dd>#{h.(option.fetch('hypothesis'))}</dd><dt>弱点</dt><dd>#{h.(option.fetch('tradeoffs'))}</dd></dl>
+          <figure class="header"><img src="#{images.fetch(option.fetch('source')).fetch('dataUri')}" alt="#{h.(option.fetch('id'))}"></figure>
+          #{video}
+          </section>
+        SECTION
+      end.join
+      brief = spec["brief"] ? %(<p class="brief">#{h.(spec['brief'])}</p>) : ""
+      html = <<~HTML
+        <!doctype html>
+        <html lang="ja">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="Content-Security-Policy" content="#{CONTENT_SECURITY_POLICY}">
+        <meta name="#{DISPLAY_RECORD_META}" content="#{Base64.strict_encode64(JSON.generate(display))}">
+        <title>#{h.(spec.fetch('title'))}</title>
+        <style>
+        :root { color-scheme: light dark; --bg: #f6f5f2; --fg: #1d1d1f; --muted: #5b5b60; --card: #ffffff; --line: #d9d7d2; }
+        @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #f2f2f4; --muted: #a8a8ae; --card: #212124; --line: #3a3a3e; } }
+        body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg); font: 15px/1.6 -apple-system, "Hiragino Sans", sans-serif; }
+        header, section { max-width: 1200px; margin: 0 auto 24px; }
+        .meta { color: var(--muted); font-size: 13px; }
+        .brief, .pattern { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+        .badge { display: inline-block; min-width: 2em; text-align: center; border-radius: 8px; background: var(--fg); color: var(--bg); padding: 0 8px; }
+        dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; } dt { color: var(--muted); }
+        .header { margin: 0; } .header img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); }
+        </style>
+        </head>
+        <body>
+        <header>
+        <h1>#{h.(spec.fetch('title'))}</h1>
+        <p class="meta">#{h.(spec.fetch('app'))} ・ プロダクトページヘッダー ・ revision #{h.(revision)}</p>
+        #{brief}
+        <p class="meta">ヘッダーの案IDを1つ選ぶか、「ヘッダーなし」（none）を選んでください。ヘッダーはiOS 27とiPadOS 27で表示され、機種と向きで切り取られ方が変わります。公開前にApp Store ConnectのPreview toolで確かめます。</p>
+        </header>
+        #{sections}
+        <section class="pattern"><h2><span class="badge">none</span> ヘッダーなし</h2><p class="meta">プロダクトページヘッダーを使いません。</p></section>
+        </body>
+        </html>
+      HTML
+      File.binwrite(File.join(staging, "sheet.html"), html)
+      record = {
+        "schemaVersion" => SCHEMA_VERSION, "revision" => revision, "kind" => HEADER_KIND,
+        "sheetSha256" => "sha256:#{Digest::SHA256.hexdigest(html)}",
+        "definitionSha256" => "sha256:#{Digest::SHA256.hexdigest(spec_bytes)}", "builtAt" => Time.now.utc.iso8601,
+        "options" => display.fetch("options").zip(spec.fetch("options")).map { |shown, option| shown.merge("source" => option.fetch("source"), "videoSource" => option["videoSource"]) }
+      }
+      File.binwrite(File.join(staging, "sheet.json"), "#{JSON.pretty_generate(record)}\n")
+      Dir.children(staging).each { |name| File.unlink(File.join(staging, name)) if name.start_with?(".thumb-") }
+      File.rename(staging, destination)
+      staging = nil
+      {"status" => "built", "revision" => revision, "sheet" => File.join(destination, "sheet.html"), "sheetSha256" => record.fetch("sheetSha256")}
+    ensure
+      FileUtils.rm_rf(staging) if staging
+    end
+  end
+
+  # The user chooses one header option or no header; the choice is checked against the displayed page and
+  # recorded once.
+  def select_header(directory, options)
+    fail!("a header sheet takes --pattern <option ID> or --pattern none") if options.key?("tiles")
+    record, displayed, actual = verified_sheet(directory)
+    listed = {"schemaVersion" => record["schemaVersion"], "revision" => record["revision"], "kind" => record["kind"],
+              "options" => (record["options"] || []).map { |option| option.slice("id", "sha256", "videoSha256") }}
+    fail!("sheet.json differs from the displayed sheet") unless listed == displayed
+    target = File.join(directory, "selection.json")
+    fail!("a selection is already recorded for this sheet and is never replaced") if File.exist?(target) || File.symlink?(target)
+    choice = options.fetch("pattern")
+    selection = if choice == NO_HEADER
+                  {"type" => "no-header"}
+                else
+                  option = displayed.fetch("options").find { |item| item.fetch("id") == choice } or fail!("unknown header option id: #{choice}")
+                  {"type" => "header", "optionId" => choice, "sha256" => option.fetch("sha256"), "videoSha256" => option["videoSha256"]}
+                end
+    value = {"schemaVersion" => SCHEMA_VERSION, "revision" => record.fetch("revision"), "sheetSha256" => actual,
+             "selection" => selection, "decision" => "user-explicit", "recordedAt" => Time.now.utc.iso8601}
+    File.open(target, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |file| file.write("#{JSON.pretty_generate(value)}\n") }
+    {"status" => "selected", "selection" => target, "type" => selection.fetch("type")}
+  end
+
   # --- select --------------------------------------------------------------------------------------
 
   def select(options)
@@ -1289,6 +1436,7 @@ module AppStoreCreativeSheet
     directory = File.expand_path(options.fetch("sheet"))
     record = JSON.parse(read_regular(File.join(directory, "sheet.json"), "sheet record"))
     fail!("a material sheet takes review --adopt/--reject, not select") if record["kind"] == MATERIAL_KIND
+    return select_header(directory, options) if record["kind"] == HEADER_KIND
     html = read_regular(File.join(directory, "sheet.html"), "sheet")
     actual = "sha256:#{Digest::SHA256.hexdigest(html)}"
     fail!("sheet.html differs from the sheet record") unless record["sheetSha256"].is_a?(String) &&

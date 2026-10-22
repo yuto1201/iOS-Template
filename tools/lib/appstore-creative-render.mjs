@@ -12,7 +12,7 @@
 // one sentence across tiles, and a mark for tiles with more visual layers than the guide.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -571,6 +571,198 @@ function parse(argv) {
   return { command, options };
 }
 
+// --- D-085 (#391) product page header ----------------------------------------------------------------
+
+// App Store product page header: 21:9, 3840x1646, opaque (Creative assets specifications). The art safe
+// area was measured from the "Art Safe Area" layer of Apple's official Photoshop template; text, logos and
+// the focal point stay inside it, which also keeps them clear of the back and share buttons in the top
+// corners.
+export const HEADER = { width: 3840, height: 1646 };
+export const HEADER_SAFE_AREA = {
+  x: 1097, y: 493, width: 1646, height: 661,
+  source: {
+    template: "creative_assets-product_page_header_template-static.psd (layer Art Safe Area)",
+    url: "https://devimages-cdn.apple.com/design/resources/download/app-store/creative_assets-product_page_header_template-static.psd",
+    checkedOn: "2026-10-22"
+  }
+};
+// The top corners hold the back and share buttons; no protected layer may sit there. Apple gives no
+// numbers for them, so these are the tool's margins (fractions of the header); check in the Preview tool.
+export const HEADER_CLEAR_CORNERS = { width: 0.12, height: 0.2 };
+export const HEADER_PROTECTED_ROLES = ["headline", "logo", "focal", "app-name", "claim", "key-number", "face"];
+
+function headerSafeArea(value) {
+  if (value === undefined) return HEADER_SAFE_AREA;
+  if (!value || typeof value !== "object") fail("safeArea must be an object");
+  for (const key of ["x", "y", "width", "height"]) {
+    if (!Number.isInteger(value[key]) || value[key] < 0) fail(`safeArea ${key} must be a non-negative integer in header pixels`);
+  }
+  // A safe area is only as good as where it was measured: it must name the official template it came from.
+  const source = value.source;
+  if (!source || typeof source !== "object" || ["template", "url", "checkedOn"].some((key) => typeof source[key] !== "string" || !source[key].trim())) {
+    fail("safeArea needs source: the official template, its URL and the date it was checked");
+  }
+  if (!/^https:\/\/(devimages-cdn\.apple\.com|developer\.apple\.com)\//.test(source.url)) fail("safeArea source url must be an Apple developer URL");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(source.checkedOn)) fail("safeArea source checkedOn must be a YYYY-MM-DD date");
+  if (value.x + value.width > HEADER.width || value.y + value.height > HEADER.height || value.width === 0 || value.height === 0) {
+    fail("safeArea must lie inside the 3840x1646 header");
+  }
+  return { x: value.x, y: value.y, width: value.width, height: value.height, source: { ...source } };
+}
+
+function inside(box, area) {
+  return box.left >= area.x - 0.5 && box.top >= area.y - 0.5 && box.right <= area.x + area.width + 0.5 && box.bottom <= area.y + area.height + 0.5;
+}
+
+function rotatedBox(left, top, width, height, rotate) {
+  const angle = ((rotate ?? 0) * Math.PI) / 180;
+  const w = Math.abs(width * Math.cos(angle)) + Math.abs(height * Math.sin(angle));
+  const h = Math.abs(width * Math.sin(angle)) + Math.abs(height * Math.cos(angle));
+  const cx = left + width / 2;
+  const cy = top + height / 2;
+  return { left: cx - w / 2, right: cx + w / 2, top: cy - h / 2, bottom: cy + h / 2 };
+}
+
+// Renders a header still from a header spec: a background (#RRGGBB or an image that covers the header),
+// image layers and text, all placed by fractions of the header. Text and every layer with a protected
+// role must lie inside the safe area and outside the clear corners, or nothing is written.
+export async function renderHeader({ runtime, spec: specPath, out }) {
+  const { root } = await loadGoldie(runtime);
+  const { createCanvas, loadImage } = createRequire(join(root, "package.json"))("@napi-rs/canvas");
+  const specFile = resolve(specPath);
+  const spec = JSON.parse(readFileSync(specFile, "utf8"));
+  if (!spec || spec.schemaVersion !== 1) fail("header spec schemaVersion must be 1");
+  const unknown = Object.keys(spec).filter((key) => !["schemaVersion", "background", "layers", "texts", "safeArea"].includes(key));
+  if (unknown.length) fail(`unknown header spec field: ${unknown[0]}`);
+  const base = dirname(specFile);
+  const area = headerSafeArea(spec.safeArea);
+  const corners = [
+    { left: 0, top: 0, right: HEADER_CLEAR_CORNERS.width * HEADER.width, bottom: HEADER_CLEAR_CORNERS.height * HEADER.height },
+    { left: (1 - HEADER_CLEAR_CORNERS.width) * HEADER.width, top: 0, right: HEADER.width, bottom: HEADER_CLEAR_CORNERS.height * HEADER.height }
+  ];
+  const overlapsCorner = (box) => corners.some((corner) => box.left < corner.right && box.right > corner.left && box.top < corner.bottom && box.bottom > corner.top);
+  const output = resolve(out);
+  const recordPath = `${output}.json`;
+  // Neither the image nor its record replaces anything, and symlinks count as existing.
+  const present = (path) => { try { lstatSync(path); return true; } catch { return false; } };
+  if (present(output)) fail(`header output already exists and is never replaced: ${output}`);
+  if (present(recordPath)) fail(`header record already exists and is never replaced: ${recordPath}`);
+  const canvas = createCanvas(HEADER.width, HEADER.height);
+  const ctx = canvas.getContext("2d");
+  let background;
+  if (typeof spec.background === "string") {
+    if (!HEX.test(spec.background)) fail("header background must be #RRGGBB or { image }");
+    ctx.fillStyle = spec.background;
+    ctx.fillRect(0, 0, HEADER.width, HEADER.height);
+    background = { color: spec.background.toUpperCase() };
+  } else if (spec.background && typeof spec.background.image === "string") {
+    const src = resolve(base, spec.background.image);
+    if (!existsSync(src)) fail(`header background image not found: ${src}`);
+    const image = await loadImage(src);
+    const scale = Math.max(HEADER.width / image.width, HEADER.height / image.height);
+    const sw = HEADER.width / scale;
+    const sh = HEADER.height / scale;
+    ctx.drawImage(image, (image.width - sw) / 2, (image.height - sh) / 2, sw, sh, 0, 0, HEADER.width, HEADER.height);
+    background = { image: src, sha256: sha256(src) };
+  } else {
+    fail("header background must be #RRGGBB or { image }");
+  }
+  const layers = [];
+  for (const [index, layer] of (spec.layers ?? []).entries()) {
+    const label = `header layer ${index + 1}`;
+    if (!layer || typeof layer.src !== "string") fail(`${label} needs src`);
+    const src = resolve(base, layer.src);
+    if (!existsSync(src)) fail(`${label} image not found: ${src}`);
+    const size = pngSize(src);
+    const place = placement(layer, label, {});
+    const rotate = layer.rotate === undefined ? 0 : number(layer.rotate, `${label} rotate`, { min: -180, max: 180 });
+    const role = layer.role ?? "decoration";
+    const width = place.width * HEADER.width;
+    const height = width * size.height / size.width;
+    const left = place.x * HEADER.width;
+    const top = place.y * HEADER.height;
+    const box = rotatedBox(left, top, width, height, rotate);
+    if (HEADER_PROTECTED_ROLES.includes(role)) {
+      if (!inside(box, area)) fail(`${label} is marked ${role} and runs outside the safe area`);
+      if (overlapsCorner(box)) fail(`${label} is marked ${role} and sits in a top corner under the buttons`);
+    }
+    const image = await loadImage(src);
+    ctx.save();
+    if (layer.shadow) {
+      ctx.shadowColor = "rgba(0, 0, 0, 0.28)";
+      ctx.shadowBlur = Math.round(HEADER.height * 0.02);
+      ctx.shadowOffsetY = Math.round(HEADER.height * 0.008);
+    }
+    ctx.translate(left + width / 2, top + height / 2);
+    if (rotate) ctx.rotate((rotate * Math.PI) / 180);
+    ctx.drawImage(image, -width / 2, -height / 2, width, height);
+    ctx.restore();
+    layers.push({ index: index + 1, src, sha256: sha256(src), role, box });
+  }
+  const texts = [];
+  for (const [index, entry] of (spec.texts ?? []).entries()) {
+    const label = `header text ${index + 1}`;
+    if (!entry || typeof entry.text !== "string" || !entry.text.trim()) fail(`${label} needs text`);
+    const place = placement({ width: 1, ...entry }, label, {});
+    const size = number(entry.size ?? 0.08, `${label} size`, { min: 0.01, max: 0.5 }) * HEADER.height;
+    const color = entry.color ?? "#111111";
+    if (!HEX.test(color)) fail(`${label} color must be #RRGGBB`);
+    const font = entry.font ?? "Hiragino Sans";
+    if (typeof font !== "string" || !/^[A-Za-z0-9 .'-]{1,64}$/.test(font)) fail(`${label} font must be a family name`);
+    const weight = entry.weight ?? 700;
+    const align = entry.align ?? "left";
+    if (!["left", "center", "right"].includes(align)) fail(`${label} align must be left, center or right`);
+    ctx.save();
+    ctx.font = `${weight} ${Math.round(size)}px "${font}"`;
+    ctx.fillStyle = color;
+    ctx.textBaseline = "top";
+    ctx.textAlign = align;
+    const lines = entry.text.split("\n");
+    const width = Math.max(...lines.map((line) => ctx.measureText(line).width));
+    const height = lines.length * size * 1.2;
+    const x = place.x * HEADER.width;
+    const left = align === "left" ? x : align === "center" ? x - width / 2 : x - width;
+    const box = { left, right: left + width, top: place.y * HEADER.height, bottom: place.y * HEADER.height + height };
+    // Text is always protected: it must read on every device crop.
+    if (!inside(box, area)) fail(`${label} runs outside the safe area`);
+    if (overlapsCorner(box)) fail(`${label} sits in a top corner under the buttons`);
+    lines.forEach((line, row) => ctx.fillText(line, x, box.top + row * size * 1.2));
+    ctx.restore();
+    texts.push({ index: index + 1, text: entry.text, box });
+  }
+  // Work files live in a directory this run creates; the results are published with link(), which
+  // refuses an existing destination, and the directory is removed afterwards.
+  const work = mkdtempSync(join(dirname(output), ".render-header-"));
+  try {
+    const rgba = join(work, "header.rgba.png");
+    const rgb = join(work, "header.png");
+    writeFileSync(rgba, await canvas.encode("png"));
+    execFileSync("ffmpeg", ["-loglevel", "error", "-i", rgba, "-vf", "format=rgb24", "-frames:v", "1", rgb], { stdio: ["ignore", "ignore", "inherit"] });
+    const size = pngSize(rgb);
+    if (size.width !== HEADER.width || size.height !== HEADER.height || size.colorType !== 2) fail(`${output} is not an opaque 3840x1646 header`);
+    const record = { schemaVersion: 1, kind: "product-page-header", output, sha256: sha256(rgb), width: size.width, height: size.height,
+      safeArea: area, clearCorners: HEADER_CLEAR_CORNERS, background, layers, texts };
+    const recordFile = join(work, "header.json");
+    writeFileSync(recordFile, `${JSON.stringify(record, null, 2)}\n`);
+    try {
+      linkSync(rgb, output);
+    } catch (error) {
+      if (error.code === "EEXIST") fail(`header output already exists and is never replaced: ${output}`);
+      throw error;
+    }
+    try {
+      linkSync(recordFile, recordPath);
+    } catch (error) {
+      unlinkSync(output); // the image this run just published, never anything else
+      if (error.code === "EEXIST") fail(`header record already exists and is never replaced: ${recordPath}`);
+      throw error;
+    }
+    return record;
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
 async function main(argv) {
   const { command, options } = parse(argv);
   const runtime = options.runtime ?? process.env.GOLDIE_RUNTIME ?? defaultRuntime();
@@ -585,7 +777,16 @@ async function main(argv) {
     if (unknown.length) fail(`unknown option: --${unknown[0]}`);
     return render({ runtime, config: options.config, device: options.device, locale: options.locale });
   }
-  fail("command is required: render or describe");
+  if (command === "render-header") {
+    for (const name of ["spec", "out"]) if (!options[name]) fail(`missing option: --${name}`);
+    const unknown = Object.keys(options).filter((name) => !["spec", "out", "runtime"].includes(name));
+    if (unknown.length) fail(`unknown option: --${unknown[0]}`);
+    return renderHeader({ runtime, spec: options.spec, out: options.out });
+  }
+  if (command === "describe-header") {
+    return { header: HEADER, safeArea: HEADER_SAFE_AREA, clearCorners: HEADER_CLEAR_CORNERS, protectedRoles: HEADER_PROTECTED_ROLES };
+  }
+  fail("command is required: render, render-header, describe or describe-header");
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

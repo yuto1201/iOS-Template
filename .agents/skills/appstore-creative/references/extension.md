@@ -131,6 +131,81 @@ captures, and says so with `inputInventory: "complete-v1"`; the proposal sheet r
 check that every generated input was adopted by the user and refuses an older record
 without that mark.
 
+## Product page header (D-085)
+
+Since 2026-10-05 a product page can open with a **product page header**: a 21:9 image or
+video above the screenshots, shown on iOS 27 and iPadOS 27 (see
+[Showcase your apps with new assets on the App Store](https://developer.apple.com/news/?id=ljpl7kyn)
+and [Creative assets specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/creative-assets-specifications/)).
+It may show the app's world, a season or new content beyond the app's screens. Make it only
+when the user wants one; "no header" is always a valid answer.
+
+- **Format:** 3840×1646. Image: `.png`, `.jpg` or `.jpeg` without transparency. Video:
+  `.mov`, `.m4v` or `.mp4`, 30 or 60 fps, 5 to 30 seconds. The video always loops and is
+  muted by default (people can unmute it on the product page), so it must not depend on
+  sound and its loop must not jump.
+- **Safe area:** text, logos and the focal point stay inside x 1097–2743, y 493–1154
+  (1646×661), the `Art Safe Area` layer of Apple's official template
+  (`creative_assets-product_page_header_template-static.psd`, checked 2026-10-22, from
+  [App Store Asset Best Practices and Resources](https://developer.apple.com/app-store/asset-best-practices/)).
+  Devices and orientations crop the rest differently, and the top corners carry the back
+  and share buttons. Recheck the template before a real submission, and look at every
+  crop in App Store Connect's **Preview tool** before publishing.
+- **One clear idea** for someone who has never seen the app, in the voice of `brand.json`.
+
+### Header still — `render-header`
+
+```sh
+tools/appstore-creative-render.sh render-header --spec header.json --out goldie/header/header.png
+tools/appstore-creative-render.sh describe-header
+```
+
+```json
+{
+  "schemaVersion": 1,
+  "background": {"image": "../assets/garden-wide.png"},
+  "layers": [
+    {"src": "../assets/garden-left.png", "x": 0.0, "y": 0.1, "width": 0.3, "role": "decoration"},
+    {"src": "../assets/mascot.png", "x": 0.42, "y": 0.34, "width": 0.16, "role": "focal", "shadow": true}
+  ],
+  "texts": [{"text": "雨の日も、花が教えてくれる", "x": 0.5, "y": 0.31, "size": 0.05, "align": "center", "color": "#1E1D1B", "font": "Zen Maru Gothic"}]
+}
+```
+
+Positions and widths are fractions of the header. `background` is `#RRGGBB` or an image
+that covers the header. Every text, and every layer whose `role` is `headline`, `logo`,
+`focal`, `app-name`, `claim`, `key-number` or `face`, must lie inside the safe area (after
+rotation) and outside the top corners, or nothing is written; decoration layers may run to
+the edges. A `safeArea` override must name the official template, its Apple URL and the
+date it was checked. The output is an opaque RGB PNG with a record beside it
+(`header.png.json`: safe area and its source, each input image's SHA-256, the text).
+Generated images for a header are material like any other: show them on a material sheet
+before use.
+
+### Header video — `encode-header`
+
+```sh
+tools/appstore-creative-preview.sh encode-header --background goldie/header/header.png \
+  --clip recordings/garden.mp4 --screen 0.30,0.30,0.40 --output goldie/header/header.mp4
+tools/appstore-creative-preview.sh verify-header --video goldie/header/header.mp4
+```
+
+It places a recording from the dedicated Simulator (`tools/record-appstore-preview.sh`) or
+an adopted video on the header still at `--screen x,y,width` (fractions; a `focal` clip,
+the default, must fit the safe area) and writes a silent H.264 video at `--fps 30` or
+`60`. By default the last half second crossfades into the start (`--loop crossfade`), so
+the video is the clip's length minus half a second and the loop does not jump. Without a
+clip, `--seconds` makes a still loop. It refuses a background that is not 3840×1646,
+another frame rate, a length outside 5 to 30 seconds, an audio track, and a video whose
+first and last frames differ by more than `--seam-threshold` (mean of 0–255 on a 10× smaller
+frame, default 6). `verify-header` runs the same checks on a finished video. Music is added
+only when the user asks for it.
+
+### Choosing a header
+
+Show two or more options on a header sheet and record the user's choice of one, or of no
+header (see [proposal](proposal.md#header-sheet)).
+
 ## iPad 13-inch
 
 `--device ipad-13` renders 2064×2752 tiles with a bare screen (rounded corners and a

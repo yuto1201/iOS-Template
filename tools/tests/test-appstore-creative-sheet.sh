@@ -580,4 +580,58 @@ expect_failure provenance-digest 'image cloud.png does not match its recorded sh
 provenance other-review 'value["images"][0]["materialReview"]["reviewSha256"] = "sha256:" + "1" * 64'
 expect_failure provenance-other-review 'image cloud.png names a material review that differs from m1' "$tool" provenance --file "$assets/provenance-other-review.json" --root "$root"
 
+# D-085 (#391): a header sheet compares two to six product page header options; "none" (no header) is
+# always a choice. Same CSP, digest and no-replace rules as the other sheets.
+hs="$workspace/headers"; mkdir -p "$hs"
+ffmpeg -y -loglevel error -f lavfi -i "color=c=0x2A5599:s=3840x1646,format=rgb24" -frames:v 1 "$hs/a.png"
+ffmpeg -y -loglevel error -f lavfi -i "color=c=0xE9C46A:s=3840x1646,format=rgb24" -frames:v 1 "$hs/b.png"
+ffmpeg -y -loglevel error -f lavfi -i "color=c=0xE9C46A:s=1920x1080,format=rgb24" -frames:v 1 "$hs/wide.png"
+printf 'video bytes' >"$hs/a.mp4"
+header_sheet() { # path options-json
+  ruby -rjson -e 'File.write(ARGV[0], JSON.generate({"schemaVersion" => 1, "kind" => "header", "app" => "テストアプリ", "title" => "ヘッダーの提案",
+    "brief" => "雨上がりの庭を広く見せる。", "options" => JSON.parse(ARGV[1])}))' "$1" "$2"
+}
+hopt() { # id image [video]
+  ruby -rjson -e 'value = {"id" => ARGV[0], "title" => "案#{ARGV[0]}", "hypothesis" => "世界観を一目で伝える。", "tradeoffs" => "画面が小さく見える。",
+    "image" => "headers/#{ARGV[1]}"}; value["video"] = "headers/#{ARGV[2]}" unless ARGV[2].to_s.empty?; puts JSON.generate(value)' "$1" "$2" "${3:-}"
+}
+header_sheet "$workspace/header.json" "[$(hopt A a.png a.mp4),$(hopt B b.png)]"
+"$tool" build --spec "$workspace/header.json" --root "$root" --revision h1 >/dev/null
+hsheet="$root/h1/sheet.html"
+grep -Fq "http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';" "$hsheet" || fail 'header sheet lacks the restrictive CSP'
+! grep -Eiq 'https?://|url\(|@import|<script|<iframe|<object|<embed|<link|<form|<video' "$hsheet" || fail 'header sheet can reach the network or run script'
+[[ "$(grep -o '<img src="data:image/png;base64,' "$hsheet" | wc -l | tr -d ' ')" == 2 ]] || fail 'header sheet does not embed every option'
+for text in 'プロダクトページヘッダー' 'ヘッダーなし' 'Preview tool' 'ループ動画あり（a.mp4' '静止画のみ'; do
+  grep -Fq -- "$text" "$hsheet" || fail "header sheet does not show: $text"
+done
+ruby -rjson -rdigest -e 'record = JSON.parse(File.read(ARGV[0]))
+  abort "header record" unless record.fetch("kind") == "header" && record.fetch("sheetSha256") == "sha256:#{Digest::SHA256.file(ARGV[1]).hexdigest}" &&
+    record.fetch("options").map { |item| item.fetch("id") } == %w[A B] && record.dig("options", 0, "videoSha256") == "sha256:#{Digest::SHA256.file(ARGV[2]).hexdigest}" &&
+    record.dig("options", 1, "videoSha256").nil?' "$root/h1/sheet.json" "$hsheet" "$hs/a.mp4"
+header_sheet "$workspace/header-one.json" "[$(hopt A a.png)]"
+expect_failure header-one 'a header sheet compares two to six header options; found 1' "$tool" build --spec "$workspace/header-one.json" --root "$root" --revision h9
+header_sheet "$workspace/header-none-id.json" "[$(hopt none a.png),$(hopt B b.png)]"
+expect_failure header-none-id 'header option id none is reserved for no header' "$tool" build --spec "$workspace/header-none-id.json" --root "$root" --revision h9
+header_sheet "$workspace/header-size.json" "[$(hopt A a.png),$(hopt B wide.png)]"
+expect_failure header-size 'header option B image is not a 3840x1646 PNG header' "$tool" build --spec "$workspace/header-size.json" --root "$root" --revision h9
+[[ ! -e "$root/h9" ]] || fail 'a refused header sheet left a revision behind'
+expect_failure header-rebuild 'revision already exists and is never replaced' "$tool" build --spec "$workspace/header.json" --root "$root" --revision h1
+# The user chooses one listed option or no header, once.
+expect_failure header-unknown 'unknown header option id: C' "$tool" select --sheet "$root/h1" --pattern C
+expect_failure header-tiles 'a header sheet takes --pattern <option ID> or --pattern none' "$tool" select --sheet "$root/h1" --tiles 1=A:1
+cp -R "$root/h1" "$workspace/tampered-h1"
+printf '<!-- edited -->\n' >>"$workspace/tampered-h1/sheet.html"
+expect_failure header-tampered 'sheet.html differs from the sheet record' "$tool" select --sheet "$workspace/tampered-h1" --pattern A
+"$tool" select --sheet "$root/h1" --pattern none >/dev/null
+ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); record = JSON.parse(File.read(ARGV[1]))
+  abort "no-header selection" unless value.fetch("selection") == {"type" => "no-header"} && value.fetch("decision") == "user-explicit" &&
+    value.fetch("sheetSha256") == record.fetch("sheetSha256") && value.fetch("revision") == "h1"' "$root/h1/selection.json" "$root/h1/sheet.json"
+expect_failure header-reselect 'a selection is already recorded for this sheet and is never replaced' "$tool" select --sheet "$root/h1" --pattern A
+"$tool" build --spec "$workspace/header.json" --root "$root" --revision h2 >/dev/null
+"$tool" select --sheet "$root/h2" --pattern A >/dev/null
+ruby -rjson -rdigest -e 'selection = JSON.parse(File.read(ARGV[0])).fetch("selection")
+  abort "header selection: #{selection}" unless selection.values_at("type", "optionId") == %w[header A] &&
+    selection.fetch("sha256") == "sha256:#{Digest::SHA256.file(ARGV[1]).hexdigest}" && selection.fetch("videoSha256") == "sha256:#{Digest::SHA256.file(ARGV[2]).hexdigest}"' \
+  "$root/h2/selection.json" "$hs/a.png" "$hs/a.mp4"
+
 echo 'appstore-creative sheet tests passed'
