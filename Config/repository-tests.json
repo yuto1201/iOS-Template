@@ -454,7 +454,7 @@
     {"path": "tools/tests/test-bounded-command.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-recovery.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-claim-resume.sh", "domains": ["workflow-state"]},
-    {"path": "tools/tests/test-cleanup-issue.sh", "domains": ["descriptor-files", "workflow-state"]},
+    {"path": "tools/tests/test-cleanup-issue.sh", "domains": ["descriptor-files", "workflow-state", "worktree-build"]},
     {"path": "tools/tests/test-cross-model-review.sh", "domains": ["descriptor-files", "review-contract"]},
     {"path": "tools/tests/test-delivery-stages.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-documentation-evidence-publisher.sh", "domains": ["workflow-state"]},
