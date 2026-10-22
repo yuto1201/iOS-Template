@@ -439,7 +439,7 @@ for stale in ("Pro Max を除く", "iPad Air", "4種類の読取command", "secre
 PYTHON
 
 ownership_check=$(cat <<'RUBY'
-  data = YAML.safe_load(File.read("Config/ownership.yml"), permitted_classes: [], aliases: false)
+  data = YAML.safe_load(File.read("Config/ownership.yml", encoding: "UTF-8"), permitted_classes: [], aliases: false)
   abort "unexpected schema version" unless data["schemaVersion"] == 2
   abort "ownership top-level schema differs" unless data.keys.sort == %w[appStore cloudflare elevenlabs github linear schemaVersion supabase vercel].sort
   abort "unexpected GitHub login" unless data.dig("github", "login") == "yuto1201"
@@ -457,7 +457,7 @@ ownership_check=$(cat <<'RUBY'
   # The app-feedback skill (D-076) records the app's Worker as the target once the Identity exists.
   cloudflare_target = data.dig("cloudflare", "target")
   if File.exist?("Config/app-identity.json")
-    worker = "#{JSON.parse(File.read("Config/app-identity.json"))["appSlug"]}-feedback"
+    worker = "#{JSON.parse(File.read("Config/app-identity.json", encoding: "UTF-8"))["appSlug"]}-feedback"
     abort "Cloudflare target must be null or #{worker}" unless cloudflare_target.nil? || cloudflare_target == worker
   else
     abort "Cloudflare target must be null" unless cloudflare_target.nil?
@@ -468,7 +468,7 @@ ownership_check=$(cat <<'RUBY'
   %w[accountId workspaceId].each { |key| abort "ElevenLabs #{key} must be null" unless data.dig("elevenlabs", key).nil? }
   abort "unexpected App Store team" unless data.dig("appStore", "teamId") == "AUZ2MV247A" && data.dig("appStore", "apiKeyType") == "team-app-manager"
   if File.exist?("Config/app-identity.json")
-    identity = JSON.parse(File.read("Config/app-identity.json"))
+    identity = JSON.parse(File.read("Config/app-identity.json", encoding: "UTF-8"))
     abort "unexpected app identity schema version" unless identity["schemaVersion"] == 1
     abort "app identity bundleId is missing" unless identity["bundleId"].is_a?(String) && !identity["bundleId"].empty?
     abort "ownership and app identity bundleId differ" unless data.dig("appStore", "bundleId") == identity["bundleId"]
@@ -486,7 +486,7 @@ check_ownership_fixture() {
   dir=$(mktemp -d "$ownership_fixture/case.XXXXXX")
   mkdir -p "$dir/Config"
   TARGET="$target" IDENTITY="$identity" ruby -ryaml -rjson -e '
-    data = YAML.safe_load(File.read(ARGV.fetch(0)), permitted_classes: [], aliases: false)
+    data = YAML.safe_load(File.read(ARGV.fetch(0), encoding: "UTF-8"), permitted_classes: [], aliases: false)
     data["cloudflare"]["target"] = ENV.fetch("TARGET") == "null" ? nil : ENV.fetch("TARGET")
     if ENV.fetch("IDENTITY") == "bootstrapped"
       identity = {"appSlug" => "garden-notes", "bundleId" => "com.yuto.GardenNotes", "displayName" => "Garden Notes",
@@ -513,7 +513,7 @@ check_ownership_fixture fail other-feedback bootstrapped
 rm -rf -- "$ownership_fixture"
 
 ruby -rjson -e '
-  manifest = JSON.parse(File.read("Config/template-identity.json"))
+  manifest = JSON.parse(File.read("Config/template-identity.json", encoding: "UTF-8"))
   abort "unexpected identity manifest schema version" unless manifest["schemaVersion"] == 1
   abort "identity manifest source is missing" unless manifest["source"].is_a?(Hash)
   abort "identity manifest rename paths are missing" unless manifest["renamePaths"].is_a?(Array) && !manifest["renamePaths"].empty?
@@ -533,7 +533,7 @@ fi
 app_bootstrap_skill=.agents/skills/app-bootstrap/SKILL.md
 ruby -ryaml - "$app_bootstrap_skill" <<'RUBY'
 path = ARGV.fetch(0)
-text = File.read(path)
+text = File.read(path, encoding: "UTF-8")
 frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
 abort "missing app bootstrap skill frontmatter" unless frontmatter
 data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
@@ -597,7 +597,7 @@ fi
 ios_verify_skill=.agents/skills/ios-verify/SKILL.md
 ruby -ryaml - "$ios_verify_skill" <<'RUBY'
 path = ARGV.fetch(0)
-text = File.read(path)
+text = File.read(path, encoding: "UTF-8")
 frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
 abort "missing iOS verification skill frontmatter" unless frontmatter
 data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
@@ -715,7 +715,7 @@ for skill in "${workflow_skills[@]}"; do
 
   ruby -ryaml - "$shared_skill" "$skill" <<'RUBY'
 path, expected_name = ARGV
-text = File.read(path)
+text = File.read(path, encoding: "UTF-8")
 frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
 abort "missing shared workflow skill frontmatter: #{path}" unless frontmatter
 data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
@@ -791,7 +791,7 @@ PYTHON
 
   ruby -ryaml - "$claude_agent" "$agent" <<'RUBY'
 path, expected_name = ARGV
-text = File.read(path)
+text = File.read(path, encoding: "UTF-8")
 frontmatter = text.match(/\A---\n(.*?)\n---\n/m)&.captures&.first
 abort "missing Claude evaluator frontmatter: #{path}" unless frontmatter
 data = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
@@ -913,7 +913,7 @@ for case_spec in 'dormant null pass' 'dormant abcdefghijklmnopqrst fail' 'adopte
   case_root="$supabase_fixture_dir/ref-$case_state-$case_ref"
   mkdir -p "$case_root/Config"
   REF="$case_ref" ruby -ryaml -e '
-    data = YAML.safe_load(File.read(ARGV.fetch(0)), permitted_classes: [], aliases: false)
+    data = YAML.safe_load(File.read(ARGV.fetch(0), encoding: "UTF-8"), permitted_classes: [], aliases: false)
     data["supabase"]["projectRef"] = ENV.fetch("REF") == "null" ? nil : ENV.fetch("REF")
     data["cloudflare"]["target"] = nil
     data["appStore"]["bundleId"] = nil
@@ -925,5 +925,20 @@ for case_spec in 'dormant null pass' 'dormant abcdefghijklmnopqrst fail' 'adopte
 done
 
 swift tools/check-markdown-links.swift
+
+# #333: the Ruby checks above read UTF-8 files whatever the caller's locale. With LANG and LC_ALL set to C,
+# Ruby's default external encoding is US-ASCII, so the same checks run once more there and must pass the same way.
+if [[ -z "${IOS_TEMPLATE_FOUNDATION_C_LOCALE_RUN:-}" ]]; then
+  c_locale_encoding=$(env -u RUBYOPT LANG=C LC_ALL=C ruby -e 'print Encoding.default_external')
+  [[ "$c_locale_encoding" == US-ASCII ]] ||
+    { echo "the C locale did not make Ruby read files as US-ASCII: $c_locale_encoding" >&2; exit 1; }
+  if ! c_locale_output=$(env -u RUBYOPT LANG=C LC_ALL=C IOS_TEMPLATE_FOUNDATION_C_LOCALE_RUN=1 \
+    bash "$repo_root/tools/tests/test-foundation.sh" 2>&1); then
+    echo "Foundation checks failed with LANG=C and LC_ALL=C: $c_locale_output" >&2
+    exit 1
+  fi
+  [[ "$c_locale_output" == *"Foundation repository policy checks passed"* ]] ||
+    { echo "Foundation checks did not pass with LANG=C and LC_ALL=C: $c_locale_output" >&2; exit 1; }
+fi
 
 echo "Foundation repository policy checks passed"
