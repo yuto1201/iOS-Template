@@ -54,11 +54,18 @@ around the app, a story across the tiles and real illustrations do.
    the [quality bar](references/patterns.md#quality-bar) adapted from
    ParthJadhav/app-store-screenshots. A color or font outside `brand.json` needs a
    written reason.
-5. **Make and show the materials.** Generate as many illustrations, objects and
-   settings as the patterns need ([image generation](references/imagegen.md)); there
-   is no per-pattern limit. Reject anything that looks like generic AI art before
-   showing it, then show the materials to the user and use only what the user
-   explicitly adopts.
+5. **Make and show the materials.** Generate as many illustrations, objects, mascots
+   and settings as the patterns need ([image generation](references/imagegen.md)); there
+   is no per-pattern limit. Keep one style per pattern by editing from its first adopted
+   material, and make cut-outs on a key color and check them with
+   `tools/appstore-creative-sheet.sh cutout`. Reject anything that looks like generic AI
+   art before showing it. Then show the trial materials on a material sheet
+   (`appstore-creative-sheet.sh build` with `"kind": "material"`) and record the user's
+   decision on every material with
+   `tools/appstore-creative-sheet.sh review --sheet <dir> --adopt <ids> --reject <ids>`.
+   Use only what the user explicitly adopted: the proposal build refuses a pattern whose
+   `materials` include an image that was rejected, changed after the review, or never
+   reviewed.
 6. **Stage 1 — compare patterns.** Design three to six whole-set patterns (three or
    four by default; five or six only when the ideas do not fit in four) that
    differ in world, story and composition, not only color. Mark exactly one as

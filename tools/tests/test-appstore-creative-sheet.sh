@@ -2,7 +2,7 @@
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" ruby /usr/bin/sips
+require_test_commands "$0" ruby /usr/bin/sips ffmpeg
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 tool="$repo_root/tools/appstore-creative-sheet.sh"
@@ -93,9 +93,9 @@ pattern() { # id tiles-json [recommended]
   style "$1" "決め手の要素$1"
   ruby -rjson -e 'value = {"id" => ARGV[0], "title" => "案#{ARGV[0]}", "hypothesis" => "動きで伝える。",
     "tradeoffs" => "生成画像の質に左右される。", "recommended" => ARGV[2] == "recommended", "style" => "style-#{ARGV[0]}.json",
-    "techniques" => ["story-across", "off-screen-world"], "tiles" => JSON.parse(ARGV[1])}
+    "techniques" => ["story-across", "off-screen-world"], "materials" => JSON.parse(ARGV[3].to_s.empty? ? "[]" : ARGV[3]), "tiles" => JSON.parse(ARGV[1])}
     value["recommendation"] = "検索結果の3枚で動きが伝わる。" if value["recommended"]
-    puts JSON.generate(value)' "$1" "$2" "${3:-}"
+    puts JSON.generate(value)' "$1" "$2" "${3:-}" "${4:-}"
 }
 
 plain_pattern() { # id tiles-json -> a preview or storyboard pattern, without proposal fields
@@ -411,5 +411,138 @@ ruby -rjson -e '
     value.fetch("decision") == "user-explicit" && value.fetch("revision") == "s1" && value.fetch("sheetSha256") == record.fetch("sheetSha256")
 ' "$root/s1/selection.json" "$root/s1/sheet.json"
 expect_failure storyboard-reselect 'a selection is already recorded for this sheet and is never replaced' "$tool" select --sheet "$root/s1" --pattern S1
+
+# D-085 (#393): generated material is shown on a material sheet and used only after the user adopts it.
+# Cut-outs are RGBA PNGs: "cloud" is clean, "fringe" keeps a ring of the green key color, "edge" touches
+# the border, "opaque" has no alpha; "sky" and "dusk" are full backgrounds.
+mat="$workspace/materials"; mkdir -p "$mat"
+ruby -rzlib -e '
+  def png(path, width, height, type)
+    rows = (0...height).map { |y| "\x00".b + (0...width).map { |x| yield(x, y) }.join }
+    chunk = ->(kind, data) { [data.bytesize].pack("N") + kind + data + [Zlib.crc32(kind + data)].pack("N") }
+    File.binwrite(path, "\x89PNG\r\n\x1A\n".b + chunk.("IHDR", [width, height, 8, type, 0, 0, 0].pack("N2C5")) +
+      chunk.("IDAT", Zlib::Deflate.deflate(rows.join)) + chunk.("IEND", "".b))
+  end
+  dir = ARGV[0]; clear = [0, 0, 0, 0].pack("C4"); white = [240, 240, 235, 255].pack("C4"); green = [0, 255, 0, 255].pack("C4")
+  inside = ->(x, y, a, b) { (a...b).cover?(x) && (a...b).cover?(y) }
+  png(File.join(dir, "cloud.png"), 120, 120, 6) { |x, y| inside.(x, y, 30, 90) ? white : clear }
+  png(File.join(dir, "fringe.png"), 120, 120, 6) { |x, y| inside.(x, y, 36, 84) ? white : inside.(x, y, 30, 90) ? green : clear }
+  png(File.join(dir, "edge.png"), 120, 120, 6) { |x, y| x < 60 ? white : clear }
+  png(File.join(dir, "opaque.png"), 120, 120, 2) { |x, y| [200, 120, 80].pack("C3") }
+  png(File.join(dir, "sky.png"), 120, 260, 2) { |x, y| [40, 90, 200].pack("C3") }
+  png(File.join(dir, "dusk.png"), 120, 260, 2) { |x, y| [200, 90, 40].pack("C3") }
+  png(File.join(dir, "unseen.png"), 120, 260, 2) { |x, y| [90, 200, 40].pack("C3") }
+' "$mat"
+material_spec() { # path materials-json
+  ruby -rjson -e 'File.write(ARGV[0], JSON.generate({"schemaVersion" => 1, "kind" => "material", "app" => "テストアプリ",
+    "title" => "素材の確認", "brief" => "雨上がりの庭の素材。", "materials" => JSON.parse(ARGV[1])}))' "$1" "$2"
+}
+m() { # id pattern role image [key]
+  ruby -rjson -e 'value = {"id" => ARGV[0], "pattern" => ARGV[1], "role" => ARGV[2], "image" => "materials/#{ARGV[3]}", "prompt" => "雨上がりの#{ARGV[0]}、文字なし"}
+    value["cutout"] = {"key" => ARGV[4]} unless ARGV[4].to_s.empty?
+    puts JSON.generate(value)' "$@"
+}
+material_spec "$workspace/materials.json" "[$(m cloud A object cloud.png '#00FF00'),$(m sky A background sky.png),$(m dusk B background dusk.png)]"
+"$tool" build --spec "$workspace/materials.json" --root "$root" --revision m1 >/dev/null
+msheet="$root/m1/sheet.html"
+grep -Fq "http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';" "$msheet" || fail 'material sheet lacks the restrictive CSP'
+! grep -Eiq 'https?://|url\(|@import|<script|<iframe|<object|<embed|<link|<form' "$msheet" || fail 'material sheet can reach the network or run script'
+[[ "$(grep -o '<img src="data:image/png;base64,' "$msheet" | wc -l | tr -d ' ')" == 3 ]] || fail 'material sheet does not embed every material'
+for text in '素材の確認' '「採用」か「不採用」' 'AIっぽくありきたり' '雨上がりのcloud、文字なし' '切り抜き（キー色 #00FF00）'; do
+  grep -Fq -- "$text" "$msheet" || fail "material sheet does not show: $text"
+done
+ruby -rjson -rdigest -e 'record = JSON.parse(File.read(ARGV[0]))
+  abort "material record" unless record.fetch("kind") == "material" && record.fetch("sheetSha256") == "sha256:#{Digest::SHA256.file(ARGV[1]).hexdigest}" &&
+    record.fetch("materials").map { |item| item.fetch("id") } == %w[cloud sky dusk] && record.dig("materials", 0, "cutout", "keyResidue") == 0.0' "$root/m1/sheet.json" "$msheet"
+expect_failure material-rebuild 'revision already exists and is never replaced' "$tool" build --spec "$workspace/materials.json" --root "$root" --revision m1
+material_spec "$workspace/materials-fringe.json" "[$(m fringe A object fringe.png '#00FF00')]"
+expect_failure material-fringe 'material fringe keeps' "$tool" build --spec "$workspace/materials-fringe.json" --root "$root" --revision m9
+grep -Fq 'of the key color #00FF00 at its edges; separate it again' "$workspace/material-fringe.err" || fail 'fringe failure does not name the key color'
+material_spec "$workspace/materials-url.json" "[$(m cloud A object cloud.png | sed 's/文字なし/https:\/\/example.com/')]"
+expect_failure material-url 'must not contain URLs, markup, or style imports' "$tool" build --spec "$workspace/materials-url.json" --root "$root" --revision m9
+material_spec "$workspace/materials-none.json" "[]"
+expect_failure material-none 'materials must be a list of 1 to 60 entries' "$tool" build --spec "$workspace/materials-none.json" --root "$root" --revision m9
+[[ ! -e "$root/m9" ]] || fail 'a refused material sheet left a revision behind'
+
+# The cut-out check on its own: a clean cut-out passes; an opaque image, a cut-out that touches its edge
+# and one that keeps the key color are refused.
+"$tool" cutout --image "$mat/cloud.png" --key '#00FF00' >"$workspace/cutout.out"
+ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); abort "cutout result" unless value.fetch("status") == "clean" && value.fetch("keyResidue") == 0.0 && value.fetch("transparent") > 0.5' "$workspace/cutout.out"
+expect_failure cutout-opaque 'has no transparent background: the PNG has no alpha channel' "$tool" cutout --image "$mat/opaque.png" --key '#00FF00'
+expect_failure cutout-edge 'background is not transparent at its edges' "$tool" cutout --image "$mat/edge.png" --key '#00FF00'
+expect_failure cutout-fringe 'of the key color #00FF00 at its edges' "$tool" cutout --image "$mat/fringe.png" --key '#00FF00'
+
+# The user adopts or rejects every material by ID; anything less is not a decision. Recorded once.
+expect_failure material-select 'a material sheet takes review --adopt/--reject, not select' "$tool" select --sheet "$root/m1" --pattern A
+expect_failure review-missing 'every material needs --adopt or --reject; missing: dusk' "$tool" review --sheet "$root/m1" --adopt cloud,sky
+expect_failure review-unknown 'unknown material id: rain' "$tool" review --sheet "$root/m1" --adopt cloud,sky,rain --reject dusk
+expect_failure review-both 'material sky is both adopted and rejected' "$tool" review --sheet "$root/m1" --adopt cloud,sky --reject sky,dusk
+expect_failure review-pattern-sheet 'review applies only to a material sheet' "$tool" review --sheet "$root/r1" --adopt A
+[[ ! -e "$root/m1/material-review.json" ]] || fail 'a refused review was recorded'
+cp -R "$root/m1" "$workspace/tampered-m1"
+printf '<!-- edited -->\n' >>"$workspace/tampered-m1/sheet.html"
+expect_failure review-tampered 'sheet.html differs from the sheet record' "$tool" review --sheet "$workspace/tampered-m1" --adopt cloud,sky --reject dusk
+"$tool" review --sheet "$root/m1" --adopt cloud,sky --reject dusk >/dev/null
+ruby -rjson -rdigest -e 'value = JSON.parse(File.read(ARGV[0])); sheet = JSON.parse(File.read(ARGV[1]))
+  abort "review fields" unless value.keys.sort == %w[decision decisions recordedAt revision schemaVersion sheetSha256] && value.fetch("decision") == "user-explicit"
+  abort "review digest" unless value.fetch("sheetSha256") == sheet.fetch("sheetSha256") && value.fetch("revision") == "m1"
+  abort "review decisions" unless value.fetch("decisions").map { |d| d.values_at("id", "decision") } == [%w[cloud adopted], %w[sky adopted], %w[dusk rejected]] &&
+    value.fetch("decisions").first.fetch("sha256") == "sha256:#{Digest::SHA256.file(ARGV[2]).hexdigest}"' "$root/m1/material-review.json" "$root/m1/sheet.json" "$mat/cloud.png"
+expect_failure review-again 'a review is already recorded for this sheet and is never replaced' "$tool" review --sheet "$root/m1" --adopt cloud,sky,dusk
+
+# A proposal pattern may use only adopted material, byte for byte; it lists what it uses.
+with_materials() { # name materials-json-for-pattern-C
+  write_spec "$workspace/$1.json" proposal "[$good,$early,$(pattern C "$(tiles illustration device pair scene concept concept concept)" "" "$2")]" \
+    '{"materialReviews":["store-creative/m1"]}'
+}
+with_materials adopted '["materials/cloud.png","materials/sky.png"]'
+"$tool" build --spec "$workspace/adopted.json" --root "$root" --revision mat-ok >/dev/null
+ruby -rjson -rdigest -e 'pattern = JSON.parse(File.read(ARGV[0])).fetch("patterns").find { |item| item.fetch("id") == "C" }
+  abort "pattern materials" unless pattern.fetch("materials") == ARGV[1, 2].map { |path| "sha256:#{Digest::SHA256.file(path).hexdigest}" }' \
+  "$root/mat-ok/sheet.json" "$mat/cloud.png" "$mat/sky.png"
+grep -Fq '使う生成素材：2点（すべて素材の確認で採用済み）' "$root/mat-ok/sheet.html" || fail 'proposal sheet does not show the adopted materials'
+with_materials rejected '["materials/dusk.png"]'
+expect_failure material-rejected 'pattern C uses dusk.png, which the user rejected' "$tool" build --spec "$workspace/rejected.json" --root "$root" --revision m9
+with_materials unseen '["materials/unseen.png"]'
+expect_failure material-unseen 'pattern C uses unseen.png, which the user has not adopted on a material sheet' "$tool" build --spec "$workspace/unseen.json" --root "$root" --revision m9
+cp "$mat/sky.png" "$workspace/sky.original.png"
+printf 'x' >>"$mat/sky.png"
+with_materials changed '["materials/sky.png"]'
+expect_failure material-changed 'pattern C uses sky.png, which changed after the user reviewed it' "$tool" build --spec "$workspace/changed.json" --root "$root" --revision m9
+cp "$workspace/sky.original.png" "$mat/sky.png"
+# A review that no longer matches its sheet is never trusted.
+cp -R "$root/m1" "$root/m1-forged"
+ruby -rjson -e 'path = ARGV[0]; value = JSON.parse(File.read(path)); value["sheetSha256"] = "sha256:" + "0" * 64; File.write(path, JSON.generate(value))' \
+  "$root/m1-forged/material-review.json"
+write_spec "$workspace/forged-review.json" proposal "[$good,$early,$(pattern C "$(tiles illustration device pair scene concept concept concept)" "" '["materials/cloud.png"]')]" \
+  '{"materialReviews":["store-creative/m1-forged"]}'
+expect_failure material-forged-review 'material review of m1 does not match its sheet' "$tool" build --spec "$workspace/forged-review.json" --root "$root" --revision m9
+write_spec "$workspace/no-materials.json" proposal "[$good,$early,$(pattern C "$(tiles illustration device pair scene concept concept concept)" | sed 's/"materials":\[\],//')]"
+expect_failure no-materials 'pattern C needs materials' "$tool" build --spec "$workspace/no-materials.json" --root "$root" --revision m9
+[[ ! -e "$root/m9" ]] || fail 'a refused proposal left a revision behind'
+
+# goldie/assets/provenance.json: every adopted image carries the material review that adopted it.
+assets="$workspace/goldie-assets"; mkdir -p "$assets"
+cp "$mat/cloud.png" "$mat/dusk.png" "$assets/"
+provenance() { # name ruby-edit
+  ruby -rjson -rdigest -e 'review = "sha256:#{Digest::SHA256.file(ARGV[2]).hexdigest}"
+    image = ->(file) { {"file" => file, "sha256" => "sha256:#{Digest::SHA256.file(File.join(ARGV[1], file)).hexdigest}", "prompt" => "雨上がりの雲",
+      "mode" => "generate", "generator" => "codex-builtin-imagegen", "generatedAt" => "2026-10-22T00:00:00Z", "revision" => "mat-ok",
+      "materialReview" => {"revision" => "m1", "reviewSha256" => review, "decision" => "adopted"}} }
+    value = {"schemaVersion" => 1, "images" => [image.("cloud.png")]}
+    eval(ARGV[3])
+    File.write(File.join(ARGV[1], "provenance-#{ARGV[0]}.json"), JSON.generate(value))' "$1" "$assets" "$root/m1/material-review.json" "$2"
+}
+provenance good ''
+"$tool" provenance --file "$assets/provenance-good.json" --root "$root" >"$workspace/provenance.out"
+ruby -rjson -e 'abort "provenance result" unless JSON.parse(File.read(ARGV[0])) == {"status" => "valid", "images" => 1}' "$workspace/provenance.out"
+provenance no-review 'value["images"][0].delete("materialReview")'
+expect_failure provenance-no-review 'image cloud.png has no material review record' "$tool" provenance --file "$assets/provenance-no-review.json" --root "$root"
+provenance rejected 'value["images"] << image.("dusk.png")'
+expect_failure provenance-rejected 'image dusk.png was rejected on the material review m1' "$tool" provenance --file "$assets/provenance-rejected.json" --root "$root"
+provenance digest 'value["images"][0]["sha256"] = "sha256:" + "0" * 64'
+expect_failure provenance-digest 'image cloud.png does not match its recorded sha256' "$tool" provenance --file "$assets/provenance-digest.json" --root "$root"
+provenance other-review 'value["images"][0]["materialReview"]["reviewSha256"] = "sha256:" + "1" * 64'
+expect_failure provenance-other-review 'image cloud.png names a material review that differs from m1' "$tool" provenance --file "$assets/provenance-other-review.json" --root "$root"
 
 echo 'appstore-creative sheet tests passed'
