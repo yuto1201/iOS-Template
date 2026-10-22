@@ -151,9 +151,14 @@ swift "$stage_worktree/tools/bootstrap-app.swift" apply \
   --app-slug "$app_slug" \
   --bundle-id "$bundle_id" >/dev/null
 
+# #372 (D-084): without a DerivedData location, `xcodebuild -list` leaves an empty <Module>-<hash>/Logs folder in
+# ~/Library/Developer/Xcode/DerivedData. xcodebuild rejects -derivedDataPath for -list (it requires -scheme,
+# -testProductsPath or -xctestrun), so the same location is given as the IDEDerivedDataPathOverride user default,
+# inside the staging folder that cleanup removes.
 bounded_run bootstrap-xcode-list "${IOS_TEMPLATE_BOOTSTRAP_XCODE_TIMEOUT_SECONDS:-300}" \
   /usr/bin/env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  xcodebuild -list -json -project "$stage_worktree/$module_name.xcodeproj" >/dev/null
+  xcodebuild -list -json -project "$stage_worktree/$module_name.xcodeproj" \
+  "-IDEDerivedDataPathOverride=$stage_parent/DerivedData" >/dev/null
 
 changed_paths=()
 while IFS= read -r path; do
