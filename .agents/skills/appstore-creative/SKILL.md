@@ -160,9 +160,22 @@ Only when the user asks, and "no video" is a valid answer at every gate. Details
 4. **Decision.** The user adopts the draft or chooses no video; record it with
    `appstore-creative-preview.sh decide` in `preview-decision.json` with the user's
    reason. Choose no video whenever a gate fails or the draft does not sell the app.
+5. **Poster frame.** Apple shows the frame at 5 seconds until another is chosen, and
+   people who do not play the video see only that frame. Extract candidates with
+   `tools/appstore-creative-preview.sh poster-frames`, show them on a `poster` sheet and
+   record the user's choice of one (details: [poster frame](references/preview-video.md#5-poster-frame-d-085)).
 
-Previews are silent by default; make music only when the user asks for it. Check
-Apple's current preview requirements before a real submission.
+Previews are silent by default; make music only when the user asks for it.
+
+## Check against Apple's current specifications (D-085)
+
+Before handing any image or video to `prepare-appstore-assets`, run
+`tools/appstore-creative-preview.sh check-assets --kind <kind> --file <file>` on it. It
+checks size, format, alpha, length, frame rate and codec against the skill's
+specification table (Apple's pages and the day they were read) and stops when that table
+is older than its `maxAgeDays`: then read Apple's current pages, update the table, and
+check again. Always read Apple's current requirements and App Review Guidelines before a
+real submission; see [the table](references/preview-video.md#check-every-asset-against-apples-current-specifications-d-085).
 
 ## Phase 6 boundary and Simulator ownership
 

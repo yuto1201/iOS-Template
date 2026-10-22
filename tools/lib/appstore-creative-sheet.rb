@@ -49,6 +49,10 @@ module AppStoreCreativeSheet
   HEADER_OPTIONS = (2..6).freeze
   HEADER_SIZE = [3840, 1646].freeze
   NO_HEADER = "none"
+  # D-085 (#392): a poster sheet shows candidate poster frames of one App Preview (Apple shows the frame
+  # at 5 seconds unless another is chosen); the user picks one, whose time is recorded with the video.
+  POSTER_KIND = "poster"
+  POSTER_CANDIDATES = (1..6).freeze
   MATERIAL_COUNT = (1..60).freeze
   MATERIAL_DECISIONS = %w[adopted rejected].freeze
   CUTOUT_EDGE = 2
@@ -145,6 +149,9 @@ module AppStoreCreativeSheet
     end
     if parsed.is_a?(Hash) && parsed["kind"] == HEADER_KIND
       return build_header(validate_header_spec(parsed, File.dirname(spec_path)), spec_bytes, root, revision, max_dimension)
+    end
+    if parsed.is_a?(Hash) && parsed["kind"] == POSTER_KIND
+      return build_poster(validate_poster_spec(parsed, File.dirname(spec_path)), spec_bytes, root, revision, max_dimension)
     end
     spec = validate_spec(parsed, File.dirname(spec_path))
 
@@ -1426,6 +1433,130 @@ module AppStoreCreativeSheet
     {"status" => "selected", "selection" => target, "type" => selection.fetch("type")}
   end
 
+  # --- poster sheets (D-085, #392) -----------------------------------------------------------------
+
+  def video_seconds(path)
+    output, status = Open3.capture2("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", path)
+    fail!("could not read the length of #{File.basename(path)}") unless status.success? && output.strip.match?(/\A[0-9.]+\z/)
+    Float(output.strip)
+  end
+
+  def validate_poster_spec(spec, base)
+    object!(spec, "poster definition", %w[schemaVersion kind app title video candidates], %w[brief])
+    fail!("poster definition schemaVersion must be #{SCHEMA_VERSION}") unless spec["schemaVersion"] == SCHEMA_VERSION
+    %w[app title].each { |key| text!(spec[key], key, required: true) }
+    text!(spec["brief"], "brief", required: false)
+    video = File.expand_path(spec["video"].to_s, base)
+    read_regular(video, "preview video")
+    fail!("the preview video must be .mp4, .mov or .m4v") unless %w[.mp4 .mov .m4v].include?(File.extname(video).downcase)
+    duration = video_seconds(video)
+    candidates = spec["candidates"]
+    unless candidates.is_a?(Array) && POSTER_CANDIDATES.cover?(candidates.length)
+      fail!("a poster sheet shows one to six candidate frames; found #{candidates.is_a?(Array) ? candidates.length : 0}")
+    end
+    validated = candidates.map do |candidate|
+      object!(candidate, "poster candidate", %w[id seconds image], %w[note])
+      id = candidate["id"]
+      fail!("poster candidate id is invalid: #{id.inspect}") unless id.is_a?(String) && id.match?(ID_PATTERN)
+      seconds = candidate["seconds"]
+      fail!("poster candidate #{id} seconds must be a number") unless seconds.is_a?(Numeric)
+      # A poster frame is a frame of the video: a time outside it is refused.
+      unless seconds >= 0 && seconds < duration
+        fail!(format("poster candidate %s at %.2f seconds is outside the %.2f-second preview", id, seconds, duration))
+      end
+      text!(candidate["note"], "#{id}.note", required: false)
+      candidate.merge("source" => File.expand_path(candidate["image"].to_s, base))
+    end
+    ids = validated.map { |candidate| candidate.fetch("id") }
+    fail!("poster candidate ids must be unique") unless ids.uniq.length == ids.length
+    spec.merge("candidates" => validated, "videoSource" => video, "durationSeconds" => duration.round(3),
+               "videoSha256" => "sha256:#{Digest::SHA256.file(video).hexdigest}")
+  end
+
+  def build_poster(spec, spec_bytes, root, revision, max_dimension)
+    FileUtils.mkdir_p(root, mode: 0o700)
+    destination = File.join(root, revision)
+    fail!("revision already exists and is never replaced: #{revision}") if File.exist?(destination) || File.symlink?(destination)
+    staging = Dir.mktmpdir(".#{revision}.", root)
+    begin
+      images = {}
+      spec.fetch("candidates").each { |candidate| images[candidate.fetch("source")] ||= embed_image(candidate.fetch("source"), max_dimension, staging) }
+      display = {"schemaVersion" => SCHEMA_VERSION, "revision" => revision, "kind" => POSTER_KIND, "videoSha256" => spec.fetch("videoSha256"),
+                 "durationSeconds" => spec.fetch("durationSeconds"),
+                 "candidates" => spec.fetch("candidates").map { |candidate| {"id" => candidate.fetch("id"), "seconds" => candidate.fetch("seconds"),
+                                                                            "sha256" => images.fetch(candidate.fetch("source")).fetch("sha256")} }}
+      h = ->(text) { CGI.escapeHTML(text.to_s) }
+      figures = spec.fetch("candidates").map do |candidate|
+        note = candidate["note"] ? "<span>#{h.(candidate['note'])}</span>" : ""
+        %(<figure class="tile"><img src="#{images.fetch(candidate.fetch('source')).fetch('dataUri')}" alt="#{h.(candidate.fetch('id'))}">) +
+          %(<figcaption><b>#{h.(candidate.fetch('id'))}</b> #{format('%.2f', candidate.fetch('seconds'))}秒#{note}</figcaption></figure>)
+      end.join
+      brief = spec["brief"] ? %(<p class="brief">#{h.(spec['brief'])}</p>) : ""
+      html = <<~HTML
+        <!doctype html>
+        <html lang="ja">
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="Content-Security-Policy" content="#{CONTENT_SECURITY_POLICY}">
+        <meta name="#{DISPLAY_RECORD_META}" content="#{Base64.strict_encode64(JSON.generate(display))}">
+        <title>#{h.(spec.fetch('title'))}</title>
+        <style>
+        :root { color-scheme: light dark; --bg: #f6f5f2; --fg: #1d1d1f; --muted: #5b5b60; --card: #ffffff; --line: #d9d7d2; }
+        @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #f2f2f4; --muted: #a8a8ae; --card: #212124; --line: #3a3a3e; } }
+        body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg); font: 15px/1.6 -apple-system, "Hiragino Sans", sans-serif; }
+        header, section { max-width: 1200px; margin: 0 auto 24px; }
+        .meta { color: var(--muted); font-size: 13px; } .brief, .pattern { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+        .strip { display: flex; flex-wrap: wrap; gap: 12px; } .tile { margin: 0; } .tile img { display: block; width: 180px; height: auto; border-radius: 10px; border: 1px solid var(--line); }
+        figcaption { font-size: 12px; color: var(--muted); } figcaption span { display: block; }
+        </style>
+        </head>
+        <body>
+        <header>
+        <h1>#{h.(spec.fetch('title'))}</h1>
+        <p class="meta">#{h.(spec.fetch('app'))} ・ App Previewのポスターフレーム ・ revision #{h.(revision)} ・ 動画 #{format('%.2f', spec.fetch('durationSeconds'))}秒</p>
+        #{brief}
+        <p class="meta">候補のIDを1つ選んでください。選ばなければ、Appleは5秒の位置の画面をポスターフレームにします。自動再生を切った人と、再生が始まる前の人には、この1枚だけが見えます。</p>
+        </header>
+        <section class="pattern"><div class="strip">#{figures}</div></section>
+        </body>
+        </html>
+      HTML
+      File.binwrite(File.join(staging, "sheet.html"), html)
+      record = display.merge("sheetSha256" => "sha256:#{Digest::SHA256.hexdigest(html)}",
+                             "definitionSha256" => "sha256:#{Digest::SHA256.hexdigest(spec_bytes)}", "builtAt" => Time.now.utc.iso8601,
+                             "video" => spec.fetch("videoSource"))
+      File.binwrite(File.join(staging, "sheet.json"), "#{JSON.pretty_generate(record)}\n")
+      Dir.children(staging).each { |name| File.unlink(File.join(staging, name)) if name.start_with?(".thumb-") }
+      File.rename(staging, destination)
+      staging = nil
+      {"status" => "built", "revision" => revision, "sheet" => File.join(destination, "sheet.html"), "sheetSha256" => record.fetch("sheetSha256")}
+    ensure
+      FileUtils.rm_rf(staging) if staging
+    end
+  end
+
+  def select_poster(directory, options)
+    fail!("a poster sheet takes --pattern <candidate ID>") if options.key?("tiles")
+    record, displayed, actual = verified_sheet(directory)
+    listed = record.slice("schemaVersion", "revision", "kind", "videoSha256", "durationSeconds", "candidates")
+    fail!("sheet.json differs from the displayed sheet") unless listed == displayed
+    target = File.join(directory, "selection.json")
+    fail!("a selection is already recorded for this sheet and is never replaced") if File.exist?(target) || File.symlink?(target)
+    choice = options.fetch("pattern")
+    candidate = displayed.fetch("candidates").find { |item| item.fetch("id") == choice } or fail!("unknown poster candidate id: #{choice}")
+    # The time is checked again against the displayed video length, never read from sheet.json alone.
+    unless candidate.fetch("seconds") >= 0 && candidate.fetch("seconds") < displayed.fetch("durationSeconds")
+      fail!("poster candidate #{choice} lies outside the preview")
+    end
+    value = {"schemaVersion" => SCHEMA_VERSION, "revision" => record.fetch("revision"), "sheetSha256" => actual,
+             "selection" => {"type" => "poster", "candidateId" => choice, "seconds" => candidate.fetch("seconds"),
+                             "frameSha256" => candidate.fetch("sha256"), "videoSha256" => displayed.fetch("videoSha256")},
+             "decision" => "user-explicit", "recordedAt" => Time.now.utc.iso8601}
+    File.open(target, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |file| file.write("#{JSON.pretty_generate(value)}\n") }
+    {"status" => "selected", "selection" => target, "type" => "poster", "seconds" => candidate.fetch("seconds")}
+  end
+
   # --- select --------------------------------------------------------------------------------------
 
   def select(options)
@@ -1437,6 +1568,7 @@ module AppStoreCreativeSheet
     record = JSON.parse(read_regular(File.join(directory, "sheet.json"), "sheet record"))
     fail!("a material sheet takes review --adopt/--reject, not select") if record["kind"] == MATERIAL_KIND
     return select_header(directory, options) if record["kind"] == HEADER_KIND
+    return select_poster(directory, options) if record["kind"] == POSTER_KIND
     html = read_regular(File.join(directory, "sheet.html"), "sheet")
     actual = "sha256:#{Digest::SHA256.hexdigest(html)}"
     fail!("sheet.html differs from the sheet record") unless record["sheetSha256"].is_a?(String) &&

@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "date"
 require "digest"
 require "fileutils"
 require "json"
@@ -42,6 +43,39 @@ module AppStoreCreativePreview
   # Mean absolute difference (0-255) between the first and last frames, downscaled 10x, above which the
   # loop visibly jumps.
   HEADER_SEAM_THRESHOLD = 6.0
+  # D-085 (#392): the specification table every exported App Store asset is checked against, with Apple's
+  # pages and the day they were read. Screenshot sizes are those of D-079 (App Store/submission/
+  # requirements.json); a table older than maxAgeDays stops the check until someone reads Apple's pages
+  # again and updates it.
+  ASSET_SPECS = {
+    "checkedOn" => "2026-10-22",
+    "maxAgeDays" => 90,
+    "sources" => {
+      "screenshot" => "https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/",
+      "preview" => "https://developer.apple.com/help/app-store-connect/reference/app-information/app-preview-specifications/",
+      "creative" => "https://developer.apple.com/help/app-store-connect/reference/app-information/creative-assets-specifications/"
+    },
+    "kinds" => {
+      "screenshot-iphone" => {"source" => "screenshot", "type" => "image", "formats" => %w[png jpg jpeg], "alpha" => false,
+                              "sizes" => [[1206, 2622], [1179, 2556], [2622, 1206], [2556, 1179]]},
+      "screenshot-ipad" => {"source" => "screenshot", "type" => "image", "formats" => %w[png jpg jpeg], "alpha" => false,
+                            "sizes" => [[2064, 2752], [2048, 2732], [2752, 2064], [2732, 2048]]},
+      "preview-iphone" => {"source" => "preview", "type" => "video", "formats" => %w[mov m4v mp4], "sizes" => [[886, 1920], [1920, 886]],
+                           "seconds" => [15, 30], "fps" => [30], "codecs" => %w[h264 prores], "maxBytes" => MAX_BYTES},
+      "preview-ipad" => {"source" => "preview", "type" => "video", "formats" => %w[mov m4v mp4], "sizes" => [[1200, 1600], [1600, 1200]],
+                         "seconds" => [15, 30], "fps" => [30], "codecs" => %w[h264 prores], "maxBytes" => MAX_BYTES},
+      "header-image" => {"source" => "creative", "type" => "image", "formats" => %w[png jpg jpeg], "alpha" => false, "sizes" => [[3840, 1646]]},
+      "header-video" => {"source" => "creative", "type" => "video", "formats" => %w[mov m4v mp4], "sizes" => [[3840, 1646]],
+                         "seconds" => [5, 30], "fps" => [30, 60]},
+      "search-image" => {"source" => "creative", "type" => "image", "formats" => %w[png jpg jpeg], "alpha" => false,
+                         "ratio" => [3, 2], "minSize" => [1920, 1280], "maxSize" => [3840, 2560]},
+      "search-video" => {"source" => "creative", "type" => "video", "formats" => %w[mov m4v mp4], "ratio" => [3, 2],
+                         "minSize" => [1920, 1280], "maxSize" => [3840, 2560], "seconds" => [5, 30], "fps" => [30, 60]},
+      "universal-image" => {"source" => "creative", "type" => "image", "formats" => %w[png], "alpha" => false, "sizes" => [[5244, 2950]]}
+    }
+  }.freeze
+  # Apple shows the frame at 5 seconds of an App Preview until another poster frame is chosen.
+  DEFAULT_POSTER_SECONDS = 5.0
 
   class Failure < StandardError; end
 
@@ -55,6 +89,9 @@ module AppStoreCreativePreview
             when "decide" then decide(options)
             when "encode-header" then encode_header(options)
             when "verify-header" then verify_header_command(options)
+            when "describe-specs" then ASSET_SPECS
+            when "check-assets" then check_assets(options)
+            when "poster-frames" then poster_frames(options)
             else fail!("unknown command: #{command}")
             end
     puts JSON.generate(value)
@@ -421,6 +458,99 @@ module AppStoreCreativePreview
     path = File.expand_path(options.fetch("video"))
     verify_header(path, nil, Float(options.fetch("seam-threshold", HEADER_SEAM_THRESHOLD.to_s)))
       .merge("status" => "valid", "video" => path, "sha256" => sha256(path))
+  end
+
+  # --- specification table and asset check (D-085, #392) -------------------------------------------
+
+  def spec_age_days(today)
+    (Date.parse(today) - Date.parse(ASSET_SPECS.fetch("checkedOn"))).to_i
+  end
+
+  # Checks one exported asset against the table, after checking that the table itself is recent.
+  def check_assets(options)
+    %w[kind file].each { |name| fail!("missing option: --#{name}") unless options.key?(name) }
+    unknown = options.keys - %w[kind file max-age-days today]
+    fail!("unknown option: --#{unknown.first}") unless unknown.empty?
+    today = options.fetch("today", Time.now.utc.strftime("%Y-%m-%d"))
+    fail!("--today must be a YYYY-MM-DD date") unless today.match?(/\A\d{4}-\d{2}-\d{2}\z/)
+    max_age = Integer(options.fetch("max-age-days", ASSET_SPECS.fetch("maxAgeDays").to_s), 10)
+    age = spec_age_days(today)
+    if age > max_age
+      fail!("the asset spec table was checked on #{ASSET_SPECS.fetch('checkedOn')}, #{age} days ago (more than #{max_age}); " \
+            "read Apple's current specifications and update it before checking assets")
+    end
+    kind = options.fetch("kind")
+    spec = ASSET_SPECS.fetch("kinds")[kind] or fail!("unknown asset kind: #{kind}; known kinds: #{ASSET_SPECS.fetch('kinds').keys.join(', ')}")
+    path = regular!(File.expand_path(options.fetch("file")), "asset")
+    problems = []
+    extension = File.extname(path).delete_prefix(".").downcase
+    problems << "format .#{extension} is not one of #{spec.fetch('formats').map { |item| ".#{item}" }.join(', ')}" unless spec.fetch("formats").include?(extension)
+    info = probe(path)
+    video = info.fetch("streams").find { |stream| stream["codec_type"] == "video" } or fail!("asset #{File.basename(path)} has no image or video stream")
+    size = [video["width"], video["height"]]
+    if spec["sizes"]
+      problems << "size #{size.join('x')} is not one of #{spec['sizes'].map { |item| item.join('x') }.join(', ')}" unless spec["sizes"].include?(size)
+    else
+      ratio_ok = size[0] * spec["ratio"][1] == size[1] * spec["ratio"][0]
+      range_ok = size[0].between?(spec["minSize"][0], spec["maxSize"][0]) && size[1].between?(spec["minSize"][1], spec["maxSize"][1])
+      unless ratio_ok && range_ok
+        problems << "size #{size.join('x')} is not #{spec['ratio'].join(':')} from #{spec['minSize'].join('x')} to #{spec['maxSize'].join('x')}"
+      end
+    end
+    if spec.fetch("type") == "image"
+      if extension == "png"
+        color = File.binread(path, 26).getbyte(25)
+        problems << "the PNG has an alpha channel" if [4, 6].include?(color) && spec["alpha"] == false
+      end
+    else
+      duration = Float(info.dig("format", "duration"))
+      low, high = spec.fetch("seconds")
+      problems << format("duration %.2fs is outside %d to %d seconds", duration, low, high) unless duration.round(2).between?(low, high)
+      rate = frame_rate(video)
+      problems << format("frame rate %.2f is not %s", rate, spec.fetch("fps").join(" or ")) unless spec.fetch("fps").any? { |value| (rate - value).abs < 0.01 }
+      problems << "codec #{video['codec_name']} is not #{spec['codecs'].join(' or ')}" if spec["codecs"] && !spec["codecs"].include?(video["codec_name"])
+      problems << "file is larger than #{spec['maxBytes'] / 1024 / 1024} MB" if spec["maxBytes"] && File.size(path) > spec["maxBytes"]
+    end
+    fail!("#{File.basename(path)} does not meet the #{kind} specification: #{problems.join('; ')}") unless problems.empty?
+    {"status" => "conforms", "kind" => kind, "file" => path, "sha256" => sha256(path), "width" => size[0], "height" => size[1],
+     "specCheckedOn" => ASSET_SPECS.fetch("checkedOn"), "source" => ASSET_SPECS.fetch("sources").fetch(spec.fetch("source"))}
+  end
+
+  # --- poster frame candidates (D-085, #392) -------------------------------------------------------
+
+  # Extracts one still per candidate time from an encoded App Preview for the poster sheet. Every time
+  # must lie inside the video; the stills and their record go to a new directory.
+  def poster_frames(options)
+    %w[video times out].each { |name| fail!("missing option: --#{name}") unless options.key?(name) }
+    unknown = options.keys - %w[video times out]
+    fail!("unknown option: --#{unknown.first}") unless unknown.empty?
+    video = regular!(File.expand_path(options.fetch("video")), "preview video")
+    out = File.expand_path(options.fetch("out"))
+    fail!("poster frame directory already exists and is never replaced: #{out}") if File.exist?(out) || File.symlink?(out)
+    duration = Float(probe(video).dig("format", "duration"))
+    times = options.fetch("times").split(",").map { |item| Float(item) }
+    fail!("give one to six poster frame times") unless (1..6).cover?(times.length) && times.uniq.length == times.length
+    times.each do |seconds|
+      next if seconds >= 0 && seconds < duration
+      fail!(format("poster frame time %.2f is outside the %.2f-second preview", seconds, duration))
+    end
+    work = Dir.mktmpdir(".poster-frames-", File.dirname(out))
+    begin
+      frames = times.map do |seconds|
+        id = "t#{format('%.2f', seconds).sub(/\.?0+\z/, '').tr('.', '-')}"
+        image = File.join(work, "#{id}.png")
+        capture!("ffmpeg", "-loglevel", "error", "-ss", seconds.to_s, "-i", video, "-frames:v", "1", "-vf", "format=rgb24", image)
+        {"id" => id, "seconds" => seconds, "image" => "#{id}.png", "sha256" => sha256(image)}
+      end
+      record = {"schemaVersion" => SCHEMA_VERSION, "video" => video, "videoSha256" => sha256(video), "durationSeconds" => duration.round(3),
+                "defaultSeconds" => DEFAULT_POSTER_SECONDS, "frames" => frames}
+      File.write(File.join(work, "poster-frames.json"), "#{JSON.pretty_generate(record)}\n")
+      File.rename(work, out)
+      work = nil
+      record.merge("status" => "extracted", "directory" => out)
+    ensure
+      FileUtils.rm_rf(work) if work
+    end
   end
 
   # --- decide --------------------------------------------------------------------------------------

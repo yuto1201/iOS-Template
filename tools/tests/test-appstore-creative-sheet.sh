@@ -2,7 +2,7 @@
 set -euo pipefail
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
-require_test_commands "$0" ruby /usr/bin/sips ffmpeg
+require_test_commands "$0" ruby /usr/bin/sips ffmpeg ffprobe
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 tool="$repo_root/tools/appstore-creative-sheet.sh"
@@ -633,5 +633,46 @@ ruby -rjson -rdigest -e 'selection = JSON.parse(File.read(ARGV[0])).fetch("selec
   abort "header selection: #{selection}" unless selection.values_at("type", "optionId") == %w[header A] &&
     selection.fetch("sha256") == "sha256:#{Digest::SHA256.file(ARGV[1]).hexdigest}" && selection.fetch("videoSha256") == "sha256:#{Digest::SHA256.file(ARGV[2]).hexdigest}"' \
   "$root/h2/selection.json" "$hs/a.png" "$hs/a.mp4"
+
+# D-085 (#392): a poster sheet shows candidate poster frames of one App Preview; the user picks one,
+# whose time is recorded with the video's SHA-256, once. A time outside the video is refused.
+ps="$workspace/poster"; mkdir -p "$ps"
+ffmpeg -y -loglevel error -f lavfi -i "testsrc2=s=320x240:r=30:d=10" -c:v libx264 -preset ultrafast -pix_fmt yuv420p "$ps/preview.mp4"
+for t in 1 5 9; do ffmpeg -y -loglevel error -ss "$t" -i "$ps/preview.mp4" -frames:v 1 -vf format=rgb24 "$ps/t$t.png"; done
+poster_sheet() { # path candidates-json
+  ruby -rjson -e 'File.write(ARGV[0], JSON.generate({"schemaVersion" => 1, "kind" => "poster", "app" => "テストアプリ", "title" => "ポスターフレーム",
+    "video" => "poster/preview.mp4", "candidates" => JSON.parse(ARGV[1])}))' "$1" "$2"
+}
+pc() { ruby -rjson -e 'puts JSON.generate({"id" => ARGV[0], "seconds" => Float(ARGV[1]), "image" => "poster/#{ARGV[2]}", "note" => "花が開く瞬間"})' "$@"; }
+poster_sheet "$workspace/poster.json" "[$(pc t1 1 t1.png),$(pc t5 5 t5.png),$(pc t9 9 t9.png)]"
+"$tool" build --spec "$workspace/poster.json" --root "$root" --revision pf1 >/dev/null
+psheet="$root/pf1/sheet.html"
+grep -Fq "http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';" "$psheet" || fail 'poster sheet lacks the restrictive CSP'
+! grep -Eiq 'https?://|url\(|@import|<script|<iframe|<object|<embed|<link|<form|<video' "$psheet" || fail 'poster sheet can reach the network or run script'
+[[ "$(grep -o '<img src="data:image/png;base64,' "$psheet" | wc -l | tr -d ' ')" == 3 ]] || fail 'poster sheet does not embed every candidate'
+for text in 'App Previewのポスターフレーム' '5秒の位置' '5.00秒' '花が開く瞬間'; do grep -Fq -- "$text" "$psheet" || fail "poster sheet does not show: $text"; done
+poster_sheet "$workspace/poster-outside.json" "[$(pc t1 1 t1.png),$(pc t12 12 t9.png)]"
+expect_failure poster-outside 'poster candidate t12 at 12.00 seconds is outside the 10.00-second preview' "$tool" build --spec "$workspace/poster-outside.json" --root "$root" --revision pf9
+poster_sheet "$workspace/poster-negative.json" "[$(pc tm -1 t1.png)]"
+expect_failure poster-negative 'poster candidate tm at -1.00 seconds is outside the 10.00-second preview' "$tool" build --spec "$workspace/poster-negative.json" --root "$root" --revision pf9
+poster_sheet "$workspace/poster-none.json" "[]"
+expect_failure poster-none 'a poster sheet shows one to six candidate frames; found 0' "$tool" build --spec "$workspace/poster-none.json" --root "$root" --revision pf9
+[[ ! -e "$root/pf9" ]] || fail 'a refused poster sheet left a revision behind'
+expect_failure poster-rebuild 'revision already exists and is never replaced' "$tool" build --spec "$workspace/poster.json" --root "$root" --revision pf1
+expect_failure poster-unknown 'unknown poster candidate id: t3' "$tool" select --sheet "$root/pf1" --pattern t3
+expect_failure poster-tiles 'a poster sheet takes --pattern <candidate ID>' "$tool" select --sheet "$root/pf1" --tiles 1=t1:1
+cp -R "$root/pf1" "$workspace/tampered-pf1"
+printf '<!-- edited -->\n' >>"$workspace/tampered-pf1/sheet.html"
+expect_failure poster-tampered 'sheet.html differs from the sheet record' "$tool" select --sheet "$workspace/tampered-pf1" --pattern t5
+cp -R "$root/pf1" "$workspace/forged-pf1"
+ruby -rjson -e 'path = ARGV[0]; record = JSON.parse(File.read(path)); record["candidates"][1]["seconds"] = 3.0; File.write(path, JSON.generate(record))' "$workspace/forged-pf1/sheet.json"
+expect_failure poster-forged 'sheet.json differs from the displayed sheet' "$tool" select --sheet "$workspace/forged-pf1" --pattern t5
+"$tool" select --sheet "$root/pf1" --pattern t5 >/dev/null
+ruby -rjson -rdigest -e 'value = JSON.parse(File.read(ARGV[0])); record = JSON.parse(File.read(ARGV[1]))
+  selection = value.fetch("selection")
+  abort "poster selection: #{value}" unless selection.values_at("type", "candidateId", "seconds") == ["poster", "t5", 5.0] &&
+    selection.fetch("videoSha256") == "sha256:#{Digest::SHA256.file(ARGV[2]).hexdigest}" && value.fetch("decision") == "user-explicit" &&
+    value.fetch("sheetSha256") == record.fetch("sheetSha256")' "$root/pf1/selection.json" "$root/pf1/sheet.json" "$ps/preview.mp4"
+expect_failure poster-reselect 'a selection is already recorded for this sheet and is never replaced' "$tool" select --sheet "$root/pf1" --pattern t1
 
 echo 'appstore-creative sheet tests passed'
