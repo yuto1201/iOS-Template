@@ -253,4 +253,57 @@ jq -e --arg sha "sha256:$(shasum -a 256 "$workspace/trial.json" | cut -d' ' -f1)
 jq -e '.decision == "no-video" and (has("trial") | not) and .choice == "user-explicit"' "$decisions/early/preview-decision.json" >/dev/null ||
   fail 'early no-video decision record is incomplete'
 
+# D-085 (#391): the product page header video. 3840x1646, 30 or 60 fps, 5 to 30 seconds, H.264, silent,
+# and a loop with no visible seam; a recording placed outside the safe area is refused.
+hv="$workspace/header-video"; mkdir -p "$hv"
+ffmpeg -y -loglevel error -f lavfi -i "color=c=0xE9EFF5:s=3840x1646,format=rgb24" -frames:v 1 "$hv/background.png"
+ffmpeg -y -loglevel error -f lavfi -i "color=c=0xE9EFF5:s=1920x1080,format=rgb24" -frames:v 1 "$hv/wide.png"
+# A landscape recording whose colors turn over time, so its first and last frames differ clearly.
+header_clip() { # path seconds fps
+  ffmpeg -y -loglevel error -f lavfi -i "testsrc2=s=1200x500:r=$3:d=$2" -vf "hue=h=t*25" "${encode[@]}" "$1"
+}
+header_clip "$hv/clip8.mp4" 8 30
+header_clip "$hv/clip6-60.mp4" 6 60
+header_clip "$hv/clip4.mp4" 4 30
+header_clip "$hv/clip32.mp4" 32 30
+screen=0.3,0.304,0.4
+"$tool" encode-header --background "$hv/background.png" --clip "$hv/clip8.mp4" --screen "$screen" --output "$hv/loop.mp4" >"$hv/loop.json"
+ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0]))
+  abort "header video: #{value}" unless value.values_at("status", "width", "height", "codec", "fps", "audio", "loop") == ["encoded", 3840, 1646, "h264", 30, false, "crossfade"] &&
+    (value.fetch("durationSeconds") - 7.5).abs < 0.1 && value.fetch("seam") <= 6.0 && value.fetch("sha256").match?(/\Asha256:[0-9a-f]{64}\z/)' "$hv/loop.json"
+[[ "$(ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "$hv/loop.mp4")" == "" ]] || fail 'header video has an audio track'
+"$tool" encode-header --background "$hv/background.png" --clip "$hv/clip6-60.mp4" --screen "$screen" --fps 60 --output "$hv/loop60.mp4" >"$hv/loop60.json"
+ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); abort "60 fps header: #{value}" unless value.fetch("fps") == 60 && (value.fetch("durationSeconds") - 5.5).abs < 0.1' "$hv/loop60.json"
+"$tool" encode-header --background "$hv/background.png" --seconds 5 --output "$hv/still.mp4" >"$hv/still.json"
+ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); abort "still header: #{value}" unless value.fetch("seam") == 0.0 && value.fetch("fps") == 30' "$hv/still.json"
+# The video check uses the same safe area as the render extension measured from Apple's template.
+"$repo_root/tools/appstore-creative-render.sh" describe-header >"$hv/describe.json"
+ruby -rjson -e 'render = JSON.parse(File.read(ARGV[0])).fetch("safeArea"); video = JSON.parse(File.read(ARGV[1])).fetch("safeArea")
+  abort "safe areas differ: #{render} #{video}" unless render.slice("x", "y", "width", "height") == video' "$hv/describe.json" "$hv/loop.json"
+# Inputs outside the format are refused before anything is written.
+expect_failure header-short 'the header video would run 3.50 seconds; a product page header runs 5 to 30 seconds' \
+  "$tool" encode-header --background "$hv/background.png" --clip "$hv/clip4.mp4" --screen "$screen" --output "$hv/short.mp4"
+expect_failure header-long 'the header video would run 31.50 seconds; a product page header runs 5 to 30 seconds' \
+  "$tool" encode-header --background "$hv/background.png" --clip "$hv/clip32.mp4" --screen "$screen" --output "$hv/long.mp4"
+expect_failure header-size 'header background is 1920x1080; a product page header is 3840x1646' \
+  "$tool" encode-header --background "$hv/wide.png" --clip "$hv/clip8.mp4" --screen "$screen" --output "$hv/size.mp4"
+expect_failure header-fps 'header fps must be 30 or 60' \
+  "$tool" encode-header --background "$hv/background.png" --clip "$hv/clip8.mp4" --screen "$screen" --fps 24 --output "$hv/fps.mp4"
+expect_failure header-safe-area 'the clip on the header runs outside the safe area' \
+  "$tool" encode-header --background "$hv/background.png" --clip "$hv/clip8.mp4" --screen 0.02,0.05,0.4 --output "$hv/outside.mp4"
+# Without the crossfade the colors jump at the loop point, so the seam check refuses the video.
+expect_failure header-seam 'the loop seam differs by' \
+  "$tool" encode-header --background "$hv/background.png" --clip "$hv/clip8.mp4" --screen "$screen" --loop none --output "$hv/jump.mp4"
+for refused in short long size fps outside jump; do [[ ! -e "$hv/$refused.mp4" ]] || fail "a refused header video was written: $refused"; done
+before=$(shasum -a 256 "$hv/loop.mp4")
+expect_failure header-overwrite 'output already exists and is never replaced' \
+  "$tool" encode-header --background "$hv/background.png" --clip "$hv/clip8.mp4" --screen "$screen" --output "$hv/loop.mp4"
+[[ "$(shasum -a 256 "$hv/loop.mp4")" == "$before" ]] || fail 'encode-header replaced an existing header video'
+# verify-header checks a finished header video, for example one made elsewhere.
+"$tool" verify-header --video "$hv/loop.mp4" | jq -e '.status == "valid" and .fps == 30 and .audio == false' >/dev/null || fail 'verify-header refused a valid header'
+ffmpeg -y -loglevel error -i "$hv/loop.mp4" -f lavfi -i anullsrc=r=48000:cl=stereo -shortest -c:v copy -c:a aac "$hv/with-audio.mp4"
+expect_failure header-audio 'it has an audio track; a header is silent by default' "$tool" verify-header --video "$hv/with-audio.mp4"
+clip "$hv/portrait.mp4" 886x1920 6
+expect_failure header-portrait 'size 886x1920 is not 3840x1646' "$tool" verify-header --video "$hv/portrait.mp4"
+
 echo 'appstore-creative preview encode and decision tests passed'

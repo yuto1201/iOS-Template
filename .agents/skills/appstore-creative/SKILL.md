@@ -133,6 +133,16 @@ Goldie 0.3.1 draws image layers over the headline, so every full-tile generated 
   locales use the same tile kinds in the same order; iPhone and iPad use the same
   pattern with device-specific placement.
 
+## Product page header (D-085)
+
+Only when the user asks; "no header" is a valid answer. The header is a 21:9 3840×1646
+image or a 5–30 second silent loop above the screenshots on iOS 27 and iPadOS 27. Render
+the still with `tools/appstore-creative-render.sh render-header` (text, logos and the
+focal point inside the safe area from Apple's official template), make the loop with
+`tools/appstore-creative-preview.sh encode-header`, compare options on a `header` sheet
+and record the choice, and check every crop in App Store Connect's Preview tool before
+publishing. Details: [product page header](references/extension.md#product-page-header-d-085).
+
 ## Preview video (D-077)
 
 Only when the user asks, and "no video" is a valid answer at every gate. Details:

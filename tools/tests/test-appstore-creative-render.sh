@@ -430,6 +430,56 @@ expect_sheet_failure e2e-changed-background 'tile 1 of A uses sky.png, which cha
 cp "$workspace/sky.original.png" "$workspace/app/goldie/assets/sky.png"
 [[ ! -e "$proposal_dir/sheets/p-refused" ]] || fail 'a refused end-to-end proposal left a revision behind'
 
+# 9. D-085 (#391): the product page header still. 3840x1646 without alpha; the safe area comes from the
+# Art Safe Area layer of Apple's official template, with its source; text and protected layers must stay
+# inside it and out of the top corners.
+"$tool" describe-header >"$workspace/header-describe.json"
+ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); area = value.fetch("safeArea")
+  abort "header size" unless value.fetch("header") == {"width" => 3840, "height" => 1646}
+  abort "safe area: #{area}" unless area.values_at("x", "y", "width", "height") == [1097, 493, 1646, 661]
+  source = area.fetch("source")
+  abort "safe area source: #{source}" unless source.fetch("template").include?("product_page_header_template") &&
+    source.fetch("url").start_with?("https://devimages-cdn.apple.com/") && source.fetch("checkedOn").match?(/\A\d{4}-\d{2}-\d{2}\z/)' "$workspace/header-describe.json"
+hdir="$workspace/header"; mkdir -p "$hdir"
+cp "$workspace/app/goldie/assets/magenta.png" "$workspace/app/goldie/assets/cyan.png" "$hdir/"
+header_spec() { # name extra-json
+  ruby -rjson -e 'value = {"schemaVersion" => 1, "background" => "#E9EFF5",
+    "layers" => [{"src" => "magenta.png", "x" => 0.45, "y" => 0.4, "width" => 0.1, "role" => "focal"},
+                 {"src" => "cyan.png", "x" => 0.02, "y" => 0.6, "width" => 0.2, "role" => "decoration"}],
+    "texts" => [{"text" => "雨の日も、花が教えてくれる", "x" => 0.5, "y" => 0.32, "size" => 0.05, "align" => "center", "color" => "#111111"}]}
+    value.merge!(JSON.parse(ARGV[2])) unless ARGV[2].to_s.empty?
+    File.write(File.join(ARGV[0], "#{ARGV[1]}.json"), JSON.generate(value))' "$hdir" "$1" "${2:-}"
+}
+expect_header_failure() { # label message spec
+  if "$tool" render-header --runtime "$runtime" --spec "$hdir/$3.json" --out "$hdir/$3.png" >"$workspace/$1.out" 2>"$workspace/$1.err"; then fail "render-header accepted $1"; fi
+  grep -Fq -- "$2" "$workspace/$1.err" || { cat "$workspace/$1.err" >&2; fail "unexpected failure for $1"; }
+  [[ ! -e "$hdir/$3.png" ]] || fail "a refused header was written: $1"
+}
+header_spec good
+"$tool" render-header --runtime "$runtime" --spec "$hdir/good.json" --out "$hdir/good.png" >"$workspace/header-good.json"
+[[ "$(png_info "$hdir/good.png")" == "3840x1646 color2" ]] || fail "header still has the wrong size or an alpha channel: $(png_info "$hdir/good.png")"
+(( $(pixels "$hdir/good.png" 255,0,255) > 50000 )) && (( $(pixels "$hdir/good.png" 0,255,255) > 50000 )) || fail 'header still lost a layer'
+(( $(pixels "$hdir/good.png" 17,17,17) > 1000 )) || fail 'header still lost its text'
+ruby -rjson -rdigest -e 'record = JSON.parse(File.read(ARGV[0]))
+  abort "header record" unless record.fetch("kind") == "product-page-header" && record.fetch("sha256") == "sha256:#{Digest::SHA256.file(ARGV[1]).hexdigest}" &&
+    record.dig("safeArea", "source", "checkedOn") && record.fetch("layers").map { |layer| layer.fetch("role") } == %w[focal decoration]' "$hdir/good.png.json" "$hdir/good.png"
+good_before=$(shasum -a 256 "$hdir/good.png")
+if "$tool" render-header --runtime "$runtime" --spec "$hdir/good.json" --out "$hdir/good.png" >/dev/null 2>"$workspace/header-overwrite.err"; then fail "render-header replaced an existing header"; fi
+grep -Fq "header output already exists and is never replaced" "$workspace/header-overwrite.err" || fail "unexpected overwrite failure"
+[[ "$(shasum -a 256 "$hdir/good.png")" == "$good_before" ]] || fail "render-header changed an existing header"
+header_spec text-out '{"texts":[{"text":"はみ出す見出し","x":0.05,"y":0.32,"size":0.05}]}'
+expect_header_failure header-text-out 'header text 1 runs outside the safe area' text-out
+header_spec logo-out '{"layers":[{"src":"magenta.png","x":0.8,"y":0.5,"width":0.1,"role":"logo"}]}'
+expect_header_failure header-logo-out 'header layer 1 is marked logo and runs outside the safe area' logo-out
+header_spec rotated-focal '{"layers":[{"src":"magenta.png","x":0.64,"y":0.5,"width":0.05,"rotate":45,"role":"focal"}]}'
+"$tool" render-header --runtime "$runtime" --spec "$hdir/rotated-focal.json" --out "$hdir/rotated-focal.png" >/dev/null
+header_spec rotated-out '{"layers":[{"src":"magenta.png","x":0.655,"y":0.5,"width":0.05,"rotate":45,"role":"focal"}]}'
+expect_header_failure header-rotated-out 'header layer 1 is marked focal and runs outside the safe area' rotated-out
+header_spec no-source '{"safeArea":{"x":0,"y":0,"width":3840,"height":1646}}'
+expect_header_failure header-safe-area-source 'safeArea needs source: the official template, its URL and the date it was checked' no-source
+header_spec corner '{"safeArea":{"x":0,"y":0,"width":3840,"height":1646,"source":{"template":"t.psd","url":"https://developer.apple.com/t","checkedOn":"2026-10-22"}},"texts":[{"text":"角","x":0.01,"y":0.02,"size":0.05}],"layers":[]}'
+expect_header_failure header-corner 'header text 1 sits in a top corner under the buttons' corner
+
 # 6. The installed runtime is never written to.
 [[ "$(runtime_digest)" == "$before_runtime" ]] || fail 'render changed the installed Goldie runtime'
 
