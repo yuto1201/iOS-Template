@@ -35,7 +35,7 @@ ruby -rzlib -e '
 printf 'not an image\n' >"$workspace/broken.png"
 # The default render record lists every tile image with no generated inputs.
 ruby -rjson -rdigest -e 'dir = ARGV[0]; files = %w[device pair scene concept callout broken].map { |name| File.join(dir, "#{name}.png") }
-  File.write(File.join(dir, "render.json"), JSON.generate({"schemaVersion" => 1,
+  File.write(File.join(dir, "render.json"), JSON.generate({"schemaVersion" => 1, "inputInventory" => "complete-v1",
     "files" => files.map { |path| {"path" => path, "sha256" => "sha256:#{Digest::SHA256.file(path).hexdigest}"} }, "backgrounds" => []}))' "$workspace"
 
 # D-085: a proposal starts from the app's identity (brand.json), a research record of reference apps,
@@ -502,7 +502,7 @@ render_record() { # name concept-inputs-json  (each input: {"via": "background"|
     digest = ->(path) { "sha256:#{Digest::SHA256.file(path).hexdigest}" }
     files = %w[device pair scene concept callout].map { |name| File.join(dir, "#{name}.png") } + [File.join(dir, "broken.png")]
     index = files.index(File.join(dir, "concept.png")) + 1
-    record = {"schemaVersion" => 1, "files" => files.map { |path| {"path" => path, "sha256" => digest.(path)} },
+    record = {"schemaVersion" => 1, "inputInventory" => "complete-v1", "files" => files.map { |path| {"path" => path, "sha256" => digest.(path)} },
       "backgrounds" => inputs.select { |input| input["via"] == "background" }.map { |input| path = File.join(dir, input["path"])
         {"file" => File.join(dir, "concept.png"), "source" => path, "sourceSha256" => digest.(path)} },
       "layers" => inputs.select { |input| input["via"] == "layer" }.map { |input| path = File.join(dir, input["path"])
@@ -541,6 +541,11 @@ expect_failure material-direct 'tile 2 of D uses dusk.png, which the user reject
 write_spec "$workspace/unrendered.json" proposal "[$good,$early,$(pattern E "$(tiles photo device scene pair device device pair | sed 's/"image":"scene.png"/"image":"materials\/unseen.png"/')")]" \
   '{"materialReviews":["store-creative/m1"]}'
 expect_failure material-unrendered 'tile 2 of E is in no render record' "$tool" build --spec "$workspace/unrendered.json" --root "$root" --revision m9
+# A render record that does not say it lists every input (an old render) is refused.
+ruby -rjson -e 'path = ARGV[0]; record = JSON.parse(File.read(path)); record.delete("inputInventory"); File.write(ARGV[1], JSON.generate(record))' \
+  "$workspace/render-adopted.json" "$workspace/render-old.json"
+write_spec "$workspace/old-render.json" proposal "[$good,$early,$many]" '{"materialReviews":["store-creative/m1"],"renders":["render-old.json"]}'
+expect_failure old-render 'render record render-old.json has no complete input inventory' "$tool" build --spec "$workspace/old-render.json" --root "$root" --revision m9
 write_spec "$workspace/no-renders.json" proposal "[$good,$early,$many]" '{"renders":[]}'
 expect_failure no-renders 'a proposal needs renders' "$tool" build --spec "$workspace/no-renders.json" --root "$root" --revision m9
 # A review that no longer matches its sheet is never trusted.

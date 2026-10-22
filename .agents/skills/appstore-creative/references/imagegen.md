@@ -128,9 +128,10 @@ it is never replaced.
 A proposal then names the reviews in `materialReviews` and the render records of its
 tiles in `renders` (the `creative-render-<device>-<locale>.json` files of
 `tools/appstore-creative-render.sh`). For every tile, the build reads from its render
-record which generated images it was drawn from (the background slice and every layer on
-it) and refuses an image the user rejected, one that changed after the review, one never
-reviewed, a rejected material used directly as a tile, and a tile in no render record.
+record which generated images it was drawn from (the background slice, every layer on it
+and Goldie's image decorations) and refuses an image the user rejected, one that changed
+after the review, one never reviewed, a rejected material used directly as a tile, a tile
+in no render record, and a record that does not say it lists every input.
 
 ## Keep and record
 

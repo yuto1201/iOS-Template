@@ -49,6 +49,8 @@ module AppStoreCreativeSheet
   CUTOUT_MIN_TRANSPARENT = 0.10
   CUTOUT_MAX_RESIDUE = 0.005
   CUTOUT_KEY_DISTANCE = 60
+  # The render extension marks a record that lists every image input of every tile (D-085, #401).
+  RENDER_INVENTORY = "complete-v1"
   STORYBOARD_COUNT = 2
   PREVIEW_SECONDS = (15..30).freeze
   STATE_PATTERN = /\A[a-z0-9][a-z0-9-]{0,31}\z/
@@ -1112,9 +1114,17 @@ module AppStoreCreativeSheet
       unless record.is_a?(Hash) && record["schemaVersion"] == SCHEMA_VERSION && record["files"].is_a?(Array) && !record["files"].empty?
         fail!("render record #{File.basename(path)} must have schemaVersion 1 and files")
       end
+      # Only a record that lists every image input of every tile can show that a tile is clean.
+      unless record["inputInventory"] == RENDER_INVENTORY
+        fail!("render record #{File.basename(path)} has no complete input inventory; render the tiles again with tools/appstore-creative-render.sh")
+      end
       backgrounds = record.fetch("backgrounds", [])
       layers = record.fetch("layers", [])
-      fail!("render record #{File.basename(path)} backgrounds and layers must be lists") unless backgrounds.is_a?(Array) && layers.is_a?(Array)
+      decorations = record.fetch("decorations", [])
+      unless backgrounds.is_a?(Array) && layers.is_a?(Array) && decorations.is_a?(Array)
+        fail!("render record #{File.basename(path)} backgrounds, layers and decorations must be lists")
+      end
+      layers += decorations
       record.fetch("files").each_with_index do |file, position|
         unless file.is_a?(Hash) && file["path"].is_a?(String) && file["sha256"].is_a?(String) && file["sha256"].match?(DIGEST_PATTERN)
           fail!("render record #{File.basename(path)} lists a file without path and sha256")

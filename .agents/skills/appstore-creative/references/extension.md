@@ -124,8 +124,12 @@ background, device or illustration, headline, one accent). Layers, popouts and a
 coming in from a neighbor each count. Fix the tile or say why in the proposal's `tradeoffs`.
 
 The render record adds `layers` (scene, image SHA-256, position, role, tiles, crossing),
-`popouts` and `screens` (capture, its SHA-256 and region), `stories` (the parts) and
-`marks`.
+`decorations` (Goldie's image decorations of each scene and the theme: path, SHA-256 and
+tiles), `popouts` and `screens` (capture, its SHA-256 and region), `stories` (the parts) and
+`marks`. With `backgrounds` it lists every image input of every tile apart from the real
+captures, and says so with `inputInventory: "complete-v1"`; the proposal sheet reads it to
+check that every generated input was adopted by the user and refuses an older record
+without that mark.
 
 ## iPad 13-inch
 

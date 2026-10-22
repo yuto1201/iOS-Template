@@ -175,8 +175,10 @@ material definition and build it like any sheet:
 - `renders` names the render records of the tiles (`out/creative-render-<device>-<locale>.json`
   from `tools/appstore-creative-render.sh`) and `materialReviews` the reviewed material
   sheets. Every tile must appear in a render record by its SHA-256; its generated inputs
-  (the background slice and each layer that touches it) must all be adopted on a listed
-  review, byte for byte. The sheet shows how many adopted materials each pattern uses, and
+  (the background slice, each layer that touches it and Goldie's image decorations) must
+  all be adopted on a listed review, byte for byte. A record without
+  `inputInventory: "complete-v1"` (rendered before the record listed every input) is
+  refused; render the tiles again. The sheet shows how many adopted materials each pattern uses, and
   `sheet.json` keeps their SHA-256.
 - Exactly one pattern is `recommended`, with the `recommendation`: the one you think is
   best. The others carry `"recommended": false` and no reason.
