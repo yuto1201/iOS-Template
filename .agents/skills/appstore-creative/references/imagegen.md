@@ -125,9 +125,12 @@ a decision — show a new revision and ask again. `material-review.json` keeps t
 revision, the sheet's SHA-256, each material's SHA-256 and decision, and `user-explicit`;
 it is never replaced.
 
-A proposal then names the reviews in `materialReviews` and, per pattern, every generated
-image it uses in `materials`; the build refuses an image the user rejected, one that
-changed after the review, and one never reviewed.
+A proposal then names the reviews in `materialReviews` and the render records of its
+tiles in `renders` (the `creative-render-<device>-<locale>.json` files of
+`tools/appstore-creative-render.sh`). For every tile, the build reads from its render
+record which generated images it was drawn from (the background slice and every layer on
+it) and refuses an image the user rejected, one that changed after the review, one never
+reviewed, a rejected material used directly as a tile, and a tile in no render record.
 
 ## Keep and record
 

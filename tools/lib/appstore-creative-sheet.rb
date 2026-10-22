@@ -202,7 +202,7 @@ module AppStoreCreativeSheet
   def validate_spec(spec, base)
     fail!("pattern definition must be an object") unless spec.is_a?(Hash)
     allowed = %w[schemaVersion kind app title brief patterns]
-    allowed += %w[brand research captures headlineLimits materialReviews] if spec["kind"] == "proposal"
+    allowed += %w[brand research captures headlineLimits materialReviews renders] if spec["kind"] == "proposal"
     extra = spec.keys - allowed
     fail!("unknown pattern definition field: #{extra.first}") unless extra.empty?
     fail!("pattern definition schemaVersion must be #{SCHEMA_VERSION}") unless spec["schemaVersion"] == SCHEMA_VERSION
@@ -232,7 +232,8 @@ module AppStoreCreativeSheet
       verify_screens!(brand, capture_inventory(captures_record))
       reviews = spec.fetch("materialReviews", [])
       fail!("materialReviews must be a list of material sheet directories") unless reviews.is_a?(Array) && reviews.all? { |item| item.is_a?(String) && !item.empty? }
-      spec = spec.merge("materialReviewRecords" => reviews.map { |item| load_review(File.expand_path(item, base)) })
+      spec = spec.merge("materialReviewRecords" => reviews.map { |item| load_review(File.expand_path(item, base)) },
+                        "renderIndex" => render_index(spec["renders"], base))
       research_record = load_json(File.expand_path(spec["research"], base), "research record")
       research = validate_research(research_record.fetch("value"))
       spec = spec.merge("brandRecord" => brand_record.merge("value" => brand), "capturesRecord" => captures_record,
@@ -260,7 +261,7 @@ module AppStoreCreativeSheet
   def validate_pattern(pattern, base, kind, spec)
     fail!("each pattern must be an object") unless pattern.is_a?(Hash)
     allowed = %w[id title hypothesis tradeoffs tiles]
-    allowed += %w[recommended recommendation style techniques materials] if kind == "proposal"
+    allowed += %w[recommended recommendation style techniques] if kind == "proposal"
     extra = pattern.keys - allowed
     fail!("unknown pattern field: #{extra.first}") unless extra.empty?
     id = pattern["id"]
@@ -283,6 +284,7 @@ module AppStoreCreativeSheet
       fail!("a proposal shows only Japanese iPhone tiles; pattern #{id} has #{groups.keys.map { |key| key.join('/') }.join(', ')}")
     end
     fail!("storyboard #{id} must use one device and locale") if kind == "storyboard" && groups.length != 1
+    pattern = pattern.merge("materialRecords" => verify_tile_materials!(id, validated, spec)) if kind == "proposal"
     pattern.merge("tiles" => validated)
   end
 
@@ -544,11 +546,7 @@ module AppStoreCreativeSheet
       token!(technique, "pattern #{id} technique")
       fail!("pattern #{id} uses technique #{technique} that the research record does not list") unless known.include?(technique)
     end
-    # Every generated material the pattern draws on is listed, even when the list is empty.
-    paths = pattern["materials"]
-    fail!("pattern #{id} needs materials: the generated images it uses, or an empty list") unless paths.is_a?(Array) && paths.all? { |item| item.is_a?(String) && !item.empty? }
-    materials = verify_materials!(id, paths.map { |item| File.expand_path(item, base) }, spec.fetch("materialReviewRecords"))
-    pattern.merge("styleRecord" => style_record.merge("value" => style), "materialRecords" => materials)
+    pattern.merge("styleRecord" => style_record.merge("value" => style))
   end
 
   def validate_proposal_tile(tile, id, spec)
@@ -1102,22 +1100,70 @@ module AppStoreCreativeSheet
      "reviewSha256" => "sha256:#{Digest::SHA256.file(File.join(directory, 'material-review.json')).hexdigest}"}
   end
 
-  # A pattern may use only generated material the user adopted on a material sheet, byte for byte.
-  def verify_materials!(id, paths, reviews)
-    paths.map do |path|
-      fail!("pattern #{id} material must be a regular file: #{path}") unless File.file?(path) && !File.symlink?(path)
-      digest = "sha256:#{Digest::SHA256.file(path).hexdigest}"
-      decisions = reviews.flat_map { |review| review.fetch("decisions").select { |entry| entry.fetch("sha256") == digest } }
-      if decisions.any? { |entry| entry.fetch("decision") == "adopted" }
-        {"path" => path, "sha256" => digest}
-      elsif decisions.any?
-        fail!("pattern #{id} uses #{File.basename(path)}, which the user rejected")
-      elsif reviews.any? { |review| review.fetch("sources").key?(path) }
-        fail!("pattern #{id} uses #{File.basename(path)}, which changed after the user reviewed it")
-      else
-        fail!("pattern #{id} uses #{File.basename(path)}, which the user has not adopted on a material sheet")
+  # The render records of tools/appstore-creative-render.sh (creative-render-<device>-<locale>.json) say,
+  # for each output tile, which generated images it was drawn from: its background slice and every
+  # layer that touches it. The index maps each tile's SHA-256 to those inputs.
+  def render_index(paths, base)
+    fail!("a proposal needs renders: the creative-render records of its tiles") unless paths.is_a?(Array) && !paths.empty? &&
+      paths.all? { |item| item.is_a?(String) && !item.empty? }
+    paths.each_with_object({}) do |item, index|
+      path = File.expand_path(item, base)
+      record = JSON.parse(read_regular(path, "render record"))
+      unless record.is_a?(Hash) && record["schemaVersion"] == SCHEMA_VERSION && record["files"].is_a?(Array) && !record["files"].empty?
+        fail!("render record #{File.basename(path)} must have schemaVersion 1 and files")
+      end
+      backgrounds = record.fetch("backgrounds", [])
+      layers = record.fetch("layers", [])
+      fail!("render record #{File.basename(path)} backgrounds and layers must be lists") unless backgrounds.is_a?(Array) && layers.is_a?(Array)
+      record.fetch("files").each_with_index do |file, position|
+        unless file.is_a?(Hash) && file["path"].is_a?(String) && file["sha256"].is_a?(String) && file["sha256"].match?(DIGEST_PATTERN)
+          fail!("render record #{File.basename(path)} lists a file without path and sha256")
+        end
+        inputs = backgrounds.select { |entry| entry.is_a?(Hash) && entry["file"] == file["path"] }
+                            .map { |entry| {"sha256" => entry["sourceSha256"], "path" => entry["source"]} }
+        inputs += layers.select { |entry| entry.is_a?(Hash) && entry["tiles"].is_a?(Array) && entry["tiles"].include?(position + 1) }
+                        .map { |entry| {"sha256" => entry["sha256"], "path" => entry["src"]} }
+        inputs.each do |input|
+          next if input["sha256"].is_a?(String) && input["sha256"].match?(DIGEST_PATTERN) && input["path"].is_a?(String)
+          fail!("render record #{File.basename(path)} lists an input without source and sha256")
+        end
+        (index[file["sha256"]] ||= []).concat(inputs)
       end
     end
+  end
+
+  # A tile may draw only on generated material the user adopted, byte for byte: every input its render
+  # record names, and the tile image itself when it is a reviewed material.
+  def verify_tile_materials!(id, tiles, spec)
+    reviews = spec.fetch("materialReviewRecords")
+    index = spec.fetch("renderIndex")
+    decisions_for = ->(digest) { reviews.flat_map { |review| review.fetch("decisions").select { |entry| entry.fetch("sha256") == digest } } }
+    adopted = []
+    tiles.each do |tile|
+      label = "tile #{tile.fetch('slot')} of #{id}"
+      source = tile.fetch("source")
+      digest = "sha256:#{Digest::SHA256.hexdigest(read_regular(source, "#{label} image"))}"
+      inputs = index[digest] or
+        fail!("#{label} is in no render record; render it with tools/appstore-creative-render.sh and list the record in renders")
+      direct = decisions_for.(digest)
+      if direct.any? && direct.none? { |entry| entry.fetch("decision") == "adopted" }
+        fail!("#{label} uses #{File.basename(source)}, which the user rejected")
+      end
+      inputs.each do |input|
+        decisions = decisions_for.(input.fetch("sha256"))
+        name = File.basename(input.fetch("path"))
+        if decisions.any? { |entry| entry.fetch("decision") == "adopted" }
+          adopted << input.fetch("sha256")
+        elsif decisions.any?
+          fail!("#{label} uses #{name}, which the user rejected")
+        elsif reviews.any? { |review| review.fetch("sources").key?(File.expand_path(input.fetch("path"))) }
+          fail!("#{label} uses #{name}, which changed after the user reviewed it")
+        else
+          fail!("#{label} uses #{name}, which the user has not adopted on a material sheet")
+        end
+      end
+    end
+    adopted.uniq.map { |digest| {"sha256" => digest} }
   end
 
   # --- cutout --------------------------------------------------------------------------------------

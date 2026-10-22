@@ -140,6 +140,7 @@ material definition and build it like any sheet:
   "research": "research.json",
   "captures": "../../goldie/ja/out/raw/iphone-6.3/manifest.json",
   "materialReviews": ["../flower-m1"],
+  "renders": ["../../goldie/ja/out/creative-render-iphone-6.3-ja.json"],
   "headlineLimits": {"ja": 16, "en-US": 36},
   "patterns": [
     {
@@ -151,7 +152,6 @@ material definition and build it like any sheet:
       "recommendation": "最初の3枚だけで、何ができるかと世界観が伝わる。",
       "style": "style-A.json",
       "techniques": ["story-across"],
-      "materials": ["../flower-m1/generated/garden.png"],
       "tiles": [
         {"slot": 1, "kind": "scene", "device": "iphone", "locale": "ja",
          "image": "goldie/ja/out/screenshots/iphone-6.3/ja/01-rain.png", "caption": "雨の日",
@@ -172,11 +172,12 @@ material definition and build it like any sheet:
   `background` and `headlines` (two to six candidates per locale). `decorations` is
   optional. `headlineLimits` is optional; the default guide is 16 Japanese characters
   (spaces not counted) and 36 English characters.
-- Every pattern lists in `materials` each generated image its tiles draw on (an empty list
-  when it uses none), and `materialReviews` names the reviewed material sheets. The build
-  refuses an image the user rejected, one whose bytes changed after the review, and one
-  that no listed review adopted; the sheet shows how many adopted materials each pattern
-  uses, and `sheet.json` keeps their SHA-256.
+- `renders` names the render records of the tiles (`out/creative-render-<device>-<locale>.json`
+  from `tools/appstore-creative-render.sh`) and `materialReviews` the reviewed material
+  sheets. Every tile must appear in a render record by its SHA-256; its generated inputs
+  (the background slice and each layer that touches it) must all be adopted on a listed
+  review, byte for byte. The sheet shows how many adopted materials each pattern uses, and
+  `sheet.json` keeps their SHA-256.
 - Exactly one pattern is `recommended`, with the `recommendation`: the one you think is
   best. The others carry `"recommended": false` and no reason.
 - Headlines are provisional until the App Store copy guide (ASO) exists; then align
@@ -214,8 +215,9 @@ SHA-256 of `brand.json`, the research record and each style spec. The build refu
   capture in the `captures` manifest, a color or
   font outside `brand.json` without a reason, or fewer than three reference apps;
 - a pattern without a style spec, or using a technique the research does not list;
-- a pattern without `materials`, or using a generated image that no material review
-  adopted, that the user rejected, or that changed after the review;
+- a tile in no render record, or drawn from a generated image that no material review
+  adopted, that the user rejected, or that changed after the review, and a rejected
+  material placed directly as a tile;
 - two patterns that share the signature element, or that use the same layouts and
   backgrounds in the same order (one pattern shown twice).
 

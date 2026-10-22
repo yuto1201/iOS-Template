@@ -33,6 +33,10 @@ ruby -rzlib -e '
     "concept" => [150, 60, 170], "callout" => [220, 60, 60] }.each { |name, rgb| png(File.join(dir, "#{name}.png"), 132, 287, rgb) }
 ' "$workspace"
 printf 'not an image\n' >"$workspace/broken.png"
+# The default render record lists every tile image with no generated inputs.
+ruby -rjson -rdigest -e 'dir = ARGV[0]; files = %w[device pair scene concept callout broken].map { |name| File.join(dir, "#{name}.png") }
+  File.write(File.join(dir, "render.json"), JSON.generate({"schemaVersion" => 1,
+    "files" => files.map { |path| {"path" => path, "sha256" => "sha256:#{Digest::SHA256.file(path).hexdigest}"} }, "backgrounds" => []}))' "$workspace"
 
 # D-085: a proposal starts from the app's identity (brand.json), a research record of reference apps,
 # and one style spec per pattern. The fixtures are written here; none is committed.
@@ -70,7 +74,7 @@ ruby -rjson -e '
 write_spec() { # path kind patterns-json [extra-json]
   ruby -rjson -e 'value = {"schemaVersion" => 1, "kind" => ARGV[1], "app" => "テストアプリ",
     "title" => "ストア画像の提案", "brief" => "雨と風の動きを主役にする。", "patterns" => JSON.parse(ARGV[2])}
-    value.merge!("brand" => "brand.json", "research" => "research.json", "captures" => "captures.json") if ARGV[1] == "proposal"
+    value.merge!("brand" => "brand.json", "research" => "research.json", "captures" => "captures.json", "renders" => ["render.json"]) if ARGV[1] == "proposal"
     value.merge!(JSON.parse(ARGV[3])) if ARGV[3]
     File.write(ARGV[0], JSON.generate(value.compact))' "$@"
 }
@@ -93,7 +97,7 @@ pattern() { # id tiles-json [recommended]
   style "$1" "決め手の要素$1"
   ruby -rjson -e 'value = {"id" => ARGV[0], "title" => "案#{ARGV[0]}", "hypothesis" => "動きで伝える。",
     "tradeoffs" => "生成画像の質に左右される。", "recommended" => ARGV[2] == "recommended", "style" => "style-#{ARGV[0]}.json",
-    "techniques" => ["story-across", "off-screen-world"], "materials" => JSON.parse(ARGV[3].to_s.empty? ? "[]" : ARGV[3]), "tiles" => JSON.parse(ARGV[1])}
+    "techniques" => ["story-across", "off-screen-world"], "tiles" => JSON.parse(ARGV[1])}
     value["recommendation"] = "検索結果の3枚で動きが伝わる。" if value["recommended"]
     puts JSON.generate(value)' "$1" "$2" "${3:-}" "${4:-}"
 }
@@ -490,35 +494,61 @@ ruby -rjson -rdigest -e 'value = JSON.parse(File.read(ARGV[0])); sheet = JSON.pa
     value.fetch("decisions").first.fetch("sha256") == "sha256:#{Digest::SHA256.file(ARGV[2]).hexdigest}"' "$root/m1/material-review.json" "$root/m1/sheet.json" "$mat/cloud.png"
 expect_failure review-again 'a review is already recorded for this sheet and is never replaced' "$tool" review --sheet "$root/m1" --adopt cloud,sky,dusk
 
-# A proposal pattern may use only adopted material, byte for byte; it lists what it uses.
-with_materials() { # name materials-json-for-pattern-C
-  write_spec "$workspace/$1.json" proposal "[$good,$early,$(pattern C "$(tiles illustration device pair scene concept concept concept)" "" "$2")]" \
-    '{"materialReviews":["store-creative/m1"]}'
+# A proposal tile may draw only on adopted material, byte for byte: the render record of each tile
+# names its generated inputs (background slice and layers), and the tile image itself counts when it
+# is a reviewed material. A tile in no render record is refused.
+render_record() { # name concept-inputs-json  (each input: {"via": "background"|"layer", "path": ...})
+  ruby -rjson -rdigest -e 'dir = ARGV[0]; inputs = JSON.parse(ARGV[2])
+    digest = ->(path) { "sha256:#{Digest::SHA256.file(path).hexdigest}" }
+    files = %w[device pair scene concept callout].map { |name| File.join(dir, "#{name}.png") } + [File.join(dir, "broken.png")]
+    index = files.index(File.join(dir, "concept.png")) + 1
+    record = {"schemaVersion" => 1, "files" => files.map { |path| {"path" => path, "sha256" => digest.(path)} },
+      "backgrounds" => inputs.select { |input| input["via"] == "background" }.map { |input| path = File.join(dir, input["path"])
+        {"file" => File.join(dir, "concept.png"), "source" => path, "sourceSha256" => digest.(path)} },
+      "layers" => inputs.select { |input| input["via"] == "layer" }.map { |input| path = File.join(dir, input["path"])
+        {"src" => path, "sha256" => digest.(path), "tiles" => [index]} }}
+    File.write(File.join(dir, "render-#{ARGV[1]}.json"), JSON.generate(record))' "$workspace" "$1" "$2"
 }
-with_materials adopted '["materials/cloud.png","materials/sky.png"]'
+with_inputs() { # name concept-inputs-json
+  render_record "$1" "$2"
+  write_spec "$workspace/$1.json" proposal "[$good,$early,$many]" "{\"materialReviews\":[\"store-creative/m1\"],\"renders\":[\"render-$1.json\"]}"
+}
+with_inputs adopted '[{"via":"background","path":"materials/cloud.png"},{"via":"layer","path":"materials/sky.png"}]'
 "$tool" build --spec "$workspace/adopted.json" --root "$root" --revision mat-ok >/dev/null
 ruby -rjson -rdigest -e 'pattern = JSON.parse(File.read(ARGV[0])).fetch("patterns").find { |item| item.fetch("id") == "C" }
-  abort "pattern materials" unless pattern.fetch("materials") == ARGV[1, 2].map { |path| "sha256:#{Digest::SHA256.file(path).hexdigest}" }' \
+  abort "pattern materials: #{pattern["materials"]}" unless pattern.fetch("materials") == ARGV[1, 2].map { |path| "sha256:#{Digest::SHA256.file(path).hexdigest}" }' \
   "$root/mat-ok/sheet.json" "$mat/cloud.png" "$mat/sky.png"
 grep -Fq '使う生成素材：2点（すべて素材の確認で採用済み）' "$root/mat-ok/sheet.html" || fail 'proposal sheet does not show the adopted materials'
-with_materials rejected '["materials/dusk.png"]'
-expect_failure material-rejected 'pattern C uses dusk.png, which the user rejected' "$tool" build --spec "$workspace/rejected.json" --root "$root" --revision m9
-with_materials unseen '["materials/unseen.png"]'
-expect_failure material-unseen 'pattern C uses unseen.png, which the user has not adopted on a material sheet' "$tool" build --spec "$workspace/unseen.json" --root "$root" --revision m9
+with_inputs rejected '[{"via":"background","path":"materials/dusk.png"}]'
+expect_failure material-rejected 'tile 5 of A uses dusk.png, which the user rejected' "$tool" build --spec "$workspace/rejected.json" --root "$root" --revision m9
+with_inputs rejected-layer '[{"via":"background","path":"materials/cloud.png"},{"via":"layer","path":"materials/dusk.png"}]'
+expect_failure material-rejected-layer 'tile 5 of A uses dusk.png, which the user rejected' "$tool" build --spec "$workspace/rejected-layer.json" --root "$root" --revision m9
+with_inputs unseen '[{"via":"layer","path":"materials/unseen.png"}]'
+expect_failure material-unseen 'tile 5 of A uses unseen.png, which the user has not adopted on a material sheet' "$tool" build --spec "$workspace/unseen.json" --root "$root" --revision m9
 cp "$mat/sky.png" "$workspace/sky.original.png"
 printf 'x' >>"$mat/sky.png"
-with_materials changed '["materials/sky.png"]'
-expect_failure material-changed 'pattern C uses sky.png, which changed after the user reviewed it' "$tool" build --spec "$workspace/changed.json" --root "$root" --revision m9
+with_inputs changed '[{"via":"background","path":"materials/sky.png"}]'
+expect_failure material-changed 'tile 5 of A uses sky.png, which changed after the user reviewed it' "$tool" build --spec "$workspace/changed.json" --root "$root" --revision m9
 cp "$workspace/sky.original.png" "$mat/sky.png"
+# A rejected material placed directly as a tile is refused even when its render record names no inputs.
+render_record direct '[]'
+ruby -rjson -rdigest -e 'path = ARGV[0]; record = JSON.parse(File.read(path)); image = ARGV[1]
+  record["files"] << {"path" => image, "sha256" => "sha256:#{Digest::SHA256.file(image).hexdigest}"}; File.write(path, JSON.generate(record))' \
+  "$workspace/render-direct.json" "$mat/dusk.png"
+write_spec "$workspace/direct.json" proposal "[$good,$early,$(pattern D "$(tiles photo device scene pair device device pair | sed 's/"image":"scene.png"/"image":"materials\/dusk.png"/')")]" \
+  '{"materialReviews":["store-creative/m1"],"renders":["render-direct.json"]}'
+expect_failure material-direct 'tile 2 of D uses dusk.png, which the user rejected' "$tool" build --spec "$workspace/direct.json" --root "$root" --revision m9
+write_spec "$workspace/unrendered.json" proposal "[$good,$early,$(pattern E "$(tiles photo device scene pair device device pair | sed 's/"image":"scene.png"/"image":"materials\/unseen.png"/')")]" \
+  '{"materialReviews":["store-creative/m1"]}'
+expect_failure material-unrendered 'tile 2 of E is in no render record' "$tool" build --spec "$workspace/unrendered.json" --root "$root" --revision m9
+write_spec "$workspace/no-renders.json" proposal "[$good,$early,$many]" '{"renders":[]}'
+expect_failure no-renders 'a proposal needs renders' "$tool" build --spec "$workspace/no-renders.json" --root "$root" --revision m9
 # A review that no longer matches its sheet is never trusted.
 cp -R "$root/m1" "$root/m1-forged"
 ruby -rjson -e 'path = ARGV[0]; value = JSON.parse(File.read(path)); value["sheetSha256"] = "sha256:" + "0" * 64; File.write(path, JSON.generate(value))' \
   "$root/m1-forged/material-review.json"
-write_spec "$workspace/forged-review.json" proposal "[$good,$early,$(pattern C "$(tiles illustration device pair scene concept concept concept)" "" '["materials/cloud.png"]')]" \
-  '{"materialReviews":["store-creative/m1-forged"]}'
+write_spec "$workspace/forged-review.json" proposal "[$good,$early,$many]" '{"materialReviews":["store-creative/m1-forged"],"renders":["render-adopted.json"]}'
 expect_failure material-forged-review 'material review of m1 does not match its sheet' "$tool" build --spec "$workspace/forged-review.json" --root "$root" --revision m9
-write_spec "$workspace/no-materials.json" proposal "[$good,$early,$(pattern C "$(tiles illustration device pair scene concept concept concept)" | sed 's/"materials":\[\],//')]"
-expect_failure no-materials 'pattern C needs materials' "$tool" build --spec "$workspace/no-materials.json" --root "$root" --revision m9
 [[ ! -e "$root/m9" ]] || fail 'a refused proposal left a revision behind'
 
 # goldie/assets/provenance.json: every adopted image carries the material review that adopted it.

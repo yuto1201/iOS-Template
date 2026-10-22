@@ -63,9 +63,9 @@ around the app, a story across the tiles and real illustrations do.
    (`appstore-creative-sheet.sh build` with `"kind": "material"`) and record the user's
    decision on every material with
    `tools/appstore-creative-sheet.sh review --sheet <dir> --adopt <ids> --reject <ids>`.
-   Use only what the user explicitly adopted: the proposal build refuses a pattern whose
-   `materials` include an image that was rejected, changed after the review, or never
-   reviewed.
+   Use only what the user explicitly adopted: the proposal build reads each tile's
+   render record (`renders`) and refuses a tile drawn from an image that was rejected,
+   changed after the review, or never reviewed, and a tile in no render record.
 6. **Stage 1 — compare patterns.** Design three to six whole-set patterns (three or
    four by default; five or six only when the ideas do not fit in four) that
    differ in world, story and composition, not only color. Mark exactly one as
