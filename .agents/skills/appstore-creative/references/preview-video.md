@@ -83,6 +83,70 @@ and a decision is recorded once. Keep encodes and decisions under
 `.artifacts/store-creative-previews/`, apart from the sheet revisions, which are never
 written to after they are built.
 
+## 5. Poster frame (D-085)
+
+An App Preview plays muted on the product page; people who turned autoplay off, and
+everyone before playback starts, see only its poster frame. Unless another is chosen,
+Apple uses the frame at 5 seconds
+([App preview specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/app-preview-specifications/),
+[App Previews](https://developer.apple.com/app-store/app-previews/)). Choose a frame that
+shows the app's strength by itself, with no motion blur and no transition:
+
+```sh
+tools/appstore-creative-preview.sh poster-frames --video previews/iphone-ja.mp4 \
+  --times 2,5,12.5 --out .artifacts/store-creative-previews/poster-iphone-ja
+```
+
+It writes one still per time and `poster-frames.json` (the video's SHA-256 and each still's
+SHA-256) to a new directory, and refuses a time outside the video. Show them on a poster
+sheet and record the user's choice:
+
+```json
+{"schemaVersion": 1, "kind": "poster", "app": "花島", "title": "ポスターフレーム",
+ "video": "../store-creative-previews/iphone-ja.mp4",
+ "candidates": [{"id": "t5", "seconds": 5.0, "image": "../store-creative-previews/poster-iphone-ja/t5.png", "note": "花が開く"}]}
+```
+
+`appstore-creative-sheet.sh build` refuses a candidate outside the video's length;
+`select --pattern <ID>` records the candidate, its time, the frame's and the video's SHA-256
+and `user-explicit` in `selection.json`, once. Setting the poster frame in App Store
+Connect is part of the later upload.
+
+## Check every asset against Apple's current specifications (D-085)
+
+`tools/lib/appstore-creative-preview.rb` keeps one specification table for every asset
+this skill exports, with Apple's pages and the day they were read
+(`tools/appstore-creative-preview.sh describe-specs`):
+
+| Kind | Size | Format | Length / frame rate |
+| --- | --- | --- | --- |
+| `screenshot-iphone` | 1206×2622, 1179×2556 (and landscape), D-079 | png, jpg, jpeg, no alpha | — |
+| `screenshot-ipad` | 2064×2752, 2048×2732 (and landscape), D-079 | png, jpg, jpeg, no alpha | — |
+| `preview-iphone` | 886×1920 or 1920×886 | mov, m4v, mp4 (H.264 or ProRes) | 15–30 s, 30 fps, ≤ 500 MB |
+| `preview-ipad` | 1200×1600 or 1600×1200 | mov, m4v, mp4 (H.264 or ProRes) | 15–30 s, 30 fps, ≤ 500 MB |
+| `header-image` | 3840×1646 | png, jpg, jpeg, no alpha | — |
+| `header-video` | 3840×1646 | mov, m4v, mp4 | 5–30 s, 30 or 60 fps |
+| `search-image` | 3:2, 1920×1280 to 3840×2560 | png, jpg, jpeg, no alpha | — |
+| `search-video` | 3:2, 1920×1280 to 3840×2560 | mov, m4v, mp4 | 5–30 s, 30 or 60 fps |
+| `universal-image` | 5244×2950 | png, no alpha | — |
+
+Sources: [Screenshot specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications/),
+[App preview specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/app-preview-specifications/),
+[Creative assets specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/creative-assets-specifications/).
+
+Before handing anything to `prepare-appstore-assets`, check each file:
+
+```sh
+tools/appstore-creative-preview.sh check-assets --kind header-video --file goldie/header/header.mp4
+```
+
+It reads the content, not only the name (a PNG or JPEG signature, PNG transparency
+through an alpha channel or a `tRNS` chunk, a MOV/MP4 container), and refuses a file
+whose size, format, transparency, length, frame rate or codec is outside its kind, and stops when the table was read more than `maxAgeDays` (90) days ago
+(`--max-age-days` changes the limit for one run). Then read Apple's pages again, update the
+table and its `checkedOn` date in a change of its own, and check again. Apple changes these
+rules; a passing check is not a substitute for reading them before a real submission.
+
 ## Sound and submission
 
 Previews are silent by default; music is made only when the user asks for it

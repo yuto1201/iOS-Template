@@ -317,4 +317,77 @@ expect_failure header-audio 'it has an audio track; a header is silent by defaul
 clip "$hv/portrait.mp4" 886x1920 6
 expect_failure header-portrait 'size 886x1920 is not 3840x1646' "$tool" verify-header --video "$hv/portrait.mp4"
 
+# D-085 (#392): the asset specification table, with Apple's pages and the day they were read, matches
+# the D-079 sizes; exported assets are checked against it, and a stale table stops the check.
+"$tool" describe-specs >"$workspace/specs.json"
+ruby -rjson -e 'specs = JSON.parse(File.read(ARGV[0])); requirements = JSON.parse(File.read(ARGV[1]))
+  abort "spec date" unless specs.fetch("checkedOn").match?(/\A\d{4}-\d{2}-\d{2}\z/) && specs.fetch("maxAgeDays").is_a?(Integer)
+  abort "spec sources" unless specs.fetch("sources").values.all? { |url| url.start_with?("https://developer.apple.com/help/app-store-connect/") }
+  kinds = specs.fetch("kinds")
+  %w[screenshot-iphone screenshot-ipad preview-iphone preview-ipad header-image header-video search-image search-video universal-image].each { |kind| abort "missing #{kind}" unless kinds.key?(kind) }
+  kinds.each { |kind, spec| abort "#{kind} has no source page" unless specs.fetch("sources").key?(spec.fetch("source")) }
+  families = requirements.dig("screenshots", "requiredFamilies").to_h { |family| [family.fetch("id"), (family.fetch("portraitSizes") + family.fetch("landscapeSizes")).sort] }
+  abort "iPhone sizes differ from D-079" unless kinds.dig("screenshot-iphone", "sizes").sort == families.fetch("iphone-6.3")
+  abort "iPad sizes differ from D-079" unless kinds.dig("screenshot-ipad", "sizes").sort == families.fetch("ipad-13")
+  abort "preview sizes differ from D-079" unless kinds.dig("preview-iphone", "sizes").include?([886, 1920]) && kinds.dig("preview-ipad", "sizes").include?([1200, 1600])
+  abort "header specs" unless kinds.dig("header-image", "sizes") == [[3840, 1646]] && kinds.dig("header-video", "fps") == [30, 60] && kinds.dig("header-video", "seconds") == [5, 30]
+  abort "universal spec" unless kinds.dig("universal-image", "sizes") == [[5244, 2950]] && kinds.dig("universal-image", "formats") == ["png"]' \
+  "$workspace/specs.json" "$repo_root/App Store/submission/requirements.json"
+sa="$workspace/assets"; mkdir -p "$sa"
+still() { ffmpeg -y -loglevel error -f lavfi -i "color=c=0x336699:s=$2,format=${3:-rgb24}" -frames:v 1 "$sa/$1"; }
+still header.png 3840x1646
+still iphone.png 1206x2622
+still old-iphone.png 1320x2868
+still alpha.png 1206x2622 rgba
+still search.png 1920x1280
+still search-wide.png 2000x1280
+still universal.jpg 5244x2950
+check() { "$tool" check-assets --today 2026-10-30 "$@"; }
+check --kind header-image --file "$sa/header.png" | jq -e '.status == "conforms" and .width == 3840 and (.source | startswith("https://developer.apple.com/"))' >/dev/null || fail 'a conforming header image was refused'
+check --kind screenshot-iphone --file "$sa/iphone.png" | jq -e '.status == "conforms"' >/dev/null || fail 'a conforming iPhone screenshot was refused'
+check --kind search-image --file "$sa/search.png" | jq -e '.status == "conforms"' >/dev/null || fail 'a conforming search image was refused'
+check --kind header-video --file "$hv/loop.mp4" | jq -e '.status == "conforms"' >/dev/null || fail 'a conforming header video was refused'
+expect_failure asset-old-size 'size 1320x2868 is not one of 1206x2622, 1179x2556, 2622x1206, 2556x1179' check --kind screenshot-iphone --file "$sa/old-iphone.png"
+expect_failure asset-alpha 'the PNG has transparency (an alpha channel)' check --kind screenshot-iphone --file "$sa/alpha.png"
+expect_failure asset-ratio 'size 2000x1280 is not 3:2 from 1920x1280 to 3840x2560' check --kind search-image --file "$sa/search-wide.png"
+expect_failure asset-format 'format .jpg is not one of .png' check --kind universal-image --file "$sa/universal.jpg"
+expect_failure asset-video 'does not meet the preview-iphone specification: size 3840x1646 is not one of 886x1920, 1920x886; duration 7.50s is outside 15 to 30 seconds' \
+  check --kind preview-iphone --file "$hv/loop.mp4"
+expect_failure asset-kind 'unknown asset kind: banner' check --kind banner --file "$sa/header.png"
+# The content is checked, not only the name: a video renamed to .jpg, a JPEG renamed to .png, and a
+# palette PNG that is transparent through its tRNS chunk are refused.
+cp "$hv/loop.mp4" "$sa/video-as.jpg"
+expect_failure asset-video-as-jpg 'video-as.jpg is not a JPEG image' check --kind header-image --file "$sa/video-as.jpg"
+ffmpeg -y -loglevel error -f lavfi -i "color=c=0x336699:s=3840x1646" -frames:v 1 "$sa/jpeg.jpg"
+cp "$sa/jpeg.jpg" "$sa/jpeg-as.png"
+expect_failure asset-jpeg-as-png 'jpeg-as.png is not a PNG image' check --kind header-image --file "$sa/jpeg-as.png"
+check --kind header-image --file "$sa/jpeg.jpg" | jq -e '.status == "conforms"' >/dev/null || fail 'a conforming JPEG header was refused'
+ruby -rzlib -e '
+  width, height = 3840, 1646
+  chunk = ->(type, data) { [data.bytesize].pack("N") + type + data + [Zlib.crc32(type + data)].pack("N") }
+  rows = ("\x00".b + ("\x00".b * width)) * height
+  File.binwrite(ARGV[0], "\x89PNG\r\n\x1A\n".b + chunk.("IHDR", [width, height, 8, 3, 0, 0, 0].pack("N2C5")) +
+    chunk.("PLTE", [51, 102, 153].pack("C3")) + chunk.("tRNS", "\x00".b) + chunk.("IDAT", Zlib::Deflate.deflate(rows)) + chunk.("IEND", "".b))' "$sa/palette-trns.png"
+expect_failure asset-trns 'the PNG has transparency (tRNS)' check --kind header-image --file "$sa/palette-trns.png"
+cp "$sa/header.png" "$sa/still-as.mp4"
+expect_failure asset-still-as-mp4 'still-as.mp4 is not a MOV/MP4 video' check --kind header-video --file "$sa/still-as.mp4"
+# A table read more than maxAgeDays ago stops the check until Apple's pages are read again; the limit is a setting.
+expect_failure asset-stale 'the asset spec table was checked on 2026-10-22, 222 days ago (more than 90)' \
+  "$tool" check-assets --today 2027-06-01 --kind header-image --file "$sa/header.png"
+"$tool" check-assets --today 2027-06-01 --max-age-days 365 --kind header-image --file "$sa/header.png" >/dev/null || fail 'the age limit setting was ignored'
+
+# Poster frames: one still per candidate time, only inside the preview.
+clip "$workspace/poster-source.mp4" 886x1920 20
+"$tool" poster-frames --video "$workspace/poster-source.mp4" --times 2,5,12.5 --out "$workspace/posters" >/dev/null
+ruby -rjson -rdigest -e 'record = JSON.parse(File.read(File.join(ARGV[0], "poster-frames.json")))
+  abort "poster record: #{record}" unless record.fetch("frames").map { |frame| frame.values_at("id", "seconds") } == [["t2", 2.0], ["t5", 5.0], ["t12-5", 12.5]] &&
+    record.fetch("defaultSeconds") == 5.0 && record.fetch("videoSha256") == "sha256:#{Digest::SHA256.file(ARGV[1]).hexdigest}" &&
+    record.fetch("frames").all? { |frame| frame.fetch("sha256") == "sha256:#{Digest::SHA256.file(File.join(ARGV[0], frame.fetch("image"))).hexdigest}" }' \
+  "$workspace/posters" "$workspace/poster-source.mp4"
+expect_failure poster-outside 'poster frame time 25.00 is outside the 20.00-second preview' \
+  "$tool" poster-frames --video "$workspace/poster-source.mp4" --times 2,25 --out "$workspace/posters-2"
+[[ ! -e "$workspace/posters-2" ]] || fail 'a refused poster extraction left a directory behind'
+expect_failure poster-exists 'poster frame directory already exists and is never replaced' \
+  "$tool" poster-frames --video "$workspace/poster-source.mp4" --times 3 --out "$workspace/posters"
+
 echo 'appstore-creative preview encode and decision tests passed'
