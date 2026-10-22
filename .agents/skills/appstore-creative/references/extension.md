@@ -1,7 +1,7 @@
 # Render extension
 
-`tools/appstore-creative-render.sh` renders a Goldie config with four additions that
-Goldie 0.3.1 lacks (D-077, D-079). It loads the pinned runtime's published modules and
+`tools/appstore-creative-render.sh` renders a Goldie config with the additions that
+Goldie 0.3.1 lacks (D-077, D-079, D-085). It loads the pinned runtime's published modules and
 changes them only inside its own process; the installed runtime is never written to.
 
 ```sh
@@ -53,6 +53,75 @@ scene ids where one is the other plus `-<number>`.
 
 Choose `theme.headlineColor` and `subheadColor` for contrast against the image;
 Goldie's automatic light/dark copy color reads only hex colors in `theme.background`.
+
+## Layers, popouts, frames and stories (D-085)
+
+These draw the world around the app and a story across tiles. The tool composes them with
+the pinned runtime's own `@napi-rs/canvas` after Goldie renders, and writes RGB PNGs as
+before. Positions and widths are fractions of the tile, so one config works for iPhone and
+iPad; a layer's height follows its image.
+
+### `layers` — illustrations and objects in front of or behind the device
+
+```ts
+layers: [
+  { src: "../assets/cloud.png", position: "back", x: 0.62, y: 0.30, width: 0.5, role: "background" },
+  { src: "../assets/mascot.png", position: "front", x: -0.05, y: 0.72, width: 0.32, rotate: -8, shadow: true, role: "mascot" }
+]
+```
+
+- `src` is a PNG with transparency (a cut-out illustration or object, see
+  [image generation](imagegen.md)). `position` is `front` (over the device and copy) or
+  `back` (between the background and the device). `rotate` is in degrees; `shadow` adds a
+  soft contact shadow.
+- A `back` layer needs a background the tool paints itself: a `backgroundImage`, or a
+  `#RRGGBB` background on the scene or theme. Gradients are refused for those scenes.
+- A layer that runs past its tile continues on the next one: the tool places it on the
+  strip of all tiles. At most 30% of a layer may cross into a neighbor, 40% for `role`
+  `background` or `abstract`. A layer whose `role` is `headline`, `app-name`, `face`,
+  `key-number` or `claim` never crosses a seam. Set other limits with
+  `theme.crossTile: { max, abstractMax, protectedRoles }`. A `back` layer that crosses needs
+  a paintable background on both tiles.
+
+### `popouts` — a magnified piece of the real screen
+
+```ts
+popouts: [{ region: { x: 100, y: 1500, width: 400, height: 300 }, x: 0.04, y: 0.70, width: 0.5, radius: 24, shadow: true }]
+```
+
+`region` is in pixels of the scene's raw capture (from `out/raw/<device>/manifest.json`);
+the tool magnifies it into a rounded card with a shadow at `x`, `y`, `width`. It reads the
+capture and never changes it, and refuses a region outside the capture. The record keeps the
+capture's SHA-256 and the region, which is the D-077 `callout` provenance.
+
+### `frame` — the device, a bare screen, or part of the screen
+
+`frame: "device"` (default) keeps Goldie's device. `frame: "bare"` draws the whole capture as
+a rounded screen with a shadow and no bezel; `frame: "crop"` draws only `crop: { x, y,
+width, height }` of it. Both use the copy of the `concept` layout and place the screen with
+`screen: { x, y, width }` (default: centered, `width: 0.78`, `y: 0.27`, running off the
+bottom edge).
+
+### `theme.stories` — one sentence across tiles
+
+```ts
+stories: [{ scenes: ["problem", "answer"], text: { ja: "天気アプリは複雑すぎる。だから花に聞く。" }, breaks: { ja: [12] } }]
+```
+
+The scenes must be consecutive. `breaks` are character positions where the sentence moves
+to the next tile, one fewer than the scenes, per locale; each part becomes that scene's
+headline, with `…` at the joins unless `ellipsis: false`. Read every tile alone afterwards:
+each part must still make sense on its own at thumbnail size.
+
+### Visual layers
+
+The record marks a tile with more visual layers than `theme.layerLimit` (default 4:
+background, device or illustration, headline, one accent). Layers, popouts and a layer
+coming in from a neighbor each count. Fix the tile or say why in the proposal's `tradeoffs`.
+
+The render record adds `layers` (scene, image SHA-256, position, role, tiles, crossing),
+`popouts` and `screens` (capture, its SHA-256 and region), `stories` (the parts) and
+`marks`.
 
 ## iPad 13-inch
 
