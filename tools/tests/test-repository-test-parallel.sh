@@ -164,16 +164,27 @@ jq -e '.failedTest == "tools/tests/test-alpha.sh" and .timedOut == false and
   "$repo/.artifacts/issues/120/$head_sha/repository-test-failure-attempt-1.json" >/dev/null
 [[ ! -e "$repo/.artifacts/issues/120/$head_sha/repository-tests.json" ]]
 
-# A timeout reaps only the timed-out test's process group; the other running test passes unchanged.
+# A timeout reaps only the timed-out test's process group, including a member that ignores TERM and keeps the
+# output open after the leader exits, within a bounded time; the other running test passes unchanged and an
+# unrelated process survives.
 prepare_issue 121
-if run_suite 121 alpha,beta delta,gamma IOS_TEMPLATE_REPOSITORY_TEST_JOBS=2 HANG_TESTS=alpha SLEEP_SECONDS=1 \
-  IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=4; then
+sleep 120 &
+unrelated=$!
+timeout_started=$SECONDS
+if run_suite 121 alpha,beta delta,gamma IOS_TEMPLATE_REPOSITORY_TEST_JOBS=2 HANG_TESTS=alpha STUBBORN_TESTS=alpha \
+  SLEEP_SECONDS=1 IOS_TEMPLATE_REPOSITORY_TEST_TIMEOUT_SECONDS=4; then
   echo 'a timed-out parallel test was accepted' >&2
   exit 1
 fi
+(( SECONDS - timeout_started < 40 )) || { echo 'a timed-out test with a TERM-ignoring member was not bounded' >&2; exit 1; }
 grep -Fq 'repository test timed out: tools/tests/test-alpha.sh' "$scratch/121.err"
 child=$(cat "$scratch/log-121/alpha.child")
 ! kill -0 "$child" 2>/dev/null || { kill "$child"; echo 'the timed-out process group was not reaped' >&2; exit 1; }
+stubborn=$(cat "$scratch/log-121/alpha.stubborn")
+! kill -0 "$stubborn" 2>/dev/null || { kill -KILL "$stubborn"; echo 'a TERM-ignoring member survived the timeout' >&2; exit 1; }
+kill -0 "$unrelated" 2>/dev/null || { echo 'the timeout stopped an unrelated process' >&2; exit 1; }
+kill "$unrelated"
+wait "$unrelated" 2>/dev/null || true
 [[ -f "$scratch/log-121/beta.end" && ! -e "$scratch/log-121/delta.start" ]] ||
   { echo 'a timeout changed the other running test or started another one' >&2; exit 1; }
 jq -e '.failedTest == "tools/tests/test-alpha.sh" and .timedOut == true and
@@ -210,5 +221,90 @@ done
 [[ $(git -C "$repo" worktree list --porcelain | grep -c '^worktree ') == 1 ]] ||
   { echo 'an interrupted runner left detached worktrees' >&2; exit 1; }
 [[ ! -e "$repo/.artifacts/issues/122/$head_sha/repository-tests.json" ]]
+
+# Deterministic interruption windows, driven inside the runner's own process: an interruption between a worker
+# reserving a test and registering its process group, and an interruption while the workers are being created.
+# Every group that started is gone afterwards and the detached worktrees are removed.
+cat >"$scratch/interrupt-windows.rb" <<'RUBY'
+require "run-repository-tests"
+repo, head, log, mode = ARGV
+mod = IOSTemplate::RepositoryTests
+alive = lambda do |pid|
+  Process.kill(0, -pid)
+  true
+rescue Errno::ESRCH
+  false
+end
+started_groups = Queue.new
+original = mod.method(:capture3_bounded)
+case mode
+when "reservation"
+  reserved = Queue.new
+  release = Queue.new
+  mod.define_singleton_method(:capture3_bounded) do |*arguments, on_start: nil, **options|
+    reserved << true
+    release.pop
+    original.call(*arguments, **options, on_start: lambda { |pid| started_groups << pid; on_start&.call(pid) })
+  end
+  main = Thread.current
+  Thread.new do
+    reserved.pop
+    main.raise(Interrupt)
+    # Spawn only after the runner's grace period, so that only the worker's own check can stop the group.
+    sleep 7
+    release << true
+  end
+  tests = ["tools/tests/test-alpha.sh"]
+when "creation"
+  mod.define_singleton_method(:capture3_bounded) do |*arguments, on_start: nil, **options|
+    original.call(*arguments, **options, on_start: lambda { |pid| started_groups << pid; on_start&.call(pid) })
+  end
+  # The runner resolves Thread inside its module first; the second worker's creation on the main thread is
+  # interrupted once the first worker's test has started its TERM-ignoring member.
+  creation_log = log
+  mod.const_set(:Thread, Class.new(::Thread) do
+    @main_calls = 0
+    define_singleton_method(:new) do |*arguments, &block|
+      if ::Thread.current == ::Thread.main
+        @main_calls += 1
+        if @main_calls == 2
+          400.times { break if File.size?(File.join(creation_log, "alpha.stubborn")); sleep 0.05 }
+          abort "the first worker did not start its test" unless File.size?(File.join(creation_log, "alpha.stubborn"))
+          raise Interrupt
+        end
+      end
+      super(*arguments, &block)
+    end
+  end)
+  tests = ["tools/tests/test-alpha.sh", "tools/tests/test-beta.sh"]
+end
+begin
+  mod.execute_in_detached_worktree(repo, head, tests, deadline: Process.clock_gettime(Process::CLOCK_MONOTONIC) + 120,
+    child_timeout_seconds: 60, execution_scope: "legacy-head")
+  abort "#{mode}: the run was not interrupted"
+rescue Interrupt
+  nil
+end
+groups = []
+groups << started_groups.pop until started_groups.empty?
+abort "#{mode}: no test process group started" if groups.empty?
+abort "#{mode}: a test process group survived the interruption" if groups.any? { |pid| alive.call(pid) }
+puts "#{mode}: #{groups.length} group(s) reaped"
+RUBY
+for mode in reservation creation; do
+  mkdir -p "$scratch/log-$mode"
+  (cd "$repo" && env PARALLEL_LOG="$scratch/log-$mode" IOS_TEMPLATE_REPOSITORY_TEST_JOBS=2 HANG_TESTS='alpha beta' \
+    STUBBORN_TESTS=alpha ruby -I "$repo/tools/lib" "$scratch/interrupt-windows.rb" "$repo" "$head_sha" \
+    "$scratch/log-$mode" "$mode") >"$scratch/$mode.out" 2>"$scratch/$mode.err" ||
+    { cat "$scratch/$mode.err" >&2; echo "the $mode interruption window was not handled" >&2; exit 1; }
+  grep -Fq "$mode: " "$scratch/$mode.out"
+  if [[ -s "$scratch/log-$mode/alpha.stubborn" ]]; then
+    stubborn=$(cat "$scratch/log-$mode/alpha.stubborn")
+    ! kill -0 "$stubborn" 2>/dev/null || { kill -KILL "$stubborn"; echo "a TERM-ignoring member survived the $mode interruption" >&2; exit 1; }
+  fi
+  [[ $(git -C "$repo" worktree list --porcelain | grep -c '^worktree ') == 1 ]] ||
+    { echo "the $mode interruption left detached worktrees" >&2; exit 1; }
+done
+[[ -s "$scratch/log-creation/alpha.stubborn" ]] || { echo 'the creation window did not start a TERM-ignoring member' >&2; exit 1; }
 
 echo 'PASS: repository tests run in parallel workers, exclusive tests alone, with per-test process groups, bounds, and plan-order results'

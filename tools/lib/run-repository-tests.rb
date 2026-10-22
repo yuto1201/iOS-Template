@@ -31,6 +31,8 @@ module IOSTemplate
     EXCLUSIVE_MARKER = "# repository-test-execution: exclusive"
     EXCLUSIVE_MARKER_LINES = 10
     INTERRUPT_GRACE_SECONDS = 5
+    INTERRUPT_STOP_SECONDS = 30
+    OUTPUT_DRAIN_SECONDS = 10
     FAILURE_FILE_PREFIX = "repository-test-failure-attempt-"
     # A failed test's own output is kept here, private to this user and outside the repository and the
     # canonical evidence, for the selected diagnostic before the one allowed retry (#268).
@@ -303,6 +305,9 @@ module IOSTemplate
       running = 0
       exclusive_running = false
       stopping = false
+      interrupted = false
+      interrupted_groups = []
+      workers = []
       Dir.mktmpdir("ios-template-repository-tests-") do |temporary|
         worktrees = []
         begin
@@ -330,7 +335,16 @@ module IOSTemplate
               {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil, JOBS_VARIABLE => nil},
               "/bin/bash", "-p", path, *arguments,
               chdir: worktree, timeout_seconds: timeout_seconds,
-              on_start: ->(pid) { monitor.synchronize { running_groups[index] = pid } }
+              on_start: lambda do |pid|
+                monitor.synchronize do
+                  running_groups[index] = pid
+                  if interrupted
+                    # A test that a worker reserved before the interruption and spawned after it is killed at once.
+                    interrupted_groups << pid
+                    kill_process_group(pid)
+                  end
+                end
+              end
             )
             monitor.synchronize { running_groups.delete(index) }
             completed = Time.now.utc
@@ -354,69 +368,75 @@ module IOSTemplate
              "output" => {"path" => path, "exitStatus" => exit_status, "timedOut" => timed_out,
                           "elapsedSeconds" => elapsed, "stdout" => stdout, "stderr" => stderr}}
           end
-          workers = worktrees.map do |worktree|
-            Thread.new do
-              loop do
-                index = nil
-                monitor.synchronize do
-                  until stopping || next_index >= tests.length
-                    candidate_exclusive = exclusive.include?(tests[next_index])
-                    break if candidate_exclusive ? running.zero? : !exclusive_running
-                    available.wait
+          begin
+            worktrees.each do |worktree|
+              workers << Thread.new do
+                loop do
+                  index = nil
+                  monitor.synchronize do
+                    until stopping || next_index >= tests.length
+                      candidate_exclusive = exclusive.include?(tests[next_index])
+                      break if candidate_exclusive ? running.zero? : !exclusive_running
+                      available.wait
+                    end
+                    unless stopping || next_index >= tests.length
+                      index = next_index
+                      next_index += 1
+                      running += 1
+                      exclusive_running = exclusive.include?(tests[index])
+                      started_indexes << index
+                    end
                   end
-                  unless stopping || next_index >= tests.length
-                    index = next_index
-                    next_index += 1
-                    running += 1
-                    exclusive_running = exclusive.include?(tests[index])
-                    started_indexes << index
+                  break unless index
+                  outcome = begin
+                    run_test.call(index, worktree)
+                  rescue StandardError => error
+                    {"kind" => "error", "error" => error}
                   end
-                end
-                break unless index
-                outcome = begin
-                  run_test.call(index, worktree)
-                rescue StandardError => error
-                  {"kind" => "error", "error" => error}
-                end
-                monitor.synchronize do
-                  running -= 1
-                  exclusive_running = false if exclusive.include?(tests[index])
-                  case outcome.fetch("kind")
-                  when "result"
-                    records[index] = outcome
-                    stopping = true unless outcome.fetch("result").fetch("status") == "passed"
-                  when "aggregate-before-start"
-                    started_indexes.delete(index)
-                    problems << index
-                    stopping = true
-                  else
-                    errors << [index, outcome.fetch("error")]
-                    stopping = true
+                  monitor.synchronize do
+                    running -= 1
+                    exclusive_running = false if exclusive.include?(tests[index])
+                    case outcome.fetch("kind")
+                    when "result"
+                      records[index] = outcome
+                      stopping = true unless outcome.fetch("result").fetch("status") == "passed"
+                    when "aggregate-before-start"
+                      started_indexes.delete(index)
+                      problems << index
+                      stopping = true
+                    else
+                      errors << [index, outcome.fetch("error")]
+                      stopping = true
+                    end
+                    available.broadcast
                   end
-                  available.broadcast
                 end
               end
             end
-          end
-          begin
             workers.each(&:join)
           rescue Exception
-            # An interruption terminates every running test's process group, kills the members that are
-            # still alive after a bounded grace period, and waits for the workers before the worktrees go.
-            interrupted_groups = monitor.synchronize do
+            # An interruption, including one while the workers are being created, stops new tests, sends TERM to
+            # every running test's process group, kills the members still alive after a bounded grace period,
+            # and waits for every worker before the worktrees go. A group that starts after the interruption is
+            # killed by its worker as soon as it is registered.
+            groups = monitor.synchronize do
               stopping = true
-              running_groups.values
+              interrupted = true
+              interrupted_groups.concat(running_groups.values)
+              available.broadcast
+              interrupted_groups.dup
             end
-            interrupted_groups.each { |pid| terminate_process_group(pid) }
+            groups.each { |pid| terminate_process_group(pid) }
             grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + INTERRUPT_GRACE_SECONDS
-            interrupted_groups.each do |pid|
-              while process_group_alive?(pid) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < grace_deadline
-                sleep 0.05
-              end
-              kill_process_group(pid)
+            while Process.clock_gettime(Process::CLOCK_MONOTONIC) < grace_deadline &&
+                  (workers.any?(&:alive?) || groups.any? { |pid| process_group_alive?(pid) })
+              sleep 0.05
+              groups = monitor.synchronize { interrupted_groups.dup }
             end
-            workers.each { |worker| worker.join(INTERRUPT_GRACE_SECONDS) }
-            survivors = interrupted_groups.select { |pid| process_group_alive?(pid) }
+            monitor.synchronize { interrupted_groups.dup }.each { |pid| kill_process_group(pid) }
+            stop_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + INTERRUPT_STOP_SECONDS
+            workers.each { |worker| worker.join([stop_deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max) }
+            survivors = monitor.synchronize { interrupted_groups.dup }.select { |pid| process_group_alive?(pid) }
             reject("interrupted test process groups are still running: #{survivors.join(', ')}") unless survivors.empty?
             reject("repository test workers did not stop after the interruption") if workers.any?(&:alive?)
             raise
@@ -650,25 +670,36 @@ module IOSTemplate
       path
     end
 
+    # Runs one test in its own process group within TIMEOUT_SECONDS. The test also times out when a member of
+    # its group keeps the output open after the leader exits. On a timeout the group gets TERM, the members still
+    # alive after a grace period get KILL whether or not the leader is alive, and reading the output is bounded.
     def capture3_bounded(environment, *command, chdir:, timeout_seconds:, on_start: nil)
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      deadline = started + timeout_seconds
       input = output = error = wait_thread = nil
       input, output, error, wait_thread = Open3.popen3(environment, *command, chdir: chdir, pgroup: true)
       input.close
       on_start&.call(wait_thread.pid)
-      stdout_reader = Thread.new { output.read }
-      stderr_reader = Thread.new { error.read }
+      stdout_reader = Thread.new { read_until_closed(output) }
+      stderr_reader = Thread.new { read_until_closed(error) }
       timed_out = wait_thread.join(timeout_seconds).nil?
+      unless timed_out
+        timed_out = [stdout_reader, stderr_reader].any? do |reader|
+          reader.join([deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max).nil?
+        end
+      end
       if timed_out
         terminate_process_group(wait_thread.pid)
-        wait_thread.join(5)
-        if wait_thread.alive?
-          begin
-            Process.kill("KILL", -wait_thread.pid)
-          rescue Errno::ESRCH
-            nil
-          end
-          wait_thread.join
+        grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + INTERRUPT_GRACE_SECONDS
+        while process_group_alive?(wait_thread.pid) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < grace_deadline
+          sleep 0.05
+        end
+        kill_process_group(wait_thread.pid)
+        wait_thread.join
+        [[stdout_reader, output], [stderr_reader, error]].each do |reader, stream|
+          next if reader.join(OUTPUT_DRAIN_SECONDS)
+          stream.close
+          reader.join
         end
       end
       status = wait_thread.value
@@ -680,6 +711,12 @@ module IOSTemplate
       input&.close unless input&.closed?
       output&.close unless output&.closed?
       error&.close unless error&.closed?
+    end
+
+    def read_until_closed(stream)
+      stream.read
+    rescue IOError
+      ""
     end
 
     def kill_process_group(pid)
