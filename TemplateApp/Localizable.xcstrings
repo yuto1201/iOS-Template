@@ -392,6 +392,142 @@
         }
       }
     },
+    "review-prompt.close" : {
+      "comment" : "Closes the review prompt's follow-up.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "閉じる"
+          }
+        }
+      }
+    },
+    "review-prompt.feedback-invitation" : {
+      "comment" : "Shown after \"Not great\" when the build can send feedback or open the support page.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If you like, tell us how we could make it better."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "よろしければ、改善のためにご意見をお聞かせください。"
+          }
+        }
+      }
+    },
+    "review-prompt.later" : {
+      "comment" : "Closes the review prompt without an answer.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "あとで"
+          }
+        }
+      }
+    },
+    "review-prompt.negative" : {
+      "comment" : "Answer to the review prompt: the app is not great.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Great"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "いまいち"
+          }
+        }
+      }
+    },
+    "review-prompt.positive" : {
+      "comment" : "Answer to the review prompt: the app is good.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Good"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "良い"
+          }
+        }
+      }
+    },
+    "review-prompt.question %@" : {
+      "comment" : "Neutral question in the review prompt; the argument is the app's name. Never promise anything for an answer.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How do you like %@?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@はどうですか？"
+          }
+        }
+      }
+    },
+    "review-prompt.support" : {
+      "comment" : "Opens the app's support page from the review prompt's follow-up.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Support Page"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サポートページを開く"
+          }
+        }
+      }
+    },
+    "review-prompt.thanks" : {
+      "comment" : "Shown after \"Not great\" when the build has no feedback endpoint or support page.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thanks for letting us know."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "お答えいただきありがとうございました。"
+          }
+        }
+      }
+    },
     "template.welcome" : {
       "comment" : "Deterministic welcome message shown on the template launch screen.",
       "localizations" : {
