@@ -171,6 +171,10 @@ File.write(path, text)
 RUBY
 validator_binary="$scratch/validate-verify-json"
 /usr/bin/swiftc "$test_source/tools/validate-verify-json.swift" -o "$validator_binary"
+# The runner dispatches simulator-matrix-io.swift through the fake Swift driver once per published case;
+# a compiled copy of the same source answers it without reinterpreting the script each time (#411).
+matrix_io_binary="$scratch/simulator-matrix-io"
+/usr/bin/swiftc "$test_source/tools/simulator-matrix-io.swift" -o "$matrix_io_binary"
 
 # This is a test-only compiled copy: production constants are textually replaced with
 # absolute adapters. If the constants disappear, the poison PATH below catches it.
@@ -392,6 +396,7 @@ cat >"$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift" <<'SH'
 set -euo pipefail
 state_dir="@STATE_DIR@"
 validator_binary="@VALIDATOR_BINARY@"
+matrix_io_binary="@MATRIX_IO_BINARY@"
 state() { [[ -f "$state_dir/$1" ]] && /bin/cat "$state_dir/$1" || true; }
 [[ "${0##*/}" == swift ]] || {
   echo 'Swift frontend was invoked directly instead of the Swift driver symlink' >&2
@@ -430,6 +435,9 @@ File.write(destination + '/checked', observation)
 RUBY
     fi
     "$validator_binary" "$@"
+  elif [[ "${1-}" == */simulator-matrix-io.swift ]]; then
+    shift
+    "$matrix_io_binary" "$@"
   else
     /usr/bin/swift "$@"
   fi
@@ -897,7 +905,8 @@ for adapter in "$adapter_bin/xcode-select" "$adapter_bin/xcrun" "$adapter_bin/ho
   "$fake_developer/usr/bin/xcodebuild" \
   "$fake_developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-frontend"; do
   /usr/bin/sed -i '' -e "s|@STATE_DIR@|$adapter_state|g" -e "s|@FAKE_LOG@|$fake_log|g" \
-    -e "s|@VALIDATOR_BINARY@|$validator_binary|g" -e "s|@ADAPTER_BIN@|$adapter_bin|g" "$adapter"
+    -e "s|@VALIDATOR_BINARY@|$validator_binary|g" -e "s|@MATRIX_IO_BINARY@|$matrix_io_binary|g" \
+    -e "s|@ADAPTER_BIN@|$adapter_bin|g" "$adapter"
 done
 
 repo="" base_sha="" head_sha="" contract="" matrix="" draft="" visual="" final=""

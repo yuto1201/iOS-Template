@@ -432,6 +432,11 @@ func runGitProcess(_ arguments: [String]) throws -> ProcessResult {
         let stdout = Pipe()
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
+        // `waitUntilExit()` spins the run loop and adds about 65 ms to every call on this macOS, which
+        // multiplied each runner stage by the number of tracked blobs it reads (#411). The termination
+        // handler signals as soon as Git exits, and the status is read only after that signal.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do {
             try process.run()
         } catch {
@@ -441,7 +446,7 @@ func runGitProcess(_ arguments: [String]) throws -> ProcessResult {
         }
         try? stdout.fileHandleForWriting.close()
         let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        exited.wait()
         try? stdout.fileHandleForReading.close()
         return ProcessResult(status: process.terminationStatus, stdout: data)
     }

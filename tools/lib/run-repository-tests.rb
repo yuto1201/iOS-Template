@@ -4,6 +4,7 @@
 require "digest"
 require "fileutils"
 require "json"
+require "monitor"
 require "open3"
 require "tmpdir"
 require "time"
@@ -24,6 +25,14 @@ module IOSTemplate
     DEFAULT_TARGETED_SUITE_TIMEOUT_SECONDS = 900
     DEFAULT_FULL_CHILD_TIMEOUT_SECONDS = 900
     DEFAULT_FULL_SUITE_TIMEOUT_SECONDS = 14_400
+    JOBS_VARIABLE = "IOS_TEMPLATE_REPOSITORY_TEST_JOBS"
+    DEFAULT_REPOSITORY_TEST_JOBS = 4
+    MAXIMUM_REPOSITORY_TEST_JOBS = 8
+    EXCLUSIVE_MARKER = "# repository-test-execution: exclusive"
+    EXCLUSIVE_MARKER_LINES = 10
+    INTERRUPT_GRACE_SECONDS = 5
+    INTERRUPT_STOP_SECONDS = 30
+    OUTPUT_DRAIN_SECONDS = 10
     FAILURE_FILE_PREFIX = "repository-test-failure-attempt-"
     # A failed test's own output is kept here, private to this user and outside the repository and the
     # canonical evidence, for the selected diagnostic before the one allowed retry (#268).
@@ -35,6 +44,7 @@ module IOSTemplate
       reject("repository root must be a physical absolute directory") unless repo.start_with?("/") && File.realpath(repo) == repo
       reject("issue must be a positive integer") unless issue.is_a?(Integer) && issue.positive?
       reject("expected Base SHA is invalid") unless expected_base.match?(SHA)
+      repository_test_jobs
 
       head_sha = git!(repo, "rev-parse", "HEAD").strip
       reject("current Head SHA is invalid") unless head_sha.match?(SHA)
@@ -164,7 +174,10 @@ module IOSTemplate
               deadline: suite_deadline, child_timeout_seconds: child_timeout_seconds, execution_scope: execution_scope)
           end
           failure = results.find { |entry| entry["status"] != "passed" }
-          reject("repository test failed: #{failure.fetch('path')}") if failure
+          if failure
+            unexecuted = @unexecuted_tests ? "; unexecuted tests: #{JSON.generate(@unexecuted_tests)}" : ""
+            reject("repository test failed: #{failure.fetch('path')}#{unexecuted}")
+          end
         rescue RunnerError => error
           elapsed_seconds = Process.clock_gettime(Process::CLOCK_MONOTONIC) - suite_started_monotonic
           failure_details = repository_test_failure_details(error.message, tests, execution_stage)
@@ -270,19 +283,45 @@ module IOSTemplate
        "failed"=>results.count { |entry| entry["status"] != "passed" }}
     end
 
+    # Runs the selected tests from detached worktrees of one revision (#411). Up to `repository_test_jobs`
+    # workers each own a detached worktree and take the next test in plan order; a test whose file declares
+    # EXCLUSIVE_MARKER starts only when no other test runs and keeps the others from starting until it ends.
+    # Each test keeps its own process group and its own bound. After the first failure or timeout no further
+    # test starts, the running ones finish within their bounds, and the result is reported as if the tests had
+    # run one by one: results in plan order and the first problem in plan order. With one worker this is the
+    # same sequential run as before.
     def execute_in_detached_worktree(repo, head_sha, tests, inventory: nil, deadline:, child_timeout_seconds:, execution_scope:)
-      results = []
+      @unexecuted_tests = nil
+      jobs = [repository_test_jobs, tests.length].min
       revision_tests = tracked_tests(repo, head_sha)
+      records = Array.new(tests.length)
+      started_indexes = []
+      problems = []
+      errors = []
+      running_groups = {}
+      monitor = Monitor.new
+      available = monitor.new_cond
+      next_index = 0
+      running = 0
+      exclusive_running = false
+      stopping = false
+      interrupted = false
+      interrupted_groups = []
+      workers = []
       Dir.mktmpdir("ios-template-repository-tests-") do |temporary|
-        worktree = File.join(temporary, "worktree")
-        git!(repo, "worktree", "add", "--detach", worktree, head_sha)
+        worktrees = []
         begin
-          reject("detached test worktree resolved an unexpected Head") unless git!(worktree, "rev-parse", "HEAD").strip == head_sha
-          tests.each_with_index do |path, index|
-            remaining_seconds = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            unfinished = tests.drop(index)
-            remaining_whole_seconds = remaining_seconds.floor
-            reject("repository test suite reached its aggregate timeout; unexecuted tests: #{JSON.generate(unfinished)}") unless remaining_whole_seconds.positive?
+          jobs.times do |worker|
+            worktree = File.join(temporary, worker.zero? ? "worktree" : "worktree-#{worker}")
+            git!(repo, "worktree", "add", "--detach", worktree, head_sha)
+            worktrees << worktree
+            reject("detached test worktree resolved an unexpected Head") unless git!(worktree, "rev-parse", "HEAD").strip == head_sha
+          end
+          exclusive = tests.select { |path| exclusive_test?(File.join(worktrees.first, path)) }
+          run_test = lambda do |index, worktree|
+            path = tests[index]
+            remaining_whole_seconds = (deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)).floor
+            return {"kind" => "aggregate-before-start"} unless remaining_whole_seconds.positive?
             if inventory
               reject("detached revision worktree is dirty") unless git!(worktree, "status", "--porcelain").empty?
               expected = inventory.find { |entry| entry["path"] == path }.fetch("sourceDigest")
@@ -292,19 +331,25 @@ module IOSTemplate
             arguments = RepositoryTestPlan.test_arguments(path, execution_scope, revision_tests: revision_tests)
             started = Time.now.utc
             timeout_seconds = [child_timeout_seconds, remaining_whole_seconds].min
-            aggregate_limited = timeout_seconds < child_timeout_seconds
             stdout, stderr, status, timed_out, elapsed = capture3_bounded(
-              {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil},
+              {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil, JOBS_VARIABLE => nil},
               "/bin/bash", "-p", path, *arguments,
-              chdir: worktree, timeout_seconds: timeout_seconds
+              chdir: worktree, timeout_seconds: timeout_seconds,
+              on_start: lambda do |pid|
+                monitor.synchronize do
+                  running_groups[index] = pid
+                  if interrupted
+                    # A test that a worker reserved before the interruption and spawned after it is killed at once.
+                    interrupted_groups << pid
+                    kill_process_group(pid)
+                  end
+                end
+              end
             )
+            monitor.synchronize { running_groups.delete(index) }
             completed = Time.now.utc
             exit_status = timed_out ? 124 : status.exitstatus || 128 + status.termsig.to_i
-            unless status.success? && !timed_out
-              @failed_test_output = {"path" => path, "exitStatus" => exit_status, "timedOut" => timed_out,
-                                     "elapsedSeconds" => elapsed, "stdout" => stdout, "stderr" => stderr}
-            end
-            results << {
+            result = {
               "path" => path,
               "arguments" => arguments,
               "status" => timed_out ? "timed-out" : status.success? ? "passed" : "failed",
@@ -314,27 +359,138 @@ module IOSTemplate
               "completedAt" => completed.iso8601(6)
             }
             if inventory
-              results.last.merge!("sourceDigest"=>expected, "command"=>["/bin/bash", "-p", path, *arguments],
+              result.merge!("sourceDigest"=>expected, "command"=>["/bin/bash", "-p", path, *arguments],
                 "timeoutSeconds"=>timeout_seconds, "elapsedSeconds"=>elapsed.round(6))
               reject("detached revision worktree changed during tests") unless git!(worktree, "rev-parse", "HEAD").strip == head_sha && git!(worktree, "status", "--porcelain").empty?
             end
-            if timed_out
-              if aggregate_limited
-                reject("repository test suite reached its aggregate timeout; active test: #{path}; unexecuted tests: #{JSON.generate(tests.drop(index + 1))}")
+            {"kind" => "result", "result" => result, "timedOut" => timed_out, "elapsed" => elapsed,
+             "aggregateLimited" => timeout_seconds < child_timeout_seconds,
+             "output" => {"path" => path, "exitStatus" => exit_status, "timedOut" => timed_out,
+                          "elapsedSeconds" => elapsed, "stdout" => stdout, "stderr" => stderr}}
+          end
+          begin
+            worktrees.each do |worktree|
+              workers << Thread.new do
+                loop do
+                  index = nil
+                  monitor.synchronize do
+                    until stopping || next_index >= tests.length
+                      candidate_exclusive = exclusive.include?(tests[next_index])
+                      break if candidate_exclusive ? running.zero? : !exclusive_running
+                      available.wait
+                    end
+                    unless stopping || next_index >= tests.length
+                      index = next_index
+                      next_index += 1
+                      running += 1
+                      exclusive_running = exclusive.include?(tests[index])
+                      started_indexes << index
+                    end
+                  end
+                  break unless index
+                  outcome = begin
+                    run_test.call(index, worktree)
+                  rescue StandardError => error
+                    {"kind" => "error", "error" => error}
+                  end
+                  monitor.synchronize do
+                    running -= 1
+                    exclusive_running = false if exclusive.include?(tests[index])
+                    case outcome.fetch("kind")
+                    when "result"
+                      records[index] = outcome
+                      stopping = true unless outcome.fetch("result").fetch("status") == "passed"
+                    when "aggregate-before-start"
+                      started_indexes.delete(index)
+                      problems << index
+                      stopping = true
+                    else
+                      errors << [index, outcome.fetch("error")]
+                      stopping = true
+                    end
+                    available.broadcast
+                  end
+                end
               end
-              reject("repository test timed out: #{path}; elapsedSeconds=#{format('%.3f', elapsed)}; unexecuted tests: #{JSON.generate(tests.drop(index + 1))}")
             end
-            break unless status.success?
+            workers.each(&:join)
+          rescue Exception
+            # An interruption, including one while the workers are being created, stops new tests, sends TERM to
+            # every running test's process group, kills the members still alive after a bounded grace period,
+            # and waits for every worker before the worktrees go. A group that starts after the interruption is
+            # killed by its worker as soon as it is registered.
+            groups = monitor.synchronize do
+              stopping = true
+              interrupted = true
+              interrupted_groups.concat(running_groups.values)
+              available.broadcast
+              interrupted_groups.dup
+            end
+            groups.each { |pid| terminate_process_group(pid) }
+            grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + INTERRUPT_GRACE_SECONDS
+            while Process.clock_gettime(Process::CLOCK_MONOTONIC) < grace_deadline &&
+                  (workers.any?(&:alive?) || groups.any? { |pid| process_group_alive?(pid) })
+              sleep 0.05
+              groups = monitor.synchronize { interrupted_groups.dup }
+            end
+            monitor.synchronize { interrupted_groups.dup }.each { |pid| kill_process_group(pid) }
+            stop_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + INTERRUPT_STOP_SECONDS
+            workers.each { |worker| worker.join([stop_deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max) }
+            survivors = monitor.synchronize { interrupted_groups.dup }.select { |pid| process_group_alive?(pid) }
+            reject("interrupted test process groups are still running: #{survivors.join(', ')}") unless survivors.empty?
+            reject("repository test workers did not stop after the interruption") if workers.any?(&:alive?)
+            raise
           end
         ensure
-          _, cleanup_status = Open3.capture2e(
-            {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil},
-            "/usr/bin/git", "-C", repo, "worktree", "remove", "--force", worktree
-          )
-          reject("detached test worktree cleanup failed") unless cleanup_status.success?
+          worktrees.each do |worktree|
+            _, cleanup_status = Open3.capture2e(
+              {"GIT_DIR" => nil, "GIT_WORK_TREE" => nil, "GIT_COMMON_DIR" => nil},
+              "/usr/bin/git", "-C", repo, "worktree", "remove", "--force", worktree
+            )
+            reject("detached test worktree cleanup failed") unless cleanup_status.success?
+          end
         end
       end
+      unexecuted = tests.each_index.reject { |index| started_indexes.include?(index) }.map { |index| tests[index] }
+      @unexecuted_tests = unexecuted
+      first_error = errors.min_by(&:first)
+      raise first_error.last if first_error
+      results = records.compact.map { |outcome| outcome.fetch("result") }
+      problem_index = (records.each_index.select { |index| records[index] && records[index].fetch("result").fetch("status") != "passed" } +
+        problems).min
+      return results unless problem_index
+      if problems.include?(problem_index)
+        reject("repository test suite reached its aggregate timeout; unexecuted tests: #{JSON.generate(unexecuted)}")
+      end
+      outcome = records[problem_index]
+      @failed_test_output = outcome.fetch("output")
+      if outcome.fetch("timedOut")
+        path = tests[problem_index]
+        if outcome.fetch("aggregateLimited")
+          reject("repository test suite reached its aggregate timeout; active test: #{path}; unexecuted tests: #{JSON.generate(unexecuted)}")
+        end
+        reject("repository test timed out: #{path}; elapsedSeconds=#{format('%.3f', outcome.fetch('elapsed'))}; unexecuted tests: #{JSON.generate(unexecuted)}")
+      end
       results
+    end
+
+    # The number of workers for one suite: IOS_TEMPLATE_REPOSITORY_TEST_JOBS, an integer from 1 to
+    # MAXIMUM_REPOSITORY_TEST_JOBS, or DEFAULT_REPOSITORY_TEST_JOBS when unset (#411).
+    def repository_test_jobs
+      value = ENV[JOBS_VARIABLE]
+      return DEFAULT_REPOSITORY_TEST_JOBS if value.nil?
+      unless value.match?(/\A[1-9][0-9]*\z/) && Integer(value, 10) <= MAXIMUM_REPOSITORY_TEST_JOBS
+        reject("#{JOBS_VARIABLE} must be an integer from 1 to #{MAXIMUM_REPOSITORY_TEST_JOBS}")
+      end
+      Integer(value, 10)
+    end
+
+    # A test runs alone when one of its first lines is exactly EXCLUSIVE_MARKER, for example a test that
+    # uses host state shared across processes (#411).
+    def exclusive_test?(path)
+      File.foreach(path).first(EXCLUSIVE_MARKER_LINES).any? { |line| line.chomp == EXCLUSIVE_MARKER }
+    rescue SystemCallError
+      false
     end
 
     def repository_test_timeout_seconds(scope)
@@ -514,27 +670,37 @@ module IOSTemplate
       path
     end
 
-    def capture3_bounded(environment, *command, chdir:, timeout_seconds:)
+    # Runs one test in its own process group within TIMEOUT_SECONDS. The test also times out when a member of
+    # its group keeps the output open after the leader exits. On a timeout the group gets TERM, the members still
+    # alive after a grace period get KILL whether or not the leader is alive, and reading the output is bounded.
+    def capture3_bounded(environment, *command, chdir:, timeout_seconds:, on_start: nil)
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      deadline = started + timeout_seconds
       input = output = error = wait_thread = nil
       input, output, error, wait_thread = Open3.popen3(environment, *command, chdir: chdir, pgroup: true)
       input.close
-      stdout_reader = Thread.new { output.read }
-      stderr_reader = Thread.new { error.read }
+      on_start&.call(wait_thread.pid)
+      stdout_reader = Thread.new { read_until_closed(output) }
+      stderr_reader = Thread.new { read_until_closed(error) }
       timed_out = wait_thread.join(timeout_seconds).nil?
+      unless timed_out
+        timed_out = [stdout_reader, stderr_reader].any? do |reader|
+          reader.join([deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC), 0].max).nil?
+        end
+      end
       if timed_out
-        terminate_process_group(wait_thread.pid)
-        wait_thread.join(5)
-        if wait_thread.alive?
-          begin
-            Process.kill("KILL", -wait_thread.pid)
-          rescue Errno::ESRCH
-            nil
-          end
-          wait_thread.join
+        reap_process_group(wait_thread.pid)
+        wait_thread.join
+        [[stdout_reader, output], [stderr_reader, error]].each do |reader, stream|
+          next if reader.join(OUTPUT_DRAIN_SECONDS)
+          stream.close
+          reader.join
         end
       end
       status = wait_thread.value
+      # A failed test can leave members of its group running with their output redirected; they are stopped
+      # the same bounded way before the group is unregistered.
+      reap_process_group(wait_thread.pid) unless timed_out || status.success?
       stdout = stdout_reader.value
       stderr = stderr_reader.value
       elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
@@ -543,6 +709,36 @@ module IOSTemplate
       input&.close unless input&.closed?
       output&.close unless output&.closed?
       error&.close unless error&.closed?
+    end
+
+    def read_until_closed(stream)
+      stream.read
+    rescue IOError
+      ""
+    end
+
+    # Sends TERM to the group, waits up to the grace period for its members to exit, then kills the rest.
+    def reap_process_group(pid)
+      terminate_process_group(pid)
+      grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + INTERRUPT_GRACE_SECONDS
+      sleep 0.05 while process_group_alive?(pid) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < grace_deadline
+      kill_process_group(pid)
+    end
+
+    def kill_process_group(pid)
+      Process.kill("KILL", -pid)
+    rescue Errno::ESRCH
+      nil
+    end
+
+    # True while any member of the process group still exists.
+    def process_group_alive?(pid)
+      Process.kill(0, -pid)
+      true
+    rescue Errno::ESRCH
+      false
+    rescue Errno::EPERM
+      true
     end
 
     def terminate_process_group(pid)

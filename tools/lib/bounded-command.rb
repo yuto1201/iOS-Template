@@ -146,6 +146,9 @@ end
 
 deadline = started + timeout_seconds
 status = nil
+# Most wrapped commands finish within milliseconds, so the wait starts short and backs off to 50 ms; a fixed
+# 50 ms first sleep added about that much to every bounded command (#411). The deadline is unchanged.
+poll_seconds = 0.002
 loop do
   waited = Process.waitpid2(child, Process::WNOHANG)
   if waited
@@ -153,7 +156,8 @@ loop do
     break
   end
   break if monotonic_now >= deadline || forwarded_signal
-  sleep 0.05
+  sleep poll_seconds
+  poll_seconds = [poll_seconds * 2, 0.05].min
 end
 
 if status && forwarded_signal.nil?

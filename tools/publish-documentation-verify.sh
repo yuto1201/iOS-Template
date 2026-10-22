@@ -17,4 +17,7 @@ validator="$script_dir/validate-verify-json.swift"
   exit 1
 }
 
-exec /usr/bin/swift "$validator" --publish-documentation "$@"
+# #411: the validator runs from a binary compiled once per source and toolchain (tools/lib/swift-tool-cache.sh).
+source "$script_dir/lib/swift-tool-cache.sh"
+validator_binary="$(swift_tool_binary "$validator")" || exit 1
+exec "$validator_binary" --publish-documentation "$@"
