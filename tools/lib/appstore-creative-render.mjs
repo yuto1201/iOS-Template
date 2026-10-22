@@ -221,10 +221,14 @@ function applyStories(cfg, locale) {
 // layout, and renders scenes with a back layer on a transparent background so the tool can paint the
 // background, the back layers and then Goldie's device and copy in that order.
 export function creativePlan(cfg, device, backgrounds, tile, spanOf) {
-  const crossTile = { ...CROSS_TILE_DEFAULTS, ...(cfg.theme.crossTile ?? {}) };
+  const configured = cfg.theme.crossTile ?? {};
+  const added = configured.protectedRoles ?? [];
+  if (!Array.isArray(added) || added.some((role) => typeof role !== "string")) fail("theme.crossTile.protectedRoles must be a list of roles");
+  // The default protected roles are mandatory; a config may only add to them.
+  const crossTile = { ...CROSS_TILE_DEFAULTS, ...configured,
+    protectedRoles: [...new Set([...CROSS_TILE_DEFAULTS.protectedRoles, ...added])] };
   number(crossTile.max, "theme.crossTile.max", { min: 0, max: 1 });
   number(crossTile.abstractMax, "theme.crossTile.abstractMax", { min: 0, max: 1 });
-  if (!Array.isArray(crossTile.protectedRoles)) fail("theme.crossTile.protectedRoles must be a list");
   const layerLimit = cfg.theme.layerLimit ?? LAYER_LIMIT_DEFAULT;
   if (!Number.isInteger(layerLimit) || layerLimit < 1) fail("theme.layerLimit must be a positive integer");
   const scenes = new Map();

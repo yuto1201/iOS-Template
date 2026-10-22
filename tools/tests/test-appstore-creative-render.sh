@@ -273,6 +273,19 @@ write_config "$config" '[
   { kind: "screenshot", id: "next", flow: "store-ja-home", headline: { ja: "風の日も" } }]'
 sed -i '' 's/layout: "classic" }/layout: "classic", crossTile: { max: 0.5, abstractMax: 0.6, protectedRoles: ["headline"] } }/' "$config"
 render63 >/dev/null
+# The default protected roles stay mandatory: a config can add roles but never remove one.
+write_config "$config" '[
+  { kind: "screenshot", id: "home", flow: "store-ja-home", headline: { ja: "雨の日も" },
+    layers: [{ src: "../assets/magenta.png", position: "front", x: 0.85, y: 0.80, width: 0.2, role: "headline" }] },
+  { kind: "screenshot", id: "next", flow: "store-ja-home", headline: { ja: "風の日も" } }]'
+sed -i '' 's/layout: "classic" }/layout: "classic", crossTile: { protectedRoles: [] } }/' "$config"
+expect_render_failure protected-removed 'layer 1 of home is marked headline and must not cross a tile seam'
+write_config "$config" '[
+  { kind: "screenshot", id: "home", flow: "store-ja-home", headline: { ja: "雨の日も" },
+    layers: [{ src: "../assets/magenta.png", position: "front", x: 0.85, y: 0.80, width: 0.2, role: "price" }] },
+  { kind: "screenshot", id: "next", flow: "store-ja-home", headline: { ja: "風の日も" } }]'
+sed -i '' 's/layout: "classic" }/layout: "classic", crossTile: { protectedRoles: ["price"] } }/' "$config"
+expect_render_failure protected-added 'layer 1 of home is marked price and must not cross a tile seam'
 
 # 7c. A popout magnifies a region of the real capture beside the device; the capture is never changed.
 write_config "$config" '[

@@ -80,7 +80,8 @@ layers: [
   strip of all tiles. At most 30% of a layer may cross into a neighbor, 40% for `role`
   `background` or `abstract`. A layer whose `role` is `headline`, `app-name`, `face`,
   `key-number` or `claim` never crosses a seam. Set other limits with
-  `theme.crossTile: { max, abstractMax, protectedRoles }`. The crossing is the share of the
+  `theme.crossTile: { max, abstractMax, protectedRoles }`; `protectedRoles` adds roles to
+  those five and can never remove one. The crossing is the share of the
   layer outside the one tile that holds most of it, measured on the bounds it is drawn with
   after `rotate`, at every exported seam — the seam inside a two-tile `panorama` scene
   counts too. A `back` layer that crosses needs a paintable background on both tiles; the
