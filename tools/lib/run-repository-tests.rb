@@ -272,6 +272,7 @@ module IOSTemplate
 
     def execute_in_detached_worktree(repo, head_sha, tests, inventory: nil, deadline:, child_timeout_seconds:, execution_scope:)
       results = []
+      revision_tests = tracked_tests(repo, head_sha)
       Dir.mktmpdir("ios-template-repository-tests-") do |temporary|
         worktree = File.join(temporary, "worktree")
         git!(repo, "worktree", "add", "--detach", worktree, head_sha)
@@ -288,7 +289,7 @@ module IOSTemplate
               source = File.join(worktree, path)
               reject("detached test source differs from revision") unless File.lstat(source).file? && ReviewContract.digest(File.binread(source)) == expected
             end
-            arguments = RepositoryTestPlan.test_arguments(path, execution_scope)
+            arguments = RepositoryTestPlan.test_arguments(path, execution_scope, revision_tests: revision_tests)
             started = Time.now.utc
             timeout_seconds = [child_timeout_seconds, remaining_whole_seconds].min
             aggregate_limited = timeout_seconds < child_timeout_seconds

@@ -4,6 +4,19 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby bash python3 swift /usr/bin/xcrun
 
+# #327: each group runs in its own temporary tree and stays well inside the targeted per-test limit. With no
+# argument this test checks the frozen fixture and its compatibility with the template; each derived-* group
+# rebuilds the same derived repository and runs one app-bootstrap group there through its own
+# tools/tests/test-bootstrap-fixture-derived-*.sh entrypoint.
+group="${1:-fixture}"
+case "$group" in
+  fixture|derived-core|derived-transform|derived-safety-rejection|derived-safety-rerun) ;;
+  *)
+    echo "usage: $0 [fixture|derived-core|derived-transform|derived-safety-rejection|derived-safety-rerun]" >&2
+    exit 64
+    ;;
+esac
+
 # Git 2.54 runs `git maintenance run --auto --detach` after a commit, and its default geometric strategy
 # repacks in the background (objects/bitmap-ref-tips_*, packs, multi-pack-index) while this test removes its
 # temporary repositories. Every git this test and its children run keeps the caller's settings, skips
@@ -19,23 +32,25 @@ disable_git_auto_maintenance() {
 }
 # #325: in both tests, the setting keeps the caller's entries, turns automatic maintenance off for every
 # child git, and refuses a GIT_CONFIG_COUNT that is not a count.
-for test_file in test-bootstrap-fixture.sh test-app-bootstrap.sh; do
-  definition=$(sed -n '/^disable_git_auto_maintenance() {$/,/^}$/p' "${BASH_SOURCE[0]%/*}/$test_file")
-  [[ -n "$definition" ]] || { echo "$test_file does not turn off Git's automatic maintenance" >&2; exit 1; }
-  probe=$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0='Caller Name' bash -c "$definition"'
-    disable_git_auto_maintenance
-    printf "%s|%s|%s|%s|%s\n" "$(git config --get user.name)" "$(git config --get maintenance.auto)" \
-      "$(git config --get maintenance.autoDetach)" "$(git config --get gc.auto)" "$(git config --get gc.autoDetach)"')
-  [[ "$probe" == 'Caller Name|false|false|0|false' ]] || { echo "$test_file Git settings for children: $probe" >&2; exit 1; }
-  if env GIT_CONFIG_COUNT=one bash -c "$definition"'
-    disable_git_auto_maintenance' 2>/dev/null; then
-    echo "$test_file accepted a GIT_CONFIG_COUNT that is not a count" >&2; exit 1
-  fi
-done
+if [[ "$group" == fixture ]]; then
+  for test_file in test-bootstrap-fixture.sh test-app-bootstrap.sh; do
+    definition=$(sed -n '/^disable_git_auto_maintenance() {$/,/^}$/p' "${BASH_SOURCE[0]%/*}/$test_file")
+    [[ -n "$definition" ]] || { echo "$test_file does not turn off Git's automatic maintenance" >&2; exit 1; }
+    probe=$(env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0='Caller Name' bash -c "$definition"'
+      disable_git_auto_maintenance
+      printf "%s|%s|%s|%s|%s\n" "$(git config --get user.name)" "$(git config --get maintenance.auto)" \
+        "$(git config --get maintenance.autoDetach)" "$(git config --get gc.auto)" "$(git config --get gc.autoDetach)"')
+    [[ "$probe" == 'Caller Name|false|false|0|false' ]] || { echo "$test_file Git settings for children: $probe" >&2; exit 1; }
+    if env GIT_CONFIG_COUNT=one bash -c "$definition"'
+      disable_git_auto_maintenance' 2>/dev/null; then
+      echo "$test_file accepted a GIT_CONFIG_COUNT that is not a count" >&2; exit 1
+    fi
+  done
+fi
 disable_git_auto_maintenance
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
-ruby - "$root" <<'RUBY'
+ruby - "$root" "$group" <<'RUBY'
 require "digest"
 require "fileutils"
 require "json"
@@ -43,6 +58,7 @@ require "open3"
 require "tmpdir"
 
 root = ARGV.fetch(0)
+group = ARGV.fetch(1)
 require File.join(root, "tools/tests/lib/bootstrap-fixture")
 
 def assert(condition, message)
@@ -137,167 +153,195 @@ def captured_stderr
 ensure
   $stderr = original
 end
-require "stringio"
-tree = cleanup_case_tree
-calls = with_failing_removals([Errno::ENOENT, Errno::ENOTEMPTY]) { remove_temporary_tree(tree, failing: false) }
-assert(calls == 3 && !File.exist?(tree), "cleanup did not retry ENOENT and ENOTEMPTY until the tree was gone")
-exhausted = Array.new(5, Errno::ENOTEMPTY)
-tree = cleanup_case_tree
-raised = begin
-  with_failing_removals(exhausted) { remove_temporary_tree(tree, failing: false) }
-  nil
-rescue RuntimeError => error
-  error.message
-end
-assert(raised == "temporary tree could not be removed: #{tree}" && File.exist?(tree), "a remaining tree did not fail the test: #{raised.inspect}")
-FileUtils.remove_entry(tree)
-tree = cleanup_case_tree
-warning = captured_stderr { with_failing_removals(exhausted) { remove_temporary_tree(tree, failing: true) } }
-assert(warning.include?("temporary tree could not be removed: #{tree}"), "a remaining tree was not reported while the body was failing")
-FileUtils.remove_entry(tree)
-tree = cleanup_case_tree
-body_error = begin
-  captured_stderr do
-    with_failing_removals(exhausted) do
-      begin
-        raise "body failed first"
-      ensure
-        remove_temporary_tree(tree, failing: !$!.nil?)
-      end
-    end
-  end
-  nil
-rescue RuntimeError => error
-  error.message
-end
-assert(body_error == "body failed first", "the cleanup hid the earlier body failure: #{body_error.inspect}")
-FileUtils.remove_entry(tree)
 
-instruction = BootstrapFixture::UPDATE_INSTRUCTION
-before = snapshot(root)
-temp = File.realpath(Dir.mktmpdir("bootstrap-fixture-test."))
-begin
-  helper = File.join(root, "tools/tests/lib/bootstrap-fixture.rb")
-  ok, output = command("ruby", helper, "check", root)
-  assert(ok, "current source file set differs: #{output}")
-
-  seed = File.join(temp, "seed")
-  assert(succeed("ruby", helper, "create", root, seed).strip == seed, "create returned wrong destination")
-  assert(File.file?(File.join(seed, "TemplateApp.xcodeproj/project.pbxproj")), "template project missing")
-  assert(!File.exist?(File.join(seed, "Config/app-identity.json")), "derived identity leaked into seed")
-  assert(File.binread(File.join(seed, "Config/template-identity.json")) ==
-    File.binread(File.join(root, "Config/template-identity.json")), "current manifest was replaced")
-  assert(git(seed, "status", "--porcelain=v1").empty?, "seed is dirty")
-  assert(git(seed, "config", "--get", "maintenance.auto").strip == "false" && git(seed, "config", "--get", "gc.auto").strip == "0",
-    "Git's automatic maintenance is still on in the temporary repositories")
-
-  ok, = command("ruby", helper, "create", root, seed)
-  assert(!ok && File.file?(File.join(seed, "TemplateApp/TemplateAppApp.swift")),
-    "existing destination was accepted or damaged")
-  outside = File.join(root, ".bootstrap-fixture-outside-#{Process.pid}")
-  ok, = command("ruby", helper, "create", root, outside)
-  assert(!ok && !File.exist?(outside), "non-temporary destination was accepted")
-
-  frozen_path = File.join(seed, "tools/tests/fixtures/bootstrap-template/source-identity.json")
-  original = File.binread(frozen_path)
-  {
-    "digest" => lambda { |entry| entry["lines"] << "changed" },
-    "traversal" => lambda { |entry| entry["path"] = "../escape" },
-    "tools" => lambda { |entry| entry["path"] = "tools/bootstrap-app.swift" },
-    "manifest" => lambda { |entry| entry["path"] = "Config/template-identity.json" }
-  }.each do |label, mutation|
-    data = JSON.parse(original)
-    mutation.call(data.fetch("files").first)
-    File.binwrite(frozen_path, JSON.pretty_generate(data))
-    target = File.join(temp, "rejected-#{label}")
-    ok, = command("ruby", File.join(seed, "tools/tests/lib/bootstrap-fixture.rb"), "create", seed, target)
-    assert(!ok && !File.exist?(target), "invalid fixture accepted or destination retained: #{label}")
-  end
-  File.binwrite(frozen_path, original)
-
-  extra = File.join(seed, "TemplateApp/Unexpected.swift")
-  File.binwrite(extra, "// new source identity file\n")
-  commit(seed, "test: expand source identity set")
-  ok, output = command("ruby", File.join(seed, "tools/tests/lib/bootstrap-fixture.rb"), "check", seed)
-  assert(!ok && output.include?("TemplateApp/Unexpected.swift") && output.include?(instruction),
-    "file-set drift was not explained: #{output}")
-
+# The template-shaped repository with a prose-only change that every derived group starts from.
+def prose_repository(root, temp)
   prose = File.join(temp, "prose")
   BootstrapFixture.create(root, prose)
   File.open(File.join(prose, "docs/verification.md"), "ab") { |file| file.write("\nProse-only fixture regression check.\n") }
   commit(prose, "test: change verification prose")
-  ok, output = command("ruby", File.join(prose, "tools/tests/lib/bootstrap-fixture.rb"), "check", prose)
-  assert(ok, "prose edit incorrectly required refresh: #{output}")
+  prose
+end
 
-  check_compatibility(prose, instruction)
-
-  stale = File.join(temp, "stale")
-  BootstrapFixture.create(root, stale)
-  stale_path = File.join(stale, "tools/tests/fixtures/bootstrap-template/source-identity.json")
-  stale_data = JSON.parse(File.binread(stale_path))
-  entry = stale_data.fetch("files").find { |file| file.fetch("path") == "docs/verification.md" }
-  assert(!entry.nil?, "verification document absent from fixture")
-  entry.fetch("lines") << "TemplateApp"
-  entry["sha256"] = Digest::SHA256.hexdigest(entry.fetch("lines").join("\n"))
-  File.binwrite(stale_path, JSON.pretty_generate(stale_data))
-  broken = File.join(temp, "broken")
-  BootstrapFixture.create(stale, broken)
-  failure = begin
-    check_compatibility(broken, instruction)
-    nil
-  rescue RuntimeError => error
-    error.message
-  end
-  assert(!failure.nil?, "bootstrap-incompatible fixture passed transform")
-  assert(failure.include?("required transformation anchor is missing") && failure.include?(instruction),
-    "incompatible fixture failure was not explained: #{failure}")
-
+# A clone of the prose repository converted to GardenNotes and left uncommitted.
+def derived_repository(temp, prose)
   derived = File.join(temp, "derived")
   git(temp, "clone", "--quiet", "--no-local", prose, derived)
   git(derived, "checkout", "-q", "-b", "codex/bootstrap-fixture-test")
   succeed("bash", "tools/bootstrap-app.sh", "--display-name", "Garden Notes",
     "--module-name", "GardenNotes", "--app-slug", "garden-notes",
     "--bundle-id", "com.yuto.GardenNotes", chdir: derived)
-  ok, = command("ruby", File.join(derived, "tools/tests/lib/bootstrap-fixture.rb"), "refresh", derived)
-  assert(!ok, "derived repository accepted fixture refresh")
-  previous = snapshot(derived)
-  succeed("bash", "tools/tests/test-app-bootstrap.sh", "trunk-default", chdir: derived)
-  assert(snapshot(derived) == previous, "uncommitted derived suite mutated repository")
-  commit(derived, "test: commit GardenNotes bootstrap")
-  previous = snapshot(derived)
-  succeed("bash", "tools/tests/test-app-bootstrap.sh", "all", chdir: derived)
-  assert(snapshot(derived) == previous, "committed derived suite mutated repository")
+  derived
+end
 
-  # A shared seed with local changes or another Head is refused before any suite uses it.
-  shared = BootstrapFixture.create(derived, File.join(temp, "shared-seed"))
-  shared_head = git(shared, "rev-parse", "HEAD").strip
-  File.write(File.join(shared, "AGENTS.md"), "local change\n", mode: "a")
-  ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => shared_head},
-    "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
-  assert(!ok && output.include?("shared bootstrap seed has local changes"), "a dirty shared seed was used: #{output}")
-  git(shared, "checkout", "-q", "--", "AGENTS.md")
-  ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => "0" * 40},
-    "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
-  assert(!ok && output.include?("shared bootstrap seed Head changed"), "a shared seed at another Head was used: #{output}")
-  File.write(File.join(shared, "Config/app-identity.json"), File.read(File.join(derived, "Config/app-identity.json")))
-  git(shared, "add", "Config/app-identity.json")
-  git(shared, "-c", "user.name=Bootstrap Test", "-c", "user.email=bootstrap-test@example.invalid", "-c", "commit.gpgsign=false",
-    "commit", "--quiet", "-m", "test: bootstrapped seed")
-  ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => git(shared, "rev-parse", "HEAD").strip},
-    "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
-  assert(!ok && output.include?("shared bootstrap seed no longer has the template identity"), "a bootstrapped shared seed was used: #{output}")
+require "stringio"
+if group == "fixture"
+  tree = cleanup_case_tree
+  calls = with_failing_removals([Errno::ENOENT, Errno::ENOTEMPTY]) { remove_temporary_tree(tree, failing: false) }
+  assert(calls == 3 && !File.exist?(tree), "cleanup did not retry ENOENT and ENOTEMPTY until the tree was gone")
+  exhausted = Array.new(5, Errno::ENOTEMPTY)
+  tree = cleanup_case_tree
+  raised = begin
+    with_failing_removals(exhausted) { remove_temporary_tree(tree, failing: false) }
+    nil
+  rescue RuntimeError => error
+    error.message
+  end
+  assert(raised == "temporary tree could not be removed: #{tree}" && File.exist?(tree), "a remaining tree did not fail the test: #{raised.inspect}")
+  FileUtils.remove_entry(tree)
+  tree = cleanup_case_tree
+  warning = captured_stderr { with_failing_removals(exhausted) { remove_temporary_tree(tree, failing: true) } }
+  assert(warning.include?("temporary tree could not be removed: #{tree}"), "a remaining tree was not reported while the body was failing")
+  FileUtils.remove_entry(tree)
+  tree = cleanup_case_tree
+  body_error = begin
+    captured_stderr do
+      with_failing_removals(exhausted) do
+        begin
+          raise "body failed first"
+        ensure
+          remove_temporary_tree(tree, failing: !$!.nil?)
+        end
+      end
+    end
+    nil
+  rescue RuntimeError => error
+    error.message
+  end
+  assert(body_error == "body failed first", "the cleanup hid the earlier body failure: #{body_error.inspect}")
+  FileUtils.remove_entry(tree)
+end
+
+instruction = BootstrapFixture::UPDATE_INSTRUCTION
+before = snapshot(root)
+temp = File.realpath(Dir.mktmpdir("bootstrap-fixture-test."))
+begin
+  helper = File.join(root, "tools/tests/lib/bootstrap-fixture.rb")
+  if group == "fixture"
+    ok, output = command("ruby", helper, "check", root)
+    assert(ok, "current source file set differs: #{output}")
+
+    seed = File.join(temp, "seed")
+    assert(succeed("ruby", helper, "create", root, seed).strip == seed, "create returned wrong destination")
+    assert(File.file?(File.join(seed, "TemplateApp.xcodeproj/project.pbxproj")), "template project missing")
+    assert(!File.exist?(File.join(seed, "Config/app-identity.json")), "derived identity leaked into seed")
+    assert(File.binread(File.join(seed, "Config/template-identity.json")) ==
+      File.binread(File.join(root, "Config/template-identity.json")), "current manifest was replaced")
+    assert(git(seed, "status", "--porcelain=v1").empty?, "seed is dirty")
+    assert(git(seed, "config", "--get", "maintenance.auto").strip == "false" && git(seed, "config", "--get", "gc.auto").strip == "0",
+      "Git's automatic maintenance is still on in the temporary repositories")
+
+    ok, = command("ruby", helper, "create", root, seed)
+    assert(!ok && File.file?(File.join(seed, "TemplateApp/TemplateAppApp.swift")),
+      "existing destination was accepted or damaged")
+    outside = File.join(root, ".bootstrap-fixture-outside-#{Process.pid}")
+    ok, = command("ruby", helper, "create", root, outside)
+    assert(!ok && !File.exist?(outside), "non-temporary destination was accepted")
+
+    frozen_path = File.join(seed, "tools/tests/fixtures/bootstrap-template/source-identity.json")
+    original = File.binread(frozen_path)
+    {
+      "digest" => lambda { |entry| entry["lines"] << "changed" },
+      "traversal" => lambda { |entry| entry["path"] = "../escape" },
+      "tools" => lambda { |entry| entry["path"] = "tools/bootstrap-app.swift" },
+      "manifest" => lambda { |entry| entry["path"] = "Config/template-identity.json" }
+    }.each do |label, mutation|
+      data = JSON.parse(original)
+      mutation.call(data.fetch("files").first)
+      File.binwrite(frozen_path, JSON.pretty_generate(data))
+      target = File.join(temp, "rejected-#{label}")
+      ok, = command("ruby", File.join(seed, "tools/tests/lib/bootstrap-fixture.rb"), "create", seed, target)
+      assert(!ok && !File.exist?(target), "invalid fixture accepted or destination retained: #{label}")
+    end
+    File.binwrite(frozen_path, original)
+
+    extra = File.join(seed, "TemplateApp/Unexpected.swift")
+    File.binwrite(extra, "// new source identity file\n")
+    commit(seed, "test: expand source identity set")
+    ok, output = command("ruby", File.join(seed, "tools/tests/lib/bootstrap-fixture.rb"), "check", seed)
+    assert(!ok && output.include?("TemplateApp/Unexpected.swift") && output.include?(instruction),
+      "file-set drift was not explained: #{output}")
+
+    prose = prose_repository(root, temp)
+    ok, output = command("ruby", File.join(prose, "tools/tests/lib/bootstrap-fixture.rb"), "check", prose)
+    assert(ok, "prose edit incorrectly required refresh: #{output}")
+
+    check_compatibility(prose, instruction)
+
+    stale = File.join(temp, "stale")
+    BootstrapFixture.create(root, stale)
+    stale_path = File.join(stale, "tools/tests/fixtures/bootstrap-template/source-identity.json")
+    stale_data = JSON.parse(File.binread(stale_path))
+    entry = stale_data.fetch("files").find { |file| file.fetch("path") == "docs/verification.md" }
+    assert(!entry.nil?, "verification document absent from fixture")
+    entry.fetch("lines") << "TemplateApp"
+    entry["sha256"] = Digest::SHA256.hexdigest(entry.fetch("lines").join("\n"))
+    File.binwrite(stale_path, JSON.pretty_generate(stale_data))
+    broken = File.join(temp, "broken")
+    BootstrapFixture.create(stale, broken)
+    failure = begin
+      check_compatibility(broken, instruction)
+      nil
+    rescue RuntimeError => error
+      error.message
+    end
+    assert(!failure.nil?, "bootstrap-incompatible fixture passed transform")
+    assert(failure.include?("required transformation anchor is missing") && failure.include?(instruction),
+      "incompatible fixture failure was not explained: #{failure}")
+  else
+    # Each derived group runs one app-bootstrap group in the derived repository: core (validation,
+    # transaction, trunk-default, cleanup-failure), transform, safety-rejection, or safety-rerun.
+    derived = derived_repository(temp, prose_repository(root, temp))
+    if group == "derived-core"
+      ok, = command("ruby", File.join(derived, "tools/tests/lib/bootstrap-fixture.rb"), "refresh", derived)
+      assert(!ok, "derived repository accepted fixture refresh")
+      previous = snapshot(derived)
+      succeed("bash", "tools/tests/test-app-bootstrap.sh", "trunk-default", chdir: derived)
+      assert(snapshot(derived) == previous, "uncommitted derived suite mutated repository")
+    end
+    commit(derived, "test: commit GardenNotes bootstrap")
+    previous = snapshot(derived)
+    succeed("bash", "tools/tests/test-app-bootstrap.sh", group.delete_prefix("derived-"), chdir: derived)
+    assert(snapshot(derived) == previous, "committed derived suite mutated repository")
+
+    if group == "derived-core"
+      # A shared seed with local changes or another Head is refused before any suite uses it.
+      shared = BootstrapFixture.create(derived, File.join(temp, "shared-seed"))
+      shared_head = git(shared, "rev-parse", "HEAD").strip
+      File.write(File.join(shared, "AGENTS.md"), "local change\n", mode: "a")
+      ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => shared_head},
+        "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
+      assert(!ok && output.include?("shared bootstrap seed has local changes"), "a dirty shared seed was used: #{output}")
+      git(shared, "checkout", "-q", "--", "AGENTS.md")
+      ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => "0" * 40},
+        "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
+      assert(!ok && output.include?("shared bootstrap seed Head changed"), "a shared seed at another Head was used: #{output}")
+      File.write(File.join(shared, "Config/app-identity.json"), File.read(File.join(derived, "Config/app-identity.json")))
+      git(shared, "add", "Config/app-identity.json")
+      git(shared, "-c", "user.name=Bootstrap Test", "-c", "user.email=bootstrap-test@example.invalid", "-c", "commit.gpgsign=false",
+        "commit", "--quiet", "-m", "test: bootstrapped seed")
+      ok, output = command({"IOS_TEMPLATE_BOOTSTRAP_SEED" => shared, "IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD" => git(shared, "rev-parse", "HEAD").strip},
+        "bash", "tools/tests/test-app-bootstrap.sh", "validation", chdir: derived)
+      assert(!ok && output.include?("shared bootstrap seed no longer has the template identity"), "a bootstrapped shared seed was used: #{output}")
+    end
+  end
 ensure
   remove_temporary_tree(temp, failing: !$!.nil?)
 end
 
-# A template-only change under any frozen source directory selects this fixture regression.
-require File.join(root, "tools/lib/repository-test-plan")
-manifest = JSON.parse(File.read(File.join(root, "Config/repository-tests.json")))
-identity = JSON.parse(File.read(File.join(root, "Config/template-identity.json")))
-identity.fetch("renamePaths").map { |path| path.split("/").first }.uniq.each do |directory|
-  _, _, tests = IOSTemplate::RepositoryTestPlan.resolve(manifest, "targeted", ["#{directory}/fixture-change.txt"])
-  assert(tests.include?("tools/tests/test-bootstrap-fixture.sh"), "a change under #{directory}/ did not select the fixture regression")
+# A template-only change under any frozen source directory selects every group of this fixture regression.
+if group == "fixture"
+  require File.join(root, "tools/lib/repository-test-plan")
+  manifest = JSON.parse(File.read(File.join(root, "Config/repository-tests.json")))
+  identity = JSON.parse(File.read(File.join(root, "Config/template-identity.json")))
+  fixture_tests = %w[tools/tests/test-bootstrap-fixture.sh tools/tests/test-bootstrap-fixture-derived-core.sh
+    tools/tests/test-bootstrap-fixture-derived-safety-rejection.sh tools/tests/test-bootstrap-fixture-derived-safety-rerun.sh
+    tools/tests/test-bootstrap-fixture-derived-transform.sh]
+  identity.fetch("renamePaths").map { |path| path.split("/").first }.uniq.each do |directory|
+    _, _, tests = IOSTemplate::RepositoryTestPlan.resolve(manifest, "targeted", ["#{directory}/fixture-change.txt"])
+    assert((fixture_tests - tests).empty?, "a change under #{directory}/ did not select every fixture regression group")
+  end
 end
 assert(snapshot(root) == before, "fixture regression mutated source HEAD, status, tracked files, or identity")
-puts "bootstrap fixture tests passed"
+puts group == "fixture" ? "bootstrap fixture tests passed" : "bootstrap fixture #{group} tests passed"
 RUBY

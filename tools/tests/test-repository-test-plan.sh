@@ -115,10 +115,22 @@ runner.validate_manifest!(source_manifest, source_tests)
 live_content = JSON.parse(File.binread(File.join(source_repo, "Config/template-identity.json"))).fetch("liveContentPaths")
 bootstrap_paths = live_content.reject { |path| path.start_with?("TemplateApp") } +
   %w[tools/bootstrap-app.swift tools/bootstrap-app.sh Config/template-identity.json]
+# #327: a bootstrap-assets change selects every app-bootstrap group, and a bootstrap-fixture change selects
+# every fixture group.
+bootstrap_tests = %w[tools/tests/test-app-bootstrap-safety-rejection.sh tools/tests/test-app-bootstrap-safety-rerun.sh
+  tools/tests/test-app-bootstrap-transform.sh tools/tests/test-app-bootstrap.sh]
+fixture_tests = %w[tools/tests/test-bootstrap-fixture-derived-core.sh tools/tests/test-bootstrap-fixture-derived-safety-rejection.sh
+  tools/tests/test-bootstrap-fixture-derived-safety-rerun.sh tools/tests/test-bootstrap-fixture-derived-transform.sh
+  tools/tests/test-bootstrap-fixture.sh]
+abort "bootstrap groups differ from the manifest" unless
+  source_tests.select { |path| path.start_with?("tools/tests/test-app-bootstrap") } == bootstrap_tests &&
+    source_tests.select { |path| path.start_with?("tools/tests/test-bootstrap-fixture") } == fixture_tests
+_, _, tests = runner.resolve(source_manifest, "targeted", ["tools/bootstrap-app.swift"])
+abort "a bootstrap-fixture change did not select every fixture group" unless (fixture_tests - tests).empty?
 bootstrap_paths.each do |changed_path|
   scope, reason, tests = runner.resolve(source_manifest, "targeted", [changed_path])
   abort "bootstrap regression was not selected for #{changed_path}" unless scope == "targeted" &&
-    reason.include?("bootstrap-assets") && tests.include?("tools/tests/test-app-bootstrap.sh")
+    reason.include?("bootstrap-assets") && (bootstrap_tests - tests).empty?
 end
 %w[docs/verification.md tools/bootstrap-app.sh tools/tests/test-appstore-preparation.sh].each do |changed_path|
   _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
@@ -139,21 +151,41 @@ rescue IOSTemplate::RepositoryTestPlan::PlanError => error
   abort "missing lints failed for the wrong reason" unless error.message.include?("repository-lint")
 end
 abort "targeted merge did not use its bounded scenario" unless
-  runner.test_arguments("tools/tests/test-merge-issue.sh", "targeted") == ["scoped"]
+  runner.test_arguments("tools/tests/test-merge-issue.sh", "targeted", revision_tests: source_tests) == ["scoped"]
 abort "targeted premerge did not use its bounded scenario" unless
-  runner.test_arguments("tools/tests/test-premerge-gate.sh", "targeted") == ["scoped"]
+  runner.test_arguments("tools/tests/test-premerge-gate.sh", "targeted", revision_tests: source_tests) == ["scoped"]
 abort "targeted renderer did not use its bounded scenario" unless
-  runner.test_arguments("tools/tests/test-render-pr-body.sh", "targeted") == ["scoped"]
+  runner.test_arguments("tools/tests/test-render-pr-body.sh", "targeted", revision_tests: source_tests) == ["scoped"]
 abort "targeted workflow state did not use its bounded scenario" unless
-  runner.test_arguments("tools/tests/test-workflow-state.sh", "targeted") == ["scoped"]
+  runner.test_arguments("tools/tests/test-workflow-state.sh", "targeted", revision_tests: source_tests) == ["scoped"]
 abort "targeted workflow E2E did not use its bounded scenario" unless
-  runner.test_arguments("tools/tests/test-workflow-e2e.sh", "targeted") == ["scoped"]
+  runner.test_arguments("tools/tests/test-workflow-e2e.sh", "targeted", revision_tests: source_tests) == ["scoped"]
 abort "head-all unexpectedly narrowed a test" unless
-  runner.test_arguments("tools/tests/test-premerge-gate.sh", "head-all") == [] &&
-    runner.test_arguments("tools/tests/test-workflow-state.sh", "head-all") == [] &&
-    runner.test_arguments("tools/tests/test-workflow-e2e.sh", "head-all") == []
-abort "bootstrap full entrypoint changed" unless
-  runner.test_arguments("tools/tests/test-app-bootstrap.sh", "targeted") == ["all"]
+  runner.test_arguments("tools/tests/test-premerge-gate.sh", "head-all", revision_tests: source_tests) == [] &&
+    runner.test_arguments("tools/tests/test-workflow-state.sh", "head-all", revision_tests: source_tests) == [] &&
+    runner.test_arguments("tools/tests/test-workflow-e2e.sh", "head-all", revision_tests: source_tests) == []
+abort "bootstrap core entrypoint changed" unless
+  %w[targeted head-all base-and-head].all? { |scope| runner.test_arguments("tools/tests/test-app-bootstrap.sh", scope, revision_tests: source_tests) == ["core"] }
+# #327: the arguments follow the tested revision. A revision without every companion group entrypoint (an
+# earlier, unsplit Base) runs `all`; legacy Head-only evidence keeps `all`; an inventory is required otherwise.
+unsplit_tests = source_tests - bootstrap_tests + ["tools/tests/test-app-bootstrap.sh"]
+abort "an unsplit revision did not keep its full bootstrap run" unless
+  %w[targeted head-all base-and-head].all? { |scope| runner.test_arguments("tools/tests/test-app-bootstrap.sh", scope, revision_tests: unsplit_tests) == ["all"] }
+abort "a partly split revision did not keep its full bootstrap run" unless
+  runner.test_arguments("tools/tests/test-app-bootstrap.sh", "base-and-head",
+    revision_tests: source_tests - ["tools/tests/test-app-bootstrap-transform.sh"]) == ["all"]
+abort "legacy Head-only evidence changed its bootstrap arguments" unless
+  runner.test_arguments("tools/tests/test-app-bootstrap.sh", "legacy-head", revision_tests: nil) == ["all"] &&
+    runner.test_arguments("tools/tests/test-app-bootstrap.sh", "legacy-head", revision_tests: source_tests) == ["all"]
+begin
+  runner.test_arguments("tools/tests/test-app-bootstrap.sh", "base-and-head", revision_tests: nil)
+  abort "bootstrap arguments were resolved without the revision inventory"
+rescue IOSTemplate::RepositoryTestPlan::PlanError => error
+  abort "missing revision inventory failed for the wrong reason" unless error.message.include?("revision test inventory is required")
+end
+abort "a bootstrap group entrypoint gained arguments" unless (bootstrap_tests + fixture_tests - ["tools/tests/test-app-bootstrap.sh"]).all? { |path|
+  %w[targeted head-all base-and-head].all? { |scope| runner.test_arguments(path, scope, revision_tests: source_tests) == [] }
+}
 Dir.mktmpdir("repository-test-plan-") do |scratch|
   repo = File.join(scratch, "repo")
   FileUtils.mkdir_p(File.join(repo, "Config"))
@@ -438,4 +470,83 @@ Dir.mktmpdir("repository-test-plan-e2e-") do |scratch|
   abort "planned packet accepted changed plan bytes" if status.success?
 end
 puts "PASS: targeted plans drive schema v3 execution and remain sealed through packet validation"
+RUBY
+
+# #327: a base-and-head comparison that spans the app-bootstrap split runs and validates each revision with the
+# arguments its own entrypoints accept: the unsplit Base rejects `core` the way the earlier script did.
+SOURCE_REPO="$source_repo" ruby -I"$source_repo/tools/lib" -rrun-repository-tests -rissue-contract -rfileutils -rtmpdir -rjson <<'RUBY'
+source = ENV.fetch("SOURCE_REPO")
+runner = IOSTemplate::RepositoryTests
+review = IOSTemplate::ReviewContract
+Dir.mktmpdir("repository-bootstrap-split-") do |scratch|
+  scratch = File.realpath(scratch)
+  repo = File.join(scratch, "repo")
+  FileUtils.mkdir_p(File.join(repo, "tools/tests"))
+  git = ->(*args) { runner.git!(repo, *args).strip }
+  git.call("init", "-q", "-b", "main")
+  git.call("config", "user.name", "Fixture")
+  git.call("config", "user.email", "fixture@example.invalid")
+  File.write(File.join(repo, ".gitignore"), "/.artifacts\n")
+  bootstrap = File.join(repo, "tools/tests/test-app-bootstrap.sh")
+  File.write(bootstrap, "case \"${1:-}\" in all) exit 0;; *) echo \"usage: $0 validation|all\" >&2; exit 64;; esac\n")
+  File.write(File.join(repo, "tools/tests/test-alpha.sh"), "exit 0\n")
+  git.call("add", ".")
+  git.call("commit", "-qm", "unsplit Base")
+  base = git.call("rev-parse", "HEAD")
+  FileUtils.mkdir_p(File.join(repo, "tools/lib"))
+  %w[run-repository-tests.sh prepare-review-packet.sh validate-review-result.sh cross-model-review.sh].each do |name|
+    FileUtils.cp(File.join(source, "tools", name), File.join(repo, "tools", name))
+  end
+  Dir[File.join(source, "tools/lib/*.rb")].each { |file| FileUtils.cp(file, File.join(repo, "tools/lib")) }
+  File.write(bootstrap, "case \"${1:-}\" in core) exit 0;; *) echo \"usage: $0 core|all\" >&2; exit 64;; esac\n")
+  groups = %w[tools/tests/test-app-bootstrap-safety-rejection.sh tools/tests/test-app-bootstrap-safety-rerun.sh
+    tools/tests/test-app-bootstrap-transform.sh]
+  groups.each { |path| File.write(File.join(repo, path), "test $# -eq 0\n") }
+  git.call("add", ".")
+  git.call("commit", "-qm", "split Head")
+  head = git.call("rev-parse", "HEAD")
+  FileUtils.mkdir_p(File.join(repo, ".artifacts/issues/42", head))
+  criteria = [{"id"=>"AC-1", "text"=>"Bootstrap groups"},
+              {"id"=>"AC-2", "text"=>"Repository-test scope: base-and-head; Full baseline and Head regression"}]
+  contract = {"schemaVersion"=>1, "issue"=>42, "repository"=>"example/repo", "goal"=>"Split comparison",
+              "specAnchors"=>["specs/test.md#evidence"], "acceptanceCriteria"=>criteria,
+              "dependencies"=>[], "externalOperations"=>[], "externalOperationDetailsDigest"=>"sha256:#{'0' * 64}",
+              "fetchedAt"=>"2026-08-25T00:00:00Z"}
+  contract_bytes = IOSTemplate::IssueContract.canonical_json(contract)
+  File.write(File.join(repo, ".artifacts/issues/42/issue-contract.json"), contract_bytes)
+  head_tests = (groups + %w[tools/tests/test-alpha.sh tools/tests/test-app-bootstrap.sh]).sort
+  base_tests = %w[tools/tests/test-alpha.sh tools/tests/test-app-bootstrap.sh]
+  begin
+    runner.run(repo: repo, issue: 42, expected_base: base,
+      mappings: {"AC-1"=>["tools/tests/test-app-bootstrap.sh"], "AC-2"=>head_tests}, base_mappings: {"AC-2"=>base_tests})
+  rescue runner::RunnerError => error
+    abort "an unsplit Base paired with a split Head did not run: #{error.message}"
+  end
+  record_bytes = File.binread(File.join(repo, ".artifacts/issues/42", head, "repository-tests.json"))
+  record = JSON.parse(record_bytes.dup)
+  arguments = record.fetch("revisions").map do |revision|
+    revision.fetch("tests").find { |test| test.fetch("path") == "tools/tests/test-app-bootstrap.sh" }.values_at("arguments", "command")
+  end
+  abort "each revision did not run its own bootstrap form: #{arguments.inspect}" unless arguments == [
+    [["all"], ["/bin/bash", "-p", "tools/tests/test-app-bootstrap.sh", "all"]],
+    [["core"], ["/bin/bash", "-p", "tools/tests/test-app-bootstrap.sh", "core"]]
+  ]
+  context = review.repository_revision_context(repo: repo, base_sha: base, head_sha: head)
+  validate = ->(value) { review.validate_repository_tests!(value, issue: 42, base_sha: base, head_sha: head,
+    contract_digest: review.digest(contract_bytes), criteria: criteria, revision_context: context) }
+  validate.call(record)
+  [[0, "core"], [1, "all"]].each do |index, swapped|
+    altered = JSON.parse(record_bytes.dup)
+    test = altered.fetch("revisions")[index].fetch("tests").find { |entry| entry.fetch("path") == "tools/tests/test-app-bootstrap.sh" }
+    test["arguments"] = [swapped]
+    test["command"] = ["/bin/bash", "-p", test.fetch("path"), swapped]
+    begin
+      validate.call(altered)
+      abort "accepted #{swapped} for the #{index.zero? ? 'unsplit Base' : 'split Head'}"
+    rescue IOSTemplate::ReviewContract::ValidationError => error
+      abort "swapped bootstrap arguments failed for the wrong reason: #{error.message}" unless error.message.include?("argv differs")
+    end
+  end
+end
+puts "PASS: a Base and Head on either side of the app-bootstrap split each run their own bootstrap form"
 RUBY

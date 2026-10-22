@@ -48,6 +48,14 @@ module IOSTemplate
       tools/template-sync.sh
       tools/tests/test-adopted-app-imported-tests.sh
     ].freeze
+    # #327: a revision with every companion group entrypoint is split and runs `core` in BOOTSTRAP_CORE_TEST;
+    # a revision without them runs that test's `all`.
+    BOOTSTRAP_CORE_TEST = "tools/tests/test-app-bootstrap.sh"
+    BOOTSTRAP_GROUP_TESTS = %w[
+      tools/tests/test-app-bootstrap-safety-rejection.sh
+      tools/tests/test-app-bootstrap-safety-rerun.sh
+      tools/tests/test-app-bootstrap-transform.sh
+    ].freeze
 
     def policy(contract)
       criteria = contract.fetch("acceptanceCriteria")
@@ -127,8 +135,16 @@ module IOSTemplate
       reject("repository-test plan is incomplete")
     end
 
-    def test_arguments(path, scope)
-      return ["all"] if path == "tools/tests/test-app-bootstrap.sh"
+    # #327: the arguments come from the tested revision's own tracked test entrypoints (revision_tests), so a
+    # Base and a Head on either side of the app-bootstrap split each run the form they contain. Legacy Head-only
+    # evidence keeps its recorded `all`.
+    def test_arguments(path, scope, revision_tests:)
+      if path == BOOTSTRAP_CORE_TEST
+        return ["all"] if scope == "legacy-head"
+
+        reject("revision test inventory is required for #{path}") unless revision_tests.is_a?(Array)
+        return (BOOTSTRAP_GROUP_TESTS - revision_tests).empty? ? ["core"] : ["all"]
+      end
       return ["scoped"] if scope == "targeted" && TARGETED_SCOPED_TESTS.include?(path)
 
       []

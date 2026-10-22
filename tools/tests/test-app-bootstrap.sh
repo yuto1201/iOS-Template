@@ -20,11 +20,21 @@ disable_git_auto_maintenance() {
 }
 disable_git_auto_maintenance
 
+# A suite runs one scenario set in its own fixtures. A group runs several suites in order; the repository
+# suite runs `core` here and each other group through its own tools/tests/test-app-bootstrap-*.sh entrypoint,
+# so every entrypoint stays well inside the targeted per-test limit. `all` runs every suite once.
 mode="${1:-}"
-if [[ "$mode" != "validation" && "$mode" != "transform" && "$mode" != "transaction" && "$mode" != "trunk-default" && "$mode" != "cleanup-failure" && "$mode" != "safety" && "$mode" != "all" ]]; then
-  echo "usage: $0 validation|transform|transaction|trunk-default|cleanup-failure|safety|all" >&2
-  exit 64
-fi
+group_suites=""
+case "$mode" in
+  validation|transform|transaction|trunk-default|cleanup-failure|safety-rejection|safety-rerun) ;;
+  core) group_suites="validation transaction trunk-default cleanup-failure" ;;
+  safety) group_suites="safety-rejection safety-rerun" ;;
+  all) group_suites="validation transform transaction trunk-default cleanup-failure safety-rejection safety-rerun" ;;
+  *)
+    echo "usage: $0 validation|transform|transaction|trunk-default|cleanup-failure|safety-rejection|safety-rerun|core|safety|all" >&2
+    exit 64
+    ;;
+esac
 
 source_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 root="$source_root"
@@ -40,7 +50,7 @@ escaped_fixture=""
 seed_parent=""
 trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"; [[ -z "$escaped_fixture" ]] || rm -rf "$escaped_fixture"; [[ -z "$seed_parent" ]] || rm -rf "$seed_parent"' EXIT
 
-# A derived repository builds one seed for the whole `all` run and passes it to each suite, which
+# A derived repository builds one seed for a whole group run and passes it to each suite, which
 # first proves the seed is still a clean repository directory at the same Head.
 verify_shared_seed() {
   local seed="$1" expected_head="$2"
@@ -49,19 +59,19 @@ verify_shared_seed() {
   [[ "$(git -C "$seed" rev-parse HEAD)" == "$expected_head" ]] || { echo 'shared bootstrap seed Head changed' >&2; exit 1; }
   [[ ! -e "$seed/Config/app-identity.json" && ! -L "$seed/Config/app-identity.json" ]] || { echo 'shared bootstrap seed no longer has the template identity' >&2; exit 1; }
 }
-if [[ "$mode" == "all" ]]; then
+if [[ -n "$group_suites" ]]; then
   if [[ -f "$source_root/Config/app-identity.json" && ! -L "$source_root/Config/app-identity.json" && -z "${IOS_TEMPLATE_BOOTSTRAP_SEED-}" ]]; then
     seed_parent="$(mktemp -d -t app-bootstrap-seed.XXXXXX)"
     IOS_TEMPLATE_BOOTSTRAP_SEED="$(ruby "$source_root/tools/tests/lib/bootstrap-fixture.rb" create "$source_root" "$seed_parent/repository")"
     IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD="$(git -C "$IOS_TEMPLATE_BOOTSTRAP_SEED" rev-parse HEAD)"
     export IOS_TEMPLATE_BOOTSTRAP_SEED IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD
   fi
-  for suite in validation transform transaction trunk-default cleanup-failure safety; do
+  for suite in $group_suites; do
     [[ -z "${IOS_TEMPLATE_BOOTSTRAP_SEED-}" ]] || verify_shared_seed "$IOS_TEMPLATE_BOOTSTRAP_SEED" "$IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD"
     bash "$0" "$suite"
   done
   [[ -z "${IOS_TEMPLATE_BOOTSTRAP_SEED-}" ]] || verify_shared_seed "$IOS_TEMPLATE_BOOTSTRAP_SEED" "$IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD"
-  echo 'all app bootstrap tests passed'
+  echo "$mode app bootstrap tests passed"
   exit 0
 fi
 if [[ -f "$source_root/Config/app-identity.json" && ! -L "$source_root/Config/app-identity.json" ]]; then
@@ -83,13 +93,13 @@ set_clone_default_for_detached_root() {
   fi
 }
 
+# One shasum process hashes the sorted list (#327): the per-file lines and the digest are the same as one
+# shasum per file, but the validation suite no longer grows by a process per file for every invalid case.
 fixture_hash() {
   {
     find TemplateApp TemplateAppTests TemplateAppUITests TemplateApp.xcodeproj Config specs docs -type f -print
     printf '%s\n' AGENTS.md
-  } | LC_ALL=C sort | while IFS= read -r path; do
-    shasum "$path"
-  done | shasum | awk '{print $1}'
+  } | LC_ALL=C sort | tr '\n' '\0' | xargs -0 shasum | shasum | awk '{print $1}'
 }
 
 source_tree_digest() {
@@ -283,7 +293,7 @@ expect_invalid() {
   }
 }
 
-if [[ "$mode" == "safety" ]]; then
+if [[ "$mode" == "safety-rejection" ]]; then
   new_safety_fixture dirty
   printf 'caller-owned\n' >"$fixture/dirty.txt"
   expect_bootstrap_rejection_without_mutation 'dirty worktree' "${garden_notes_arguments[@]}"
@@ -426,6 +436,11 @@ PY
       --bundle-id "$invalid_bundle"
   done
 
+  echo 'safety rejection tests passed'
+  exit 0
+fi
+
+if [[ "$mode" == "safety-rerun" ]]; then
   new_safety_fixture independent-bundle-segment
   independent_bundle_arguments=(
     --display-name 'Garden Notes'
@@ -729,7 +744,7 @@ PY
   expect_bootstrap_rejection_without_mutation 'same second run with a live residual' \
     "${garden_notes_arguments[@]}"
 
-  echo 'safety tests passed'
+  echo 'safety rerun tests passed'
   exit 0
 fi
 
