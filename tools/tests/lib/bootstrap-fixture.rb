@@ -15,10 +15,12 @@ module BootstrapFixture
   MANIFEST_PATH = "Config/template-identity.json"
   UPDATE_INSTRUCTION = "bootstrap template fixture is out of date: run `ruby tools/tests/lib/bootstrap-fixture.rb refresh .` from the template repository root, review tools/tests/fixtures/bootstrap-template/source-identity.json, and commit it with the change."
 
+  # Git prints paths as raw bytes. Ruby tags pipe output with the caller's locale encoding, which is US-ASCII
+  # when LANG/LC_ALL are unset or C (#333), so the output is always tagged UTF-8 and checked where it is used.
   def git(root, *args)
     output, error, status = Open3.capture3("git", "-C", root, *args)
     raise "fixture git failed: #{error}" unless status.success?
-    output
+    output.force_encoding(Encoding::UTF_8)
   end
 
   def read_text(path)
@@ -31,10 +33,15 @@ module BootstrapFixture
     JSON.parse(read_text(path))
   end
 
+  # A path is judged by its bytes, not by the encoding Ruby gave the string from the caller's locale (#333).
+  # Bytes that are not UTF-8 are refused as an encoding problem; the shape checks and their message are as before.
   def safe_relative!(relative)
-    raise ArgumentError, "unsafe fixture path" unless relative.is_a?(String) &&
-      relative.encoding == Encoding::UTF_8 && relative.valid_encoding? &&
-      !relative.empty? && !relative.start_with?("/") &&
+    raise ArgumentError, "unsafe fixture path" unless relative.is_a?(String)
+    relative = relative.dup.force_encoding(Encoding::UTF_8) unless relative.encoding == Encoding::UTF_8
+    unless relative.valid_encoding?
+      raise ArgumentError, "fixture path is not valid UTF-8: #{relative.dup.force_encoding(Encoding::BINARY).inspect}"
+    end
+    raise ArgumentError, "unsafe fixture path" unless !relative.empty? && !relative.start_with?("/") &&
       !relative.match?(/[\x00-\x1f\\]/)
     parts = relative.split("/", -1)
     raise ArgumentError, "unsafe fixture path" if parts.any? { |part| part.empty? || %w[. .. .git].include?(part) }
@@ -52,8 +59,9 @@ module BootstrapFixture
     File.join(root, relative)
   end
 
+  # Split as bytes so that a path that is not UTF-8 reaches safe_relative! and is refused there by name.
   def tracked_paths(source)
-    git(source, "ls-files", "-z").split("\0").reject(&:empty?).sort
+    git(source, "ls-files", "-z").b.split("\0".b).reject(&:empty?).map { |path| path.force_encoding(Encoding::UTF_8) }.sort
   end
 
   def manifest(source)

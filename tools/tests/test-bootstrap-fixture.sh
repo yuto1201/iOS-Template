@@ -50,7 +50,8 @@ fi
 disable_git_auto_maintenance
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
-ruby - "$root" "$group" <<'RUBY'
+# #333: -E UTF-8 reads Git output and files as UTF-8 even when LANG/LC_ALL are unset or C (US-ASCII in Ruby).
+ruby -E UTF-8 - "$root" "$group" <<'RUBY'
 require "digest"
 require "fileutils"
 require "json"
@@ -77,9 +78,13 @@ def succeed(*argv, chdir: nil)
   output
 end
 
+# #333: only a missing transformation anchor means the frozen fixture is out of date. Any other transform
+# failure, such as one caused by the caller's locale, shows the transform output alone.
 def check_compatibility(seed, instruction)
   ok, output = command("bash", "tools/tests/test-app-bootstrap.sh", "transform", chdir: seed)
-  raise "bootstrap template fixture compatibility check failed\n#{output}\n#{instruction}" unless ok
+  return if ok
+  advice = output.include?("required transformation anchor is missing") ? "\n#{instruction}" : ""
+  raise "bootstrap template fixture compatibility check failed\n#{output}#{advice}"
 end
 
 def git(root, *args)
@@ -230,6 +235,62 @@ begin
     assert(git(seed, "status", "--porcelain=v1").empty?, "seed is dirty")
     assert(git(seed, "config", "--get", "maintenance.auto").strip == "false" && git(seed, "config", "--get", "gc.auto").strip == "0",
       "Git's automatic maintenance is still on in the temporary repositories")
+
+    # #333: with LANG and LC_ALL set to C, Ruby reads Git output and files as US-ASCII. The helper's check and
+    # create give the same results as under a UTF-8 locale, and a tracked path whose bytes are not UTF-8 is
+    # refused under both as an encoding problem, not as an unsafe path.
+    c_locale = {"LANG" => "C", "LC_ALL" => "C", "RUBYOPT" => nil}
+    utf8_locale = {"LANG" => "en_US.UTF-8", "LC_ALL" => "en_US.UTF-8", "RUBYOPT" => nil}
+    encodings = [c_locale, utf8_locale].map { |env| succeed(env, "ruby", "-e", "print Encoding.default_external") }
+    assert(encodings == %w[US-ASCII UTF-8], "the locales did not set Ruby's external encoding: #{encodings.inspect}")
+    checks = [c_locale, utf8_locale].map { |env| command(env, "ruby", helper, "check", root) }
+    assert(checks.first.first && checks.first == checks.last, "helper check differs between the C and UTF-8 locales: #{checks.inspect}")
+    seed_tree = git(seed, "rev-parse", "HEAD^{tree}")
+    {"c" => c_locale, "utf8" => utf8_locale}.each do |label, env|
+      destination = File.join(temp, "seed-#{label}-locale")
+      ok, output = command(env, "ruby", helper, "create", root, destination)
+      assert(ok && output.strip == destination && git(destination, "rev-parse", "HEAD^{tree}") == seed_tree,
+        "helper create under the #{label} locale differs from the seed: #{output}")
+    end
+    non_utf8 = BootstrapFixture.create(root, File.join(temp, "non-utf8-source"))
+    blob = git(non_utf8, "rev-parse", "HEAD:AGENTS.md").strip
+    git(non_utf8, "update-index", "--add", "--cacheinfo", "100644,#{blob},not-utf8-\xFF.md")
+    {"c" => c_locale, "utf8" => utf8_locale}.each do |label, env|
+      destination = File.join(temp, "non-utf8-#{label}-locale")
+      ok, output = command(env, "ruby", File.join(non_utf8, "tools/tests/lib/bootstrap-fixture.rb"), "create", non_utf8, destination)
+      assert(!ok && !File.exist?(destination) && output.include?("fixture path is not valid UTF-8: \"not-utf8-\\xFF.md\"") &&
+        !output.include?("unsafe fixture path"), "a tracked path that is not UTF-8 was not refused as an encoding problem (#{label}): #{output}")
+    end
+    {
+      "absolute" => "/AGENTS.md", "parent" => "docs/../AGENTS.md", "git" => ".git/config", "empty segment" => "docs//README.md",
+      "control" => "docs/\nREADME.md", "backslash" => "docs\\README.md", "empty" => ""
+    }.each do |label, path|
+      [path, path.dup.force_encoding(Encoding::US_ASCII)].each do |candidate|
+        message = begin
+          BootstrapFixture.safe_relative!(candidate)
+          nil
+        rescue ArgumentError => error
+          error.message
+        end
+        assert(message == "unsafe fixture path", "the #{label} path check changed (#{candidate.encoding}): #{message.inspect}")
+      end
+    end
+    assert(BootstrapFixture.safe_relative!("docs/README.md".encode(Encoding::US_ASCII)) == "docs/README.md",
+      "a safe path read under the C locale was refused")
+
+    # #333: a transform failure without a missing anchor shows the transform output and no refresh instruction.
+    failing = File.join(temp, "failing-transform")
+    FileUtils.mkdir_p(File.join(failing, "tools/tests"))
+    File.binwrite(File.join(failing, "tools/tests/test-app-bootstrap.sh"),
+      "echo 'Foundation failed after disposable bootstrap: invalid byte sequence in US-ASCII' >&2\nexit 1\n")
+    failure = begin
+      check_compatibility(failing, instruction)
+      nil
+    rescue RuntimeError => error
+      error.message
+    end
+    assert(!failure.nil? && failure.include?("invalid byte sequence in US-ASCII") && !failure.include?(instruction),
+      "a transform failure without a missing anchor was not shown alone: #{failure.inspect}")
 
     ok, = command("ruby", helper, "create", root, seed)
     assert(!ok && File.file?(File.join(seed, "TemplateApp/TemplateAppApp.swift")),
