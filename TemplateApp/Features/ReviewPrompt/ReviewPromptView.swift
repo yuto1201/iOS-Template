@@ -76,10 +76,13 @@ struct ReviewPromptSheet: View {
                     center.answerPositive()
                 }
             }
-            Button("review-prompt.later") { center.close() }
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .contentShape(.rect)
-                .accessibilityIdentifier("review-prompt.later")
+            // The 44pt height is on the label, so the tappable area and the accessibility frame both get it.
+            Button { center.close() } label: {
+                Text("review-prompt.later")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .accessibilityIdentifier("review-prompt.later")
         }
     }
 
