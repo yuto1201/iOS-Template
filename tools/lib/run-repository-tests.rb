@@ -30,6 +30,7 @@ module IOSTemplate
     MAXIMUM_REPOSITORY_TEST_JOBS = 8
     EXCLUSIVE_MARKER = "# repository-test-execution: exclusive"
     EXCLUSIVE_MARKER_LINES = 10
+    INTERRUPT_GRACE_SECONDS = 5
     FAILURE_FILE_PREFIX = "repository-test-failure-attempt-"
     # A failed test's own output is kept here, private to this user and outside the repository and the
     # canonical evidence, for the selected diagnostic before the one allowed retry (#268).
@@ -400,11 +401,24 @@ module IOSTemplate
           begin
             workers.each(&:join)
           rescue Exception
-            monitor.synchronize do
+            # An interruption terminates every running test's process group, kills the members that are
+            # still alive after a bounded grace period, and waits for the workers before the worktrees go.
+            interrupted_groups = monitor.synchronize do
               stopping = true
-              running_groups.each_value { |pid| terminate_process_group(pid) }
+              running_groups.values
             end
-            workers.each { |worker| worker.join(10) }
+            interrupted_groups.each { |pid| terminate_process_group(pid) }
+            grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + INTERRUPT_GRACE_SECONDS
+            interrupted_groups.each do |pid|
+              while process_group_alive?(pid) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < grace_deadline
+                sleep 0.05
+              end
+              kill_process_group(pid)
+            end
+            workers.each { |worker| worker.join(INTERRUPT_GRACE_SECONDS) }
+            survivors = interrupted_groups.select { |pid| process_group_alive?(pid) }
+            reject("interrupted test process groups are still running: #{survivors.join(', ')}") unless survivors.empty?
+            reject("repository test workers did not stop after the interruption") if workers.any?(&:alive?)
             raise
           end
         ensure
@@ -666,6 +680,22 @@ module IOSTemplate
       input&.close unless input&.closed?
       output&.close unless output&.closed?
       error&.close unless error&.closed?
+    end
+
+    def kill_process_group(pid)
+      Process.kill("KILL", -pid)
+    rescue Errno::ESRCH
+      nil
+    end
+
+    # True while any member of the process group still exists.
+    def process_group_alive?(pid)
+      Process.kill(0, -pid)
+      true
+    rescue Errno::ESRCH
+      false
+    rescue Errno::EPERM
+      true
     end
 
     def terminate_process_group(pid)

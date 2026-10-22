@@ -34,7 +34,8 @@ git -C "$repo" commit -q -m base
 base_sha=$(git -C "$repo" rev-parse HEAD)
 
 # Each fixture test records when it started and ended under PARALLEL_LOG, fails when named in FAIL_TESTS,
-# and when named in HANG_TESTS leaves a background child in its process group and waits for it.
+# and when named in HANG_TESTS leaves a background child in its process group and waits for it; a test named in
+# STUBBORN_TESTS also leaves a child that ignores TERM.
 for name in alpha beta delta gamma; do
   {
     printf '%s\n' '#!/usr/bin/env bash'
@@ -44,6 +45,9 @@ for name in alpha beta delta gamma; do
 [[ -z ${IOS_TEMPLATE_REPOSITORY_TEST_JOBS+x} ]] || { echo 'the worker count reached a test' >&2; exit 3; }
 perl -MTime::HiRes=time -e 'printf "%.6f\n", time' >"$log/$name.start"
 case " ${FAIL_TESTS:-} " in *" $name "*) exit 5 ;; esac
+case " ${STUBBORN_TESTS:-} " in
+  *" $name "*) ( trap '' TERM; exec sleep 120 ) & printf '%s\n' "$!" >"$log/$name.stubborn" ;;
+esac
 case " ${HANG_TESTS:-} " in
   *" $name "*) sleep 120 & printf '%s\n' "$!" >"$log/$name.child"; wait ;;
 esac
@@ -176,14 +180,17 @@ jq -e '.failedTest == "tools/tests/test-alpha.sh" and .timedOut == true and
   .unexecutedTestPaths == ["tools/tests/test-delta.sh", "tools/tests/test-gamma.sh"]' \
   "$repo/.artifacts/issues/121/$head_sha/repository-test-failure-attempt-1.json" >/dev/null
 
-# An interruption reaps every running test's process group and removes the detached worktrees.
+# An interruption reaps every running test's process group, killing members that ignore TERM, leaves an
+# unrelated process alone, and removes the detached worktrees.
 prepare_issue 122
-(cd "$repo" && exec env PARALLEL_LOG="$scratch/log-122" IOS_TEMPLATE_REPOSITORY_TEST_JOBS=2 HANG_TESTS='alpha beta' \
+sleep 120 &
+unrelated=$!
+(cd "$repo" && exec env PARALLEL_LOG="$scratch/log-122" IOS_TEMPLATE_REPOSITORY_TEST_JOBS=2 HANG_TESTS='alpha beta' STUBBORN_TESTS=alpha \
   tools/run-repository-tests.sh --issue 122 --expected-base "$base_sha" \
   --map AC-1=tools/tests/test-alpha.sh --map AC-2=tools/tests/test-beta.sh) >"$scratch/122.out" 2>"$scratch/122.err" &
 runner=$!
 for _ in $(seq 1 100); do
-  [[ -s "$scratch/log-122/alpha.child" && -s "$scratch/log-122/beta.child" ]] && break
+  [[ -s "$scratch/log-122/alpha.child" && -s "$scratch/log-122/beta.child" && -s "$scratch/log-122/alpha.stubborn" ]] && break
   sleep 0.2
 done
 [[ -s "$scratch/log-122/alpha.child" && -s "$scratch/log-122/beta.child" ]] || { kill "$runner"; echo 'interrupted tests did not start' >&2; exit 1; }
@@ -191,6 +198,11 @@ kill -TERM "$runner"
 for _ in $(seq 1 150); do kill -0 "$runner" 2>/dev/null || break; sleep 0.2; done
 if kill -0 "$runner" 2>/dev/null; then kill -KILL "$runner"; echo 'the interrupted runner did not stop' >&2; exit 1; fi
 { wait "$runner"; } 2>/dev/null && { echo 'an interrupted runner reported success' >&2; exit 1; } || true
+stubborn=$(cat "$scratch/log-122/alpha.stubborn")
+! kill -0 "$stubborn" 2>/dev/null || { kill -KILL "$stubborn"; echo 'a TERM-ignoring test process survived the interruption' >&2; exit 1; }
+kill -0 "$unrelated" 2>/dev/null || { echo 'the interruption stopped an unrelated process' >&2; exit 1; }
+kill "$unrelated"
+wait "$unrelated" 2>/dev/null || true
 for name in alpha beta; do
   child=$(cat "$scratch/log-122/$name.child")
   ! kill -0 "$child" 2>/dev/null || { kill "$child"; echo "the interrupted $name process group was not reaped" >&2; exit 1; }

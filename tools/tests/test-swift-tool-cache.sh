@@ -63,6 +63,23 @@ chmod 700 "$restored"
 writable_checked=$(swift_tool_binary "$source_file")
 [[ "$(stat -f '%Lp' "$writable_checked")" == 500 && "$("$writable_checked" f)" == 'second:f' ]] || fail 'a writable binary was used'
 
+# A valid binary of another source copied into this entry, under its own digest name and with or without
+# that entry's binding, is not used.
+bound=$(swift_tool_binary "$source_file")
+other_entry=$(dirname "$other")
+entry=$(dirname "$bound")
+chmod 700 "$bound"
+rm -f -- "$bound"
+cp -p "$other" "$entry/"
+substituted=$(swift_tool_binary "$source_file")
+[[ "$("$substituted" g)" == 'second:g' ]] || fail 'a binary of another source was used'
+chmod 600 "$entry/binding"
+cp "$other_entry/binding" "$entry/binding"
+chmod 400 "$entry/binding"
+rebound=$(swift_tool_binary "$source_file")
+[[ "$("$rebound" h)" == 'second:h' && "$(cut -d' ' -f1 "$entry/binding")" == "$(basename "$entry")" ]] ||
+  fail "another entry's binding was used"
+
 # A source that does not compile fails without leaving a binary or compile file.
 broken_source="$scratch/sources/broken.swift"
 printf '%s\n' 'this is not swift' >"$broken_source"
@@ -84,6 +101,27 @@ chmod 755 "$entry"
 if swift_tool_binary "$source_file" >/dev/null 2>&1; then fail 'a shared cache entry was accepted'; fi
 chmod 700 "$entry"
 
+# A cache root inside the repository that holds the tool, inside its primary checkout or artifact store
+# (also through a symbolic link in an ancestor), or containing the repository is refused before any binary is
+# written.
+primary="$scratch/primary"
+git init -q -b main "$primary"
+git -C "$primary" -c user.name=Test -c user.email=test@example.com commit -q --allow-empty -m base
+git -C "$primary" worktree add -q --detach "$primary/.worktrees/issue" HEAD
+mkdir -p "$primary/.worktrees/issue/tools" "$primary/.artifacts"
+repository_source="$primary/.worktrees/issue/tools/probe.swift"
+cp "$source_file" "$repository_source"
+ln -s "$primary" "$scratch/linked-primary"
+for refused_root in "$primary/.worktrees/issue/.cache" "$primary/.artifacts/swift-tools" \
+  "$scratch/linked-primary/.artifacts/linked-tools" "$scratch"; do
+  if IOS_TEMPLATE_SWIFT_TOOL_CACHE="$refused_root" swift_tool_binary "$repository_source" >/dev/null 2>"$scratch/overlap.err"; then
+    fail "a cache root overlapping the repository was accepted: $refused_root"
+  fi
+  grep -Fq 'the cache root overlaps the' "$scratch/overlap.err" || fail "unexpected overlap refusal: $(cat "$scratch/overlap.err")"
+done
+[[ -z $(find "$primary" -name 'tool-*') ]] || fail 'a refused cache root received a binary'
+[[ "$(swift_tool_binary "$repository_source")" == "$cache"/* ]] || fail 'a cache root outside the repository was refused'
+
 # Caller variables cannot change the compiler, Ruby, or the cache key.
 poison_source="$scratch/sources/poison.swift"
 printf '%s\n' 'print("clean")' >"$poison_source"
@@ -93,8 +131,8 @@ poisoned=$(RUBYOPT='-r/nonexistent-poison' SWIFT_EXEC=/nonexistent-poison BASH_E
 [[ "$(dirname "$poisoned")" == "$(dirname "$clean")" && "$("$poisoned")" == clean ]] || fail 'caller variables changed the compile or the key'
 
 # Without an override the cache is in this user's private cache directory, outside the repository.
-default_root=$(unset IOS_TEMPLATE_SWIFT_TOOL_CACHE; swift_tool_cache_root)
-[[ "$default_root" == "$(getconf DARWIN_USER_CACHE_DIR)"* && "$default_root" != "$source_repo"/* ]] ||
+default_root=$(unset IOS_TEMPLATE_SWIFT_TOOL_CACHE; swift_tool_cache_root "$source_file")
+[[ "$default_root" == "$(cd -P "$(getconf DARWIN_USER_CACHE_DIR)" && pwd -P)"/* && "$default_root" != "$source_repo"/* ]] ||
   fail "the default cache root is not the private cache directory: $default_root"
 
 # The publishers run the validator through the cache.
