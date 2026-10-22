@@ -310,10 +310,82 @@ if git ls-files --error-unmatch Package.swift Package.resolved >/dev/null 2>&1; 
   echo 'Foundation template must not carry a root Swift package dependency surface' >&2
   exit 1
 fi
-if git grep -n -I -E -- 'Supabase|ElevenLabs|Cloudflare|Firebase|PostHog|Mixpanel|Sentry|StoreKit|UserNotifications|XCRemoteSwiftPackageReference' -- TemplateApp TemplateApp.xcodeproj >/dev/null 2>&1; then
+if git grep -n -I -E -- 'Supabase|ElevenLabs|Cloudflare|Firebase|PostHog|Mixpanel|Sentry|UserNotifications|XCRemoteSwiftPackageReference' -- TemplateApp TemplateApp.xcodeproj >/dev/null 2>&1; then
   echo 'TemplateApp contains an integration SDK, entitlement, import, or package reference before activation' >&2
   exit 1
 fi
+
+# #419: StoreKit stays out of TemplateApp except the exact `import StoreKit` that Apple's rating request
+# (`requestReview`, #383) needs in the review prompt. In-app purchase code, Xcode project references and
+# StoreKit configuration files stay refused until an app adopts the conditional StoreKit entitlement (D-064).
+check_storekit_boundary() {
+  local root=$1 line path rest text
+  while IFS= read -r line; do
+    path=${line%%:*}
+    rest=${line#*:}
+    text=${rest#*:}
+    [[ "$path" == TemplateApp/Features/ReviewPrompt/*.swift && "$text" == 'import StoreKit' ]] || {
+      echo "TemplateApp refers to StoreKit outside the review prompt's import: $path" >&2
+      return 1
+    }
+  done < <(git -C "$root" grep -n -I -e StoreKit -- TemplateApp || true)
+  if git -C "$root" grep -n -I -E -- 'Product\.(products|purchase)|Transaction\.(updates|currentEntitlements|all|latest|unfinished)|AppStore\.(sync|showManageSubscriptions)|\.purchase\(|ProductView|StoreView|SubscriptionStoreView|SubscriptionOfferView|AppTransaction|VerificationResult|RenewalInfo|currentEntitlement|subscriptionStatus|inAppPurchaseOptions|onInAppPurchase|storeButton|offerCodeRedemption|manageSubscriptionsSheet|refundRequestSheet|SKPaymentQueue|SKProduct|SKPayment|SKReceipt|SKRequest' -- TemplateApp >/dev/null 2>&1; then
+    echo 'TemplateApp contains in-app purchase code before activation' >&2
+    return 1
+  fi
+  # In a file that imports StoreKit, the StoreKit purchase types are refused by name as well (SwiftUI's own
+  # Transaction elsewhere in TemplateApp is not affected).
+  local storekit_files=()
+  while IFS= read -r path; do storekit_files+=("$path"); done < <(git -C "$root" grep -l -I -e '^import StoreKit$' -- TemplateApp || true)
+  if (( ${#storekit_files[@]} > 0 )) &&
+     git -C "$root" grep -n -I -w -E -- 'Product|Transaction|AppStore' -- "${storekit_files[@]}" >/dev/null 2>&1; then
+    echo 'the review prompt uses StoreKit purchase types' >&2
+    return 1
+  fi
+  if git -C "$root" grep -n -I -e StoreKit -- TemplateApp.xcodeproj >/dev/null 2>&1; then
+    echo 'TemplateApp.xcodeproj refers to StoreKit before activation' >&2
+    return 1
+  fi
+  if [[ -n "$(git -C "$root" ls-files -- '*.storekit')" ]]; then
+    echo 'the repository carries a StoreKit configuration file before activation' >&2
+    return 1
+  fi
+}
+
+storekit_workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-foundation-storekit.XXXXXX")
+# Builds a disposable repository with the review prompt's import, applies one change, and runs the check.
+storekit_case() {
+  local name=$1 root="$storekit_workspace/$1"
+  mkdir -p "$root/TemplateApp/Features/ReviewPrompt" "$root/TemplateApp.xcodeproj" "$root/Config"
+  git -C "$root" init -q
+  printf '%s\n' 'import StoreKit' 'import SwiftUI' >"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift"
+  printf '%s\n' '// project' >"$root/TemplateApp.xcodeproj/project.pbxproj"
+  case "$name" in
+    baseline) ;;
+    import-elsewhere) printf '%s\n' 'import StoreKit' >"$root/TemplateApp/Store.swift" ;;
+    other-mention) printf '%s\n' '// StoreKit purchases' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
+    purchase-code) printf '%s\n' 'let products = try await Product.products(for: ["remove_ads"])' >"$root/TemplateApp/Purchases.swift" ;;
+    legacy-purchase-code) printf '%s\n' 'SKPaymentQueue.default().add(payment)' >"$root/TemplateApp/Purchases.swift" ;;
+    prompt-product-view) printf '%s\n' 'ProductView(id: "com.example.remove_ads")' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
+    prompt-instance-purchase) printf '%s\n' 'func buy(_ item: Item) async throws { _ = try await item.purchase() }' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
+    prompt-product-type) printf '%s\n' 'let item: Product? = nil' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
+    prompt-store-view) printf '%s\n' 'SubscriptionStoreView(groupID: "group")' >>"$root/TemplateApp/Features/ReviewPrompt/ReviewPromptView.swift" ;;
+    project-reference) printf '%s\n' 'StoreKit.framework in Frameworks' >>"$root/TemplateApp.xcodeproj/project.pbxproj" ;;
+    configuration-file) printf '%s\n' '{}' >"$root/Config/Products.storekit" ;;
+  esac
+  git -C "$root" add -A
+  check_storekit_boundary "$root" 2>"$storekit_workspace/$name.err"
+}
+storekit_case baseline || { cat "$storekit_workspace/baseline.err" >&2; echo 'the review prompt import was refused' >&2; exit 1; }
+for storekit_mutation in import-elsewhere other-mention purchase-code legacy-purchase-code prompt-product-view \
+  prompt-instance-purchase prompt-product-type prompt-store-view project-reference configuration-file; do
+  if storekit_case "$storekit_mutation"; then
+    echo "the StoreKit boundary accepted $storekit_mutation" >&2
+    exit 1
+  fi
+done
+rm -rf -- "$storekit_workspace"
+check_storekit_boundary . || exit 1
 
 if ! credential_scan_output=$(bash "$repo_root/tools/tests/test-tracked-credential-scan.sh" --root "$repo_root" 2>&1); then
   if [[ "$credential_scan_output" == 'tracked credential scan failed:'* ]]; then
