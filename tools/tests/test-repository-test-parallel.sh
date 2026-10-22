@@ -33,7 +33,8 @@ git -C "$repo" add .gitignore README.md
 git -C "$repo" commit -q -m base
 base_sha=$(git -C "$repo" rev-parse HEAD)
 
-# Each fixture test records when it started and ended under PARALLEL_LOG, fails when named in FAIL_TESTS,
+# Each fixture test records when it started and ended under PARALLEL_LOG, leaves a child with redirected output
+# when named in LEAK_TESTS, fails when named in FAIL_TESTS,
 # and when named in HANG_TESTS leaves a background child in its process group and waits for it; a test named in
 # STUBBORN_TESTS also leaves a child that ignores TERM.
 for name in alpha beta delta gamma; do
@@ -44,6 +45,9 @@ for name in alpha beta delta gamma; do
     cat <<'EOF'
 [[ -z ${IOS_TEMPLATE_REPOSITORY_TEST_JOBS+x} ]] || { echo 'the worker count reached a test' >&2; exit 3; }
 perl -MTime::HiRes=time -e 'printf "%.6f\n", time' >"$log/$name.start"
+case " ${LEAK_TESTS:-} " in
+  *" $name "*) sleep 120 >/dev/null 2>&1 & printf '%s\n' "$!" >"$log/$name.leak" ;;
+esac
 case " ${FAIL_TESTS:-} " in *" $name "*) exit 5 ;; esac
 case " ${STUBBORN_TESTS:-} " in
   *" $name "*) ( trap '' TERM; exec sleep 120 ) & printf '%s\n' "$!" >"$log/$name.stubborn" ;;
@@ -150,13 +154,21 @@ for value in 0 9 x '' 01 -1; do
 done
 
 # A failure stops new tests; a running test still finishes, the tests that never started are recorded as
-# unexecuted, and the failure is the first one in plan order.
+# unexecuted, and the failure is the first one in plan order. A child that the failed test left running with its
+# output redirected is stopped, and an unrelated process survives.
 prepare_issue 120
-if run_suite 120 alpha,beta delta,gamma IOS_TEMPLATE_REPOSITORY_TEST_JOBS=2 FAIL_TESTS=alpha; then
+sleep 120 &
+unrelated=$!
+if run_suite 120 alpha,beta delta,gamma IOS_TEMPLATE_REPOSITORY_TEST_JOBS=2 FAIL_TESTS=alpha LEAK_TESTS=alpha; then
   echo 'a failed parallel test was accepted' >&2
   exit 1
 fi
 grep -Fq 'repository test failed: tools/tests/test-alpha.sh' "$scratch/120.err"
+leak=$(cat "$scratch/log-120/alpha.leak")
+! kill -0 "$leak" 2>/dev/null || { kill "$leak"; echo 'a child left by the failed test was not stopped' >&2; exit 1; }
+kill -0 "$unrelated" 2>/dev/null || { echo 'the failure cleanup stopped an unrelated process' >&2; exit 1; }
+kill "$unrelated"
+wait "$unrelated" 2>/dev/null || true
 [[ -f "$scratch/log-120/beta.end" && ! -e "$scratch/log-120/delta.start" && ! -e "$scratch/log-120/gamma.start" ]] ||
   { echo 'a failure changed a running test or started another one' >&2; exit 1; }
 jq -e '.failedTest == "tools/tests/test-alpha.sh" and .timedOut == false and

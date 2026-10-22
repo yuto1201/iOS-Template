@@ -689,12 +689,7 @@ module IOSTemplate
         end
       end
       if timed_out
-        terminate_process_group(wait_thread.pid)
-        grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + INTERRUPT_GRACE_SECONDS
-        while process_group_alive?(wait_thread.pid) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < grace_deadline
-          sleep 0.05
-        end
-        kill_process_group(wait_thread.pid)
+        reap_process_group(wait_thread.pid)
         wait_thread.join
         [[stdout_reader, output], [stderr_reader, error]].each do |reader, stream|
           next if reader.join(OUTPUT_DRAIN_SECONDS)
@@ -703,6 +698,9 @@ module IOSTemplate
         end
       end
       status = wait_thread.value
+      # A failed test can leave members of its group running with their output redirected; they are stopped
+      # the same bounded way before the group is unregistered.
+      reap_process_group(wait_thread.pid) unless timed_out || status.success?
       stdout = stdout_reader.value
       stderr = stderr_reader.value
       elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
@@ -717,6 +715,14 @@ module IOSTemplate
       stream.read
     rescue IOError
       ""
+    end
+
+    # Sends TERM to the group, waits up to the grace period for its members to exit, then kills the rest.
+    def reap_process_group(pid)
+      terminate_process_group(pid)
+      grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + INTERRUPT_GRACE_SECONDS
+      sleep 0.05 while process_group_alive?(pid) && Process.clock_gettime(Process::CLOCK_MONOTONIC) < grace_deadline
+      kill_process_group(pid)
     end
 
     def kill_process_group(pid)
