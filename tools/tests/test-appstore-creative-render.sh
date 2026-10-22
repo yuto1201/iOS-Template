@@ -467,6 +467,24 @@ good_before=$(shasum -a 256 "$hdir/good.png")
 if "$tool" render-header --runtime "$runtime" --spec "$hdir/good.json" --out "$hdir/good.png" >/dev/null 2>"$workspace/header-overwrite.err"; then fail "render-header replaced an existing header"; fi
 grep -Fq "header output already exists and is never replaced" "$workspace/header-overwrite.err" || fail "unexpected overwrite failure"
 [[ "$(shasum -a 256 "$hdir/good.png")" == "$good_before" ]] || fail "render-header changed an existing header"
+# Files next to the output are never replaced or deleted: an unrelated companion-looking file stays,
+# an existing record is refused, and a spec that sits at the record path is not overwritten.
+header_spec companion
+printf 'not ours\n' >"$hdir/companion.png.rgba.png"
+"$tool" render-header --runtime "$runtime" --spec "$hdir/companion.json" --out "$hdir/companion.png" >/dev/null
+[[ "$(cat "$hdir/companion.png.rgba.png")" == 'not ours' ]] || fail 'render-header replaced a file next to the output'
+header_spec record-exists
+printf '{"keep":true}\n' >"$hdir/record-exists.png.json"
+expect_header_failure header-record-exists 'header record already exists and is never replaced' record-exists
+[[ "$(cat "$hdir/record-exists.png.json")" == '{"keep":true}' ]] || fail 'render-header replaced an existing record'
+header_spec spec-at-record
+mv "$hdir/spec-at-record.json" "$hdir/collide.png.json"
+spec_before=$(shasum -a 256 "$hdir/collide.png.json")
+if "$tool" render-header --runtime "$runtime" --spec "$hdir/collide.png.json" --out "$hdir/collide.png" >/dev/null 2>"$workspace/collide.err"; then
+  fail 'render-header wrote its record over the spec'
+fi
+grep -Fq 'header record already exists and is never replaced' "$workspace/collide.err" || { cat "$workspace/collide.err" >&2; fail 'unexpected collide failure'; }
+[[ "$(shasum -a 256 "$hdir/collide.png.json")" == "$spec_before" && ! -e "$hdir/collide.png" ]] || fail 'render-header changed the spec at the record path'
 header_spec text-out '{"texts":[{"text":"はみ出す見出し","x":0.05,"y":0.32,"size":0.05}]}'
 expect_header_failure header-text-out 'header text 1 runs outside the safe area' text-out
 header_spec logo-out '{"layers":[{"src":"magenta.png","x":0.8,"y":0.5,"width":0.1,"role":"logo"}]}'
@@ -479,6 +497,7 @@ header_spec no-source '{"safeArea":{"x":0,"y":0,"width":3840,"height":1646}}'
 expect_header_failure header-safe-area-source 'safeArea needs source: the official template, its URL and the date it was checked' no-source
 header_spec corner '{"safeArea":{"x":0,"y":0,"width":3840,"height":1646,"source":{"template":"t.psd","url":"https://developer.apple.com/t","checkedOn":"2026-10-22"}},"texts":[{"text":"角","x":0.01,"y":0.02,"size":0.05}],"layers":[]}'
 expect_header_failure header-corner 'header text 1 sits in a top corner under the buttons' corner
+[[ -z "$(find "$hdir" -maxdepth 1 -name ".render-header-*")" ]] || fail "render-header left a work directory behind"
 
 # 6. The installed runtime is never written to.
 [[ "$(runtime_digest)" == "$before_runtime" ]] || fail 'render changed the installed Goldie runtime'

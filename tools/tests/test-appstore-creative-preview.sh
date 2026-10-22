@@ -294,6 +294,17 @@ expect_failure header-safe-area 'the clip on the header runs outside the safe ar
 # Without the crossfade the colors jump at the loop point, so the seam check refuses the video.
 expect_failure header-seam 'the loop seam differs by' \
   "$tool" encode-header --background "$hv/background.png" --clip "$hv/clip8.mp4" --screen "$screen" --loop none --output "$hv/jump.mp4"
+# Work files live in a private temporary directory: a file named like a staging file stays untouched on
+# success, and a source clip with that name survives a failed encode.
+printf 'not ours\n' >"$hv/kept.mp4.partial.mp4"
+"$tool" encode-header --background "$hv/background.png" --seconds 5 --output "$hv/kept.mp4" >/dev/null
+[[ "$(cat "$hv/kept.mp4.partial.mp4")" == 'not ours' ]] || fail 'encode-header replaced a file next to the output'
+cp "$hv/clip8.mp4" "$hv/jump2.mp4.partial.mp4"
+clip_before=$(shasum -a 256 "$hv/jump2.mp4.partial.mp4")
+expect_failure header-staging-clip 'the loop seam differs by' \
+  "$tool" encode-header --background "$hv/background.png" --clip "$hv/jump2.mp4.partial.mp4" --screen "$screen" --loop none --output "$hv/jump2.mp4"
+[[ "$(shasum -a 256 "$hv/jump2.mp4.partial.mp4")" == "$clip_before" && ! -e "$hv/jump2.mp4" ]] || fail 'a failed encode changed or removed its source clip'
+[[ -z "$(find "$hv" -maxdepth 1 -name ".encode-header-*")" ]] || fail "encode-header left a work directory behind"
 for refused in short long size fps outside jump; do [[ ! -e "$hv/$refused.mp4" ]] || fail "a refused header video was written: $refused"; done
 before=$(shasum -a 256 "$hv/loop.mp4")
 expect_failure header-overwrite 'output already exists and is never replaced' \

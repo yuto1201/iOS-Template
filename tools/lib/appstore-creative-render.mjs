@@ -12,7 +12,7 @@
 // one sentence across tiles, and a mark for tiles with more visual layers than the guide.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -642,7 +642,11 @@ export async function renderHeader({ runtime, spec: specPath, out }) {
   ];
   const overlapsCorner = (box) => corners.some((corner) => box.left < corner.right && box.right > corner.left && box.top < corner.bottom && box.bottom > corner.top);
   const output = resolve(out);
-  if (existsSync(output)) fail(`header output already exists and is never replaced: ${output}`);
+  const recordPath = `${output}.json`;
+  // Neither the image nor its record replaces anything, and symlinks count as existing.
+  const present = (path) => { try { lstatSync(path); return true; } catch { return false; } };
+  if (present(output)) fail(`header output already exists and is never replaced: ${output}`);
+  if (present(recordPath)) fail(`header record already exists and is never replaced: ${recordPath}`);
   const canvas = createCanvas(HEADER.width, HEADER.height);
   const ctx = canvas.getContext("2d");
   let background;
@@ -726,16 +730,37 @@ export async function renderHeader({ runtime, spec: specPath, out }) {
     ctx.restore();
     texts.push({ index: index + 1, text: entry.text, box });
   }
-  const rgba = `${output}.rgba.png`;
-  writeFileSync(rgba, await canvas.encode("png"));
-  execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", rgba, "-vf", "format=rgb24", "-frames:v", "1", output], { stdio: ["ignore", "ignore", "inherit"] });
-  unlinkSync(rgba);
-  const size = pngSize(output);
-  if (size.width !== HEADER.width || size.height !== HEADER.height || size.colorType !== 2) fail(`${output} is not an opaque 3840x1646 header`);
-  const record = { schemaVersion: 1, kind: "product-page-header", output, sha256: sha256(output), width: size.width, height: size.height,
-    safeArea: area, clearCorners: HEADER_CLEAR_CORNERS, background, layers, texts };
-  writeFileSync(`${output}.json`, `${JSON.stringify(record, null, 2)}\n`);
-  return record;
+  // Work files live in a directory this run creates; the results are published with link(), which
+  // refuses an existing destination, and the directory is removed afterwards.
+  const work = mkdtempSync(join(dirname(output), ".render-header-"));
+  try {
+    const rgba = join(work, "header.rgba.png");
+    const rgb = join(work, "header.png");
+    writeFileSync(rgba, await canvas.encode("png"));
+    execFileSync("ffmpeg", ["-loglevel", "error", "-i", rgba, "-vf", "format=rgb24", "-frames:v", "1", rgb], { stdio: ["ignore", "ignore", "inherit"] });
+    const size = pngSize(rgb);
+    if (size.width !== HEADER.width || size.height !== HEADER.height || size.colorType !== 2) fail(`${output} is not an opaque 3840x1646 header`);
+    const record = { schemaVersion: 1, kind: "product-page-header", output, sha256: sha256(rgb), width: size.width, height: size.height,
+      safeArea: area, clearCorners: HEADER_CLEAR_CORNERS, background, layers, texts };
+    const recordFile = join(work, "header.json");
+    writeFileSync(recordFile, `${JSON.stringify(record, null, 2)}\n`);
+    try {
+      linkSync(rgb, output);
+    } catch (error) {
+      if (error.code === "EEXIST") fail(`header output already exists and is never replaced: ${output}`);
+      throw error;
+    }
+    try {
+      linkSync(recordFile, recordPath);
+    } catch (error) {
+      unlinkSync(output); // the image this run just published, never anything else
+      if (error.code === "EEXIST") fail(`header record already exists and is never replaced: ${recordPath}`);
+      throw error;
+    }
+    return record;
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 }
 
 async function main(argv) {

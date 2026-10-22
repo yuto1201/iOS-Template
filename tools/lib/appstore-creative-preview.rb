@@ -357,18 +357,24 @@ module AppStoreCreativePreview
       filter = "[0:v]fps=#{fps},format=yuv420p[v]"
     end
     FileUtils.mkdir_p(File.dirname(output))
-    staging = "#{output}.partial#{File.extname(output)}"
+    # The video is made in a directory this run creates, published with a hard link (which refuses an
+    # existing destination), and only that directory is removed: nothing else beside the output is touched.
+    work = Dir.mktmpdir(".encode-header-", File.dirname(output))
     begin
-      capture!("ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", filter, "-map", "[v]", "-t", seconds.to_s,
+      staging = File.join(work, "header#{File.extname(output)}")
+      capture!("ffmpeg", "-loglevel", "error", *inputs, "-filter_complex", filter, "-map", "[v]", "-t", seconds.to_s,
         "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", fps.to_s,
         "-movflags", "+faststart", staging)
       result = verify_header(staging, fps, Float(options.fetch("seam-threshold", HEADER_SEAM_THRESHOLD.to_s)))
-      File.rename(staging, output)
-      staging = nil
+      begin
+        File.link(staging, output)
+      rescue Errno::EEXIST
+        fail!("output already exists and is never replaced: #{output}")
+      end
       result.merge("status" => "encoded", "output" => output, "sha256" => sha256(output), "loop" => loop_mode,
                    "backgroundSha256" => sha256(background), "clipSha256" => options.key?("clip") ? sha256(File.expand_path(options["clip"])) : nil)
     ensure
-      File.unlink(staging) if staging && File.exist?(staging)
+      FileUtils.rm_rf(work)
     end
   end
 
