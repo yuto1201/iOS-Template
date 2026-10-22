@@ -986,3 +986,24 @@
   - 18歳未満を含むアプリ（`minimumAge`が18未満）では、AdMobの共通のcoreが広告の内容のレーティングの上限をTと決め、生成するprovider（`GoogleMobileAdsProvider.swift`）がSDKへ設定する（T（teen、App Storeの12+向け）にする（`maxAdContentRating = .teen`、https://support.google.com/admob/answer/7562142 ）。18以上では、今までどおり制限しない。
 - Consequence: 入力の検査、skillの文書、coreとproviderのレーティングの上限は#398で実装し、追跡済みのfixture appのBuild、Unit Test、日本語iPhoneのSmoke Testで確かめる。#398がmergeされるまで、有効化は今までどおり18以上だけを受け付ける。年齢区分が16+または17+のアプリが、年齢区分を上げずに非trackingの既定の経路で広告を有効化できる。16歳未満を対象に含むアプリは、子ども向けや同意年齢未満の扱いを別の判断として決めるまで有効化できない。実際の年齢の確認は利用者の自己申告に頼らず、アプリの仕様と年齢区分で決める。TFCD／TFUAの後継の`ageRestrictedTreatment`への移行は、このDecisionに含めない。
 - Related Issue: #376、#397、#398、#408
+
+## D-088: Supabaseを採用したアプリに、Edge Functionのdeployの経路を許可する
+
+- Date: 2026-10-21
+- Status: 確定
+- Supersedes: なし。D-010のSupabaseの採用と、`docs/AUTHORITY.md` §5の`supabase.inspect_project`、`supabase.apply_migrations`に、Edge Functionのdeployの経路を加える。
+- Context: Supabaseを採用した派生アプリ（発見元はiOS-CampPocket）の仕様には、写真の検証やアカウントの削除などserver側の処理があり、Edge Functionが要る。一方、`docs/AUTHORITY.md`のoperation allowlist、`tools/lib/issue-contract.rb`、`tools/provider-preflight.sh`、pre-merge gateのいずれにもEdge Functionのdeployのoperationがなく、Issue contractに書くと拒否される（#330）。2026-10-21、ユーザーが未決事項の6点を推奨どおりに決めた。
+- Decision:
+  - Supabaseを採用したアプリに、Edge Functionのremoteへのdeployを許可する。
+  - operationの名前は`supabase.deploy_functions`とする。対象は`Config/ownership.yml`に設定済みのProject Refと、Issue contractに名前を列挙したfunctionだけとし、列挙していないfunctionや別のProjectへはdeployしない。
+  - deployはIssueごとに毎回ユーザーの承認を要する（`Approval required: yes`）。Delivery profileは`strict`に限る。
+  - functionが使う秘密の値は、ユーザーが`supabase secrets set`で設定する。AIは秘密の値を入力、表示、保存せず、Issue contractに列挙した秘密の名前が設定されているかどうかだけを確かめる。
+  - migrationの適用（`supabase.apply_migrations`）とfunctionのdeployは、別のIssueで行う。1つのIssueのSupabaseのremote operationは1種類とし、pre-merge gateの証拠もIssueごとに1つとする。
+  - `supabase/functions/<name>/`のfunctionごとに、localのtest（Supabase CLIまたはDenoで、remoteへ接続しないもの）を必須とする。testはrepository-test manifestの新しいdomainで選び、`supabase/functions/`の変更でそのdomainを選ぶ。
+  - 後続のFeature Issueの分け方（このDecisionにまとめ、後続Issueは`specs/decisions.md`を変えない）:
+    1. allowlistとIssue contract: `docs/AUTHORITY.md` §5への`supabase.deploy_functions`の追加、`tools/lib/issue-contract.rb`の`ALLOWED_OPERATIONS`、`Approval required: yes`と`strict`の強制、functionの名前と秘密の名前の列挙の検証、migrationとの同居の拒否。
+    2. preflight: `tools/provider-preflight.sh`が、設定済みのProject Ref、列挙したfunctionの存在、秘密の名前の有無（値は読まない）を確かめ、Issue／Headに結び付いた証拠を出す。
+    3. pre-merge gate: deployの証拠を、migrationの証拠と同じ形でIssueごとに1つ受け取る。
+    4. skillとtest: supabase-ops skillのdeployの手順、`supabase/functions/`のmanifestのdomainと、functionごとのlocalのtestの規則。
+- Consequence: Supabaseを採用したアプリは、承認のある`strict`のIssueで、列挙したfunctionだけを設定済みのProjectへdeployできる。秘密の値はユーザーの手元から出ない。実装は上の後続のFeature Issueで行い、それまでは今までどおりdeployのoperationは拒否される。
+- Related Issue: #330
