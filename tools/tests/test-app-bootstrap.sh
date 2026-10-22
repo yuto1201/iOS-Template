@@ -994,7 +994,13 @@ if [[ "$mode" == "transform" ]]; then
   ios_system_experiences_symlink_before="$(readlink "$fixture/.claude/skills/ios-system-experiences")"
   ios_3d_symlink_before="$(readlink "$fixture/.claude/skills/ios-3d-assets")"
   historical_plan="$fixture/docs/superpowers/plans/2026-08-22-app-bootstrap.md"
-  historical_plan_hash_before="$(shasum "$historical_plan" | awk '{print $1}')"
+  # #356: docs/superpowers/ is template-only (tools/template-sync/ownership.json), so an app that adopted the
+  # template (it records Config/template-base.json, D-074) has no historical plan to protect. The template
+  # always reads its plan, and a missing plan still fails there.
+  historical_plan_hash_before=''
+  if [[ ! -f "$fixture/Config/template-base.json" || -e "$historical_plan" ]]; then
+    historical_plan_hash_before="$(shasum "$historical_plan" | awk '{print $1}')"
+  fi
   pbx_uuid_hash_before="$(rg -o '[A-F0-9]{24}' "$fixture/TemplateApp.xcodeproj/project.pbxproj" | LC_ALL=C sort -u | shasum | awk '{print $1}')"
 
   if ! swift "$bootstrap" apply \
@@ -1319,6 +1325,12 @@ contracts = {
     ),
 }
 
+# #356: specs/product.md belongs to the app (tools/template-sync/ownership.json). An app that adopted the
+# template (it records Config/template-base.json, D-074) keeps its own product specification, so the
+# template's policy sections are checked there only in the template.
+if (root / "Config/template-base.json").is_file():
+    del contracts["specs/product.md"]
+
 missing = []
 for relative, anchors in contracts.items():
     path = root / relative
@@ -1433,10 +1445,15 @@ PY
     echo "Issue-contract route behavior failed after disposable bootstrap: $(<"$errors")" >&2
     exit 1
   fi
-  [[ "$historical_plan_hash_before" == "$(shasum "$historical_plan" | awk '{print $1}')" ]] || {
-    echo 'historical plan changed during transform' >&2
+  if [[ -n "$historical_plan_hash_before" ]]; then
+    [[ "$historical_plan_hash_before" == "$(shasum "$historical_plan" | awk '{print $1}')" ]] || {
+      echo 'historical plan changed during transform' >&2
+      exit 1
+    }
+  elif [[ -e "$historical_plan" ]]; then
+    echo 'transform created a historical plan in an app that adopted the template' >&2
     exit 1
-  }
+  fi
 
   if ! bounded_run generated-sample-xcode-list "${IOS_TEMPLATE_BOOTSTRAP_XCODE_TIMEOUT_SECONDS:-300}" \
     /usr/bin/env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \

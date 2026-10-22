@@ -103,6 +103,12 @@ forbidden = (
     "### Quick route: Claude or Codex `gpt-6-astra`",
 )
 
+# #356: specs/product.md belongs to the app (tools/template-sync/ownership.json). An app that adopted the
+# template (it records Config/template-base.json, D-074) keeps its own product specification, so the template's
+# section 5.1 is checked only in the template; the skill and the imported guidance above carry D-082 there.
+if (root / "Config/template-base.json").is_file():
+    del required["specs/product.md"]
+
 failures = []
 for relative, anchors in required.items():
     text = (root / relative).read_text(encoding="utf-8")

@@ -23,7 +23,30 @@ ledger_bytes = <<~MARKDOWN
   Decision history: preserve this user-authored wording.
 MARKDOWN
 File.binwrite(ledger, ledger_bytes)
-FileUtils.copy_file(File.join(repo, "App Store/metadata/app.yml"), File.join(metadata, "app.yml"))
+# #356: App Store/metadata/app.yml belongs to the app, and an app that adopted the template (it records
+# Config/template-base.json, D-074) has its own or none yet. There the fixture uses the template's sample
+# below; the template itself keeps copying its own file.
+adopted = File.file?(File.join(repo, "Config/template-base.json"))
+app_schema = if adopted
+  <<~YAML.b
+    schemaVersion: 1
+    bundleId: "com.yuto.TemplateApp"
+    version: "1.0"
+    primaryLocale: "en-US"
+    platforms:
+      iphone: true
+      ipad: true
+    category: "Utilities"
+    copyright: "Draft \u2014 replace for the app release"
+    supportURL: "https://support.example.invalid/template-app"
+    privacyPolicyURL: "https://support.example.invalid/template-app/privacy"
+    reviewContactReference: "keychain://app-store-connect/review-contact"
+    accountsSupported: false
+  YAML
+else
+  File.binread(File.join(repo, "App Store/metadata/app.yml"))
+end
+File.binwrite(File.join(metadata, "app.yml"), app_schema)
 File.binwrite(File.join(project, "user-notes.txt"), "User notes remain unchanged.\n")
 FileUtils.mkdir_p(File.join(project, "App Store/submission"))
 # Opaque historical bytes are preservation fixtures, not fabricated valid
@@ -57,6 +80,7 @@ sku = row.call(after_migration, "sku")
 abort "copied wording became confirmed" unless sku["state"] == "draft" && sku["sources"].first["anchor"] == "sku" && sku["sources"].first["digest"].start_with?("sha256:") && sku["sources"].first["revision"].nil?
 abort "migration invented questionnaire answers" unless row.call(after_migration, "ageRating")["state"] == "draft" && row.call(after_migration, "ageRating")["reasons"].include?("missing-value")
 abort "migration rewrote the original ledger" unless File.binread(ledger) == ledger_bytes
-abort "migration changed exact legacy app schema" unless File.binread(File.join(metadata, "app.yml")) == File.binread(File.join(repo, "App Store/metadata/app.yml"))
+abort "migration changed exact legacy app schema" unless File.binread(File.join(metadata, "app.yml")) ==
+  (adopted ? app_schema : File.binread(File.join(repo, "App Store/metadata/app.yml")))
 puts "PASS: explicit reviewed-draft transcription preserves original and historical bytes, never copies status into evidence, and keeps unanswered fields unresolved"
 RUBY

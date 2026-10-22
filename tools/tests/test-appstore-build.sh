@@ -56,9 +56,22 @@ FileUtils.cp(File.join(root,'Config/Public.xcconfig'), write(project,'Config/Pub
 ownership = YAML.safe_load(File.binread(File.join(root,'Config/ownership.yml')), permitted_classes: [], aliases: false)
 ownership['appStore'] = {'teamId'=>'TEAM123456','bundleId'=>'com.example.garden','apiKeyType'=>'team-app-manager'}
 write(project, 'Config/ownership.yml', YAML.dump(ownership))
-pbx = File.binread(File.join(root,'TemplateApp.xcodeproj/project.pbxproj')).gsub('com.yuto.TemplateApp','com.example.garden').gsub('TemplateApp','GardenNotes').gsub('CURRENT_PROJECT_VERSION = 1;','CURRENT_PROJECT_VERSION = 7;')
+# #356: the sample starts from the template's own project. After Identity bootstrap (Config/app-identity.json)
+# the app's project has another module name and no TemplateApp.xcodeproj, so the template's project and scheme
+# come from the frozen bootstrap fixture, as in test-admob-integration.sh (#345). The template keeps reading
+# its live project.
+template_project = lambda do |relative|
+  next File.binread(File.join(root, relative)) unless File.file?(File.join(root, 'Config/app-identity.json'))
+  frozen = JSON.parse(File.read(File.join(root, 'tools/tests/fixtures/bootstrap-template/source-identity.json'), encoding: 'UTF-8'))
+  frozen_file = frozen.fetch('files').find { |file| file['path'] == relative }
+  check(frozen_file, "the bootstrap fixture lacks #{relative}")
+  frozen_bytes = frozen_file.fetch('lines').join("\n").b
+  check(Digest::SHA256.hexdigest(frozen_bytes) == frozen_file.fetch('sha256'), "the bootstrap fixture's #{relative} does not match its digest")
+  frozen_bytes
+end
+pbx = template_project.call('TemplateApp.xcodeproj/project.pbxproj').gsub('com.yuto.TemplateApp','com.example.garden').gsub('TemplateApp','GardenNotes').gsub('CURRENT_PROJECT_VERSION = 1;','CURRENT_PROJECT_VERSION = 7;')
 write(project, 'GardenNotes.xcodeproj/project.pbxproj', pbx)
-scheme = File.binread(File.join(root,'TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme')).gsub('TemplateApp','GardenNotes')
+scheme = template_project.call('TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme').gsub('TemplateApp','GardenNotes')
 write(project, 'GardenNotes.xcodeproj/xcshareddata/xcschemes/GardenNotes.xcscheme', scheme)
 write(project, '.gitignore', ".artifacts/\n")
 git(project,'init','-q')
