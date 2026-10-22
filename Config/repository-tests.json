@@ -255,6 +255,11 @@
       ]
     },
     {
+      "domain": "ios-verify-fast",
+      "paths": ["tools/verify-fast-issue.sh"],
+      "prefixes": []
+    },
+    {
       "domain": "ios-visual-review",
       "paths": ["tools/tests/test-visual-review-packet.sh", "tools/visual-review-packet.sh"],
       "prefixes": []
@@ -539,6 +544,7 @@
     {"path": "tools/tests/test-tracked-credential-scan.sh", "domains": ["credential-scan"]},
     {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["ui-direction"]},
     {"path": "tools/tests/test-verification-contract.sh", "domains": ["ios-verification"]},
+    {"path": "tools/tests/test-verify-free-space.sh", "domains": ["ios-verification", "ios-verify-fast"]},
     {"path": "tools/tests/test-visual-review-packet.sh", "domains": ["ios-visual-review", "swift-tool-cache"]},
     {"path": "tools/tests/test-workflow-e2e.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-workflow-evidence-publisher.sh", "domains": ["ios-verification", "swift-tool-cache", "workflow-evidence"]},

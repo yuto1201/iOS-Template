@@ -116,6 +116,40 @@ end
 RUBY
 }
 
+# D-084: a verification starts only when the volume that will hold its attempt has this much free space.
+# IOS_TEMPLATE_MINIMUM_FREE_GIB changes the threshold. The 8 GiB check at each Simulator lease is separate.
+readonly DEFAULT_MINIMUM_FREE_GIB=20
+readonly BYTES_PER_GIB=1073741824
+
+# Prints the available bytes of the volume holding the nearest existing ancestor of the path. Only test mode
+# may substitute the measurement.
+available_bytes_for() {
+  local path="$1" output="" line="" entry=""
+  if [[ "${IOS_TEMPLATE_TEST_MODE-}" == 1 && -n "${IOS_TEMPLATE_TEST_FREE_BYTES+x}" ]]; then
+    [[ "$IOS_TEMPLATE_TEST_FREE_BYTES" =~ ^[[:digit:]]{1,18}$ ]] || return 1
+    printf '%s\n' "$((10#$IOS_TEMPLATE_TEST_FREE_BYTES))"
+    return 0
+  fi
+  while [[ ! -d "$path" ]]; do
+    path="${path%/*}"
+    [[ -n "$path" ]] || path="/"
+  done
+  output="$(/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C /bin/df -Pk "$path" 2>/dev/null)" || return 1
+  while IFS= read -r entry || [[ -n "$entry" ]]; do line="$entry"; done <<<"$output"
+  [[ "$line" =~ [[:space:]]([[:digit:]]{1,15})[[:space:]]+([[:digit:]]{1,15})[[:space:]]+([[:digit:]]{1,15})[[:space:]]+[[:digit:]]{1,3}%[[:space:]] ]] || return 1
+  printf '%s\n' "$((10#${BASH_REMATCH[3]} * 1024))"
+}
+
+format_gib() {
+  printf '%s.%s GiB' "$(($1 / BYTES_PER_GIB))" "$((($1 % BYTES_PER_GIB) * 10 / BYTES_PER_GIB))"
+}
+
+print_reclaim_routes() {
+  echo "  tools/xcodebuild-in-worktree.sh: build and test ad hoc in the worktree's one DerivedData, not a new -derivedDataPath per task (#368)"
+  echo "  tools/cleanup-issue.sh --repo OWNER/REPO --issue N: after an Issue is done, removes its worktree with that worktree's DerivedData and verification data (#369)"
+  echo "  ruby tools/lib/ios-simulator-resource.rb poster-data --repository .: sizes of the shut-down dedicated Simulators' poster data; add --apply to remove it (#378)"
+}
+
 usage() {
   echo "usage: tools/verify-ios-issue.sh --issue N --expected-base SHA --issue-contract canonical --matrix canonical --project PATH --scheme NAME" >&2
   echo "   or: tools/verify-ios-issue.sh --finalize --issue N --expected-base SHA --draft canonical --visual-result canonical" >&2
@@ -157,6 +191,11 @@ if [[ "$mode" == "execute" ]]; then
   [[ -n "$issue_contract" && -n "$matrix" && -n "$project" && -n "$scheme" && -z "$draft" && -z "$visual_result" ]] || usage
 else
   [[ -n "$draft" && -n "$visual_result" && -z "$issue_contract" && -z "$matrix" && -z "$project" && -z "$scheme" ]] || usage
+fi
+minimum_free_gib="${IOS_TEMPLATE_MINIMUM_FREE_GIB-$DEFAULT_MINIMUM_FREE_GIB}"
+if [[ "$mode" == "execute" ]] && ! [[ "$minimum_free_gib" =~ ^[1-9][[:digit:]]{0,8}$ ]]; then
+  echo "iOS verification failed: IOS_TEMPLATE_MINIMUM_FREE_GIB must be a positive integer number of GiB (at most 999999999)" >&2
+  exit 2
 fi
 
 repository_root="$(run_git rev-parse --show-toplevel 2>/dev/null)" || { echo "iOS verification failed: Git repository unavailable" >&2; exit 1; }
@@ -243,6 +282,21 @@ expected_contract=".artifacts/issues/$issue/issue-contract.json"
 [[ "$issue_contract" == "$expected_contract" ]] || fail "issue contract must use the canonical path"
 [[ "$matrix" =~ ^\.artifacts/batches/[A-Za-z0-9][A-Za-z0-9-]{0,63}/simulator-matrix\.json$ ]] || fail "matrix must use the canonical path"
 [[ "$scheme" =~ ^[A-Za-z0-9_.-]+$ ]] || fail "scheme is invalid"
+
+# D-084: before the source snapshot, the Build, and any Simulator lease. The validator places every attempt
+# under this root (its workspaceRoot), so its volume, or its nearest existing ancestor's, holds the attempt.
+stage="disk-space"
+free_space_location="/tmp/ios-template-verify"
+free_bytes="$(available_bytes_for "$free_space_location")" || fail "blocked:environment: free disk space could not be measured"
+if [[ "$free_bytes" -lt "$((minimum_free_gib * BYTES_PER_GIB))" ]]; then
+  {
+    echo "iOS verification: free space for $free_space_location is $(format_gib "$free_bytes") ($free_bytes bytes); a verification needs at least $minimum_free_gib GiB (IOS_TEMPLATE_MINIMUM_FREE_GIB, default $DEFAULT_MINIMUM_FREE_GIB)."
+    echo "iOS verification: nothing was built or leased and no verify.json was published. Reclaim space, then run again:"
+    print_reclaim_routes
+  } >&2
+  fail "blocked:environment: free disk space $(format_gib "$free_bytes") is below the $minimum_free_gib GiB threshold"
+fi
+stage="preflight"
 
 select_initial_xcode_environment || fail "Xcode tools could not be derived"
 if ! snapshot_receipt="$(run_xcode_swift "$script_dir/validate-verify-json.swift" --runner-snapshot \
