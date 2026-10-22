@@ -79,8 +79,8 @@ fi
 
 # #372 (D-084): each suite runs xcodebuild through a recorder that is first on PATH. The recorder passes every call
 # to /usr/bin/xcodebuild unchanged. For each -list call it records the IDEDerivedDataPathOverride locations and the
-# folder name Xcode gives the project in its DerivedData, which a second listing learns from a temporary custom
-# DerivedData location. verify_xcode_list_calls then requires the expected number of -list calls, exactly one
+# folder names Xcode gives the project in its DerivedData, computed from the project path without another
+# listing. verify_xcode_list_calls then requires the expected number of -list calls, exactly one
 # override per call inside a temporary folder that is gone again, and no folder for the project in
 # ~/Library/Developer/Xcode/DerivedData. Empty fields are recorded as "-" so the tab-separated fields stay in place.
 xcode_record_dir="$(mktemp -d -t app-bootstrap-xcodebuild.XXXXXX)"
@@ -111,14 +111,23 @@ status=$?
 if [[ "$listing" == true ]]; then
   name='-'
   if [[ $status -eq 0 && -n "$project" ]]; then
-    probe="$(mktemp -d "$record/probe.XXXXXX")"
-    if /usr/bin/xcodebuild -list -json -project "$project" "-IDECustomDerivedDataLocation=$probe" >/dev/null 2>&1; then
-      for entry in "$probe"/*; do
-        [[ -e "$entry" ]] || continue
-        if [[ "$name" == - ]]; then name="${entry##*/}"; else name='?multiple'; fi
-      done
-    fi
-    rm -rf "$probe"
+    # Xcode names a project's DerivedData folder "<project>-<hash>", where the hash is the MD5 of the project path
+    # as given (made absolute against the working directory) written as two 14-letter base-26 halves. Both that
+    # path and its physical form are named, so no second xcodebuild -list call is needed (#429).
+    [[ "$project" == /* ]] || project="$PWD/$project"
+    name="$(/usr/bin/env -i /usr/bin/ruby --disable-gems -rdigest -e '
+      def folder(path)
+        digest = Digest::MD5.digest(path)
+        letters = Array.new(28)
+        value = digest[0, 8].unpack("Q>")[0]
+        13.downto(0) { |index| letters[index] = (97 + value % 26).chr; value /= 26 }
+        value = digest[8, 8].unpack("Q>")[0]
+        27.downto(14) { |index| letters[index] = (97 + value % 26).chr; value /= 26 }
+        File.basename(path, ".xcodeproj") + "-" + letters.join
+      end
+      path = ARGV.fetch(0)
+      physical = File.join(File.realpath(File.dirname(path)), File.basename(path))
+      puts [folder(path), folder(physical)].uniq.join(",")' "$project")" || name='?unknown'
   fi
   printf '%s\t%s\t%s\t%s\t%s\n' "$status" "$override_count" "${override:--}" "$name" "${project:--}" >>"$record/calls"
 fi
@@ -146,12 +155,17 @@ verify_xcode_list_calls() {
     fi
     project_name="${project##*/}"
     project_name="${project_name%.xcodeproj}"
-    if [[ "$status" == 0 && ! "$name" =~ ^${project_name}-[a-z]{28}$ ]]; then
-      echo "could not learn the DerivedData folder name of $project: $name" >&2
+    if [[ "$status" == 0 && ! "$name" =~ ^${project_name}-[a-z]{28}(,${project_name}-[a-z]{28})?$ ]]; then
+      echo "could not compute the DerivedData folder name of $project: $name" >&2
       problems=$((problems + 1))
-    elif [[ "$name" != - && ( -e "$xcode_default_derived_data/$name" || -L "$xcode_default_derived_data/$name" ) ]]; then
-      echo "xcodebuild -list left a DerivedData folder: $xcode_default_derived_data/$name" >&2
-      problems=$((problems + 1))
+    elif [[ "$name" != - ]]; then
+      local folder
+      for folder in ${name//,/ }; do
+        if [[ -e "$xcode_default_derived_data/$folder" || -L "$xcode_default_derived_data/$folder" ]]; then
+          echo "xcodebuild -list left a DerivedData folder: $xcode_default_derived_data/$folder" >&2
+          problems=$((problems + 1))
+        fi
+      done
     fi
   done <"$xcode_record_dir/calls"
   if [[ $calls -ne $expected ]]; then
