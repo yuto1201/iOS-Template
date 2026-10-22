@@ -56,10 +56,25 @@ public enum PublisherPrivacyPersonalizationState: Sendable {
     case disabled
 }
 
+// Mirrors the SDK's string-typed max ad content rating constants (G, PG, T, MA).
+public struct MaxAdContentRating: RawRepresentable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let general = MaxAdContentRating(rawValue: "G")
+    public static let parentalGuidance = MaxAdContentRating(rawValue: "PG")
+    public static let teen = MaxAdContentRating(rawValue: "T")
+    public static let matureAudience = MaxAdContentRating(rawValue: "MA")
+}
+
 @MainActor
 public final class RequestConfiguration {
     public var publisherPrivacyPersonalizationState:
         PublisherPrivacyPersonalizationState = .disabled
+    public var maxAdContentRating: MaxAdContentRating?
 
     public func setPublisherFirstPartyIDEnabled(_ enabled: Bool) {}
 }
