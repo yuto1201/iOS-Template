@@ -199,4 +199,18 @@ run_runner ios IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_FREE_BYTES=1
 run_runner fast IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_FREE_BYTES=1
 /usr/bin/grep -Fq "free space for $scratch/tmp is 0.0 GiB (1 bytes)" "$stderr" || { show; fail 'fast runner measured another location'; }
 
+# A relative TMPDIR that does not exist is resolved against the working directory, and the walk to an existing
+# ancestor ends: the real measurement stops at the threshold instead of looping.
+: >"$fake_log"
+status=0
+(cd "$fast_repo" && env -u IOS_TEMPLATE_TEST_MODE -u IOS_TEMPLATE_TEST_FREE_BYTES TMPDIR=tmp-missing/attempts \
+  IOS_TEMPLATE_MINIMUM_FREE_GIB=999999 /usr/bin/perl -e 'alarm 60; exec @ARGV' \
+  tools/verify-fast-issue.sh --issue 42 --expected-base "$fast_base" --project App.xcodeproj --scheme App \
+  --test-identifier AppTests/AppTests/testExample --destination-udid 00000000-0000-0000-0000-000000000001) \
+  >"$stdout" 2>"$stderr" || status=$?
+[[ "$status" == 1 ]] && /usr/bin/grep -Fq 'GiB is below the 999999 GiB threshold' "$stderr" || {
+  show; fail "a relative missing TMPDIR did not end with the free-space stop (exit $status)"
+}
+[[ ! -e "$fast_repo/tmp-missing" ]] || fail 'the relative TMPDIR was created'
+
 echo 'verify runner free-space tests passed'

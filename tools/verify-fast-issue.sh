@@ -19,9 +19,14 @@ available_bytes_for() {
     printf '%s\n' "$((10#$IOS_TEMPLATE_TEST_FREE_BYTES))"
     return 0
   fi
+  # A relative location is resolved against the working directory, and each step moves to a shorter parent,
+  # so the walk always ends at an existing directory or at /.
+  [[ "$path" == /* ]] || path="$PWD/$path"
+  local parent=""
   while [[ ! -d "$path" ]]; do
-    path="${path%/*}"
-    [[ -n "$path" ]] || path="/"
+    parent="${path%/*}"
+    [[ -n "$parent" && "$parent" != "$path" ]] || parent="/"
+    path="$parent"
   done
   output="$(/usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C /bin/df -Pk "$path" 2>/dev/null)" || return 1
   while IFS= read -r entry || [[ -n "$entry" ]]; do line="$entry"; done <<<"$output"
