@@ -107,6 +107,24 @@ research record and the pattern's `techniques`.
 - **The app's own typeface and color** (`app-typeface`): headlines in the face and color
   the app uses itself, from `brand.json`.
 
+### Combinations that work
+
+Recipes with the [render extension](extension.md#layers-popouts-frames-and-stories-d-085):
+
+- **Device and mascot**: `device` tile with a `front` mascot layer (`shadow: true`) beside
+  the device bottom, half of it outside the device outline.
+- **World behind the screen**: `frame: "bare"` with `back` layers of the setting (clouds,
+  shelves, a desk edge) on a `#RRGGBB` or generated background, so the screen sits inside
+  the world rather than on a color.
+- **Benefit at thumbnail size**: `device` or `frame: "crop"` with a `popout` of the one card
+  or number the headline promises, at about half the tile width.
+- **Two tiles, one picture**: a `background` or `abstract` layer that crosses 20–40% into the
+  next tile, under two `device` tiles of different layouts.
+- **Problem, then answer**: a `theme.stories` sentence across a `concept` tile (the
+  problem, drawn as an illustration) and the `device` tile that answers it.
+
+Keep one cross-tile moment per five tiles, and check every tile alone at thumbnail size.
+
 ## Quality bar
 
 Adapted from ParthJadhav/app-store-screenshots (MIT, see [upstream](upstream.md)) to the
