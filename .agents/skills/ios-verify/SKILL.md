@@ -24,7 +24,7 @@ For a non-application delivery-tool/schema/validator/review/evidence change, use
 - `shape`: use `iphone-ja`; require Build, critical Unit Test, and one primary-flow smoke test. Do not capture screenshots or claim release readiness.
 - `harden`: use the exact `targeted` canonical subset declared by the contract. Verify only the affected behavior and related regressions. A harden contract requests visual evidence only when an AC explicitly contains a `visual:` check.
 - `release` or legacy: use `full`; require all four cases, visual/accessibility/integration evidence, same-Head review preparation, and the release gate.
-- explicit `fast`: require UI verification to be not applicable and run `tools/verify-fast-issue.sh` with the selected Unit Test and one available iPhone Simulator UDID.
+- explicit `fast`: require UI verification to be not applicable and run `tools/verify-fast-issue.sh` with the selected Unit Test and one available iPhone Simulator UDID. It applies the same [free-space check](#free-space-before-starting) before its Build.
 - documentation-only: use the documentation publisher when the contract has no application scope.
 
 Never start canonical Simulator verification for an intermediate commit. After a failure, run in this order: affected test, related regression tests, stage-standard verification, then full verification only for release. Affected repository-test commands stop at 300 seconds and normal completion `targeted` suites stop at 900 seconds aggregate. Do not auto-escalate manifest, runner, tracked-test, unknown-path, or multi-domain changes to the full inventory: use the known-domain union, reject unknown paths before execution, and reserve `head-all`／`base-and-head` for release or an explicit approved request. The same Issue／Head／scope may retry only once after a selected affected test succeeds; a second failure stops. Every Xcode, Unit/UI Test, and Simulator command must go through the repository's finite-timeout wrappers; a timeout is failure and must not publish successful evidence.
@@ -50,6 +50,16 @@ Read the sealed Acceptance criteria before selecting commands. A phase-aware con
 - Phase 6 first resolves `.artifacts/issues/<issue>/<head>/evidence-applicability.json`. Exact same candidate/context may reuse the Phase 5 proof; an affected context requires targeted re-verification and unknown, missing dependency, or expanded scope requires expanded verification. Never report reuse as a new run. Package integrity, screenshots, privacy, legal, account, upload, and submit checks remain Phase 6-specific and are never inherited from the applicability decision.
 
 Delivery stage still controls the breadth of an individual Issue. Phase number does not turn a `shape` into `release`, and a `release` stage does not by itself complete a Phase exit. User-authority exit events remain separate from AI verification success.
+
+## Free space before starting
+
+Before the source snapshot, any Build, and any Simulator lease, `tools/verify-ios-issue.sh` and `tools/verify-fast-issue.sh` measure with `df -Pk` the free space of the volume that will hold their attempt: `/tmp/ios-template-verify` for the full runner and `TMPDIR` for the fast one, or the nearest existing ancestor (D-084). Below 20 GiB the runner stops as `blocked:environment`. It builds and leases nothing, publishes no `verify.json`, and prints the free space, the threshold, and these reclaim routes:
+
+- `tools/xcodebuild-in-worktree.sh` for ad-hoc builds in the worktree's one DerivedData (#368).
+- `tools/cleanup-issue.sh` after an Issue is done, which also reclaims the removed worktree's DerivedData and verification data (#369).
+- `ruby tools/lib/ios-simulator-resource.rb poster-data --repository .` for the poster data of shut-down dedicated Simulators (#378).
+
+`IOS_TEMPLATE_MINIMUM_FREE_GIB` sets another threshold in GiB for a run: a positive integer without leading zeros, at most 999999999. Any other value, including an empty one, stops the runner with exit 2 before it starts. Reclaim space rather than lowering the threshold to get past the stop, and never delete Simulators or runtimes for it. The 8 GiB check at each Simulator lease, described below, still applies. Only under `IOS_TEMPLATE_TEST_MODE=1` may a test replace the measurement with `IOS_TEMPLATE_TEST_FREE_BYTES`.
 
 ## Application verification
 

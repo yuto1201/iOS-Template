@@ -1405,6 +1405,7 @@ run_execute() {
     SWIFT_EXEC="$poison_tool" SWIFT_DRIVER_SWIFT_FRONTEND_EXEC="$poison_tool" \
     CC="$poison_tool" CXX="$poison_tool" LD="$poison_tool" OTHER_SWIFT_FLAGS=-malicious \
     XCODE_XCCONFIG_FILE=/malicious/settings.xcconfig \
+    IOS_TEMPLATE_TEST_MODE=1 IOS_TEMPLATE_TEST_FREE_BYTES="${FAKE_FREE_BYTES:-1099511627776}" \
     "$runner" --issue 42 --expected-base "${FAKE_EXPECTED_BASE:-$base_sha}" \
       --issue-contract .artifacts/issues/42/issue-contract.json \
       --matrix .artifacts/batches/runner-fixture/simulator-matrix.json \

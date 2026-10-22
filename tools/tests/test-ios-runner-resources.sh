@@ -7,6 +7,21 @@ require_test_commands "$0" rg git jq ruby /usr/bin/ruby /usr/bin/swiftc
 [[ $# == 0 ]] || exit 64
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/ios-runner-fixture.sh"
 
+# D-084 (#373): with too little free space the runner stops as blocked:environment before the source snapshot,
+# the Build, and any Simulator lease, records the failure, and publishes no evidence.
+prepare_repo free-space-blocked
+FAKE_FREE_BYTES=$((20 * 1073741824 - 1)) expect_execute_failure free-space-blocked \
+  "iOS verification failed: blocked:environment: free disk space 19.9 GiB is below the 20 GiB threshold"
+grep -Fq 'ruby tools/lib/ios-simulator-resource.rb poster-data --repository .' "$scratch/free-space-blocked.stderr" || {
+  echo "free-space stop did not name the reclaim routes" >&2; exit 1
+}
+[[ ! -s "$fake_log" ]] || { echo "free-space stop reached Xcode or a Simulator" >&2; /bin/cat "$fake_log" >&2; exit 1; }
+[[ ! -e "$(runner_workspace)" ]] || { echo "free-space stop created a verification workspace" >&2; exit 1; }
+[[ ! -e "$draft" && ! -e "$final" ]] || { echo "free-space stop published evidence" >&2; exit 1; }
+failure_file="$(/usr/bin/find "$(dirname "$draft")/failures" -type f -name 'failure-*.json' -print -quit)"
+[[ -n "$failure_file" ]] || { echo "free-space stop lacked failure evidence" >&2; exit 1; }
+/usr/bin/ruby -rjson -e 'd = JSON.parse(File.read(ARGV.fetch(0))); abort "free-space failure record is wrong" unless d["status"] == "failed" && d["stage"] == "disk-space" && d["error"].start_with?("blocked:environment: free disk space 19.9 GiB")' "$failure_file"
+
 prepare_repo case-failure
 FAKE_CASE_MODE=launch-fail expect_execute_failure case-failure "case iphone-ja failed"
 [[ ! -e "$draft" ]] || { echo "case failure published draft" >&2; exit 1; }
