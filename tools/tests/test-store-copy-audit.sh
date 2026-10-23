@@ -7,17 +7,17 @@ require_test_commands "$0" git ruby mktemp
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 cd "$repo_root"
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/appstore-aso.XXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/store-copy-audit.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
 ruby -rjson -rdigest -rfileutils -ropen3 - "$repo_root" "$tmp" <<'RUBY'
 # encoding: UTF-8
 repo_root, tmp = ARGV
-checker = File.join(repo_root, 'tools/check-appstore-aso.sh')
+checker = File.join(repo_root, 'tools/check-store-copy.sh')
 requirements_bytes = File.binread(File.join(repo_root, 'App Store/submission/requirements.json'))
 
 def fail!(message)
-  abort "appstore-aso: #{message}"
+  abort "store-copy-audit: #{message}"
 end
 
 # Fixture copy for a made-up focus timer. It passes every check with no warning.
@@ -264,7 +264,7 @@ run_checker(checker, untouched, ['--localizations', 'App Store/metadata/localiza
 fail!('the checker changed the project') unless tree_digest(untouched) == before
 
 # The checker reads local files only and writes nothing.
-library = File.read(File.join(repo_root, 'tools/lib/appstore-aso.rb'), encoding: 'UTF-8')
+library = File.read(File.join(repo_root, 'tools/lib/store-copy-audit.rb'), encoding: 'UTF-8')
 %w[net/http net/https open-uri socket open3 resolv fileutils tempfile].each do |name|
   fail!("checker must not load #{name}") if library.match?(/require\s+["']#{Regexp.escape(name)}["']/)
 end
@@ -281,7 +281,7 @@ end
 
 # AC-3: the guide has every section, separates Apple's statements from practitioner knowledge, cites a source with
 # a check date in each section, and says that the keyword unit and the en-US handling in Japan are not settled.
-guide = File.read(File.join(repo_root, 'docs/appstore-aso.md'), encoding: 'UTF-8')
+guide = File.read(File.join(repo_root, 'docs/store-copy-aso.md'), encoding: 'UTF-8')
 # Headings inside fenced examples are not sections of the guide.
 outline = guide.gsub(/^```.*?^```\n/m, '')
 sections = ['アプリ名', 'サブタイトル', 'キーワード', 'プロモーション用テキスト', '説明', "What's New", 'スクリーンショットの見出し', '計測と改善']
@@ -314,7 +314,7 @@ require_all('guide', guide, [
   'https://www.apptweak.com/en/aso-blog/how-to-optimize-your-ios-keyword-field',
   'https://appfigures.com/resources/guides/app-store-algorithm-update-2025',
   'https://www.consultmyapp.com/blog/-is-apple-now-indexing-screenshot-titles-on-the-app-store',
-  '100バイト', '100 characters', 'tools/check-appstore-aso.sh', 'App Store/metadata/aso.json', 'aso-decisions.md',
+  '100バイト', '100 characters', 'tools/check-store-copy.sh', 'App Store/metadata/aso.json', 'aso-decisions.md',
   '2.3.3', '2.3.7', '2.3.12', '2.3.14', '5.6.1'
 ])
 unsettled = outline[/^## 決まっていないこと\n(.*?)(?=^## |\z)/m, 1] or fail!('guide lacks the unsettled section')
@@ -329,12 +329,12 @@ fail!("guide does not explain the codes #{undocumented.inspect}") unless undocum
 # reasons, and keeps the existing no-invention rule and the save boundary. The creative skill points at the guide.
 prepare = File.read(File.join(repo_root, '.agents/skills/prepare-appstore-assets/SKILL.md'), encoding: 'UTF-8')
 require_all('prepare skill', prepare, [
-  'docs/appstore-aso.md', 'tools/check-appstore-aso.sh', 'two or three', '--localizations', 'aso-decisions.md',
+  'docs/store-copy-aso.md', 'tools/check-store-copy.sh', 'two or three', '--localizations', 'aso-decisions.md',
   'explicit choice', 'target', 'avoided', 'Do not invent marketing, privacy, account-deletion, or legal claims.',
   'save-appstore-metadata', 'not approval'
 ])
 creative = File.read(File.join(repo_root, '.agents/skills/appstore-creative/SKILL.md'), encoding: 'UTF-8')
-fail!('creative skill does not point at the screenshot section of the guide') unless creative.scan('docs/appstore-aso.md#スクリーンショットの見出し').length >= 2
+fail!('creative skill does not point at the screenshot section of the guide') unless creative.scan('docs/store-copy-aso.md#スクリーンショットの見出し').length >= 2
 fail!('creative skill still waits for the guide') if creative.include?('when it exists') || creative.include?('until the App Store copy guide (ASO) exists')
 
 puts "App Store ASO checker passed (#{cases.size} copy cases, keyword-limit, locale, refusal, read-only and guide checks)"

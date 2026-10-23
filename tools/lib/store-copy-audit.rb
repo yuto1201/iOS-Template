@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# #385: checks App Store localization sources against the parts of the ASO guide (docs/appstore-aso.md) that a
+# #385: checks App Store localization sources against the parts of the ASO guide (docs/store-copy-aso.md) that a
 # machine can check. It reads local files only: it never opens the network, App Store Connect, a credential
 # store, or a public page, and it never writes. Errors are fixed before submission; a warning may stay when the
 # reason is recorded next to the copy. A passing check is not approval, release readiness, or an App Review
@@ -12,7 +12,7 @@ require "optparse"
 require "pathname"
 require "yaml"
 
-module AppStoreASO
+module StoreCopyAudit
   LOCALIZATIONS_RELATIVE = "App Store/metadata/localizations"
   REQUIREMENTS_RELATIVE = "App Store/submission/requirements.json"
   CONFIG_RELATIVE = "App Store/metadata/aso.json"
@@ -76,7 +76,7 @@ module AppStoreASO
   def parse(argv)
     options = {}
     OptionParser.new do |cli|
-      cli.banner = "usage: check-appstore-aso.sh --project-root DIR [--localizations DIR] [--requirements PATH] [--config PATH]"
+      cli.banner = "usage: check-store-copy.sh --project-root DIR [--localizations DIR] [--requirements PATH] [--config PATH]"
       cli.on("--project-root DIR") { |value| options[:project_root] = value }
       cli.on("--localizations DIR") { |value| options[:localizations] = value }
       cli.on("--requirements PATH") { |value| options[:requirements] = value }
@@ -124,7 +124,7 @@ module AppStoreASO
     }
     # requirements.json records the App Store Connect help's byte limit. Apple's search page says 100 characters
     # for the same field; until requirements.json records a character limit, the character mode uses the same
-    # number. Which unit is right stays open (docs/appstore-aso.md).
+    # number. Which unit is right stays open (docs/store-copy-aso.md).
     characters = fields.dig("keywords", "maxCharacters")
     limits["keywordCharacters"] = characters.nil? ? limits["keywordBytes"] : characters
     limits.each do |key, value|
@@ -418,4 +418,4 @@ module AppStoreASO
   end
 end
 
-exit AppStoreASO.run(ARGV) if $PROGRAM_NAME == __FILE__
+exit StoreCopyAudit.run(ARGV) if $PROGRAM_NAME == __FILE__

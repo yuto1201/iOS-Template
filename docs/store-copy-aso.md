@@ -1,7 +1,7 @@
 # App Storeの原稿のASOガイド
 
 App Storeで選ばれやすい（検索で見つかり、商品ページで入れたくなる）アプリ名、サブタイトル、キーワード、プロモーション用テキスト、説明、What's New、スクリーンショットの見出しの書き方を、出典付きでまとめます（ASO：App Store Optimization）。
-原稿は[prepare-appstore-assetsスキル](../.agents/skills/prepare-appstore-assets/SKILL.md)がこのガイドに従って作り、機械で確かめられる部分は読み取りだけの検査tool [`tools/check-appstore-aso.sh`](../tools/check-appstore-aso.sh)で確かめます。
+原稿は[prepare-appstore-assetsスキル](../.agents/skills/prepare-appstore-assets/SKILL.md)がこのガイドに従って作り、機械で確かめられる部分は読み取りだけの検査tool [`tools/check-store-copy.sh`](../tools/check-store-copy.sh)で確かめます。
 
 このガイドは、確認済みのアプリの振る舞いと仕様から原稿を作るという既存の規則を変えません。アプリにない機能、順位、受賞、評価の数を書きません。App Store Connectへの保存は[save-appstore-metadataスキル](../.agents/skills/save-appstore-metadata/SKILL.md)だけが行い、このガイドと検査toolは保存も外部への通信もしません。
 
@@ -333,11 +333,11 @@ App Storeで選ばれやすい（検索で見つかり、商品ページで入�
 
 ## 検査tool
 
-`tools/check-appstore-aso.sh`は、ローカルのファイルだけを読みます。原稿を書き換えず、ネットワーク、App Store Connect、認証情報の保存先へ接続しません。成功は、承認、release readiness、審査の通過の証拠ではありません。
+`tools/check-store-copy.sh`は、ローカルのファイルだけを読みます。原稿を書き換えず、ネットワーク、App Store Connect、認証情報の保存先へ接続しません。成功は、承認、release readiness、審査の通過の証拠ではありません。
 
 ```sh
-tools/check-appstore-aso.sh --project-root "$PWD"
-tools/check-appstore-aso.sh --project-root "$PWD" \
+tools/check-store-copy.sh --project-root "$PWD"
+tools/check-store-copy.sh --project-root "$PWD" \
   --localizations .artifacts/appstore-draft/candidate-a/localizations
 ```
 
@@ -408,5 +408,5 @@ tools/check-appstore-aso.sh --project-root "$PWD" \
 - 避けた語と理由：<語>（<他社名、人気が高すぎる、など>）
 - 英語（米国）の欄の日本語の語：入れる／入れない（理由：<理由>）
 - 残したwarningと理由：`<code>`（<理由>）
-- 検査：`tools/check-appstore-aso.sh`の`status`と、ロケールごとのキーワードのバイト数と文字数
+- 検査：`tools/check-store-copy.sh`の`status`と、ロケールごとのキーワードのバイト数と文字数
 ```

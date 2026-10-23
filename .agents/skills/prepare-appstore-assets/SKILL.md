@@ -25,13 +25,13 @@ Independent text preparation can continue before complete release inputs exist. 
 
 ## Draft the store copy (ASO)
 
-Write the name, subtitle, keywords, promotional text, description and release notes (What's New) by the [ASO guide](../../../docs/appstore-aso.md), from the same confirmed facts. The guide adds no exception to step 1 of [Prepare the source package](#prepare-the-source-package): never invent features, rankings, awards or ratings to rank better.
+Write the name, subtitle, keywords, promotional text, description and release notes (What's New) by the [ASO guide](../../../docs/store-copy-aso.md), from the same confirmed facts. The guide adds no exception to step 1 of [Prepare the source package](#prepare-the-source-package): never invent features, rankings, awards or ratings to rank better.
 
 1. Draft two or three candidate sets for each locale (`ja` and `en-US`) that differ in the target terms they put in the name, subtitle and keyword field. Keep them outside the canonical sources, as `.artifacts/appstore-draft/<candidate>/localizations/<locale>.yml` with the keys of `App Store/metadata/localizations/`, and the release notes beside them.
 2. Run the read-only checker on every candidate:
 
    ```sh
-   tools/check-appstore-aso.sh --project-root "$PWD" \
+   tools/check-store-copy.sh --project-root "$PWD" \
      --localizations .artifacts/appstore-draft/<candidate>/localizations
    ```
 
