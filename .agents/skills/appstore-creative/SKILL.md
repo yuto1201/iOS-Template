@@ -72,7 +72,8 @@ around the app, a story across the tiles and real illustrations do.
    recommended, with the reason: the one you think is best. Draw every tile for real
    with Goldie and the render extension at full size, Japanese iPhone only. Headlines
    are provisional: give two or more candidates per tile and locale, and align them
-   with the App Store copy guide (ASO) when it exists. Build the sheet:
+   with the [screenshot headline section](../../../docs/store-copy-aso.md#スクリーンショットの見出し)
+   of the App Store copy guide (ASO). Build the sheet:
 
    ```sh
    tools/appstore-creative-sheet.sh build --spec pattern-definition.json \
@@ -244,8 +245,8 @@ absolute build path. Each output directory is disposable and **owned by Goldie**
 ## Copy and typography
 
 Aim for short benefit-led Japanese/English headlines in the voice of `brand.json`.
-They are provisional until the App Store copy guide (ASO) exists; follow that guide
-once it does. Fonts come from `brand.json`, each with its source and license. Prefer
+They are provisional; follow the [screenshot headline section](../../../docs/store-copy-aso.md#スクリーンショットの見出し)
+of the App Store copy guide (ASO). Fonts come from `brand.json`, each with its source and license. Prefer
 free fonts (Noto Sans JP, the M PLUS family, the Zen family, Shippori Mincho) and
 inspect the actual export for tofu, wrong glyph forms, wrapping and cropping.
 Bundled Noto Sans SC is not a Japanese typography guarantee. **Before using a paid
