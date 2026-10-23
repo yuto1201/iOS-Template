@@ -48,7 +48,9 @@ errors="$(mktemp -t app-bootstrap-errors.XXXXXX)"
 fixture=""
 escaped_fixture=""
 seed_parent=""
-trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"; [[ -z "$escaped_fixture" ]] || rm -rf "$escaped_fixture"; [[ -z "$seed_parent" ]] || rm -rf "$seed_parent"' EXIT
+xcode_record_dir=""
+xcode_list_parent=""
+trap 'rm -f "$output" "$errors"; [[ -z "$fixture" ]] || rm -rf "$fixture"; [[ -z "$escaped_fixture" ]] || rm -rf "$escaped_fixture"; [[ -z "$seed_parent" ]] || rm -rf "$seed_parent"; [[ -z "$xcode_list_parent" ]] || rm -rf "$xcode_list_parent"; [[ -z "$xcode_record_dir" ]] || rm -rf "$xcode_record_dir"' EXIT
 
 # A derived repository builds one seed for a whole group run and passes it to each suite, which
 # first proves the seed is still a clean repository directory at the same Head.
@@ -74,6 +76,105 @@ if [[ -n "$group_suites" ]]; then
   echo "$mode app bootstrap tests passed"
   exit 0
 fi
+
+# #372 (D-084): each suite runs xcodebuild through a recorder that is first on PATH. The recorder passes every call
+# to /usr/bin/xcodebuild unchanged. For each -list call it records the IDEDerivedDataPathOverride locations and the
+# folder names Xcode gives the project in its DerivedData, computed from the project path without another
+# listing. verify_xcode_list_calls then requires the expected number of -list calls, exactly one
+# override per call inside a temporary folder that is gone again, and no folder for the project in
+# ~/Library/Developer/Xcode/DerivedData. Empty fields are recorded as "-" so the tab-separated fields stay in place.
+xcode_record_dir="$(mktemp -d -t app-bootstrap-xcodebuild.XXXXXX)"
+mkdir "$xcode_record_dir/bin"
+: >"$xcode_record_dir/calls"
+cat >"$xcode_record_dir/bin/xcodebuild" <<'RECORDER'
+#!/bin/bash
+set -u
+record="$IOS_TEMPLATE_BOOTSTRAP_XCODE_RECORD"
+listing=false
+project=''
+override_count=0
+override='-'
+previous=''
+for argument in "$@"; do
+  case "$argument" in
+    -list) listing=true ;;
+    -IDEDerivedDataPathOverride=*)
+      override_count=$((override_count + 1))
+      override="${argument#-IDEDerivedDataPathOverride=}"
+      ;;
+  esac
+  [[ "$previous" != -project ]] || project="$argument"
+  previous="$argument"
+done
+/usr/bin/xcodebuild "$@"
+status=$?
+if [[ "$listing" == true ]]; then
+  name='-'
+  if [[ $status -eq 0 && -n "$project" ]]; then
+    # Xcode names a project's DerivedData folder "<project>-<hash>", where the hash is the MD5 of the project path
+    # as given (made absolute against the working directory) written as two 14-letter base-26 halves. Both that
+    # path and its physical form are named, so no second xcodebuild -list call is needed (#429).
+    [[ "$project" == /* ]] || project="$PWD/$project"
+    name="$(/usr/bin/env -i /usr/bin/ruby --disable-gems -rdigest -e '
+      def folder(path)
+        digest = Digest::MD5.digest(path)
+        letters = Array.new(28)
+        value = digest[0, 8].unpack("Q>")[0]
+        13.downto(0) { |index| letters[index] = (97 + value % 26).chr; value /= 26 }
+        value = digest[8, 8].unpack("Q>")[0]
+        27.downto(14) { |index| letters[index] = (97 + value % 26).chr; value /= 26 }
+        File.basename(path, ".xcodeproj") + "-" + letters.join
+      end
+      path = ARGV.fetch(0)
+      physical = File.join(File.realpath(File.dirname(path)), File.basename(path))
+      puts [folder(path), folder(physical)].uniq.join(",")' "$project")" || name='?unknown'
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "$status" "$override_count" "${override:--}" "$name" "${project:--}" >>"$record/calls"
+fi
+exit "$status"
+RECORDER
+chmod +x "$xcode_record_dir/bin/xcodebuild"
+export IOS_TEMPLATE_BOOTSTRAP_XCODE_RECORD="$xcode_record_dir"
+export PATH="$xcode_record_dir/bin:$PATH"
+xcode_default_derived_data="$(python3 -c 'import os, pwd; print(os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "Library/Developer/Xcode/DerivedData"))')"
+
+verify_xcode_list_calls() {
+  local expected="$1" calls=0 problems=0 status count override name project parent project_name
+  while IFS=$'\t' read -r status count override name project; do
+    calls=$((calls + 1))
+    parent="${override%/DerivedData}"
+    if [[ "$count" != 1 ]]; then
+      echo "xcodebuild -list passed $count IDEDerivedDataPathOverride locations: $project" >&2
+      problems=$((problems + 1))
+    elif [[ "$override" != /*/DerivedData || ( "${parent##*/}" != ios-template-bootstrap.* && "${parent##*/}" != app-bootstrap-xcode-list.* ) ]]; then
+      echo "xcodebuild -list DerivedData override is not in the run's temporary folder: $override" >&2
+      problems=$((problems + 1))
+    elif [[ -e "$parent" || -L "$parent" ]]; then
+      echo "temporary folder of the xcodebuild -list DerivedData override was not removed: $parent" >&2
+      problems=$((problems + 1))
+    fi
+    project_name="${project##*/}"
+    project_name="${project_name%.xcodeproj}"
+    if [[ "$status" == 0 && ! "$name" =~ ^${project_name}-[a-z]{28}(,${project_name}-[a-z]{28})?$ ]]; then
+      echo "could not compute the DerivedData folder name of $project: $name" >&2
+      problems=$((problems + 1))
+    elif [[ "$name" != - ]]; then
+      local folder
+      for folder in ${name//,/ }; do
+        if [[ -e "$xcode_default_derived_data/$folder" || -L "$xcode_default_derived_data/$folder" ]]; then
+          echo "xcodebuild -list left a DerivedData folder: $xcode_default_derived_data/$folder" >&2
+          problems=$((problems + 1))
+        fi
+      done
+    fi
+  done <"$xcode_record_dir/calls"
+  if [[ $calls -ne $expected ]]; then
+    echo "expected $expected xcodebuild -list calls, recorded $calls" >&2
+    problems=$((problems + 1))
+  fi
+  [[ $problems -eq 0 ]] || exit 1
+}
+
 if [[ -f "$source_root/Config/app-identity.json" && ! -L "$source_root/Config/app-identity.json" ]]; then
   if [[ -n "${IOS_TEMPLATE_BOOTSTRAP_SEED-}" ]]; then
     verify_shared_seed "$IOS_TEMPLATE_BOOTSTRAP_SEED" "${IOS_TEMPLATE_BOOTSTRAP_SEED_HEAD-}"
@@ -436,6 +537,7 @@ PY
       --bundle-id "$invalid_bundle"
   done
 
+  verify_xcode_list_calls 0
   echo 'safety rejection tests passed'
   exit 0
 fi
@@ -744,6 +846,7 @@ PY
   expect_bootstrap_rejection_without_mutation 'same second run with a live residual' \
     "${garden_notes_arguments[@]}"
 
+  verify_xcode_list_calls 8
   echo 'safety rerun tests passed'
   exit 0
 fi
@@ -838,6 +941,7 @@ if [[ "$mode" == "transaction" ]]; then
     exit 1
   }
 
+  verify_xcode_list_calls 1
   echo 'transaction tests passed'
   exit 0
 fi
@@ -872,6 +976,7 @@ if [[ "$mode" == "trunk-default" ]]; then
     exit 1
   }
 
+  verify_xcode_list_calls 0
   echo 'trunk default tests passed'
   exit 0
 fi
@@ -912,6 +1017,7 @@ if [[ "$mode" == "cleanup-failure" ]]; then
   git -C "$fixture" worktree remove --force "$retained_path"
   rm -rf -- "${retained_path%/worktree}"
 
+  verify_xcode_list_calls 1
   echo 'cleanup failure tests passed'
   exit 0
 fi
@@ -1455,12 +1561,16 @@ PY
     exit 1
   fi
 
+  xcode_list_parent="$(mktemp -d -t app-bootstrap-xcode-list.XXXXXX)"
   if ! bounded_run generated-sample-xcode-list "${IOS_TEMPLATE_BOOTSTRAP_XCODE_TIMEOUT_SECONDS:-300}" \
     /usr/bin/env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    xcodebuild -list -json -project "$fixture/GardenNotes.xcodeproj" >"$output" 2>"$errors"; then
+    xcodebuild -list -json -project "$fixture/GardenNotes.xcodeproj" \
+    "-IDEDerivedDataPathOverride=$xcode_list_parent/DerivedData" >"$output" 2>"$errors"; then
     echo "xcodebuild -list failed: $(<"$errors")" >&2
     exit 1
   fi
+  rm -rf "$xcode_list_parent"
+  xcode_list_parent=''
   python3 - "$output" <<'PY'
 import json
 import sys
@@ -1503,17 +1613,22 @@ display_name_setting = r'INFOPLIST_KEY_CFBundleDisplayName = "Garden \"Notes\" \
 if content.count(display_name_setting) != 2:
     raise SystemExit(f"expected exactly two escaped display-name settings, found {content.count(display_name_setting)}")
 PY
+  xcode_list_parent="$(mktemp -d -t app-bootstrap-xcode-list.XXXXXX)"
   if ! bounded_run generated-sample-quoted-xcode-list "${IOS_TEMPLATE_BOOTSTRAP_XCODE_TIMEOUT_SECONDS:-300}" \
     /usr/bin/env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-    xcodebuild -list -json -project "$escaped_fixture/QuotedGardenNotes.xcodeproj" >"$output" 2>"$errors"; then
+    xcodebuild -list -json -project "$escaped_fixture/QuotedGardenNotes.xcodeproj" \
+    "-IDEDerivedDataPathOverride=$xcode_list_parent/DerivedData" >"$output" 2>"$errors"; then
     echo "quoted display-name xcodebuild -list failed: $(<"$errors")" >&2
     exit 1
   fi
+  rm -rf "$xcode_list_parent"
+  xcode_list_parent=''
   [[ "$source_hash_before" == "$(fixture_hash)" ]] || {
     echo 'apply changed content outside its staging root' >&2
     exit 1
   }
 
+  verify_xcode_list_calls 2
   echo 'transform tests passed'
   exit 0
 fi
@@ -1579,4 +1694,5 @@ expect_invalid 'bundle segment beginning with a hyphen' \
 expect_invalid 'Bundle ID equal to source identity' \
   --display-name 'Garden Notes' --module-name 'GardenNotes' --app-slug 'garden-notes' --bundle-id 'com.yuto.TemplateApp'
 
+verify_xcode_list_calls 0
 echo 'validation tests passed'
