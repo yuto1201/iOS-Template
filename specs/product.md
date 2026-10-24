@@ -184,7 +184,7 @@ permissionは起動直後に要求せず、利用者が通知を有効にする�
 
 ### 5.1 3Dモデル制作方針
 
-3Dモデルを使う場合は、モデルの複雑さで作成の経路を選びます。3D作業は共有の[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteします（[D-082](decisions.md#d-082-3dモデルの作成経路をモデルの複雑さで選ぶ)）。
+3Dモデルを使う場合は、モデルの複雑さで作成の経路を選びます。3D作業は共有の[`ios-design-3d-asset`](../.agents/skills/ios-design-3d-asset/SKILL.md)へrouteします（[D-082](decisions.md#d-082-3dモデルの作成経路をモデルの複雑さで選ぶ)）。
 
 - ごく単純な形（箱、円柱、球のいくつかの組み合わせと単色）は、ClaudeがBlenderで直接作れます。
 - 単純なモデルと部品の単純な動きは、Codexの`gpt-6.1-sol`（reasoning effort `xhigh`）が参照画像を作り、Claudeが評価して修正をやり取りした後、その画像を添えてCodexの`gpt-6-astra`（reasoning effort `xhigh`）がBlenderでモデルを作り、Claudeの評価と修正を繰り返します。参照画像とモデルの繰り返しはそれぞれ5回までとし、超えたらユーザーが続けるかTripoへ切り替えるかを決めます。

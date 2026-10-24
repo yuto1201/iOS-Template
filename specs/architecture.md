@@ -174,8 +174,10 @@ routeの正本も新しいfieldには置かない。cutover後のClaim前に、�
 | --- | --- |
 | `ui-direction` | 現在のユーザーが対象範囲のHTML比較を明示したとき、または対象範囲のUI方向が未確定で、最初のユーザー向けUI、最上位navigation／information hierarchyの新設・変更、主要flowの大幅な再設計のいずれかを行うとき |
 | `supabase-ops` | アプリ仕様でSupabase使用を確定したとき |
-| `ios-media-assets` | 音声、文字起こし、効果音、音声分離、音楽、画像または動画が受け入れ条件になったとき |
-| `ios-3d-assets` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。モデルの複雑さで経路を選び、ごく単純な形はClaude、単純なモデルと部品の単純な動きはCodexの`gpt-6.1-sol`と`gpt-6-astra`（reasoning effort `xhigh`）の往復、複雑なモデルと骨格で動くモデルはブラウザで操作するTripoで作る（D-082） |
+| `ios-design-audio-asset` | 音声、文字起こし、効果音、音声分離、音楽が受け入れ条件になったとき（D-090） |
+| `ios-design-image-asset` | アプリに入れる静止画が受け入れ条件になったとき。必須の新しいアプリのアイコンは`app-icon`（D-090、D-091） |
+| `ios-design-2d-asset` | アプリの中の2Dのアニメーション、モーショングラフィックス、アプリに入れる動画が受け入れ条件になったとき（D-090） |
+| `ios-design-3d-asset` | 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更が受け入れ条件になったとき。モデルの複雑さで経路を選び、ごく単純な形はClaude、単純なモデルと部品の単純な動きはCodexの`gpt-6.1-sol`と`gpt-6-astra`（reasoning effort `xhigh`）の往復、複雑なモデルと骨格で動くモデルはブラウザで操作するTripoで作る（D-082） |
 | `prepare-appstore-assets` | App Store原稿のread-only準備、登録前提の照合、または完全な提出packageを準備するとき |
 | `submit-appstore-release` | CodexまたはClaudeが原稿準備／先行保存と正式提出を振り分け、監査済みpackageを明示許可の下で提出・再開するとき。先行save実装は§9.2の後続Issue、API入出力は§7.2の`asc` adapter |
 

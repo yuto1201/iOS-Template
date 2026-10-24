@@ -882,7 +882,7 @@ struct VerificationInfo {
 let applicationFixtureDeclarationPrefix = "Application-fixture binding:"
 let applicationFixtureProtectedSkillNames: Set<String> = [
     "app-bootstrap", "app-icon", "appstore-creative", "cross-model-review", "external-ops",
-    "ios-3d-assets", "ios-media-assets", "ios-system-experiences", "ios-verify",
+    "ios-design-3d-asset", "ios-design-audio-asset", "ios-system-experiences", "ios-verify",
     "plan-issue-batch", "prepare-appstore-assets", "report-template-issue", "ship-issue",
     "ship-issue-batch", "spec-workflow", "submit-appstore-release", "supabase-ops",
     "ui-direction"

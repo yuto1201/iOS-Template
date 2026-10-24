@@ -20,7 +20,7 @@
 - 1 Issue = 1 Branch = 1 PR。
 - `main` へ直接コミットまたは直接 Push しない。
 - Issue の受け入れ条件外へ機能を広げない。
-- ClaudeとCodexのどちらでも通常の仕様化・実装・検証・外部操作を担当できる。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[3D Asset skill](.agents/skills/ios-3d-assets/SKILL.md)に従い、経路をモデルの複雑さで選ぶ（D-082）。ごく単純な形はClaudeがBlenderで直接作れる。単純なモデルと部品の単純な動きは、Codexの`gpt-6.1-sol`（reasoning effort `xhigh`）が作る参照画像と`gpt-6-astra`（reasoning effort `xhigh`）が作るモデルをClaudeが評価して修正を往復させて作り、複雑で高い品質が必要なモデルと骨格で動くモデルだけを、ユーザーまたはClaudeがブラウザでTripoを操作して作る。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、クレジットを使う操作は毎回ユーザーの承認を得る。どの経路で作ったassetも形式検証、統合、Build／Test、視覚確認を行い、Issue／PR証拠にauthoringの経路を記録する。
+- ClaudeとCodexのどちらでも通常の仕様化・実装・検証・外部操作を担当できる。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[3D Asset skill](.agents/skills/ios-design-3d-asset/SKILL.md)に従い、経路をモデルの複雑さで選ぶ（D-082）。ごく単純な形はClaudeがBlenderで直接作れる。単純なモデルと部品の単純な動きは、Codexの`gpt-6.1-sol`（reasoning effort `xhigh`）が作る参照画像と`gpt-6-astra`（reasoning effort `xhigh`）が作るモデルをClaudeが評価して修正を往復させて作り、複雑で高い品質が必要なモデルと骨格で動くモデルだけを、ユーザーまたはClaudeがブラウザでTripoを操作して作る。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、クレジットを使う操作は毎回ユーザーの承認を得る。どの経路で作ったassetも形式検証、統合、Build／Test、視覚確認を行い、Issue／PR証拠にauthoringの経路を記録する。
 - リポジトリのルートに置く文書は`AGENTS.md`だけとし、`README.md`を置かない。`README.md`はフォルダ内の説明が必要な場合（例：`docs/README.md`）だけに使う。
 - `AGENTS.md`を書き換えるときは、変更する文面をユーザーに示し、merge前に必ず承認を得て、その承認をIssueのコメントに記録する。
 - 新しいアプリでは目的・方向性と4つのIdentity値を確定してIdentity bootstrapを完了した後、最初のユーザー向けUI `shape`より前に[App Icon skill](.agents/skills/app-icon/SKILL.md)でシンプルな画像生成候補を2案作り、ユーザーが明示選択した1案だけをAppIconへ組み込む。選択待ちは`blocked:user`とし、独立した非UI作業は止めない。アプリアイコン選択はUI Direction Gateの承認として扱わない。

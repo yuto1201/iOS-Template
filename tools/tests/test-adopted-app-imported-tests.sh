@@ -272,7 +272,7 @@ grep -Fq 'repository-test manifest inventory differs from tracked tests' "$work/
 adopted="$work/adopted-app"
 make_bootstrapped_adopted_app "$adopted"
 for test_name in test-foundation.sh test-appstore-screenshots.sh test-appstore-preparation-migration.sh \
-  test-appstore-build.sh test-ios-3d-assets-skill.sh; do
+  test-appstore-build.sh test-ios-design-3d-asset-skill.sh; do
   run_in "$adopted" "$test_name" || fail "$test_name failed in the adopted app: $(tail -3 "$work/$test_name.log")"
 done
 # Without the adoption record the same repository is checked as the template, which needs the template's files.
@@ -286,7 +286,7 @@ expect_template_failure() {
 }
 expect_template_failure test-foundation.sh 'missing required foundation file: App Store/submission/requirements.json'
 expect_template_failure test-appstore-preparation-migration.sh 'App Store/metadata/app.yml'
-expect_template_failure test-ios-3d-assets-skill.sh "specs/product.md lacks '### 5.1 3Dモデル制作方針'"
+expect_template_failure test-ios-design-3d-asset-skill.sh "specs/product.md lacks '### 5.1 3Dモデル制作方針'"
 
 check_running_repository
 

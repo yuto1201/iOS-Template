@@ -9,6 +9,6 @@ heightPixels: 1024
 durationSeconds: null
 format: "png"
 assetPath: "Feature/Resources/Media/asset.png"
-licenseNote: "Record the ElevenLabs use and reference-rights basis"
+licenseNote: "Record the route (codex, vector, or elevenlabs) and the reference-rights basis"
 sha256: "sha256:replace-with-file-digest"
 processedAt: "2000-01-01T00:00:00Z"

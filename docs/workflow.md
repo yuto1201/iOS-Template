@@ -72,7 +72,7 @@ Identity bootstrap後、主要Feature Issueの計画またはClaimより前に�
 
 ### 2.3 3D authoring route
 
-ClaudeとCodexは通常のIssueを同じworkflowで担当します。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[`ios-3d-assets`](../.agents/skills/ios-3d-assets/SKILL.md)へrouteし、経路をモデルの複雑さで選びます（D-082）。ごく単純な形はClaudeがBlenderで直接作り、単純なモデルと部品の単純な動きはCodexの`gpt-6.1-sol`（reasoning effort `xhigh`）が作る参照画像と`gpt-6-astra`（reasoning effort `xhigh`）が作るモデルをClaudeが評価して往復させて作り（それぞれ5回まで）、複雑で高い品質が必要なモデルと骨格で動くモデルだけをユーザーまたはClaudeがブラウザでTripoを操作して作ります。
+ClaudeとCodexは通常のIssueを同じworkflowで担当します。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[`ios-design-3d-asset`](../.agents/skills/ios-design-3d-asset/SKILL.md)へrouteし、経路をモデルの複雑さで選びます（D-082）。ごく単純な形はClaudeがBlenderで直接作り、単純なモデルと部品の単純な動きはCodexの`gpt-6.1-sol`（reasoning effort `xhigh`）が作る参照画像と`gpt-6-astra`（reasoning effort `xhigh`）が作るモデルをClaudeが評価して往復させて作り（それぞれ5回まで）、複雑で高い品質が必要なモデルと骨格で動くモデルだけをユーザーまたはClaudeがブラウザでTripoを操作して作ります。
 
 Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、Claudeはユーザーのログイン済みsessionで生成とダウンロードの操作だけを行います。クレジットを使う操作は毎回ユーザーの承認を得て、画面が手順と違えば止めて報告します。どの経路の成果も、決定論的なformat validation、統合、RealityKit実装、Build／Test、視覚確認、reviewを経てから受け入れます。Issue／PR証拠へauthoringの経路を記録し、経路を確認できない生成物を承認済み3D成果として扱いません。
 

@@ -36,9 +36,9 @@ private_key = re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")
 password_assignment = re.compile(rb"(?i)password\s*=\s*[^\s\"']{6,}")
 dedicated_filename = re.compile(rb"Library/Application Support/iOS-Template/secrets/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.(?:p8|pem|key)")
 service_role_allowed = {
-    ".agents/skills/ios-media-assets/scripts/validate-audio.sh",
-    ".agents/skills/ios-media-assets/scripts/validate-transcript.sh",
-    ".agents/skills/ios-media-assets/scripts/validate-visual.sh",
+    ".agents/skills/ios-design-audio-asset/scripts/validate-audio.sh",
+    ".agents/skills/ios-design-audio-asset/scripts/validate-transcript.sh",
+    ".agents/skills/ios-design-image-asset/scripts/validate-visual.sh",
     ".agents/skills/supabase-ops/SKILL.md",
     ".agents/skills/supabase-ops/scripts/validate-migrations.sh",
     "docs/security.md",

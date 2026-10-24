@@ -1080,15 +1080,15 @@ if [[ "$mode" == "transform" ]]; then
   cp "$root/.agents/skills/ios-system-experiences/templates/system-experiences-plan.md" "$fixture/.agents/skills/ios-system-experiences/templates/system-experiences-plan.md"
   rm -f "$fixture/.claude/skills/ios-system-experiences"
   ln -s ../../.agents/skills/ios-system-experiences "$fixture/.claude/skills/ios-system-experiences"
-  mkdir -p "$fixture/.agents/skills/ios-3d-assets"
-  cp "$root/.agents/skills/ios-3d-assets/SKILL.md" "$fixture/.agents/skills/ios-3d-assets/SKILL.md"
-  rm -f "$fixture/.claude/skills/ios-3d-assets"
-  ln -s ../../.agents/skills/ios-3d-assets "$fixture/.claude/skills/ios-3d-assets"
+  mkdir -p "$fixture/.agents/skills/ios-design-3d-asset"
+  cp "$root/.agents/skills/ios-design-3d-asset/SKILL.md" "$fixture/.agents/skills/ios-design-3d-asset/SKILL.md"
+  rm -f "$fixture/.claude/skills/ios-design-3d-asset"
+  ln -s ../../.agents/skills/ios-design-3d-asset "$fixture/.claude/skills/ios-design-3d-asset"
   ui_direction_skill_hash_before="$(shasum "$fixture/.agents/skills/ui-direction/SKILL.md" | awk '{print $1}')"
   app_icon_skill_hash_before="$(shasum "$fixture/.agents/skills/app-icon/SKILL.md" | awk '{print $1}')"
   ios_system_experiences_skill_hash_before="$(shasum "$fixture/.agents/skills/ios-system-experiences/SKILL.md" | awk '{print $1}')"
   ios_system_experiences_template_hash_before="$(shasum "$fixture/.agents/skills/ios-system-experiences/templates/system-experiences-plan.md" | awk '{print $1}')"
-  ios_3d_skill_hash_before="$(shasum "$fixture/.agents/skills/ios-3d-assets/SKILL.md" | awk '{print $1}')"
+  ios_3d_skill_hash_before="$(shasum "$fixture/.agents/skills/ios-design-3d-asset/SKILL.md" | awk '{print $1}')"
   app_bootstrap_test_hash_before="$(shasum "$fixture/tools/tests/test-app-bootstrap.sh" | awk '{print $1}')"
   foundation_test_hash_before="$(shasum "$fixture/tools/tests/test-foundation.sh" | awk '{print $1}')"
   credential_scan_hash_before="$(shasum "$fixture/tools/tests/test-tracked-credential-scan.sh" | awk '{print $1}')"
@@ -1098,7 +1098,7 @@ if [[ "$mode" == "transform" ]]; then
   ui_direction_symlink_before="$(readlink "$fixture/.claude/skills/ui-direction")"
   app_icon_symlink_before="$(readlink "$fixture/.claude/skills/app-icon")"
   ios_system_experiences_symlink_before="$(readlink "$fixture/.claude/skills/ios-system-experiences")"
-  ios_3d_symlink_before="$(readlink "$fixture/.claude/skills/ios-3d-assets")"
+  ios_3d_symlink_before="$(readlink "$fixture/.claude/skills/ios-design-3d-asset")"
   historical_plan="$fixture/docs/superpowers/plans/2026-08-22-app-bootstrap.md"
   # #356: docs/superpowers/ is template-only (tools/template-sync/ownership.json), so an app that adopted the
   # template (it records Config/template-base.json, D-074) has no historical plan to protect. The template
@@ -1251,11 +1251,11 @@ PY
     echo 'portable Claude iOS system experiences skill link changed during transform' >&2
     exit 1
   }
-  [[ "$ios_3d_skill_hash_before" == "$(shasum "$fixture/.agents/skills/ios-3d-assets/SKILL.md" | awk '{print $1}')" ]] || {
+  [[ "$ios_3d_skill_hash_before" == "$(shasum "$fixture/.agents/skills/ios-design-3d-asset/SKILL.md" | awk '{print $1}')" ]] || {
     echo 'iOS 3D assets skill changed during transform' >&2
     exit 1
   }
-  [[ -L "$fixture/.claude/skills/ios-3d-assets" && "$ios_3d_symlink_before" == "$(readlink "$fixture/.claude/skills/ios-3d-assets")" && -f "$fixture/.claude/skills/ios-3d-assets/SKILL.md" ]] || {
+  [[ -L "$fixture/.claude/skills/ios-design-3d-asset" && "$ios_3d_symlink_before" == "$(readlink "$fixture/.claude/skills/ios-design-3d-asset")" && -f "$fixture/.claude/skills/ios-design-3d-asset/SKILL.md" ]] || {
     echo 'portable Claude iOS 3D assets skill link changed during transform' >&2
     exit 1
   }
@@ -1272,7 +1272,7 @@ contracts = {
     "AGENTS.md": (
         ".agents/skills/app-icon/SKILL.md",
         ".agents/skills/ios-system-experiences/SKILL.md",
-        ".agents/skills/ios-3d-assets/SKILL.md",
+        ".agents/skills/ios-design-3d-asset/SKILL.md",
         "`gpt-6-astra`",
         ".agents/skills/ui-direction/SKILL.md",
         "UI-direction route: <route>; Scope: <nonempty>; Reason: <nonempty>",
@@ -1284,7 +1284,7 @@ contracts = {
         "### App icon",
         "System Experiences Planning Gate",
         ".agents/skills/app-icon/SKILL.md",
-        ".agents/skills/ios-3d-assets/SKILL.md",
+        ".agents/skills/ios-design-3d-asset/SKILL.md",
         "tools/install-app-icon.sh",
         ".agents/skills/ui-direction/SKILL.md",
         "2〜3個の自己完結HTML案",
@@ -1323,7 +1323,7 @@ contracts = {
     "specs/architecture.md": (
         "### 2.2 App Icon境界",
         "System Experiences設計境界",
-        "`ios-3d-assets`",
+        "`ios-design-3d-asset`",
         "Config/app-icon.json",
         "### 4.1 UI Direction成果物の境界",
         "Content Security Policy",
@@ -1376,7 +1376,7 @@ contracts = {
         "2026-09-06T00:31:41Z",
         "Ambiguity fails closed into the gate",
     ),
-    ".agents/skills/ios-3d-assets/SKILL.md": (
+    ".agents/skills/ios-design-3d-asset/SKILL.md": (
         "## Authoring routes (D-082)",
         "reasoning effort `xhigh`",
         "RealityKit",

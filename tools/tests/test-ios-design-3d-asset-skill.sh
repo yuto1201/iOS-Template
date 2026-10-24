@@ -12,9 +12,9 @@ require_test_commands "$0" python3
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 
-[[ -L "$repo_root/.claude/skills/ios-3d-assets" &&
-   "$(readlink "$repo_root/.claude/skills/ios-3d-assets")" == "../../.agents/skills/ios-3d-assets" ]] || {
-  echo "Claude alias for ios-3d-assets must point to the shared skill" >&2
+[[ -L "$repo_root/.claude/skills/ios-design-3d-asset" &&
+   "$(readlink "$repo_root/.claude/skills/ios-design-3d-asset")" == "../../.agents/skills/ios-design-3d-asset" ]] || {
+  echo "Claude alias for ios-design-3d-asset must point to the shared skill" >&2
   exit 1
 }
 
@@ -25,16 +25,16 @@ import sys
 root = Path(sys.argv[1])
 
 required = {
-    ".agents/skills/ios-3d-assets/SKILL.md": (
-        "name: ios-3d-assets",
+    ".agents/skills/ios-design-3d-asset/SKILL.md": (
+        "name: ios-design-3d-asset",
         "## Authoring routes (D-082)",
         "`claude`, `codex`, or `tripo`",
         "### Choosing the route",
         "Shape", "Number of parts", "Texture", "Motion",
         "`blocked:user`",
         "## Shared authoring skill",
-        "`3d-asset-design`",
-        "`~/.agents/skills/3d-asset-design/`",
+        "`design-3d-asset`",
+        "`~/.agents/skills/design-3d-asset/`",
         "D-082 and `AGENTS.md` take precedence over the shared skill",
         "stop as `blocked:environment` before authoring",
         "Codex `gpt-6.1-sol` with reasoning effort `xhigh`",
@@ -56,7 +56,7 @@ required = {
         "Light and Dark",
     ),
     "AGENTS.md": (
-        "[3D Asset skill](.agents/skills/ios-3d-assets/SKILL.md)に従い、経路をモデルの複雑さで選ぶ（D-082）",
+        "[3D Asset skill](.agents/skills/ios-design-3d-asset/SKILL.md)に従い、経路をモデルの複雑さで選ぶ（D-082）",
         "ごく単純な形はClaudeがBlenderで直接作れる",
         "`gpt-6.1-sol`（reasoning effort `xhigh`）",
         "`gpt-6-astra`（reasoning effort `xhigh`）",
@@ -99,7 +99,7 @@ forbidden = (
 if (root / "Config/template-base.json").is_file():
     del required["specs/product.md"]
 
-# #435: ios-3d-assets is a thin adapter over the shared Mac skill 3d-asset-design. The authoring
+# #435: ios-design-3d-asset is a thin adapter over the shared Mac skill design-3d-asset. The authoring
 # procedures live there, so the adapter must not carry them again.
 adapter_procedures = (
     "## Claude route",
@@ -115,12 +115,12 @@ adapter_procedures = (
 )
 
 failures = []
-adapter_text = (root / ".agents/skills/ios-3d-assets/SKILL.md").read_text(encoding="utf-8")
+adapter_text = (root / ".agents/skills/ios-design-3d-asset/SKILL.md").read_text(encoding="utf-8")
 for phrase in adapter_procedures:
     if phrase in adapter_text:
-        failures.append(f".agents/skills/ios-3d-assets/SKILL.md keeps shared-skill procedure {phrase!r}")
+        failures.append(f".agents/skills/ios-design-3d-asset/SKILL.md keeps shared-skill procedure {phrase!r}")
 if len(adapter_text.splitlines()) > 65:
-    failures.append(".agents/skills/ios-3d-assets/SKILL.md must stay a thin adapter (65 lines or fewer)")
+    failures.append(".agents/skills/ios-design-3d-asset/SKILL.md must stay a thin adapter (65 lines or fewer)")
 for relative, anchors in required.items():
     text = (root / relative).read_text(encoding="utf-8")
     for anchor in anchors:
@@ -137,4 +137,4 @@ if failures:
     sys.exit(1)
 PY
 
-echo "ios-3d-assets skill route tests passed"
+echo "ios-design-3d-asset skill route tests passed"

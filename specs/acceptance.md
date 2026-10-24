@@ -13,7 +13,7 @@ Date: 2026-10-05
 - [ ] Unit TestとUI Testのサンプルが実行できる。
 - [ ] 日本語と英語を切り替えて主要画面を検証できる。
 - [ ] CodexとClaudeが同じ外部操作権限を持ち、設定済みアカウント／targetを照合する。
-- [ ] ClaudeとCodexの一般開発を同等に許可しつつ、3D asset authoringは共有`ios-3d-assets` skillにより、モデルの複雑さで経路を選び、ごく単純な形はClaude、単純なモデルと部品の単純な動きはCodexの`gpt-6.1-sol`と`gpt-6-astra`（reasoning effort `xhigh`）の往復、複雑なモデルと骨格で動くモデルはユーザーまたはClaudeがブラウザで操作するTripoへrouteされる（D-082）。
+- [ ] ClaudeとCodexの一般開発を同等に許可しつつ、3D asset authoringは共有`ios-design-3d-asset` skillにより、モデルの複雑さで経路を選び、ごく単純な形はClaude、単純なモデルと部品の単純な動きはCodexの`gpt-6.1-sol`と`gpt-6-astra`（reasoning effort `xhigh`）の往復、複雑なモデルと骨格で動くモデルはユーザーまたはClaudeがブラウザで操作するTripoへrouteされる（D-082）。
 - [ ] IssueからSquash Merge・Branch削除までのdry-run testが通る。
 - [ ] Delivery stageに応じて1条件、targeted部分集合、4条件を固定できる。
 - [ ] 条件付きUI Direction Gateが、必要なUI作業だけを明示選択まで停止し、Identity bootstrapと独立した非UI作業を停止しない。
@@ -58,7 +58,7 @@ Date: 2026-10-05
 - App Icon Issueは`bounded direction-neutral` routeで、App Home Screen／Settings等のicon表示をlive UI verificationに記録し、選択が画面階層、navigation、primary-flow interactionを決めずUI Direction Gateを満たさないことをReasonと関連product anchorから復元可能にする。最初のユーザー向けUI `shape`は完了済みApp Icon Issueへ依存し、独立した非UI作業は依存しない。
 - 選択済みアプリアイコンは1024 x 1024の不透明PNGで、system masking前の正方形、単一の認識しやすい主題、単純な背景、少ない形と色を基本とする。`tools/validate-app-icon.sh`が`Config/app-identity.json`、default AppIcon entry、PNGの寸法・透明性、`Config/app-icon.json`のasset path／prompt summary／generator／exact SHA-256を一致検証する。
 - 派生アプリのFeature Issueは、[App Store審査ガイドラインの適用](product.md#62-app-store審査ガイドラインの適用)に従い、対応表で機能が当たる`triggered`の項目の具体的な要件を受け入れ条件へ入れるか、当たる項目がないことを本文に書く。要件の扱いが受け入れ条件を変える未決事項なら`blocked:user`とする。対応表と手順を実装する後続Issueが完了するまでは、Appleのページを直接確かめて同じことを行う。
-- 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更を含むIssueは`ios-3d-assets`を使い、モデルの複雑さで選んだauthoringの経路（`claude`、`codex`、`tripo`）と理由をIssue／PR証拠へ記録する（D-082）。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、クレジットを使う操作は毎回ユーザーの承認を得る。どの経路の成果も形式検証、統合、RealityKit実装、Build／Test、視覚確認を経てから受け入れる。
+- 3Dモデル、mesh、material、rig、animationの作成・生成・形状変更を含むIssueは`ios-design-3d-asset`を使い、モデルの複雑さで選んだauthoringの経路（`claude`、`codex`、`tripo`）と理由をIssue／PR証拠へ記録する（D-082）。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、クレジットを使う操作は毎回ユーザーの承認を得る。どの経路の成果も形式検証、統合、RealityKit実装、Build／Test、視覚確認を経てから受け入れる。
 - application releaseに属するIssueは、release identifier、revision、現在Phase、依存する前Phaseの完了記録へ到達できる。Phase 1のscope承認、Phase 3のユーザー完了判断、Phase 4の独立した対応範囲、Phase 5の残件承認、Phase 6の公開権限を別々に記録する。workflow-onlyのテンプレート改善Issueへ架空のapplication Phaseを付けない。
 - 前Phaseが未完了でもread-only調査、選択肢、Issue草案、依存しない作業は可能だが、その結果を次Phaseの実装開始または完了証拠にしない。依存する実装は前Phase完了と現行revisionの再照合まで開始しない。
 - 反対モデルreviewerは既定でCodex primary→Claude、Claude primary→Codexとする。Claudeが利用不能でユーザーがそのIssueに限り明示承認した場合だけ、一つのAC本文先頭にexact `Opposite-review route: grok-fallback; Primary: codex; Reviewer: cursor-grok-4.6-xhigh; Approval: user-explicit; Reason: <nonempty>`を置ける。重複、不完全、別primary／model、推測承認はGrok routeを成立させず、silent／automatic fallback、Claude-primary→Grok、primary自身の承認を許可しない。

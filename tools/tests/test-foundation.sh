@@ -65,12 +65,12 @@ required_files=(
   .agents/skills/supabase-ops/SKILL.md
   .agents/skills/supabase-ops/scripts/activate.sh
   .agents/skills/supabase-ops/scripts/validate-migrations.sh
-  .agents/skills/ios-media-assets/SKILL.md
-  .agents/skills/ios-media-assets/scripts/check-elevenlabs-capability.sh
-  .agents/skills/ios-media-assets/scripts/validate-audio.sh
-  .agents/skills/ios-media-assets/scripts/validate-transcript.sh
-  .agents/skills/ios-media-assets/scripts/validate-visual.sh
-  .agents/skills/ios-media-assets/scripts/inspect-visual.swift
+  .agents/skills/ios-design-audio-asset/SKILL.md
+  .agents/skills/ios-design-audio-asset/scripts/check-elevenlabs-capability.sh
+  .agents/skills/ios-design-audio-asset/scripts/validate-audio.sh
+  .agents/skills/ios-design-audio-asset/scripts/validate-transcript.sh
+  .agents/skills/ios-design-image-asset/scripts/validate-visual.sh
+  .agents/skills/ios-design-image-asset/scripts/inspect-visual.swift
   .agents/skills/prepare-appstore-assets/SKILL.md
   .agents/skills/prepare-appstore-assets/scripts/seal-package.sh
   .agents/skills/submit-appstore-release/SKILL.md
@@ -87,7 +87,7 @@ required_files=(
   tools/tests/test-secret-store.sh
   tools/tests/test-provider-preflight.sh
   tools/tests/test-supabase-skill.sh
-  tools/tests/test-media-skill.sh
+  tools/tests/test-ios-design-audio-asset-skill.sh
   tools/tests/test-appstore-package.sh
   tools/tests/test-appstore-screenshots.sh
   tools/tests/test-appstore-skills.sh
@@ -116,8 +116,10 @@ integration_skills=(
   app-feedback
   app-icon
   supabase-ops
-  ios-media-assets
-  ios-3d-assets
+  ios-design-2d-asset
+  ios-design-3d-asset
+  ios-design-audio-asset
+  ios-design-image-asset
   prepare-appstore-assets
   submit-appstore-release
 )
@@ -283,8 +285,8 @@ for executable in \
   tools/secret-store.sh tools/run-with-secret.sh tools/run-with-private-key.sh tools/provider-preflight.sh \
   tools/validate-appstore-package.sh tools/capture-appstore-screenshots.sh tools/build-appstore-screenshot-set.sh \
   .agents/skills/supabase-ops/scripts/activate.sh .agents/skills/supabase-ops/scripts/validate-migrations.sh \
-  .agents/skills/ios-media-assets/scripts/check-elevenlabs-capability.sh .agents/skills/ios-media-assets/scripts/validate-audio.sh \
-  .agents/skills/ios-media-assets/scripts/validate-transcript.sh .agents/skills/ios-media-assets/scripts/validate-visual.sh \
+  .agents/skills/ios-design-audio-asset/scripts/check-elevenlabs-capability.sh .agents/skills/ios-design-audio-asset/scripts/validate-audio.sh \
+  .agents/skills/ios-design-audio-asset/scripts/validate-transcript.sh .agents/skills/ios-design-image-asset/scripts/validate-visual.sh \
   .agents/skills/prepare-appstore-assets/scripts/seal-package.sh .agents/skills/submit-appstore-release/scripts/record-section.sh; do
   [[ -x "$executable" ]] || { echo "integration executable is not executable: $executable" >&2; exit 1; }
 done
@@ -440,7 +442,7 @@ required = (
     ".agents/skills/app-icon/SKILL.md",
     "## 条件付き統合と秘密管理",
     ".agents/skills/supabase-ops/SKILL.md",
-    ".agents/skills/ios-media-assets/SKILL.md",
+    ".agents/skills/ios-design-audio-asset/SKILL.md",
     "## App Store リリース素材",
     "App Store/submission/requirements.json",
     "submit-appstore-release",

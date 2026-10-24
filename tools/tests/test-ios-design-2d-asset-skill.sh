@@ -48,7 +48,7 @@ required = (
     "`blocked:user`",
     "`appstore-creative`",
     "`ios-design-image-asset`",
-    "`ios-3d-assets`",
+    "`ios-design-3d-asset`",
 )
 failures = [f"ios-design-2d-asset lacks {anchor!r}" for anchor in required if anchor not in text]
 if len(text.splitlines()) > 90:
