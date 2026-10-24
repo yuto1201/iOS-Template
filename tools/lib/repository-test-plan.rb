@@ -41,6 +41,7 @@ module IOSTemplate
       tools/tests/test-link-user-skill.sh
       tools/tests/test-template-sync-apply.sh
       tools/tests/test-template-sync-derived.sh
+      tools/tests/test-template-sync-source.sh
       tools/tests/test-template-sync.sh
     ].freeze
     TEMPLATE_ONLY_PATHS = %w[

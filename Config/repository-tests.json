@@ -554,6 +554,7 @@
     {"path": "tools/tests/test-swift-tool-cache.sh", "domains": ["swift-tool-cache"]},
     {"path": "tools/tests/test-template-sync-apply.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-template-sync-derived.sh", "domains": ["template-sync"]},
+    {"path": "tools/tests/test-template-sync-source.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-template-sync.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-tracked-credential-scan.sh", "domains": ["credential-scan"]},
     {"path": "tools/tests/test-ui-direction-skill.sh", "domains": ["ui-direction"]},

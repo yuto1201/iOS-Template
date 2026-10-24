@@ -9,14 +9,14 @@ description: Use when the user wants iOS-Template updates brought into a derived
 
 ## 入り口
 
-- **入り口1**：開発中のアプリのリポジトリから、このMacのテンプレートのcheckout（`/Users/uesugiyuuto/Documents/Xcode/iOS-Template`）を参照して、そのアプリへ取り込みます。今いるリポジトリが取り込み先です。
+- **入り口1**：開発中のアプリのリポジトリから、そのアプリへ取り込みます。今いるリポジトリが取り込み先です。
 - **入り口2**：テンプレートのリポジトリから、ユーザーが指定した取り込み先のリポジトリへ取り込みます。取り込み先が指定されていなければ、推測せずに聞きます。
 
-どちらの入り口でも、手順とコマンドは同じです。
+どちらの入り口でも、手順とコマンドは同じです。取り込み元は、どちらもGitHubのテンプレートの最新の`main`です（2節）。このMacのテンプレートのcheckoutは、このスキルの置き場所として使うだけで、取り込み元にはしません。
 
 ## 守ること
 
-- **取り込み元**：テンプレートのcleanな`main`で、`origin/main`と一致するcommitだけを取り込みます。テンプレートで作業途中の変更は取り込みません。
+- **取り込み元**：GitHubの`yuto1201/iOS-Template`の、その時点の`main`の最新のcommitだけを取り込みます。2節のscriptが、テンプレートとアプリの両方のリポジトリの外に、そのcommitのcleanなcheckoutを全履歴つきで用意します。ユーザーのテンプレートのcheckout（作業中の変更やブランチ）には触れず、取り込み元にもしません。取得できないときは、古い取り込み元やユーザーのcheckoutへ切り替えずに止まります。
 - **テンプレートへ書き込まない**：取り込みのために、テンプレートへcommit、ブランチ、Issue、PR、ファイルを作りません。出力もテンプレートの中に置きません。テンプレートの不具合や改善に気づいたら、ユーザーが頼んだときだけ`report-template-issue`で報告します。
 - **取り込み先の1つのIssue**：レポート、事前の判定、分析、承認、適用、検証、mergeを、取り込み先の1つのテンプレート同期Issueとして進めます（1 Issue = 1 Branch = 1 PR）。Issue、ブランチ、PRは取り込み先に作り、取り込み先の`AGENTS.md`と規則に従います。入り口2でも、取り込み先の`AGENTS.md`を読んでから進めます。
 - **出力の置き場**：レポート、判定、分析、承認、作業用フォルダは、取り込み先とテンプレートの両方の外に置きます。
@@ -29,23 +29,24 @@ description: Use when the user wants iOS-Template updates brought into a derived
 
 ```sh
 export LANG=en_US.UTF-8
-TEMPLATE=/Users/uesugiyuuto/Documents/Xcode/iOS-Template
+SKILL_DIR=/Users/uesugiyuuto/.agents/skills/ios-template-sync           # このスキルのフォルダ（リンク）
 REPO=yuto1201/iOS-<Name>                               # 取り込み先のGitHubのリポジトリ
 APP=/Users/uesugiyuuto/Documents/Xcode/iOS-<Name>      # 取り込み先の本体のcheckout（linked worktreeではない）
 SYNC="$HOME/.ios-template-sync/iOS-<Name>/$(date -u +%Y%m%dT%H%M%SZ)"   # 両方のリポジトリの外
 mkdir -p "$SYNC"
 ```
 
-### 2. 取り込み元を確かめる
+### 2. 取り込み元を用意する
 
 ```sh
-test "$(git -C "$TEMPLATE" symbolic-ref --short HEAD)" = main
-test -z "$(git -C "$TEMPLATE" status --porcelain)"
-TEMPLATE_COMMIT=$(git -C "$TEMPLATE" rev-parse HEAD)
-test "$TEMPLATE_COMMIT" = "$(git -C "$TEMPLATE" ls-remote origin refs/heads/main | cut -f1)"
+SOURCE=$("$SKILL_DIR/scripts/prepare-template-source.sh")
+TEMPLATE=$(ruby -rjson -e 'print JSON.parse(ARGV[0]).fetch("templateRoot")' "$SOURCE")
+TEMPLATE_COMMIT=$(ruby -rjson -e 'print JSON.parse(ARGV[0]).fetch("commit")' "$SOURCE")
 ```
 
-どれかが失敗したら取り込まず、テンプレートの状態をユーザーに伝えます。テンプレートのcheckoutを切り替えたり進めたりするのは、ユーザーが指示したときだけです。
+scriptは、GitHubの`main`の最新のcommitを読み、`~/.ios-template-sync/template-source/`の下に、そのcommitのcleanなcheckout（全履歴つき）を用意して、`commit`、`remote`、`templateRoot`を1行のJSONで返します。すでに同じcommitのcheckoutがあれば、cleanでそのcommitにあるときだけ使います。以降の手順のtool（`$TEMPLATE/tools/template-sync.sh`）は、この取り込み元のcommitの版です。`TEMPLATE_COMMIT`は、同期Issueとレポートに記録します。
+
+scriptが失敗したら（network、認証、取得の途中で`main`が進んだ、用意済みのcheckoutが変わっている）、取り込みを始めずに、表示された理由をユーザーに伝えます。古い取り込み元や、ユーザーのテンプレートのcheckoutへ切り替えません。用意済みのcheckoutを消すのは、ユーザーが指示したときだけです。
 
 ### 3. 取り込み先を確かめる
 
@@ -146,7 +147,7 @@ APPROVAL="$SYNC/approval.json"
 
 ## このスキルのリンク
 
-正本はテンプレートにあり、`~/.claude/skills/ios-template-sync`と`~/.codex/skills/ios-template-sync`は正本を指すリンクです。リンクはテンプレートのcheckoutで張ります。同じ名前のフォルダや別の場所を指すリンクがあれば、上書きせずに止まります。
+正本はテンプレートにあり、D-089の配置でリンクします。`~/.agents/skills/ios-template-sync`（Codexが読む）はテンプレートのcheckoutの`.agents/user-skills/ios-template-sync`を指し、`~/.claude/skills/ios-template-sync`はその相対リンク（`../../.agents/skills/ios-template-sync`）です。`~/.codex/skills`には作りません。リンクはテンプレートのcheckoutのtoolで張ります。同じ名前のフォルダや別の場所を指すリンクがあれば、上書きせずに止まります。
 
 ```sh
 /Users/uesugiyuuto/Documents/Xcode/iOS-Template/tools/link-user-skill.sh ios-template-sync
