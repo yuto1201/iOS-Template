@@ -1,11 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-# Links one user skill of this template (D-078) into the Claude and Codex skill folders of $HOME:
-# ~/.claude/skills/<name> and ~/.codex/skills/<name> become symlinks to .agents/user-skills/<name> of
-# this checkout. Every destination is checked before anything changes: a folder or file of that name,
-# or a symlink to another place, stops the tool with nothing changed. A symlink to this skill already
-# is left as it is. A missing skills/ folder is created.
+# Links one user skill of this template (D-078) in the Mac skill layout of D-089: ~/.agents/skills/<name>,
+# which Codex reads, becomes a symlink to .agents/user-skills/<name> of this checkout, and
+# ~/.claude/skills/<name> becomes the relative symlink ../../.agents/skills/<name>. Nothing is made in
+# ~/.codex/skills. Every destination is checked before anything changes: a folder or file of that name,
+# or a symlink to another place, stops the tool with nothing changed. A symlink that is already the
+# expected one is left as it is. A missing skills/ folder is created.
 
 usage() {
   echo "usage: link-user-skill.sh <name>" >&2
@@ -30,15 +31,15 @@ source_dir="$repo_root/.agents/user-skills/${name}"
   exit 1
 }
 
-# Prints "linked" when the destination is already this skill's symlink, "create" when it can be made,
-# or one refusal line, without changing anything.
+# Prints "linked" when the destination is already the expected symlink, "create" when it can be made, or
+# one refusal line, without changing anything.
 destination_state() {
-  local tool_dir=$1 destination="$1/skills/${name}" folder
+  local tool_dir=$1 target=$2 destination="$1/skills/${name}" folder
   if [[ -L "$destination" ]]; then
-    if [[ "$(readlink "$destination")" == "$source_dir" ]]; then
+    if [[ "$(readlink "$destination")" == "$target" ]]; then
       echo linked
     else
-      echo "refuse: ${destination} is a symlink to $(readlink "$destination"), not to ${source_dir}"
+      echo "refuse: ${destination} is a symlink to $(readlink "$destination"), not to ${target}"
     fi
     return
   fi
@@ -55,10 +56,12 @@ destination_state() {
   echo create
 }
 
-claude_state=$(destination_state "$HOME/.claude")
-codex_state=$(destination_state "$HOME/.codex")
+agents_target=$source_dir
+claude_target="../../.agents/skills/${name}"
+agents_state=$(destination_state "$HOME/.agents" "$agents_target")
+claude_state=$(destination_state "$HOME/.claude" "$claude_target")
 refused=0
-for state in "$claude_state" "$codex_state"; do
+for state in "$agents_state" "$claude_state"; do
   if [[ "$state" == refuse:* ]]; then
     echo "link-user-skill: ${state#refuse: }" >&2
     refused=1
@@ -70,16 +73,17 @@ if [[ $refused -ne 0 ]]; then
 fi
 
 link_one() {
-  local tool_dir=$1 state=$2 destination="$1/skills/${name}"
+  local tool_dir=$1 target=$2 state=$3 destination="$1/skills/${name}"
   if [[ "$state" == linked ]]; then
-    echo "already linked: ${destination} -> ${source_dir}"
+    echo "already linked: ${destination} -> ${target}"
     return
   fi
   mkdir -p "$tool_dir/skills"
   # symlink(2) fails if the destination appeared meanwhile, instead of linking inside a new folder.
-  /usr/bin/ruby -e 'File.symlink(ARGV[0], ARGV[1])' "$source_dir" "$destination"
-  echo "linked: ${destination} -> ${source_dir}"
+  /usr/bin/ruby -e 'File.symlink(ARGV[0], ARGV[1])' "$target" "$destination"
+  echo "linked: ${destination} -> ${target}"
 }
 
-link_one "$HOME/.claude" "$claude_state"
-link_one "$HOME/.codex" "$codex_state"
+# The Codex link is made first, so the Claude link never points at a missing entry.
+link_one "$HOME/.agents" "$agents_target" "$agents_state"
+link_one "$HOME/.claude" "$claude_target" "$claude_state"
