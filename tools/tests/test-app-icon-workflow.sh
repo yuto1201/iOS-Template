@@ -111,6 +111,9 @@ ruby -ryaml -e '
 
 grep -Fq 'exactly two' "$skill"
 grep -Fq 'built-in image generation' "$skill"
+# #462: Claude, the main agent, has no built-in image generation and asks Codex with stdin closed.
+grep -Fq 'Claude has no built-in image generation, so Claude asks Codex for each candidate' "$skill"
+grep -Fq 'Do nothing else." < /dev/null' "$skill"
 grep -Fq 'one centered recognizable subject' "$skill"
 grep -Fq 'no text, initials' "$skill"
 grep -Fq 'new immutable revision' "$skill"

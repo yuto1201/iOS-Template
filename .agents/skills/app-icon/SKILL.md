@@ -17,6 +17,15 @@ Check the current Apple app-icon guidance linked from [`docs/references.md`](../
 
 ## Generate and select
 
+Who generates: Codex calls its built-in image generation directly. Claude has no built-in image generation, so Claude asks Codex for each candidate from a scratch directory outside Git and evaluates the result itself:
+
+```sh
+codex exec --skip-git-repo-check -s workspace-write -C "$WORK" \
+  "Use your built-in image generation tool (not SVG, not code, not the CLI fallback) to create ONE app icon candidate: <prompt>. Copy the generated PNG into the current directory as <concept-id>.png and print its source path. Do nothing else." < /dev/null
+```
+
+Always close standard input with `< /dev/null`; otherwise `codex exec` waits for more input and never finishes. Claude opens every candidate and checks it before presenting it.
+
 1. Use the default built-in image generation skill/tool. Do not substitute SVG, HTML, SF Symbols, a screenshot, or a manually drawn placeholder when the requested deliverable is an image-generated bitmap.
 2. Create exactly two stable-ID candidates in separate built-in image-generation calls from the same confirmed brief. Keep their finish and constraints equal, but make their core visual metaphors meaningfully distinct.
 3. Default each prompt to one centered recognizable subject, a simple solid or restrained gradient background, few shapes, few colors, strong small-size contrast, and no text, initials, numbers, screenshots, Apple hardware replicas, third-party marks, watermarks, baked rounded-corner mask, or fine detail. Ask for a square, full-bleed, opaque 1024 x 1024 PNG that remains legible after system masking.

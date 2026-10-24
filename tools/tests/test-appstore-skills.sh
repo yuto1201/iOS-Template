@@ -100,6 +100,7 @@ require_text "$creative_refs/imagegen.md" 'appstore-creative-sheet\.sh cutout --
 require_text "$creative_refs/imagegen.md" '^## Reject generic AI images before showing them' 'image guide does not reject generic AI images'
 require_text "$creative_refs/imagegen.md" 'appstore-creative-sheet\.sh review --sheet' 'image guide does not record the material review'
 require_text "$creative_refs/imagegen.md" 'stop and ask the user before every use' 'image guide does not stop before paid generators'
+require_text "$creative_refs/imagegen.md" 'Do nothing else\." < /dev/null' 'image guide lets codex exec wait on standard input'
 require_text "$creative_refs/imagegen.md" 'appstore-creative-sheet\.sh provenance --file' 'image guide does not check provenance'
 require_text "$creative_refs/proposal.md" '^## Material sheet' 'proposal guide lacks the material sheet'
 require_text "$creative_skill/SKILL.md" 'Use only what the user explicitly adopted' 'skill does not use only adopted materials'
