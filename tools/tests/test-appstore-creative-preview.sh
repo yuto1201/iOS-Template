@@ -332,7 +332,7 @@ ruby -rjson -e 'specs = JSON.parse(File.read(ARGV[0])); requirements = JSON.pars
   abort "preview sizes differ from D-079" unless kinds.dig("preview-iphone", "sizes").include?([886, 1920]) && kinds.dig("preview-ipad", "sizes").include?([1200, 1600])
   abort "header specs" unless kinds.dig("header-image", "sizes") == [[3840, 1646]] && kinds.dig("header-video", "fps") == [30, 60] && kinds.dig("header-video", "seconds") == [5, 30]
   abort "universal spec" unless kinds.dig("universal-image", "sizes") == [[5244, 2950]] && kinds.dig("universal-image", "formats") == ["png"]' \
-  "$workspace/specs.json" "$repo_root/App Store/submission/requirements.json"
+  "$workspace/specs.json" "$repo_root/tools/tests/fixtures/appstore/requirements.json"
 sa="$workspace/assets"; mkdir -p "$sa"
 still() { ffmpeg -y -loglevel error -f lavfi -i "color=c=0x336699:s=$2,format=${3:-rgb24}" -frames:v 1 "$sa/$1"; }
 still header.png 3840x1646

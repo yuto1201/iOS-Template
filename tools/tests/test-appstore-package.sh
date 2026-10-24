@@ -114,6 +114,10 @@ assert_invalid() {
 
 # D-079: the submission requirements and this fixture name the iPhone family Dynamic Island (medium display),
 # with Apple's models and sizes, and keep the iPad 13-inch family.
+# #433: the app owns App Store/submission/requirements.json and may have none yet, so the live file is checked
+# only in the template, which does not record Config/template-base.json.
+live_requirements=()
+[[ -f "$repo_root/Config/template-base.json" ]] || live_requirements=("$repo_root/App Store/submission/requirements.json")
 ruby -rjson -e '
   expected = [
     {"id" => "iphone-6.3", "platform" => "iphone",
@@ -126,7 +130,7 @@ ruby -rjson -e '
     families = JSON.parse(File.binread(path)).dig("screenshots", "requiredFamilies")
     abort "screenshot families differ from D-079: #{path}" unless families == expected
   end
-' "$requirements" "$repo_root/App Store/submission/requirements.json"
+' "$requirements" ${live_requirements[@]+"${live_requirements[@]}"}
 
 write_valid_fixture
 ready=$("$validator" --root "$package_root" --project-root "$fixture_project" \

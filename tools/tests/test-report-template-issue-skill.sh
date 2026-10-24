@@ -151,7 +151,14 @@ test = manifest.fetch('tests').find { |entry| entry.fetch('path') == 'tools/test
 abort 'report-template-issue test manifest entry is missing' unless test&.fetch('domains')&.include?('template-issue-reporting')
 RUBY
 
-tools/validate-issue-body.sh --type docs "$example" >/dev/null
-swift tools/check-markdown-links.swift "$skill" docs/README.md >/dev/null
+# #433: the example names the template's own specification anchors (specs/product.md belongs to the app), so it
+# is validated as an Issue body only in the template, not in an app that records Config/template-base.json.
+# docs/README.md links into the template-only docs/superpowers/, which the foundation test leaves out in an app.
+if [[ ! -f Config/template-base.json ]]; then
+  tools/validate-issue-body.sh --type docs "$example" >/dev/null
+  swift tools/check-markdown-links.swift "$skill" docs/README.md >/dev/null
+else
+  swift tools/check-markdown-links.swift "$skill" >/dev/null
+fi
 
 echo 'Template Issue reporting skill checks passed.'

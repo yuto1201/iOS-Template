@@ -12,14 +12,19 @@ set -euo pipefail
 # take longer, so each runs on its own through tools/tests/test-adopted-app-bootstrap-*.sh and stays well inside
 # the targeted per-test limit; with no argument this test runs the `imported` group.
 
+# #433: the app's own specs/acceptance.md, and an app whose project is its own (an Info.plist file, a widget
+# target and a Swift package) with its own StoreKit configuration file. The `own-project` and
+# `own-project-appstore` groups run the imported tests that read app-owned files through
+# tools/tests/test-adopted-app-own-project*.sh, and a sync-like change there resolves a targeted plan.
+
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby python3 shasum swift
 
 group="${1:-imported}"
 case "$group" in
-  imported|bootstrap-transform|bootstrap-fixture) ;;
+  imported|bootstrap-transform|bootstrap-fixture|own-project|own-project-appstore) ;;
   *)
-    echo "usage: $0 [imported|bootstrap-transform|bootstrap-fixture]" >&2
+    echo "usage: $0 [imported|bootstrap-transform|bootstrap-fixture|own-project|own-project-appstore]" >&2
     exit 64
     ;;
 esac
@@ -75,11 +80,104 @@ make_bootstrapped_adopted_app() {
   done <"$work/adopted-removed.txt"
   printf '{\n  "baseCommit": "%s",\n  "method": "adopted",\n  "recordedAt": "2026-10-19T00:00:00Z",\n  "schemaVersion": 1,\n  "templateRepository": "yuto1201/iOS-Template"\n}\n' "$before_head" >"$dest/Config/template-base.json"
   printf '# Sample Notes product\n\nSample Notes keeps notes on the device. It has no server and no database.\n' >"$dest/specs/product.md"
+  printf '# Sample Notes acceptance\n\nA note written on the device is still there after a restart.\n' >"$dest/specs/acceptance.md"
   commit_all "$dest" 'Adopt the template as Sample Notes'
   [[ -z "$(git -C "$dest" ls-files -- 'App Store/metadata/app.yml' 'App Store/screenshots/states.json' 'App Store/submission' docs/superpowers)" ]] ||
     fail 'the adopted app still tracks app-owned App Store files or template-only documents'
 }
 run_in() { (cd "$1" && bash "tools/tests/$2" "${@:3}" >"$work/$2${3:+-$3}.log" 2>&1); }
+
+# #433: an adopted app whose project is its own: the app target reads an Info.plist file and links a Swift
+# package, a widget extension target sits beside it, and StoreKitTesting/ holds its own configuration file.
+make_own_project_app() {
+  local dest="$1"
+  make_bootstrapped_adopted_app "$dest"
+  ruby -e '
+    path = ARGV.fetch(0)
+    pbx = File.binread(path).force_encoding(Encoding::UTF_8)
+    ids = Array.new(9) { |index| format("AA00%020X", index + 1) }
+    widget, list, debug, release, package, product, build_file, frameworks, target_line = ids
+    app_setting = "PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;"
+    abort "the app target settings are missing" unless pbx.scan(app_setting).length == 2
+    pbx = pbx.gsub(app_setting, "#{app_setting}\n\t\t\t\tINFOPLIST_FILE = SampleNotes/Info.plist;")
+    widget_settings = ->(id, name) { "\t\t#{id} /* #{name} */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tINFOPLIST_FILE = SampleNotesWidget/Info.plist;\n\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes.Widget;\n\t\t\t\tPRODUCT_NAME = \"$(TARGET_NAME)\";\n\t\t\t\tSKIP_INSTALL = YES;\n\t\t\t};\n\t\t\tname = #{name};\n\t\t};\n" }
+    pbx = pbx.sub("/* End XCBuildConfiguration section */", widget_settings.call(debug, "Debug") + widget_settings.call(release, "Release") + "/* End XCBuildConfiguration section */")
+    pbx = pbx.sub("/* End XCConfigurationList section */", "\t\t#{list} /* Build configuration list for PBXNativeTarget \"SampleNotesWidget\" */ = {\n\t\t\tisa = XCConfigurationList;\n\t\t\tbuildConfigurations = (\n\t\t\t\t#{debug} /* Debug */,\n\t\t\t\t#{release} /* Release */,\n\t\t\t);\n\t\t\tdefaultConfigurationIsVisible = 0;\n\t\t\tdefaultConfigurationName = Release;\n\t\t};\n/* End XCConfigurationList section */")
+    pbx = pbx.sub("/* End PBXNativeTarget section */", "\t\t#{widget} /* SampleNotesWidget */ = {\n\t\t\tisa = PBXNativeTarget;\n\t\t\tbuildConfigurationList = #{list} /* Build configuration list for PBXNativeTarget \"SampleNotesWidget\" */;\n\t\t\tbuildPhases = (\n\t\t\t);\n\t\t\tbuildRules = (\n\t\t\t);\n\t\t\tdependencies = (\n\t\t\t);\n\t\t\tname = SampleNotesWidget;\n\t\t\tproductName = SampleNotesWidget;\n\t\t\tproductType = \"com.apple.product-type.app-extension\";\n\t\t};\n/* End PBXNativeTarget section */")
+    targets = pbx[/\t\t\ttargets = \(\n(?:\t\t\t\t[^\n]*\n)*\t\t\t\);/] or abort "the project lists no targets"
+    pbx = pbx.sub(targets, targets.sub("\t\t\t);", "\t\t\t\t#{widget} /* SampleNotesWidget */,\n\t\t\t);"))
+    app_target = pbx[/\t\t[0-9A-F]{24} \/\* SampleNotes \*\/ = \{\n\t\t\tisa = PBXNativeTarget;.*?\n\t\t\};\n/m] or abort "the app target is missing"
+    pbx = pbx.sub(app_target, app_target.sub("\t\t\tpackageProductDependencies = (\n\t\t\t);", "\t\t\tpackageProductDependencies = (\n\t\t\t\t#{product} /* NotesKit */,\n\t\t\t);"))
+    pbx = pbx.sub(/(\t\t\tmainGroup = )/, "\t\t\tpackageReferences = (\n\t\t\t\t#{package} /* XCRemoteSwiftPackageReference \"notes-kit\" */,\n\t\t\t);\n\\1")
+    pbx = pbx.sub("/* End XCConfigurationList section */\n", "/* End XCConfigurationList section */\n\n/* Begin XCRemoteSwiftPackageReference section */\n\t\t#{package} /* XCRemoteSwiftPackageReference \"notes-kit\" */ = {\n\t\t\tisa = XCRemoteSwiftPackageReference;\n\t\t\trepositoryURL = \"https://github.com/example/notes-kit\";\n\t\t\trequirement = {\n\t\t\t\tkind = upToNextMajorVersion;\n\t\t\t\tminimumVersion = 1.0.0;\n\t\t\t};\n\t\t};\n/* End XCRemoteSwiftPackageReference section */\n\n/* Begin XCSwiftPackageProductDependency section */\n\t\t#{product} /* NotesKit */ = {\n\t\t\tisa = XCSwiftPackageProductDependency;\n\t\t\tpackage = #{package} /* XCRemoteSwiftPackageReference \"notes-kit\" */;\n\t\t\tproductName = NotesKit;\n\t\t};\n/* End XCSwiftPackageProductDependency section */\n")
+    %w[INFOPLIST_FILE\ =\ SampleNotes/Info.plist SampleNotesWidget XCRemoteSwiftPackageReference XCSwiftPackageProductDependency packageReferences].each do |anchor|
+      abort "the own project lacks #{anchor}" unless pbx.include?(anchor.delete("\\"))
+    end
+    File.binwrite(path, pbx)
+  ' "$dest/SampleNotes.xcodeproj/project.pbxproj" || fail 'the own project could not be written'
+  /usr/bin/plutil -lint "$dest/SampleNotes.xcodeproj/project.pbxproj" >/dev/null || fail 'the own project is not a valid property list'
+  mkdir -p "$dest/SampleNotesWidget" "$dest/StoreKitTesting"
+  local plist
+  for plist in "$dest/SampleNotes/Info.plist" "$dest/SampleNotesWidget/Info.plist"; do
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+      '<plist version="1.0">' '<dict>' '<key>ITSAppUsesNonExemptEncryption</key>' '<false/>' '</dict>' '</plist>' >"$plist"
+  done
+  printf '%s\n' '{"identifier":"SampleNotes","nonRenewingSubscriptions":[],"products":[],"settings":{},"subscriptionGroups":[],"version":{"major":4,"minor":0}}' \
+    >"$dest/StoreKitTesting/SampleNotes.storekit"
+  commit_all "$dest" 'Give Sample Notes its own project and StoreKit configuration'
+}
+
+if [[ "$group" == own-project || "$group" == own-project-appstore ]]; then
+  own="$work/own-project-app"
+  make_own_project_app "$own"
+  if [[ "$group" == own-project ]]; then
+    own_tests=(test-foundation.sh test-ios-3d-assets-skill.sh test-ios-system-experiences-skill.sh test-report-template-issue-skill.sh
+      test-appstore-package.sh test-store-copy-audit.sh test-appstore-metadata-save.sh)
+  else
+    own_tests=(test-appstore-preparation.sh test-appstore-creative-preview.sh)
+  fi
+  for test_name in "${own_tests[@]}"; do
+    run_in "$own" "$test_name" || fail "$test_name failed in the app with its own project: $(tail -3 "$work/$test_name.log")"
+  done
+  if [[ "$group" == own-project ]]; then
+    # A sync-like change, which always writes Config/template-base.json, resolves a targeted plan that
+    # includes the foundation test and no template-only test.
+    sync_base="$(git -C "$own" rev-parse HEAD)"
+    ruby -rjson -e '
+      path = ARGV.fetch(0)
+      value = JSON.parse(File.read(path))
+      value["recordedAt"] = "2026-10-25T00:00:00Z"
+      File.write(path, JSON.pretty_generate(value) + "\n")
+    ' "$own/Config/template-base.json"
+    printf '\nSynced note.\n' >>"$own/docs/AUTHORITY.md"
+    commit_all "$own" 'A sync-like change'
+    (cd "$own" && ruby -Itools/lib -rjson -rrepository-test-plan -e '
+      plan = IOSTemplate::RepositoryTestPlan
+      base, head = ARGV
+      manifest = JSON.parse(IO.popen(["git", "show", "#{head}:Config/repository-tests.json"], &:read))
+      tracked = plan.tracked_paths(".", head)
+      adopted, testless = plan.adopted_manifest(manifest, tracked)
+      plan.validate_manifest!(adopted, tracked.grep(plan::TEST_PATH), tracked_paths: tracked, testless_domains: testless)
+      changed = plan.changed_paths(".", base, head)
+      abort "the change does not write the base record: #{changed}" unless changed.include?("Config/template-base.json")
+      scope, _, selected = plan.resolve(adopted, "targeted", changed)
+      abort "unexpected plan: #{scope} #{selected}" unless scope == "targeted" && selected.include?("tools/tests/test-foundation.sh") &&
+        (selected & plan::TEMPLATE_ONLY_TESTS).empty?
+    ' "$sync_base" "$(git rev-parse HEAD)") >"$work/own-plan.log" 2>&1 ||
+      fail "the sync-like change did not resolve a targeted plan: $(tail -3 "$work/own-plan.log")"
+    # Without the adoption record the same repository is checked as the template.
+    git -C "$own" rm -q -- Config/template-base.json
+    commit_all "$own" 'Check the app as the template'
+    if run_in "$own" test-ios-system-experiences-skill.sh; then
+      fail 'the System Experiences test accepted the app text without the adoption record'
+    fi
+    grep -Fq 'specs/product.md lacks' "$work/test-ios-system-experiences-skill.sh.log" ||
+      fail "unexpected template failure: $(tail -3 "$work/test-ios-system-experiences-skill.sh.log")"
+  fi
+  check_running_repository
+  echo "adopted-app imported $group test regressions passed"
+  exit 0
+fi
 
 if [[ "$group" != imported ]]; then
   adopted="$work/adopted-app"

@@ -96,8 +96,10 @@ forbidden = (
 # #356: specs/product.md belongs to the app (tools/template-sync/ownership.json). An app that adopted the
 # template (it records Config/template-base.json, D-074) keeps its own product specification, so the template's
 # section 5.1 is checked only in the template; the skill and the imported guidance above carry D-082 there.
+# #433: specs/acceptance.md belongs to the app as well, so its 3D criteria are checked only in the template.
 if (root / "Config/template-base.json").is_file():
     del required["specs/product.md"]
+    del required["specs/acceptance.md"]
 
 # #435: ios-design-3d-asset is a thin adapter over the shared Mac skill design-3d-asset. The authoring
 # procedures live there, so the adapter must not carry them again.
