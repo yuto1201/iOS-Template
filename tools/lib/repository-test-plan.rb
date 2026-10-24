@@ -37,7 +37,8 @@ module IOSTemplate
       tools/tests/test-adopted-app-bootstrap-fixture.sh
       tools/tests/test-adopted-app-bootstrap-transform.sh
       tools/tests/test-adopted-app-imported-tests.sh
-      tools/tests/test-adopted-app-own-project-appstore.sh
+      tools/tests/test-adopted-app-own-project-creative.sh
+      tools/tests/test-adopted-app-own-project-preparation.sh
       tools/tests/test-adopted-app-own-project.sh
       tools/tests/test-build-for-device.sh
       tools/tests/test-link-user-skill.sh

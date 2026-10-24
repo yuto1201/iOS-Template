@@ -13,18 +13,18 @@ set -euo pipefail
 # the targeted per-test limit; with no argument this test runs the `imported` group.
 
 # #433: the app's own specs/acceptance.md, and an app whose project is its own (an Info.plist file, a widget
-# target and a Swift package) with its own StoreKit configuration file. The `own-project` and
-# `own-project-appstore` groups run the imported tests that read app-owned files through
-# tools/tests/test-adopted-app-own-project*.sh, and a sync-like change there resolves a targeted plan.
+# target and a Swift package) with its own StoreKit configuration file. The `own-project`,
+# `own-project-preparation` and `own-project-creative` groups run the imported tests that read app-owned files
+# through tools/tests/test-adopted-app-own-project*.sh, and a sync-like change there resolves a targeted plan.
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby python3 shasum swift
 
 group="${1:-imported}"
 case "$group" in
-  imported|bootstrap-transform|bootstrap-fixture|own-project|own-project-appstore) ;;
+  imported|bootstrap-transform|bootstrap-fixture|own-project|own-project-preparation|own-project-creative) ;;
   *)
-    echo "usage: $0 [imported|bootstrap-transform|bootstrap-fixture|own-project|own-project-appstore]" >&2
+    echo "usage: $0 [imported|bootstrap-transform|bootstrap-fixture|own-project|own-project-preparation|own-project-creative]" >&2
     exit 64
     ;;
 esac
@@ -136,15 +136,15 @@ make_own_project_app() {
   commit_all "$dest" 'Give Sample Notes its own project and StoreKit configuration'
 }
 
-if [[ "$group" == own-project || "$group" == own-project-appstore ]]; then
+if [[ "$group" == own-project* ]]; then
   own="$work/own-project-app"
   make_own_project_app "$own"
-  if [[ "$group" == own-project ]]; then
-    own_tests=(test-foundation.sh test-ios-3d-assets-skill.sh test-ios-system-experiences-skill.sh test-report-template-issue-skill.sh
-      test-appstore-package.sh test-store-copy-audit.sh test-appstore-metadata-save.sh)
-  else
-    own_tests=(test-appstore-preparation.sh test-appstore-creative-preview.sh)
-  fi
+  case "$group" in
+    own-project) own_tests=(test-foundation.sh test-ios-3d-assets-skill.sh test-ios-system-experiences-skill.sh
+      test-report-template-issue-skill.sh test-appstore-package.sh test-store-copy-audit.sh test-appstore-metadata-save.sh) ;;
+    own-project-preparation) own_tests=(test-appstore-preparation.sh) ;;
+    *) own_tests=(test-appstore-creative-preview.sh) ;;
+  esac
   for test_name in "${own_tests[@]}"; do
     run_in "$own" "$test_name" || fail "$test_name failed in the app with its own project: $(tail -3 "$work/$test_name.log")"
   done
