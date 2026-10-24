@@ -78,7 +78,8 @@
         ".agents/skills/appstore-creative/",
         ".agents/skills/prepare-appstore-assets/templates/",
         "App Store/",
-        "tools/lib/appstore-"
+        "tools/lib/appstore-",
+        "tools/tests/fixtures/appstore/"
       ]
     },
     {
