@@ -32,38 +32,28 @@ required = {
         "### Choosing the route",
         "Shape", "Number of parts", "Texture", "Motion",
         "`blocked:user`",
-        "### A set of models: style reference first",
-        "two style reference images",
-        "## Codex route",
+        "## Shared authoring skill",
+        "`3d-asset-design`",
+        "`~/.agents/skills/3d-asset-design/`",
+        "D-082 and `AGENTS.md` take precedence over the shared skill",
+        "stop as `blocked:environment` before authoring",
         "Codex `gpt-6.1-sol` with reasoning effort `xhigh`",
         "Codex `gpt-6-astra` with reasoning effort `xhigh`",
-        "Blender Python (`bpy`)",
-        "GLB and USDZ",
-        "front, side, top, and a three-quarter view",
-        "At most 5 rounds.",
-        "switch to Tripo",
         "`blocked:environment`; never substitute another model",
-        "## Tripo route",
+        "At most 5 rounds",
+        "switch to Tripo",
+        "## Tripo safety",
         "The user signs in, changes the plan or billing, and enters any credentials.",
         "never buys credits",
         "already signed-in session",
         "expected credit cost and wait for approval",
-        "Never generate a model from text alone",
-        "multi-view generation",
-        "set the number of generations to 4",
-        "partial fix",
-        "first 3 fixes spend no credits",
-        "Then generate the texture",
-        "Tripo's rigging",
         "stop before any credit-spending operation and report the difference",
-        "UI checked",
         "commercial use",
         "## App budgets and verification",
         "5,000 or fewer", "1024 px", "2 MB or less",
         "30,000 or fewer", "2048 px", "10 MB or less",
         "RealityKit",
         "Light and Dark",
-        "## Claude route",
     ),
     "AGENTS.md": (
         "[3D Asset skill](.agents/skills/ios-3d-assets/SKILL.md)に従い、経路をモデルの複雑さで選ぶ（D-082）",
@@ -109,7 +99,28 @@ forbidden = (
 if (root / "Config/template-base.json").is_file():
     del required["specs/product.md"]
 
+# #435: ios-3d-assets is a thin adapter over the shared Mac skill 3d-asset-design. The authoring
+# procedures live there, so the adapter must not carry them again.
+adapter_procedures = (
+    "## Claude route",
+    "## Codex route",
+    "### A set of models: style reference first",
+    "two style reference images",
+    "front, side, top, and a three-quarter view",
+    "multi-view generation",
+    "set the number of generations to 4",
+    "first 3 fixes spend no credits",
+    "Never generate a model from text alone",
+    "UI checked",
+)
+
 failures = []
+adapter_text = (root / ".agents/skills/ios-3d-assets/SKILL.md").read_text(encoding="utf-8")
+for phrase in adapter_procedures:
+    if phrase in adapter_text:
+        failures.append(f".agents/skills/ios-3d-assets/SKILL.md keeps shared-skill procedure {phrase!r}")
+if len(adapter_text.splitlines()) > 65:
+    failures.append(".agents/skills/ios-3d-assets/SKILL.md must stay a thin adapter (65 lines or fewer)")
 for relative, anchors in required.items():
     text = (root / relative).read_text(encoding="utf-8")
     for anchor in anchors:
