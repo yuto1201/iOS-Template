@@ -117,6 +117,13 @@ contracts = {
   'tools/tests/test-foundation.sh' => ['ios-system-experiences'],
   'tools/tests/test-app-bootstrap.sh' => ['ios-system-experiences']
 }
+# #433: specs/product.md and specs/acceptance.md belong to the app (tools/template-sync/ownership.json). An app
+# made from or adopting the template (it records Config/template-base.json, D-074) keeps its own, so the
+# template's Planning Gate text there is checked only in the template; the skill and the guidance above carry it.
+if File.file?('Config/template-base.json')
+  contracts.delete('specs/product.md')
+  contracts.delete('specs/acceptance.md')
+end
 contracts.each do |path, anchors|
   text = File.read(path, encoding: 'UTF-8')
   require_all(path, text, anchors)

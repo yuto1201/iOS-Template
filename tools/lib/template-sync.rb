@@ -516,6 +516,12 @@ module TemplateSync
       return record.merge("status" => "app-owned", "action" => "skip", "reason" => "アプリが持つファイルなので取り込みません。")
     end
     if entry[:category] == "template-only"
+      # #433: a template-only file that the app already has (a copy of the template, or an earlier sync) is
+      # left as it is, and the plan lists it so the sync Issue can decide whether the app keeps it.
+      if app_files[path]
+        return record.merge("status" => "template-only", "action" => "skip", "appPresent" => true,
+                            "reason" => "テンプレート専用のファイルが、アプリに残っています。取り込みでは変えません。")
+      end
       return record.merge("status" => "template-only", "action" => "skip", "reason" => "テンプレート専用なのでアプリへ持ち込みません。")
     end
     transformed = entry[:transform]
@@ -1947,6 +1953,16 @@ module TemplateSync
     manual = pick.call("manual")
     manual.empty? ? lines << "なし" : manual.each { |file| lines << "- `#{file["path"]}`（#{STATUS_LABELS.fetch(file["status"], file["status"])}）: #{file["reason"]}#{nearest_note(file)}" }
     lines << ""
+    # #433: template-only files that the app has; the sync leaves them, and the sync Issue decides whether to keep them.
+    leftover = result["files"].select { |file| file["status"] == "template-only" && file["appPresent"] }.sort_by { |file| file["path"] }
+    unless leftover.empty?
+      lines << "## アプリに残っているテンプレート専用のファイル"
+      lines << ""
+      lines << "テンプレートだけで使うファイルが、アプリにあります（テンプレートの複製として作ったアプリや、以前の取り込みの残り）。取り込みでは変えません。アプリで使わないものは、同期Issueの中で消すか残すかを決めます。"
+      lines << ""
+      leftover.each { |file| lines << "- `#{file["path"]}`" }
+      lines << ""
+    end
     lines << "## 確認事項"
     lines << ""
     decisions = result["decisions"]

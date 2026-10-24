@@ -1434,8 +1434,10 @@ contracts = {
 # #356: specs/product.md belongs to the app (tools/template-sync/ownership.json). An app that adopted the
 # template (it records Config/template-base.json, D-074) keeps its own product specification, so the
 # template's policy sections are checked there only in the template.
+# #433: specs/acceptance.md belongs to the app as well.
 if (root / "Config/template-base.json").is_file():
     del contracts["specs/product.md"]
+    del contracts["specs/acceptance.md"]
 
 missing = []
 for relative, anchors in contracts.items():

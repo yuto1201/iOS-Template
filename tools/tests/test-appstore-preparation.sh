@@ -378,12 +378,21 @@ puts "PASS: duplicate JSON and YAML keys cannot override preparation identity"
 # This is still a read-only metadata fixture, not an Xcode Build/Test claim.
 pbx_path = File.join(project, "GardenNotes.xcodeproj/project.pbxproj")
 FileUtils.mkdir_p(File.dirname(pbx_path))
-# A derived app's bootstrap renames the live project, so read its module and Bundle ID from the record.
-live_identity_path = File.join(repo_root, "Config/app-identity.json")
-live_identity = File.file?(live_identity_path) ? JSON.parse(File.binread(live_identity_path)) : {}
-live_module = live_identity.fetch("moduleName", "TemplateApp")
-live_bundle = live_identity.fetch("bundleId", "com.yuto.TemplateApp")
-live_pbx = File.binread(File.join(repo_root, "#{live_module}.xcodeproj/project.pbxproj"))
+# #433: an app made from or adopting the template (it records Config/template-base.json, D-074, or its
+# Identity bootstrap's Config/app-identity.json) owns its project, which may have its own Info.plist, targets
+# and packages, so there the copy comes from the template's project kept under tools/tests/fixtures, and the
+# App Store placeholders below from the copies there; the template reads its own, which the copies must match.
+template_project = File.join(repo_root, "tools/tests/fixtures/store-sources/template-project")
+derived = %w[Config/template-base.json Config/app-identity.json].any? { |record| File.file?(File.join(repo_root, record)) }
+project_source = derived ? template_project : repo_root
+unless derived
+  %w[TemplateApp.xcodeproj/project.pbxproj TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme].each do |relative|
+    abort "the template project fixture differs from #{relative}" unless File.binread(File.join(repo_root, relative)) == File.binread(File.join(template_project, relative))
+  end
+end
+live_module = "TemplateApp"
+live_bundle = "com.yuto.TemplateApp"
+live_pbx = File.binread(File.join(project_source, "#{live_module}.xcodeproj/project.pbxproj"))
 # The bootstrap also records the display name, which the fixture sets below.
 pbx = live_pbx.gsub(/^[ \t]*INFOPLIST_KEY_CFBundleDisplayName = .*;\n/, "")
 pbx = pbx.gsub(live_bundle, "com.example.garden").gsub(live_module, "GardenNotes")
@@ -407,17 +416,17 @@ File.write(pbx_path, pbx)
 # so carry those files under the renamed module.
 build_inputs = live_pbx.scan(/^\s*(?:CODE_SIGN_ENTITLEMENTS|INFOPLIST_FILE|GCC_PREFIX_HEADER|INFOPLIST_PREFIX_HEADER|MODULEMAP_FILE|SWIFT_OBJC_BRIDGING_HEADER) = (?:"([^"\n]*)"|([^";\s]+));$/).map(&:compact).flatten.uniq
 build_inputs.each do |relative|
-  abort "live build input #{relative} is not a repository file" unless !relative.include?("$") && File.file?(File.join(repo_root, relative))
+  abort "live build input #{relative} is not a repository file" unless !relative.include?("$") && File.file?(File.join(project_source, relative))
   destination = File.join(project, relative.gsub(live_module, "GardenNotes"))
   FileUtils.mkdir_p(File.dirname(destination))
-  File.binwrite(destination, File.binread(File.join(repo_root, relative)))
+  File.binwrite(destination, File.binread(File.join(project_source, relative)))
 end
 # The module's source root exists, as in a bootstrapped app, so each inventory below reaches the case it checks.
 FileUtils.mkdir_p(File.join(project, "GardenNotes"))
 scheme_relative = "GardenNotes.xcodeproj/xcshareddata/xcschemes/GardenNotes.xcscheme"
 scheme_path = File.join(project, scheme_relative)
 FileUtils.mkdir_p(File.dirname(scheme_path))
-scheme = File.binread(File.join(repo_root, "#{live_module}.xcodeproj/xcshareddata/xcschemes/#{live_module}.xcscheme")).gsub(live_module, "GardenNotes")
+scheme = File.binread(File.join(project_source, "#{live_module}.xcodeproj/xcshareddata/xcschemes/#{live_module}.xcscheme")).gsub(live_module, "GardenNotes")
 File.write(scheme_path, scheme)
 public_config = File.join(project, "Config/Public.xcconfig")
 FileUtils.cp(File.join(repo_root, "Config/Public.xcconfig"), public_config)
@@ -1777,19 +1786,32 @@ ensure
   end
 end
 
+# #433: the App Store sources belong to the app, so an app made from or adopting the template (it records
+# Config/template-base.json, D-074) has its own or none. There the placeholders come from the template's copies
+# kept under tools/tests/fixtures; the template reads its own sources, which those copies must match.
+placeholder_root = File.join(repo_root, "tools/tests/fixtures/store-sources/template-placeholders")
+placeholder_paths = ["App Store/metadata/app.yml", "App Store/review/review-notes.md", "App Store/legal/privacy-policy.md",
+  "App Store/legal/terms-of-use.md"] + %w[en-US ja].flat_map { |locale| ["App Store/metadata/localizations/#{locale}.yml", "App Store/release-notes/#{locale}.md"] }
+# The copies keep the paths under App Store/ without that folder (a workflow-only path never names App Store).
+placeholder_copy = ->(relative) { File.join(placeholder_root, relative.delete_prefix("App Store/")) }
+placeholder = ->(relative) { File.binread(derived ? placeholder_copy.(relative) : File.join(repo_root, relative)) }
+unless derived
+  placeholder_paths.each do |relative|
+    abort "the template placeholder fixture differs from #{relative}" unless File.binread(File.join(repo_root, relative)) == File.binread(placeholder_copy.(relative))
+  end
+end
 %w[en-US ja].each do |locale|
   relative = "App Store/metadata/localizations/#{locale}.yml"
   template_copy_check.call(
     "#{locale} template localization",
-    # A derived app's bootstrap already replaced the template app name with its own.
-    (%w[name subtitle description keywords promotionalText] - (live_identity.empty? ? [] : %w[name])).map { |field_id| [field_id, locale] },
-    relative => File.binread(File.join(repo_root, relative))
+    %w[name subtitle description keywords promotionalText].map { |field_id| [field_id, locale] },
+    relative => placeholder.(relative)
   )
   notes_relative = "App Store/release-notes/#{locale}.md"
   template_copy_check.call(
     "#{locale} template release notes",
     [["releaseNotes", locale]],
-    notes_relative => File.binread(File.join(repo_root, notes_relative))
+    notes_relative => placeholder.(notes_relative)
   )
 end
 template_copy_check.call(
@@ -1808,7 +1830,7 @@ template_copy_check.call(
     "description" => "庭の記録を残します。", "keywords" => "庭,記録", "promotionalText" => "プロモーション文の下書きです!"
   })
 )
-template_app = YAML.safe_load(File.binread(File.join(repo_root, "App Store/metadata/app.yml")))
+template_app = YAML.safe_load(placeholder.("App Store/metadata/app.yml"))
 fixture_app = YAML.safe_load(File.binread(File.join(project, app_path)))
 %w[copyright supportURL privacyPolicyURL].each { |key| fixture_app[key] = template_app.fetch(key) }
 template_copy_check.call(
@@ -1820,13 +1842,13 @@ review_relative = "App Store/review/review-notes.md"
 template_copy_check.call(
   "template review notes",
   [["reviewNotes", nil]],
-  review_relative => File.binread(File.join(repo_root, review_relative))
+  review_relative => placeholder.(review_relative)
 )
 {
   "legal.privacyPolicy" => "App Store/legal/privacy-policy.md",
   "legal.termsOfUse" => "App Store/legal/terms-of-use.md"
 }.each do |field_id, relative|
-  changed_status = File.binread(File.join(repo_root, relative)).sub("Status: Draft", "Status: Confirmed")
+  changed_status = placeholder.(relative).sub("Status: Draft", "Status: Confirmed")
   template_copy_check.call(
     "#{field_id} template legal body after status edit",
     [[field_id, nil]],

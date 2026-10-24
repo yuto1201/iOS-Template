@@ -14,7 +14,9 @@ ruby -rjson -rdigest -rfileutils -ropen3 - "$repo_root" "$tmp" <<'RUBY'
 # encoding: UTF-8
 repo_root, tmp = ARGV
 checker = File.join(repo_root, 'tools/check-store-copy.sh')
-requirements_bytes = File.binread(File.join(repo_root, 'App Store/submission/requirements.json'))
+# #433: the app owns App Store/submission/requirements.json and may have none yet; the template's fixture holds
+# the same requirements.
+requirements_bytes = File.binread(File.join(repo_root, 'tools/tests/fixtures/appstore/requirements.json'))
 
 def fail!(message)
   abort "store-copy-audit: #{message}"
