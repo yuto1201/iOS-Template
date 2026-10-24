@@ -36,7 +36,7 @@ App Storeで選ばれやすい（検索で見つかり、商品ページで入�
 
 ## 流れ
 
-1. 原稿の正本は各アプリの`App Store/metadata/localizations/<locale>.yml`（`name`、`subtitle`、`keywords`、`promotionalText`、`description`）と、What's Newにあたる`App Store/release-notes/<locale>.md`です。文字数の上限は[`App Store/submission/requirements.json`](<../App Store/submission/requirements.json>)を正とします。
+1. 原稿の正本は各アプリの`App Store/metadata/localizations/<locale>.yml`（`name`、`subtitle`、`keywords`、`promotionalText`、`description`）と、What's Newにあたる`App Store/release-notes/<locale>.md`です。文字数の上限は`App Store/submission/requirements.json`を正とします。
 2. `prepare-appstore-assets`が、確認済みの機能からロケールごとの案を2〜3出し、正本の外（例：`.artifacts/appstore-draft/<案>/localizations/`）に置きます。
 3. 各案を検査toolに通し、`error`を直し、残す`warning`には理由を書きます。
 4. 案と検査の結果をユーザーに見せ、明示に1案を選んでもらいます。
