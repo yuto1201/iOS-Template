@@ -66,8 +66,6 @@ required_files=(
   .agents/skills/supabase-ops/scripts/activate.sh
   .agents/skills/supabase-ops/scripts/validate-migrations.sh
   .agents/skills/ios-media-assets/SKILL.md
-  .agents/skills/ios-media-assets/references/audio-and-speech.md
-  .agents/skills/ios-media-assets/references/image-and-video.md
   .agents/skills/ios-media-assets/scripts/check-elevenlabs-capability.sh
   .agents/skills/ios-media-assets/scripts/validate-audio.sh
   .agents/skills/ios-media-assets/scripts/validate-transcript.sh

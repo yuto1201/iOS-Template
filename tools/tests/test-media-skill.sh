@@ -184,4 +184,36 @@ ruby -ryaml -e '
   abort unless value["name"] == "ios-media-assets" && value["description"].is_a?(String) && !value["description"].empty?
 ' "$skill_root/SKILL.md"
 
+# #436: ios-media-assets is a thin adapter over the shared Mac skill elevenlabs-media. It keeps the
+# eight-mode routing (D-023) and the repository gates, names the shared skill, and no longer carries
+# the provider API references, which live in the shared skill.
+[[ ! -e "$skill_root/references/audio-and-speech.md" && ! -e "$skill_root/references/image-and-video.md" ]] || { echo 'Moved provider references remain in the adapter' >&2; exit 1; }
+python3 - "$skill_root/SKILL.md" <<'PY_ADAPTER'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+required = (
+    "`elevenlabs-media`",
+    "`~/.agents/skills/elevenlabs-media/`",
+    "this adapter and D-023 take precedence over the shared skill",
+    "stop as `blocked:environment` before any external work",
+    "`text-to-speech`", "`speech-to-speech`", "`speech-to-text`", "`sound-effect`",
+    "`audio-isolation`", "`music`", "`image`", "`video`",
+    "check-elevenlabs-capability.sh",
+    "tools/provider-preflight.sh",
+    "tools/run-with-secret.sh",
+    "`retry: false`",
+    "`blocked:user`",
+    "`blocked:ops`",
+    "validate-audio.sh", "validate-transcript.sh", "validate-visual.sh",
+    "persistent environment variable",
+    "[`app-icon`](../app-icon/SKILL.md)",
+)
+moved = ("POST /v1/", "references/audio-and-speech.md", "references/image-and-video.md", "HMAC signature")
+failures = [f"adapter lacks {value!r}" for value in required if value not in text]
+failures += [f"adapter keeps moved provider detail {value!r}" for value in moved if value in text]
+if failures:
+    print("\n".join(failures), file=sys.stderr)
+    sys.exit(1)
+PY_ADAPTER
+
 echo 'PASS: one shared media skill routes and validates eight conditional ElevenLabs modes without authenticated provider calls'
