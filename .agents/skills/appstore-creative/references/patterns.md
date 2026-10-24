@@ -134,10 +134,19 @@ pattern's style spec add to it.
 
 - **Composition.** A device fills 68–82% of the tile height; headline and device
   together cover at least 80%, and no empty band is taller than 22%. Anchor the device
-  to an edge rather than floating it with empty bands above and below. At most three
-  visual layers per tile: background, device or illustration, headline with one accent.
-- **Headlines.** At most three lines, two preferred; break lines by hand so they are
-  about equal or deliberately short-long. A word wider than 88% of the tile is broken,
+  to an edge and let it run 5–10% off it rather than floating it with empty bands above
+  and below. Decorations per tile follow the style (D-093): `minimal` 0, `editorial` 2–5,
+  `maximal` 8–14; the style spec's `decorationLimit` sets the number within that range.
+  Objects and popouts may overlap the device and run off the tile's edge.
+- **Device frame.** Draw the frame at the tile's resolution; never stretch frame artwork.
+- **Popouts.** Lift the magnified card right over its own region (1.1–1.2×, turned 2–7° the
+  other way from the device, with a white or accent border), never beside it, so the same
+  view does not show twice.
+- **Backgrounds.** Prefer one strong brand color per tile, or the brand colors changing from
+  tile to tile, with a light grain; pale cream or white grounds make every set look alike.
+- **Headlines.** At most three lines, two preferred, and big: the widest line spans at
+  least 60% of the tile (top apps use about 110–130 px on a 1206 px iPhone tile); break lines
+  by hand so they are about equal or deliberately short-long. A word wider than 88% of the tile is broken,
   resized or hyphenated, never cut off. Display leading at most 1.05 and slightly
   negative tracking (−0.01 to −0.03 em). The sheet marks candidates longer than the
   headline guide.
@@ -156,13 +165,18 @@ pattern's style spec add to it.
 - **Variety.** Adjacent tiles change layout or device placement; the sheet marks a
   layout used on three adjacent tiles. Each tile sells one strength; the sheet marks a
   strength repeated within a pattern.
+- **Thumbnails.** From `thumbnails.png` (220 px wide) alone, say in one sentence what the app
+  is and why someone would install it; otherwise the set is not ready.
+- **Measured marks.** `compose` measures device height, the tallest empty band, the widest
+  headline line, headline contrast and decorations, and marks every tile outside the bar
+  ([compose renderer](compose.md#quality-marks)).
 - **Generic AI look.** Reject before showing: meaningless gradients and light orbs,
   flat single-tone shapes, objects without shadow or texture, the same picture on every
   tile, stock-photo smiles, and anything in the `avoid` list of `brand.json`.
 
 ## iPad
 
-Render iPad 13-inch tiles (2064×2752, bare screen) with the render extension and
-`--device ipad-13`, from a separate `goldie.ipad.config.ts` that starts from
-[assets/ipad.config.ts](../assets/ipad.config.ts). Use the same pattern as iPhone with
-iPad placement, and never stretch an iPhone image. See [extension](extension.md).
+Render iPad 13-inch tiles (2064×2752) with `compose` and `"device": "ipad-13"` in a separate
+declaration. Use the same pattern as iPhone with iPad placement, and never stretch an iPhone
+image. See [compose renderer](compose.md). A Goldie draft starts from
+[assets/ipad.config.ts](../assets/ipad.config.ts) and the [extension](extension.md).

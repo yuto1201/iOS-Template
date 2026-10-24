@@ -4,6 +4,9 @@
 Goldie 0.3.1 lacks (D-077, D-079, D-085). It loads the pinned runtime's published modules and
 changes them only inside its own process; the installed runtime is never written to.
 
+Since D-093 App Store tiles are drawn with the [compose renderer](compose.md). This extension
+remains for Goldie drafts, the `pair` and `panorama` kinds, and the product page header.
+
 ```sh
 tools/appstore-creative-render.sh render --config goldie/ja/goldie.config.ts --device iphone-6.3 --locale ja
 tools/appstore-creative-render.sh render --config goldie/ja/goldie.ipad.config.ts --device ipad-13 --locale ja
@@ -119,9 +122,10 @@ each part must still make sense on its own at thumbnail size.
 
 ### Visual layers
 
-The record marks a tile with more visual layers than `theme.layerLimit` (default 4:
-background, device or illustration, headline, one accent). Layers, popouts and a layer
-coming in from a neighbor each count. Fix the tile or say why in the proposal's `tradeoffs`.
+For a Goldie draft, the record marks a tile with more visual layers than `theme.layerLimit`
+(default 4: background, device or illustration, headline, one accent). Layers, popouts and a
+layer coming in from a neighbor each count. Tiles drawn with the [compose renderer](compose.md)
+follow the style's decoration limit instead (D-093).
 
 The render record adds `layers` (scene, image SHA-256, position, role, tiles, crossing),
 `decorations` (Goldie's image decorations of each scene and the theme: path, SHA-256 and
