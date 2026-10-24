@@ -1039,3 +1039,17 @@
   - 後続のIssueの分け方: (1) 2Dと画像のアダプタの追加（新しいskill、Claudeのalias、test、repository testの割り当て）。(2) 既存の2つのアダプタの改名と、ElevenLabsの`image`・`video`のモードの移動。`AGENTS.md`の3Dの規則のリンクを変えるため、変える文面をユーザーに示し、merge前に承認を得て、その承認をIssueのコメントに記録する（D-075）。後続のIssueは`specs/decisions.md`を変えない。
 - Consequence: 派生アプリでは、テンプレートの取り込み（D-074、D-078）で、古い名前のアダプタが無くなり、新しい名前のアダプタが入る。Macの本体はGitの管理の外にあり、派生アプリに届かない（D-089と同じ）。改名が済むまでは、Macの本体に今のアダプタの名前も書いておく。
 - Related Issue: #449
+
+## D-091: 画像の静止画はCodexの画像生成のskillで作り、ローポリの分岐先を無くす
+
+- Date: 2026-10-25
+- Status: 確定
+- Supersedes: D-090のうち、画像の分岐先を`image-asset-low-poly`、`image-asset-low-poly-flower`、`image-asset-elevenlabs`とすることと、画像のCodexの`image_gen`を別のskillにせず入口の中に書くこと。D-090のほかの部分（名前の決まり、種類ごとの入口とアダプタ、ElevenLabsを種類ごとに分けること、後続のIssue）は維持する。
+- Context: 2026-10-25、ユーザーは、ローポリの画像の2つのskillを削除し、代わりにCodexでの画像生成のskillを作ると決めた。ローポリは、画像の作り方の一つの画風であり、道具としての分岐先にする理由が無かった。Codexの組み込みの`image_gen`の使い方（依頼書、`codex exec`、評価と直し）は、入口に書くには長い。同じ日に、Macの本体`image-asset-codex`で、透過のPNGを1枚作れることを確かめた。
+- Decision:
+  - 画像の分岐先は、`image-asset-codex`（Codexの組み込みの`image_gen`。ラスター画像の全般と、既存の画像の直し）と`image-asset-elevenlabs`（ユーザーがElevenLabsを指定したとき）とする。単純な図形のSVGは、引き続き入口`design-image-asset`の中に書く。
+  - ローポリ、水彩、フラットなどの画風は、分岐先にせず、`image-asset-codex`の依頼書で指定する。
+  - `image-asset-codex`では、Claudeが依頼書を書き、`codex exec`でCodexに作らせ、できた画像をClaudeが開いて評価する（ClaudeをメインとしてCodexをサブエージェントとして使う方針）。直しは最大5ラウンドとし、決まらなければユーザーに見せて止まる。CLIの経路や別のモデルには、ユーザーが明示したときだけ切り替える。
+  - `ios-design-image-asset`は、経路を`codex`、`vector`、`elevenlabs`のいずれかとして記録する（#450）。
+- Consequence: Macの`image-asset-low-poly`と`image-asset-low-poly-flower`は削除した。後続のIssueは`specs/decisions.md`を変えない。
+- Related Issue: #455
