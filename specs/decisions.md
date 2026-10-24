@@ -1022,3 +1022,20 @@
   - ElevenLabsのAPI keyは、Mac全体でもKeychainの`ios-template/template-app/elevenlabs/production/api-key`（`docs/security.md`の名前）に置き、平文のファイルに置かない。
 - Consequence: Macの本体はGitの管理の外にあり、テンプレートの取り込み（D-074、D-078）では派生アプリに届かない。派生アプリやCIの環境で本体が無いときは、アダプタが止める。repository testは本体の存在を検査せず、アダプタの内容と、移した手順がアダプタに残っていないことを検査する。`AGENTS.md`の3Dの規則とリンク（`ios-3d-assets`）は変えない。
 - Related Issue: #435, #436, #438
+
+## D-090: アセットのスキルを種類ごとの入口・分岐先・アダプタの名前で揃え、2Dと画像にもアダプタを置く
+
+- Date: 2026-10-25
+- Status: 確定
+- Supersedes: D-089のうち、2Dアニメーションにリポジトリのアダプタを置かないこと、本体の名前（`3d-asset-design`、`elevenlabs-media`、`2d-motion-design`ほか）、ElevenLabsのメディアを1つの本体にまとめること。D-023のうち、ElevenLabsの8つのモードを`ios-media-assets`の1つのskillへまとめること（8つのモードと、各モードの権利・同意・プライバシー・契約・課金の事前確認は維持し、種類ごとのアダプタへ分ける）。D-089のほかの部分（本体は`~/.agents/skills/`に1つ、このリポジトリではアダプタが優先、本体が読めないときは`blocked:environment`、ElevenLabsのAPI keyはKeychain）、D-082、D-024は維持する。
+- Context: 2026-10-25、ユーザーは、3D・2D・画像・音声のスキルを同じ形の名前で揃え、テンプレートに2Dと画像のアダプタも作ると決めた。画像は、Codexの組み込みの`image_gen`やローポリのskillで作ったものが、権利の記録や大きさの検証なしにアプリへ入れられる隙間があった。2Dは、Riveの依存（`RiveRuntime`）と有料のプラン、アプリに入れる動画の容量とダーク用の版など、リポジトリで通す条件がある。ElevenLabsは、音声・画像・動画をそれぞれ分けて作ると決めた。2026-10-24から、ClaudeをメインのエージェントとしてCodexとGrokをサブエージェントとして使う方針である。
+- Decision:
+  - 名前は、Macの入口を`design-<種類>-asset`、入口から呼ばれるskillを`<種類>-asset-<道具>`、リポジトリのアダプタを`ios-design-<種類>-asset`とする。種類は`3d`、`2d`、`image`、`audio`。手順が短い道具（3DのBlender・Codex・Tripoの経路、画像のCodexの`image_gen`とSVG）は、別のskillにせず入口の中に書く。
+  - 3D: 入口`design-3d-asset`、分岐先`3d-asset-repair-model`、`3d-asset-repair-texture`、アダプタ`ios-design-3d-asset`（`ios-3d-assets`から改名）。
+  - 2D: 入口`design-2d-asset`、分岐先`2d-asset-swiftui`、`2d-asset-remotion`、`2d-asset-web`、`2d-asset-rive`、`2d-asset-elevenlabs`、アダプタ`ios-design-2d-asset`（新規）。
+  - 画像: 入口`design-image-asset`、分岐先`image-asset-low-poly`、`image-asset-low-poly-flower`、`image-asset-elevenlabs`、アダプタ`ios-design-image-asset`（新規）。必須の新しいアプリのアイコンは、引き続き`app-icon`で作る。
+  - 音声: 入口`design-audio-asset`、分岐先`audio-asset-elevenlabs`、アダプタ`ios-design-audio-asset`（`ios-media-assets`から改名）。
+  - ElevenLabsは種類ごとに分ける。音声の6つのモード（`text-to-speech`、`speech-to-speech`、`speech-to-text`、`sound-effect`、`audio-isolation`、`music`）は音声、`image`は画像、`video`は2Dのアダプタが受け持つ。各モードの事前確認とマニフェストの検証は、受け持つアダプタが持つ。
+  - 後続のIssueの分け方: (1) 2Dと画像のアダプタの追加（新しいskill、Claudeのalias、test、repository testの割り当て）。(2) 既存の2つのアダプタの改名と、ElevenLabsの`image`・`video`のモードの移動。`AGENTS.md`の3Dの規則のリンクを変えるため、変える文面をユーザーに示し、merge前に承認を得て、その承認をIssueのコメントに記録する（D-075）。後続のIssueは`specs/decisions.md`を変えない。
+- Consequence: 派生アプリでは、テンプレートの取り込み（D-074、D-078）で、古い名前のアダプタが無くなり、新しい名前のアダプタが入る。Macの本体はGitの管理の外にあり、派生アプリに届かない（D-089と同じ）。改名が済むまでは、Macの本体に今のアダプタの名前も書いておく。
+- Related Issue: #449
