@@ -163,8 +163,8 @@
     },
     {
       "domain": "foundation",
-      "paths": ["Config/template-base.json", "docs/review-prompt.md", "tools/tests/test-adopted-app-imported-tests.sh", "tools/tests/test-foundation.sh", "tools/tests/test-tracked-credential-scan.sh"],
-      "prefixes": []
+      "paths": ["docs/review-prompt.md", "tools/tests/test-adopted-app-imported-tests.sh", "tools/tests/test-foundation.sh", "tools/tests/test-tracked-credential-scan.sh"],
+      "prefixes": ["Config/template-base."]
     },
     {
       "domain": "ios-evidence-exhaustive",
