@@ -71,14 +71,16 @@ adapted from ParthJadhav/app-store-screenshots (see [upstream](upstream.md)):
   size. Two patterns of one proposal never share it.
 - Every token color and font comes from `brand.json`; anything else needs a
   `deviations` entry naming it with the reason, or the spec is refused.
-- `decorationLimit` is the number of decorations one tile may carry; `failures` are
+- `decorationLimit` is the number of decorations one tile may carry, from the style class
+  (D-093): `minimal` 0, `editorial` 2–5, `maximal` 8–14; `failures` are
   the conditions that make a render wrong, checked by eye with the
   [quality bar](patterns.md#quality-bar) before the user sees it.
 
 ## Research record
 
-Before each proposal, look at three to five top apps of the same category (before.click,
-the App Store) and write what techniques they use:
+Before each proposal, collect the images of three to five top apps of the same category
+(before.click, the App Store), lay them out beside your tiles with `research-sheet`
+([research](research.md)), and write what techniques they use:
 
 ```json
 {

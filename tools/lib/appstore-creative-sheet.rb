@@ -485,7 +485,8 @@ module AppStoreCreativeSheet
     fonts = object!(style["fonts"], "#{label} fonts", %w[headline], %w[body])
     fonts.each { |role, family| text!(family, "#{label} #{role} font", required: true) }
     limit = style["decorationLimit"]
-    fail!("#{label} decorationLimit must be an integer from 0 to 10") unless limit.is_a?(Integer) && (0..10).cover?(limit)
+    # #434 (D-093): up to 14, the top of the maximal style class (minimal 0, editorial 2-5, maximal 8-14).
+    fail!("#{label} decorationLimit must be an integer from 0 to 14") unless limit.is_a?(Integer) && (0..14).cover?(limit)
     texts!(style["voice"], "#{label} voice")
     texts!(style["failures"], "#{label} failures")
     deviations = style.fetch("deviations", [])

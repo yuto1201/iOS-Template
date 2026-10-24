@@ -17,6 +17,14 @@ CC BY 4.0. Bundled fonts are SIL OFL 1.1. Keep the npm package's
 using a bezel-free layout avoids using that device artwork. No frame/font binaries
 are vendored into this template skill.
 
+## Compose renderer (D-093)
+
+`tools/appstore-creative-compose.sh` is written for this template; it uses no Goldie code. It
+lays tiles out in HTML and CSS and asks the installed Google Chrome (headless) for the image,
+draws the device frame itself, and bundles no browser, frame or font. The style classes of its
+decoration limit (minimal, editorial, maximal) follow the ParthJadhav/app-store-screenshots
+quality bar below.
+
 ## Style spec format and quality bar (D-085)
 
 The style spec format ([proposal](proposal.md#style-spec-one-per-pattern)) and the

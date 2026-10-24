@@ -2,8 +2,9 @@
 name: appstore-creative
 description: >-
   App Store用のスクリーンショットとプレビュー動画を、まずいくつかのパターンを提案して
-  ユーザーに選んでもらい、選んだものだけを作り込む（D-077）。Goldieを土台に、2画面、
-  連続背景、使用シーン、生成した背景などを組み合わせる。ストア用スクショの作成・装飾・
+  ユーザーに選んでもらい、選んだものだけを作り込む（D-077）。面はHTMLとCSSで組んで
+  headless Chromiumで書き出し（D-093）、大きな見出し、端からはみ出す端末、拡大カード、
+  使用シーン、生成した背景などを組み合わせる。ストア用スクショの作成・装飾・
   見出しや背景の変更に使う。通常のUI検証スクショには使わない。
 ---
 
@@ -11,8 +12,10 @@ description: >-
 
 Make App Store images that sell the app, not just frame one screenshot under a
 headline. Propose several whole-set patterns first, let the user choose, then build
-only the chosen one (D-077). Official **Goldie 0.3.1** is the renderer; the template
-adds what Goldie lacks. Read [provenance](references/upstream.md) before installing
+only the chosen one (D-077). Tiles are declared in JSON, laid out in HTML and CSS and drawn
+by headless Chromium with `tools/appstore-creative-compose.sh` (D-093, see
+[compose renderer](references/compose.md)). Official **Goldie 0.3.1** imports the captures and
+may sketch a quick draft. Read [provenance](references/upstream.md) before installing
 or updating. This is a local asset workflow, not App Store Connect submission.
 
 ## Choose only the requested work
@@ -46,10 +49,12 @@ around the app, a story across the tiles and real illustrations do.
    captures with
    `tools/appstore-creative-sheet.sh check --brand goldie/brand.json --captures goldie/ja/out/raw/iphone-6.3/manifest.json`. See
    [identity and style specs](references/proposal.md#identity-brandjson).
-3. **Research.** Look at three to five top apps of the same category (before.click
-   and the App Store) every time, and record only the techniques they use. Never copy
-   their designs, illustrations, copy or logos. See
-   [research](references/proposal.md#research-record).
+3. **Research.** Every time, collect the real images (the first five) of three to five top
+   apps of the same category from before.click and the App Store with `curl`, lay them out
+   with `tools/appstore-creative-compose.sh research-sheet`, and record only the techniques
+   they use. Never copy their designs, illustrations, copy or logos, and never commit their
+   images. See [research](references/research.md) and the
+   [research record](references/proposal.md#research-record).
 4. **Write one style spec per pattern** from `brand.json`, in the format and against
    the [quality bar](references/patterns.md#quality-bar) adapted from
    ParthJadhav/app-store-screenshots. A color or font outside `brand.json` needs a
@@ -70,7 +75,11 @@ around the app, a story across the tiles and real illustrations do.
    four by default; five or six only when the ideas do not fit in four) that
    differ in world, story and composition, not only color. Mark exactly one as
    recommended, with the reason: the one you think is best. Draw every tile for real
-   with Goldie and the render extension at full size, Japanese iPhone only. Headlines
+   with `tools/appstore-creative-compose.sh compose` at full size, Japanese iPhone only.
+   Before building the sheet, put your tiles beside the references at the same height
+   (`research-sheet --mine`) and fix what they do better, and check `thumbnails.png`: from
+   the 220 px thumbnails alone, say in one sentence what the app is and why someone would
+   install it. Headlines
    are provisional: give two or more candidates per tile and locale, and align them
    with the [screenshot headline section](../../../docs/store-copy-aso.md#スクリーンショットの見出し)
    of the App Store copy guide (ASO). Build the sheet:
@@ -114,11 +123,12 @@ Details: [proposal sheet](references/proposal.md), [tile kinds](references/patte
 | `scene` | The real device inside a generated setting | generated `backgroundImage` (extension) |
 | `concept` | A generated image and headline, no device | `concept` layout (extension) |
 
-Every App Store tile is rendered with `tools/appstore-creative-render.sh` (see
-[extension](references/extension.md)). The App Store iPhone size, iPhone 6.3-inch
-(1206×2622, `--device iphone-6.3`, D-079), and iPad 13-inch are extension devices, and
-Goldie 0.3.1 draws image layers over the headline, so every full-tile generated image
-(a generated background, `continuous`, `scene`, `concept`) needs the extension too.
+Every App Store tile is drawn with `tools/appstore-creative-compose.sh` (D-093, see
+[compose renderer](references/compose.md)) at the App Store sizes, iPhone 6.3-inch
+(1206×2622, D-079) and iPad 13-inch (2064×2752): a big headline, a device that runs off an
+edge, popouts lifted right over their region, and adopted materials in front of or behind the
+device. `pair` and `panorama` are still drawn with Goldie and the
+[render extension](references/extension.md), which also draws the product page header.
 
 ## Rules (D-077)
 
