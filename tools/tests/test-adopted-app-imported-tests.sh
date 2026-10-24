@@ -140,7 +140,7 @@ if [[ "$group" == own-project* ]]; then
   own="$work/own-project-app"
   make_own_project_app "$own"
   case "$group" in
-    own-project) own_tests=(test-foundation.sh test-ios-3d-assets-skill.sh test-ios-system-experiences-skill.sh
+    own-project) own_tests=(test-foundation.sh test-ios-design-3d-asset-skill.sh test-ios-system-experiences-skill.sh
       test-report-template-issue-skill.sh test-appstore-package.sh test-store-copy-audit.sh test-appstore-metadata-save.sh) ;;
     own-project-preparation) own_tests=(test-appstore-preparation.sh) ;;
     *) own_tests=(test-appstore-creative-preview.sh) ;;
