@@ -74,7 +74,10 @@ cat >"$work/app/spec.json" <<'EOF'
              {"src":"goldie/assets/sun.png","x":600,"y":2200,"width":100,"z":"front"},
              {"src":"goldie/assets/sun.png","x":800,"y":2200,"width":100,"z":"front"}]},
   {"id":"midgray","background":{"gradient":{"from":"#000000","to":"#FFFFFF","angle":90}},
-   "headline":{"lines":["中ほどの灰色の見出し"],"size":90,"color":"#767676","top":300,"highlight":{"text":"灰色","color":"#757575"}}}]}
+   "headline":{"lines":["中ほどの灰色の見出し"],"size":90,"color":"#767676","top":300,"highlight":{"text":"灰色","color":"#757575"}}},
+  {"id":"turned","background":{"color":"#FFD60A"},
+   "headline":{"lines":["傾けた端末"],"size":120,"color":"#1C1C1E","top":100},
+   "device":{"capture":"capture.png","width":826,"centerX":603,"top":450,"rotate":15}}]}
 EOF
 compose() { "$tool" compose --spec "$1" --brand "$work/app/brand.json" --provenance "$work/app/goldie/assets/provenance.json" --out "$2"; }
 compose "$work/app/spec.json" "$work/out" >"$work/compose.json" || fail "compose failed: $(cat "$work/compose.json")"
@@ -259,7 +262,7 @@ RECORD="$record" OUT="$work/out" ruby -rjson -rdigest -e '
 ruby -r"$repo_root/tools/lib/appstore-creative-sheet.rb" -e '
   index = AppStoreCreativeSheet.render_index([ARGV[0]], File.dirname(ARGV[0]))
   inputs = index.values.flatten.map { |entry| File.basename(entry["path"]) }.uniq.sort
-  abort "render index #{inputs}" unless index.size == 3 && inputs == %w[leaf.png sun.png]
+  abort "render index #{inputs}" unless index.size == 4 && inputs == %w[leaf.png sun.png]
 ' "$record" || fail 'the proposal sheet does not read the record as renders'
 # No network: every page allows only file and data URLs, names no remote resource, and a URL is refused.
 for page in "$work/out/html/"*.html; do
@@ -331,8 +334,11 @@ RECORD="$record" ruby -rjson -e '
   marks = tiles[2]["marks"].join("\n")
   # Both ends of the gradient clear 4.5:1 against #767676 and #757575; the gray in the middle under the text does not.
   ["headline contrast is", "highlight contrast is"].each { |text| abort "tile 3 lacks #{text}: #{marks}" unless marks.include?(text) }
+  # Unturned, this device would fill 66% of the height (under the 68% bar); turned 15 degrees it covers about
+  # 72%, so the turned tile has no device mark.
+  abort "tile 4 marks the turned device: #{tiles[3]["marks"]}" if tiles[3]["marks"].any? { |mark| mark.start_with?("the device fills") }
 ' || fail 'the quality marks differ'
-[[ "$(px size "$work/out/thumbnails.png")" == "$((3 * 244 + 24))x$(( (220 * 2622 + 1205) / 1206 + 48 ))" ]] ||
+[[ "$(px size "$work/out/thumbnails.png")" == "$((4 * 244 + 24))x$(( (220 * 2622 + 1205) / 1206 + 48 ))" ]] ||
   fail "the thumbnail sheet is $(px size "$work/out/thumbnails.png")"
 
 # AC-7: reference images are laid out per app (first five), beside the proposal, and never inside Git.
@@ -343,7 +349,7 @@ done
 "$tool" research-sheet --refs "$work/refs" --mine "$work/out" --out "$work/research" >/dev/null || fail 'the research sheet failed'
 RESEARCH="$work/research/research-sheet.json" ruby -rjson -e '
   rows = JSON.parse(File.read(ENV.fetch("RESEARCH"))).fetch("rows")
-  abort "rows #{rows.map { |row| [row["label"], row["images"].size] }}" unless rows.map { |row| [row["label"], row["images"].size] } == [["alpha", 5], ["beta", 5], ["proposal", 3]]
+  abort "rows #{rows.map { |row| [row["label"], row["images"].size] }}" unless rows.map { |row| [row["label"], row["images"].size] } == [["alpha", 5], ["beta", 5], ["proposal", 4]]
   abort "sixth image used" if rows.any? { |row| row["images"].any? { |image| File.basename(image["path"]) == "6.png" } }
 ' || fail 'the research sheet rows differ'
 git init -q "$work/repo"

@@ -512,14 +512,18 @@ module AppStoreCreativeCompose
     marks = []
     occupied = []
     if (shown = tile["device"])
+      # The drawn device is turned about its center, so its vertical extent is that of the turned corners.
       g = device_geometry(plan, shown)
-      visible = [g["top"] + g["height"], height].min - [g["top"], 0].max
+      angle = g["rotate"] * Math::PI / 180
+      half = (g["width"] * Math.sin(angle).abs + g["height"] * Math.cos(angle).abs) / 2.0
+      top, bottom = g["centerY"] - half, g["centerY"] + half
+      visible = [bottom, height].min - [top, 0].max
       ratio = visible / height
       unless (QUALITY["deviceHeightMin"]..QUALITY["deviceHeightMax"]).cover?(ratio)
         marks << "the device fills #{(ratio * 100).round}% of the height; the bar is " \
                  "#{(QUALITY['deviceHeightMin'] * 100).round}-#{(QUALITY['deviceHeightMax'] * 100).round}%"
       end
-      occupied << [g["top"], g["top"] + g["height"]]
+      occupied << [top, bottom]
     end
     lines = metrics["lines"] || []
     widest = lines.map { |box| box["width"] }.max.to_f
