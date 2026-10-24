@@ -1,6 +1,6 @@
 ---
-name: ios-3d-assets
-description: Choose the iOS 3D authoring route by model complexity (D-082) — Claude in Blender for very simple shapes, the Codex loop (gpt-6.1-sol reference images and gpt-6-astra models, both xhigh) for simple models and simple part motion, and Tripo in the browser for complex or skeleton-rigged models — then integrate and verify the accepted asset against the app budgets. This repository adapter defers the authoring procedures to the shared Mac skill 3d-asset-design.
+name: ios-design-3d-asset
+description: Choose the iOS 3D authoring route by model complexity (D-082) — Claude in Blender for very simple shapes, the Codex loop (gpt-6.1-sol reference images and gpt-6-astra models, both xhigh) for simple models and simple part motion, and Tripo in the browser for complex or skeleton-rigged models — then integrate and verify the accepted asset against the app budgets. This repository adapter defers the authoring procedures to the shared Mac skill design-3d-asset.
 ---
 
 # iOS 3D Assets
@@ -9,7 +9,7 @@ Use this skill when an approved Issue requires creating, generating, or structur
 
 ## Shared authoring skill
 
-This skill is the repository adapter. The authoring procedures (the Claude route in Blender, the Codex reference-image and model loops, the style reference for a set, and the Tripo screen procedure) live in the shared Mac skill `3d-asset-design` at `~/.agents/skills/3d-asset-design/`, which Claude and Codex both read. In this repository, D-082 and `AGENTS.md` take precedence over the shared skill, and this adapter's budgets, verification, and evidence rules apply to every route.
+This skill is the repository adapter. The authoring procedures (the Claude route in Blender, the Codex reference-image and model loops, the style reference for a set, and the Tripo screen procedure) live in the shared Mac skill `design-3d-asset` at `~/.agents/skills/design-3d-asset/`, which Claude and Codex both read. In this repository, D-082 and `AGENTS.md` take precedence over the shared skill, and this adapter's budgets, verification, and evidence rules apply to every route.
 
 When the shared skill cannot be read in the current environment, stop as `blocked:environment` before authoring. Do not reconstruct its procedures from memory or substitute another route.
 

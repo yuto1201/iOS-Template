@@ -1,11 +1,11 @@
 ---
 name: ios-design-image-asset
-description: Use when an approved Issue requires a still image to enter the iOS app (an illustration, background, texture, sprite, or decorative image); this repository adapter keeps the contract, validation, and evidence and defers the authoring procedures to the shared Mac skill design-image-asset (D-090). Not for the required new-app icon (use app-icon), App Store screenshots (use appstore-creative), 2D animation (use ios-design-2d-asset), or 3D (use ios-3d-assets).
+description: Use when an approved Issue requires a still image to enter the iOS app (an illustration, background, texture, sprite, or decorative image); this repository adapter keeps the contract, validation, and evidence and defers the authoring procedures to the shared Mac skill design-image-asset (D-090). Not for the required new-app icon (use app-icon), App Store screenshots (use appstore-creative), 2D animation (use ios-design-2d-asset), or 3D (use ios-design-3d-asset).
 ---
 
 # iOS Image Assets
 
-Use this skill when an approved Issue requires a still image to enter the app. Do not route the required new-app icon through this skill; use [`app-icon`](../app-icon/SKILL.md). App Store screenshots use `appstore-creative`, 2D animation uses `ios-design-2d-asset`, and 3D uses `ios-3d-assets`.
+Use this skill when an approved Issue requires a still image to enter the app. Do not route the required new-app icon through this skill; use [`app-icon`](../app-icon/SKILL.md). App Store screenshots use `appstore-creative`, 2D animation uses `ios-design-2d-asset`, and 3D uses `ios-design-3d-asset`.
 
 ## Shared authoring skill
 
@@ -15,7 +15,7 @@ When the shared skill cannot be read in the current environment, stop as `blocke
 
 ## Route
 
-Choose one route per image revision and record it in the Issue/PR evidence as `codex`, `vector`, or `elevenlabs`. The `codex` route uses Codex's built-in `image_gen` as the shared skill describes, and the style (for example low-poly) is written in the brief, not chosen as a route; never switch to the CLI path or another model unless the user asks for it. The `elevenlabs` route also checks `.agents/skills/ios-media-assets/scripts/check-elevenlabs-capability.sh --capability image`, runs `tools/provider-preflight.sh`, and passes the key only through `tools/run-with-secret.sh`.
+Choose one route per image revision and record it in the Issue/PR evidence as `codex`, `vector`, or `elevenlabs`. The `codex` route uses Codex's built-in `image_gen` as the shared skill describes, and the style (for example low-poly) is written in the brief, not chosen as a route; never switch to the CLI path or another model unless the user asks for it. The `elevenlabs` route also checks `.agents/skills/ios-design-audio-asset/scripts/check-elevenlabs-capability.sh --capability image`, runs `tools/provider-preflight.sh`, and passes the key only through `tools/run-with-secret.sh`.
 
 ## Contract
 
@@ -23,7 +23,7 @@ Before authoring, the Issue states the purpose, the destination (asset catalog n
 
 ## Validation
 
-Validate every accepted raster image as a PNG with `.agents/skills/ios-media-assets/scripts/validate-visual.sh` and an `image` manifest from `.agents/skills/ios-media-assets/templates/visual-manifest.yml`; record the route and the rights basis in its `model` and `licenseNote`. A vector asset is exported to PNG for that check, or the Issue names its own check. Then verify the image in the app in Light and Dark appearance through `ios-verify` and the opposite-model review gates for the Issue's stage.
+Validate every accepted raster image as a PNG with `.agents/skills/ios-design-image-asset/scripts/validate-visual.sh` and an `image` manifest from `.agents/skills/ios-design-image-asset/templates/visual-manifest.yml`; record the route and the rights basis in its `model` and `licenseNote`. A vector asset is exported to PNG for that check, or the Issue names its own check. Then verify the image in the app in Light and Dark appearance through `ios-verify` and the opposite-model review gates for the Issue's stage.
 
 ## Evidence and boundary
 

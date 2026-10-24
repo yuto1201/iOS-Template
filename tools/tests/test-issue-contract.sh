@@ -759,8 +759,8 @@ app-icon
 appstore-creative
 cross-model-review
 external-ops
-ios-3d-assets
-ios-media-assets
+ios-design-3d-asset
+ios-design-audio-asset
 ios-system-experiences
 ios-verify
 plan-issue-batch

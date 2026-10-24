@@ -21,7 +21,7 @@ provider_status=${4:-}
 /usr/bin/ruby -ryaml -e '
   text=File.binread(ARGV.fetch(0)); match=text.match(/\A---\n(.*?)\n---\n/m) or abort
   value=YAML.safe_load(match[1], permitted_classes: [], aliases: false)
-  abort unless value.is_a?(Hash) && value["name"] == "ios-media-assets"
+  abort unless value.is_a?(Hash) && value["name"] == "ios-design-audio-asset"
 ' "$skill_root/SKILL.md" 2>/dev/null || fail 'repository media skill is invalid'
 
 case "$provider_status" in

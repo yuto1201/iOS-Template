@@ -1,0 +1,4 @@
+interface:
+  display_name: "iOS Audio Assets"
+  short_description: "Create and validate conditional ElevenLabs app audio"
+  default_prompt: "Use $ios-design-audio-asset to create or transform the audio asset required by this Issue."

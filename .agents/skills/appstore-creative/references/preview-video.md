@@ -150,6 +150,6 @@ rules; a passing check is not a substitute for reading them before a real submis
 ## Sound and submission
 
 Previews are silent by default; music is made only when the user asks for it
-(`ios-media-assets`) and is named as the preview scene's `audio`. Taking an adopted
+(`ios-design-audio-asset`) and is named as the preview scene's `audio`. Taking an adopted
 preview into the release package and App Store Connect is a separate follow-up of
 D-077. Check Apple's current preview requirements before a real submission.
