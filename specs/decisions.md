@@ -1007,3 +1007,18 @@
     4. skillとtest: supabase-ops skillのdeployの手順、`supabase/functions/`のmanifestのdomainと、functionごとのlocalのtestの規則。
 - Consequence: Supabaseを採用したアプリは、承認のある`strict`のIssueで、列挙したfunctionだけを設定済みのProjectへdeployできる。秘密の値はユーザーの手元から出ない。実装は上の後続のFeature Issueで行い、それまでは今までどおりdeployのoperationは拒否される。
 - Related Issue: #330
+
+## D-089: 作り方のスキルの本体をMacの共通の場所に置き、リポジトリのskillを通す条件のアダプタにする
+
+- Date: 2026-10-24
+- Status: 確定
+- Supersedes: なし。D-023（`ios-media-assets`が8つのモードへ振り分けること）、D-082（3Dの作成経路と、3D作業を`ios-3d-assets`へrouteすること）、D-024（ClaudeとCodexの同じ権限）を維持し、作り方の手順の置き場所だけを決める。
+- Context: 2026-10-24、ユーザーは、3D、2Dアニメーション、音声、画像生成のスキルを、このリポジトリ以外の作業でも使えるMacの標準のスキルにすると決めた。それまで、3Dの作り方とElevenLabsのAPIの詳細はリポジトリのskill（`ios-3d-assets`、`ios-media-assets`）にあり、Mac側には内容の重なる別のコピー（`generating-elevenlabs-audio`など）が複数の場所にあった。Codexは`~/.claude/skills`を読まないため、Claudeの場所だけに置いたskillはCodexから見えなかった。同じ日に`codex exec --sandbox read-only`で、Codexが`$HOME/.agents/skills`と`~/.codex/skills`のskillを読むことを確かめた。
+- Decision:
+  - 作り方の本体（道具や経路の選び方と手順、providerのAPIの詳細）は、Mac全体の共通の場所`~/.agents/skills/<name>/`に実体を1つだけ置く。Claudeからは`~/.claude/skills/<name>`の相対symlink（`../../.agents/skills/<name>`）で読む。同じ名前のコピーを別の場所に置かない。
+  - リポジトリのskillは、通す条件のアダプタにする。使ってよい条件、予算、検証、証拠、秘密情報の扱い、決定事項との対応を持ち、作り方の手順を重ねて書かない。アダプタの名前とパスは変えない。
+  - このリポジトリの中では、アダプタ、決定事項（D-023、D-082）、`AGENTS.md`が本体より優先する。本体が読めない環境では、アダプタが`blocked:environment`で止め、手順を推測で補わない。
+  - 対象は、3D（本体`3d-asset-design`、アダプタ`ios-3d-assets`、#435）とElevenLabsのメディア（本体`elevenlabs-media`、アダプタ`ios-media-assets`、#436）とする。2Dアニメーション（`2d-motion-design`と、`swiftui-motion`、`remotion-video`、`web-motion`、`rive-motion`）は、リポジトリにアダプタを置かず、Macの本体だけとする。新しい種類を足すときも、同じ分け方にする。
+  - ElevenLabsのAPI keyは、Mac全体でもKeychainの`ios-template/template-app/elevenlabs/production/api-key`（`docs/security.md`の名前）に置き、平文のファイルに置かない。
+- Consequence: Macの本体はGitの管理の外にあり、テンプレートの取り込み（D-074、D-078）では派生アプリに届かない。派生アプリやCIの環境で本体が無いときは、アダプタが止める。repository testは本体の存在を検査せず、アダプタの内容と、移した手順がアダプタに残っていないことを検査する。`AGENTS.md`の3Dの規則とリンク（`ios-3d-assets`）は変えない。
+- Related Issue: #435, #436, #438
