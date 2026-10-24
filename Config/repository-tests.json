@@ -108,6 +108,8 @@
     {
       "domain": "bootstrap-assets",
       "paths": [
+        ".claude/skills/ios-design-2d-asset",
+        ".claude/skills/ios-design-image-asset",
         "AGENTS.md",
         "Config/dedicated-simulators.json",
         "Config/ownership.yml",
@@ -126,6 +128,8 @@
         ".agents/skills/app-bootstrap/",
         ".agents/skills/app-icon/",
         ".agents/skills/ios-3d-assets/",
+        ".agents/skills/ios-design-2d-asset/",
+        ".agents/skills/ios-design-image-asset/",
         ".agents/skills/ios-media-assets/"
       ]
     },
@@ -493,6 +497,8 @@
     {"path": "tools/tests/test-feedback-worker.sh", "domains": ["app-feedback"]},
     {"path": "tools/tests/test-foundation.sh", "domains": ["foundation"]},
     {"path": "tools/tests/test-ios-3d-assets-skill.sh", "domains": ["bootstrap-assets"]},
+    {"path": "tools/tests/test-ios-design-2d-asset-skill.sh", "domains": ["bootstrap-assets"]},
+    {"path": "tools/tests/test-ios-design-image-asset-skill.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-ios-evidence.sh", "domains": ["ios-evidence-exhaustive"]},
     {"path": "tools/tests/test-ios-runner-allocation.sh", "domains": ["ios-verification"]},
     {"path": "tools/tests/test-ios-runner-baseline.sh", "domains": ["ios-verification"]},
