@@ -68,7 +68,7 @@ write(project, 'GardenNotes/Journal.swift', "struct Journal { var entries: [Stri
 # records Config/template-base.json, D-074, or its Identity bootstrap's Config/app-identity.json) owns its
 # project, which may have its own Info.plist, targets and packages, so there the copy comes from the template's
 # project kept under tools/tests/fixtures; the template copies its own project, which the fixture must match.
-template_project = File.join(root, 'tools/tests/fixtures/appstore/template-project')
+template_project = File.join(root, 'tools/tests/fixtures/store-sources/template-project')
 derived = %w[Config/template-base.json Config/app-identity.json].any? { |record| File.file?(File.join(root, record)) }
 project_source = derived ? template_project : root
 unless derived

@@ -382,7 +382,7 @@ FileUtils.mkdir_p(File.dirname(pbx_path))
 # Identity bootstrap's Config/app-identity.json) owns its project, which may have its own Info.plist, targets
 # and packages, so there the copy comes from the template's project kept under tools/tests/fixtures, and the
 # App Store placeholders below from the copies there; the template reads its own, which the copies must match.
-template_project = File.join(repo_root, "tools/tests/fixtures/appstore/template-project")
+template_project = File.join(repo_root, "tools/tests/fixtures/store-sources/template-project")
 derived = %w[Config/template-base.json Config/app-identity.json].any? { |record| File.file?(File.join(repo_root, record)) }
 project_source = derived ? template_project : repo_root
 unless derived
@@ -1789,13 +1789,15 @@ end
 # #433: the App Store sources belong to the app, so an app made from or adopting the template (it records
 # Config/template-base.json, D-074) has its own or none. There the placeholders come from the template's copies
 # kept under tools/tests/fixtures; the template reads its own sources, which those copies must match.
-placeholder_root = File.join(repo_root, "tools/tests/fixtures/appstore/template-placeholders")
+placeholder_root = File.join(repo_root, "tools/tests/fixtures/store-sources/template-placeholders")
 placeholder_paths = ["App Store/metadata/app.yml", "App Store/review/review-notes.md", "App Store/legal/privacy-policy.md",
   "App Store/legal/terms-of-use.md"] + %w[en-US ja].flat_map { |locale| ["App Store/metadata/localizations/#{locale}.yml", "App Store/release-notes/#{locale}.md"] }
-placeholder_source = derived ? placeholder_root : repo_root
+# The copies keep the paths under App Store/ without that folder (a workflow-only path never names App Store).
+placeholder_copy = ->(relative) { File.join(placeholder_root, relative.delete_prefix("App Store/")) }
+placeholder = ->(relative) { File.binread(derived ? placeholder_copy.(relative) : File.join(repo_root, relative)) }
 unless derived
   placeholder_paths.each do |relative|
-    abort "the template placeholder fixture differs from #{relative}" unless File.binread(File.join(repo_root, relative)) == File.binread(File.join(placeholder_root, relative))
+    abort "the template placeholder fixture differs from #{relative}" unless File.binread(File.join(repo_root, relative)) == File.binread(placeholder_copy.(relative))
   end
 end
 %w[en-US ja].each do |locale|
@@ -1803,13 +1805,13 @@ end
   template_copy_check.call(
     "#{locale} template localization",
     %w[name subtitle description keywords promotionalText].map { |field_id| [field_id, locale] },
-    relative => File.binread(File.join(placeholder_source, relative))
+    relative => placeholder.(relative)
   )
   notes_relative = "App Store/release-notes/#{locale}.md"
   template_copy_check.call(
     "#{locale} template release notes",
     [["releaseNotes", locale]],
-    notes_relative => File.binread(File.join(placeholder_source, notes_relative))
+    notes_relative => placeholder.(notes_relative)
   )
 end
 template_copy_check.call(
@@ -1828,7 +1830,7 @@ template_copy_check.call(
     "description" => "庭の記録を残します。", "keywords" => "庭,記録", "promotionalText" => "プロモーション文の下書きです!"
   })
 )
-template_app = YAML.safe_load(File.binread(File.join(placeholder_source, "App Store/metadata/app.yml")))
+template_app = YAML.safe_load(placeholder.("App Store/metadata/app.yml"))
 fixture_app = YAML.safe_load(File.binread(File.join(project, app_path)))
 %w[copyright supportURL privacyPolicyURL].each { |key| fixture_app[key] = template_app.fetch(key) }
 template_copy_check.call(
@@ -1840,13 +1842,13 @@ review_relative = "App Store/review/review-notes.md"
 template_copy_check.call(
   "template review notes",
   [["reviewNotes", nil]],
-  review_relative => File.binread(File.join(placeholder_source, review_relative))
+  review_relative => placeholder.(review_relative)
 )
 {
   "legal.privacyPolicy" => "App Store/legal/privacy-policy.md",
   "legal.termsOfUse" => "App Store/legal/terms-of-use.md"
 }.each do |field_id, relative|
-  changed_status = File.binread(File.join(placeholder_source, relative)).sub("Status: Draft", "Status: Confirmed")
+  changed_status = placeholder.(relative).sub("Status: Draft", "Status: Confirmed")
   template_copy_check.call(
     "#{field_id} template legal body after status edit",
     [[field_id, nil]],
