@@ -16,8 +16,11 @@ pattern uses it, and only what the user adopts is used.
 
   ```sh
   codex exec --skip-git-repo-check -C "$WORK" -s workspace-write \
-    "Use your built-in image generation tool (not SVG, not code, not the CLI fallback) to create ONE image: <prompt>. Request a tall portrait size as close as possible to a 1206x2622 aspect ratio. Copy the generated PNG into the current directory as <name>.png, then print the source path and 'sips -g pixelWidth -g pixelHeight <name>.png'. Do nothing else."
+    "Use your built-in image generation tool (not SVG, not code, not the CLI fallback) to create ONE image: <prompt>. Request a tall portrait size as close as possible to a 1206x2622 aspect ratio. Copy the generated PNG into the current directory as <name>.png, then print the source path and 'sips -g pixelWidth -g pixelHeight <name>.png'. Do nothing else." < /dev/null
   ```
+
+  Always close standard input with `< /dev/null`; otherwise `codex exec` waits for more
+  input and never finishes.
 
   For an edit (`scene`, or the next image of a series), attach the reference with
   `-i reference.png` and say what must stay unchanged. Read the session id from the first
