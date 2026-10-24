@@ -50,7 +50,8 @@ cat >"$work/app/goldie/assets/provenance.json" <<EOF
  {"file":"rejected.png","sha256":"$(digest "$work/app/goldie/assets/rejected.png")","materialReview":{"decision":"rejected"}}]}
 EOF
 printf '%s\n' '{"fonts":[{"role":"headline","family":"Hiragino Sans","source":"macOS","license":"system","paid":false},
-  {"role":"body","family":"Sample Sans","source":"fixture","license":"fixture","paid":false}]}' >"$work/app/brand.json"
+  {"role":"body","family":"Sample Sans","source":"fixture","license":"fixture","paid":false},
+  {"role":"display","family":"Courier New","source":"macOS","license":"system","paid":false}]}' >"$work/app/brand.json"
 printf 'not a real font\n' >"$work/app/fonts/sample.ttf"
 printf 'not a real font\n' >"$work/stray.ttf"
 
@@ -66,8 +67,8 @@ cat >"$work/app/spec.json" <<'EOF'
    "layers":[{"src":"goldie/assets/leaf.png","x":1000,"y":1600,"width":300,"z":"front"},
              {"src":"goldie/assets/sun.png","x":150,"y":2000,"width":300,"z":"back"}]},
   {"id":"weak","background":{"gradient":{"from":"#202020","to":"#303030","angle":180}},
-   "headline":{"lines":["短い"],"size":80,"color":"#333333","top":200},
-   "device":{"capture":"capture.png","width":500,"centerX":603,"top":800},
+   "headline":{"lines":["短い"],"size":80,"color":"#333333","top":200,"highlight":{"text":"短","color":"#EEEEEE","band":"#FFFFFF"}},
+   "device":{"capture":"capture.png","width":500,"centerX":603,"top":1000},
    "layers":[{"src":"goldie/assets/leaf.png","x":200,"y":2200,"width":100,"z":"front"},
              {"src":"goldie/assets/leaf.png","x":400,"y":2200,"width":100,"z":"front"},
              {"src":"goldie/assets/sun.png","x":600,"y":2200,"width":100,"z":"front"},
@@ -242,6 +243,29 @@ expect_refused font-stray 'is outside the allowed font folders' compose "$work/a
 url_spec '"fonts":\[{"family":"Hiragino Sans"}\]' '"fonts":[{"family":"Sample Sans","file":"fonts/sample.ttf"}]' font-ok
 compose "$work/app/font-ok.json" "$work/font-ok" >/dev/null || fail 'a brand font in fonts/ was refused'
 grep -Fq 'sample.ttf' "$work/font-ok/html/tile-1.html" || fail 'the allowed font file is not used'
+# The layout is measured after images and fonts load: the front layer (a 400x400 image drawn 300 px wide) is
+# recorded 300 px tall, and a real font file in fonts/ is loaded and sets the headline's width.
+RECORD="$record" ruby -rjson -e '
+  layers = JSON.parse(File.read(ENV.fetch("RECORD"))).fetch("tiles")[0].fetch("metrics").fetch("layers")
+  abort "layer boxes #{layers}" unless layers.size == 2 && layers.all? { |box| (box["height"] - 300).abs <= 2 && (box["width"] - 300).abs <= 2 }
+' || fail 'the layer boxes were measured before the images loaded'
+system_font="/System/Library/Fonts/Supplemental/Courier New.ttf"
+if [[ -f "$system_font" ]]; then
+  cp "$system_font" "$work/app/fonts/courier.ttf"
+  sed -e 's#"fonts":\[{"family":"Hiragino Sans"}\]#"fonts":[{"family":"Courier New","file":"fonts/courier.ttf"}]#' \
+    -e 's#"給料日まで","あといくら？"#"IIIIIIIIII","IIIIIIIIII"#' -e 's#"text":"あといくら"#"text":"IIII"#' "$work/app/spec.json" >"$work/app/font-real.json"
+  sed -e 's#"給料日まで","あといくら？"#"IIIIIIIIII","IIIIIIIIII"#' -e 's#"text":"あといくら"#"text":"IIII"#' "$work/app/spec.json" >"$work/app/font-default.json"
+  compose "$work/app/font-real.json" "$work/font-real" >/dev/null || fail 'the real font was refused'
+  compose "$work/app/font-default.json" "$work/font-default" >/dev/null || fail 'the default font compose failed'
+  REAL="$work/font-real/creative-render-iphone-6.3-ja.json" DEFAULT="$work/font-default/creative-render-iphone-6.3-ja.json" ruby -rjson -e '
+    metrics = ->(name) { JSON.parse(File.read(ENV.fetch(name))).fetch("tiles")[0].fetch("metrics") }
+    real, default = metrics.("REAL"), metrics.("DEFAULT")
+    abort "font not loaded: #{real["fonts"]}" unless real.fetch("fonts").any? { |face| face["family"] == "Courier New" && face["status"] == "loaded" }
+    widths = [real, default].map { |m| m.fetch("lines").map { |box| box["width"] }.max }
+    # A run of I is narrow in a proportional face and as wide as any letter in Courier New.
+    abort "the loaded font did not change the headline width: #{widths}" if widths[0] < widths[1] * 1.5
+  ' || fail 'the headline was measured before the font loaded'
+fi
 # An existing output folder is never replaced.
 expect_refused existing-out 'must be a new folder' compose "$work/app/spec.json" "$work/out"
 
@@ -254,7 +278,8 @@ RECORD="$record" ruby -rjson -e '
   tiles = JSON.parse(File.read(ENV.fetch("RECORD"))).fetch("tiles")
   abort "tile 1 marks #{tiles[0]["marks"]}" unless tiles[0]["marks"].empty?
   marks = tiles[1]["marks"].join("\n")
-  ["the device fills", "the headline spans", "an empty band of", "headline contrast is", "4 decorations; the editorial style allows 3"].each do |text|
+  ["the device fills", "the headline spans", "an empty band of", "headline contrast is", "highlight contrast is",
+   "4 decorations; the editorial style allows 3"].each do |text|
     abort "tile 2 lacks #{text}: #{marks}" unless marks.include?(text)
   end
 ' || fail 'the quality marks differ'

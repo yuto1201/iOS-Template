@@ -376,15 +376,17 @@ module AppStoreCreativeCompose
       <body>
       #{parts.join("\n")}
       <script>
-      (function () {
+      // Measured only after every image and font has loaded, so the boxes are the settled layout.
+      Promise.all([new Promise(function (done) { window.addEventListener('load', done); }), document.fonts.ready]).then(function () {
         var box = function (node) { if (!node) return null; var r = node.getBoundingClientRect(); return {left:r.left,top:r.top,width:r.width,height:r.height}; };
         var lines = Array.prototype.map.call(document.querySelectorAll('#headline .line'), box);
         var layers = Array.prototype.map.call(document.querySelectorAll('.layer'), box);
         var out = document.createElement('pre'); out.id = 'metrics'; out.style.display = 'none';
         out.textContent = JSON.stringify({headline: box(document.getElementById('headline')), lines: lines,
-          subhead: box(document.getElementById('subhead')), badge: box(document.getElementById('badge')), layers: layers});
+          subhead: box(document.getElementById('subhead')), badge: box(document.getElementById('badge')), layers: layers,
+          fonts: Array.from(document.fonts).map(function (face) { return {family: face.family.replace(/['"]/g, ''), status: face.status}; })});
         document.body.appendChild(out);
-      })();
+      });
       </script>
       </body></html>
     HTML
@@ -538,6 +540,15 @@ module AppStoreCreativeCompose
     else
       ratio = behind.map { |color| contrast(tile.dig("headline", "color"), color) }.min
       marks << "headline contrast is #{ratio.round(2)}:1; the bar is #{QUALITY['contrastMin']}:1" if ratio < QUALITY["contrastMin"]
+    end
+    # The highlighted phrase has its own foreground, and its own background when it has a band.
+    if (highlight = tile.dig("headline", "highlight"))
+      foreground = highlight["color"] || tile.dig("headline", "color")
+      grounds = highlight["band"] ? [highlight["band"]] : behind
+      unless grounds.empty?
+        ratio = grounds.map { |color| contrast(foreground, color) }.min
+        marks << "highlight contrast is #{ratio.round(2)}:1; the bar is #{QUALITY['contrastMin']}:1" if ratio < QUALITY["contrastMin"]
+      end
     end
     decorations = tile["layers"].size + tile["popouts"].size
     if decorations > plan["decorationLimit"]
