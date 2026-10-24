@@ -9,13 +9,13 @@ Use this skill when an approved Issue requires a still image to enter the app. D
 
 ## Shared authoring skill
 
-This skill is the repository adapter. The authoring procedures (choosing the route, the Codex handoff and evaluation rounds, low-poly images, simple vector graphics, ElevenLabs images) live in the shared Mac skill `design-image-asset` at `~/.agents/skills/design-image-asset/`, which Claude and Codex both read. In this repository, this adapter, D-090, and `AGENTS.md` take precedence over the shared skill.
+This skill is the repository adapter. The authoring procedures (choosing the route, the Codex brief and evaluation rounds, styles such as low-poly, simple vector graphics, ElevenLabs images) live in the shared Mac skill `design-image-asset` at `~/.agents/skills/design-image-asset/`, which Claude and Codex both read. In this repository, this adapter, D-090, and `AGENTS.md` take precedence over the shared skill.
 
 When the shared skill cannot be read in the current environment, stop as `blocked:environment` before authoring. Do not reconstruct its procedures from memory.
 
 ## Route
 
-Choose one route per image revision and record it in the Issue/PR evidence as `codex-imagegen`, `low-poly`, `vector`, or `elevenlabs`. The Codex routes use its built-in `image_gen`; never switch to the CLI path or another model unless the user asks for it. The `elevenlabs` route also checks `.agents/skills/ios-media-assets/scripts/check-elevenlabs-capability.sh --capability image`, runs `tools/provider-preflight.sh`, and passes the key only through `tools/run-with-secret.sh`.
+Choose one route per image revision and record it in the Issue/PR evidence as `codex`, `vector`, or `elevenlabs`. The `codex` route uses Codex's built-in `image_gen` as the shared skill describes, and the style (for example low-poly) is written in the brief, not chosen as a route; never switch to the CLI path or another model unless the user asks for it. The `elevenlabs` route also checks `.agents/skills/ios-media-assets/scripts/check-elevenlabs-capability.sh --capability image`, runs `tools/provider-preflight.sh`, and passes the key only through `tools/run-with-secret.sh`.
 
 ## Contract
 

@@ -32,7 +32,7 @@ required = (
     "`~/.agents/skills/design-image-asset/`",
     "this adapter, D-090, and `AGENTS.md` take precedence over the shared skill",
     "stop as `blocked:environment` before authoring",
-    "`codex-imagegen`, `low-poly`, `vector`, or `elevenlabs`",
+    "`codex`, `vector`, or `elevenlabs`",
     "built-in `image_gen`",
     "Never draw text into the image",
     "Light and Dark",
