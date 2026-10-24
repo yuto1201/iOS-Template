@@ -390,8 +390,37 @@ for storekit_mutation in import-elsewhere other-mention purchase-code legacy-pur
     exit 1
   fi
 done
+# #443: an app made from the template or one that adopted it records Config/template-base.json (D-074). It
+# has no TemplateApp, and once its specification adopts StoreKit (D-064) its own StoreKit code and
+# configuration file belong to it, so the repository itself is checked only in the template.
+check_repository_storekit() {
+  [[ -f "$1/Config/template-base.json" ]] || check_storekit_boundary "$1"
+}
+storekit_app_case() {
+  local method=$1 root="$storekit_workspace/app-$1"
+  mkdir -p "$root/Config" "$root/StoreKitTesting" "$root/SampleApp/Store"
+  git -C "$root" init -q
+  printf '{"baseCommit":"%s","method":"%s","schemaVersion":1,"templateRepository":"yuto1201/iOS-Template"}' \
+    0000000000000000000000000000000000000000 "$method" >"$root/Config/template-base.json"
+  printf '%s\n' '{}' >"$root/StoreKitTesting/SampleApp.storekit"
+  printf '%s\n' 'import StoreKit' 'let products = try await Product.products(for: ["remove_ads"])' >"$root/SampleApp/Store/Store.swift"
+  git -C "$root" add -A
+  check_repository_storekit "$root" 2>"$storekit_workspace/app-$method.err"
+}
+for storekit_method in created adopted; do
+  storekit_app_case "$storekit_method" || {
+    cat "$storekit_workspace/app-$storekit_method.err" >&2
+    echo "an app ($storekit_method) that adopted StoreKit was refused by the template's StoreKit boundary" >&2
+    exit 1
+  }
+done
+# The same check still refuses the template's configuration-file case, which records no base.
+if check_repository_storekit "$storekit_workspace/configuration-file" 2>/dev/null; then
+  echo 'the repository check accepted a StoreKit configuration file in the template' >&2
+  exit 1
+fi
 rm -rf -- "$storekit_workspace"
-check_storekit_boundary . || exit 1
+check_repository_storekit . || exit 1
 
 if ! credential_scan_output=$(bash "$repo_root/tools/tests/test-tracked-credential-scan.sh" --root "$repo_root" 2>&1); then
   if [[ "$credential_scan_output" == 'tracked credential scan failed:'* ]]; then
