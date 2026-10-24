@@ -102,7 +102,8 @@ for text in 'テンプレートを取り込む' 'テンプレートを反映す�
   sed -n '3p' "$skill_md" | grep -Fq -- "$text" || { echo "the skill description does not trigger on: $text" >&2; exit 1; }
 done
 for text in '**入り口1**' '**入り口2**' '/Users/uesugiyuuto/Documents/Xcode/iOS-Template' \
-  'テンプレートのcleanな`main`で、`origin/main`と一致するcommitだけを取り込みます。' \
+  'GitHubの`yuto1201/iOS-Template`の、その時点の`main`の最新のcommitだけを取り込みます。' \
+  '"$SKILL_DIR/scripts/prepare-template-source.sh"' 'ユーザーのテンプレートのcheckout（作業中の変更やブランチ）には触れず' \
   'テンプレートへcommit、ブランチ、Issue、PR、ファイルを作りません。' \
   '取り込み先の1つのテンプレート同期Issueとして進めます' '取り込み先の`AGENTS.md`と規則に従います。' \
   '取り込み先とテンプレートの両方の外に置きます。' \
