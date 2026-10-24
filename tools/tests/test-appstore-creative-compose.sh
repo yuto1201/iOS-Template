@@ -72,7 +72,9 @@ cat >"$work/app/spec.json" <<'EOF'
    "layers":[{"src":"goldie/assets/leaf.png","x":200,"y":2200,"width":100,"z":"front"},
              {"src":"goldie/assets/leaf.png","x":400,"y":2200,"width":100,"z":"front"},
              {"src":"goldie/assets/sun.png","x":600,"y":2200,"width":100,"z":"front"},
-             {"src":"goldie/assets/sun.png","x":800,"y":2200,"width":100,"z":"front"}]}]}
+             {"src":"goldie/assets/sun.png","x":800,"y":2200,"width":100,"z":"front"}]},
+  {"id":"midgray","background":{"gradient":{"from":"#000000","to":"#FFFFFF","angle":90}},
+   "headline":{"lines":["中ほどの灰色の見出し"],"size":90,"color":"#767676","top":300,"highlight":{"text":"灰色","color":"#757575"}}}]}
 EOF
 compose() { "$tool" compose --spec "$1" --brand "$work/app/brand.json" --provenance "$work/app/goldie/assets/provenance.json" --out "$2"; }
 compose "$work/app/spec.json" "$work/out" >"$work/compose.json" || fail "compose failed: $(cat "$work/compose.json")"
@@ -137,6 +139,26 @@ elif command == "near":
     _, _, rows = read(sys.argv[2])
     target = tuple(int(sys.argv[5][i:i + 2], 16) for i in (0, 2, 4))
     sys.exit(0 if near(pixel(rows, int(sys.argv[3]), int(sys.argv[4])), target, 12) else 1)
+elif command == "shape":
+    # The orientation and outer size of the pixels near a color: principal axes of their spread, and their
+    # extent along each axis.
+    _, height, rows = read(sys.argv[2])
+    target = tuple(int(sys.argv[3][i:i + 2], 16) for i in (0, 2, 4))
+    top = int(sys.argv[4])
+    points = []
+    for y in range(top, height):
+        row = rows[y]
+        for x in range(len(row) // 3):
+            if near(tuple(row[x * 3:x * 3 + 3]), target, 30):
+                points.append((x, y))
+    n = len(points)
+    cx = sum(p[0] for p in points) / n; cy = sum(p[1] for p in points) / n
+    sxx = sum((p[0] - cx) ** 2 for p in points) / n; syy = sum((p[1] - cy) ** 2 for p in points) / n
+    sxy = sum((p[0] - cx) * (p[1] - cy) for p in points) / n
+    angle = 0.5 * math.atan2(2 * sxy, sxx - syy)
+    u = [(p[0] - cx) * math.cos(angle) + (p[1] - cy) * math.sin(angle) for p in points]
+    v = [-(p[0] - cx) * math.sin(angle) + (p[1] - cy) * math.cos(angle) for p in points]
+    print(json.dumps({"n": n, "angle": math.degrees(angle), "long": max(u) - min(u) + 1, "short": max(v) - min(v) + 1}))
 elif command == "centroid":
     # The centroid of the pixels near a color, inside an optional box.
     _, height, rows = read(sys.argv[2])
@@ -198,6 +220,30 @@ CENTROID="$centroid" EX="$expected_x" EY="$expected_y" RECORD="$record" ruby -rj
 ' || fail "the popout is not centered on its region: $centroid, expected $expected"
 px near "$work/out/tile-1.png" "${expected_x%.*}" "${expected_y%.*}" FF00FF ||
   fail "the popout does not show the magnified region ($(px at "$work/out/tile-1.png" "${expected_x%.*}" "${expected_y%.*}"))"
+# The card is the region magnified by its scale and turned by its own angle: the cyan border's spread gives
+# the card's orientation and outer size, computed here from the declaration (scale 1.15, rotate 5, a
+# 400x300 region, a border of 2% of the card's width), and the card's inner corners show the region.
+shape=$(px shape "$work/out/tile-1.png" 00FFFF 600)
+read -r card_w card_h border <<<"$(python3 -c 'f = (930 - 2 * 930 * 0.034) / 1206; w, h = 400 * f * 1.15, 300 * f * 1.15; print(w, h, max(w * 0.02, 6))')"
+SHAPE="$shape" W="$card_w" H="$card_h" B="$border" ruby -rjson -e '
+  s = JSON.parse(ENV.fetch("SHAPE"))
+  w, h, b = %w[W H B].map { |key| ENV.fetch(key).to_f }
+  abort "card turned #{s["angle"]} degrees, expected 5" unless (s["angle"] - 5).abs <= 0.5
+  abort "card outer size #{s["long"]}x#{s["short"]}, expected #{w + 2 * b}x#{h + 2 * b}" unless (s["long"] - (w + 2 * b)).abs <= 3 && (s["short"] - (h + 2 * b)).abs <= 3
+' || fail "the popout's size or orientation differs: $shape"
+python3 - "$expected_x" "$expected_y" "$card_w" "$card_h" <<'INNER' >"$work/corners.txt"
+import math, sys
+cx, cy, w, h = map(float, sys.argv[1:])
+a = math.radians(5)
+for sx in (-1, 1):
+    for sy in (-1, 1):
+        dx, dy = sx * (w / 2 - 8), sy * (h / 2 - 8)
+        print(round(cx + dx * math.cos(a) - dy * math.sin(a)), round(cy + dx * math.sin(a) + dy * math.cos(a)))
+INNER
+while read -r corner_x corner_y; do
+  px near "$work/out/tile-1.png" "$corner_x" "$corner_y" FF00FF ||
+    fail "the popout's inner corner $corner_x,$corner_y does not show the region ($(px at "$work/out/tile-1.png" "$corner_x" "$corner_y"))"
+done <"$work/corners.txt"
 
 # AC-5: the record lists inputs and outputs with SHA-256 and is accepted as `renders` by the proposal sheet.
 RECORD="$record" OUT="$work/out" ruby -rjson -rdigest -e '
@@ -213,7 +259,7 @@ RECORD="$record" OUT="$work/out" ruby -rjson -rdigest -e '
 ruby -r"$repo_root/tools/lib/appstore-creative-sheet.rb" -e '
   index = AppStoreCreativeSheet.render_index([ARGV[0]], File.dirname(ARGV[0]))
   inputs = index.values.flatten.map { |entry| File.basename(entry["path"]) }.uniq.sort
-  abort "render index #{inputs}" unless index.size == 2 && inputs == %w[leaf.png sun.png]
+  abort "render index #{inputs}" unless index.size == 3 && inputs == %w[leaf.png sun.png]
 ' "$record" || fail 'the proposal sheet does not read the record as renders'
 # No network: every page allows only file and data URLs, names no remote resource, and a URL is refused.
 for page in "$work/out/html/"*.html; do
@@ -282,8 +328,11 @@ RECORD="$record" ruby -rjson -e '
    "4 decorations; the editorial style allows 3"].each do |text|
     abort "tile 2 lacks #{text}: #{marks}" unless marks.include?(text)
   end
+  marks = tiles[2]["marks"].join("\n")
+  # Both ends of the gradient clear 4.5:1 against #767676 and #757575; the gray in the middle under the text does not.
+  ["headline contrast is", "highlight contrast is"].each { |text| abort "tile 3 lacks #{text}: #{marks}" unless marks.include?(text) }
 ' || fail 'the quality marks differ'
-[[ "$(px size "$work/out/thumbnails.png")" == "$((2 * 244 + 24))x$(( (220 * 2622 + 1205) / 1206 + 48 ))" ]] ||
+[[ "$(px size "$work/out/thumbnails.png")" == "$((3 * 244 + 24))x$(( (220 * 2622 + 1205) / 1206 + 48 ))" ]] ||
   fail "the thumbnail sheet is $(px size "$work/out/thumbnails.png")"
 
 # AC-7: reference images are laid out per app (first five), beside the proposal, and never inside Git.
@@ -294,7 +343,7 @@ done
 "$tool" research-sheet --refs "$work/refs" --mine "$work/out" --out "$work/research" >/dev/null || fail 'the research sheet failed'
 RESEARCH="$work/research/research-sheet.json" ruby -rjson -e '
   rows = JSON.parse(File.read(ENV.fetch("RESEARCH"))).fetch("rows")
-  abort "rows #{rows.map { |row| [row["label"], row["images"].size] }}" unless rows.map { |row| [row["label"], row["images"].size] } == [["alpha", 5], ["beta", 5], ["proposal", 2]]
+  abort "rows #{rows.map { |row| [row["label"], row["images"].size] }}" unless rows.map { |row| [row["label"], row["images"].size] } == [["alpha", 5], ["beta", 5], ["proposal", 3]]
   abort "sixth image used" if rows.any? { |row| row["images"].any? { |image| File.basename(image["path"]) == "6.png" } }
 ' || fail 'the research sheet rows differ'
 git init -q "$work/repo"

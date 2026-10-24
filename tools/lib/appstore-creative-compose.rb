@@ -383,6 +383,7 @@ module AppStoreCreativeCompose
         var layers = Array.prototype.map.call(document.querySelectorAll('.layer'), box);
         var out = document.createElement('pre'); out.id = 'metrics'; out.style.display = 'none';
         out.textContent = JSON.stringify({headline: box(document.getElementById('headline')), lines: lines,
+          highlight: box(document.querySelector('#headline .hl')),
           subhead: box(document.getElementById('subhead')), badge: box(document.getElementById('badge')), layers: layers,
           fonts: Array.from(document.fonts).map(function (face) { return {family: face.family.replace(/['"]/g, ''), status: face.status}; })});
         document.body.appendChild(out);
@@ -534,7 +535,7 @@ module AppStoreCreativeCompose
     gap = largest_gap(occupied, height)
     marks << "an empty band of #{(gap / height * 100).round}% of the height; the bar is #{(QUALITY['emptyBandMax'] * 100).round}%" if gap / height > QUALITY["emptyBandMax"]
     background = tile["background"]
-    behind = background["color"] ? [background["color"]] : background["gradient"] ? background["gradient"].values_at("from", "to") : []
+    behind = colors_under(background, lines, width, height)
     if behind.empty?
       marks << "headline contrast over an image is not measured; check it by eye"
     else
@@ -544,7 +545,7 @@ module AppStoreCreativeCompose
     # The highlighted phrase has its own foreground, and its own background when it has a band.
     if (highlight = tile.dig("headline", "highlight"))
       foreground = highlight["color"] || tile.dig("headline", "color")
-      grounds = highlight["band"] ? [highlight["band"]] : behind
+      grounds = highlight["band"] ? [highlight["band"]] : colors_under(background, [metrics["highlight"]].compact, width, height)
       unless grounds.empty?
         ratio = grounds.map { |color| contrast(foreground, color) }.min
         marks << "highlight contrast is #{ratio.round(2)}:1; the bar is #{QUALITY['contrastMin']}:1" if ratio < QUALITY["contrastMin"]
@@ -566,6 +567,34 @@ module AppStoreCreativeCompose
       cursor = [cursor, bottom].max
     end
     [gap, height - cursor].max
+  end
+
+  # The background colors under some boxes: the color, or for a gradient every color it takes over the boxes
+  # (CSS linear-gradient: 0deg runs upward, 90deg to the right, along a line through the tile's center that
+  # reaches its far corners). An image background has none that can be computed.
+  def colors_under(background, boxes, width, height)
+    return [background["color"]] if background["color"]
+    gradient = background["gradient"] or return []
+    return gradient.values_at("from", "to") if boxes.empty?
+    angle = gradient["angle"] * Math::PI / 180
+    length = (width * Math.sin(angle)).abs + (height * Math.cos(angle)).abs
+    positions = boxes.flat_map do |box|
+      [[box["left"], box["top"]], [box["left"] + box["width"], box["top"]], [box["left"], box["top"] + box["height"]],
+       [box["left"] + box["width"], box["top"] + box["height"]]].map do |x, y|
+        (0.5 + ((x - width / 2.0) * Math.sin(angle) - (y - height / 2.0) * Math.cos(angle)) / length).clamp(0.0, 1.0)
+      end
+    end
+    first, last = positions.minmax
+    from = rgb(gradient["from"])
+    to = rgb(gradient["to"])
+    (0..32).map do |step|
+      t = first + (last - first) * step / 32.0
+      format("#%02X%02X%02X", *from.zip(to).map { |a, b| (a + (b - a) * t).round })
+    end
+  end
+
+  def rgb(hex)
+    hex.delete("#").scan(/../).map { |pair| pair.to_i(16) }
   end
 
   def contrast(foreground, background)
