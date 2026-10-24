@@ -65,11 +65,11 @@ write(project, 'App Store/release-notes/en-US.md', "New garden journal notes.\n"
 write(project, 'specs/product.md', "# Garden journal\n\nStatus: Confirmed\n\nKeep a garden journal.\n")
 write(project, 'GardenNotes/Journal.swift', "struct Journal { var entries: [String] = [] }\n")
 # #433: the fixture copies the template's project structure. An app made from or adopting the template (it
-# records Config/template-base.json, D-074) owns its project, which may have its own Info.plist, targets and
-# packages, so there the copy comes from the template's project kept under tools/tests/fixtures; the template
-# copies its own project, which the fixture must match byte for byte.
+# records Config/template-base.json, D-074, or its Identity bootstrap's Config/app-identity.json) owns its
+# project, which may have its own Info.plist, targets and packages, so there the copy comes from the template's
+# project kept under tools/tests/fixtures; the template copies its own project, which the fixture must match.
 template_project = File.join(root, 'tools/tests/fixtures/appstore/template-project')
-derived = File.file?(File.join(root, 'Config/template-base.json'))
+derived = %w[Config/template-base.json Config/app-identity.json].any? { |record| File.file?(File.join(root, record)) }
 project_source = derived ? template_project : root
 unless derived
   %w[TemplateApp.xcodeproj/project.pbxproj TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme].each do |relative|
@@ -535,10 +535,11 @@ check(status.exitstatus == 1 && JSON.parse(File.binread(state_path))['calls'].no
 puts 'PASS: selective save real preparation, fake asc, journal and resume cases'
 RUBY
 
-# #326/#352: the sample app is built from the live project, so these tests must also pass in an app after
-# Identity bootstrap (another module name and Bundle ID) whose app target signs with an entitlements file
-# and links a remote Swift package with its workspace lock. A disposable clone of HEAD becomes such an app
-# and runs this test and test-appstore-preparation.sh inside it once (not again from inside the clone).
+# #326/#352: these tests must also pass in an app after Identity bootstrap (another module name and Bundle
+# ID) whose app target signs with an entitlements file and links a remote Swift package with its workspace
+# lock; since #433 such an app's tests copy the template's project from tools/tests/fixtures, not its own. A
+# disposable clone of HEAD becomes such an app and runs this test and test-appstore-preparation.sh inside it
+# once (not again from inside the clone).
 if [[ -z "${IOS_TEMPLATE_APPSTORE_ADOPTED_RUN-}" && ! -e "$root/Config/app-identity.json" ]]; then
 adopted_work="$scratch/adopted"
 mkdir -p "$adopted_work"

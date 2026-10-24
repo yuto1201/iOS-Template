@@ -378,11 +378,12 @@ puts "PASS: duplicate JSON and YAML keys cannot override preparation identity"
 # This is still a read-only metadata fixture, not an Xcode Build/Test claim.
 pbx_path = File.join(project, "GardenNotes.xcodeproj/project.pbxproj")
 FileUtils.mkdir_p(File.dirname(pbx_path))
-# #433: an app made from or adopting the template (it records Config/template-base.json, D-074) owns its
-# project, which may have its own Info.plist, targets and packages, so there the copy comes from the template's
-# project kept under tools/tests/fixtures; the template copies its own project, which the fixture must match.
+# #433: an app made from or adopting the template (it records Config/template-base.json, D-074, or its
+# Identity bootstrap's Config/app-identity.json) owns its project, which may have its own Info.plist, targets
+# and packages, so there the copy comes from the template's project kept under tools/tests/fixtures, and the
+# App Store placeholders below from the copies there; the template reads its own, which the copies must match.
 template_project = File.join(repo_root, "tools/tests/fixtures/appstore/template-project")
-derived = File.file?(File.join(repo_root, "Config/template-base.json"))
+derived = %w[Config/template-base.json Config/app-identity.json].any? { |record| File.file?(File.join(repo_root, record)) }
 project_source = derived ? template_project : repo_root
 unless derived
   %w[TemplateApp.xcodeproj/project.pbxproj TemplateApp.xcodeproj/xcshareddata/xcschemes/TemplateApp.xcscheme].each do |relative|
