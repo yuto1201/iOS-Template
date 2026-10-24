@@ -77,7 +77,7 @@ cat >"$work/app/spec.json" <<'EOF'
    "headline":{"lines":["中ほどの灰色の見出し"],"size":90,"color":"#767676","top":300,"highlight":{"text":"灰色","color":"#757575"}}},
   {"id":"turned","background":{"color":"#FFD60A"},
    "headline":{"lines":["傾けた端末"],"size":120,"color":"#1C1C1E","top":100},
-   "device":{"capture":"capture.png","width":826,"centerX":603,"top":450,"rotate":15}}]}
+   "device":{"capture":"capture.png","width":826,"centerX":603,"top":450,"rotate":15,"frame":"#00AA88"}}]}
 EOF
 compose() { "$tool" compose --spec "$1" --brand "$work/app/brand.json" --provenance "$work/app/goldie/assets/provenance.json" --out "$2"; }
 compose "$work/app/spec.json" "$work/out" >"$work/compose.json" || fail "compose failed: $(cat "$work/compose.json")"
@@ -198,6 +198,18 @@ sed -e 's/"iphone-6.3"/"ipad-13"/' -e 's/"width":930,"centerX":603/"width":1500,
   "$work/app/spec.json" >"$work/app/ipad.json"
 compose "$work/app/ipad.json" "$work/ipad" >/dev/null || fail 'the iPad compose failed'
 [[ "$(px size "$work/ipad/tile-1.png")" == 2064x2752 && -f "$work/ipad/creative-render-ipad-13-ja.json" ]] || fail 'the iPad tile is not 2064x2752'
+
+# The device is drawn at its declared width and angle: tile 4's frame (a color used nowhere else) is measured
+# from its pixels, against the width, the frame height computed from the capture's aspect ratio, and 15 degrees.
+frame_shape=$(px shape "$work/out/tile-4.png" 00AA88 0)
+read -r device_w device_h <<<"$(python3 -c 'w = 826.0; b = w * 0.034; print(w, (w - 2 * b) * 2622 / 1206 + 2 * b)')"
+SHAPE="$frame_shape" W="$device_w" H="$device_h" ruby -rjson -e '
+  s = JSON.parse(ENV.fetch("SHAPE"))
+  w, h = ENV.fetch("W").to_f, ENV.fetch("H").to_f
+  # The principal axis is the frame'"'"'s long side, so a 15 degree turn reads as 15 - 90 = -75 degrees.
+  abort "device turned #{s["angle"]} degrees" unless (s["angle"] + 75).abs <= 0.5
+  abort "device #{s["short"]} wide and #{s["long"]} tall, expected #{w}x#{h}" unless (s["short"] - w).abs <= 3 && (s["long"] - h).abs <= 3
+' || fail "the device is not drawn at its declared width and angle: $frame_shape"
 
 # AC-4: the popout sits over its region on the turned device. The test carries the region's center
 # through the device geometry itself and compares it with the cyan border's centroid in the pixels.
