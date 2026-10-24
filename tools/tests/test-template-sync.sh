@@ -80,16 +80,24 @@ CHECK_ROOT="$check_root" PATHS="$template_only_paths" ruby -r"$check_root/tools/
     abort "#{path} is classified #{category.inspect}, not template-only" unless category == "template-only"
   end
 '
-# expect_not_imported REPORT: the plan skips every template-only path above and plan.md names none of them.
+# expect_not_imported REPORT: the plan skips every template-only path above, and plan.md names them only in
+# the list of template-only files that the app already has (#433), each exactly when the app has it.
 expect_not_imported() {
-  PLAN="$1/plan.json" PATHS="$template_only_paths" ruby -rjson -e '
+  PLAN="$1/plan.json" MD="$1/plan.md" PATHS="$template_only_paths" ruby -rjson -e '
     files = JSON.parse(File.read(ENV.fetch("PLAN"))).fetch("files").to_h { |file| [file["path"], file] }
+    markdown = File.read(ENV.fetch("MD"))
+    heading = "## アプリに残っているテンプレート専用のファイル"
+    leftover = markdown[/^#{heading}\n.*?(?=^## )/m] || ""
+    outside = markdown.sub(leftover, "")
+    abort "plan.md brings the user skill or its link tool into the app" if outside.match?(/user-skills|link-user-skill/)
     ENV.fetch("PATHS").split.each do |path|
-      actual = files.fetch(path) { abort "the plan does not judge #{path}" }.values_at("category", "status", "action")
+      file = files.fetch(path) { abort "the plan does not judge #{path}" }
+      actual = file.values_at("category", "status", "action")
       abort "#{path} in the plan: #{actual}" unless actual == %w[template-only template-only skip]
+      listed = leftover.include?("- `#{path}`")
+      abort "#{path} is listed as left in the app: #{file}" unless listed == (file["appPresent"] == true)
     end
   '
-  ! grep -Eq 'user-skills|link-user-skill' "$1/plan.md" || { echo "plan.md in $1 brings the user skill or its link tool into the app" >&2; exit 1; }
 }
 
 # The skill guides both entry points, the template source, one sync Issue in the target, the command

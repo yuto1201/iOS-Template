@@ -80,7 +80,16 @@ make_bootstrapped_adopted_app() {
   done <"$work/adopted-removed.txt"
   printf '{\n  "baseCommit": "%s",\n  "method": "adopted",\n  "recordedAt": "2026-10-19T00:00:00Z",\n  "schemaVersion": 1,\n  "templateRepository": "yuto1201/iOS-Template"\n}\n' "$before_head" >"$dest/Config/template-base.json"
   printf '# Sample Notes product\n\nSample Notes keeps notes on the device. It has no server and no database.\n' >"$dest/specs/product.md"
-  printf '# Sample Notes acceptance\n\nA note written on the device is still there after a restart.\n' >"$dest/specs/acceptance.md"
+  # The app keeps the template's structure of specs/acceptance.md (its Status and Definition of Ready, which
+  # Issue bodies cite) and writes its own criteria: the template's policy phrases that the imported tests look
+  # for are gone, and an app criterion is added.
+  ruby -e '
+    path = ARGV.fetch(0)
+    phrases = ["gpt-6-astra", "Tripo", "D-082", "authoringの経路", "3D asset authoring", "System Experiences Planning Gate", "5面", "部分blocking"]
+    lines = File.readlines(path).reject { |line| phrases.any? { |phrase| line.include?(phrase) } }
+    File.write(path, lines.join + "\n- Sample Notes: a note written on the device is still there after a restart.\n")
+  ' "$dest/specs/acceptance.md"
+  ! grep -Eq 'gpt-6-astra|System Experiences Planning Gate' "$dest/specs/acceptance.md" || fail 'the app acceptance still has the template policy text'
   commit_all "$dest" 'Adopt the template as Sample Notes'
   [[ -z "$(git -C "$dest" ls-files -- 'App Store/metadata/app.yml' 'App Store/screenshots/states.json' 'App Store/submission' docs/superpowers)" ]] ||
     fail 'the adopted app still tracks app-owned App Store files or template-only documents'
