@@ -53,7 +53,7 @@
 
 ## 3. 差分レポートの作り方
 
-テンプレートのcheckoutから実行します。取り込み元は、テンプレートのcleanな`main`で`origin/main`と一致するcommitだけです（D-078）。テンプレートで作業途中の変更は取り込みません。
+取り込み元のcheckout（10節）から実行します。取り込み元は、GitHubのテンプレートの、その時点の`main`の最新のcommitだけです（D-078、D-090）。テンプレートで作業途中の変更や、ユーザーのテンプレートのcheckoutは取り込み元にしません。
 
 ```sh
 tools/template-sync.sh report --app-root /path/to/app --template-ref <確かめたテンプレートのcommit> \
@@ -210,14 +210,17 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 
 取り込みには2つの入り口があります（D-078）。
 
-- 入り口1：開発中のアプリのリポジトリから、このMacのテンプレートのcheckout（`/Users/uesugiyuuto/Documents/Xcode/iOS-Template`）を参照して、そのアプリへ取り込みます。
+- 入り口1：開発中のアプリのリポジトリから、そのアプリへ取り込みます。
 - 入り口2：テンプレートのリポジトリから、取り込み先のアプリのリポジトリを指定して取り込みます。
 
-どちらの入り口でも、toolはテンプレートのcheckoutから実行し、Issue、ブランチ、PRは取り込み先に作って、取り込み先の`AGENTS.md`と規則に従います。テンプレートのリポジトリには書き込みません。取り込み元は、テンプレートのcleanな`main`で`origin/main`と一致するcommitだけです。
+どちらの入り口でも、取り込み元はGitHubのテンプレートの最新の`main`です（D-090）。スキルの`scripts/prepare-template-source.sh`が、`main`の最新のcommitを読み、テンプレートと取り込み先の両方のリポジトリの外（`~/.ios-template-sync/template-source/`）に、`main`だけを取得する保管用のbareリポジトリと、そのcommitのcleanなcheckout（全履歴つき）を用意して、`commit`、`remote`、`templateRoot`を1行のJSONで返します。toolはこのcheckout（そのcommitの版）から実行し、Issue、ブランチ、PRは取り込み先に作って、取り込み先の`AGENTS.md`と規則に従います。
+
+- ユーザーのテンプレートのcheckout（`/Users/uesugiyuuto/Documents/Xcode/iOS-Template`）は、スキルの置き場所として使うだけで、読み取り元にも書き込み先にもしません。テンプレートのGitHubへも書き込みません。
+- 取得した`main`が読んだときの`main`と違う、用意済みの同じcommitのcheckoutがそのcommitにないか変更がある、保管用のリポジトリが別のremoteを読む、`main`を読めない、のどれかなら、取り込みを始めずに理由を示して止まります。古い取り込み元やユーザーのcheckoutへ黙って切り替えません。
 
 取り込み先のリポジトリで、テンプレートの取り込みを1つのIssueとして進めます（1 Issue = 1 Branch = 1 PR）。
 
-1. テンプレートのcheckoutが`main`にいて、変更がなく、`origin/main`と一致することを確かめます。取り込み先の本体のcheckoutは、`main`にいて`origin/main`と一致する状態にします。
+1. 取り込み元を用意し、そのcommitを記録します。取り込み先の本体のcheckoutは、`main`にいて`origin/main`と一致する状態にします。
 2. 差分レポートを作ります（3節）。出力は、取り込み先とテンプレートの両方の外に置きます。
 3. ほかの作業中かと変更の大きさを判定します（6節）。ほかの作業中なら止めて、終わるまで待つことを勧めます。並行するかは、ユーザーの明示の指示だけで決めます。
 4. 計画を分析します（7節）。
@@ -232,7 +235,7 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 
 ## 11. スキル`ios-template-sync`とリンク
 
-10節の手順は、スキル`ios-template-sync`にまとめています。正本はテンプレートの`.agents/user-skills/ios-template-sync/`（`SKILL.md`と`agents/openai.yaml`）で、ClaudeとCodexは、`~/.claude/skills/ios-template-sync`と`~/.codex/skills/ios-template-sync`のリンクを通して使います。スキル、リンクのtool、そのtestは`template-only`で、取り込みでアプリへ持ち込みません。
+10節の手順は、スキル`ios-template-sync`にまとめています。正本はテンプレートの`.agents/user-skills/ios-template-sync/`（`SKILL.md`、`agents/openai.yaml`、`scripts/prepare-template-source.sh`）で、D-089の配置に合わせ、Codexは`~/.agents/skills/ios-template-sync`、Claudeは`~/.claude/skills/ios-template-sync`のリンクを通して使います。スキル、リンクのtool、それらのtestは`template-only`で、取り込みでアプリへ持ち込みません。
 
 リンクは、テンプレートのcheckoutで張ります。
 
@@ -240,6 +243,6 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 tools/link-user-skill.sh ios-template-sync
 ```
 
-- `~/.claude/skills/<name>`と`~/.codex/skills/<name>`を、このcheckoutの`.agents/user-skills/<name>`を絶対パスで指すリンクにします。`skills/`のフォルダがなければ作ります。
-- どちらかに同じ名前のフォルダやファイル、別の場所を指すリンクがあれば、どちらも変えずに非0で止まります。すでに同じ正本を指すリンクなら、何もしません。
+- `~/.agents/skills/<name>`を、このcheckoutの`.agents/user-skills/<name>`を絶対パスで指すリンクにし、`~/.claude/skills/<name>`を相対リンク`../../.agents/skills/<name>`にします。`~/.codex/skills`には作りません。`skills/`のフォルダがなければ作ります。
+- どちらかに同じ名前のフォルダやファイル、別の場所を指すリンク（以前の配置の、Claudeから正本を直接指すリンクを含む）があれば、どちらも変えずに非0で止まります。すでに決まったリンクなら、何もしません。
 - `<name>`は英小文字、数字、`-`だけで、正本のフォルダに`SKILL.md`が必要です。

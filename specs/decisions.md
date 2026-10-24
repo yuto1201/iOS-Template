@@ -1022,3 +1022,17 @@
   - ElevenLabsのAPI keyは、Mac全体でもKeychainの`ios-template/template-app/elevenlabs/production/api-key`（`docs/security.md`の名前）に置き、平文のファイルに置かない。
 - Consequence: Macの本体はGitの管理の外にあり、テンプレートの取り込み（D-074、D-078）では派生アプリに届かない。派生アプリやCIの環境で本体が無いときは、アダプタが止める。repository testは本体の存在を検査せず、アダプタの内容と、移した手順がアダプタに残っていないことを検査する。`AGENTS.md`の3Dの規則とリンク（`ios-3d-assets`）は変えない。
 - Related Issue: #435, #436, #438
+
+## D-090: テンプレートの取り込み元を、GitHubの最新の`main`から用意する
+
+- Date: 2026-10-25
+- Status: 確定
+- Supersedes: D-078の「取り込み元は、テンプレートのcleanな`main`で`origin/main`と一致するcommitだけとする」を置き換える。D-074、D-078のほかの規則（2つの入り口、ファイルごとの出どころ、事前の判定と分析、承認、適用、1つの同期Issue）と、D-089の配置は維持する。
+- Context: 取り込みのスキル`ios-template-sync`は、このMacのテンプレートのcheckoutがcleanな`main`で`origin/main`と一致していないと止まり、checkoutを進めるのはユーザーの指示があるときだけだった。そのため、テンプレートが更新されても、アプリ側から最新を取り込むには、先にテンプレートのcheckoutを手で最新にする必要があった。2026-10-24、ユーザーは、テンプレートの更新をアプリへ反映するためのスキルを求め、既存のスキルを直す形を選んだ（#446）。同じ日のスキルの配置の整理（D-089）の後、このスキルのリンクがなくなり、ClaudeからもCodexからも呼び出せなくなっていた。
+- Decision:
+  - 取り込み元は、GitHubの`yuto1201/iOS-Template`の、その時点の`main`の最新のcommitとする。スキルの`scripts/prepare-template-source.sh`が、テンプレートと取り込み先の両方のリポジトリの外（`~/.ios-template-sync/template-source/`）に、そのcommitのcleanなcheckoutを全履歴つきで用意し、取り込みのtoolはそのcheckout（そのcommitの版）から実行する。
+  - ユーザーのテンプレートのcheckoutは、取り込み元にも書き込み先にもしない。テンプレートのGitHubへも書き込まない。
+  - 取得した`main`が読んだときの`main`と違う、用意済みのcheckoutがそのcommitにないか変更がある、`main`を読めない、のどれかなら、取り込みを始めずに理由を示して止まる。古い取り込み元やユーザーのcheckoutへ黙って切り替えない。
+  - スキルはD-089の配置でリンクする。`~/.agents/skills/ios-template-sync`がテンプレートのcheckoutの正本を指し、`~/.claude/skills/ios-template-sync`はその相対リンクとする。`~/.codex/skills`には作らない。
+- Consequence: アプリのリポジトリから頼むだけで、テンプレートの最新を取り込める。スキルの本文とscriptは、このMacのテンプレートのcheckoutにある版を使うため、スキル自体の更新を使うには、そのcheckoutを進める必要がある。取り込み元のcheckoutは`~/.ios-template-sync/template-source/checkouts/`にcommitごとに残る。以前の配置の、Claudeから正本を直接指すリンクがあれば、リンクのtoolは上書きせずに止まり、扱いはユーザーが決める。`~/.codex/skills`に以前のリンクが残っていても、toolはそれに触れない。
+- Related Issue: #446

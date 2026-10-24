@@ -92,6 +92,7 @@
         "tools/tests/test-link-user-skill.sh",
         "tools/tests/test-template-sync-apply.sh",
         "tools/tests/test-template-sync-derived.sh",
+        "tools/tests/test-template-sync-source.sh",
         "tools/tests/test-template-sync.sh"
       ],
       "prefixes": [".agents/user-skills/", "docs/superpowers/", "tools/template-sync/", "tools/tests/fixtures/template-sync/"]
