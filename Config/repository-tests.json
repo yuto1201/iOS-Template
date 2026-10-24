@@ -156,7 +156,7 @@
     },
     {
       "domain": "foundation",
-      "paths": ["tools/tests/test-adopted-app-imported-tests.sh", "tools/tests/test-foundation.sh", "tools/tests/test-tracked-credential-scan.sh"],
+      "paths": ["docs/review-prompt.md", "tools/tests/test-adopted-app-imported-tests.sh", "tools/tests/test-foundation.sh", "tools/tests/test-tracked-credential-scan.sh"],
       "prefixes": []
     },
     {
@@ -335,6 +335,7 @@
         "tools/cross-model-review.sh",
         "tools/lib/prepare-review-packet.rb",
         "tools/lib/publish-review-result.rb",
+        "tools/lib/review-artifacts.rb",
         "tools/lib/review-contract.rb",
         "tools/lib/review-receipt.rb",
         "tools/lib/review-route.rb",

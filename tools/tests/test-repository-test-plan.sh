@@ -132,6 +132,15 @@ bootstrap_paths.each do |changed_path|
   abort "bootstrap regression was not selected for #{changed_path}" unless scope == "targeted" &&
     reason.include?("bootstrap-assets") && (bootstrap_tests - tests).empty?
 end
+# #444: the review prompt guide is checked by the foundation test's Markdown links, and the shared
+# artifact topology belongs to the review tools; a change to either resolves a targeted plan.
+{
+  "docs/review-prompt.md" => "tools/tests/test-foundation.sh",
+  "tools/lib/review-artifacts.rb" => "tools/tests/test-cross-model-review.sh"
+}.each do |changed_path, expected_test|
+  scope, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
+  abort "#{changed_path} did not select #{expected_test}" unless scope == "targeted" && tests.include?(expected_test)
+end
 %w[docs/verification.md tools/bootstrap-app.sh tools/tests/test-appstore-preparation.sh].each do |changed_path|
   _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
   abort "source manifest omitted credential scan for #{changed_path}" unless tests.include?(scan_test)
