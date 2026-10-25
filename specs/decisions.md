@@ -1095,3 +1095,17 @@
   - 取り込みのtool（`tools/template-sync.sh`）と手順の正本（`docs/template-sync.md`）はテンプレートに残す。`docs/template-sync.md`は、スキルの置き場所を示す。
 - Consequence: スキルの変更は、テンプレートのIssueとrepository testを通らない。スキルのtestは、テンプレートのcheckoutの見本とtoolを読んで、このMacで手で実行する。`tools/template-sync.sh`の引数を変えるIssueは、スキルの文書とtestも合わせて直す。別のMacで使うときは、スキルを写して置く。
 - Related Issue: #468
+
+## D-095: 3Dの作成のCodexとTripoの経路を、Macの共通の分岐先のskillに分ける
+
+- Date: 2026-10-25
+- Status: 確定
+- Supersedes: D-090のうち、3DのCodexとTripoの経路を別のskillにせず入口`design-3d-asset`の中に書くこと。D-082（3Dの作成経路をモデルの複雑さで選ぶこと、モデルの指定、ラウンドの上限、Tripoのログイン・課金・認証情報はユーザーが行い、クレジットを使う操作は承認を得ること、どの経路でも検証と経路の記録を行うこと）と、D-090のほかの部分（名前の決まり、種類ごとの入口とアダプタ、`ios-design-3d-asset`）は維持する。
+- Context: 2026-10-25、ユーザーは、3Dのモデルを作るskillが無いことを指摘した。入口`design-3d-asset`には経路の選び方と手順の概要しかなく、派生アプリで実際に使った手順（CafLogの容器4種類を作った`docs/3d-asset-pipeline.md`と`Assets3D/scripts/`、CampPocketの自然7モデルとテント・タープ・テーブル9モデルを作ったTripoの操作の記録と`gpt-6-astra`での仕上げ）をまとめる場所が無かった。
+- Decision:
+  - 3Dの分岐先は、`3d-asset-gpt6-astra`（単純なモデルと部品の単純な動き。Codexの`gpt-6.1-sol`が4方向の設計シートを描き、`gpt-6-astra`がBlenderのPythonのスクリプトでモデルを作り、Claudeが依頼文を書いて評価する。ともにreasoning effort `xhigh`）、`3d-asset-tripo3d`（複雑なモデルと骨格で動くモデル。ユーザーのログイン済みのブラウザでTripo3D Studioを操作し、評価済みの参考画像からだけ作り、書き出したGLBを`gpt-6-astra`で仕上げる）、`3d-asset-repair-model`、`3d-asset-repair-texture`とする。
+  - ごく単純な形を作るBlenderの経路（Claudeが直接作る）は、入口`design-3d-asset`の中に残す。
+  - 2つの分岐先は、派生アプリでの実績（依頼文、評価の基準、記録の形式、Tripoの設定と操作の順番、クレジットの記録、つまずいた点）をもとにする。Codexの隔離環境でBlenderが起動できないときは、Codexがスクリプトを書き、Claudeが実行する分担にしてよい。
+  - このリポジトリでは、3Dのアダプタ（`ios-design-3d-asset`）、D-082、`AGENTS.md`が分岐先より優先する（D-089）。
+- Consequence: Macの`3d-asset-gpt6-astra`と`3d-asset-tripo3d`を作り、`design-3d-asset`はこの2つへ振り分ける。Macのskillはテンプレートの取り込みで派生アプリに届かない（D-089）。`AGENTS.md`、skill、tool、testは変えない。
+- Related Issue: #472
