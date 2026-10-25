@@ -294,7 +294,7 @@ tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
 
 ## appstore-creativeスキルでストア用スクショを作る
 
-CodexやClaudeに「appstore-creativeでストア用スクショを作って」と依頼できます。スキルはGoldieを土台にします（D-077）。
+CodexやClaudeに「appstore-creativeでストア用スクショを作って」と依頼できます。面はHTMLとCSSで組み、headless Chromiumで描きます（D-077、D-093）。
 [使い方](./appstore-creative.md)と[スキル](../.agents/skills/appstore-creative/SKILL.md)を参照してください。
 日本語・英語の原稿と実際のアプリ画像を使い、背景・見出し・端末枠を調整します。
 導入のみ、既存画像の装飾、撮影、動画を依頼に合わせて実行します。
