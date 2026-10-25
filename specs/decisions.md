@@ -1109,3 +1109,19 @@
   - このリポジトリでは、3Dのアダプタ（`ios-design-3d-asset`）、D-082、`AGENTS.md`が分岐先より優先する（D-089）。
 - Consequence: Macの`3d-asset-gpt6-astra`と`3d-asset-tripo3d`を作り、`design-3d-asset`はこの2つへ振り分ける。Macのskillはテンプレートの取り込みで派生アプリに届かない（D-089）。`AGENTS.md`、skill、tool、testは変えない。
 - Related Issue: #472
+
+## D-096: Xへの投稿の材料を、機能のPRの中で`XPosts/`に残す
+
+- Date: 2026-10-25
+- Status: 確定
+- Supersedes: なし
+- Context: ユーザーはXで、作っているアプリの投稿を運用している。投稿はGrok Botが、GitHubの各アプリのリポジトリの`main`を読んで行う。これまでは投稿の材料が残らず、機能を作るたびに、あとから材料を集め直す必要があった。
+- Decision:
+  - テンプレートのスキル`x-post-material`で、投稿の材料を残す。テンプレートを導入したすべての派生アプリが、取り込みでこのスキルを使う。
+  - 画面のある機能を作っている途中で、Claudeが「Xに投稿する価値がある」と判断したら、材料を残し、残したことをユーザーへ報告する。ある程度完成した機能は、すべて公開してよい。
+  - 1つの投稿につき1つのフォルダを`XPosts/<YYYY-MM-DD>-<サブタイトル>/`に作る。日付は必須で、サブタイトルは英小文字、数字、ハイフンにする。中身は日本語の`post.md`、`post.json`、画像と、5秒以上30秒以下の動画とする。面白い点が複数あれば、その数だけフォルダを作る。既存の材料と同じ機能、同じ推しどころなら作らない。
+  - 材料は、その機能IssueのPRの同じブランチに入れる。投稿の材料のためだけのIssueは立てない。`XPosts/`の材料は、機能IssueのAcceptance criteriaの範囲外への機能の追加として扱わない。
+  - 画像と動画は、専用Simulator（D-063、D-070、D-079）だけで撮る。秘密、認証情報、個人情報を入れない。
+  - Xへの投稿、文面の最終決定、投稿済みの記録はGrok Botが行う。Grok Botへの案内は`XPosts/README.md`に置く。
+- Consequence: スキル、Grok Botへの案内のひな形、材料の書式を確かめるtoolとtestを加える。repository testの一覧に`XPosts/`のdomainを加える。テンプレートの取り込みはテンプレートにあるファイルだけを扱うので、テンプレート自身に材料を置かなければ、アプリの`XPosts/`は取り込みで変わらない。`AGENTS.md`は変えない。
+- Related Issue: #474
