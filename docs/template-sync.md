@@ -20,7 +20,7 @@
 | `identity` | Identity bootstrapが書き換える文書 | 取り込み先のIdentityで変換してから比べ、取り込む |
 | `app` | アプリが持つもの（アプリのソース、Xcode project、`App Store/`の原稿、product／acceptance仕様） | 取り込まない |
 | `mixed` | テンプレートとアプリの内容が混ざるもの | 規則ごとに手で確認する |
-| `template-only` | テンプレート専用（同期tool自身、テンプレート専用のスキル`.agents/user-skills/`とリンクのtool、過去の実装計画） | アプリへ持ち込まない |
+| `template-only` | テンプレート専用（同期tool自身、過去の実装計画） | アプリへ持ち込まない |
 
 `mixed`の規則は次のとおりです。
 
@@ -213,9 +213,9 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 - 入り口1：開発中のアプリのリポジトリから、そのアプリへ取り込みます。
 - 入り口2：テンプレートのリポジトリから、取り込み先のアプリのリポジトリを指定して取り込みます。
 
-どちらの入り口でも、取り込み元はGitHubのテンプレートの最新の`main`です（D-092）。スキルの`scripts/prepare-template-source.sh`が、`main`の最新のcommitを読み、テンプレートと取り込み先の両方のリポジトリの外（`~/.ios-template-sync/template-source/`）に、`main`だけを取得する保管用のbareリポジトリと、そのcommitのcleanなcheckout（全履歴つき）を用意して、`commit`、`remote`、`templateRoot`を1行のJSONで返します。toolはこのcheckout（そのcommitの版）から実行し、Issue、ブランチ、PRは取り込み先に作って、取り込み先の`AGENTS.md`と規則に従います。
+どちらの入り口でも、取り込み元はGitHubのテンプレートの最新の`main`です（D-092）。スキル`ios-template-sync`（11節）の`scripts/prepare-template-source.sh`が、`main`の最新のcommitを読み、テンプレートと取り込み先の両方のリポジトリの外（`~/.ios-template-sync/template-source/`）に、`main`だけを取得する保管用のbareリポジトリと、そのcommitのcleanなcheckout（全履歴つき）を用意して、`commit`、`remote`、`templateRoot`を1行のJSONで返します。toolはこのcheckout（そのcommitの版）から実行し、Issue、ブランチ、PRは取り込み先に作って、取り込み先の`AGENTS.md`と規則に従います。
 
-- ユーザーのテンプレートのcheckout（`/Users/uesugiyuuto/Documents/Xcode/iOS-Template`）は、スキルの置き場所として使うだけで、読み取り元にも書き込み先にもしません。テンプレートのGitHubへも書き込みません。
+- ユーザーのテンプレートのcheckout（`/Users/uesugiyuuto/Documents/Xcode/iOS-Template`）は、読み取り元にも書き込み先にもしません。テンプレートのGitHubへも書き込みません。
 - 取得した`main`が読んだときの`main`と違う、用意済みの同じcommitのcheckoutがそのcommitにないか変更がある、保管用のリポジトリが別のremoteを読む、`main`を読めない、のどれかなら、取り込みを始めずに理由を示して止まります。古い取り込み元やユーザーのcheckoutへ黙って切り替えません。
 
 取り込み先のリポジトリで、テンプレートの取り込みを1つのIssueとして進めます（1 Issue = 1 Branch = 1 PR）。
@@ -233,16 +233,15 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 11. 変更をcommitし、取り込み先の規則に従って検証します。取り込んだtoolとskillのrepository test、アプリのBuild、重要なUnit Test、日本語iPhoneのSmoke Testを行い、取り込みの前と後でアプリのBuildとUnit Testが同じように通ることを受け入れ条件に含めます。Simulatorは取り込み先の専用の2台だけを使います。
 12. 反対モデルの承認を受けて、mergeします。反対モデルの承認は必須です。PRには、計画のdigest、承認の参照、適用の結果（書き込んだファイル、削除したファイル、追記した決定事項、手で判断したファイル）を書きます。
 
-## 11. スキル`ios-template-sync`とリンク
+## 11. スキル`ios-template-sync`
 
-10節の手順は、スキル`ios-template-sync`にまとめています。正本はテンプレートの`.agents/user-skills/ios-template-sync/`（`SKILL.md`、`agents/openai.yaml`、`scripts/prepare-template-source.sh`）で、D-089の配置に合わせ、Codexは`~/.agents/skills/ios-template-sync`、Claudeは`~/.claude/skills/ios-template-sync`のリンクを通して使います。スキル、リンクのtool、それらのtestは`template-only`で、取り込みでアプリへ持ち込みません。
+10節の手順は、スキル`ios-template-sync`にまとめています。スキルはこのMacの共通スキルで（D-094）、テンプレートにもアプリにも置きません。本体（`SKILL.md`、`agents/openai.yaml`、`scripts/prepare-template-source.sh`と、そのtest）は`~/.agents/skills/ios-template-sync/`にあり、Codexはそこを読みます。Claudeは相対リンク`~/.claude/skills/ios-template-sync`（`../../.agents/skills/ios-template-sync`）を通して使います。`~/.codex/skills`には置きません。変更は`~/.agents/skills`のGitでcommitします。
 
-リンクは、テンプレートのcheckoutで張ります。
+スキルのtestは、テンプレートのIssueのrepository testには含まれません。スキルを変えたときや、このtoolの引数を変えたときは、このMacで次を実行します。どちらもテンプレートのcheckoutの見本とtoolを読むだけで、変えません（`--template <フォルダ>`で別のcheckoutを指定できます）。
 
 ```sh
-tools/link-user-skill.sh ios-template-sync
+~/.agents/skills/ios-template-sync/scripts/test-prepare-template-source.sh
+~/.agents/skills/ios-template-sync/scripts/test-skill-commands.sh
 ```
 
-- `~/.agents/skills/<name>`を、このcheckoutの`.agents/user-skills/<name>`を絶対パスで指すリンクにし、`~/.claude/skills/<name>`を相対リンク`../../.agents/skills/<name>`にします。`~/.codex/skills`には作りません。`skills/`のフォルダがなければ作ります。
-- どちらかに同じ名前のフォルダやファイル、別の場所を指すリンク（以前の配置の、Claudeから正本を直接指すリンクを含む）があれば、どちらも変えずに非0で止まります。すでに決まったリンクなら、何もしません。
-- `<name>`は英小文字、数字、`-`だけで、正本のフォルダに`SKILL.md`が必要です。
+1つ目は2節のscriptを、2つ目はスキルの文書（入り口、守ること、`tools/template-sync.sh`の各コマンドの引数と順番）を確かめます。このtoolの引数を変えるIssueは、スキルの文書と2つ目のtestも合わせて直します。
