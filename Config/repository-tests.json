@@ -419,7 +419,7 @@
     {
       "domain": "template-sync",
       "paths": ["Config/template-identity.json", "docs/template-sync.md", "tools/bootstrap-app.swift", "tools/lib/template-sync-apply.rb", "tools/lib/template-sync.rb", "tools/template-sync-codex-review.sh", "tools/template-sync.sh"],
-      "prefixes": ["tools/template-sync/", "tools/tests/fixtures/template-sync/"]
+      "prefixes": [".agents/user-skills/", "tools/link-user-skill.sh", "tools/template-sync/", "tools/tests/fixtures/template-sync/", "tools/tests/test-link-user-skill.sh", "tools/tests/test-template-sync-source.sh"]
     },
     {
       "domain": "ui-direction",
