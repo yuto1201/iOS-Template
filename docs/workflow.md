@@ -134,7 +134,7 @@ ruby tools/lib/workflow-release-phase-cli.rb validate \
 
 計画時はPhase recordを将来のClaim Baseへ先にmergeし、新規phase-aware Issueの既存AC一つへbindingを記載します。Claimは`implementation`の前Phase出口を検証し、batchは同じrelease／revision内でPhase順とIssue依存を両方守ります。`research`／`draft`はread-only、`independent`は理由付き非依存laneに限定します。Minor修正は同Phase、major変更はユーザー承認付きの新revisionと最も早い影響Phaseへの部分再gateです。
 
-実行と検証では、Phase 3を日本語iPhone主要機能と軽量証拠、Phase 4を英語／iPadの対象拡張、Phase 5を完全品質、Phase 6を証拠適用判断と公開準備へrouteします。Phase 6のApp Store用画像は、専用のiPhone 17 Pro（Dynamic Island (medium display)、1206×2622、D-079）とiPad Pro 13-inch (M5)で`tools/capture-appstore-screenshots.sh`が撮影し、`appstore-creative`スキル（D-077）がGoldieのlocale別configと拡張層で仕上げます。両経路とも共通Simulator session、全画像監査、package seal、upload／submitの独立gateを維持します。
+実行と検証では、Phase 3を日本語iPhone主要機能と軽量証拠、Phase 4を英語／iPadの対象拡張、Phase 5を完全品質、Phase 6を証拠適用判断と公開準備へrouteします。Phase 6のApp Store用画像は、専用のiPhone 17 Pro（Dynamic Island (medium display)、1206×2622、D-079）とiPad Pro 13-inch (M5)で`tools/capture-appstore-screenshots.sh`が撮影し、`appstore-creative`スキル（D-077、D-093）がlocale別の面の宣言から描画器（`tools/appstore-creative-compose.sh`）で仕上げます。両経路とも共通Simulator session、全画像監査、package seal、upload／submitの独立gateを維持します。
 
 既存Issueの移行はstateごとに扱います。
 

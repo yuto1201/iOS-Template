@@ -138,3 +138,20 @@ D-075に従い、`AGENTS.md`を書き換えるときは、変更する文面を�
 -- ClaudeとCodexのどちらでも通常の仕様化・実装・検証・外部操作を担当できる。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[3D Asset skill](.agents/skills/ios-3d-assets/SKILL.md)に従い、経路をモデルの複雑さで選ぶ（D-082）。ごく単純な形はClaudeがBlenderで直接作れる。単純なモデルと部品の単純な動きは、Codexの`gpt-6.1-sol`（reasoning effort `xhigh`）が作る参照画像と`gpt-6-astra`（reasoning effort `xhigh`）が作るモデルをClaudeが評価して修正を往復させて作り、複雑で高い品質が必要なモデルと骨格で動くモデルだけを、ユーザーまたはClaudeがブラウザでTripoを操作して作る。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、クレジットを使う操作は毎回ユーザーの承認を得る。どの経路で作ったassetも形式検証、統合、Build／Test、視覚確認を行い、Issue／PR証拠にauthoringの経路を記録する。
 +- ClaudeとCodexのどちらでも通常の仕様化・実装・検証・外部操作を担当できる。3Dモデル、mesh、material、rig、animationの作成・生成・形状変更は[3D Asset skill](.agents/skills/ios-design-3d-asset/SKILL.md)に従い、経路をモデルの複雑さで選ぶ（D-082）。ごく単純な形はClaudeがBlenderで直接作れる。単純なモデルと部品の単純な動きは、Codexの`gpt-6.1-sol`（reasoning effort `xhigh`）が作る参照画像と`gpt-6-astra`（reasoning effort `xhigh`）が作るモデルをClaudeが評価して修正を往復させて作り、複雑で高い品質が必要なモデルと骨格で動くモデルだけを、ユーザーまたはClaudeがブラウザでTripoを操作して作る。Tripoのログイン、プランや課金の変更、認証情報の入力はユーザーが行い、クレジットを使う操作は毎回ユーザーの承認を得る。どの経路で作ったassetも形式検証、統合、Build／Test、視覚確認を行い、Issue／PR証拠にauthoringの経路を記録する。
 ```
+
+## #469（2026-10-25）
+
+- Issue: #469
+- 承認を記録したIssueコメント: https://github.com/yuto1201/iOS-Template/issues/469#issuecomment-6392160234（2026-10-25）
+- 承認: ユーザーが会話の中で、53行目の括弧の中をD-093の描画器に合わせる変更前と変更後の文面を示した質問に「この文面で承認する」と回答した。
+- 承認後の`AGENTS.md`（1行目を除く）のSHA-256: `sha256:47a7e69f4e285c76a1a44e890ab18931b2bf5cd191fab52129beea41f4cc9ac6`
+
+承認した変更の文面:
+
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -53 +53 @@
+-Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの主要機能と軽量検証、Phase 4は英語／iPadの対象拡張、Phase 5は完全品質、Phase 6は同一candidateに対する証拠適用判断と公開準備を担当する。Phase 6のApp Store用画像とプレビュー動画は、`appstore-creative`スキル（Goldieを土台とする、D-077）でパターンを提案し、ユーザーの選択を経て作り、`ja`／`en-US`を分離する。iPhone・iPadとも撮影と録画は検証済み既存撮影経路の専用deviceを使い、共通Simulator資源管理、全画像監査、package／upload／submitの独立gateを維持する。
++Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの主要機能と軽量検証、Phase 4は英語／iPadの対象拡張、Phase 5は完全品質、Phase 6は同一candidateに対する証拠適用判断と公開準備を担当する。Phase 6のApp Store用画像とプレビュー動画は、`appstore-creative`スキル（D-077、D-093。面はHTMLとCSSで組み、headless Chromiumで描く）でパターンを提案し、ユーザーの選択を経て作り、`ja`／`en-US`を分離する。iPhone・iPadとも撮影と録画は検証済み既存撮影経路の専用deviceを使い、共通Simulator資源管理、全画像監査、package／upload／submitの独立gateを維持する。
+```

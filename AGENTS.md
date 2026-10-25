@@ -50,7 +50,7 @@ ClaudeとCodexは同じ権限を持ち、どちらもローカル作業と認証
 - `harden`: 承認済みの形に対し、保存復旧、特定画面のDynamic Type、VoiceOver、localization、Dark Mode、性能、回帰など一つの問題を狭く改善する。`targeted`なcaseだけを検証し、無関係な品質項目を同じIssueへ集めない。
 - `release`: リリース候補Headへ従来の完全品質ゲートを適用する。4条件、Light/Dark、Dynamic Type、VoiceOver、44pt、目視、統合UI Test、同一Head証拠、反対モデルレビュー、premerge、提出前確認を必須にする。
 
-Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの主要機能と軽量検証、Phase 4は英語／iPadの対象拡張、Phase 5は完全品質、Phase 6は同一candidateに対する証拠適用判断と公開準備を担当する。Phase 6のApp Store用画像とプレビュー動画は、`appstore-creative`スキル（Goldieを土台とする、D-077）でパターンを提案し、ユーザーの選択を経て作り、`ja`／`en-US`を分離する。iPhone・iPadとも撮影と録画は検証済み既存撮影経路の専用deviceを使い、共通Simulator資源管理、全画像監査、package／upload／submitの独立gateを維持する。
+Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの主要機能と軽量検証、Phase 4は英語／iPadの対象拡張、Phase 5は完全品質、Phase 6は同一candidateに対する証拠適用判断と公開準備を担当する。Phase 6のApp Store用画像とプレビュー動画は、`appstore-creative`スキル（D-077、D-093。面はHTMLとCSSで組み、headless Chromiumで描く）でパターンを提案し、ユーザーの選択を経て作り、`ja`／`en-US`を分離する。iPhone・iPadとも撮影と録画は検証済み既存撮影経路の専用deviceを使い、共通Simulator資源管理、全画像監査、package／upload／submitの独立gateを維持する。
 
 すべてのstageで、コンパイル可能性、重要な金額・日付・保存ロジック、データ非破壊、秘密・個人情報の非保存、ユーザー所有ファイル保護、Scope境界、実行結果の正確な報告を省略しません。`strict`対象の認証・migration・本番データ・課金・法務・workflow gateは、stageが早くても対象別安全確認と必要な承認を維持します。
 

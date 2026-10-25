@@ -165,11 +165,11 @@ ruby tools/lib/ios-simulator-resource.rb recover --dry-run
 
 ### 3.3 Phase 6のApp Store画像
 
-Phase 6のスクリーンショットは通常の4条件application verificationとは別のdisplay-family成果物です。iPhoneの画像は、App Storeの必須サイズであるDynamic Island (medium display)の1206×2622（family `iphone-6.3`、D-079）で作ります。その装飾・編集は`appstore-creative`スキル（Goldieを土台とする、D-077）を標準参照とし、`goldie/ja/`と`goldie/en-US/`を別config／raw／flow／outputとして扱います。iPadはGoldie対象外なので`tools/capture-appstore-screenshots.sh`へrouteし、iPhone画像を拡大しません。既存画像の見出し、背景、frame、font、順序だけの変更は再撮影しません。
+Phase 6のスクリーンショットは通常の4条件application verificationとは別のdisplay-family成果物です。iPhoneの画像は、App Storeの必須サイズであるDynamic Island (medium display)の1206×2622（family `iphone-6.3`、D-079）で作ります。その装飾・編集は`appstore-creative`スキル（D-077、D-093）を標準参照とし、面はlocale別の宣言からHTMLとCSSで組んでheadless Chromiumで描きます（`tools/appstore-creative-compose.sh`）。`goldie/ja/`と`goldie/en-US/`を別の宣言／raw／flow／outputとして扱います。iPadの撮影も`tools/capture-appstore-screenshots.sh`へrouteし、iPhone画像を拡大しません。既存画像の見出し、背景、frame、font、順序だけの変更は再撮影しません。
 
 新規raw撮影は`tools/with-ios-simulator-lock.sh`の内側で`tools/capture-appstore-screenshots.sh`を実行し、同じMac共通resource managerを使用します。撮影はlocale／familyごとにplatformの専用deviceを一台ずつleaseし（lease前にerase、release時にshutdown）、画像とsanitized receiptをdevice外へ保存して停止を確認してから次の条件へ進みます。D-079により専用iPhone 17 ProはiPhoneの必須画像サイズ（1206×2622、family `iphone-6.3`）の機種、専用iPad Pro 13-inch (M5)はiPad 13-inch（2064×2752、family `ipad-13`）の機種なので、撮影画像を合成や切り抜きなしで使い、manifestへは各familyのApple公式の機種名と実際の画像サイズを記録します。宣言と異なるRuntimeやfamilyに対応しない専用deviceでは、Simulatorを変更する前に停止します。Goldieの`capture`は専用deviceを選べないため使わず、撮影結果をGoldieへimportします。失敗、timeout、INT／TERMも同じrelease経路を通し、cleanup失敗は枠とdurable recordを残して成功扱いしません。fake `xcrun`によるrepository testはこの順序とcleanupの回帰であり、実画像品質の証拠ではありません。
 
-Goldie／capture成功はPhase 5 full proof、`evidence-applicability.json`、visual audit、release-auditor、package seal、App Store account／target preflight、upload、submitの代用ではありません。`reuse`は元のPhase 5証拠が同じcandidate／contextへ適用可能という意味だけで、新たに実行したと報告しません。
+描画／capture成功はPhase 5 full proof、`evidence-applicability.json`、visual audit、release-auditor、package seal、App Store account／target preflight、upload、submitの代用ではありません。`reuse`は元のPhase 5証拠が同じcandidate／contextへ適用可能という意味だけで、新たに実行したと報告しません。
 
 ## 4. 実行段階
 
