@@ -25,7 +25,11 @@ done
 [[ "$(readlink "$claude_skill")" == ../../.agents/skills/x-post-material ]] || fail 'Claude route is not portable'
 [[ -f "$claude_skill/SKILL.md" ]] || fail 'Claude route is broken'
 
-ruby -rjson <<'RUBY'
+# Config/development-device.json is template-only (D-086), so it marks the template repository itself.
+template_repository=0
+[[ -f Config/development-device.json ]] && template_repository=1
+
+X_POST_TEMPLATE=$template_repository ruby -rjson -rdigest <<'RUBY'
 # encoding: UTF-8
 def fail!(message)
   abort "x-post-material: #{message}"
@@ -45,13 +49,21 @@ require_all('SKILL.md', skill, [
   '投稿の材料のためだけのIssueは立てない', 'tools/check-x-posts.sh XPosts', '## 報告',
   '秘密、認証情報、個人情報'
 ])
+privacy = skill[skill.index('## 機能のPRに入れる')..]
+require_all('privacy procedure', privacy, [
+  'commitする前に、秘密、認証情報、個人情報が入っていないかを、次のすべてで確かめ、見つけたら取り除く',
+  '`post.md`の事実、推しどころ、画像と動画の説明', '`post.json`のすべての値', 'すべての画像と動画を、1枚ずつ'
+])
 
 readme = File.read('.agents/skills/x-post-material/templates/README.md', encoding: 'UTF-8')
 guide = readme.lines.grep(/\A\d+\. /)
+# AC-3 of #474: the template carries the Issue's Grok Bot guide verbatim, preserved from the Issue body.
+issue_guide = File.read('tools/tests/fixtures/x-post-material/issue-474-grok-guide.md', encoding: 'UTF-8').lines.grep(/\A\d+\. /)
+fail!('Grok Bot guide differs from the Issue #474 guide') unless guide == issue_guide
 fail!("Grok Bot guide must have 7 numbered items, found #{guide.length}") unless guide.length == 7
 fail!('Grok Bot guide items are out of order') unless guide.map { |line| line.to_i } == (1..7).to_a
 require_all('Grok Bot guide', readme, [
-  'GitHubのこのリポジトリの`main`の`XPosts/`', '「事実」に書いてあることだけ', '画像は4枚まで、または動画1本',
+  'GitHubの各アプリのリポジトリの`main`の`XPosts/`', '「事実」に書いてあることだけ', '画像は4枚まで、または動画1本',
   '`related`に書いてあるフォルダは、内容が近い', '投稿済みの記録は、Grok Bot自身の側に残す', '投稿は1日1つ程度'
 ])
 
@@ -70,13 +82,25 @@ fail!('repository-tests lacks the x-post-material test') unless test && test['do
 
 # Template sync plans only the template's tracked files and requires every ownership prefix to match one, so
 # an app's XPosts/ stays app-only and untouched as long as the template itself tracks nothing there.
-ownership = JSON.parse(File.read('tools/template-sync/ownership.json'))
-listed = ownership['rules'].flat_map { |entry| entry['paths'] + entry['prefixes'] }
-fail!('template sync ownership must not list XPosts/') if listed.any? { |path| path.start_with?('XPosts') }
+# Both files below are template-only, so an app that imported the template checks only its own material.
+if ENV.fetch('X_POST_TEMPLATE') == '1'
+  ownership = JSON.parse(File.read('tools/template-sync/ownership.json'))
+  listed = ownership['rules'].flat_map { |entry| entry['paths'] + entry['prefixes'] }
+  fail!('template sync ownership must not list XPosts/') if listed.any? { |path| path.start_with?('XPosts') }
+
+  # AC-6 of #474: the user approved D-096's exact wording; the record binds the section's bytes.
+  approval = JSON.parse(File.read('tools/tests/fixtures/x-post-material/d-096-approval.json', encoding: 'UTF-8'))
+  decisions = File.read('specs/decisions.md', encoding: 'UTF-8')
+  start = decisions.index("\n## D-096: ")
+  fail!('specs/decisions.md lacks D-096') unless start
+  finish = decisions.index("\n## D-", start + 1) || decisions.length
+  section = decisions[(start + 1)..finish]
+  section = section.chomp + "\n" if finish < decisions.length
+  fail!('D-096 differs from the approved wording') unless Digest::SHA256.hexdigest(section) == approval.fetch('sectionSha256')
+end
 RUBY
 
-# Config/development-device.json is template-only (D-086), so it marks the template repository itself.
-if [[ -f Config/development-device.json ]]; then
+if [[ $template_repository == 1 ]]; then
   [[ -z "$(git ls-files -- XPosts)" ]] || fail 'the template itself must not track XPosts/ material'
 fi
 
@@ -132,5 +156,29 @@ root=$(case_root related-ok)
 cp -R "$root/$post" "$root/2026-10-26-icon-detail"
 edit_json "$root/2026-10-26-icon-detail/post.json" 'data["createdAt"] = "2026-10-26"; data["related"] = ["2026-10-25-icon-list"]'
 "$check" "$root" >/dev/null || fail 'valid related folders were rejected'
+
+# An app that imported the template has none of the template-only files. Rebuild that layout in a scratch
+# repository and run this same test there, once with valid material and once with broken material.
+if [[ -z "${X_POST_MATERIAL_NESTED:-}" ]]; then
+  app="$tmp/adopted-app"
+  mkdir -p "$app"
+  for path in .agents/skills/x-post-material .agents/skills/ship-issue/SKILL.md Config/repository-tests.json \
+    tools/check-x-posts.sh tools/lib/x-posts-check.rb tools/lib/bounded-command.rb tools/tests/test-x-post-material.sh \
+    tools/tests/lib/prerequisites.sh tools/tests/fixtures/x-post-material; do
+    mkdir -p "$app/$(dirname "$path")"
+    cp -R "$path" "$app/$path"
+  done
+  mkdir -p "$app/.claude/skills"
+  ln -s ../../.agents/skills/x-post-material "$app/.claude/skills/x-post-material"
+  cp -R "$fixture" "$app/XPosts"
+  git -C "$app" init -q
+  [[ ! -e "$app/tools/template-sync" && ! -e "$app/Config/development-device.json" ]] || fail 'adopted layout kept template-only files'
+  X_POST_MATERIAL_NESTED=1 bash "$app/tools/tests/test-x-post-material.sh" >/dev/null 2>"$tmp/adopted.stderr" ||
+    fail "the test fails in an app that imported the template: $(cat "$tmp/adopted.stderr")"
+  rm "$app/XPosts/$post/post.md"
+  if X_POST_MATERIAL_NESTED=1 bash "$app/tools/tests/test-x-post-material.sh" >/dev/null 2>&1; then
+    fail 'the test accepted broken XPosts/ material in an app that imported the template'
+  fi
+fi
 
 echo 'x-post-material: passed'
