@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "app": "ExampleApp",
+  "title": "アイコンの一覧",
+  "createdAt": "2026-10-25",
+  "issue": 1,
+  "related": [],
+  "media": [
+    {"file": "01-icon-grid.png", "kind": "image", "description": "24種類のアイコンを並べた一覧"},
+    {"file": "02-scroll.mp4", "kind": "video", "description": "一覧をスクロールして1つを選ぶ6秒の動画"}
+  ]
+}

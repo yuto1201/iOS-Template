@@ -456,6 +456,11 @@
       "domain": "worktree-build",
       "paths": ["tools/xcodebuild-in-worktree.sh"],
       "prefixes": []
+    },
+    {
+      "domain": "x-post-material",
+      "paths": [".claude/skills/x-post-material", "tools/check-x-posts.sh", "tools/lib/x-posts-check.rb", "tools/tests/test-x-post-material.sh"],
+      "prefixes": [".agents/skills/x-post-material/", "XPosts/", "tools/tests/fixtures/x-post-material/"]
     }
   ],
   "tests": [
@@ -575,6 +580,7 @@
     {"path": "tools/tests/test-workflow-state-nested-resume.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-workflow-state-post-claim.sh", "domains": ["workflow-state"]},
     {"path": "tools/tests/test-workflow-state.sh", "domains": ["workflow-state"]},
+    {"path": "tools/tests/test-x-post-material.sh", "domains": ["x-post-material"]},
     {"path": "tools/tests/test-xcodebuild-in-worktree.sh", "domains": ["worktree-build"]}
   ]
 }
