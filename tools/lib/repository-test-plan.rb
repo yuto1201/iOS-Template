@@ -41,10 +41,8 @@ module IOSTemplate
       tools/tests/test-adopted-app-own-project-preparation.sh
       tools/tests/test-adopted-app-own-project.sh
       tools/tests/test-build-for-device.sh
-      tools/tests/test-link-user-skill.sh
       tools/tests/test-template-sync-apply.sh
       tools/tests/test-template-sync-derived.sh
-      tools/tests/test-template-sync-source.sh
       tools/tests/test-template-sync.sh
     ].freeze
     TEMPLATE_ONLY_PATHS = %w[
@@ -52,7 +50,6 @@ module IOSTemplate
       tools/build-for-device.sh
       tools/lib/template-sync-apply.rb
       tools/lib/template-sync.rb
-      tools/link-user-skill.sh
       tools/template-sync-codex-review.sh
       tools/template-sync.sh
       tools/tests/test-adopted-app-imported-tests.sh

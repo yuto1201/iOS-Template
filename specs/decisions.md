@@ -1082,3 +1082,16 @@
   - 参考の調査では、毎回、同じ分類の上位アプリ3〜5本の実際の画像（1〜5枚目）をbefore.clickやApp Storeから`curl`で集め、`research-sheet`で自分の案と同じ高さに並べて見比べてから提案シートを作る。参考の画像はGitの外に置き、手法だけを取り、デザイン、イラスト、文言、ロゴを写さない。
 - Consequence: 見出しを大きく、端末を端からはみ出させ、拡大カードを元の場所から持ち上げ、素材を端末に重ねて描けるようになる。描画にはこのMacのGoogle Chrome（またはChromium）とffmpegが要り、ない環境では描画器とそのtestが前提の不足として止まる。Goldieの経路の層の印（`theme.layerLimit`）は下書きにだけ使う。字体の太さを足す（Noto Sans JP Blackなど）ダウンロードと利用は、その都度ユーザーに聞く。
 - Related Issue: #434, #461
+
+## D-094: スキル`ios-template-sync`を、テンプレートではなくこのMacの共通スキルとして置く
+
+- Date: 2026-10-25
+- Status: 確定
+- Supersedes: D-078とD-092のうち、スキル`ios-template-sync`の正本をテンプレートの`.agents/user-skills/ios-template-sync/`に置き、`tools/link-user-skill.sh`でリンクすること。取り込みの仕組み（D-074、D-078）と、取り込み元をGitHubの最新の`main`にすること（D-092）は維持する。
+- Context: 2026-10-25、ユーザーが「ios-template-syncをMacの共通スキルとして配置、リポジトリのやつは削除」と指示した。このMacの共通スキルは、本体を`~/.agents/skills/`（このMacの中だけのGitで管理）に置き、`~/.claude/skills/`から相対リンクする。テンプレートの中のスキルはアプリへ持ち込まないテンプレート専用のもので、リンクはテンプレートのcheckoutに依存していた。
+- Decision:
+  - スキルの本体（`SKILL.md`、`agents/openai.yaml`、`scripts/prepare-template-source.sh`）と、そのtest（`scripts/test-prepare-template-source.sh`、`scripts/test-skill-commands.sh`）を`~/.agents/skills/ios-template-sync/`に置き、`~/.claude/skills/ios-template-sync`は`../../.agents/skills/ios-template-sync`への相対リンクにする。変更は`~/.agents/skills`のGitでcommitする。
+  - テンプレートから、`.agents/user-skills/`、`tools/link-user-skill.sh`、`tools/tests/test-link-user-skill.sh`、`tools/tests/test-template-sync-source.sh`と、`tools/tests/test-template-sync.sh`のスキルの文書の検査を削除する。
+  - 取り込みのtool（`tools/template-sync.sh`）と手順の正本（`docs/template-sync.md`）はテンプレートに残す。`docs/template-sync.md`は、スキルの置き場所を示す。
+- Consequence: スキルの変更は、テンプレートのIssueとrepository testを通らない。スキルのtestは、テンプレートのcheckoutの見本とtoolを読んで、このMacで手で実行する。`tools/template-sync.sh`の引数を変えるIssueは、スキルの文書とtestも合わせて直す。別のMacで使うときは、スキルを写して置く。
+- Related Issue: #468
