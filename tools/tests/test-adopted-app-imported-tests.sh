@@ -106,9 +106,10 @@ make_own_project_app() {
     pbx = File.binread(path).force_encoding(Encoding::UTF_8)
     ids = Array.new(9) { |index| format("AA00%020X", index + 1) }
     widget, list, debug, release, package, product, build_file, frameworks, target_line = ids
-    app_setting = "PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;"
+    # Release keeps the App Store Bundle ID and Debug carries the development one (#476).
+    app_setting = /PRODUCT_BUNDLE_IDENTIFIER = com\.example\.SampleNotes(?:\.dev)?;/
     abort "the app target settings are missing" unless pbx.scan(app_setting).length == 2
-    pbx = pbx.gsub(app_setting, "#{app_setting}\n\t\t\t\tINFOPLIST_FILE = SampleNotes/Info.plist;")
+    pbx = pbx.gsub(app_setting) { |setting| "#{setting}\n\t\t\t\tINFOPLIST_FILE = SampleNotes/Info.plist;" }
     widget_settings = ->(id, name) { "\t\t#{id} /* #{name} */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tINFOPLIST_FILE = SampleNotesWidget/Info.plist;\n\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes.Widget;\n\t\t\t\tPRODUCT_NAME = \"$(TARGET_NAME)\";\n\t\t\t\tSKIP_INSTALL = YES;\n\t\t\t};\n\t\t\tname = #{name};\n\t\t};\n" }
     pbx = pbx.sub("/* End XCBuildConfiguration section */", widget_settings.call(debug, "Debug") + widget_settings.call(release, "Release") + "/* End XCBuildConfiguration section */")
     pbx = pbx.sub("/* End XCConfigurationList section */", "\t\t#{list} /* Build configuration list for PBXNativeTarget \"SampleNotesWidget\" */ = {\n\t\t\tisa = XCConfigurationList;\n\t\t\tbuildConfigurations = (\n\t\t\t\t#{debug} /* Debug */,\n\t\t\t\t#{release} /* Release */,\n\t\t\t);\n\t\t\tdefaultConfigurationIsVisible = 0;\n\t\t\tdefaultConfigurationName = Release;\n\t\t};\n/* End XCConfigurationList section */")
