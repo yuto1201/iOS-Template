@@ -294,6 +294,53 @@ expect_refusal() {
   if run_renderer >"$scratch/$label.out" 2>"$scratch/$label.err"; then echo "unsafe visual evidence was rendered: $label" >&2; exit 1; fi
   if grep -Fq 'None for this Issue' "$scratch/$label.out"; then echo "unsafe evidence overclaimed Remaining work: $label" >&2; exit 1; fi
 }
+# Visual evidence of an explicit non-release stage (harden; shape has no visual
+# evidence) carries the stage reason that the canonical finalizer writes and
+# validate-verify-json.swift requires.
+render_explicit_stage_visual() {
+  local stage=$1 stage_scope=$2
+  restore_application
+  rm -f "$head_dir/evidence-applicability.json" "$review" "$review_packet" "$review_diff" "$head_dir/review-receipt.json"
+  CONTRACT="$contract" MATRIX="$matrix" VERIFY="$verify" DRAFT="$draft" STATE="$issue_dir/state.json" STAGE="$stage" STAGE_SCOPE="$stage_scope" \
+    ruby -I "$primary/tools/lib" -rjson -rdigest -rissue-contract <<'RUBY'
+contract = JSON.parse(File.binread(ENV.fetch("CONTRACT")))
+contract["deliveryStage"] = {"name"=>ENV.fetch("STAGE"), "timeBudgetMinutes"=>60, "reason"=>"Explicit-stage visual renderer fixture."}
+contract["deliveryProfile"] = {"name"=>"standard", "reason"=>"Explicit-stage visual renderer fixture."}
+contract["verificationScope"] = {"name"=>ENV.fetch("STAGE_SCOPE"), "reason"=>"Explicit-stage visual renderer fixture."}
+contract.fetch("acceptanceCriteria").last["text"] = "Explicit-stage visual evidence is sealed."
+File.binwrite(ENV.fetch("CONTRACT"), IOSTemplate::IssueContract.canonical_json(contract))
+contract_digest = "sha256:#{Digest::SHA256.file(ENV.fetch("CONTRACT")).hexdigest}"
+matrix = JSON.parse(File.read(ENV.fetch("MATRIX")))
+matrix["scope"] = ENV.fetch("STAGE_SCOPE")
+File.write(ENV.fetch("MATRIX"), JSON.generate(matrix))
+matrix_digest = "sha256:#{Digest::SHA256.file(ENV.fetch("MATRIX")).hexdigest}"
+[ENV.fetch("VERIFY"), ENV.fetch("DRAFT")].each do |path|
+  document = JSON.parse(File.read(path))
+  document.fetch("issueContract")["digest"] = contract_digest
+  document["matrixDigest"] = matrix_digest
+  document["reason"] = "Delivery stage #{ENV.fetch("STAGE")} passed; not release-ready." if path == ENV.fetch("VERIFY")
+  File.write(path, JSON.pretty_generate(document) + "\n")
+end
+state = JSON.parse(File.binread(ENV.fetch("STATE")))
+state.fetch("issueContract")["digest"] = contract_digest
+File.binwrite(ENV.fetch("STATE"), JSON.generate(state))
+RUBY
+  rm -f "$packet"
+  (
+    cd "$worktree"
+    /usr/bin/swift tools/validate-verify-json.swift --visual-packet --issue 42 --expected-base "$base" --draft ".artifacts/issues/42/$head/verify-draft.json" --output ".artifacts/issues/42/$head/visual-packet.json" >/dev/null
+  )
+  EVIDENCE="$verify" PACKET="$packet" ruby -rjson -rdigest -e '
+path=ENV.fetch("EVIDENCE");value=JSON.parse(File.read(path));packet=JSON.parse(File.read(ENV.fetch("PACKET")));
+value["visualEvaluation"]={"status"=>"passed","packet"=>{"path"=>".artifacts/issues/42/#{value.fetch("headSha")}/visual-packet.json","digest"=>"sha256:#{Digest::SHA256.file(ENV.fetch("PACKET")).hexdigest}"},"cases"=>packet.fetch("cases").map{|entry|{"id"=>entry.fetch("id"),"images"=>entry.fetch("images").map{|image|{"state"=>image.fetch("state"),"path"=>image.fetch("path"),"digest"=>image.fetch("digest"),"status"=>"passed","findings"=>[]}}}},"findings"=>[]};File.write(path,JSON.pretty_generate(value)+"\n")'
+  local stage_body
+  stage_body=$(run_renderer) || { echo "explicit $stage visual evidence was not rendered" >&2; exit 1; }
+  for expected in "Delivery stage: \`$stage\`" 'Release readiness: `not release-ready`'; do
+    grep -Fq "$expected" <<<"$stage_body" || { echo "missing explicit $stage visual PR body evidence: $expected" >&2; exit 1; }
+  done
+  VERIFY="$verify" ruby -rjson -e 'p=ENV.fetch("VERIFY");v=JSON.parse(File.read(p));v["reason"]=nil;File.write(p,JSON.pretty_generate(v)+"\n")'
+  expect_refusal "explicit-$stage-visual-null-reason"
+}
 
 body=$(run_renderer)
 [[ "$body" == *'Closes #42'* ]] || { echo 'PR body was not rendered with relaunchArguments evidence' >&2; exit 1; }
@@ -321,6 +368,11 @@ value = JSON.parse(File.read(ARGV[0]))
 abort "packet contains unverified languages/devices" unless value["imageFiles"].all? { |entry| entry["path"].include?("/iphone-ja/") }
 RUBY
   printf '\n' >>"$matrix"; expect_refusal scoped-stale-matrix
+  restore_application
+  VERIFY="$verify" ruby -rjson -e 'p=ENV.fetch("VERIFY");v=JSON.parse(File.read(p));v["reason"]="Delivery stage harden passed; not release-ready.";File.write(p,JSON.pretty_generate(v)+"\n")'
+  expect_refusal legacy-visual-stage-reason
+  render_explicit_stage_visual harden targeted
+  echo 'PASS: explicit harden visual evidence renders only with its stage reason'
   echo 'PASS: one-case canonical review packet and PR keep English/iPad deferred/unverified'
   exit 0
 fi

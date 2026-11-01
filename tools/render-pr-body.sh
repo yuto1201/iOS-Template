@@ -340,7 +340,9 @@ else
   reject("application Verify status is not passed") unless verify["status"] == "passed"
   reject("application classification is invalid") unless verify["changeClassification"] == "application-code" && verify["xcode"].is_a?(Hash)
   if visual_required
-    reject("visual application route is invalid") unless verify["reason"].nil? && %w[xcodebuild-mcp xcodebuild-simctl].include?(verify["executionRoute"])
+    # Same reason as the canonical finalizer and validator: explicit non-release stages report the stage.
+    expected_reason = %w[legacy release].include?(delivery_stage) ? nil : "Delivery stage #{delivery_stage} passed; not release-ready."
+    reject("visual application route is invalid") unless verify["reason"] == expected_reason && %w[xcodebuild-mcp xcodebuild-simctl].include?(verify["executionRoute"])
   else
     expected_reason = "Delivery stage #{delivery_stage} passed; not release-ready."
     reject("nonvisual application route is invalid") unless verify["reason"] == expected_reason && verify["executionRoute"] == "xcodebuild-stage"
