@@ -337,14 +337,7 @@
         "tools/lib/run-repository-tests.rb",
         "tools/run-repository-tests.sh"
       ],
-      "prefixes": [
-        ".agents/skills/x-post-material/",
-        ".claude/skills/x-post-material",
-        "tools/check-x-posts.sh",
-        "tools/lib/x-posts-check.rb",
-        "tools/tests/fixtures/x-post-material/",
-        "tools/tests/test-x-post-material.sh"
-      ]
+      "prefixes": []
     },
     {
       "domain": "review-contract",
