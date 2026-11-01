@@ -901,7 +901,7 @@ PY
   expect_bootstrap_rejection_without_mutation 'same second run with a live residual' \
     "${garden_notes_arguments[@]}"
 
-  verify_xcode_list_calls 8
+  verify_xcode_list_calls 9
   echo 'safety rerun tests passed'
   exit 0
 fi
