@@ -240,7 +240,10 @@ module AppStoreASCPreflight
   def main(root, bundle_id, version)
     refuse unless bundle_id.match?(/\A[A-Za-z0-9][A-Za-z0-9.-]*\z/) && version.match?(/\A[0-9]+(?:\.[0-9]+){1,2}\z/)
     run = runner(root)
-    bundle = one(list(run, "bundleIds", "bundle-ids", "list", "--identifier", bundle_id))
+    # The identifier filter matches by prefix, so app extensions (e.g. "<bundleId>.Widget") come back too.
+    # Keep only the exact Bundle ID and still require exactly one such record.
+    bundles = list(run, "bundleIds", "bundle-ids", "list", "--identifier", bundle_id)
+    bundle = one(bundles.select { |item| item.dig("attributes", "identifier") == bundle_id })
     refuse unless bundle.dig("attributes", "identifier") == bundle_id
     seed_id = bundle.dig("attributes", "seedId")
     refuse unless seed_id.is_a?(String) && seed_id.match?(/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/)
