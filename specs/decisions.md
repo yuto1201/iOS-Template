@@ -1141,3 +1141,25 @@
   - 派生アプリへの反映は、既存の`template-sync`の流れに任せる。
 - Consequence: テンプレートは`XPosts/`の材料も、その書式を確かめるskillとtoolも持たない。`ship-issue`の手順からXPostsの指示を外す。削除したpathのcoverageのため、`Config/repository-tests.json`の`repository-testing` domainに削除済みpathのprefixを一時的に置き、#493で外す。`AGENTS.md`は変えない。D-096の本文は書き換えず、追記型の記録として残す。
 - Related Issue: #492
+
+## D-099: 初回起動のオンボーディングを、全アプリ必須の標準機能にする
+
+- Date: 2026-11-01
+- Status: 確定
+- Supersedes: なし（`specs/development-stages.md` §1.5.3の「必須onboardingを追加する場合はPhase 1のMVP範囲とPhase 2のUI方向を再承認する」は維持し、このDecisionに従って適用する）。
+- Context: テンプレートにオンボーディングの部品がなく、派生アプリはそれぞれ別の作りで持っている（CafLogの`OnboardingView.swift`、SubLogの`Views/Onboarding/OnboardingView.swift`、Flowerの`OnboardingHints.swift`、SimplePomoの`GuideCards.swift`）。完了の記録の鍵、Skipの有無、通知の許可の求め方、評価の依頼（#383）との関係、App Store撮影のときの扱いがアプリごとに違う。ユーザーは2026-10-28、オンボーディングを全アプリ必須の標準機能にすると決め、2026-11-01にこの文面を承認した。
+- Decision:
+  - すべてのアプリは、初回起動のオンボーディングを持つ。外すのはユーザーが明示した場合だけとする。
+  - テンプレートは共通の部品`TemplateApp/Features/Onboarding/`を持ち、新しいアプリはこれを使う。ページは`OnboardingConfig.json`で宣言する。ページの種類は「価値の説明」「選択肢」「許可の前置き」「完了」とする。
+  - 最低限の決まり：
+    - 画面は3〜5枚。
+    - 質問（選択肢のページ）は0〜2問。気分や目的を選ぶ質問の画面は必須にしない。
+    - 完了以外の全ページにSkip、2枚目以降に戻るボタンを置く。
+    - Skipしても使い始められる。許可を拒否しても先へ進める（審査ガイドライン5.1.1(iv)、4.5.4）。
+    - 日本語と英語の文言、VoiceOverのラベル、44pt以上の操作。
+  - 選択肢の答えは端末の`UserDefaults`だけに置き、外部へ送らない。アプリの中で使う場所をページの宣言に書く（`usedFor`）。答えをアプリの中で使わない質問は置かない。
+  - オンボーディングの間は評価の依頼を止める（`reviewPrompt.suppress("onboarding")`。終わったら`resume("onboarding")`）。
+  - App Store撮影の起動引数`--appstore-screenshot`ではオンボーディングを出さず、完了の記録も残さない。オンボーディング自体を撮るときは、撮影の状態でページを指定して出す。
+  - 新しいアプリでは、Phase 1のrelease briefでオンボーディングの中身（伝える価値、質問と答えの使い道、許可の前置きの有無）を決め、Phase 2のUI方向で画面を決める。すでに公開した派生アプリへ入れる、または作りを大きく変えるときは、`specs/development-stages.md` §1.5.3のmajor changeとして、そのアプリの対象releaseのPhase 1（MVP範囲）とPhase 2（UI方向）をユーザーに再承認してもらう。今のオンボーディングの見た目と流れを変えずに部品だけを入れ替える場合は、confirmed-direction reuseとして扱える。
+- Consequence: テンプレートにUI方向（#482）、部品（#483）、作り方と計画の手順（#484）のIssueを立てる。派生アプリへの導入は各アプリのIssueで行い、テンプレートの取り込みでは自動で入らない（`TemplateApp/`はアプリの持ち物）。既存の完了の記録（例：`hasCompletedOnboarding`）を部品が読めるようにして、既存の利用者にもう一度出さない。
+- Related Issue: #481, #480
