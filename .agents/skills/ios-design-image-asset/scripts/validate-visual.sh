@@ -24,9 +24,13 @@ MANIFEST="$manifest_file" ROOT="$repository_root" INSPECTOR="$script_directory/i
   def refuse(message); warn message; exit 1; end
   value=YAML.safe_load(File.binread(ENV.fetch("MANIFEST")), permitted_classes: [], aliases: false)
   keys=%w[schemaVersion mode purpose prompt model sourceDigests widthPixels heightPixels durationSeconds format assetPath licenseNote sha256 processedAt]
-  refuse("manifest schema differs") unless value.is_a?(Hash) && value.keys.sort == keys.sort && value["schemaVersion"] == 1
+  # #477: transparency is optional in schemaVersion 1; a manifest without it means "none" and validates as before.
+  refuse("manifest schema differs") unless value.is_a?(Hash) && [keys.sort,(keys+["transparency"]).sort].include?(value.keys.sort) && value["schemaVersion"] == 1
   mode=value["mode"]
   refuse("mode is invalid") unless %w[image video].include?(mode)
+  transparency=value.fetch("transparency","none")
+  refuse("transparency is invalid") unless (mode == "image" && %w[none cutout edge-touching].include?(transparency)) || (mode == "video" && transparency == "none")
+  check_alpha=transparency != "none"
   safe_text=/\A[^\u0000-\u001f\u007f]{1,2048}\z/
   %w[purpose prompt model licenseNote].each{|key| refuse("#{key} is invalid") unless value[key].is_a?(String) && value[key].match?(safe_text)}
   secret_pattern=/(xi-api-key|api[_ -]?key|secret[_ -]?key|service_role|-----begin [a-z ]*private key-----|password\s*=)/i
@@ -62,7 +66,7 @@ MANIFEST="$manifest_file" ROOT="$repository_root" INSPECTOR="$script_directory/i
     binary=File.join(directory,"inspect-visual")
     _,compile_status=Open3.capture2e("/usr/bin/xcrun","swiftc","-parse-as-library",ENV.fetch("INSPECTOR"),"-o",binary)
     refuse("visual inspector could not compile") unless compile_status.success? && File.executable?(binary)
-    output,status=Open3.capture2e(binary,mode,asset)
+    output,status=Open3.capture2e(binary,check_alpha ? "image-alpha" : mode,asset)
     refuse("visual inspector failed") unless status.success?
   end
   begin
@@ -75,5 +79,17 @@ MANIFEST="$manifest_file" ROOT="$repository_root" INSPECTOR="$script_directory/i
     actual=measured["durationSeconds"]
     refuse("video duration differs") unless actual.is_a?(Numeric) && (actual-duration.to_f).abs <= [0.05,duration.to_f*0.02].max
   end
-  puts JSON.generate({"durationSeconds"=>measured["durationSeconds"],"format"=>format,"heightPixels"=>height,"mode"=>mode,"sha256"=>expected,"status"=>"valid","widthPixels"=>width})
-' || fail 'manifest, media, dimensions, duration, or hash did not validate'
+  result={"durationSeconds"=>measured["durationSeconds"],"format"=>format,"heightPixels"=>height,"mode"=>mode,"sha256"=>expected,"status"=>"valid","widthPixels"=>width}
+  if check_alpha
+    counts=%w[transparentPixels translucentPixels fringePixels transparentCorners].map{|key| measured[key]}
+    refuse("visual inspection output is invalid") unless [true,false].include?(measured["hasAlpha"]) && counts.all?{|count| count.is_a?(Integer) && count >= 0}
+    refuse("image has no alpha channel") unless measured["hasAlpha"]
+    refuse("image is fully opaque") if measured["transparentPixels"]+measured["translucentPixels"] == 0
+    refuse("cutout corners are not fully transparent") if transparency == "cutout" && measured["transparentCorners"] != 4
+    refuse("image has no fully transparent pixel") if transparency == "edge-touching" && measured["transparentPixels"] == 0
+    fringe=measured["fringePixels"]
+    result.merge!("transparency"=>transparency,"transparentCorners"=>measured["transparentCorners"],"fringePixels"=>fringe,"fringeRatio"=>(fringe.to_f/(width*height)).round(6))
+    warn "visual validation warning: #{fringe} semi-transparent near-white fringe pixels; check the edges on Light and Dark backgrounds" if fringe > 0
+  end
+  puts JSON.generate(result)
+' || fail 'manifest, media, dimensions, duration, hash, or transparency did not validate'
