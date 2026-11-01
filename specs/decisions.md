@@ -1125,3 +1125,19 @@
   - Xへの投稿、文面の最終決定、投稿済みの記録はGrok Botが行う。Grok Botへの案内は`XPosts/README.md`に置く。
 - Consequence: スキル、Grok Botへの案内のひな形、材料の書式を確かめるtoolとtestを加える。repository testの一覧に`XPosts/`のdomainを加える。テンプレートの取り込みはテンプレートにあるファイルだけを扱うので、テンプレート自身に材料を置かなければ、アプリの`XPosts/`は取り込みで変わらない。`AGENTS.md`は変えない。
 - Related Issue: #474
+
+## D-097: Xへの投稿の材料とSNSの判断をOpenBot側へ移し、開発側はSNS用の材料を作らない
+
+- Date: 2026-11-01
+- Status: 確定
+- Supersedes: D-096
+- Context: 侑斗さんは、SNS投稿のネタ選びと素材集めをすべてOpenBot側（SNSチーム）へ移すと決めた。機能を作る途中で開発側が`XPosts/`の材料を残す運用（D-096）は、開発側にSNSの判断を持たせることになり、この分担に合わない。
+- Decision:
+  - D-096のスキル`x-post-material`、その手順、`tools/check-x-posts.sh`と検査、対応するテストと繰り返しの検証を削除する。
+  - 開発側（Claude Code／Codex）は、SNS用の材料、文面、撮影を作らない。
+  - SNSのネタは、OpenBot側が`main`にマージ済みのPRとコミット、および各アプリの進捗から判断する。
+  - 撮影はOpenBot側の専用Simulator「OpenBot-SNS (iPhone 17 Pro)」で行う。このSimulatorは各リポジトリの`dedicated-simulators`の対象ではない。
+  - 各アプリにもうある`XPosts/`フォルダは消さず、そのまま残す。OpenBot側が素材として使い切る。
+  - 派生アプリへの反映は、既存の`template-sync`の流れに任せる。
+- Consequence: テンプレートは`XPosts/`の材料も、その書式を確かめるskillとtoolも持たない。`ship-issue`の手順からXPostsの指示を外す。`AGENTS.md`は変えない。D-096の本文は書き換えず、追記型の記録として残す。
+- Related Issue: #492
