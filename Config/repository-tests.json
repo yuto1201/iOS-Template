@@ -150,6 +150,11 @@
       "prefixes": []
     },
     {
+      "domain": "development-bundle-id",
+      "paths": ["tools/apply-development-bundle-id.sh", "tools/tests/test-apply-development-bundle-id.sh"],
+      "prefixes": ["tools/tests/fixtures/development-bundle-id/"]
+    },
+    {
       "domain": "device-build",
       "paths": ["Config/dedicated-simulators.json", "Config/development-device.json", "tools/build-for-device.sh", "tools/xcodebuild-in-worktree.sh"],
       "prefixes": []
@@ -474,6 +479,7 @@
     {"path": "tools/tests/test-app-feedback-provision.sh", "domains": ["app-feedback", "provider-security"]},
     {"path": "tools/tests/test-app-icon-workflow.sh", "domains": ["bootstrap-assets"]},
     {"path": "tools/tests/test-app-review-guidelines.sh", "domains": ["app-review-guidelines", "specification"]},
+    {"path": "tools/tests/test-apply-development-bundle-id.sh", "domains": ["development-bundle-id"]},
     {"path": "tools/tests/test-appstore-build.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-creative-compose.sh", "domains": ["appstore"]},
     {"path": "tools/tests/test-appstore-creative-preview.sh", "domains": ["appstore"]},

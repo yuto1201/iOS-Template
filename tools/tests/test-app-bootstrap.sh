@@ -793,7 +793,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 expected = 'INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";'
-if content.count(expected) != 2:
+if content.count(expected) != 1:
     raise SystemExit("unexpected display-name setting fixture")
 path.write_text(content.replace(expected, 'INFOPLIST_KEY_CFBundleDisplayName = "Tampered";', 1))
 PY
@@ -815,11 +815,34 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 expected = '\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";\n'
-if content.count(expected) != 2:
+if content.count(expected) != 1:
     raise SystemExit("unexpected display-name setting fixture")
 path.write_text(content.replace(expected, "", 1))
 PY
   expect_bootstrap_rejection_without_mutation 'deleted display-name setting on same second run' \
+    "${garden_notes_arguments[@]}"
+
+  # #476: a Debug build that lost its development Bundle ID would replace the App Store app on a device.
+  new_safety_fixture development-bundle-delete
+  if ! (
+    cd "$fixture"
+    "$root/tools/bootstrap-app.sh" "${garden_notes_arguments[@]}"
+  ) >"$output" 2>"$errors"; then
+    echo "development Bundle ID deletion setup failed: $(<"$errors")" >&2
+    exit 1
+  fi
+  python3 - "$fixture/GardenNotes.xcodeproj/project.pbxproj" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+expected = 'PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotes.dev;'
+if content.count(expected) != 1:
+    raise SystemExit("unexpected development Bundle ID fixture")
+path.write_text(content.replace(expected, 'PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotes;', 1))
+PY
+  expect_bootstrap_rejection_without_mutation 'development Bundle ID replaced by the App Store one on same second run' \
     "${garden_notes_arguments[@]}"
 
   new_safety_fixture audit-residual
@@ -1190,9 +1213,33 @@ import sys
 with open(sys.argv[1]) as source:
     content = source.read()
 
-display_name_setting = 'INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";'
-if content.count(display_name_setting) != 2:
-    raise SystemExit(f"expected exactly two App display-name settings, found {content.count(display_name_setting)}")
+def configuration(name):
+    marker = f"/* {name} */ = {{\n\t\t\tisa = XCBuildConfiguration;"
+    blocks = [block.split("\t\t\tname = ", 1)[0] for block in content.split(marker)[1:]]
+    blocks = [block for block in blocks if "PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotes" in block
+              and "PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotesTests" not in block
+              and "PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotesUITests" not in block]
+    if len(blocks) != 1:
+        raise SystemExit(f"expected exactly one App {name} configuration, found {len(blocks)}")
+    return blocks[0]
+
+# #476: Debug installs beside the App Store app; Release keeps the App Store identity.
+expected = {
+    "Debug": ('PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotes.dev;', 'INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes Dev";'),
+    "Release": ('PRODUCT_BUNDLE_IDENTIFIER = com.yuto.GardenNotes;', 'INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";'),
+}
+for name, settings in expected.items():
+    block = configuration(name)
+    for setting in settings:
+        if block.count(setting) != 1:
+            raise SystemExit(f"{name} configuration is missing {setting}")
+    if block.count("PRODUCT_BUNDLE_IDENTIFIER = ") != 1 or block.count("INFOPLIST_KEY_CFBundleDisplayName = ") != 1:
+        raise SystemExit(f"{name} configuration has more than one App identity setting")
+for setting in [setting for settings in expected.values() for setting in settings]:
+    if content.count(setting) != 1:
+        raise SystemExit(f"expected exactly one {setting}, found {content.count(setting)}")
+if "TemplateApp Dev" in content or "TemplateApp.dev" in content:
+    raise SystemExit("the template's development identity remains after bootstrap")
 PY
   [[ "$pbx_uuid_hash_before" == "$(rg -o '[A-F0-9]{24}' "$pbxproj" | LC_ALL=C sort -u | shasum | awk '{print $1}')" ]] || {
     echo 'PBX UUIDs changed during transform' >&2
@@ -1643,9 +1690,12 @@ import sys
 with open(sys.argv[1]) as source:
     content = source.read()
 
-display_name_setting = r'INFOPLIST_KEY_CFBundleDisplayName = "Garden \"Notes\" \\ Draft";'
-if content.count(display_name_setting) != 2:
-    raise SystemExit(f"expected exactly two escaped display-name settings, found {content.count(display_name_setting)}")
+for display_name_setting in (
+    r'INFOPLIST_KEY_CFBundleDisplayName = "Garden \"Notes\" \\ Draft";',
+    r'INFOPLIST_KEY_CFBundleDisplayName = "Garden \"Notes\" \\ Draft Dev";',
+):
+    if content.count(display_name_setting) != 1:
+        raise SystemExit(f"expected exactly one escaped display-name setting {display_name_setting}, found {content.count(display_name_setting)}")
 PY
   xcode_list_parent="$(mktemp -d -t app-bootstrap-xcode-list.XXXXXX)"
   if ! bounded_run generated-sample-quoted-xcode-list "${IOS_TEMPLATE_BOOTSTRAP_XCODE_TIMEOUT_SECONDS:-300}" \

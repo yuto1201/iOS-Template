@@ -191,6 +191,11 @@ module IOSTemplate
         @errors[field] << "xcode-#{field}-mismatch" unless !actual.nil? && actual == expected
       end
 
+      def compare_identity(field, actual, expected, development_suffix)
+        return if development_suffix && expected.is_a?(String) && !actual.nil? && actual == "#{expected}#{development_suffix}"
+        compare(field, actual, expected)
+      end
+
       def source_path_setting(settings, key)
         value = settings[key]
         return nil if value.nil?
@@ -432,9 +437,14 @@ module IOSTemplate
             path = source_path_setting(actual, key)
             @build_files << path if path
           end
-          compare("identity.bundleId", resolved(actual, "PRODUCT_BUNDLE_IDENTIFIER"), @values.call(IDENTITY, "bundleId"))
+          # The Debug build may carry the development identity, `<Bundle ID>.dev` named `<display name> Dev`,
+          # so it installs beside the App Store app. Every other configuration keeps the App Store identity.
+          development = target_config["name"] == "Debug"
+          compare_identity("identity.bundleId", resolved(actual, "PRODUCT_BUNDLE_IDENTIFIER"), @values.call(IDENTITY, "bundleId"),
+                           development ? ".dev" : nil)
           compare("identity.module", resolved(actual, "PRODUCT_MODULE_NAME") || resolved(actual, "PRODUCT_NAME"), module_name)
-          compare("identity.displayName", resolved(actual, "INFOPLIST_KEY_CFBundleDisplayName"), @values.call(IDENTITY, "displayName"))
+          compare_identity("identity.displayName", resolved(actual, "INFOPLIST_KEY_CFBundleDisplayName"),
+                           @values.call(IDENTITY, "displayName"), development ? " Dev" : nil)
           compare("version", resolved(actual, "MARKETING_VERSION"), @values.call(APP, "version"))
           compare("build", resolved(actual, "CURRENT_PROJECT_VERSION"), @values.call(VALUES, "build"))
           generated_info = resolved(actual, "GENERATE_INFOPLIST_FILE") == "YES"

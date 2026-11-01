@@ -397,6 +397,10 @@ live_pbx = File.binread(File.join(project_source, "#{live_module}.xcodeproj/proj
 pbx = live_pbx.gsub(/^[ \t]*INFOPLIST_KEY_CFBundleDisplayName = .*;\n/, "")
 pbx = pbx.gsub(live_bundle, "com.example.garden").gsub(live_module, "GardenNotes")
 pbx = pbx.gsub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;", 'PRODUCT_BUNDLE_IDENTIFIER = com.example.garden; INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";')
+# The Debug build carries the development identity (#476): `<Bundle ID>.dev` named `<display name> Dev`.
+pbx = pbx.gsub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden.dev;", 'PRODUCT_BUNDLE_IDENTIFIER = com.example.garden.dev; INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes Dev";')
+abort "fixture project lacks the Release App Store identity" unless pbx.scan('INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";').length == 1
+abort "fixture project lacks the Debug development identity" unless pbx.scan('INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes Dev";').length == 1
 # Garden Notes supports English and Japanese (supportedLocales below), whichever languages the live app ships.
 pbx = pbx.sub(/knownRegions = \([^)]*\);/, "knownRegions = (\n\t\t\t\ten,\n\t\t\t\tja,\n\t\t\t\tBase,\n\t\t\t);")
 abort "fixture project has no knownRegions" unless pbx.include?("knownRegions = (\n\t\t\t\ten,\n\t\t\t\tja,\n")
@@ -492,6 +496,18 @@ File.write(pbx_path, pbx.sub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;", 
 xcode_check.call("one configuration has wrong Bundle", "identity.bundleId", "xcode-identity.bundleId-mismatch")
 File.write(pbx_path, pbx.sub('INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";', 'INFOPLIST_KEY_CFBundleDisplayName = "Other Name";'))
 xcode_check.call("display name mismatch", "identity.displayName", "xcode-identity.displayName-mismatch")
+# #476: only Debug may carry the development identity; Release keeps the App Store one.
+File.write(pbx_path, pbx.sub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;", "PRODUCT_BUNDLE_IDENTIFIER = com.example.garden.dev;"))
+xcode_check.call("Release cannot use the development Bundle", "identity.bundleId", "xcode-identity.bundleId-mismatch")
+File.write(pbx_path, pbx.sub('INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";', 'INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes Dev";'))
+xcode_check.call("Release cannot use the development display name", "identity.displayName", "xcode-identity.displayName-mismatch")
+File.write(pbx_path, pbx.sub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden.dev;", "PRODUCT_BUNDLE_IDENTIFIER = com.example.garden.debug;"))
+xcode_check.call("Debug Bundle accepts only the .dev suffix", "identity.bundleId", "xcode-identity.bundleId-mismatch")
+File.write(pbx_path, pbx.sub('INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes Dev";', 'INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes Beta";'))
+xcode_check.call("Debug display name accepts only the Dev suffix", "identity.displayName", "xcode-identity.displayName-mismatch")
+File.write(pbx_path, pbx.sub("PRODUCT_BUNDLE_IDENTIFIER = com.example.garden.dev;", "PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;")
+                     .sub('INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes Dev";', 'INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";'))
+xcode_check.call("Debug that still uses the App Store identity is accepted", nil, nil)
 File.write(pbx_path, pbx.sub("MARKETING_VERSION = 1.0;", "MARKETING_VERSION = 2.0;"))
 xcode_check.call("version mismatch", "version", "xcode-version-mismatch")
 File.write(pbx_path, pbx.sub("CURRENT_PROJECT_VERSION = 1;", "CURRENT_PROJECT_VERSION = 2;"))

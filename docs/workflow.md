@@ -263,6 +263,8 @@ application検証を実行するIssueは任意の`Verification`節へ、次の�
 
 許可するkeyは`bundleIdentifier`、`unitTestIdentifier`、scopeで定まるfixed 1件／targeted部分集合／fixed 4件の`cases`、受け入れ条件と同じ順の`acceptanceMappings`だけです。`shape`のcaseは操作を確認する`testIdentifier`を必須とします。各caseは`testIdentifier`またはexact `{"kind":"launch-succeeded"}`の一方だけを持ちます。`testIdentifier`のcaseには、Screenshot前の再起動にだけ渡す任意の`relaunchArguments`を宣言できます。
 
+`bundleIdentifier`には、runnerがビルドするDebugのBundle IDを書きます。Debugは`<本番のBundle ID>.dev`、ホーム画面の名前は`<表示名> Dev`で、App Store版と別のアプリとして同じiPhoneに並びます（§9.2）。例の`com.example.ExampleApp`なら`com.example.ExampleApp.dev`です。runnerはビルドしたアプリの`Info.plist`の`CFBundleIdentifier`がこの値と一致することを確かめ、違えば失敗します。App Storeへ出すビルド（Release）のBundle IDは本番の`com.example.ExampleApp`のままで、App Storeの準備、アップロード、提出は本番のBundle IDを使います。リリースの検証の証拠は、本番のBundle IDか、その`.dev`を`bundleIdentifier`にした検証だけを受け付けます。`.dev`へ移す前の派生アプリでは、Debugもまだ本番のBundle IDなので、本番のBundle IDを書きます。
+
 documentation-only Issueでは節を省略するか、`Not applicable`／GitHub空欄の`_No response_`にします。この場合、従来のsnapshot bytesに`verification`を追加しません。空のJSON、空節、部分設定を「省略」には読み替えません。`fast`へapplication Verificationを指定することも拒否します。application実行時のobject不在は、引き続きBuild前に失敗します。
 
 `acceptanceMappings` は全 `AC-*` をexactに一度ずつ含め、各 `checks` は空でなく重複せず、次のcanonical順を守ります: `stage:build`、`stage:unit-tests`、4つの `case:<case-id>`、4つの `visual:<case-id>`。少なくとも1つのstageまたはcase checkが必要です。runnerは実行したstage/caseだけをdraftへ記録し、finalizeはAIが承認したvisual checkを加えたexact mappingをfinal evidenceへ記録します。未知または未実行の参照は許可しません。
@@ -272,7 +274,7 @@ documentation-only Issueでは節を省略するか、`Not applicable`／GitHub�
 
 ```json
 {
-    "bundleIdentifier": "com.example.ExampleApp",
+    "bundleIdentifier": "com.example.ExampleApp.dev",
     "unitTestIdentifier": "ExampleAppTests/UnitSmokeTests/testUnit",
     "cases": [
       {"id": "iphone-en", "testIdentifier": "ExampleAppUITests/SmokeTests/testLaunch"},
@@ -562,3 +564,16 @@ Bootstrap例外は自動化tool自体がまだ使用できない場合に限り�
 復旧コマンドは既にmergedのdurable identityだけを対象にし、account／read権限、live Issueの指定Executor、所有者のmerged履歴、PR番号・URL・repository・Branch・Head・closing Issueを再取得・検証します。既存の異なるPRを上書きせず、書き込む値は欠けている`pullRequest`だけです。同じPRで再開する場合もremoteを再確認します。新規マージ、PR作成、状態遷移、Branch削除、検証・レビューの免除は行いません。
 
 不一致・未取得・timeoutでは停止し、durable stateを手編集したりcleanupの削除部分を手動転記したりしません。すでにPRが記録された通常経路は従来どおり`merge-issue.sh`／`cleanup-issue.sh`で再開します。
+
+### 9.2 開発版（Debug）のBundle ID
+
+Xcodeでビルドした開発版（Debug）と、App Storeから入れた版（Release）を、同じiPhoneに別のアプリとして並べます。iOSは同じBundle IDを同じアプリとして扱うので、Bundle IDが同じだと開発版を入れたときにApp Store版が置き換わり、入れ直しでApp Store版のデータが消えます。
+
+- Debug：Bundle IDは`<本番のBundle ID>.dev`、ホーム画面の名前（`CFBundleDisplayName`）は`<表示名> Dev`です。アイコンは本番と同じです。
+- Release：Bundle IDと表示名は本番のままです。App Storeへ出すビルドはReleaseです。
+- テンプレートのアプリは、Debugが`com.yuto.TemplateApp.dev`と`TemplateApp Dev`、Releaseが`com.yuto.TemplateApp`です。
+- 新しいアプリでは、Identity bootstrap（`tools/bootstrap-app.sh`）がDebugとReleaseを上の形にします。
+- すでにある派生アプリでは、Xcode projectはアプリの持ち物なので、テンプレートの取り込みでは変わりません。取り込みで届く`tools/apply-development-bundle-id.sh`を、そのアプリの1つのIssueで実行します。toolは`Config/app-identity.json`を読み、アプリのtargetのDebugだけを変え、Releaseを1文字も変えません。2回実行しても結果は変わりません。iCloud（CloudKit）、App Group、共有のKeychainのentitlementsを持つ場合や、アプリのBundle IDで始まる埋め込みtarget（Widgetなど）がある場合は、何も変えずに止まり（終了コード3）、別に決める必要があることを表示します。扱いは別のIssueで決めます。読めない形のprojectでも何も変えずに止まります（終了コード1）。
+- AIの検証（`ios-verify`）はDebugをビルドするので、Verificationの`bundleIdentifier`には`.dev`のBundle IDを書きます（§3の「Verification」）。
+- 自分の実機へのビルド（D-086、`tools/build-for-device.sh device`）もDebugなので、実機には`.dev`の開発版が入り、App Store版は残ります。開発版のprovisioning profileは、Xcodeの自動署名で最初の1回だけユーザーが用意します。
+- 本番のBundle IDで実機に入っている開発版のデータは、移しません。

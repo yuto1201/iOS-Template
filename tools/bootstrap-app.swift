@@ -226,7 +226,7 @@ func validatedIdentity(_ identity: AppIdentity, manifest: TemplateManifest) thro
           normalized.appSlug.count <= 50,
           normalized.appSlug != sourceAppSlug(for: manifest.source.module),
           matches(normalized.bundleId, pattern: "^[A-Za-z0-9][A-Za-z0-9-]{0,62}(?:\\.[A-Za-z0-9][A-Za-z0-9-]{0,62})+$"),
-          normalized.bundleId.count <= 255,
+          normalized.bundleId.count <= 255 - developmentBundleSuffix.count,
           normalized.bundleId != manifest.source.bundleId else {
         throw BootstrapError.invalidIdentity
     }
@@ -295,19 +295,38 @@ func pbxDisplayNameSetting(_ displayName: String) -> String {
     "INFOPLIST_KEY_CFBundleDisplayName = \"\(escapedPBXString(displayName))\";"
 }
 
+// The Debug build installs beside the App Store build: `<Bundle ID>.dev` named `<display name> Dev`.
+// Release keeps the App Store identity.
+let developmentBundleSuffix = ".dev"
+let developmentDisplayNameSuffix = " Dev"
+
+func developmentBundleID(_ bundleID: String) -> String {
+    bundleID + developmentBundleSuffix
+}
+
+func developmentDisplayName(_ displayName: String) -> String {
+    displayName + developmentDisplayNameSuffix
+}
+
 func insertDisplayName(_ displayName: String, bundleID: String, inPBXProj path: URL) throws {
     guard let content = try? String(contentsOf: path, encoding: .utf8) else {
         throw BootstrapError.missingAnchor
     }
 
-    let anchor = "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \(bundleID);\n\t\t\t\tPRODUCT_NAME"
-    guard countOccurrences(of: anchor, in: content) == 2 else {
+    let releaseAnchor = "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \(bundleID);\n\t\t\t\tPRODUCT_NAME"
+    let debugAnchor = "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \(developmentBundleID(bundleID));\n\t\t\t\tPRODUCT_NAME"
+    guard countOccurrences(of: releaseAnchor, in: content) == 1,
+          countOccurrences(of: debugAnchor, in: content) == 1 else {
         throw BootstrapError.malformedProject
     }
 
-    let replacement = "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \(bundleID);\n\t\t\t\t\(pbxDisplayNameSetting(displayName))\n\t\t\t\tPRODUCT_NAME"
+    let releaseReplacement = "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \(bundleID);\n\t\t\t\t\(pbxDisplayNameSetting(displayName))\n\t\t\t\tPRODUCT_NAME"
+    let debugReplacement = "\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = \(developmentBundleID(bundleID));\n\t\t\t\t\(pbxDisplayNameSetting(developmentDisplayName(displayName)))\n\t\t\t\tPRODUCT_NAME"
     do {
-        try content.replacingOccurrences(of: anchor, with: replacement).write(to: path, atomically: true, encoding: .utf8)
+        try content
+            .replacingOccurrences(of: releaseAnchor, with: releaseReplacement)
+            .replacingOccurrences(of: debugAnchor, with: debugReplacement)
+            .write(to: path, atomically: true, encoding: .utf8)
     } catch {
         throw BootstrapError.writeFailed
     }
@@ -552,7 +571,7 @@ func preflightSourceContract(root: URL, manifest: TemplateManifest) throws {
 
     let source = manifest.source.module
     let moduleAnchorCounts: [String: Int] = [
-        "\(manifest.source.project).xcodeproj/project.pbxproj": 60,
+        "\(manifest.source.project).xcodeproj/project.pbxproj": 61,
         "\(manifest.source.project).xcodeproj/xcshareddata/xcschemes/\(source).xcscheme": 15,
         "\(source)/\(source)App.swift": 3,
         "\(source)/ContentView.swift": 1,
@@ -574,7 +593,17 @@ func preflightSourceContract(root: URL, manifest: TemplateManifest) throws {
     let pbxproj = try safePath("\(manifest.source.project).xcodeproj/project.pbxproj", under: root)
     try requireOccurrenceCount(
         "PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId);",
-        equals: 2,
+        equals: 1,
+        in: pbxproj
+    )
+    try requireOccurrenceCount(
+        "PRODUCT_BUNDLE_IDENTIFIER = \(developmentBundleID(manifest.source.bundleId));",
+        equals: 1,
+        in: pbxproj
+    )
+    try requireOccurrenceCount(
+        sourceDevelopmentDisplayNameLine(manifest),
+        equals: 1,
         in: pbxproj
     )
     try requireOccurrenceCount(
@@ -686,22 +715,31 @@ func transformArchitecture(_ identity: AppIdentity, manifest: TemplateManifest, 
     }
 }
 
+// The template's own Debug display name. Bootstrap removes it and writes the app's names with insertDisplayName.
+func sourceDevelopmentDisplayNameLine(_ manifest: TemplateManifest) -> String {
+    "\t\t\t\t\(pbxDisplayNameSetting(developmentDisplayName(manifest.source.module)))\n"
+}
+
 func transformPBXProject(_ identity: AppIdentity, manifest: TemplateManifest, in path: URL) throws {
     guard let content = try? String(contentsOf: path, encoding: .utf8) else {
         throw BootstrapError.missingAnchor
     }
     let modulePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_MODULE__"
     let appBundlePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_APP_BUNDLE__"
+    let developmentBundlePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_DEVELOPMENT_BUNDLE__"
     let unitBundlePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_UNIT_BUNDLE__"
     let uiBundlePlaceholder = "__IOS_TEMPLATE_BOOTSTRAP_UI_BUNDLE__"
     guard !content.contains(modulePlaceholder),
           !content.contains(appBundlePlaceholder),
+          !content.contains(developmentBundlePlaceholder),
           !content.contains(unitBundlePlaceholder),
-          !content.contains(uiBundlePlaceholder) else {
+          !content.contains(uiBundlePlaceholder),
+          countOccurrences(of: sourceDevelopmentDisplayNameLine(manifest), in: content) == 1 else {
         throw BootstrapError.malformedProject
     }
 
     let transformed = content
+        .replacingOccurrences(of: sourceDevelopmentDisplayNameLine(manifest), with: "")
         .replacingOccurrences(
             of: "\(manifest.source.bundleId)UITests",
             with: uiBundlePlaceholder
@@ -711,11 +749,16 @@ func transformPBXProject(_ identity: AppIdentity, manifest: TemplateManifest, in
             with: unitBundlePlaceholder
         )
         .replacingOccurrences(
+            of: "PRODUCT_BUNDLE_IDENTIFIER = \(developmentBundleID(manifest.source.bundleId));",
+            with: "PRODUCT_BUNDLE_IDENTIFIER = \(developmentBundlePlaceholder);"
+        )
+        .replacingOccurrences(
             of: "PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId);",
             with: "PRODUCT_BUNDLE_IDENTIFIER = \(appBundlePlaceholder);"
         )
         .replacingOccurrences(of: manifest.source.module, with: modulePlaceholder)
         .replacingOccurrences(of: modulePlaceholder, with: identity.moduleName)
+        .replacingOccurrences(of: developmentBundlePlaceholder, with: developmentBundleID(identity.bundleId))
         .replacingOccurrences(of: appBundlePlaceholder, with: identity.bundleId)
         .replacingOccurrences(of: unitBundlePlaceholder, with: "\(identity.bundleId)Tests")
         .replacingOccurrences(of: uiBundlePlaceholder, with: "\(identity.bundleId)UITests")
@@ -914,11 +957,16 @@ func auditResiduals(
         source,
     ]
     let expectedDisplayNameSetting = pbxDisplayNameSetting(identity.displayName)
+    let expectedDevelopmentDisplayNameSetting = pbxDisplayNameSetting(developmentDisplayName(identity.displayName))
     for sourcePath in strictSourceResidualPaths {
         var transformedContent = try content(sourcePath)
         if sourcePath == pbxPath {
             transformedContent = transformedContent
                 .replacingOccurrences(of: identity.bundleId, with: "__AUDITED_TARGET_BUNDLE__")
+                .replacingOccurrences(
+                    of: expectedDevelopmentDisplayNameSetting,
+                    with: "INFOPLIST_KEY_CFBundleDisplayName = \"__AUDITED_TARGET_DEVELOPMENT_DISPLAY__\";"
+                )
                 .replacingOccurrences(
                     of: expectedDisplayNameSetting,
                     with: "INFOPLIST_KEY_CFBundleDisplayName = \"__AUDITED_TARGET_DISPLAY__\";"
@@ -931,13 +979,16 @@ func auditResiduals(
         }
     }
 
-    try require("PRODUCT_BUNDLE_IDENTIFIER = \(identity.bundleId);", count: 2, in: pbxPath)
+    try require("PRODUCT_BUNDLE_IDENTIFIER = \(identity.bundleId);", count: 1, in: pbxPath)
+    try require("PRODUCT_BUNDLE_IDENTIFIER = \(developmentBundleID(identity.bundleId));", count: 1, in: pbxPath)
     try require("PRODUCT_BUNDLE_IDENTIFIER = \(identity.bundleId)Tests;", count: 2, in: pbxPath)
     try require("PRODUCT_BUNDLE_IDENTIFIER = \(identity.bundleId)UITests;", count: 2, in: pbxPath)
     try require("PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId);", count: 0, in: pbxPath)
+    try require("PRODUCT_BUNDLE_IDENTIFIER = \(developmentBundleID(manifest.source.bundleId));", count: 0, in: pbxPath)
     try require("PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId)Tests;", count: 0, in: pbxPath)
     try require("PRODUCT_BUNDLE_IDENTIFIER = \(manifest.source.bundleId)UITests;", count: 0, in: pbxPath)
-    try require(expectedDisplayNameSetting, count: 2, in: pbxPath)
+    try require(expectedDisplayNameSetting, count: 1, in: pbxPath)
+    try require(expectedDevelopmentDisplayNameSetting, count: 1, in: pbxPath)
     try require("BlueprintName = \"\(identity.moduleName)\"", count: 3, in: schemePath)
     try require("struct \(identity.moduleName)App: App", count: 1, in: appPath)
     try require("\"\(identity.appSlug).welcome\"", count: 1, in: contentViewPath)

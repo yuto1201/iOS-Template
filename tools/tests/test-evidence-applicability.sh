@@ -545,6 +545,30 @@ File.binwrite(disposition_path, IOSTemplate::ReleaseDisposition.canonical_bytes(
 IOSTemplate::ReleaseDisposition.define_singleton_method(:phase_record_bytes!) do |repo:, base_sha:, contract:|
   phase_record
 end
+# #476: the release proof may come from the Debug build's development Bundle ID, and from nothing else.
+{
+  ["com.example.TemplateApp", "com.example.TemplateApp"] => true,
+  ["com.example.TemplateApp.dev", "com.example.TemplateApp"] => true,
+  ["com.example.TemplateApp.debug", "com.example.TemplateApp"] => false,
+  ["com.example.TemplateApp.dev.dev", "com.example.TemplateApp"] => false,
+  ["com.example.TemplateApp", "com.example.TemplateApp.dev"] => false,
+  ["com.example.Other.dev", "com.example.TemplateApp"] => false,
+  [nil, "com.example.TemplateApp"] => false,
+  [".dev", ""] => false
+}.each do |(verified, bundle), expected|
+  actual = IOSTemplate::ReleaseVerification.verified_bundle?(verified, bundle)
+  abort "release bundle #{verified.inspect} for #{bundle.inspect} gave #{actual}" unless actual == expected
+end
+begin
+  IOSTemplate::ReleaseVerification.with_full_proof(
+    repo: repo, issue: target_issue, base: base, head: head,
+    bundle: "com.example", artifact_digest: artifact_digest,
+    publish: ->(_) { abort "release proof for another Bundle ID published" }
+  ) { |value| value }
+  abort "release proof for another Bundle ID was accepted"
+rescue IOSTemplate::ReleaseVerification::InvalidProof => error
+  abort "another Bundle ID produced an unrelated refusal: #{error.message}" unless error.message.include?("bundle identity differs")
+end
 published = false
 reference = IOSTemplate::ReleaseVerification.with_full_proof(
   repo: repo, issue: target_issue, base: base, head: head,

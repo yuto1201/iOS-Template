@@ -89,6 +89,8 @@ mkdir -p "$derived/GardenNotes.xcodeproj"
 ruby - "$temp_root/project.pbxproj" "$derived/GardenNotes.xcodeproj/project.pbxproj" <<'RUBY'
 source, destination = ARGV
 bytes = File.binread(source)
+# The template's Debug display name (#476) is replaced below like the other identity values.
+bytes = bytes.gsub(/^\t\t\t\tINFOPLIST_KEY_CFBundleDisplayName = [^\n]*;\n/, "")
 bytes = bytes.gsub("TemplateApp", "GardenNotes")
 bytes = bytes.gsub("com.yuto.GardenNotes", "com.example.GardenNotes")
 # Identity bootstrap adds the display name to the application target only, as in a real derived app.
