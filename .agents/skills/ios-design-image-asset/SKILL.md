@@ -19,11 +19,13 @@ Choose one route per image revision and record it in the Issue/PR evidence as `c
 
 ## Contract
 
-Before authoring, the Issue states the purpose, the destination (asset catalog name or resource path), the size and scale factors, transparency, whether Light and Dark versions are needed, the maximum file size, and the rights basis for every reference image. Never draw text into the image; put text in the interface so it can be localized. Hide a decorative image from VoiceOver and give a meaningful image a spoken label. Unresolved choices that change the expected image are `blocked:user`. Do not use real people, brands, or other companies' characters without a documented right.
+Before authoring, the Issue states the purpose, the destination (asset catalog name or resource path), the size and scale factors, transparency (`none`, `cutout`, or `edge-touching`, as the manifest records it), whether Light and Dark versions are needed, the maximum file size, and the rights basis for every reference image. Never draw text into the image; put text in the interface so it can be localized. Hide a decorative image from VoiceOver and give a meaningful image a spoken label. Unresolved choices that change the expected image are `blocked:user`. Do not use real people, brands, or other companies' characters without a documented right.
 
 ## Validation
 
 Validate every accepted raster image as a PNG with `.agents/skills/ios-design-image-asset/scripts/validate-visual.sh` and an `image` manifest from `.agents/skills/ios-design-image-asset/templates/visual-manifest.yml`; record the route and the rights basis in its `model` and `licenseNote`. A vector asset is exported to PNG for that check, or the Issue names its own check. Then verify the image in the app in Light and Dark appearance through `ios-verify` and the opposite-model review gates for the Issue's stage.
+
+Record the transparency the Issue requires in the manifest's `transparency`: `none` (the default when the key is absent, and the only value for `video`), `cutout` (the subject does not reach the edges), or `edge-touching` (the subject reaches an edge). For `cutout` and `edge-touching`, the validator draws the pixels and rejects an image without an alpha channel (`hasAlpha` only says the channel exists) and an image whose every pixel is opaque; `cutout` also requires all four corner pixels to have alpha 0, and `edge-touching` requires at least one pixel with alpha 0 and reports how many corners are transparent. It does not judge edge fringes: it reports the count and ratio of semi-transparent near-white pixels as `fringePixels` and `fringeRatio` with a warning, and a person checks hair, glass, shadows, and outlines on Light and Dark backgrounds. A checkerboard drawn into the image is not transparency. WebP is not accepted; export transparent images as PNG, including from the CLI image models.
 
 ## Evidence and boundary
 
