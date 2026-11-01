@@ -386,7 +386,8 @@ else
     end
     case_ids.each { |id| snapshots.watch_directory(evidence_prefix + [id], "visual packet case directory") }
   else
-    expected_mechanical_checks = Array(contract.dig("verification", "cases")).to_h { |item| [item["id"], "test:#{item["testIdentifier"]}"] }
+    # Same as the runner and validator: a case without testIdentifier is a launch assertion.
+    expected_mechanical_checks = Array(contract.dig("verification", "cases")).to_h { |item| [item["id"], item.key?("testIdentifier") ? "test:#{item["testIdentifier"]}" : "assertion:launch-succeeded"] }
     reject("nonvisual application cases are incomplete") unless cases.is_a?(Array) && cases.map { |item| item["id"] } == case_ids && cases.all? { |item| item.is_a?(Hash) && item.keys.sort == %w[id mechanicalCheck status].sort && item["status"] == "passed" && item["mechanicalCheck"] == expected_mechanical_checks[item["id"]] }
     reject("nonvisual application visual evidence must be not-applicable") unless visual == {"status"=>"not-applicable", "findings"=>[]}
   end

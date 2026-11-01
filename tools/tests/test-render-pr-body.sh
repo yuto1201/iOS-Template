@@ -341,6 +341,52 @@ value["visualEvaluation"]={"status"=>"passed","packet"=>{"path"=>".artifacts/iss
   VERIFY="$verify" ruby -rjson -e 'p=ENV.fetch("VERIFY");v=JSON.parse(File.read(p));v["reason"]=nil;File.write(p,JSON.pretty_generate(v)+"\n")'
   expect_refusal "explicit-$stage-visual-null-reason"
 }
+# Nonvisual harden evidence records each case's mechanical check as the runner
+# does: test:<testIdentifier>, or assertion:launch-succeeded for an assertion case.
+render_harden_nonvisual() {
+  local action=$1 mechanical_check
+  restore_application
+  rm -f "$head_dir/evidence-applicability.json" "$review" "$review_packet" "$review_diff" "$head_dir/review-receipt.json"
+  mechanical_check=$(CONTRACT="$contract" MATRIX="$matrix" VERIFY="$verify" STATE="$issue_dir/state.json" ACTION="$action" \
+    ruby -I "$primary/tools/lib" -rjson -rdigest -rissue-contract <<'RUBY'
+contract = JSON.parse(File.binread(ENV.fetch("CONTRACT")))
+contract["deliveryStage"] = {"name"=>"harden", "timeBudgetMinutes"=>60, "reason"=>"Nonvisual harden renderer fixture."}
+contract["deliveryProfile"] = {"name"=>"standard", "reason"=>"Nonvisual harden renderer fixture."}
+contract["verificationScope"] = {"name"=>"targeted", "reason"=>"Nonvisual harden renderer fixture."}
+contract.fetch("acceptanceCriteria").last["text"] = "Nonvisual harden evidence is sealed."
+verification = contract.fetch("verification")
+verification.fetch("acceptanceMappings").each { |entry| entry.fetch("checks").reject! { |check| check.start_with?("visual:") } }
+entry = verification.fetch("cases").fetch(0)
+if ENV.fetch("ACTION") == "test"
+  entry.delete("assertion"); entry["testIdentifier"] = "TemplateAppUITests/SmokeTests/testJapaneseSmoke"
+end
+check = entry.key?("testIdentifier") ? "test:#{entry.fetch("testIdentifier")}" : "assertion:launch-succeeded"
+File.binwrite(ENV.fetch("CONTRACT"), IOSTemplate::IssueContract.canonical_json(contract))
+contract_digest = "sha256:#{Digest::SHA256.file(ENV.fetch("CONTRACT")).hexdigest}"
+matrix = JSON.parse(File.read(ENV.fetch("MATRIX")))
+matrix["scope"] = "targeted"
+File.write(ENV.fetch("MATRIX"), JSON.generate(matrix))
+verify = JSON.parse(File.read(ENV.fetch("VERIFY")))
+verify.fetch("issueContract")["digest"] = contract_digest
+verify["matrixDigest"] = "sha256:#{Digest::SHA256.file(ENV.fetch("MATRIX")).hexdigest}"
+verify["reason"] = "Delivery stage harden passed; not release-ready."
+verify["executionRoute"] = "xcodebuild-stage"
+verify["cases"] = verify.fetch("cases").map { |item| {"id"=>item.fetch("id"), "mechanicalCheck"=>check, "status"=>"passed"} }
+verify["visualEvaluation"] = {"status"=>"not-applicable", "findings"=>[]}
+verify.fetch("acceptanceEvidence").each { |item| item.fetch("evidence").reject! { |evidence| evidence.start_with?("visual:") } }
+File.write(ENV.fetch("VERIFY"), JSON.pretty_generate(verify) + "\n")
+state = JSON.parse(File.binread(ENV.fetch("STATE")))
+state.fetch("issueContract")["digest"] = contract_digest
+File.binwrite(ENV.fetch("STATE"), JSON.generate(state))
+puts check
+RUBY
+)
+  local nonvisual_body
+  nonvisual_body=$(run_renderer) || { echo "nonvisual harden evidence with $mechanical_check was not rendered" >&2; exit 1; }
+  grep -Fq 'Delivery stage: `harden`' <<<"$nonvisual_body" || { echo "missing nonvisual harden PR body evidence for $mechanical_check" >&2; exit 1; }
+  VERIFY="$verify" ruby -rjson -e 'p=ENV.fetch("VERIFY");v=JSON.parse(File.read(p));v["cases"].each{|item| item["mechanicalCheck"]="test:Other/Smoke/testOther"};File.write(p,JSON.pretty_generate(v)+"\n")'
+  expect_refusal "harden-nonvisual-$action-wrong-mechanical-check"
+}
 
 body=$(run_renderer)
 [[ "$body" == *'Closes #42'* ]] || { echo 'PR body was not rendered with relaunchArguments evidence' >&2; exit 1; }
@@ -373,6 +419,9 @@ RUBY
   expect_refusal legacy-visual-stage-reason
   render_explicit_stage_visual harden targeted
   echo 'PASS: explicit harden visual evidence renders only with its stage reason'
+  render_harden_nonvisual test
+  render_harden_nonvisual assertion
+  echo 'PASS: nonvisual harden evidence renders test and launch-assertion cases by their mechanical check'
   echo 'PASS: one-case canonical review packet and PR keep English/iPad deferred/unverified'
   exit 0
 fi
