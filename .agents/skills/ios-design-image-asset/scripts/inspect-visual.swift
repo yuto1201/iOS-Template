@@ -58,18 +58,21 @@ struct VisualInspector {
     }
 
     // #477: hasAlpha only says the alpha channel exists, so the pixels are drawn into an RGBA buffer and read.
+    // The buffer has 16 bits per channel so a 16-bit PNG keeps its exact alpha (a nonzero 1/65535 stays nonzero).
     // A fringe pixel is semi-transparent and near white (each unpremultiplied channel at least 240).
     static func inspectAlpha(_ image: CGImage) throws -> [String: Any] {
         let width = image.width
         let height = image.height
         let hasAlpha = ![CGImageAlphaInfo.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo)
-        let bytesPerRow = width * 4
-        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        let channelsPerRow = width * 4
+        let opaque = Int(UInt16.max)
+        var pixels = [UInt16](repeating: 0, count: channelsPerRow * height)
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { throw InspectionError.unreadableImage }
         let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
             guard let context = CGContext(
-                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: bytesPerRow,
-                space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 16, bytesPerRow: channelsPerRow * 2,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGImageByteOrderInfo.order16Host.rawValue
             ) else { return false }
             context.clear(CGRect(x: 0, y: 0, width: width, height: height))
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
@@ -83,7 +86,7 @@ struct VisualInspector {
             let alpha = Int(pixels[offset + 3])
             if alpha == 0 {
                 transparentPixels += 1
-            } else if alpha < 255 {
+            } else if alpha < opaque {
                 translucentPixels += 1
                 let nearWhite = (0..<3).allSatisfy { channel in
                     Int(pixels[offset + channel]) * 255 >= 240 * alpha
@@ -92,7 +95,7 @@ struct VisualInspector {
             }
         }
         let corners = [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]
-        let transparentCorners = corners.filter { x, y in pixels[y * bytesPerRow + x * 4 + 3] == 0 }.count
+        let transparentCorners = corners.filter { x, y in pixels[y * channelsPerRow + x * 4 + 3] == 0 }.count
         return [
             "hasAlpha": hasAlpha,
             "transparentPixels": transparentPixels,

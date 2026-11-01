@@ -120,9 +120,10 @@ image_output=$("$visual_validator" --root "$fixture_repo" --manifest visual-mani
 assert_fails 'image dimensions mismatch' "$visual_validator" --root "$fixture_repo" --manifest visual-manifest.yml
 
 # #477: transparency. A manifest without the key means "none" (above). Each fixture row is a string of pixels:
-# "." alpha 0, "#" opaque color, "w" white at alpha 128.
+# "." alpha 0, "#" opaque color, "w" white at alpha 128, "1" black at the smallest nonzero alpha (1/255 or
+# 1/65535). An optional fourth argument 16 writes 16 bits per channel.
 write_png() {
-  python3 - "$media_directory/$1" "$2" "$3" <<'PY'
+  python3 - "$media_directory/$1" "$2" "$3" "${4:-8}" <<'PY'
 import struct
 import sys
 import zlib
@@ -130,11 +131,15 @@ import zlib
 def chunk(kind, data):
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
 
-path, color_type, rows = sys.argv[1], int(sys.argv[2]), sys.argv[3].split("/")
-pixels = {".": b"\x00\x00\x00\x00", "#": b"\x20\x40\x60\xff", "w": b"\xff\xff\xff\x80"}
+path, color_type, rows, depth = sys.argv[1], int(sys.argv[2]), sys.argv[3].split("/"), int(sys.argv[4])
+top = (1 << depth) - 1
+levels = {".": (0, 0, 0, 0), "#": (0x20, 0x40, 0x60, 255), "w": (255, 255, 255, 128), "1": (0, 0, 0, None)}
+def sample(pixel):
+    values = [round(value * top / 255) if value is not None else 1 for value in levels[pixel]]
+    return b"".join(value.to_bytes(depth // 8, "big") for value in values)
 size = 4 if color_type == 6 else 3
-raw = b"".join(b"\x00" + b"".join(pixels[p][:size] for p in row) for row in rows)
-header = struct.pack(">IIBBBBB", len(rows[0]), len(rows), 8, color_type, 0, 0, 0)
+raw = b"".join(b"\x00" + b"".join(b"".join(sample(p)[i * depth // 8:(i + 1) * depth // 8] for i in range(size)) for p in row) for row in rows)
+header = struct.pack(">IIBBBBB", len(rows[0]), len(rows), depth, color_type, 0, 0, 0)
 open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 PY
 }
@@ -203,6 +208,18 @@ write_transparency_manifest fringe.png 5 5 cutout
 output=$(validate_visual)
 [[ "$output" == *'"status":"valid"'* && "$output" == *'"fringePixels":8'* && "$output" == *'"fringeRatio":0.32'* ]] || { echo "unexpected fringe validation: $output" >&2; exit 1; }
 grep -Fq 'visual validation warning: 8 semi-transparent near-white fringe pixels' "$test_workspace/stderr" || { echo 'fringe must warn' >&2; exit 1; }
+
+# A 16-bit PNG keeps its exact alpha: a corner at alpha 1/65535 is not transparent, and alpha 0 corners are.
+write_png cutout16.png 6 '..../.##./.##./....' 16
+write_transparency_manifest cutout16.png 4 4 cutout
+output=$(validate_visual)
+[[ "$output" == *'"status":"valid"'* && "$output" == *'"transparentCorners":4'* ]] || { echo "unexpected 16-bit cutout validation: $output" >&2; exit 1; }
+write_png faint16.png 6 '...1/.##./.##./....' 16
+write_transparency_manifest faint16.png 4 4 cutout
+expect_rejected '16-bit corner at alpha 1/65535 as cutout' 'cutout corners are not fully transparent'
+write_png faint8.png 6 '1.../.##./.##./....'
+write_transparency_manifest faint8.png 4 4 cutout
+expect_rejected '8-bit corner at alpha 1/255 as cutout' 'cutout corners are not fully transparent'
 
 /usr/bin/xcrun swift "$repo_root/tools/tests/helpers/create-test-video.swift" "$media_directory/video.mp4"
 video_digest=$(printf 'sha256:%s' "$(/usr/bin/shasum -a 256 "$media_directory/video.mp4" | /usr/bin/awk '{print $1}')")
