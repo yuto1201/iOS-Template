@@ -1139,5 +1139,5 @@
   - 撮影はOpenBot側の専用Simulator「OpenBot-SNS (iPhone 17 Pro)」で行う。このSimulatorは各リポジトリの`dedicated-simulators`の対象ではない。
   - 各アプリにもうある`XPosts/`フォルダは消さず、そのまま残す。OpenBot側が素材として使い切る。
   - 派生アプリへの反映は、既存の`template-sync`の流れに任せる。
-- Consequence: テンプレートは`XPosts/`の材料も、その書式を確かめるskillとtoolも持たない。`ship-issue`の手順からXPostsの指示を外す。`AGENTS.md`は変えない。D-096の本文は書き換えず、追記型の記録として残す。
+- Consequence: テンプレートは`XPosts/`の材料も、その書式を確かめるskillとtoolも持たない。`ship-issue`の手順からXPostsの指示を外す。削除したpathのcoverageのため、`Config/repository-tests.json`の`repository-testing` domainに削除済みpathのprefixを一時的に置き、#493で外す。`AGENTS.md`は変えない。D-096の本文は書き換えず、追記型の記録として残す。
 - Related Issue: #492
