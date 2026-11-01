@@ -559,3 +559,15 @@ Dir.mktmpdir("repository-bootstrap-split-") do |scratch|
 end
 puts "PASS: a Base and Head on either side of the app-bootstrap split each run their own bootstrap form"
 RUBY
+
+# #493 (D-097): the retired X post material tooling leaves no tracked reference outside the decision log,
+# and repository-testing keeps no coverage prefix for it. The names are built so this file never matches.
+retired_skill="x-post-""material"
+retired_check="check-x-""posts"
+leftover=$(git -C "$source_repo" grep -n -I -e "$retired_skill" -e "$retired_check" -- . ':(exclude)specs/decisions.md' || true)
+[[ -z "$leftover" ]] || { echo "retired X post material references remain:" >&2; echo "$leftover" >&2; exit 1; }
+SOURCE_REPO="$source_repo" ruby -rjson -e '
+manifest = JSON.parse(File.read(File.join(ENV.fetch("SOURCE_REPO"), "Config/repository-tests.json")))
+rule = manifest.fetch("domainRules").find { |entry| entry.fetch("domain") == "repository-testing" }
+abort "repository-testing keeps retired coverage prefixes" unless rule && rule.fetch("prefixes").empty?'
+echo "PASS: no retired X post material reference or coverage prefix remains"
