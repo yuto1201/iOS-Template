@@ -30,6 +30,8 @@ case "$1 $2" in
       bundle-zero) printf '%s\n' '{"data":[]}' ;;
       bundle-two) printf '%s\n' '{"data":[{"type":"bundleIds","id":"B1","attributes":{"identifier":"com.yuto1201.personal","seedId":"PERSONALTEAM"}},{"type":"bundleIds","id":"B2","attributes":{"identifier":"com.yuto1201.personal","seedId":"PERSONALTEAM"}}]}' ;;
       bundle-wrong) printf '%s\n' '{"data":[{"type":"bundleIds","id":"B1","attributes":{"identifier":"com.yuto1201.other","seedId":"PERSONALTEAM"}}]}' ;;
+      bundle-extension) printf '%s\n' '{"data":[{"type":"bundleIds","id":"B1","attributes":{"identifier":"com.yuto1201.personal","seedId":"PERSONALTEAM"}},{"type":"bundleIds","id":"B2","attributes":{"identifier":"com.yuto1201.personal.Widget","seedId":"PERSONALTEAM"}}],"meta":{"paging":{"total":2}}}' ;;
+      bundle-extension-only) printf '%s\n' '{"data":[{"type":"bundleIds","id":"B2","attributes":{"identifier":"com.yuto1201.personal.Widget","seedId":"PERSONALTEAM"}}],"meta":{"paging":{"total":1}}}' ;;
       seed-mismatch) printf '%s\n' '{"data":[{"type":"bundleIds","id":"B1","attributes":{"identifier":"com.yuto1201.personal","seedId":"OTHERTEAM"}}]}' ;;
       malformed) printf '%s\n' '{"data":"invalid"}' ;;
       more-pages) printf '%s\n' '{"data":[{"type":"bundleIds","id":"B1","attributes":{"identifier":"com.yuto1201.personal","seedId":"PERSONALTEAM"}}],"links":{"next":"https://example.invalid/next"}}' ;;
@@ -200,12 +202,15 @@ for operation in appstore.update_metadata appstore.upload_build appstore.submit_
   run_preflight "$fixture_root/app-store-personal.json" --executor codex --issue 42 app-store --version 1.0 --operation "$operation" >/dev/null
   assert_record app-store codex PERSONALTEAM com.yuto1201.personal production "$operation"
 done
+# bundle-ids list matches by prefix, so an app extension's Bundle ID also comes back (#489)
+FAKE_ASC_SCENARIO=bundle-extension run_preflight "$fixture_root/app-store-personal.json" --executor codex --issue 42 app-store --version 1.0 >/dev/null
+assert_record app-store codex PERSONALTEAM com.yuto1201.personal production appstore.inspect_app
 
 write_sealed_contract 'appstore.inspect_app'
 assert_fails_without_artifact 'undeclared App Store operation' app-store "$fixture_root/app-store-personal.json" --executor codex --version 1.0 --operation appstore.update_metadata
 assert_fails_without_artifact 'unknown App Store operation' app-store "$fixture_root/app-store-personal.json" --executor codex --version 1.0 --operation appstore.delete_app
 write_sealed_contract 'appstore.inspect_app,appstore.update_metadata'
-for scenario in seed-mismatch bundle-zero bundle-two bundle-wrong app-zero app-two app-wrong version-absent version-two version-wrong platform-wrong runner-failure malformed more-pages wrong-total; do
+for scenario in seed-mismatch bundle-zero bundle-two bundle-wrong bundle-extension-only app-zero app-two app-wrong version-absent version-two version-wrong platform-wrong runner-failure malformed more-pages wrong-total; do
   FAKE_ASC_SCENARIO="$scenario" assert_fails_without_artifact "App Store $scenario" app-store "$fixture_root/app-store-personal.json" --executor codex --version 1.0
 done
 write_sealed_contract 'appstore.update_metadata'
