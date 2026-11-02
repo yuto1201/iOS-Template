@@ -233,6 +233,8 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 11. 変更をcommitし、取り込み先の規則に従って検証します。取り込んだtoolとskillのrepository test、アプリのBuild、重要なUnit Test、日本語iPhoneのSmoke Testを行い、取り込みの前と後でアプリのBuildとUnit Testが同じように通ることを受け入れ条件に含めます。Simulatorは取り込み先の専用の2台だけを使います。
 12. 反対モデルの承認を受けて、mergeします。反対モデルの承認は必須です。PRには、計画のdigest、承認の参照、適用の結果（書き込んだファイル、削除したファイル、追記した決定事項、手で判断したファイル）を書きます。
 
+開発版（Debug）のBundle IDを`.dev`に分ける変更（#476、`docs/workflow.md`の§9.2）は、Xcode projectがアプリの持ち物なので、取り込みでは入りません。取り込みで届いた`tools/apply-development-bundle-id.sh`を、取り込みのIssueとは別の、アプリの1つのIssueで実行します（1 Issue = 1 PR）。
+
 ## 11. スキル`ios-template-sync`
 
 10節の手順は、スキル`ios-template-sync`にまとめています。スキルはこのMacの共通スキルで（D-094）、テンプレートにもアプリにも置きません。本体（`SKILL.md`、`agents/openai.yaml`、`scripts/prepare-template-source.sh`と、そのtest）は`~/.agents/skills/ios-template-sync/`にあり、Codexはそこを読みます。Claudeは相対リンク`~/.claude/skills/ios-template-sync`（`../../.agents/skills/ios-template-sync`）を通して使います。`~/.codex/skills`には置きません。変更は`~/.agents/skills`のGitでcommitします。

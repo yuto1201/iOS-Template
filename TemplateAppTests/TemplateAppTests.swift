@@ -17,6 +17,19 @@ struct TemplateAppTests {
         #expect(localizedValue(for: "template.welcome", language: "ja") == "開発を始められます")
     }
 
+    /// A Debug build has its own Bundle ID and home-screen name, so it installs beside the App Store app.
+    @Test("Debug build uses the development Bundle ID and display name")
+    func debugBuildUsesDevelopmentIdentity() throws {
+        #if DEBUG
+        let identifier = try #require(Bundle.main.bundleIdentifier)
+        #expect(identifier.hasSuffix(".dev"))
+        #expect(identifier.count > ".dev".count)
+        let displayName = try #require(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+        #expect(displayName.hasSuffix(" Dev"))
+        #expect(displayName.count > " Dev".count)
+        #endif
+    }
+
     private func localizedValue(for key: String, language: String) -> String? {
         guard let localizationURL = Bundle.main.url(
             forResource: language,

@@ -95,7 +95,7 @@ body:
       description: Replace every identifier and AC mapping with the candidate's complete four-case integration and visual checks. A testIdentifier case may optionally declare relaunchArguments for the screenshot relaunch.
       placeholder: |
         {
-          "bundleIdentifier": "com.example.ExampleApp",
+          "bundleIdentifier": "com.example.ExampleApp.dev",
           "unitTestIdentifier": "ExampleAppTests/ReleaseTests/testCriticalLogic",
           "cases": [
             {"id": "iphone-en", "testIdentifier": "ExampleAppUITests/ReleaseTests/testCriticalFlow"},

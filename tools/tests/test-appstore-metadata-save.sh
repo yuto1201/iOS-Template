@@ -79,8 +79,10 @@ end
 live_module = 'TemplateApp'
 live_bundle = 'com.yuto.TemplateApp'
 live_pbx = File.binread(File.join(project_source, "#{live_module}.xcodeproj/project.pbxproj"))
-pbx = live_pbx.gsub(live_bundle,'com.example.garden').gsub(live_module,'GardenNotes')
+pbx = live_pbx.gsub(/^[ \t]*INFOPLIST_KEY_CFBundleDisplayName = .*;\n/, '')
+pbx = pbx.gsub(live_bundle,'com.example.garden').gsub(live_module,'GardenNotes')
 pbx = pbx.gsub('PRODUCT_BUNDLE_IDENTIFIER = com.example.garden;', 'PRODUCT_BUNDLE_IDENTIFIER = com.example.garden; INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes";')
+pbx = pbx.gsub('PRODUCT_BUNDLE_IDENTIFIER = com.example.garden.dev;', 'PRODUCT_BUNDLE_IDENTIFIER = com.example.garden.dev; INFOPLIST_KEY_CFBundleDisplayName = "Garden Notes Dev";')
 write(project, 'GardenNotes.xcodeproj/project.pbxproj', pbx)
 # The copied build settings keep naming the live target's input files (its entitlements, for example)
 # and its remote packages need their lock, so carry those files under the renamed module.

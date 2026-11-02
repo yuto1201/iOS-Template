@@ -26,6 +26,12 @@ module IOSTemplate
       raise InvalidProof, "release verification source Head is stale" unless status.success? && output.strip == head
     end
 
+    # The verification runner tests the Debug build. Its Bundle ID is the App Store one, or the development
+    # `<bundle>.dev` that installs beside the App Store app (#476). Nothing else stands for the release.
+    def verified_bundle?(verified, bundle)
+      bundle.is_a?(String) && !bundle.empty? && [bundle, "#{bundle}.dev"].include?(verified)
+    end
+
     # Build the result in memory, then recheck the held proof and topology just
     # before publishing. Never upgrade a partial/old package by inference.
     def with_full_proof(repo:, issue:, base:, head:, bundle:, publish:, expected_reference: nil, artifact_digest: nil)
@@ -151,10 +157,10 @@ module IOSTemplate
                verify["cases"].is_a?(Array) && verify["cases"].map { |entry| entry["id"] } == VerificationScope::FULL_IDS
           raise InvalidProof, "release requires passed full application verification"
         end
-        unless proof_contract.dig("verification", "bundleIdentifier") == bundle
+        unless verified_bundle?(proof_contract.dig("verification", "bundleIdentifier"), bundle)
           raise InvalidProof, "release verification bundle identity differs"
         end
-        if applicability_file && contract.dig("verification", "bundleIdentifier") != bundle
+        if applicability_file && !verified_bundle?(contract.dig("verification", "bundleIdentifier"), bundle)
           raise InvalidProof, "Phase 6 release contract bundle identity differs"
         end
         output, status = Open3.capture2e(GIT_ENV, "/usr/bin/swift", File.expand_path("../validate-verify-json.swift", __dir__),

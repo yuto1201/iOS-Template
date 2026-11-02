@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "sourceIdentityVersion": 1,
+  "displayName": "Sample Notes",
+  "moduleName": "SampleNotes",
+  "appSlug": "sample-notes",
+  "bundleId": "com.example.SampleNotes"
+}
