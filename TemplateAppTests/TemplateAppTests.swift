@@ -177,6 +177,26 @@ struct FeedbackTests {
             #expect(entry["NSPrivacyCollectedDataTypeTracking"] as? Bool == false)
             #expect(entry["NSPrivacyCollectedDataTypePurposes"] as? [String] == ["NSPrivacyCollectedDataTypePurposeAppFunctionality"])
         }
+        #expect(manifest["NSPrivacyTrackingDomains"] as? [String] == [])
+
+        // UserDefaults is a required reason API. The review prompt and the onboarding keep their records in the
+        // app's own defaults only, so the reason is CA92.1 ("information that is only accessible to the app
+        // itself"); see https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitypereasons
+        let accessed = try #require(manifest["NSPrivacyAccessedAPITypes"] as? [[String: Any]])
+        #expect(accessed.count == 1)
+        let userDefaults = accessed.first { $0["NSPrivacyAccessedAPIType"] as? String == "NSPrivacyAccessedAPICategoryUserDefaults" }
+        #expect(userDefaults?["NSPrivacyAccessedAPITypeReasons"] as? [String] == ["CA92.1"])
+
+        // Whenever the app's Swift uses UserDefaults, the manifest must declare it.
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let module = String(reflecting: FeedbackClient.self).split(separator: ".")[0]
+        let app = root.appending(path: String(module))
+        var usesUserDefaults = false
+        for path in try FileManager.default.subpathsOfDirectory(atPath: app.path) where path.hasSuffix(".swift") {
+            if try String(contentsOf: app.appending(path: path), encoding: .utf8).contains("UserDefaults") { usesUserDefaults = true }
+        }
+        #expect(usesUserDefaults, "the review prompt and the onboarding use UserDefaults")
+        #expect(!usesUserDefaults || userDefaults != nil, "UserDefaults is used but not declared in PrivacyInfo.xcprivacy")
     }
 }
 
