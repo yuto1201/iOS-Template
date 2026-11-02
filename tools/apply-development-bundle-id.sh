@@ -14,7 +14,8 @@ set -euo pipefail
 # development build needs a separate decision there:
 #   - entitlements with iCloud (CloudKit, iCloud Drive, key-value storage), App Groups, or shared Keychain groups,
 #     whether the project sets CODE_SIGN_ENTITLEMENTS or a configuration file (.xcconfig) it uses does;
-#   - an embedded target (a Widget or other extension) whose Bundle ID starts with the app's Bundle ID.
+#   - an embedded target (a Widget or other extension) whose Bundle ID starts with the app's Bundle ID, set in
+#     the project or in a configuration file.
 # Any other project shape it cannot read safely stops with exit 1. Nothing is written in either case.
 
 usage() {
@@ -196,24 +197,43 @@ content.scan(/^\t\t#{object} \/\* [^\n]*? \*\/ = \{isa = PBXFileReference;[^\n]*
     refuse("the project uses the configuration file #{path}, which the tool cannot find inside the app repository; check its entitlements by hand")
   end
 end
-xcconfig_entitlements = xcconfigs.flat_map do |relative|
-  File.read(File.join(ROOT, relative), encoding: "UTF-8").each_line.map do |line|
-    setting = line.sub(%r{\s*//.*\z}m, "").match(/\A\s*CODE_SIGN_ENTITLEMENTS(?:\[[^\]]*\])?\s*=\s*(.*?)\s*;?\s*\z/)
-    setting && setting[1].delete_prefix("\"").delete_suffix("\"")
-  end.compact
+# Reads one setting from every configuration file, with any number of conditions ([sdk=...][arch=...]).
+# A line that names the setting in a form the tool cannot read stops before any change.
+xcconfig_values = lambda do |key|
+  xcconfigs.flat_map do |relative|
+    File.read(File.join(ROOT, relative), encoding: "UTF-8").each_line.map do |line|
+      setting_line = line.sub(%r{\s*//.*\z}m, "")
+      next unless setting_line.match?(/\A\s*"?#{key}\b/)
+      setting = setting_line.match(/\A\s*#{key}(?:\[[^\]\n]*\])*\s*=\s*(.*?)\s*;?\s*\z/)
+      refuse("#{relative} sets #{key} in a form the tool cannot read; check it by hand") unless setting
+      setting[1].delete_prefix("\"").delete_suffix("\"")
+    end.compact
+  end
 end
+xcconfig_entitlements = xcconfig_values.call("CODE_SIGN_ENTITLEMENTS")
 
 # Entitlements of every target in the project: a development Bundle ID changes what they share.
-entitlement_paths = (content.scan(/^\t\t\t\t"?CODE_SIGN_ENTITLEMENTS(?:\[[^\]\n]*\])?"? = ([^\n]*);\n/).flatten.map do |raw|
-  pbx_value(raw)
-end + xcconfig_entitlements).map { |value| value.sub(%r{\A\$[({](?:SRCROOT|PROJECT_DIR)[)}]/}, "") }.uniq.sort
+project_values = lambda do |text, key|
+  values = text.scan(/^\t\t\t\t"?#{key}(?:\[[^\]\n]*\])*"? = ([^\n]*);\n/).flatten
+  unless values.length == text.scan(/^\s*"?#{key}\b/).length
+    refuse("the project sets #{key} in a form the tool cannot read; check it by hand")
+  end
+  values.map { |raw| pbx_value(raw) }
+end
+entitlement_paths = (project_values.call(content, "CODE_SIGN_ENTITLEMENTS") + xcconfig_entitlements)
+  .map { |value| value.sub(%r{\A\$[({](?:SRCROOT|PROJECT_DIR)[)}]/}, "") }.uniq.sort
 shared = entitlement_paths.flat_map do |relative|
   refuse("the entitlements path #{relative} uses a build setting; check it by hand") if relative.include?("$")
   values = plist(relative)
   SHARED_ENTITLEMENTS.keys.select { |key| values.key?(key) }.map { |key| [relative, key] }
 end
 other_targets = content.sub(debug[:text], "").sub(release[:text], "")
-embedded = other_targets.scan(/^\t\t\t\t"?PRODUCT_BUNDLE_IDENTIFIER(?:\[[^\]\n]*\])?"? = ([^\n]*);\n/).flatten.map { |raw| pbx_value(raw) }
+# Bundle IDs of the other targets, set in the project or in a configuration file. One built from a build
+# setting may start with the Bundle ID of the app without showing it, so it stops before any change.
+embedded = project_values.call(other_targets, "PRODUCT_BUNDLE_IDENTIFIER") + xcconfig_values.call("PRODUCT_BUNDLE_IDENTIFIER")
+embedded.each do |value|
+  refuse("a target sets PRODUCT_BUNDLE_IDENTIFIER = #{value} with a build setting; check embedded targets by hand") if value.include?("$")
+end
 embedded = embedded.select { |value| value.start_with?("#{bundle_id}.") && value != development_bundle_id }.uniq.sort
 unless shared.empty? && embedded.empty?
   lines = ["the app shares data or identity through its Bundle ID, so nothing was changed. Decide in a separate Issue how the development build handles:"]

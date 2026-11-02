@@ -166,11 +166,33 @@ expect_refusal 'include outside the repository' 1 'includes a file outside the a
 new_app xcconfig-unreadable-reference
 rm "$app/Config/Public.xcconfig"
 expect_refusal 'project configuration file missing' 1 'the project uses the configuration file Public.xcconfig'
+new_app xcconfig-multi-condition
+mkdir -p "$app/SampleNotes"
+cp "$fixture/entitlements/icloud.entitlements" "$app/SampleNotes/Shared.entitlements"
+printf '%s\n' 'CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*][arch=arm64] = SampleNotes/Shared.entitlements' >"$app/Config/Local.xcconfig"
+expect_refusal 'entitlements with several conditions in an xcconfig' 3 'SampleNotes/Shared.entitlements: com.apple.developer.icloud-container-identifiers'
+new_app project-multi-condition
+mkdir -p "$app/SampleNotes"
+cp "$fixture/entitlements/app-groups.entitlements" "$app/SampleNotes/Shared.entitlements"
+edit_project 'content.sub("\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;\n", "\t\t\t\t\"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*][arch=arm64]\" = SampleNotes/Shared.entitlements;\n\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;\n")'
+expect_refusal 'entitlements with several conditions in the project' 3 'SampleNotes/Shared.entitlements: com.apple.security.application-groups'
+new_app xcconfig-unreadable-setting
+printf '%s\n' 'CODE_SIGN_ENTITLEMENTS [sdk=iphoneos*] = SampleNotes/Shared.entitlements' >"$app/Config/Local.xcconfig"
+expect_refusal 'entitlements setting the tool cannot read' 1 'Config/Local.xcconfig sets CODE_SIGN_ENTITLEMENTS in a form the tool cannot read'
 
 # An embedded target whose Bundle ID starts with the app's stops as well.
 new_app embedded
 edit_project 'content.gsub("PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotesUITests;", "PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes.Widget;")'
 expect_refusal 'embedded target' 3 'embedded target com.example.SampleNotes.Widget'
+new_app embedded-xcconfig
+printf '%s\n' 'PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes.Widget' >"$app/Config/Local.xcconfig"
+expect_refusal 'embedded target from an xcconfig' 3 'embedded target com.example.SampleNotes.Widget'
+new_app embedded-xcconfig-variable
+printf '%s\n' 'PRODUCT_BUNDLE_IDENTIFIER = $(APP_BUNDLE_ID).Widget' >"$app/Config/Local.xcconfig"
+expect_refusal 'embedded target Bundle ID from a build setting' 1 'with a build setting; check embedded targets by hand'
+new_app embedded-project-variable
+edit_project 'content.gsub("PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotesUITests;", "PRODUCT_BUNDLE_IDENTIFIER = \"$(APP_BUNDLE_ID).Widget\";")'
+expect_refusal 'embedded target Bundle ID from a build setting in the project' 1 'with a build setting; check embedded targets by hand'
 
 # Project shapes the tool cannot change safely stop without writing.
 new_app release-differs
