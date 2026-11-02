@@ -1216,4 +1216,4 @@
     - 焦点を中央の安全域に置く。
     - 価格、URL、著作権の記号、確かめられない受賞、他社の名前や画像、Appleの選出の表記を入れない。
 - Consequence: #486と#487を作る。派生アプリの例外（A-086、A-057）は、各アプリのIssueで、新しい経路で組み直して終える。App Store Connectへのcreative assetのuploadは、今のasc経路が対応するかを確かめるまで手で行う。
-- Related Issue: #485
+- Related Issue: #485（文面は、Issue本文の「決定事項の案（D-SS）」のとおりにユーザーが2026-11-02に承認した：https://github.com/yuto1201/iOS-Template/issues/485#issuecomment-6569507286）
