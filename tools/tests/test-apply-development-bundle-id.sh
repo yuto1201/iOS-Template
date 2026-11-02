@@ -176,6 +176,14 @@ mkdir -p "$app/SampleNotes"
 cp "$fixture/entitlements/app-groups.entitlements" "$app/SampleNotes/Shared.entitlements"
 edit_project 'content.sub("\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;\n", "\t\t\t\t\"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*][arch=arm64]\" = SampleNotes/Shared.entitlements;\n\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;\n")'
 expect_refusal 'entitlements with several conditions in the project' 3 'SampleNotes/Shared.entitlements: com.apple.security.application-groups'
+new_app project-inline-setting
+mkdir -p "$app/SampleNotes"
+cp "$fixture/entitlements/app-groups.entitlements" "$app/SampleNotes/Shared.entitlements"
+edit_project 'content.sub("\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;\n", "\t\t\t\tMARKETING_VERSION = 1.0; CODE_SIGN_ENTITLEMENTS = SampleNotes/Shared.entitlements;\n\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;\n")'
+expect_refusal 'entitlements on a line shared with another setting' 1 'the project sets CODE_SIGN_ENTITLEMENTS in a form the tool cannot read'
+new_app project-inline-bundle-id
+edit_project 'content.sub("\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotesUITests;\n", "\t\t\t\tMARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotesUITests;\n")'
+expect_refusal 'a Bundle ID on a line shared with another setting' 1 'the project sets PRODUCT_BUNDLE_IDENTIFIER in a form the tool cannot read'
 new_app xcconfig-unreadable-setting
 printf '%s\n' 'CODE_SIGN_ENTITLEMENTS [sdk=iphoneos*] = SampleNotes/Shared.entitlements' >"$app/Config/Local.xcconfig"
 expect_refusal 'entitlements setting the tool cannot read' 1 'Config/Local.xcconfig sets CODE_SIGN_ENTITLEMENTS in a form the tool cannot read'

@@ -215,7 +215,8 @@ xcconfig_entitlements = xcconfig_values.call("CODE_SIGN_ENTITLEMENTS")
 # Entitlements of every target in the project: a development Bundle ID changes what they share.
 project_values = lambda do |text, key|
   values = text.scan(/^\t\t\t\t"?#{key}(?:\[[^\]\n]*\])*"? = ([^\n]*);\n/).flatten
-  unless values.length == text.scan(/^\s*"?#{key}\b/).length
+  # Every assignment counts, also one that shares a line with another setting.
+  unless values.length == text.scan(/(?<![\w$(])"?#{key}(?:\[[^\]\n]*\])*"?\s*=/).length
     refuse("the project sets #{key} in a form the tool cannot read; check it by hand")
   end
   values.map { |raw| pbx_value(raw) }
