@@ -80,7 +80,7 @@ module AppStoreCreativePreview
   # Apple shows the frame at 5 seconds of an App Preview until another poster frame is chosen.
   DEFAULT_POSTER_SECONDS = 5.0
   # D-101 (#487): a search sheet compares two to six search results images (3:2, made with the render
-  # extension's render-search) at about the size a search results list shows them, on a light and a dark
+  # extension's render-search, or universal images through their 3:2 search crop) at about the size a search results list shows them, on a light and a dark
   # ground; "none" (no search results image) is always a valid choice. Apple gives no on-screen size, so
   # the thumbnail is the tool's estimate: the width of an iPhone 17 Pro list (402 pt) less 16 pt margins on
   # each side, at 3:2, drawn from a 3x image.
@@ -624,8 +624,9 @@ module AppStoreCreativePreview
     {"width" => head[16, 4].unpack1("N"), "height" => head[20, 4].unpack1("N"), "colorType" => head.getbyte(25)}
   end
 
-  # Each option is a search results image made with render-search: an opaque 3:2 RGB PNG from 1920x1280
-  # to 3840x2560 with its render record beside it, for exactly these bytes.
+  # Each option is a search results image made with render-search (an opaque 3:2 RGB PNG from 1920x1280 to
+  # 3840x2560) or a universal image made with render-universal (5244x2950, shown through its 3:2 search
+  # crop), with its render record beside it for exactly these bytes.
   def search_option(option, base)
     fail!("search option must be an object") unless option.is_a?(Hash)
     unknown = option.keys - %w[id title hypothesis tradeoffs image]
@@ -639,24 +640,37 @@ module AppStoreCreativePreview
     facts = png_facts(image) or fail!("search option #{id} image is not a PNG")
     spec = ASSET_SPECS.fetch("kinds").fetch("search-image")
     width, height = facts.values_at("width", "height")
-    unless width * 2 == height * 3 && width.between?(spec["minSize"][0], spec["maxSize"][0])
-      fail!("search option #{id} image is #{width}x#{height}; a search results image is 3:2 from 1920x1280 to 3840x2560")
+    universal = [width, height] == ASSET_SPECS.dig("kinds", "universal-image", "sizes").first
+    unless universal || (width * 2 == height * 3 && width.between?(spec["minSize"][0], spec["maxSize"][0]))
+      fail!("search option #{id} image is #{width}x#{height}; a search results image is 3:2 from 1920x1280 to 3840x2560, or a 5244x2950 universal image")
     end
     fail!("search option #{id} image has an alpha channel or is not RGB") unless facts["colorType"] == 2
     record_path = regular!("#{image}.json", "search option #{id} render record")
     record = JSON.parse(File.binread(record_path))
     digest = sha256(image)
-    unless record.is_a?(Hash) && record["kind"] == "search-results" && record["sha256"] == digest && record.dig("safeArea", "source", "url").is_a?(String)
-      fail!("search option #{id} image has no render-search record for these bytes: #{record_path}")
+    kind = universal ? "universal" : "search-results"
+    unless record.is_a?(Hash) && record["kind"] == kind && record["sha256"] == digest && record.dig("safeArea", "source", "url").is_a?(String)
+      fail!("search option #{id} image has no #{universal ? 'render-universal' : 'render-search'} record for these bytes: #{record_path}")
     end
-    option.merge("image" => image, "sha256" => digest, "renderRecord" => record_path, "renderRecordSha256" => sha256(record_path),
-                 "size" => {"width" => width, "height" => height})
+    crop = nil
+    if universal
+      crop = record.dig("crops", "search")
+      unless crop.is_a?(Hash) && %w[x y width height].all? { |key| crop[key].is_a?(Integer) && crop[key] >= 0 } &&
+             crop["x"] + crop["width"] <= width && crop["y"] + crop["height"] <= height
+        fail!("search option #{id} universal record has no 3:2 search crop")
+      end
+      crop = crop.slice("x", "y", "width", "height")
+    end
+    option.merge("image" => image, "sha256" => digest, "kind" => kind, "renderRecord" => record_path, "renderRecordSha256" => sha256(record_path),
+                 "size" => {"width" => width, "height" => height}, "searchCrop" => crop)
   end
 
-  def search_thumbnail(image, work)
+  def search_thumbnail(option, work)
+    image = option.fetch("image")
     output = File.join(work, ".thumb-#{Digest::SHA256.hexdigest(image)}.png")
     size = SEARCH_THUMBNAIL_PIXELS
-    capture!("ffmpeg", "-loglevel", "error", "-i", image, "-vf", "scale=#{size['width']}:#{size['height']}:flags=lanczos,format=rgb24",
+    crop = option["searchCrop"] ? "crop=#{option['searchCrop'].values_at('width', 'height', 'x', 'y').join(':')}," : ""
+    capture!("ffmpeg", "-loglevel", "error", "-i", image, "-vf", "#{crop}scale=#{size['width']}:#{size['height']}:flags=lanczos,format=rgb24",
              "-frames:v", "1", output)
     data = File.binread(output)
     File.unlink(output)
@@ -682,7 +696,7 @@ module AppStoreCreativePreview
         <div class="grounds">
         #{grounds.(option)}
         </div>
-        <p class="meta">#{option.dig('size', 'width')}×#{option.dig('size', 'height')} ・ #{h.(option.fetch('sha256')[0, 19])}…</p>
+        <p class="meta">#{option['searchCrop'] ? '共用（universal）の画像の3:2の切り抜き ・ ' : ''}#{option.dig('size', 'width')}×#{option.dig('size', 'height')} ・ #{h.(option.fetch('sha256')[0, 19])}…</p>
         </section>
       SECTION
     end.join
@@ -758,7 +772,7 @@ module AppStoreCreativePreview
     staging = Dir.mktmpdir(".#{revision}.", root)
     begin
       thumbnails = {}
-      choices.each { |option| thumbnails[option.fetch("image")] ||= search_thumbnail(option.fetch("image"), staging) }
+      choices.each { |option| thumbnails[option.fetch("image")] ||= search_thumbnail(option, staging) }
       html = search_sheet_html(spec, revision, choices, thumbnails)
       File.binwrite(File.join(staging, "sheet.html"), html)
       record = {
@@ -766,7 +780,7 @@ module AppStoreCreativePreview
         "sheetSha256" => "sha256:#{Digest::SHA256.hexdigest(html)}", "definitionSha256" => "sha256:#{Digest::SHA256.hexdigest(spec_bytes)}",
         "builtAt" => Time.now.utc.iso8601, "thumbnail" => {"points" => SEARCH_THUMBNAIL_POINTS, "pixels" => SEARCH_THUMBNAIL_PIXELS},
         "grounds" => SEARCH_GROUNDS,
-        "options" => choices.map { |option| option.slice("id", "image", "sha256", "size", "renderRecord", "renderRecordSha256") }
+        "options" => choices.map { |option| option.slice("id", "kind", "image", "sha256", "size", "searchCrop", "renderRecord", "renderRecordSha256") }
       }
       File.binwrite(File.join(staging, "sheet.json"), "#{JSON.pretty_generate(record)}\n")
       File.rename(staging, destination)
@@ -797,7 +811,7 @@ module AppStoreCreativePreview
                   option = record.fetch("options").find { |item| item["id"] == choice } or fail!("unknown search option id: #{choice}")
                   image = regular!(option.fetch("image"), "search option #{choice} image")
                   fail!("search option #{choice} image changed after the sheet was built") unless sha256(image) == option.fetch("sha256")
-                  {"type" => "search-image", "optionId" => choice, "image" => image, "sha256" => option.fetch("sha256")}
+                  {"type" => "search-image", "optionId" => choice, "kind" => option.fetch("kind"), "image" => image, "sha256" => option.fetch("sha256")}
                 end
     value = {"schemaVersion" => SCHEMA_VERSION, "revision" => record.fetch("revision"), "sheetSha256" => record.fetch("sheetSha256"),
              "selection" => selection, "decision" => "user-explicit", "recordedAt" => Time.now.utc.iso8601}

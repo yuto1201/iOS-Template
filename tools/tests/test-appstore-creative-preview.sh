@@ -406,6 +406,18 @@ option() { # id image
   printf '{"id":"%s","title":"案%s","hypothesis":"一目で目的が分かる","tradeoffs":"文字が小さい","image":"images/%s"}' "$1" "$1" "$2"
 }
 search_spec two "[$(option A a.png),$(option B b.png)]"
+# A universal image is shown through its 3:2 search crop.
+printf '{"schemaVersion":1,"background":"#7A4FA0","texts":[{"text":"共用","x":0.5,"y":0.25,"size":0.03,"align":"center"}]}' >"$ss/images/u.json"
+"$repo_root/tools/appstore-creative-render.sh" render-universal --runtime "$runtime" --spec "$ss/images/u.json" --out "$ss/images/u.png" >/dev/null
+search_spec mixed "[$(option A a.png),$(option U u.png)]"
+"$tool" search-sheet --spec "$ss/mixed.json" --root "$ss/sheets" --revision m1 >/dev/null
+ruby -rjson -rbase64 -e 'dir = ARGV[0]; html = File.read(File.join(dir, "sheet.html")); record = JSON.parse(File.read(File.join(dir, "sheet.json")))
+  universal = record.fetch("options").find { |option| option.fetch("id") == "U" }
+  abort "universal option: #{universal}" unless universal.fetch("kind") == "universal" && universal.fetch("searchCrop") == {"x" => 410, "y" => 0, "width" => 4424, "height" => 2950}
+  section = html[/<section class="pattern" data-option="U">.*?<\/section>/m] or abort "search sheet lacks the universal option"
+  thumbs = section.scan(/<img class="search-thumb" src="data:image\/png;base64,([^"]+)" width="370" height="247"/).flatten
+  png = Base64.decode64(thumbs.first.to_s)
+  abort "universal thumbnail" unless thumbs.length == 2 && [png[16, 4].unpack1("N"), png[20, 4].unpack1("N")] == [1110, 740] && section.include?("3:2の切り抜き")' "$ss/sheets/m1"
 "$tool" search-sheet --spec "$ss/two.json" --root "$ss/sheets" --revision s1 | jq -e '.status == "built"' >/dev/null || fail 'search sheet was not built'
 ruby -rjson -rbase64 -rdigest -e 'dir = ARGV[0]; html = File.read(File.join(dir, "sheet.html")); record = JSON.parse(File.read(File.join(dir, "sheet.json")))
   abort "search record: #{record}" unless record.fetch("kind") == "search" && record.fetch("sheetSha256") == "sha256:#{Digest::SHA256.hexdigest(html)}" &&
@@ -437,19 +449,18 @@ cp "$ss/images/a.png.json" "$ss/images/plain.png.json"
 expect_failure search-foreign-record 'search option C image has no render-search record for these bytes' "$tool" search-sheet --spec "$ss/plain.json" --root "$ss/sheets" --revision s2
 ffmpeg -loglevel error -f lavfi -i "color=c=0x336699:s=3840x1646,format=rgb24" -frames:v 1 "$ss/images/wide.png"
 search_spec wide "[$(option A a.png),$(option D wide.png)]"
-expect_failure search-wide 'search option D image is 3840x1646; a search results image is 3:2 from 1920x1280 to 3840x2560' "$tool" search-sheet --spec "$ss/wide.json" --root "$ss/sheets" --revision s2
+expect_failure search-wide 'search option D image is 3840x1646; a search results image is 3:2 from 1920x1280 to 3840x2560, or a 5244x2950 universal image' "$tool" search-sheet --spec "$ss/wide.json" --root "$ss/sheets" --revision s2
 [ ! -e "$ss/sheets/s2" ] || fail 'a refused search sheet left a revision behind'
 [ -z "$(find "$ss/sheets" -maxdepth 1 -name '.s*')" ] || fail 'a search sheet left a staging directory behind'
 # The choice: one option, recorded once with the image SHA-256 the sheet showed, or none.
 "$tool" search-select --sheet "$ss/sheets/s1" --option B | jq -e '.type == "search-image"' >/dev/null || fail 'search choice was not recorded'
-jq -e --arg sha "sha256:$(shasum -a 256 "$ss/images/b.png" | cut -d' ' -f1)" '.selection == {"type": "search-image", "optionId": "B", "image": .selection.image, "sha256": $sha} and .decision == "user-explicit"' \
+jq -e --arg sha "sha256:$(shasum -a 256 "$ss/images/b.png" | cut -d' ' -f1)" '.selection == {"type": "search-image", "optionId": "B", "kind": "search-results", "image": .selection.image, "sha256": $sha} and .decision == "user-explicit"' \
   "$ss/sheets/s1/selection.json" >/dev/null || fail 'search selection does not record the shown image'
 expect_failure search-select-twice 'a selection is already recorded for this sheet and is never replaced' "$tool" search-select --sheet "$ss/sheets/s1" --option A
+expect_failure search-select-unknown 'unknown search option id: Z' "$tool" search-select --sheet "$ss/sheets/m1" --option Z
+"$tool" search-select --sheet "$ss/sheets/m1" --option none | jq -e '.type == "no-search-image"' >/dev/null || fail 'no search results image was not recorded'
 "$tool" search-sheet --spec "$ss/two.json" --root "$ss/sheets" --revision s3 >/dev/null
-expect_failure search-select-unknown 'unknown search option id: Z' "$tool" search-select --sheet "$ss/sheets/s3" --option Z
-"$tool" search-select --sheet "$ss/sheets/s3" --option none | jq -e '.type == "no-search-image"' >/dev/null || fail 'no search results image was not recorded'
-"$tool" search-sheet --spec "$ss/two.json" --root "$ss/sheets" --revision s4 >/dev/null
-printf '<!-- edited -->' >>"$ss/sheets/s4/sheet.html"
-expect_failure search-select-edited 'sheet.html differs from its record' "$tool" search-select --sheet "$ss/sheets/s4" --option A
+printf '<!-- edited -->' >>"$ss/sheets/s3/sheet.html"
+expect_failure search-select-edited 'sheet.html differs from its record' "$tool" search-select --sheet "$ss/sheets/s3" --option A
 
 echo 'appstore-creative preview encode and decision tests passed'
