@@ -82,6 +82,7 @@ For each `adopt-now` decision, create an architecture dependency table before fe
 - Record app and extension process boundaries, the single data owner/source of truth, the minimum App Group use, migration, deep-link routing, offline/stale/error recovery, lock-state privacy, capability/entitlement/Info.plist/signing changes, and target localization.
 - Distinguish timeline, ActivityKit update, Control refresh, and App Intent execution models. Never present one as the other.
 - Record whether foreground execution, device authentication, user confirmation, network, APNs, or a server is required. These observations do not authorize external setup.
+- When the app adopts notifications now (local notifications under D-068, or push for an adopted surface), also decide whether the first-launch onboarding (D-099, [`docs/onboarding.md`](../../../docs/onboarding.md)) uses a `permissionPrimer` page for them; record the decision and, if it does, put the notification request it passes to `OnboardingCenter.live(requestNotificationAuthorization:)` in the onboarding Issue.
 
 ## Produce implementation-ready Issues
 
