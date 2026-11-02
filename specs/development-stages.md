@@ -103,7 +103,7 @@ Phase 1〜3の軽微な修正は、目的、MVP境界、主要hierarchy／flow�
 
 目的、対象利用者、MVPの追加／削除、主要navigation／information hierarchy、primary flow、永続化形式、認証／課金／外部systemの採否、privacy／法務、安全上の重大riskが変わる場合はmajor changeである。変更前後と影響範囲を記録し、影響する最も早いPhaseだけをreopenedとしてユーザー判断へ戻す。影響しないPhase／Issueは停止しない。
 
-具体例として、Phase 3でラベル文言だけを直す場合はPhase 3内で継続する。必須onboarding（[D-099](decisions.md#d-099-初回起動のオンボーディングを全アプリ必須の標準機能にする)）を追加する場合はPhase 1のMVP範囲とPhase 2のUI方向を再承認し、依存するPhase 3実装だけを戻す。Phase 5で保存不具合を発見した場合は狭い実装／harden Issueへ戻り、修正で失効した証拠だけを再取得してPhase 5を再開する。全Phaseを機械的に未完了へ戻さない。
+具体例として、Phase 3でラベル文言だけを直す場合はPhase 3内で継続する。必須onboardingを追加する場合はPhase 1のMVP範囲とPhase 2のUI方向を再承認し、依存するPhase 3実装だけを戻す。Phase 5で保存不具合を発見した場合は狭い実装／harden Issueへ戻り、修正で失効した証拠だけを再取得してPhase 5を再開する。全Phaseを機械的に未完了へ戻さない。
 
 ### 1.5.4 Revision、証拠、不具合
 
