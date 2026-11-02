@@ -73,6 +73,8 @@ Before verifying, check read-only that each device declared in `Config/dedicated
 
 After the bootstrap, the app still carries the template's sample onboarding (`<module>/Features/Onboarding/OnboardingConfig.json`: welcome, one sample question, done). Do not ship it. In the onboarding Issue that `plan-issue-batch` creates (D-099), replace the declaration with the app's pages decided in Phase 1, add their Japanese and English String Catalog keys (marked `manual`), add pictures to the Asset Catalog or rely on the per-kind symbols, set `legacyCompletionKeys` to the completion flags of any earlier onboarding of the app, and replace the sample `purpose` line in `ContentView` with the app's real use of each answer. See [`docs/onboarding.md`](../../../docs/onboarding.md).
 
+After the bootstrap, `appStoreId` in `<module>/Features/ReviewPrompt/ReviewPromptConfig.json` stays empty, so "Rate This App" is hidden (D-103, [`docs/review-prompt.md`](../../../docs/review-prompt.md)). Once the app is registered in App Store Connect, put its App Store ID (digits) there in an app Issue. Move the button from the root screen into the app's settings screen support section when the app has one, as with the feedback entry.
+
 After the bootstrap, record the app's first app-specific decision in a new `specs/app-decisions.md` as `A-001`, and keep appending app decisions there as `A-###`. Do not add app decisions to `specs/decisions.md`; its `D-###` entries stay the template's decisions (D-069).
 
 Codex and Claude may both perform the local and authenticated steps. Every authenticated GitHub operation must use the account and target checks in [`docs/AUTHORITY.md`](../../../docs/AUTHORITY.md) and the shared `external-ops` skill.
