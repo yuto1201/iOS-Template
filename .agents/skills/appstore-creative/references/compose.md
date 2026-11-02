@@ -61,6 +61,33 @@ Paths are relative to the declaration and must be local files; a URL is refused.
 - **fonts** — only `brand.json` families. A `file` must be in `fonts/` next to the declaration or
   its parent, or in the system or user font folders; without a file the family is used by name.
 
+## Finalize (D-101)
+
+After the user adopts a set, `finalize` binds the rendered faces to the raw capture manifest so
+`tools/build-appstore-screenshot-set.sh --composition` can assemble and the package seal can bind
+them. The render record names the capture of every tile (`tiles[].capture`, null without a device).
+
+```sh
+tools/appstore-creative-compose.sh finalize --raw-root <raw capture root with manifest.json> \
+  --render-records <record>,<record>,... --selection .artifacts/store-creative/<revision>/selection.json \
+  --provenance goldie/assets/provenance.json --approval <Issue comment URL> \
+  --capture-batch <batch ID of the capture> --out <new folder>
+```
+
+The faces must be the tiles the user chose on the proposal sheet. A Japanese iPhone render record
+must show the chosen tiles (the pattern, or the slots of the combination) byte for byte, and every
+other record must render the same scenes in the same order with the same style; renders of another
+pattern, of an unchosen slot, or of other scenes are refused. For a combination, compose the chosen
+tiles into one declaration first, so its Japanese iPhone render is the tiles the user saw.
+
+Each face must show exactly one raw capture of its locale and family (guideline 2.3.3), each
+capture at most once, and only materials that `provenance.json` records as adopted (2.3.9). The
+declaration, the faces and the captures must still have the bytes the records name. The folder gets
+`<locale>/<family>/NN-<state>.png` (NN is the tile number), the records and provenance under
+`records/`, and `composition.json`; the fields are listed in
+[prepare-appstore-assets](../../prepare-appstore-assets/SKILL.md#composed-screenshot-sets-d-101).
+Keep the folder outside Git.
+
 ## Quality marks
 
 The record measures each tile in Chromium and marks it against the

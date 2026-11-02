@@ -106,10 +106,18 @@ around the app, a story across the tiles and real illustrations do.
 9. **Stage 2 — the full sample.** Generate the remaining images, render Japanese and
    English for iPhone and iPad, build a `preview` sheet,
    and repeat the choice for changes in a new revision.
-10. **Finish.** Export at the exact store sizes, inspect every image, and hand the
-   adopted images to `prepare-appstore-assets`. Commit only `goldie/<locale>/`
+10. **Finish.** Export at the exact store sizes, inspect every image, and bind the
+   adopted faces to their raw captures with `tools/appstore-creative-compose.sh
+   finalize` (D-101, [compose renderer](references/compose.md#finalize-d-101)): it
+   writes `composition.json` from the render records, the raw capture `manifest.json`,
+   the proposal sheet's `selection.json` and `goldie/assets/provenance.json`, and
+   refuses a face that shows no raw capture or uses a material the user did not adopt.
+   Hand that composed folder to `prepare-appstore-assets`, which reviews and assembles
+   it with `tools/build-appstore-screenshot-set.sh --composition` and seals it like raw
+   captures. Commit only `goldie/<locale>/`
    configs, adopted generated images in `goldie/assets/`, and
-   `goldie/assets/provenance.json`; keep sheets and rejected images out of Git.
+   `goldie/assets/provenance.json`; keep sheets, the composed folder and rejected
+   images out of Git.
 
 Details: [proposal sheet](references/proposal.md), [tile kinds](references/patterns.md),
 [image generation](references/imagegen.md), [preview video](references/preview-video.md).
@@ -311,7 +319,9 @@ a real submission. Retain device-frame and font attribution with distributed ass
 
 Working output stays under `goldie/<locale>/out/` and sheets under
 `.artifacts/store-creative/`; only reviewed, adopted images go into
-`App Store/screenshots/` through the existing preparation workflow. Goldie manifests
+`App Store/screenshots/` through the existing preparation workflow, a composed set
+with its `composition.json` from `finalize`. An app that kept an exception
+`adopted.json` moves to this route as `prepare-appstore-assets` describes. Goldie manifests
 and sheets are not canonical `verify.json`, screenshot audit, release approval or
 package seals. Do not overwrite sealed packages or weaken the capture/prepare/submit
 gates. This skill does not upload or submit.

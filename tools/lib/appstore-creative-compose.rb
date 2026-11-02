@@ -7,7 +7,9 @@
 # and never reaches the network: the page allows file and data URLs only and Chromium resolves no host.
 # It writes the tiles, one HTML page per tile, a render record that the proposal sheet reads as
 # `renders`, the measured quality marks, and a 220 px thumbnail sheet. `research-sheet` lays reference
-# images (one row per app, its first five) beside the proposal's own tiles, outside Git.
+# images (one row per app, its first five) beside the proposal's own tiles, outside Git. `finalize`
+# (#486, D-101) binds the adopted faces to the raw capture manifest in a composition record that
+# tools/build-appstore-screenshot-set.sh --composition assembles into the sealed screenshot set.
 
 require "digest"
 require "fileutils"
@@ -50,12 +52,13 @@ module AppStoreCreativeCompose
   end
 
   def run(argv)
-    command = argv.shift or fail!("command is required: compose or research-sheet")
+    command = argv.shift or fail!("command is required: compose, finalize or research-sheet")
     options = parse_options(argv)
     result = case command
              when "compose" then compose(options)
+             when "finalize" then finalize(options)
              when "research-sheet" then research_sheet(options)
-             else fail!("unknown command #{command}; use compose or research-sheet")
+             else fail!("unknown command #{command}; use compose, finalize or research-sheet")
              end
     puts JSON.generate(result)
   rescue Error => error
@@ -655,14 +658,240 @@ module AppStoreCreativeCompose
       "decorations" => [],
       "layers" => layers,
       "popouts" => popouts,
+      # #486 (D-101): each tile names the real capture it shows (null for a tile without a device), so
+      # `finalize` can bind every App Store face to its raw capture (guideline 2.3.3).
       "tiles" => tiles.map do |entry|
         {"tile" => entry["number"], "id" => entry.dig("tile", "id"), "html" => entry["html"], "htmlSha256" => digest(entry["html"]),
-         "metrics" => entry["metrics"], "marks" => entry["marks"]}
+         "metrics" => entry["metrics"], "marks" => entry["marks"],
+         "capture" => entry.dig("tile", "device", "capture")&.slice("path", "sha256")}
       end,
       "marks" => tiles.flat_map { |entry| entry["marks"].map { |mark| "tile #{entry['number']}: #{mark}" } },
       "thumbnails" => thumbnails,
       "files" => files
     }
+  end
+
+  # --- finalize (#486, D-101) ----------------------------------------------------------------------
+
+  RAW_MANIFEST_KEYS = %w[schemaVersion sourceSha buildDigest runtime requirementsDigest cases].freeze
+  RAW_CASE_KEYS = %w[locale family state order path sourceSha buildDigest runtime deviceType width height digest].freeze
+  CASE_PATH_PATTERN = %r{\A(?:en-US|ja)/[a-z0-9.-]+/[0-9]{2}-[a-z0-9-]+\.png\z}
+  DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
+  BATCH_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9-]{0,63}\z/
+  CONCEPT_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9-]{0,31}\z/
+  APPROVAL_PATTERN = %r{\A(?:https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/(?:issues|pull)/[0-9]+(?:#issuecomment-[0-9]+)?|(?:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+)?#[0-9]+)\z}
+  FINALIZE_OPTIONS = %w[--raw-root --render-records --selection --approval --capture-batch --out --provenance].freeze
+
+  # Binds the adopted, rendered faces to the raw capture manifest and writes the composed set that
+  # tools/build-appstore-screenshot-set.sh --composition assembles: `<locale>/<family>/NN-<state>.png`,
+  # byte copies of the render records and provenance.json under `records/` (named by SHA-256), and
+  # `composition.json`. Every face must show exactly one raw capture of its locale and family, every
+  # generated material must be adopted in provenance.json, and the declarations, faces and captures
+  # must still have the bytes the render records name. It reads no network and never edits a capture.
+  def finalize(options)
+    unknown = options.keys - FINALIZE_OPTIONS
+    fail!("finalize does not take #{unknown.join(', ')}") unless unknown.empty?
+    raw_root = options.fetch("--raw-root") { fail!("--raw-root is required") }
+    fail!("--raw-root #{raw_root} must be a folder, not a link") unless File.directory?(raw_root) && !File.symlink?(raw_root)
+    raw_root = File.realpath(raw_root)
+    batch = options.fetch("--capture-batch") { fail!("--capture-batch is required: the --batch-id of the capture") }
+    fail!("--capture-batch is invalid") unless batch.match?(BATCH_PATTERN)
+    approval = options.fetch("--approval") { fail!("--approval is required: the Issue comment where the user adopted the set") }
+    fail!("--approval must be an Issue or pull request reference or comment URL") unless approval.match?(APPROVAL_PATTERN)
+    out_path = options.fetch("--out") { fail!("--out is required") }
+    fail!("--out must be a new folder: #{out_path} exists") if File.exist?(out_path) || File.symlink?(out_path)
+
+    manifest_path = regular_file(File.join(raw_root, "manifest.json"), "raw capture manifest")
+    raw = JSON.parse(File.binread(manifest_path))
+    exact!(raw, "raw capture manifest", RAW_MANIFEST_KEYS)
+    fail!("raw capture manifest schemaVersion must be 1") unless raw["schemaVersion"] == 1 && raw["cases"].is_a?(Array)
+    raw_cases = raw["cases"].map { |entry| raw_case!(entry, raw_root) }
+
+    adoption, selected = adoption_record(options.fetch("--selection") { fail!("--selection is required: selection.json of the proposal sheet") }, approval)
+    provenance_path = options["--provenance"] && regular_file(options["--provenance"], "provenance record")
+    adopted = provenance_path ? adopted_materials(provenance_path).values : []
+    paths = options.fetch("--render-records") { fail!("--render-records is required: a comma-separated list of render records") }.split(",")
+    fail!("--render-records needs one to four records") unless (1..4).cover?(paths.size)
+
+    seen_sets = {}
+    used = {}
+    records = []
+    cases = paths.flat_map do |path|
+      record_path = regular_file(path, "render record")
+      record = JSON.parse(File.binread(record_path))
+      label = File.basename(record_path)
+      unless record.is_a?(Hash) && record["schemaVersion"] == SCHEMA_VERSION && record["renderer"] == "appstore-creative-compose" &&
+             record["inputInventory"] == "complete-v1" && DEVICES.key?(record["device"]) && %w[ja en-US].include?(record["locale"])
+        fail!("render record #{label} is not a complete record of tools/appstore-creative-compose.sh compose")
+      end
+      locale = record["locale"]
+      family = record["device"]
+      fail!("two render records are for #{locale} #{family}") if seen_sets[[locale, family]]
+      seen_sets[[locale, family]] = true
+      spec = record["spec"]
+      unless spec.is_a?(String) && File.file?(spec) && !File.symlink?(spec) && digest(spec) == record["specSha256"]
+        fail!("the declaration of #{label} is missing or changed after rendering; render it again")
+      end
+      files = record["files"]
+      tiles = record["tiles"]
+      unless files.is_a?(Array) && tiles.is_a?(Array) && (1..10).cover?(files.size) && files.size == tiles.size
+        fail!("render record #{label} must list one to ten tiles and their files")
+      end
+      size = DEVICES.fetch(family).values_at("width", "height")
+      records << [record_path, record]
+      files.each_with_index.map do |file, index|
+        number = index + 1
+        where = "tile #{number} of #{label}"
+        unless file.is_a?(Hash) && file["path"].is_a?(String) && File.file?(file["path"]) && !File.symlink?(file["path"]) &&
+               digest(file["path"]) == file["sha256"]
+          fail!("#{where} is missing or changed after rendering")
+        end
+        fail!("#{where} is #{png_size(file['path']).join('x')}, expected #{size.join('x')}") unless png_size(file["path"]) == size
+        capture = tiles[index].is_a?(Hash) ? tiles[index]["capture"] : nil
+        unless capture.is_a?(Hash) && capture["sha256"].is_a?(String) && capture["sha256"].match?(DIGEST_PATTERN) &&
+               (record["captures"] || []).any? { |entry| entry.is_a?(Hash) && entry["sha256"] == capture["sha256"] }
+          fail!("#{where} shows no real capture; every App Store face must contain its raw capture (guideline 2.3.3)")
+        end
+        matches = raw_cases.select do |entry|
+          entry["digest"] == capture["sha256"] && entry["locale"] == locale && entry["family"] == family
+        end
+        fail!("#{where} shows a capture that is not a #{locale} #{family} case of the raw capture manifest") unless matches.size == 1
+        source = matches.first
+        key = [locale, family, source["state"]]
+        fail!("#{where} shows the #{source['state']} capture again") if used[key]
+        used[key] = true
+        assets = tile_assets(record, file["path"], number)
+        assets.each do |asset|
+          fail!("#{where} uses a material that provenance.json does not record as adopted: #{asset}") unless adopted.include?(asset)
+        end
+        {"locale" => locale, "family" => family, "state" => source["state"], "order" => number,
+         "path" => "#{locale}/#{family}/#{format('%02d', number)}-#{source['state']}.png",
+         "rawPath" => source["path"], "rawDigest" => source["digest"], "declarationDigest" => record["specSha256"],
+         "renderRecordDigest" => digest(record_path), "assetDigests" => assets, "width" => size[0], "height" => size[1],
+         "digest" => file["sha256"], "source" => file["path"]}
+      end
+    end
+
+    # The faces are the tiles the user adopted: a Japanese iPhone render shows the chosen tiles byte for
+    # byte, and every other record renders the same scenes in the same order with the same style.
+    anchor = records.map(&:last).find do |record|
+      record["locale"] == "ja" && record["device"].start_with?("iphone") && record["files"].map { |file| file["sha256"] } == selected
+    end
+    fail!("no Japanese iPhone render record shows the tiles chosen on the proposal sheet; finalize the renders of the chosen pattern or combination") unless anchor
+    scenes = ->(record) { record["tiles"].map { |tile| tile.is_a?(Hash) ? tile["id"] : nil } }
+    records.each do |record_path, record|
+      next if record.equal?(anchor)
+      unless scenes.call(record) == scenes.call(anchor) && record["style"] == anchor["style"]
+        fail!("render record #{File.basename(record_path)} does not render the chosen tiles: its scenes or style differ from the Japanese iPhone render of the choice")
+      end
+    end
+
+    composition = {
+      "schemaVersion" => SCHEMA_VERSION,
+      "rawManifestDigest" => digest(manifest_path),
+      "captureBatchId" => batch,
+      "sourceSha" => raw["sourceSha"],
+      "buildDigest" => raw["buildDigest"],
+      "runtime" => raw["runtime"],
+      "requirementsDigest" => raw["requirementsDigest"],
+      "rendererDigest" => digest(File.realpath(__FILE__)),
+      "adoption" => adoption.merge("provenanceDigest" => provenance_path && digest(provenance_path)),
+      "cases" => cases.sort_by { |entry| entry.values_at("locale", "family", "order") }.map { |entry| entry.reject { |key, _| key == "source" } }
+    }
+    out = new_folder(out_path)
+    cases.each do |entry|
+      target = File.join(out, entry["path"])
+      FileUtils.mkdir_p(File.dirname(target))
+      FileUtils.copy_file(entry["source"], target)
+      File.chmod(0o644, target)
+    end
+    FileUtils.mkdir_p(File.join(out, "records"))
+    (records.map(&:first) + [provenance_path].compact).each do |path|
+      target = File.join(out, "records", "#{digest(path).sub(':', '-')}.json")
+      FileUtils.copy_file(path, target) unless File.exist?(target)
+      File.chmod(0o644, target)
+    end
+    composition_path = File.join(out, "composition.json")
+    File.write(composition_path, JSON.pretty_generate(composition) + "\n")
+    {"status" => "finalized", "composition" => composition_path, "composedRoot" => out, "cases" => cases.size,
+     "compositionDigest" => digest(composition_path)}
+  end
+
+  def regular_file(path, label)
+    fail!("#{label} #{path} must be a regular file, not a link") unless File.file?(path) && !File.symlink?(path)
+    path
+  end
+
+  def raw_case!(entry, raw_root)
+    exact!(entry, "raw capture manifest case", RAW_CASE_KEYS)
+    path = entry["path"]
+    fail!("raw capture manifest case path is unsafe: #{path}") unless path.is_a?(String) && path.match?(CASE_PATH_PATTERN)
+    file = File.join(raw_root, path)
+    unless File.file?(file) && !File.symlink?(file) && File.realpath(file).start_with?(raw_root + "/") && digest(file) == entry["digest"]
+      fail!("raw capture #{path} is missing or changed after capture")
+    end
+    entry
+  end
+
+  # The user's choice on the proposal sheet: selection.json written by `appstore-creative-sheet.sh select`
+  # next to the sheet it names, whose bytes must still be those the user saw.
+  def adoption_record(path, approval)
+    selection_path = regular_file(path, "selection")
+    selection = JSON.parse(File.binread(selection_path))
+    unless selection.is_a?(Hash) && selection["schemaVersion"] == SCHEMA_VERSION && selection["decision"] == "user-explicit" &&
+           selection["selection"].is_a?(Hash) && selection["sheetSha256"].is_a?(String) && selection["recordedAt"].is_a?(String)
+      fail!("selection #{path} is not an explicit choice recorded by appstore-creative-sheet.sh select")
+    end
+    folder = File.dirname(selection_path)
+    sheet = regular_file(File.join(folder, "sheet.html"), "proposal sheet")
+    fail!("the proposal sheet changed after the choice") unless digest(sheet) == selection["sheetSha256"]
+    record = JSON.parse(File.binread(regular_file(File.join(folder, "sheet.json"), "proposal sheet record")))
+    unless record.is_a?(Hash) && record["kind"] == "proposal" && record["sheetSha256"] == selection["sheetSha256"]
+      fail!("selection #{path} is not a choice on a proposal sheet")
+    end
+    patterns = (record["patterns"] || []).select { |pattern| pattern.is_a?(Hash) }
+    # The Japanese iPhone tiles of a pattern, by slot: the images the user saw on the sheet.
+    shown = lambda do |id|
+      pattern = patterns.find { |item| item["id"] == id } or fail!("the chosen pattern #{id} is not on the proposal sheet")
+      (pattern["tiles"] || []).select { |tile| tile.is_a?(Hash) && tile["device"] == "iphone" && tile["locale"] == "ja" }
+    end
+    choice = selection["selection"]
+    concept, selected = case choice["type"]
+                        when "pattern"
+                          id = choice["patternId"]
+                          fail!("the chosen pattern is not on the proposal sheet") unless id.is_a?(String) && id.match?(CONCEPT_PATTERN)
+                          tiles = shown.call(id)
+                          fail!("the chosen pattern #{id} has no Japanese iPhone tiles in slots 1..n") unless tiles.map { |tile| tile["slot"] } == (1..tiles.size).to_a && !tiles.empty?
+                          [id, tiles.map { |tile| tile["sourceSha256"] }]
+                        when "combination"
+                          slots = choice["tiles"]
+                          unless slots.is_a?(Array) && !slots.empty? && slots.all? { |slot| slot.is_a?(Hash) } &&
+                                 slots.map { |slot| slot["slot"] } == (1..slots.size).to_a
+                            fail!("the chosen combination must name every slot from 1 in order")
+                          end
+                          ["combination", slots.map do |slot|
+                            tile = shown.call(slot["patternId"]).find { |item| item["slot"] == slot["sourceSlot"] } or
+                              fail!("the combination names tile #{slot['sourceSlot']} of pattern #{slot['patternId']}, which the proposal sheet does not show")
+                            tile["sourceSha256"]
+                          end]
+                        else fail!("selection #{path} chooses neither a pattern nor a combination")
+                        end
+    unless selected.all? { |value| value.is_a?(String) && value.match?(DIGEST_PATTERN) }
+      fail!("the proposal sheet record does not name the image of every chosen tile")
+    end
+    [{"proposalSheetDigest" => selection["sheetSha256"], "selectionDigest" => digest(selection_path), "conceptId" => concept,
+      "decision" => "user-explicit", "approvalReference" => approval, "recordedAt" => selection["recordedAt"]}, selected]
+  end
+
+  # Every generated input of one tile: its background image and the layers that touch it.
+  def tile_assets(record, file_path, number)
+    backgrounds = (record["backgrounds"] || []).select { |entry| entry.is_a?(Hash) && entry["file"] == file_path }.map { |entry| entry["sourceSha256"] }
+    layers = ((record["layers"] || []) + (record["decorations"] || [])).select do |entry|
+      entry.is_a?(Hash) && entry["tiles"].is_a?(Array) && entry["tiles"].include?(number)
+    end.map { |entry| entry["sha256"] }
+    assets = (backgrounds + layers).uniq.sort
+    fail!("tile #{number} lists an input without a SHA-256") unless assets.all? { |asset| asset.is_a?(String) && asset.match?(DIGEST_PATTERN) }
+    assets
   end
 
   # --- research sheet ------------------------------------------------------------------------------

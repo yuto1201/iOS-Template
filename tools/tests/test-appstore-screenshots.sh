@@ -140,6 +140,15 @@ result=$(build_set)
 [[ -f "$final/en-US/iphone-6.3/01-primary.png" && -f "$final/ja/ipad-13/01-primary.png" && -f "$final/manifest.json" ]] || {
   echo 'final screenshot set is incomplete' >&2; exit 1
 }
+# #486 (D-101): without --composition the raw-capture route is unchanged: the same manifest keys, no
+# composition record, and every case is the raw capture itself.
+FINAL="$final" RAW="$raw" ruby -rjson -e '
+  manifest = JSON.parse(File.binread(File.join(ENV.fetch("FINAL"), "manifest.json")))
+  abort "raw manifest keys #{manifest.keys}" unless manifest.keys == %w[schemaVersion sourceSha buildDigest runtime requirementsDigest reviewDigest cases]
+  raw = JSON.parse(File.binread(File.join(ENV.fetch("RAW"), "manifest.json"))).fetch("cases")
+  abort "raw cases changed" unless manifest.fetch("cases") == raw.sort_by { |entry| entry.values_at("locale", "family", "order", "state") }
+  abort "a raw set carries a composition record" if File.exist?(File.join(ENV.fetch("FINAL"), "composition.json"))
+' || { echo 'the raw-capture screenshot set changed' >&2; exit 1; }
 
 write_valid_fixture
 write_png "$raw/en-US/iphone-6.3/01-primary.png" 1170 2532 2 31

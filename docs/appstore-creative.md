@@ -25,7 +25,7 @@ CodexやClaudeには、たとえば次のように依頼できます。
 6. 第1段階：面を宣言して `tools/appstore-creative-compose.sh compose` で描き、品質の印とサムネイルの一覧を確かめる。3〜6案（基本は3〜4案）を、日本語iPhoneの実際の描画で比べるシートにし、いちばん良いと考える1案に「おすすめ」と理由を付ける。見出しは仮の文言で、ASOガイドができたらそれに合わせる。
 7. シートを見てもらい、パターンIDを1つ、または面ごとの出どころを明示した組み合わせを選んでもらう。Claudeは同じシートを非公開のArtifactとしても公開する。
 8. 第2段階：選んだパターンだけ素材をすべて生成し、日英とiPhone・iPadの見本で確認する。
-9. 採用した面の宣言と生成画像を各アプリの `goldie/` にcommitし、画像を既存の準備手順へ渡す。
+9. 採用した面の宣言と生成画像を各アプリの `goldie/` にcommitする。`tools/appstore-creative-compose.sh finalize` で、採用した面を撮影の原画の記録（`manifest.json`）、面の宣言、描画の記録、採用した素材、提案シートでの選択に結び付けた合成の記録 `composition.json` を作り（D-101）、その画像を既存の準備手順へ渡す。
 
 有料の字体、クレジットを使う生成、有料のツールが必要になったら、使う前に止めてユーザーに聞きます。
 
@@ -39,7 +39,14 @@ CodexやClaudeには、たとえば次のように依頼できます。
 [config reference](../.agents/skills/appstore-creative/references/config.md)を参照してください。
 
 アプリごとに `goldie/ja/` と `goldie/en-US/` の宣言と設定を分けます。出力 `out/` はGit管理外とし、採用した
-最終画像だけを既存の `App Store/screenshots/` 準備手順へ渡します。
+最終画像だけを既存の `App Store/screenshots/` 準備手順へ渡します。描画器で合成した面は、`finalize` が書いた
+フォルダ（面の画像、`records/`、`composition.json`）を `prepare-appstore-assets` へ渡し、
+`tools/build-appstore-screenshot-set.sh --composition` で組みます。この組み立ては、原画の記録に今までと同じ検査をかけたうえで、
+各面が原画をちょうど1枚含むこと（審査ガイドライン2.3.3）、採用した素材だけを使うこと（2.3.9）、RGBでアルファの欄が無いこと、
+許された寸法、日英で同じ面の構成と順番を確かめ、`composition.json` を画像の組に入れます。packageのdigestがこれを含むので、
+release-auditorの承認と封印は合成の記録に結び付き、面を1枚差し替えると封印は古くなります。目視の確認は、原画の真実性と合成した面の両方に行います。
+例外の `adopted.json`（CafLog A-086、PayCycle A-057）を使っていたアプリは、同じ撮影の原画から描画器で描き直して
+`finalize` から組み直します（移し方は `prepare-appstore-assets` のスキルにあります）。
 
 このスキルはPhase 6のpresentation経路です。新規raw撮影は
 `tools/with-ios-simulator-lock.sh`の内側で`tools/capture-appstore-screenshots.sh`を

@@ -7,7 +7,8 @@ set -euo pipefail
 # a popout centered on its region of a turned device within 2 px, the refusals (URLs, materials the
 # user did not adopt or that changed, fonts outside brand.json or the allowed folders, a decoration limit
 # outside the style), the render record that the proposal sheet reads as `renders`, the quality marks
-# and the 220 px thumbnail sheet, and the reference sheet kept outside Git.
+# and the 220 px thumbnail sheet, and the reference sheet kept outside Git. #486 (D-101): the record names
+# each tile's capture, and finalize binds a rendered face to the raw capture manifest and the user's choice.
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" ruby python3 ffmpeg git shasum
@@ -352,6 +353,68 @@ RECORD="$record" ruby -rjson -e '
 ' || fail 'the quality marks differ'
 [[ "$(px size "$work/out/thumbnails.png")" == "$((4 * 244 + 24))x$(( (220 * 2622 + 1205) / 1206 + 48 ))" ]] ||
   fail "the thumbnail sheet is $(px size "$work/out/thumbnails.png")"
+
+# #486 (D-101): each tile of the record names the real capture it shows (null for a tile without a device),
+# and `finalize` binds a rendered face to the raw capture manifest, the declaration, the adopted materials and
+# the user's choice on the proposal sheet in composition.json.
+RECORD="$record" CAPTURE="$work/app/capture.png" ruby -rjson -rdigest -e '
+  tiles = JSON.parse(File.read(ENV.fetch("RECORD"))).fetch("tiles")
+  capture = "sha256:#{Digest::SHA256.file(ENV.fetch("CAPTURE")).hexdigest}"
+  shown = tiles.map { |tile| tile["capture"] && tile["capture"]["sha256"] }
+  abort "tile captures #{shown}" unless shown == [capture, capture, nil, capture] && tiles[0]["capture"]["path"] == File.realpath(ENV.fetch("CAPTURE"))
+' || fail 'the render record does not name the capture of each tile'
+cat >"$work/app/single.json" <<'EOF'
+{"schemaVersion":1,"device":"iphone-6.3","locale":"ja","style":"editorial","decorationLimit":2,
+ "tiles":[{"id":"home","background":{"color":"#FFD60A"},
+   "headline":{"lines":["給料日まで","あといくら？"],"size":130,"color":"#1C1C1E","top":150},
+   "device":{"capture":"capture.png","width":930,"centerX":603,"top":700},
+   "layers":[{"src":"goldie/assets/leaf.png","x":1000,"y":1600,"width":300,"z":"front"}]}]}
+EOF
+compose "$work/app/single.json" "$work/single" >/dev/null || fail 'the single-tile compose failed'
+mkdir -p "$work/raw/ja/iphone-6.3" "$work/sheet"
+cp "$work/app/capture.png" "$work/raw/ja/iphone-6.3/01-home.png"
+RAW="$work/raw" SHEET="$work/sheet" TILE="$work/single/tile-1.png" ruby -rjson -rdigest -e '
+  sha = ->(path) { "sha256:#{Digest::SHA256.file(path).hexdigest}" }
+  raw = ENV.fetch("RAW")
+  File.write(File.join(raw, "manifest.json"), JSON.generate({"schemaVersion" => 1, "sourceSha" => "a" * 40, "buildDigest" => "sha256:#{"b" * 64}",
+    "runtime" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "requirementsDigest" => "sha256:#{"c" * 64}", "cases" => [
+    {"locale" => "ja", "family" => "iphone-6.3", "state" => "home", "order" => 1, "path" => "ja/iphone-6.3/01-home.png",
+     "sourceSha" => "a" * 40, "buildDigest" => "sha256:#{"b" * 64}", "runtime" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+     "deviceType" => "iPhone 17 Pro", "width" => 1206, "height" => 2622, "digest" => sha.(File.join(raw, "ja/iphone-6.3/01-home.png"))}]}))
+  sheet = ENV.fetch("SHEET")
+  File.write(File.join(sheet, "sheet.html"), "<!doctype html><title>proposal</title>\n")
+  File.write(File.join(sheet, "sheet.json"), JSON.generate({"schemaVersion" => 1, "kind" => "proposal",
+    "sheetSha256" => sha.(File.join(sheet, "sheet.html")), "patterns" => [{"id" => "A", "tiles" => [{"slot" => 1, "kind" => "screen", "device" => "iphone", "locale" => "ja", "sourceSha256" => sha.(ENV.fetch("TILE"))}]}]}))
+  File.write(File.join(sheet, "selection.json"), JSON.generate({"schemaVersion" => 1, "revision" => "r1",
+    "sheetSha256" => sha.(File.join(sheet, "sheet.html")), "selection" => {"type" => "pattern", "patternId" => "A"},
+    "decision" => "user-explicit", "recordedAt" => "2026-11-02T00:00:00Z"}))
+'
+finalize() {
+  "$tool" finalize --raw-root "$work/raw" --render-records "$1" --selection "$work/sheet/selection.json" \
+    --provenance "$work/app/goldie/assets/provenance.json" --approval '#486' --capture-batch 486-r1 --out "$2"
+}
+finalize "$work/single/creative-render-iphone-6.3-ja.json" "$work/final" >/dev/null || fail 'finalize refused a rendered face'
+FINAL="$work/final" SINGLE="$work/single" APP="$work/app" ruby -rjson -rdigest -e '
+  sha = ->(path) { "sha256:#{Digest::SHA256.file(path).hexdigest}" }
+  value = JSON.parse(File.read(File.join(ENV.fetch("FINAL"), "composition.json")))
+  face = value.fetch("cases").first
+  abort "cases #{value["cases"].length}" unless value["cases"].length == 1
+  abort "face #{face}" unless face["path"] == "ja/iphone-6.3/01-home.png" && face["rawPath"] == face["path"] &&
+    face["rawDigest"] == sha.(File.join(ENV.fetch("APP"), "capture.png")) && face["digest"] == sha.(File.join(ENV.fetch("SINGLE"), "tile-1.png")) &&
+    face["declarationDigest"] == sha.(File.join(ENV.fetch("APP"), "single.json")) &&
+    face["assetDigests"] == [sha.(File.join(ENV.fetch("APP"), "goldie/assets/leaf.png"))] && [face["width"], face["height"]] == [1206, 2622] &&
+    face["renderRecordDigest"] == sha.(File.join(ENV.fetch("SINGLE"), "creative-render-iphone-6.3-ja.json"))
+  abort "copied face" unless sha.(File.join(ENV.fetch("FINAL"), face["path"])) == face["digest"]
+  abort "adoption #{value["adoption"]}" unless value.dig("adoption", "conceptId") == "A" && value.dig("adoption", "decision") == "user-explicit" &&
+    value.dig("adoption", "approvalReference") == "#486" && value.dig("adoption", "provenanceDigest") == sha.(File.join(ENV.fetch("APP"), "goldie/assets/provenance.json"))
+' || fail 'finalize did not bind the rendered face'
+# The record with four tiles shows the same capture twice and a tile without a capture: neither becomes a set.
+expect_refused finalize-repeat 'shows the home capture again' finalize "$record" "$work/final-repeat"
+# A face whose rendered bytes changed after rendering is refused.
+cp "$work/single/tile-1.png" "$work/tile-1.orig"
+printf '\0' >>"$work/single/tile-1.png"
+expect_refused finalize-changed 'is missing or changed after rendering' finalize "$work/single/creative-render-iphone-6.3-ja.json" "$work/final-changed"
+cp "$work/tile-1.orig" "$work/single/tile-1.png"
 
 # AC-7: reference images are laid out per app (first five), beside the proposal, and never inside Git.
 for app in alpha beta; do
