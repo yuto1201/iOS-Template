@@ -136,6 +136,14 @@ module IOSTemplate
               next
             end
 
+            # A request that has waited may find the device free only after its deadline, for example when a
+            # release held the lock past it. Such a request leaves the queue and stops instead of taking the lease.
+            if ticket && Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+              queue.fetch("waiters").reject! { |entry| entry["ticketId"] == ticket }
+              ticket = nil
+              raise SimulatorResourceError,
+                    "blocked:environment: Simulator '#{identity.fetch("deviceName")}' became free only after the wait expired after #{wait_seconds} seconds"
+            end
             free_before, in_use, device = grant
             queue.fetch("waiters").reject! { |entry| entry["ticketId"] == ticket } if ticket
             ticket = nil

@@ -444,6 +444,38 @@ expect_denied 'an expired shared wait' 'blocked:environment: dedicated Simulator
 grep -Fq 'wait expired after 1 seconds' "$scratch/denied.err" || fail "the expired wait did not say so: $(<"$scratch/denied.err")"
 [[ "$(queue_length)" == 0 ]] || fail "an expired request stayed in the queue"
 
+# A waiting request that finds the device free only after its deadline does not take the lease: here the
+# lease lock is held past the deadline while the holder's owner dies, as a slow release would.
+sleep 60 &
+late_holder_owner=$!
+background_pids+=("$late_holder_owner")
+late_holder="$(allocate_shared shared-late-holder ipad-ja "$late_holder_owner")"
+IFS=$'\t' read -r late_holder_id _ _ <<<"$late_holder"
+erase_before="$(calls_of erase)"
+allocate_shared shared-late-waiter ipad-en "$owner_pid" 2 >"$scratch/shared-late.out" 2>"$scratch/shared-late.err" &
+late_waiter=$!
+background_pids+=("$late_waiter")
+wait_until 'the late request is queued' queue_is 1
+ruby -e '
+  lock = File.open(ARGV[0], File::RDWR)
+  lock.flock(File::LOCK_EX)
+  File.write(ARGV[1], "locked")
+  sleep 4
+' "$state_root/dedicated-v1.lock" "$scratch/lock-held" &
+lock_holder=$!
+background_pids+=("$lock_holder")
+wait_until 'the test holds the lease lock' test -f "$scratch/lock-held"
+kill "$late_holder_owner"
+wait "$late_holder_owner" 2>/dev/null || true
+wait "$lock_holder"
+if wait "$late_waiter"; then fail "a request whose wait expired took the lease"; fi
+grep -Fq 'became free only after the wait expired after 2 seconds' "$scratch/shared-late.err" ||
+  fail "the late request reported: $(<"$scratch/shared-late.err")"
+[[ ! -s "$scratch/shared-late.out" && "$(queue_length)" == 0 && "$(calls_of erase)" == "$erase_before" ]] ||
+  fail "the late request left the queue, a lease, or an erase behind"
+[[ "$(inventory | jq -r --arg id "$late_holder_id" '[.activeCount, (.allocations[] | select(.allocationId == $id) | .cleanup.reason)] | map(tostring) | join("|")')" == "1|orphan-recovery" ]] ||
+  fail "the dead holder was not recovered, or the late request holds a lease"
+
 # Waiting requests whose owner died, or whose waiting process was killed, are removed and do not hold up the
 # request behind them.
 sleep 60 &
