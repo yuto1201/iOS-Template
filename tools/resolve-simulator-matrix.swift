@@ -191,8 +191,33 @@ func dedicatedDevices(from path: String) throws -> (iPhone: DedicatedDevice, iPa
     guard config.devices[0].runtimeIdentifier == config.devices[1].runtimeIdentifier else {
         throw ResolverError.invalidDedicatedConfig("both devices must use the same Runtime")
     }
+    let sharedNames = Set(sharedDevicePair.map(\.name))
+    if config.devices.contains(where: { sharedNames.contains($0.name) }) {
+        let exact = zip(config.devices, sharedDevicePair).allSatisfy { declared, shared in
+            declared.family == shared.family && declared.name == shared.name &&
+                declared.deviceTypeIdentifier == shared.deviceTypeIdentifier &&
+                declared.runtimeIdentifier == shared.runtimeIdentifier
+        }
+        guard exact else {
+            throw ResolverError.invalidDedicatedConfig("both shared Simulators must be declared exactly as D-098 defines them, or neither")
+        }
+    }
     return (config.devices[0], config.devices[1])
 }
+
+// D-098: the Mac's one shared pair, which an app without its own dedicated pair may declare.
+let sharedDevicePair = [
+    DedicatedDevice(
+        family: "iphone", name: "Shared iPhone 17 Pro",
+        deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+    ),
+    DedicatedDevice(
+        family: "ipad", name: "Shared iPad Pro 13-inch (M5)",
+        deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
+        runtimeIdentifier: "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+    ),
+]
 
 func declaredRuntime(_ identifier: String, from runtimes: [Runtime]) throws -> Runtime {
     guard let runtime = runtimes.first(where: { $0.identifier == identifier && $0.isAvailable }) else {

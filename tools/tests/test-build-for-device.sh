@@ -156,6 +156,24 @@ write_simulators "$(sed 's/"isAvailable":true/"isAvailable":false/' <<<"$ipad_en
 expect_stop 'an unavailable iPad Simulator' 'blocked:environment: 0 available Simulators match' ipad-simulator
 write_simulators "$ipad_entry"
 
+# D-098: an app that declares the Mac's shared pair builds for the shared device the same way; a missing
+# shared device stops and points to the Mac's administrator instead of the setup tool.
+cp "$repo/Config/dedicated-simulators.json" "$work/dedicated-simulators.json"
+sed -e 's/"iOS-Template iPhone 17 Pro"/"Shared iPhone 17 Pro"/' -e 's/"iOS-Template iPad Pro 13-inch (M5)"/"Shared iPad Pro 13-inch (M5)"/' \
+  "$work/dedicated-simulators.json" > "$repo/Config/dedicated-simulators.json"
+grep -Fq '"Shared iPad Pro 13-inch (M5)"' "$repo/Config/dedicated-simulators.json" || fail 'the shared declaration was not prepared'
+shared_ipad_entry="$(sed 's/"iOS-Template iPad Pro 13-inch (M5)"/"Shared iPad Pro 13-inch (M5)"/' <<<"$ipad_entry")"
+write_simulators "$shared_ipad_entry"
+reset_logs
+run_tool ipad-simulator || { cat "$work/out" >&2; fail 'the shared iPad build failed'; }
+grep -Fq -- "-destination id=$ipad_udid build" "$work/xcodebuild.log" || fail "the shared iPad was not the build destination: $(cat "$work/xcodebuild.log")"
+grep -Fq 'built TemplateApp for Shared iPad Pro 13-inch (M5)' "$work/out" || fail "the shared build was not reported: $(cat "$work/out")"
+check_no_device_changes
+write_simulators ''
+expect_stop 'no shared iPad Simulator' 'Ask the Mac administrator' ipad-simulator
+cp "$work/dedicated-simulators.json" "$repo/Config/dedicated-simulators.json"
+write_simulators "$ipad_entry"
+
 # The development device: current `properties` form, with a Simulator and another device in the list.
 physical() {
   local name=$1 udid=$2 state=$3 transport=$4

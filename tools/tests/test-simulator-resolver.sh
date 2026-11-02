@@ -105,6 +105,23 @@ names = matrix.fetch("cases").map { |entry| entry.dig("deviceType", "name") }
 abort "repository declaration did not use the dedicated devices: #{names.inspect}" unless names == ["iPhone 17 Pro", "iPhone 17 Pro", "iPad Pro 13-inch (M5)", "iPad Pro 13-inch (M5)"]
 RUBY
 
+# D-098: a declaration of the Mac's shared pair resolves to the same iOS 27 Device Types.
+shared_config="$scratch/shared.json"
+ruby -rjson - Config/dedicated-simulators.json "$shared_config" <<'RUBY'
+source, destination = ARGV
+config = JSON.parse(File.read(source))
+names = {"iphone" => "Shared iPhone 17 Pro", "ipad" => "Shared iPad Pro 13-inch (M5)"}
+config.fetch("devices").each { |device| device["name"] = names.fetch(device.fetch("family")) }
+File.write(destination, JSON.generate(config))
+RUBY
+run_resolver "$available_runtimes" "$dedicated_types" "$shared_config"
+ruby -rjson - "$output" <<'RUBY'
+matrix = JSON.parse(File.read(ARGV.fetch(0)))
+names = matrix.fetch("cases").map { |entry| entry.dig("deviceType", "name") }
+abort "the shared declaration did not resolve: #{names.inspect}" unless matrix.dig("runtime", "identifier") == "com.apple.CoreSimulator.SimRuntime.iOS-27-0" &&
+  names == ["iPhone 17 Pro", "iPhone 17 Pro", "iPad Pro 13-inch (M5)", "iPad Pro 13-inch (M5)"]
+RUBY
+
 # An unavailable declared Runtime or a missing declared Device Type stops without a fallback.
 unavailable_runtimes="$scratch/runtimes-unavailable.json"
 ruby -rjson - "$fixtures/runtimes.json" "$unavailable_runtimes" <<'RUBY'
@@ -166,6 +183,8 @@ invalid_edits=(
   'config["devices"][1]["runtimeIdentifier"] = "com.apple.CoreSimulator.SimRuntime.iOS-9-12"'
   'config["schemaVersion"] = 2'
   'config["devices"][0]["deviceTypeIdentifier"] = "iPhone 10 Pro"'
+  # D-098: a shared name is valid only as the exact shared pair.
+  'config["devices"][0]["name"] = "Shared iPhone 17 Pro"'
 )
 for edit in "${invalid_edits[@]}"; do
   write_config "$scratch/invalid.json" "$edit"

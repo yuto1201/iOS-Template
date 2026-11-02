@@ -828,7 +828,34 @@ func transformedLivePath(_ path: String, manifest: TemplateManifest, identity: A
         .replacingOccurrences(of: modulePlaceholder, with: identity.moduleName)
 }
 
-func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity) throws {
+// D-098: the Mac's one shared pair, in declaration order.
+let sharedSimulatorDeclaration: [[String: String]] = [
+    [
+        "family": "iphone", "name": "Shared iPhone 17 Pro",
+        "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+        "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+    ],
+    [
+        "family": "ipad", "name": "Shared iPad Pro 13-inch (M5)",
+        "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
+        "runtimeIdentifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+    ],
+]
+
+func isSharedSimulatorDeclaration(_ devices: [[String: Any]]) -> Bool {
+    guard devices.count == sharedSimulatorDeclaration.count else {
+        return false
+    }
+    return zip(devices, sharedSimulatorDeclaration).allSatisfy { device, shared in
+        Set(device.keys) == Set(shared.keys) && shared.allSatisfy { key, value in device[key] as? String == value }
+    }
+}
+
+// Apply audits the declaration it has just transformed, which always carries the display name; only the
+// audit of an already bootstrapped app (`audit`) also accepts the shared pair.
+func auditResiduals(
+    root: URL, manifest: TemplateManifest, identity: AppIdentity, allowSharedSimulators: Bool = false
+) throws {
     let livePaths = Set(manifest.liveContentPaths)
     guard livePaths.count == manifest.liveContentPaths.count,
           livePaths == expectedLiveContentPaths(manifest: manifest) else {
@@ -952,9 +979,11 @@ func auditResiduals(root: URL, manifest: TemplateManifest, identity: AppIdentity
         throw BootstrapError.missingAnchor
     }
     let simulatorNames = simulatorDevices.compactMap { $0["name"] as? String }
+    // D-098: an app that has moved to the Mac's shared pair passes the audit of a later bootstrap run.
+    let sharedDeclaration = allowSharedSimulators && isSharedSimulatorDeclaration(simulatorDevices)
     guard simulatorNames.count == 2,
           Set(simulatorNames).count == 2,
-          simulatorNames.allSatisfy({
+          sharedDeclaration || simulatorNames.allSatisfy({
               $0.hasPrefix("\(identity.displayName) ") && $0.count > identity.displayName.count + 1
           }) else {
         throw BootstrapError.missingAnchor
@@ -1010,7 +1039,7 @@ func audit(rootPath: String, manifestPath: String, moduleName: String) throws {
         ),
         manifest: manifest
     )
-    try auditResiduals(root: root, manifest: manifest, identity: identity)
+    try auditResiduals(root: root, manifest: manifest, identity: identity, allowSharedSimulators: true)
 }
 
 func changedPaths(rootPath: String, manifestPath: String) throws -> [String] {

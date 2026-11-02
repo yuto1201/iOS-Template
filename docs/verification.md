@@ -78,7 +78,7 @@ review packet schema v2は`releaseDisposition`と`releaseDispositionFile`を一�
 
 1. 使用するXcodeを確認する。必要な場合は `DEVELOPER_DIR` をコマンド単位で指定する。
 2. Xcode versionとbuildを記録する。
-3. `Config/dedicated-simulators.json`が宣言する専用deviceのRuntimeを選ぶ。Templateの宣言はiOS 27.0の`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`で、D-063、D-070、D-079に従う。
+3. `Config/dedicated-simulators.json`が宣言する専用deviceのRuntimeを選ぶ。Templateの宣言はiOS 27.0の`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`で、D-063、D-070、D-079に従う。専用の2台を持たないアプリは、Macの共有の2台（iOS 27.0の`Shared iPhone 17 Pro`と`Shared iPad Pro 13-inch (M5)`）を宣言できる。共有の2台はMacの管理者だけが作り、消す（D-098）。
 4. iPhone caseには宣言したiPhoneのDevice Typeを使う。最新機種を探し直さない。
 5. scopeがiPad caseを含む場合だけ、宣言したiPadのDevice Typeを使う。
 6. `full`は4行、`iphone-ja`は日本語iPhoneの1行、`targeted`はIssueで宣言したcanonical部分集合を作る。
@@ -148,7 +148,7 @@ matrixの`language` / `locale`は、アプリ起動引数とUI Testだけでな�
 
 runnerはrepository lockを先に取得し、その内側で`tools/lib/ios-simulator-resource.rb`の短時間Mac共通lockを使います。managerはdeviceを作成、clone、rename、削除しません（D-063）。`allocate`は`Config/dedicated-simulators.json`が宣言するexact name、Device Type、Runtimeと一致するdeviceがちょうど1台あることを確認します。0台または2台以上、型やRuntimeの不一致、利用不可なら`blocked:environment`です。そのdeviceが停止中でなければ、lease外で使用中とみなして待ちます。
 
-stable `IOS_TEMPLATE_SIMULATOR_SESSION_ID`はwrapperから子processへ継承します。repository、worktree、Issue、Headが変わっても、同じsessionが2つ目のleaseを持つことはありません。同じ専用deviceの同時leaseも拒否します。Mac全体の4枠へは、専用deviceのlease、旧managerが`state-v1.json`へ記録した有効な割り当て、起動中の管理外`iOS-Template-` deviceを合算して数えます。旧状態fileは数えるために読むだけで、変更しません。反対に、旧toolのままのrepositoryで動く旧managerは、自分の状態fileと起動中の`iOS-Template-` deviceだけを数え、専用leaseと専用deviceを数えません。そのため、専用deviceのlease中にそのrepositoryが割り当てると、Mac全体で4台を超えることがあります。この制約は、各repositoryが新しいmanagerへ移るまで残ります（D-062、D-063）。待機は既定60秒で取消可能です。既定では対象volumeに8 GiB以上の空きがない場合、leaseを`blocked:environment`で止めます。
+stable `IOS_TEMPLATE_SIMULATOR_SESSION_ID`はwrapperから子processへ継承します。repository、worktree、Issue、Headが変わっても、同じsessionが2つ目のleaseを持つことはありません。同じ専用deviceの同時leaseも拒否します。Mac全体の4枠へは、専用deviceのlease、旧managerが`state-v1.json`へ記録した有効な割り当て、起動中の管理外`iOS-Template-` deviceを合算して数えます。旧状態fileは数えるために読むだけで、変更しません。反対に、旧toolのままのrepositoryで動く旧managerは、自分の状態fileと起動中の`iOS-Template-` deviceだけを数え、専用leaseと専用deviceを数えません。そのため、専用deviceのlease中にそのrepositoryが割り当てると、Mac全体で4台を超えることがあります。この制約は、各repositoryが新しいmanagerへ移るまで残ります（D-062、D-063）。使用中のdeviceを待つ要求は、Mac共通の`dedicated-queue-v1.json`に来た順の番号、owner、待ち始めの時刻を記録し、deviceが空いたらいちばん前の要求にだけleaseを渡します。待っている間は自分の順番と前にいる数を標準エラーへ出し、ownerまたは待っているprocessが消えた要求は取り除きます。待機の既定は専用deviceで60秒、共有deviceで1800秒で、`--wait-seconds`で変えられ、取消可能です。上限を過ぎた要求は`blocked:environment`で止まり、待ちから外れます。待ちの記録を知らない旧managerは、この順番を飛ばすことがあります（D-098）。既定では対象volumeに8 GiB以上の空きがない場合、leaseを`blocked:environment`で止めます。
 
 lease直後に、managerは専用deviceをeraseし、完了を記録してからrunnerへ返します。eraseに失敗した場合はleaseを返し、成功扱いにしません。`release`はdeviceを停止し、停止を確認してからleaseを返します。停止を観測する前にdeviceが一覧から消えた場合は、`cleanup.status: unverified`、`deviceState: absent`としてleaseを返し、`release`自体は失敗します。この場合は停止の証明にならず、runnerは成功形式の証拠を公開しません。receiptは`schemaVersion: 2`、`kind: dedicated-lease`で、eraseの証明（`preparation`）と停止の証明（`cleanup.deviceState: Shutdown`）を持ちます。通常終了、Test失敗、timeout、INT／TERMでは、exit cleanupがactive leaseだけを返します。SIGKILLやMac再起動で残ったleaseは、次回runner開始時にowner PIDとprocess start identityを照合し、deviceを停止して返します。旧managerのschema v1 receiptと削除証明は変更せず、既存の証拠をそのまま検証できます。
 

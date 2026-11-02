@@ -31,6 +31,15 @@ module TemplateSync
   BASE_METHODS = %w[created adopted].freeze
   IDENTITY_KEYS = %w[appSlug bundleId displayName moduleName schemaVersion sourceIdentityVersion].freeze
   TEMPLATE_DEVICE_PREFIX = "iOS-Template "
+  # D-098: the Mac's one shared pair, which an app without its own dedicated pair may declare instead.
+  SHARED_SIMULATORS = [
+    {"family" => "iphone", "name" => "Shared iPhone 17 Pro",
+     "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+     "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0"},
+    {"family" => "ipad", "name" => "Shared iPad Pro 13-inch (M5)",
+     "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
+     "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0"}
+  ].freeze
   # A commit that changes these can change every Identity-transformed file without touching it.
   TRANSFORM_TOOL_PATHS = ["tools/bootstrap-app.swift", IDENTITY_MANIFEST_PATH].freeze
   SHA_PATTERN = /\A[0-9a-f]{40}\z/
@@ -592,7 +601,7 @@ module TemplateSync
       "agents-md" => "AGENTS.mdはテンプレートとアプリの規則が混ざるため手で確認し、変更する文面はD-075に従ってユーザーの承認を得ます。",
       "agents-md-approvals" => "承認記録はテンプレートとアプリの記録が混ざるため、テンプレートの記録を追記する形で手で確認します。",
       "decisions" => "決定事項はテンプレートのD-###を末尾へ追記する形で手で確認し、番号の衝突があれば追記しません。",
-      "dedicated-simulators" => "専用Simulatorはアプリの表示名を前置した2台を保ち、テンプレート用の端末を指す変更を入れません。",
+      "dedicated-simulators" => "専用Simulatorはアプリの表示名を前置した2台、または共有の2台（D-098）の宣言を保ち、テンプレート用の端末を指す変更を入れません。",
       "ownership" => "アカウントと提出先の設定はアプリの値を保ち、テンプレートの構造の変更だけを手で取り込みます。",
       "repository-tests" => "test manifestはアプリが追加したtestを保ち、テンプレートの変更を手で取り込みます。"
     }.fetch(rule)
@@ -856,20 +865,30 @@ module TemplateSync
   end
 
   def simulator_report(app_files, new_xf, identity)
-    names = lambda do |text|
+    declared = lambda do |text|
       next [] if text.nil?
-      JSON.parse(text.dup.force_encoding(Encoding::UTF_8)).fetch("devices", []).map { |device| device["name"] }
+      devices = JSON.parse(text.dup.force_encoding(Encoding::UTF_8)).fetch("devices", [])
+      devices.is_a?(Array) ? devices.select { |device| device.is_a?(Hash) } : []
     rescue JSON::ParserError
       []
     end
-    app_names = names.call(app_files[SIMULATORS_PATH]&.bytes)
-    planned = names.call(read(new_xf, SIMULATORS_PATH)&.bytes)
+    app_devices = declared.call(app_files[SIMULATORS_PATH]&.bytes)
+    app_names = app_devices.map { |device| device["name"] }
+    planned = declared.call(read(new_xf, SIMULATORS_PATH)&.bytes).map { |device| device["name"] }
     prefix = identity && "#{identity["displayName"]} "
+    # D-098: an app without its own dedicated pair keeps its declaration of the Mac's shared pair.
+    shared_names = SHARED_SIMULATORS.map { |device| device["name"] }
+    shared = app_devices == SHARED_SIMULATORS
     problems = []
     problems << "アプリの#{SIMULATORS_PATH}がありません。" if app_names.empty?
     problems << "アプリの専用Simulatorが2台ではありません。" unless app_names.empty? || app_names.length == 2
+    if !shared && app_names.any? { |name| shared_names.include?(name) }
+      problems << "アプリの共有Simulatorの宣言が、D-098の2台（#{shared_names.join("、")}）と一致しません。"
+    end
     if prefix
-      problems << "アプリの専用Simulatorが表示名「#{identity["displayName"]}」で始まっていません。" unless app_names.all? { |name| name.start_with?(prefix) }
+      unless shared || app_names.all? { |name| name.start_with?(prefix) }
+        problems << "アプリの専用Simulatorが表示名「#{identity["displayName"]}」で始まっていません。"
+      end
       problems << "テンプレートを変換した宣言が表示名で始まっていません。" unless planned.all? { |name| name.start_with?(prefix) }
     end
     problems << "アプリの専用Simulatorがテンプレート用の端末を指しています。" if app_names.any? { |name| name.start_with?(TEMPLATE_DEVICE_PREFIX) }
@@ -1646,7 +1665,7 @@ module TemplateSync
     problems = plan["simulators"]["problems"]
     unless problems.empty?
       items << {"kind" => "simulators", "problems" => problems,
-                "message" => "専用Simulatorの宣言（`#{SIMULATORS_PATH}`）を、取り込み先の表示名を前置した2台に直します。#{problems.join}直すまで、適用toolは止まります。"}
+                "message" => "専用Simulatorの宣言（`#{SIMULATORS_PATH}`）を、取り込み先の表示名を前置した2台、または共有の2台（D-098）に直します。#{problems.join}直すまで、適用toolは止まります。"}
     end
     collided = plan["files"].select { |file| file["caseCollision"] }
     unless collided.empty?
@@ -1969,7 +1988,9 @@ module TemplateSync
     lines << "- 決定事項: テンプレートの新しいD-###は#{decisions["templateNew"].empty? ? "ありません" : decisions["templateNew"].join("、")}。#{decisions["note"]}"
     decisions["collisions"].each { |item| lines << "  - #{item["id"]}: テンプレート「#{item["template"]}」／アプリ「#{item["app"]}」" }
     problems = result.dig("simulators", "problems")
-    lines << "- 専用Simulator: #{problems.empty? ? "取り込み先の表示名を前置した宣言です。" : problems.join(" ")}"
+    shared = result.dig("simulators", "app") == SHARED_SIMULATORS.map { |device| device["name"] }
+    declaration = shared ? "共有の2台（D-098）の宣言です。" : "取り込み先の表示名を前置した宣言です。"
+    lines << "- 専用Simulator: #{problems.empty? ? declaration : problems.join(" ")}"
     issues = result.dig("app", "identityFormatIssues")
     lines << "- `#{APP_IDENTITY_PATH}`: #{issues.empty? ? "形式の違いはありません。" : issues.join(" ")}"
     lines << ""

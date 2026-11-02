@@ -97,8 +97,13 @@ if [[ -n "$family" ]]; then
       device.is_a?(Hash) && device["name"] == name && device["deviceTypeIdentifier"] == type && device["isAvailable"] != false
     end
     unless matches.length == 1
-      stop("blocked:environment: #{matches.length} available Simulators match #{name} (#{type}, #{runtime}); exactly one is required. " \
-           "Create it only through tools/setup-dedicated-simulators.sh (D-063)")
+      # D-098: the shared pair is created and deleted only by the Mac administrators.
+      remedy = if ["Shared iPhone 17 Pro", "Shared iPad Pro 13-inch (M5)"].include?(name)
+        "Ask the Mac administrator (the Mac management agent or the owner) for the shared Simulator (D-098)"
+      else
+        "Create it only through tools/setup-dedicated-simulators.sh (D-063)"
+      end
+      stop("blocked:environment: #{matches.length} available Simulators match #{name} (#{type}, #{runtime}); exactly one is required. #{remedy}")
     end
     udid = matches.first["udid"].to_s
     stop("the dedicated Simulator has an invalid UDID") unless udid.match?(/\A[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\z/i)

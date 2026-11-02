@@ -390,11 +390,12 @@ allocate_owned_simulator() {
   for index in "${case_indexes[@]}"; do
     [[ "${case_ids[$index]}" == "$case_id" ]] || continue
     type_identifier="$(config_value "cases.$index.deviceType.identifier")" || return 1
+    # The manager waits its default: 60 seconds for a dedicated device, 1800 in arrival order for a shared one (D-098).
     output="$(run_simulator_resource allocate ${simulator_resource_test_flags[@]+"${simulator_resource_test_flags[@]}"} \
       --session "$simulator_session_id" --repository "$repository_root" --issue "$issue" --head "$head_sha" \
       --batch "$(config_value batchId)" --attempt "$attempt_id" --case "$case_id" \
       --runtime "$(config_value runtime.identifier)" --device-type "$type_identifier" \
-      --owner-pid "$$" --wait-seconds 60 --receipt-dir "$allocation_receipt_dir")" || return 1
+      --owner-pid "$$" --receipt-dir "$allocation_receipt_dir")" || return 1
     IFS=$'\t' read -r allocation_id udid receipt <<<"$output"
     receipt_directory_physical="$(cd "$allocation_receipt_dir" && /bin/pwd -P)" || return 1
     [[ "$allocation_id" =~ ^[0-9a-f-]{36}$ && "$udid" =~ ^[0-9A-Fa-f-]+$ && \

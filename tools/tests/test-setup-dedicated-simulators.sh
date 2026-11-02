@@ -176,6 +176,45 @@ run_tool
 assert_only_list_and_create
 ! grep -Eq '17-Pro-Max|17 Pro Max' "$repo_root/Config/dedicated-simulators.json" || { echo 'the declaration still names iPhone 17 Pro Max' >&2; exit 1; }
 
+# D-098: a declaration of the Mac's shared pair is checked but never created. Present shared devices are
+# reported; a missing one stops as blocked:environment and points to the Mac's administrator.
+shared_iphone='Shared iPhone 17 Pro'
+shared_ipad='Shared iPad Pro 13-inch (M5)'
+shared_runtime='com.apple.CoreSimulator.SimRuntime.iOS-27-0'
+shared_iphone_type='com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro'
+shared_ipad_type='com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB'
+write_declaration() {
+  ruby -rjson -e '
+    path, iphone, iphone_type, ipad, ipad_type, runtime = ARGV
+    File.write(path, JSON.pretty_generate("schemaVersion" => 1, "devices" => [
+      {"family" => "iphone", "name" => iphone, "deviceTypeIdentifier" => iphone_type, "runtimeIdentifier" => runtime},
+      {"family" => "ipad", "name" => ipad, "deviceTypeIdentifier" => ipad_type, "runtimeIdentifier" => runtime}
+    ]))
+  ' "$@"
+}
+write_declaration "$workspace/shared.json" "$shared_iphone" "$shared_iphone_type" "$shared_ipad" "$shared_ipad_type" "$shared_runtime"
+prepare shared-present "$shared_iphone|$shared_iphone_type|$shared_runtime|true" "$shared_ipad|$shared_ipad_type|$shared_runtime|true"
+run_tool --config "$workspace/shared.json"
+[[ "$(creates)" == 0 ]] || { echo 'setup created a shared Simulator' >&2; exit 1; }
+ruby -rjson -e '
+  value = JSON.parse(File.read(ARGV[0]))
+  abort "shared devices were not reported present" unless value["status"] == "ready" &&
+    value["devices"].map { |entry| [entry["name"], entry["status"]] } == [[ARGV[1], "present"], [ARGV[2], "present"]]
+' "$state/stdout" "$shared_iphone" "$shared_ipad"
+assert_only_list_and_create
+prepare shared-missing "$shared_iphone|$shared_iphone_type|$shared_runtime|true"
+assert_blocked 'missing shared iPad' "shared Simulator '$shared_ipad' is missing" --config "$workspace/shared.json"
+grep -Fq "ask the Mac's administrator" "$state/stderr" || { echo 'the missing shared device did not point to the administrator' >&2; exit 1; }
+assert_only_list_and_create
+prepare shared-none
+assert_blocked 'no shared devices' "shared Simulator '$shared_iphone' is missing" --config "$workspace/shared.json"
+write_declaration "$workspace/shared-mixed.json" "$shared_iphone" "$shared_iphone_type" "Mixed iPad Pro 13-inch (M5)" "$shared_ipad_type" "$shared_runtime"
+prepare shared-mixed
+assert_blocked 'mixed shared declaration' 'Simulator declaration must declare both shared Simulators exactly' --config "$workspace/shared-mixed.json"
+write_declaration "$workspace/shared-other-type.json" "$shared_iphone" 'com.apple.CoreSimulator.SimDeviceType.iPhone-17' "$shared_ipad" "$shared_ipad_type" "$shared_runtime"
+prepare shared-other-type
+assert_blocked 'shared name with another Device Type' 'Simulator declaration must declare both shared Simulators exactly' --config "$workspace/shared-other-type.json"
+
 skill="$repo_root/.agents/skills/app-bootstrap/SKILL.md"
 grep -Fq 'tools/setup-dedicated-simulators.sh' "$skill" || { echo 'app-bootstrap skill does not name the setup tool' >&2; exit 1; }
 # D-079: the user creates the dedicated Simulators; AI only checks them read-only and stops when one is missing.

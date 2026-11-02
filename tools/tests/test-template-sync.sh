@@ -332,6 +332,37 @@ PLAN="$work/report2/plan.json" BASE="$base" ruby -rjson -e '
 '
 grep -Fq '基準commit: 不明' "$work/report2/plan.md" || { echo 'plan.md does not report the unknown base' >&2; exit 1; }
 
+# D-098: an app that declares the Mac's shared pair keeps it; only the exact pair is accepted.
+shared_app="$work/app-shared"
+make_app "$shared_app"
+write_shared_declaration() {
+  (cd "$shared_app" && ruby -rjson -e '
+    simulators = JSON.parse(File.read("Config/dedicated-simulators.json"))
+    names = {"iphone" => "Shared iPhone 17 Pro", "ipad" => ARGV.fetch(0)}
+    simulators["devices"].each { |device| device["name"] = names.fetch(device["family"]) }
+    File.write("Config/dedicated-simulators.json", JSON.pretty_generate(simulators) + "\n")
+  ' "$1")
+}
+write_shared_declaration 'Shared iPad Pro 13-inch (M5)'
+commit_all "$shared_app" shared-simulators
+"$template/tools/template-sync.sh" report --app-root "$shared_app" --output-dir "$work/report-shared" --work-dir "$work/cache" >/dev/null
+PLAN="$work/report-shared/plan.json" ruby -rjson -e '
+  plan = JSON.parse(File.read(ENV.fetch("PLAN")))
+  sims = plan.fetch("simulators")
+  abort "the shared declaration was not accepted: #{sims}" unless sims["problems"] == [] &&
+    sims["app"] == ["Shared iPhone 17 Pro", "Shared iPad Pro 13-inch (M5)"] && sims["planned"].all? { |name| name.start_with?("Garden Notes ") }
+  file = plan.fetch("files").find { |entry| entry["path"] == "Config/dedicated-simulators.json" }
+  abort "the shared declaration must stay a manual mixed file: #{file}" unless file["action"] == "manual" && file["reason"].include?("共有の2台（D-098）")
+'
+grep -Fq -- '- 専用Simulator: 共有の2台（D-098）の宣言です。' "$work/report-shared/plan.md" || { echo 'plan.md does not report the shared declaration' >&2; exit 1; }
+write_shared_declaration 'Garden Notes iPad Pro 13-inch (M5)'
+commit_all "$shared_app" mixed-simulators
+"$template/tools/template-sync.sh" report --app-root "$shared_app" --output-dir "$work/report-mixed" --work-dir "$work/cache" >/dev/null
+PLAN="$work/report-mixed/plan.json" ruby -rjson -e '
+  problems = JSON.parse(File.read(ENV.fetch("PLAN"))).dig("simulators", "problems")
+  abort "a mixed shared declaration was accepted: #{problems}" unless problems.any? { |problem| problem.include?("D-098の2台") }
+'
+
 # App 3: a repository that never adopted the template (no identity, no base).
 app3="$work/app3"
 mkdir -p "$app3/docs"
@@ -989,7 +1020,7 @@ for text in '- 書き込むファイル: 3個（30個を超えると大きい変
   '取り込みIssueの最初の手順として、次の順に片付けます。' \
   '1. Identityの形式の違い: `Config/app-identity.json`の形式がテンプレートと違います。Config/app-identity.jsonにsourceIdentityVersionがありません。形式を直します。' \
   "2. 決定事項の番号の衝突: 決定事項の番号が衝突しています（${analysis_decision}）。アプリ固有の決定事項を\`specs/app-decisions.md\`の\`A-###\`へ移します（D-069）。移すまで、適用toolはテンプレートの決定事項を追記せずに止まります。" \
-  '3. 専用Simulatorの宣言: 専用Simulatorの宣言（`Config/dedicated-simulators.json`）を、取り込み先の表示名を前置した2台に直します。アプリの専用Simulatorが表示名「Garden Notes」で始まっていません。アプリの専用Simulatorがテンプレート用の端末を指しています。直すまで、適用toolは止まります。' \
+  '3. 専用Simulatorの宣言: 専用Simulatorの宣言（`Config/dedicated-simulators.json`）を、取り込み先の表示名を前置した2台、または共有の2台（D-098）に直します。アプリの専用Simulatorが表示名「Garden Notes」で始まっていません。アプリの専用Simulatorがテンプレート用の端末を指しています。直すまで、適用toolは止まります。' \
   "4. 基準commitの記録: 基準commitが記録されていません。Config/template-base.jsonがありません。この計画は、ファイルごとの出どころで判定しています（D-078）。推定の基準は\`${new_commit:0:7}\`です（参考）。記録は、適用toolが取り込んだテンプレートのcommitで作ります。" \
   "   - ${analysis_decision}: テンプレート「分析の決定」／アプリ「アプリの決定」" \
   '5. 取り込み先のtoolの更新: 検証に使う取り込み先のtoolのうち1個が、テンプレートの最新と違います。アプリ側で変えた1個は、取り込み先で検証する前に、「3. アプリ独自の改造」で扱いを決めます。' \
