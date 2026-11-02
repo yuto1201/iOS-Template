@@ -79,11 +79,39 @@ Each locale/family condition leases its platform's dedicated Simulator, which is
 
 1. Derive `metadata/`, localized English and Japanese copy, `privacy/data-use.yml`, review notes, and release notes from observable app behavior and confirmed specifications. Do not invent marketing, privacy, account-deletion, or legal claims. Draft and choose the store copy as in [Draft the store copy (ASO)](#draft-the-store-copy-aso).
 2. Draft privacy policy, terms, and support text from the same facts. For a first publication, stop until the user confirms the legal documents and an approval receipt is available. Mark their exact `Status: Confirmed`; an AI or release auditor cannot supply this approval. If public pages are required, complete the legal-page handoff above and bind the live verification record before treating their URLs as ready.
-3. Follow the Phase 6 screenshot routing above. Use `appstore-creative` for reviewed iPhone and iPad presentation, with every raw capture taken through the repository capture path. Preserve exact source/build provenance across imported and rendered images.
+3. Follow the Phase 6 screenshot routing above. Use `appstore-creative` for reviewed iPhone and iPad presentation, with every raw capture taken through the repository capture path. Preserve exact source/build provenance across imported and rendered images. When the adopted faces are drawn by the D-093 renderer (`tools/appstore-creative-compose.sh compose`), bind them with `finalize` (D-101) before review; see [Composed screenshot sets](#composed-screenshot-sets-d-101).
 4. Audit every App Store Review Guideline for this exact version and build in `App Store/review/guidelines-audit.json`, following the pre-submission audit of [`app-review-guidelines`](../app-review-guidelines/SKILL.md) (D-081). Recheck Apple's page date first, get the user's Issue-comment confirmation for every `user-judgment` guideline, and require `tools/check-review-guidelines.sh --project-root "$PWD" --bundle-id "$BUNDLE_ID" --version "$VERSION" --build "$BUILD"` to pass before the release-auditor review. A failing or stale audit stops preparation; never seal around it.
-5. Have the visual evaluator inspect every raw image for safe area, clipping, truthfulness, ordering, and English/Japanese parity. Then obtain `release-auditor` approval for the exact source SHA, build digest, package digest, privacy/legal declarations, screenshots, and the passing guideline audit.
-6. Assemble final screenshots with `tools/build-appstore-screenshot-set.sh`. Never stretch or silently transform them.
+5. Have the visual evaluator inspect every raw image for safe area, clipping, truthfulness, ordering, and English/Japanese parity. For a composed set, also inspect every composed face for safe area, text clipping and English/Japanese parity, and check that it shows its raw capture unedited (guidelines 2.3.3 and 2.3.9); each `review.json` case then carries both the composed face's `digest` and its raw capture's `rawDigest`. Then obtain `release-auditor` approval for the exact source SHA, build digest, package digest, privacy/legal declarations, screenshots, and the passing guideline audit.
+6. Assemble final screenshots with `tools/build-appstore-screenshot-set.sh`. Never stretch or silently transform them. A raw-capture set takes the raw root as it always has; a composed set adds `--composition FILE --composed-root DIR` from `finalize`.
 7. Validate the complete package with `tools/validate-appstore-package.sh --require-fresh`.
+
+## Composed screenshot sets (D-101)
+
+A set drawn by the D-093 renderer is sealed through the same package, audit and seal as raw captures, bound to the capture that each face shows:
+
+1. Render every locale and family with `tools/appstore-creative-compose.sh compose` from the raw captures of one capture batch, and record the user's choice on the proposal sheet with `tools/appstore-creative-sheet.sh select`.
+2. Bind the adopted faces. `finalize` refuses a face without a raw capture of its locale and family, a capture shown twice, a material that `goldie/assets/provenance.json` does not record as adopted, and any declaration, face or capture whose bytes changed after rendering:
+
+   ```sh
+   tools/appstore-creative-compose.sh finalize --raw-root "$RAW_ROOT" \
+     --render-records "$JA_IPHONE_RECORD,$EN_IPHONE_RECORD,$JA_IPAD_RECORD,$EN_IPAD_RECORD" \
+     --selection .artifacts/store-creative/<revision>/selection.json \
+     --provenance goldie/assets/provenance.json --approval "$ISSUE_COMMENT_URL" \
+     --capture-batch "$BATCH_ID" --out "$COMPOSED_ROOT"
+   ```
+
+   `$COMPOSED_ROOT` receives `<locale>/<family>/NN-<state>.png`, byte copies of the render records and provenance under `records/`, and `composition.json` (schemaVersion 1): the raw manifest's SHA-256, the capture batch, source SHA, build digest, runtime and requirements digest, the renderer's SHA-256, the adoption (proposal sheet and selection SHA-256, concept ID, `user-explicit`, approval reference, recorded time, provenance SHA-256), and for each face its locale, family, state, order, path, raw path and SHA-256, declaration, render record and material SHA-256, size and SHA-256. It holds no absolute path. Keep `$COMPOSED_ROOT` with the other working output outside Git: its record copies name local paths, and only the assembled set enters `App Store/screenshots/`.
+3. Review both the raw captures and the composed faces (step 5) and assemble the set with the composition:
+
+   ```sh
+   tools/build-appstore-screenshot-set.sh --raw-root "$RAW_ROOT" --output-root "$OUTPUT_ROOT" \
+     --requirements "$REQUIREMENTS" --review "$REVIEW" --source-sha "$HEAD_SHA" --runtime "$RUNTIME_ID" \
+     --build-digest "$BUILD_DIGEST" --composition "$COMPOSED_ROOT/composition.json" --composed-root "$COMPOSED_ROOT"
+   ```
+
+   The raw manifest keeps every existing check (source SHA, build digest, runtime, requirements digest, device type, naming and digests). Each composed face must match exactly one raw case by locale, family and state with the same raw digest; its render record must name that capture and the declaration digest and use only adopted materials; and it must be a real, non-linked RGB PNG without an alpha channel, at a size the family allows, with the recorded SHA-256. English and Japanese must show the same states in the same order. The output adds `screenshots/composition.json`, `compositionDigest` and each case's `rawDigest` to the manifest; the package digest that the release auditor approves and the seal records covers the composition record, so replacing one face or changing the record makes the seal stale. Without `--composition` the raw-capture route and its output are unchanged.
+
+Moving from an exception `App Store/screenshots/adopted.json` (CafLog A-086, PayCycle A-057): its `capture` block (`batchId`, `sourceSha`, `buildDigest`, `runtime`, `requirementsDigest`) becomes `--capture-batch` and the raw `manifest.json` that `finalize` reads; `decision`, `issue` and `pattern` become the proposal sheet's `selection.json`, `--approval` and `conceptId`; each tile's `raw` and `image` become a case's `rawDigest` and `digest`. Faces drawn by an app's own script (`script`, `scriptSha256`) have no render record: draw them again with `tools/appstore-creative-compose.sh compose` from the same captures, then finalize, review, assemble, validate and seal as above, and close the exception in the app's own Issue.
 
 ## Seal the exact candidate
 
