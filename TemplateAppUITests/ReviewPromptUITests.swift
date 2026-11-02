@@ -13,7 +13,7 @@ final class ReviewPromptUITests: XCTestCase {
     func testJapaneseReviewPromptShowsAndGuidesToFeedback() {
         let app = XCUIApplication()
         app.launchArguments = ["-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP", "-ReviewPromptForceShow",
-                               "-FeedbackStub", "success"]
+                               "-FeedbackStub", "success", "-OnboardingSkip"]
         app.launch()
 
         let question = app.staticTexts["review-prompt.question"]

@@ -20,7 +20,7 @@ final class FeedbackUITests: XCTestCase {
     @MainActor
     func testEnglishFeedbackKeepsMessageAndRetries() {
         runFeedbackFlow(Language(
-            launchArguments: ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"],
+            launchArguments: ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-OnboardingSkip"],
             entry: "Send Feedback", request: "Request", offline: "Check your connection", success: "Thank you"
         ))
     }
@@ -28,7 +28,7 @@ final class FeedbackUITests: XCTestCase {
     @MainActor
     func testJapaneseFeedbackKeepsMessageAndRetries() {
         runFeedbackFlow(Language(
-            launchArguments: ["-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP"],
+            launchArguments: ["-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP", "-OnboardingSkip"],
             entry: "フィードバックを送る", request: "要望", offline: "接続できませんでした", success: "ありがとうございます"
         ))
     }
@@ -36,7 +36,7 @@ final class FeedbackUITests: XCTestCase {
     @MainActor
     func testFeedbackEntryIsHiddenWithoutAnEndpoint() {
         let app = XCUIApplication()
-        app.launchArguments = ["-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP"]
+        app.launchArguments = ["-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP", "-OnboardingSkip"]
         app.launch()
 
         // No app-specific identifiers here: Identity bootstrap does not rewrite this file.

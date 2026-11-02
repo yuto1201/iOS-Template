@@ -11,7 +11,8 @@ final class LegalLinksUITests: XCTestCase {
     @MainActor
     func testJapaneseLegalLinksAppearOnTheRootScreen() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP", "-LegalLinksAppSlug", "sample-app"]
+        app.launchArguments = ["-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP", "-LegalLinksAppSlug", "sample-app",
+                               "-OnboardingSkip"]
         app.launch()
 
         let expected = [

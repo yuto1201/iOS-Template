@@ -41,6 +41,7 @@ final class TemplateAppUITests: XCTestCase {
         app.launchArguments = [
             "-AppleLanguages", "(\(language))",
             "-AppleLocale", locale,
+            "-OnboardingSkip",
         ]
         app.launch()
 

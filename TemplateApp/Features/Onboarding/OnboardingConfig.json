@@ -1,0 +1,32 @@
+{
+  "enabled": true,
+  "version": 1,
+  "pages": [
+    {
+      "id": "welcome",
+      "kind": "value",
+      "titleKey": "onboarding.sample.welcome.title",
+      "messageKey": "onboarding.sample.welcome.message"
+    },
+    {
+      "id": "purpose",
+      "kind": "choice",
+      "titleKey": "onboarding.sample.purpose.title",
+      "messageKey": "onboarding.sample.purpose.message",
+      "selection": "single",
+      "options": [
+        {"id": "build", "titleKey": "onboarding.sample.purpose.build"},
+        {"id": "explore", "titleKey": "onboarding.sample.purpose.explore"},
+        {"id": "learn", "titleKey": "onboarding.sample.purpose.learn"}
+      ],
+      "usedFor": "ContentView: the line under the root screen's title is worded for the chosen purpose."
+    },
+    {
+      "id": "done",
+      "kind": "completion",
+      "titleKey": "onboarding.sample.done.title",
+      "messageKey": "onboarding.sample.done.message"
+    }
+  ],
+  "legacyCompletionKeys": []
+}
