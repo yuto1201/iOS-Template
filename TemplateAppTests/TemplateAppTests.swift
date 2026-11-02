@@ -547,11 +547,13 @@ struct OnboardingPolicyTests {
     }
 
     private func problems(_ pages: [Page]) -> [OnboardingConfig.Problem] {
-        OnboardingConfig(pages: pages).problems(hasKey: { _ in true })
+        OnboardingConfig(pages: pages).problems(availablePermissions: [.notifications], hasKey: { _ in true })
     }
 
     func declarationsBreakingTheRulesTurnItOff() {
-        #expect(sample.problems(hasKey: { _ in true }).isEmpty)
+        #expect(sample.problems(availablePermissions: [.notifications], hasKey: { _ in true }).isEmpty)
+        // A notification primer needs the app's own request (the template does not use notifications, D-068).
+        #expect(sample.problems(hasKey: { _ in true }) == [.permissionUnavailable("notify")])
         let welcome = page("welcome", .value)
         let done = page("done", .completion)
 
@@ -581,10 +583,13 @@ struct OnboardingPolicyTests {
         noPermission.permission = nil
         #expect(problems([welcome, noPermission, done]) == [.missingPermission("notify")])
         // Every wording key is in the string catalog.
-        #expect(sample.problems(hasKey: { $0 != "purpose.explore" }) == [.missingKey("purpose.explore")])
+        #expect(sample.problems(availablePermissions: [.notifications], hasKey: { $0 != "purpose.explore" })
+            == [.missingKey("purpose.explore")])
 
         // A broken or out-of-range file turns the onboarding off instead of stopping the app.
-        let decode = { (json: String) in OnboardingConfig.decode(Data(json.utf8), hasKey: { _ in true }) }
+        let decode = { (json: String) in
+            OnboardingConfig.decode(Data(json.utf8), availablePermissions: [.notifications], hasKey: { _ in true })
+        }
         #expect(decode("not json") == .failure(OnboardingConfig.Invalid(problems: [.unreadable])))
         #expect(decode(#"{"enabled": true, "pages": [{"id": "a", "kind": "story", "titleKey": "t", "messageKey": "m"}]}"#)
             == .failure(OnboardingConfig.Invalid(problems: [.unreadable])))
@@ -600,6 +605,8 @@ struct OnboardingPolicyTests {
         let decoded = try? decode(valid).get()
         #expect(decoded?.version == 2 && decoded?.pages.map(\.id) == ["welcome", "notify", "done"])
         #expect(decoded?.legacyCompletionKeys == ["hasCompletedOnboarding"])
+        #expect(OnboardingConfig.decode(Data(valid.utf8), hasKey: { _ in true })
+            == .failure(OnboardingConfig.Invalid(problems: [.permissionUnavailable("notify")])))
 
         var reports: [String] = []
         let missing = OnboardingConfig.load(bundle: Bundle(for: MemoryOnboardingStore.self), report: { reports.append($0) })
@@ -939,7 +946,9 @@ struct OnboardingPolicyTests {
             #expect(!text.contains("template."), "\(file.lastPathComponent)")
             if file.pathExtension == "swift" { swift += text }
         }
-        #expect(swift.components(separatedBy: "requestAuthorization(").count == 2)
+        // Notifications stay out of the template (D-068); a primer asks only through the app's own request.
+        #expect(!swift.contains("import UserNotifications"))
+        #expect(swift.contains("await requestNotificationAuthorization?()"))
         for other in ["URLSession", "URLRequest", "http://", "https://", "CLLocationManager", "AVCaptureDevice",
                       "PHPhotoLibrary", "CNContactStore", "ATTrackingManager", "EKEventStore"] {
             #expect(!swift.contains(other), "\(other)")

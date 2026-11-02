@@ -27,7 +27,8 @@ nonisolated struct OnboardingConfig: Equatable, Sendable {
         case multiple
     }
 
-    /// The permissions a primer may ask for. Only notifications for now (#483).
+    /// The permissions a primer may ask for. Only notifications for now (#483). The template does not use
+    /// notifications (D-068), so an app that adopts them supplies the request; see docs/onboarding.md.
     enum Permission: String, Codable, Sendable {
         case notifications
     }
@@ -69,6 +70,8 @@ nonisolated struct OnboardingConfig: Equatable, Sendable {
         case optionCount(String, Int)
         case emptyUsedFor(String)
         case missingPermission(String)
+        /// A primer for a permission the app does not request (it supplied no request for it).
+        case permissionUnavailable(String)
         case missingKey(String)
     }
 
@@ -94,6 +97,7 @@ nonisolated struct OnboardingConfig: Equatable, Sendable {
     /// assertion, so a Debug build stops at a broken declaration; tests replace it.
     static func load(
         bundle: Bundle = .main,
+        availablePermissions: Set<Permission> = [],
         report: (String) -> Void = { assertionFailure($0) }
     ) -> OnboardingConfig {
         guard let url = bundle.url(forResource: resourceName, withExtension: "json"),
@@ -101,7 +105,7 @@ nonisolated struct OnboardingConfig: Equatable, Sendable {
             report("\(resourceName).json is missing; onboarding is off.")
             return .disabled
         }
-        switch decode(data, hasKey: { hasLocalization($0, in: bundle) }) {
+        switch decode(data, availablePermissions: availablePermissions, hasKey: { hasLocalization($0, in: bundle) }) {
         case .success(let config):
             return config
         case .failure(let invalid):
@@ -115,7 +119,11 @@ nonisolated struct OnboardingConfig: Equatable, Sendable {
     }
 
     /// Decodes and checks a declaration. A declaration with `enabled: false` is accepted as off.
-    static func decode(_ data: Data, hasKey: (String) -> Bool) -> Result<OnboardingConfig, Invalid> {
+    static func decode(
+        _ data: Data,
+        availablePermissions: Set<Permission> = [],
+        hasKey: (String) -> Bool
+    ) -> Result<OnboardingConfig, Invalid> {
         guard let settings = try? JSONDecoder().decode(Settings.self, from: data) else {
             return .failure(Invalid(problems: [.unreadable]))
         }
@@ -126,12 +134,13 @@ nonisolated struct OnboardingConfig: Equatable, Sendable {
             legacyCompletionKeys: settings.legacyCompletionKeys ?? []
         )
         guard config.enabled else { return .success(.disabled) }
-        let problems = config.problems(hasKey: hasKey)
+        let problems = config.problems(availablePermissions: availablePermissions, hasKey: hasKey)
         return problems.isEmpty ? .success(config) : .failure(Invalid(problems: problems))
     }
 
-    /// Every rule the declaration breaks; empty when it may be shown.
-    func problems(hasKey: (String) -> Bool) -> [Problem] {
+    /// Every rule the declaration breaks; empty when it may be shown. `availablePermissions` are the
+    /// permissions the app supplied a request for.
+    func problems(availablePermissions: Set<Permission> = [], hasKey: (String) -> Bool) -> [Problem] {
         var problems: [Problem] = []
         if version < 1 { problems.append(.version) }
         if !Self.pageCountRange.contains(pages.count) { problems.append(.pageCount(pages.count)) }
@@ -165,7 +174,11 @@ nonisolated struct OnboardingConfig: Equatable, Sendable {
                     problems.append(.emptyUsedFor(page.id))
                 }
             case .permissionPrimer:
-                if page.permission == nil { problems.append(.missingPermission(page.id)) }
+                if let permission = page.permission {
+                    if !availablePermissions.contains(permission) { problems.append(.permissionUnavailable(page.id)) }
+                } else {
+                    problems.append(.missingPermission(page.id))
+                }
             case .value, .completion:
                 break
             }

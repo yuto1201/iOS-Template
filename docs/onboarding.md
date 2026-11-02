@@ -37,6 +37,16 @@
 
 `choice`は、`selection`（`single`または`multiple`）、`options`（2〜6件。`id`、`titleKey`、任意の`subtitleKey`と`imageName`）、`usedFor`（答えをアプリのどこで使うかの説明。空にできない）も持ちます。比較で示したのは1つを選ぶ形だけなので、`multiple`を使うかは各アプリのIssueで決めます。`permissionPrimer`は`permission`（いまは`notifications`だけ）も持ちます。
 
+テンプレートは通知を使いません（ローカル通知は派生アプリが明示して採用する条件付きの能力です。[D-068](../specs/decisions.md#d-068-ローカル通知を派生アプリの明示採用時だけ使う条件付き能力として定める)）。通知を採用したアプリが許可の前置きを置くときは、そのアプリの`import UserNotifications`のあるコードから、許可の要求を`OnboardingCenter.live(requestNotificationAuthorization:)`へ渡します。
+
+```swift
+@State private var onboarding = OnboardingCenter.live(requestNotificationAuthorization: {
+    (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
+})
+```
+
+要求を渡さずに許可の前置きを宣言したときは、宣言の誤りとして機能を無効にします。
+
 文言の鍵はJSONから読むので、Xcodeの文字列の抽出では見つかりません。`Localizable.xcstrings`へ手で足し、`extractionState`を`manual`にします。日本語と英語の両方を入れます。
 
 ### 決まり
@@ -45,6 +55,7 @@
 - `id`は重ならない。選択肢の`id`もページの中で重ならない。
 - `choice`の`usedFor`は空にしない。答えをアプリの中で使わない質問は置かない（D-099）。
 - 文言の鍵がすべて`Localizable.xcstrings`にある。
+- 許可の前置きは、アプリがその許可の要求を渡したときだけ置ける。
 
 壊れたファイル、決まりに合わない宣言、ファイルが無いときは、機能を無効にしてアプリをそのまま動かします。Debug buildではassertで止めて知らせます。
 

@@ -97,7 +97,8 @@ final class OnboardingUITests: XCTestCase {
         XCTAssertTrue(purposeLine.waitForExistence(timeout: 10), "The root screen should use the answer.")
         XCTAssertEqual(purposeLine.label, "最初の画面から作り始めましょう。")
         XCTAssertTrue(rootTitle(app).exists)
-        XCTAssertFalse(app.buttons["onboarding.primary"].exists, "The onboarding has closed.")
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: primary)
+        XCTAssertEqual(XCTWaiter().wait(for: [closed], timeout: 5), .completed, "The onboarding has closed.")
     }
 
     @MainActor

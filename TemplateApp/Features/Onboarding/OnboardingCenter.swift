@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import UserNotifications
 
 /// The first-launch onboarding (#483, D-099, D-102). It shows the declared pages once, at the first launch,
 /// with Skip on every page but the last and Back from the second page on. Answers stay on the device and
@@ -25,7 +24,8 @@ final class OnboardingCenter {
 
     private let store: any OnboardingStore
     private let now: () -> Date
-    private let requestNotificationAuthorization: () async -> Bool
+    /// The app's notification request; nil while the app does not use notifications (D-068).
+    private let requestNotificationAuthorization: (() async -> Bool)?
     /// Answers confirmed with "Next".
     private var confirmed: [String: [String]] = [:]
     private var reviewPrompt: ReviewPromptCenter?
@@ -37,7 +37,7 @@ final class OnboardingCenter {
         store: any OnboardingStore,
         launch: OnboardingLaunchArguments = OnboardingLaunchArguments(),
         now: @escaping () -> Date = Date.init,
-        requestNotificationAuthorization: @escaping () async -> Bool = OnboardingCenter.requestSystemNotificationAuthorization
+        requestNotificationAuthorization: (() async -> Bool)? = nil
     ) {
         self.config = config
         self.store = store
@@ -47,14 +47,18 @@ final class OnboardingCenter {
         savedAnswers = store.load().answers
     }
 
-    /// The app's own declaration, record and launch arguments.
-    static func live() -> OnboardingCenter {
-        OnboardingCenter(config: .load(), store: UserDefaultsOnboardingStore(), launch: .current())
-    }
-
-    /// The system's notification request. It shows the dialog only the first time.
-    static func requestSystemNotificationAuthorization() async -> Bool {
-        (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+    /// The app's own declaration, record and launch arguments. An app that has adopted notifications
+    /// (D-068) and declares a notification primer passes its request, for example
+    /// `{ (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false }`.
+    /// Without one, a declared primer turns the onboarding off.
+    static func live(requestNotificationAuthorization: (() async -> Bool)? = nil) -> OnboardingCenter {
+        let permissions: Set<OnboardingConfig.Permission> = requestNotificationAuthorization == nil ? [] : [.notifications]
+        return OnboardingCenter(
+            config: .load(availablePermissions: permissions),
+            store: UserDefaultsOnboardingStore(),
+            launch: .current(),
+            requestNotificationAuthorization: requestNotificationAuthorization
+        )
     }
 
     // MARK: Whether to show it
@@ -184,12 +188,13 @@ final class OnboardingCenter {
         deniedPermissionPages.contains(pageID)
     }
 
-    /// "Allow Notifications": only here does the system ask. A yes moves on; a no stays on the page with a
-    /// note and "Next", so the person goes on either way (App Review Guidelines 5.1.1(iv), 4.5.4).
+    /// "Allow Notifications": only here does the system ask, through the app's request. A yes moves on; a no
+    /// stays on the page with a note and "Next", so the person goes on either way (App Review Guidelines
+    /// 5.1.1(iv), 4.5.4).
     func allowPermission() async {
         guard isPresented, let page = currentPage, page.kind == .permissionPrimer else { return }
         let pageID = page.id
-        let granted = await requestNotificationAuthorization()
+        let granted = await requestNotificationAuthorization?() ?? false
         guard isPresented, currentPage?.id == pageID else { return }
         if granted {
             next()
