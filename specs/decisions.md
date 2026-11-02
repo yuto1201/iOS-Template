@@ -1198,3 +1198,22 @@
   - 宣言を読むtool（resource manager、`tools/resolve-simulator-matrix.swift`、`tools/validate-verify-json.swift`、`tools/build-for-device.sh`、`tools/bootstrap-app.swift`の`audit`）とテンプレートの取り込み（`dedicated-simulators`の規則）は、共有の2台の宣言を受け入れる。専用の2台の宣言の扱いは変えない。
 - Consequence: 専用の2台を持たないアプリは、Simulatorを増やさずにAI検証とApp Store撮影ができる。共有の端末を使う検証は、ほかのアプリの検証が終わるまで待つことがある。待ちの順番は新しいmanagerどうしでだけ守られ、待ちの記録を知らない古いmanagerは順番を飛ばしうる。この制約は、各アプリがテンプレートの取り込みで新しいmanagerへ移るまで残る。派生アプリの宣言の変更は、テンプレートの取り込みと各アプリのIssueで行う。Mac全体のhook（`~/.claude/hooks/simulator-guard.rb`）は各リポジトリが宣言した名前を許すので変えない。SNSの撮影用の`OpenBot-SNS (iPhone 17 Pro)`はどのリポジトリの宣言にも入れない（D-097）。`AGENTS.md`の専用Simulatorの段落には、共有の2台の例外を、ユーザーが承認した文面で1文加える。
 - Related Issue: #495, #503, #504
+
+## D-101: 合成したApp Storeの画像を撮影の記録に結び付けて封印し、検索結果の画像を型に加える
+
+- Date: 2026-11-02
+- Status: 確定
+- Supersedes: `prepare-appstore-assets`の手順6のうち、最終の画像を撮影の原画だけから組むこと。D-077、D-079、D-085、D-093（撮影は専用の2台、実画面の元ファイルを加工しない、生成画像に文字・UI・ロゴ・Apple製品・誰か分かる顔を描かない、日英で構成と順番を同じにする、描画器と提案シート、headerの流れ）は維持する。
+- Context: D-093の描画器で作った画像は、`tools/build-appstore-screenshot-set.sh`が撮影の原画しか受け付けないため封印を通らず、派生アプリは例外（CafLog A-086、PayCycle A-057）で管理している。Appleは2026-10-05、検索結果と共用のcreative assetを始めた。
+- Decision:
+  - App Storeの画像は、(a) 撮影の原画をそのまま使う組（今の経路）と、(b) 描画器で合成した組の、どちらでも封印できる。
+  - (b)では、合成の記録（`composition.json`）が、次を結び付ける：原画の撮影の記録（`manifest.json`）のSHA-256、各面の原画のSHA-256、面の宣言のSHA-256、描画の記録のSHA-256、描画器のSHA-256、使った素材のSHA-256（採用済みのものだけ）、出力の画像のSHA-256と寸法、ユーザーの採用（提案シートのSHA-256、concept ID、承認の参照）。
+  - 合成の画像は、Appleの寸法、RGB、アルファの欄なし（透過は不可）とし、原画の中身（実画面）を加工しない。目視の確認は、原画の真実性（2.3.3、2.3.9）と、合成の画像（安全域、文字の切れ、日英の対応）の両方に対して行い、release-auditorは合成の組の封印のdigestを承認する。
+  - 検索結果の画像（3:2）と、headerと共用の画像（16:9、5244×2950 PNG）を`appstore-creative`の型に加える。安全域はAppleの公式テンプレートから測り、出典と確認日を記録する。ユーザーが求めたときだけ作り、「作らない」も正しい答えとする。
+  - 画像の決まり：
+    - 1面に機能1つ。見出しは描写を補う短い一言で、日英に訳す。
+    - いちばん強い機能から並べ、最初の3枚（検索結果に出る枚数）で何のアプリか分かるようにする。
+    - 焦点を中央の安全域に置く。
+    - 価格、URL、著作権の記号、確かめられない受賞、他社の名前や画像、Appleの選出の表記を入れない。
+- Consequence: #486と#487を作る。派生アプリの例外（A-086、A-057）は、各アプリのIssueで、新しい経路で組み直して終える。App Store Connectへのcreative assetのuploadは、今のasc経路が対応するかを確かめるまで手で行う。
+- Related Issue: #485（文面は、Issue本文の「決定事項の案（D-SS）」のとおりにユーザーが2026-11-02に承認した：https://github.com/yuto1201/iOS-Template/issues/485#issuecomment-6569507286）
