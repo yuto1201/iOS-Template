@@ -1182,3 +1182,19 @@
   - 詳細は`specs/product.md` §4.6に置く。
 - Consequence: 部品のIssue（#483）は、AC本文の先頭を`UI-direction route: comparison`とし、`specs/product.md` §4.6とこのDecisionをSpec anchorsに、#482をDependenciesに置く。派生アプリへ入れるときは、D-099どおり各アプリのIssueでPhase 1とPhase 2を扱い、このDecisionはテンプレートの部品の既定の形として参照する。比較のHTMLは選択を助けた資料であり、仕様の正本、pixelの仕様、iOSの検証の証拠にしない。
 - Related Issue: #482, #481
+
+## D-098: 専用Simulatorのないアプリは、Macの共有の2台を宣言して順番に使う
+
+- Date: 2026-11-01
+- Status: 確定
+- Supersedes: D-063、D-070、D-079のうち「派生アプリは表示名を前置した同じ機種を持つ」という規則を、専用の2台を持つアプリ（今はiOS-Template、AquaPocket、CampPocket、SubLog）に限る部分だけを置き換える。専用はiPhone 1台とiPad 1台、AI検証とApp Store撮影の両方に使う、exact name・Device Type・Runtimeでちょうど1台を確認する、AIは端末を作成・clone・rename・削除しない、各caseの前にeraseして返すときにshutdownする、Mac全体で最大4台、`-parallel-testing-enabled NO`で実行する、という規則は維持する。D-063、D-070、D-079の本文は書き換えない。
+- Context: アプリごとに専用の2台を作ると、アプリの数だけSimulatorが増える。このMacには、Macの管理者が用意した共有の2台（`Shared iPhone 17 Pro`、`Shared iPad Pro 13-inch (M5)`、どちらもiOS 27.0）が1組だけある。専用の2台を持たないアプリがこれを使うには、宣言として受け入れられることと、ほかのアプリが使っている間は順番に待てることが必要だった。これまでのleaseは、端末が使用中なら60秒だけ待ち、待つ順番を記録していなかった。
+- Decision:
+  - 専用Simulatorを持たないアプリは、`Config/dedicated-simulators.json`に共有の2台を宣言してよい。宣言は、iPhoneを`Shared iPhone 17 Pro`（Device Type iPhone 17 Pro）、iPadを`Shared iPad Pro 13-inch (M5)`（Device Type iPad Pro 13-inch (M5)）、Runtimeをどちらも iOS 27.0 とし、2台をこのとおりに揃える。共有の名前を1台だけ使う宣言や、Device TypeやRuntimeが違う宣言は受け入れない。テンプレート自身の宣言は専用の2台のままとする。
+  - 共有の2台は、Macの管理者（Mac管理エージェントと侑斗さん）だけが作り、消す。テンプレートのtoolとAIは作らない、消さない、renameしない、cloneしない。`tools/setup-dedicated-simulators.sh`は共有の宣言を確かめるだけで、端末が見つからなければ`blocked:environment`で止まり、Macの管理者に頼むよう案内する。
+  - 共有の2台も、これまでどおりMac共通のresource managerのleaseでだけ使う。leaseの前にeraseし、返すときにshutdownする。
+  - 端末がほかのleaseに使われているときは、来た順に待つ。待っている要求はMac共通の状態の`dedicated-queue-v1.json`（来た順の番号、owner、待ち始めの時刻）に記録し、端末が空いたら、いちばん前の待ちにだけleaseを渡す。待っている間は、自分の順番と前にいる数を標準エラーへ出す。ownerまたは待っているprocessが消えた待ちは取り除き、後ろの待ちを止めない。待ちの上限を過ぎた要求は`blocked:environment`で止まり、待ちから外れる。
+  - 待ちの上限の既定は、共有の端末で1800秒、専用の端末でこれまでどおり60秒とし、resource managerの`--wait-seconds`で上書きできる。`tools/verify-ios-issue.sh`、`tools/capture-appstore-screenshots.sh`、`tools/record-appstore-preview.sh`は値を固定せず、この既定を使う。
+  - 宣言を読むtool（resource manager、`tools/resolve-simulator-matrix.swift`、`tools/validate-verify-json.swift`、`tools/build-for-device.sh`、`tools/bootstrap-app.swift`の`audit`）とテンプレートの取り込み（`dedicated-simulators`の規則）は、共有の2台の宣言を受け入れる。専用の2台の宣言の扱いは変えない。
+- Consequence: 専用の2台を持たないアプリは、Simulatorを増やさずにAI検証とApp Store撮影ができる。共有の端末を使う検証は、ほかのアプリの検証が終わるまで待つことがある。待ちの順番は新しいmanagerどうしでだけ守られ、待ちの記録を知らない古いmanagerは順番を飛ばしうる。この制約は、各アプリがテンプレートの取り込みで新しいmanagerへ移るまで残る。派生アプリの宣言の変更は、テンプレートの取り込みと各アプリのIssueで行う。Mac全体のhook（`~/.claude/hooks/simulator-guard.rb`）は各リポジトリが宣言した名前を許すので変えない。SNSの撮影用の`OpenBot-SNS (iPhone 17 Pro)`はどのリポジトリの宣言にも入れない（D-097）。`AGENTS.md`の専用Simulatorの段落には、共有の2台の例外を、ユーザーが承認した文面で1文加える。
+- Related Issue: #495, #503, #504

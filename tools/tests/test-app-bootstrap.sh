@@ -718,6 +718,38 @@ PY
     exit 1
   fi
 
+  # D-098: an app that moved to the Mac's shared pair still passes the audit of a later run; a declaration
+  # that mixes a shared name with another device does not.
+  cp "$fixture/Config/dedicated-simulators.json" "$output.simulators"
+  ruby -rjson -e '
+    path, ipad = ARGV
+    value = JSON.parse(File.read(path))
+    names = {"iphone" => "Shared iPhone 17 Pro", "ipad" => ipad}
+    value.fetch("devices").each { |device| device["name"] = names.fetch(device.fetch("family")) }
+    File.write(path, JSON.pretty_generate(value) + "\n")
+  ' "$fixture/Config/dedicated-simulators.json" 'Shared iPad Pro 13-inch (M5)'
+  if ! swift "$root/tools/bootstrap-app.swift" audit \
+    --root "$fixture" \
+    --manifest "$fixture/Config/template-identity.json" \
+    --module-name GardenNotes >"$output" 2>"$errors"; then
+    echo "audit rejected the shared Simulator declaration: $(<"$errors")" >&2
+    exit 1
+  fi
+  ruby -rjson -e '
+    path = ARGV.fetch(0)
+    value = JSON.parse(File.read(path))
+    value.fetch("devices").last["name"] = "Other iPad Pro 13-inch (M5)"
+    File.write(path, JSON.pretty_generate(value) + "\n")
+  ' "$fixture/Config/dedicated-simulators.json"
+  if swift "$root/tools/bootstrap-app.swift" audit \
+    --root "$fixture" \
+    --manifest "$fixture/Config/template-identity.json" \
+    --module-name GardenNotes >"$output" 2>"$errors"; then
+    echo 'audit accepted a declaration that mixes a shared name with another device' >&2
+    exit 1
+  fi
+  mv "$output.simulators" "$fixture/Config/dedicated-simulators.json"
+
   same_status_before="$(git -C "$fixture" status --porcelain=v1)"
   same_head_before="$(git -C "$fixture" rev-parse HEAD)"
   same_digest_before="$(repository_content_digest "$fixture")"

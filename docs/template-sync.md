@@ -27,7 +27,7 @@
 - `agents-md`（`AGENTS.md`）：変更する文面はD-075に従ってユーザーの承認を得て、`docs/agents-md-approvals.md`へ記録する。
 - `agents-md-approvals`（`docs/agents-md-approvals.md`）：テンプレートの承認記録を末尾へ追記する。
 - `decisions`（`specs/decisions.md`）：テンプレートの新しい`D-###`を末尾へ追記する。番号が衝突している取り込み先では、アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移すまで追記しない。
-- `dedicated-simulators`（`Config/dedicated-simulators.json`）：取り込み先の表示名を前置した2台を保ち、テンプレート用の端末を指す変更を入れない。
+- `dedicated-simulators`（`Config/dedicated-simulators.json`）：取り込み先の表示名を前置した2台、または共有の2台（D-098）の宣言を保ち、テンプレート用の端末を指す変更を入れない。
 - `ownership`（`Config/ownership.yml`）：アカウントと提出先はアプリの値を保つ。
 - `repository-tests`（`Config/repository-tests.json`）：アプリが追加したtestを保つ。
 
@@ -188,7 +188,7 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 - 同じテンプレートのcommitと取り込み先から作り直した計画が、承認された`plan.json`と1byteでも違う。手で書き換えた計画は、承認があっても適用しません。
 - 取り込み先にIdentity（`Config/app-identity.json`）がない。テンプレートを未適用のリポジトリでは、先にIdentityを決めてから計画を作り直します。
 - `specs/decisions.md`の番号がテンプレートと衝突している。アプリ固有の決定事項を`specs/app-decisions.md`の`A-###`へ移してから、計画を作り直します。
-- 専用Simulatorの宣言が、取り込み先の表示名を前置した2台ではない、またはテンプレート用の端末を指している。
+- 専用Simulatorの宣言が、取り込み先の表示名を前置した2台でも共有の2台（D-098）でもない、またはテンプレート用の端末を指している。
 - 追加するパスや、記録がない取り込み先の`Config/template-base.json`に、ignoredやuntrackedのファイルが既にある。更新や削除するファイルが、計画を作ったときの内容と違う。親のパスがsymlinkやファイルである。
 
 止まらなければ、次だけを書き込みます。各ファイルは、同じフォルダに新しいランダムな名前で作った一時ファイルを置き換える形で書き、ほかの既存のファイルを消しません。indexは変えないので、結果は`git status`と`git diff`で確かめます。
@@ -202,7 +202,7 @@ tools/template-sync.sh apply --plan /path/outside/app/sync-report/plan.json \
 - 書いた内容が、計画のSHA-256と実行権限に一致する。
 - Identity変換したファイルの元の名前（`TemplateApp`、`com.yuto.TemplateApp`）が、適用前より増えていない。
 - `specs/decisions.md`の既存の内容が変わっていない。
-- 専用Simulatorの宣言が、取り込み先の表示名を前置した2台のままで、テンプレート用の端末を指していない。
+- 専用Simulatorの宣言が、取り込み先の表示名を前置した2台または共有の2台（D-098）のままで、テンプレート用の端末を指していない。
 
 上書きしないファイル、手で確認するファイル、`mixed`のファイル（`AGENTS.md`、`Config/dedicated-simulators.json`、`specs/decisions.md`の追記以外の変更など）は書き込みません。
 

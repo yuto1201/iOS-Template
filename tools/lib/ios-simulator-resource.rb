@@ -18,6 +18,8 @@ module IOSTemplate
   # clones, renames, or deletes a device: it erases a dedicated device before each lease and shuts
   # it down when the lease is returned. Legacy per-case allocations written by older managers stay
   # in state-v1.json; this manager only reads them to count Mac-wide capacity and never changes them.
+  # A repository may instead declare the Mac's shared pair (D-098); requests that wait for a busy device
+  # queue in arrival order in dedicated-queue-v1.json and the device goes to the earliest live request.
   class SimulatorResourceManager
     STATE_SCHEMA_VERSION = 1
     LEASE_SCHEMA_VERSION = 2
@@ -39,6 +41,26 @@ module IOSTemplate
     UDID_PATTERN = /\A[0-9A-Fa-f-]{8,64}\z/
     DEVICE_NAME_PATTERN = /\A[^\x00-\x1f\x7f]{1,96}\z/
     DIGEST_PATTERN = /\Asha256:[0-9a-f]{64}\z/
+    # D-098: the Mac's one pair of shared Simulators. An app without its own dedicated pair may declare exactly
+    # this pair; only the Mac's administrators create or delete it. A busy device is handed out in arrival order.
+    SHARED_DEVICES = [
+      {
+        "family" => "iphone", "name" => "Shared iPhone 17 Pro",
+        "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+        "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+      },
+      {
+        "family" => "ipad", "name" => "Shared iPad Pro 13-inch (M5)",
+        "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
+        "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+      }
+    ].freeze
+    SHARED_DEVICE_NAMES = SHARED_DEVICES.map { |device| device.fetch("name") }.freeze
+    DEFAULT_WAIT_SECONDS = 60
+    SHARED_DEFAULT_WAIT_SECONDS = 1800
+    QUEUE_SCHEMA_VERSION = 1
+    QUEUE_POLL_SECONDS = 0.2
+    QUEUE_ENTRY_KEYS = %w[deviceName enqueuedAt issue owner repositoryIdentity sequence sessionId ticketId waiter].freeze
     LEASE_KEYS = %w[
       allocationId allocator attemptId batchId caseId cleanup deviceName deviceSet deviceTypeIdentifier
       events family freeSpace headSha integrityDigest issue owner preparation preparedAt releasedAt
@@ -62,83 +84,101 @@ module IOSTemplate
 
     def allocate
       identity = allocation_identity
-      wait_seconds = nonnegative_integer(@options.fetch("--wait-seconds", "0"), "wait seconds")
+      default_wait = SHARED_DEVICE_NAMES.include?(identity.fetch("deviceName")) ? SHARED_DEFAULT_WAIT_SECONDS : DEFAULT_WAIT_SECONDS
+      wait_seconds = nonnegative_integer(@options.fetch("--wait-seconds", default_wait.to_s), "wait seconds")
       minimum_free = nonnegative_integer(
         @options.fetch("--minimum-free-bytes", DEFAULT_MINIMUM_FREE_BYTES.to_s),
         "minimum free bytes"
       )
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + wait_seconds
       reservation = nil
+      ticket = nil
+      reported_position = nil
 
-      loop do
-        denial = nil
-        with_state do |legacy_active, state|
-          recover_stale!(state, dry_run: false)
-          leases = state.fetch("leases")
-          existing = leases.find do |record|
-            ACTIVE_STATUSES.include?(record["status"]) && same_operation?(record, identity)
-          end
-          if existing
-            if existing["status"] == "active" && process_active?(existing)
-              write_receipt(existing)
-              print_receipt(existing)
-              return
+      begin
+        loop do
+          denial = nil
+          position = nil
+          with_state do |legacy_active, state, queue|
+            recover_stale!(state, dry_run: false)
+            prune_queue!(queue)
+            leases = state.fetch("leases")
+            existing = leases.find do |record|
+              ACTIVE_STATUSES.include?(record["status"]) && same_operation?(record, identity)
             end
-            denial = "matching lease is not safely reusable"
-            next
-          end
+            if existing
+              if existing["status"] == "active" && process_active?(existing)
+                write_receipt(existing)
+                print_receipt(existing)
+                return
+              end
+              denial = "matching lease is not safely reusable"
+              next
+            end
+            if ticket && queue.fetch("waiters").none? { |entry| entry["ticketId"] == ticket }
+              ticket = nil
+              raise SimulatorResourceError,
+                    "blocked:environment: the queued lease request was removed because its owner or waiting process is not active"
+            end
 
-          active = leases.select { |record| ACTIVE_STATUSES.include?(record["status"]) }
-          if active.any? { |record| record["sessionId"] == identity.fetch("sessionId") }
-            denial = "same session already owns a Simulator lease"
-            next
-          end
-          if active.any? { |record| record["deviceName"] == identity.fetch("deviceName") }
-            denial = "dedicated Simulator '#{identity.fetch("deviceName")}' is leased by another run"
-            next
-          end
-          in_use = capacity_in_use(active, legacy_active)
-          if in_use >= MAX_ALLOCATIONS
-            denial = "Mac-wide iPhone/iPad Simulator allocation limit (#{MAX_ALLOCATIONS}) is in use"
-            next
-          end
+            # D-098: a free device goes to the earliest waiting request only; a later request never overtakes it.
+            ahead = waiters_ahead(queue, identity.fetch("deviceName"), ticket)
+            grant = nil
+            if ahead.empty?
+              grant = lease_grant(state, legacy_active, identity, minimum_free)
+              denial = grant if grant.is_a?(String)
+            else
+              denial = "#{ahead.length} earlier lease request(s) wait for Simulator '#{identity.fetch("deviceName")}'"
+            end
+            if denial
+              ticket ||= enqueue!(queue, identity) if wait_seconds.positive?
+              position = ahead.length + 1 if ticket
+              next
+            end
 
-          free_before = available_bytes
-          if free_before < minimum_free
-            denial = "insufficient free space for a Simulator lease (available=#{free_before}, required=#{minimum_free})"
-            next
+            # A request that has waited may find the device free only after its deadline, for example when a
+            # release held the lock past it. Such a request leaves the queue and stops instead of taking the lease.
+            if ticket && Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+              queue.fetch("waiters").reject! { |entry| entry["ticketId"] == ticket }
+              ticket = nil
+              raise SimulatorResourceError,
+                    "blocked:environment: Simulator '#{identity.fetch("deviceName")}' became free only after the wait expired after #{wait_seconds} seconds"
+            end
+            free_before, in_use, device = grant
+            queue.fetch("waiters").reject! { |entry| entry["ticketId"] == ticket } if ticket
+            ticket = nil
+            record = identity.merge(
+              "schemaVersion" => LEASE_SCHEMA_VERSION,
+              "allocationId" => SecureRandom.uuid.downcase,
+              "allocator" => process_identity(Process.pid),
+              "status" => "reserved",
+              "deviceSet" => "default",
+              "udid" => device.fetch("udid"),
+              "reservedAt" => timestamp,
+              "preparedAt" => nil,
+              "releasedAt" => nil,
+              "freeSpace" => {"beforeLeaseBytes" => free_before, "afterReleaseBytes" => nil},
+              "preparation" => nil,
+              "cleanup" => nil,
+              "events" => []
+            )
+            add_event(record, "reserved", "capacityCount" => in_use + 1, "udid" => device.fetch("udid"))
+            leases << record
+            reservation = snapshot_record(record)
           end
-
-          device = dedicated_live_device!(identity)
-          unless device["state"] == "Shutdown"
-            denial = "dedicated Simulator '#{identity.fetch("deviceName")}' is #{device["state"]} outside a lease"
-            next
+          break if reservation
+          if position && position != reported_position
+            warn "ios-simulator-resource: waiting for Simulator '#{identity.fetch("deviceName")}': " \
+                 "queue position #{position}, #{position - 1} request(s) ahead (#{denial})"
+            reported_position = position
           end
-
-          record = identity.merge(
-            "schemaVersion" => LEASE_SCHEMA_VERSION,
-            "allocationId" => SecureRandom.uuid.downcase,
-            "allocator" => process_identity(Process.pid),
-            "status" => "reserved",
-            "deviceSet" => "default",
-            "udid" => device.fetch("udid"),
-            "reservedAt" => timestamp,
-            "preparedAt" => nil,
-            "releasedAt" => nil,
-            "freeSpace" => {"beforeLeaseBytes" => free_before, "afterReleaseBytes" => nil},
-            "preparation" => nil,
-            "cleanup" => nil,
-            "events" => []
-          )
-          add_event(record, "reserved", "capacityCount" => in_use + 1, "udid" => device.fetch("udid"))
-          leases << record
-          reservation = snapshot_record(record)
+          if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+            raise SimulatorResourceError, "blocked:environment: #{denial}; wait expired after #{wait_seconds} seconds"
+          end
+          sleep QUEUE_POLL_SECONDS
         end
-        break if reservation
-        if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
-          raise SimulatorResourceError, "blocked:environment: #{denial}; wait expired"
-        end
-        sleep 0.1
+      ensure
+        leave_queue(ticket) if ticket
       end
 
       begin
@@ -230,8 +270,9 @@ module IOSTemplate
 
     def inventory(dry_run: true)
       result = nil
-      with_state(write: !dry_run) do |legacy_active, state|
+      with_state(write: !dry_run) do |legacy_active, state, queue|
         candidates = recover_stale!(state, dry_run: dry_run)
+        prune_queue!(queue) unless dry_run
         active = state.fetch("leases").select { |record| ACTIVE_STATUSES.include?(record["status"]) }
         unmanaged = unmanaged_live_devices(legacy_active)
         result = {
@@ -246,6 +287,12 @@ module IOSTemplate
           "allocations" => state.fetch("leases").map { |record| inventory_record(record) },
           "legacyAllocations" => legacy_active,
           "protectedUnmanagedDevices" => unmanaged.map { |device| unmanaged_inventory_record(device) },
+          "queue" => queue.fetch("waiters").sort_by { |entry| entry["sequence"] }.map do |entry|
+            entry.slice("sequence", "deviceName", "sessionId", "issue", "enqueuedAt").merge(
+              "ownerActive" => process_identity_active?(entry["owner"]),
+              "waiterActive" => process_identity_active?(entry["waiter"])
+            )
+          end,
           "recoveryCandidates" => candidates
         }
       end
@@ -429,6 +476,10 @@ module IOSTemplate
         validate_identifier!(entry["runtimeIdentifier"], "declared Runtime")
       end
       raise SimulatorResourceError, "blocked:environment: #{CONFIG_PATH} device names must be unique" unless devices.map { |entry| entry["name"] }.uniq.length == devices.length
+      if devices.any? { |entry| SHARED_DEVICE_NAMES.include?(entry["name"]) } && devices != SHARED_DEVICES
+        raise SimulatorResourceError,
+              "blocked:environment: #{CONFIG_PATH} must declare both shared Simulators exactly as D-098 defines them, or neither"
+      end
       devices.find { |entry| entry["family"] == family }
     rescue Errno::ENOENT
       raise SimulatorResourceError, "blocked:environment: #{CONFIG_PATH} is missing"
@@ -452,6 +503,65 @@ module IOSTemplate
               "blocked:environment: dedicated Simulator '#{name}' does not match its declared Device Type and Runtime or is unavailable"
       end
       device
+    end
+
+    # Returns why the requested device cannot be leased now, or [free bytes, capacity in use, live device].
+    def lease_grant(state, legacy_active, identity, minimum_free)
+      name = identity.fetch("deviceName")
+      active = state.fetch("leases").select { |record| ACTIVE_STATUSES.include?(record["status"]) }
+      return "same session already owns a Simulator lease" if active.any? { |record| record["sessionId"] == identity.fetch("sessionId") }
+      return "dedicated Simulator '#{name}' is leased by another run" if active.any? { |record| record["deviceName"] == name }
+      in_use = capacity_in_use(active, legacy_active)
+      return "Mac-wide iPhone/iPad Simulator allocation limit (#{MAX_ALLOCATIONS}) is in use" if in_use >= MAX_ALLOCATIONS
+      free_before = available_bytes
+      if free_before < minimum_free
+        return "insufficient free space for a Simulator lease (available=#{free_before}, required=#{minimum_free})"
+      end
+      device = dedicated_live_device!(identity)
+      return "dedicated Simulator '#{name}' is #{device["state"]} outside a lease" unless device["state"] == "Shutdown"
+      [free_before, in_use, device]
+    end
+
+    # The waiting requests for one device that came before the given ticket (all of them without a ticket).
+    def waiters_ahead(queue, device_name, ticket)
+      waiters = queue.fetch("waiters").select { |entry| entry["deviceName"] == device_name }.sort_by { |entry| entry["sequence"] }
+      return waiters unless ticket
+      own = waiters.find { |entry| entry["ticketId"] == ticket }
+      waiters.select { |entry| entry["sequence"] < own.fetch("sequence") }
+    end
+
+    def enqueue!(queue, identity)
+      ticket = SecureRandom.uuid.downcase
+      sequence = queue.fetch("nextSequence")
+      queue["nextSequence"] = sequence + 1
+      queue.fetch("waiters") << {
+        "sequence" => sequence,
+        "ticketId" => ticket,
+        "deviceName" => identity.fetch("deviceName"),
+        "sessionId" => identity.fetch("sessionId"),
+        "issue" => identity.fetch("issue"),
+        "repositoryIdentity" => identity.dig("repository", "identity"),
+        "owner" => identity.fetch("owner"),
+        "waiter" => process_identity(Process.pid),
+        "enqueuedAt" => timestamp
+      }
+      ticket
+    end
+
+    # A waiting request whose owner or waiting process is gone never receives a lease and never blocks the
+    # requests behind it.
+    def prune_queue!(queue)
+      queue.fetch("waiters").select! do |entry|
+        process_identity_active?(entry["owner"]) && process_identity_active?(entry["waiter"])
+      end
+    end
+
+    def leave_queue(ticket)
+      with_state do |_legacy_active, _state, queue|
+        queue.fetch("waiters").reject! { |entry| entry["ticketId"] == ticket }
+      end
+    rescue StandardError
+      nil
     end
 
     def same_operation?(record, identity)
@@ -640,13 +750,20 @@ module IOSTemplate
           legacy_active = read_legacy_active
           state = read_state
           validate_state!(state)
+          queue = read_queue
+          validate_queue!(queue)
+          queue_before = JSON.generate(queue)
+          persist = lambda do
+            write_state(state)
+            write_queue(queue) unless JSON.generate(queue) == queue_before
+          end
           begin
-            result = yield legacy_active, state
+            result = yield legacy_active, state, queue
           rescue StandardError
-            write_state(state) if write
+            persist.call if write
             raise
           end
-          write_state(state) if write
+          persist.call if write
           result
         ensure
           lock.flock(File::LOCK_UN) rescue nil
@@ -736,16 +853,59 @@ module IOSTemplate
       validate_identifier!(record["deviceTypeIdentifier"], "record Device Type")
     end
 
+    # The waiting order lives in its own file under the same lock as the leases, so managers that predate
+    # the queue (D-098) still read dedicated-v1.json unchanged.
+    def read_queue
+      return {"schemaVersion" => QUEUE_SCHEMA_VERSION, "nextSequence" => 1, "waiters" => []} unless File.exist?(@queue_path)
+      info = File.lstat(@queue_path)
+      unless info.file? && !info.symlink? && info.uid == Process.uid && info.nlink == 1
+        raise SimulatorResourceError, "Simulator lease queue file is unsafe"
+      end
+      JSON.parse(File.binread(@queue_path, 4 * 1024 * 1024))
+    rescue JSON::ParserError => error
+      raise SimulatorResourceError, "Simulator lease queue is invalid: #{error.message}"
+    end
+
+    def validate_queue!(queue)
+      unless queue.is_a?(Hash) && queue.keys.sort == %w[nextSequence schemaVersion waiters] &&
+             queue["schemaVersion"] == QUEUE_SCHEMA_VERSION && queue["nextSequence"].is_a?(Integer) &&
+             queue["nextSequence"].positive? && queue["waiters"].is_a?(Array)
+        raise SimulatorResourceError, "Simulator lease queue schema is invalid"
+      end
+      queue.fetch("waiters").each do |entry|
+        unless entry.is_a?(Hash) && entry.keys.sort == QUEUE_ENTRY_KEYS &&
+               entry["sequence"].is_a?(Integer) && entry["sequence"].positive? && entry["sequence"] < queue["nextSequence"] &&
+               entry["ticketId"].is_a?(String) && DEVICE_NAME_PATTERN.match?(entry["deviceName"].to_s) &&
+               SESSION_PATTERN.match?(entry["sessionId"].to_s) && entry["issue"].is_a?(Integer) && entry["issue"].positive? &&
+               entry["repositoryIdentity"].to_s.match?(DIGEST_PATTERN) && entry["enqueuedAt"].is_a?(String) &&
+               valid_process_identity?(entry["owner"]) && valid_process_identity?(entry["waiter"])
+          raise SimulatorResourceError, "Simulator lease queue entry is invalid"
+        end
+      end
+      %w[sequence ticketId].each do |key|
+        values = queue.fetch("waiters").map { |entry| entry[key] }
+        raise SimulatorResourceError, "Simulator lease queue has duplicate entries" unless values.uniq.length == values.length
+      end
+    end
+
+    def write_queue(queue)
+      write_json_atomically(@queue_path, ".dedicated-queue", queue)
+    end
+
     def write_state(state)
       state.fetch("leases").each { |record| seal_record!(record) }
-      temporary = File.join(@root, ".dedicated-state-#{SecureRandom.uuid}.json")
-      data = JSON.pretty_generate(state) + "\n"
+      write_json_atomically(@state_path, ".dedicated-state", state)
+    end
+
+    def write_json_atomically(destination, prefix, value)
+      temporary = File.join(@root, "#{prefix}-#{SecureRandom.uuid}.json")
+      data = JSON.pretty_generate(value) + "\n"
       File.open(temporary, File::WRONLY | File::CREAT | File::EXCL | File::NOFOLLOW, 0o600) do |file|
         file.write(data)
         file.flush
         file.fsync
       end
-      File.rename(temporary, @state_path)
+      File.rename(temporary, destination)
       File.open(@root, File::RDONLY) { |directory| directory.fsync }
     ensure
       File.unlink(temporary) if temporary && File.file?(temporary)
@@ -913,6 +1073,7 @@ module IOSTemplate
       @legacy_lock_path = File.join(@root, "state-v1.lock")
       @state_path = File.join(@root, "dedicated-v1.json")
       @lock_path = File.join(@root, "dedicated-v1.lock")
+      @queue_path = File.join(@root, "dedicated-queue-v1.json")
     end
 
     def secure_open(path, flags, mode)

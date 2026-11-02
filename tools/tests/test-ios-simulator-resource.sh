@@ -346,6 +346,193 @@ expect_denied 'release after the device disappeared' 'disappeared before its Shu
 edit_simctl 'state.delete("hidden").each { |d| d["state"] = "Shutdown"; devices << d }; state["mode"] = ""'
 assert_no_forbidden_calls
 
+# D-098: an app without its own pair declares the Mac's shared pair. Leases work the same way, and requests for
+# a busy shared device wait in arrival order. All devices here are fake simctl entries.
+shared_repo="$scratch/shared-app"
+mkdir -p "$shared_repo/Config"
+git -C "$shared_repo" init -q
+shared_iphone_name='Shared iPhone 17 Pro'
+shared_ipad_name='Shared iPad Pro 13-inch (M5)'
+shared_iphone_udid=00000000-0000-0000-0000-000000000027
+shared_ipad_udid=00000000-0000-0000-0000-000000000026
+write_shared_config() {
+  jq -n --arg runtime "$runtime" --arg in "$1" --arg it "$iphone_type" --arg an "$2" --arg at "$ipad_type" \
+    '{schemaVersion: 1, devices: [
+      {family: "iphone", name: $in, deviceTypeIdentifier: $it, runtimeIdentifier: $runtime},
+      {family: "ipad", name: $an, deviceTypeIdentifier: $at, runtimeIdentifier: $runtime}]}' \
+    >"$shared_repo/Config/dedicated-simulators.json"
+}
+write_shared_config "$shared_iphone_name" "$shared_ipad_name"
+edit_simctl 'devices << {"udid" => args[0], "name" => args[1], "state" => "Shutdown", "isAvailable" => true, "deviceTypeIdentifier" => args[2], "dataPath" => "/fixture/shared-iphone"}; devices << {"udid" => args[3], "name" => args[4], "state" => "Shutdown", "isAvailable" => true, "deviceTypeIdentifier" => args[5], "dataPath" => "/fixture/shared-ipad"}' \
+  "$shared_iphone_udid" "$shared_iphone_name" "$iphone_type" "$shared_ipad_udid" "$shared_ipad_name" "$ipad_type"
+
+# allocate_shared SESSION CASE [OWNER-PID] [WAIT-SECONDS]
+allocate_shared() {
+  local session="$1" case_id="$2" pid="${3:-$owner_pid}" wait_seconds="${4:-0}" device_type
+  device_type="$([[ "$case_id" == iphone-* ]] && printf '%s' "$iphone_type" || printf '%s' "$ipad_type")"
+  "${manager[@]}" allocate "${common[@]}" \
+    --session "$session" --repository "$shared_repo" --issue 495 --head "$head_sha" \
+    --batch shared-test --attempt "$session" --case "$case_id" \
+    --runtime "$runtime" --device-type "$device_type" \
+    --owner-pid "$pid" --wait-seconds "$wait_seconds" --receipt-dir "$receipts"
+}
+
+queue_length() {
+  inventory | jq -r '.queue | length'
+}
+
+# wait_until DESCRIPTION COMMAND... polls for up to 30 seconds.
+wait_until() {
+  local description="$1" attempt
+  shift
+  for attempt in $(seq 1 150); do
+    "$@" && return 0
+    sleep 0.2
+  done
+  fail "timed out waiting until $description"
+}
+queue_is() { [[ "$(queue_length)" == "$1" ]]; }
+lease_output_ready() { [[ -s "$1" ]]; }
+process_exited() { ! kill -0 "$1" 2>/dev/null; }
+
+# A shared lease erases the shared device and returns a normal dedicated-lease receipt.
+shared_holder="$(allocate_shared shared-holder iphone-ja)"
+IFS=$'\t' read -r shared_holder_id shared_holder_udid shared_holder_receipt <<<"$shared_holder"
+[[ "$shared_holder_udid" == "$shared_iphone_udid" && "$(jq -r '.deviceName + "|" + (.preparation.erased | tostring)' "$shared_holder_receipt")" == "$shared_iphone_name|true" ]] ||
+  fail "the shared iPhone lease is invalid: $shared_holder"
+
+# Two later requests get the device in arrival order and report their place in the queue on stderr.
+allocate_shared shared-first iphone-en "$owner_pid" 30 >"$scratch/shared-first.out" 2>"$scratch/shared-first.err" &
+shared_first_pid=$!
+background_pids+=("$shared_first_pid")
+wait_until 'the first waiting request is queued' queue_is 1
+allocate_shared shared-second iphone-ja "$owner_pid" 30 >"$scratch/shared-second.out" 2>"$scratch/shared-second.err" &
+shared_second_pid=$!
+background_pids+=("$shared_second_pid")
+wait_until 'the second waiting request is queued' queue_is 2
+[[ "$(inventory | jq -r '[.queue[] | .sessionId] | join(",")')" == "shared-first,shared-second" ]] || fail "the queue is not in arrival order"
+wait_until 'the first request reports its place' grep -Fq "waiting for Simulator '$shared_iphone_name': queue position 1, 0 request(s) ahead" "$scratch/shared-first.err"
+wait_until 'the second request reports its place' grep -Fq "queue position 2, 1 request(s) ahead" "$scratch/shared-second.err"
+release_lease shared-holder "$shared_holder_id" >/dev/null
+wait "$shared_first_pid" || fail "the first waiting request failed: $(<"$scratch/shared-first.err")"
+kill -0 "$shared_second_pid" 2>/dev/null || fail "the second request did not keep waiting behind the first"
+[[ ! -s "$scratch/shared-second.out" && "$(queue_length)" == 1 ]] || fail "the second request overtook the first"
+IFS=$'\t' read -r shared_first_id _ _ <"$scratch/shared-first.out"
+release_lease shared-first "$shared_first_id" >/dev/null
+wait "$shared_second_pid" || fail "the second waiting request failed: $(<"$scratch/shared-second.err")"
+grep -Fq "queue position 1, 0 request(s) ahead" "$scratch/shared-second.err" || fail "the second request did not report moving to the front"
+IFS=$'\t' read -r shared_second_id _ _ <"$scratch/shared-second.out"
+release_lease shared-second "$shared_second_id" >/dev/null
+[[ "$(queue_length)" == 0 && "$(active_count)" == 0 ]] || fail "the queue or the leases were not emptied"
+
+# A free device still goes to the request at the front: here the front request waits only because its
+# session holds the shared iPad, and a new request for the free iPhone does not overtake it.
+shared_ipad="$(allocate_shared shared-front ipad-ja)"
+IFS=$'\t' read -r shared_ipad_id _ _ <<<"$shared_ipad"
+allocate_shared shared-front iphone-en "$owner_pid" 30 >"$scratch/shared-front.out" 2>"$scratch/shared-front.err" &
+shared_front_pid=$!
+background_pids+=("$shared_front_pid")
+wait_until 'the front request is queued' queue_is 1
+expect_denied 'a request that would overtake the queue' "1 earlier lease request(s) wait for Simulator '$shared_iphone_name'" \
+  allocate_shared shared-late iphone-ja
+release_lease shared-front "$shared_ipad_id" >/dev/null
+wait "$shared_front_pid" || fail "the front request did not receive the free device: $(<"$scratch/shared-front.err")"
+IFS=$'\t' read -r shared_front_id _ _ <"$scratch/shared-front.out"
+
+# A request whose wait expires stops with blocked:environment and leaves the queue.
+expect_denied 'an expired shared wait' 'blocked:environment: dedicated Simulator' allocate_shared shared-expired iphone-ja "$owner_pid" 1
+grep -Fq 'wait expired after 1 seconds' "$scratch/denied.err" || fail "the expired wait did not say so: $(<"$scratch/denied.err")"
+[[ "$(queue_length)" == 0 ]] || fail "an expired request stayed in the queue"
+
+# A waiting request that finds the device free only after its deadline does not take the lease: here the
+# lease lock is held past the deadline while the holder's owner dies, as a slow release would.
+sleep 60 &
+late_holder_owner=$!
+background_pids+=("$late_holder_owner")
+late_holder="$(allocate_shared shared-late-holder ipad-ja "$late_holder_owner")"
+IFS=$'\t' read -r late_holder_id _ _ <<<"$late_holder"
+erase_before="$(calls_of erase)"
+allocate_shared shared-late-waiter ipad-en "$owner_pid" 2 >"$scratch/shared-late.out" 2>"$scratch/shared-late.err" &
+late_waiter=$!
+background_pids+=("$late_waiter")
+wait_until 'the late request is queued' queue_is 1
+ruby -e '
+  lock = File.open(ARGV[0], File::RDWR)
+  lock.flock(File::LOCK_EX)
+  File.write(ARGV[1], "locked")
+  sleep 4
+' "$state_root/dedicated-v1.lock" "$scratch/lock-held" &
+lock_holder=$!
+background_pids+=("$lock_holder")
+wait_until 'the test holds the lease lock' test -f "$scratch/lock-held"
+kill "$late_holder_owner"
+wait "$late_holder_owner" 2>/dev/null || true
+wait "$lock_holder"
+if wait "$late_waiter"; then fail "a request whose wait expired took the lease"; fi
+grep -Fq 'became free only after the wait expired after 2 seconds' "$scratch/shared-late.err" ||
+  fail "the late request reported: $(<"$scratch/shared-late.err")"
+[[ ! -s "$scratch/shared-late.out" && "$(queue_length)" == 0 && "$(calls_of erase)" == "$erase_before" ]] ||
+  fail "the late request left the queue, a lease, or an erase behind"
+[[ "$(inventory | jq -r --arg id "$late_holder_id" '[.activeCount, (.allocations[] | select(.allocationId == $id) | .cleanup.reason)] | map(tostring) | join("|")')" == "1|orphan-recovery" ]] ||
+  fail "the dead holder was not recovered, or the late request holds a lease"
+
+# Waiting requests whose owner died, or whose waiting process was killed, are removed and do not hold up the
+# request behind them.
+sleep 60 &
+dead_owner=$!
+background_pids+=("$dead_owner")
+allocate_shared shared-dead-owner iphone-ja "$dead_owner" 30 >/dev/null 2>"$scratch/shared-dead-owner.err" &
+dead_owner_waiter=$!
+background_pids+=("$dead_owner_waiter")
+wait_until 'the request of the owner that will die is queued' queue_is 1
+( exec "${manager[@]}" allocate "${common[@]}" --session shared-killed --repository "$shared_repo" --issue 495 \
+    --head "$head_sha" --batch shared-test --attempt shared-killed --case iphone-ja --runtime "$runtime" \
+    --device-type "$iphone_type" --owner-pid "$owner_pid" --wait-seconds 30 --receipt-dir "$receipts" ) >/dev/null 2>&1 &
+killed_waiter=$!
+background_pids+=("$killed_waiter")
+wait_until 'the request that will be killed is queued' queue_is 2
+allocate_shared shared-behind iphone-en "$owner_pid" 30 >"$scratch/shared-behind.out" 2>"$scratch/shared-behind.err" &
+shared_behind_pid=$!
+background_pids+=("$shared_behind_pid")
+wait_until 'the request behind is queued' queue_is 3
+wait_until 'the request behind reports its place' grep -Fq "queue position 3, 2 request(s) ahead" "$scratch/shared-behind.err"
+kill -KILL "$killed_waiter"
+kill "$dead_owner"
+wait "$killed_waiter" 2>/dev/null || true
+wait "$dead_owner" 2>/dev/null || true
+wait_until 'the request of the dead owner stops' process_exited "$dead_owner_waiter"
+if wait "$dead_owner_waiter"; then fail "the request of a dead owner received a lease"; fi
+grep -Fq 'removed because its owner or waiting process is not active' "$scratch/shared-dead-owner.err" ||
+  fail "the request of a dead owner reported: $(<"$scratch/shared-dead-owner.err")"
+wait_until 'the request behind moves to the front' grep -Fq "queue position 1, 0 request(s) ahead" "$scratch/shared-behind.err"
+[[ "$(inventory | jq -r '[.queue[] | .sessionId] | join(",")')" == "shared-behind" ]] || fail "dead requests stayed in the queue"
+release_lease shared-front "$shared_front_id" >/dev/null
+wait "$shared_behind_pid" || fail "the request behind dead requests failed: $(<"$scratch/shared-behind.err")"
+IFS=$'\t' read -r shared_behind_id _ _ <"$scratch/shared-behind.out"
+
+# Without --wait-seconds a shared request keeps waiting (the shared default, 1800 seconds, is longer than the
+# dedicated 60); stopping it with TERM removes it from the queue.
+( exec "${manager[@]}" allocate "${common[@]}" --session shared-default --repository "$shared_repo" --issue 495 \
+    --head "$head_sha" --batch shared-test --attempt shared-default --case iphone-ja --runtime "$runtime" \
+    --device-type "$iphone_type" --owner-pid "$owner_pid" --receipt-dir "$receipts" ) >/dev/null 2>"$scratch/shared-default.err" &
+shared_default_pid=$!
+background_pids+=("$shared_default_pid")
+wait_until 'the request with the default wait is queued' queue_is 1
+sleep 1.5
+kill -0 "$shared_default_pid" 2>/dev/null || fail "a shared request without --wait-seconds stopped waiting: $(<"$scratch/shared-default.err")"
+kill -TERM "$shared_default_pid"
+wait "$shared_default_pid" 2>/dev/null || true
+[[ "$(queue_length)" == 0 ]] || fail "a stopped request stayed in the queue"
+release_lease shared-behind "$shared_behind_id" >/dev/null
+
+# Only the exact shared pair may use a shared name; a mixed declaration is refused before any device is used.
+erase_before="$(calls_of erase)"
+write_shared_config "$shared_iphone_name" "Mixed iPad Pro 13-inch (M5)"
+expect_denied 'a mixed shared declaration' 'must declare both shared Simulators exactly' allocate_shared shared-mixed iphone-ja
+write_shared_config "$shared_iphone_name" "$shared_ipad_name"
+[[ "$(calls_of erase)" == "$erase_before" && "$(active_count)" == 0 ]] || fail "a refused shared declaration used a device"
+assert_no_forbidden_calls
+
 # Tampered lease state is rejected.
 ruby -rjson - "$state_root/dedicated-v1.json" <<'RUBY'
 state = JSON.parse(File.read(ARGV[0]))

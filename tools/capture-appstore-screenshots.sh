@@ -210,10 +210,11 @@ while [[ "$group_index" -lt "$group_count" ]]; do
     ipad-*:ja) active_case_id=ipad-ja ;;
     *) echo "unsupported App Store capture condition: $family/$locale" >&2; exit 1 ;;
   esac
+  # The manager waits its default: 60 seconds for a dedicated device, 1800 in arrival order for a shared one (D-098).
   allocation_output=$(run_simulator_resource allocate ${resource_test_flags[@]+"${resource_test_flags[@]}"} \
     --session "$simulator_session_id" --repository "$repository_root" --issue "$issue" --head "$source_sha" \
     --batch "$batch_id" --attempt "$attempt_id" --case "$active_case_id" --runtime "$runtime" \
-    --device-type "$device_identifier" --owner-pid "$$" --wait-seconds 60 \
+    --device-type "$device_identifier" --owner-pid "$$" \
     --receipt-dir "$allocation_receipt_dir")
   IFS=$'\t' read -r active_allocation_id active_allocation_udid active_allocation_receipt <<<"$allocation_output"
   allocation_receipt_dir_physical=$(cd "$allocation_receipt_dir" && /bin/pwd -P)

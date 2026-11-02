@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Creates only the repository's declared dedicated Simulators that do not exist yet (D-063). It never deletes,
 # renames, clones, boots, or erases a device, and it stops before creating anything when a declared name is
-# ambiguous or already used by a device of another Device Type or Runtime.
+# ambiguous or already used by a device of another Device Type or Runtime. A declaration of the Mac's shared
+# pair (D-098) is only checked: a missing shared device stops as blocked:environment and is never created.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$repo_root/tools/lib/bounded-command.sh"
@@ -70,6 +71,20 @@ end
 blocked("Simulator declaration must name one iphone and one ipad") unless declared.map { |device| device["family"] }.sort == %w[ipad iphone]
 blocked("Simulator declaration names must differ") unless declared.map { |device| device["name"] }.uniq.length == 2
 blocked("simctl device list is invalid") unless devices.is_a?(Hash) && devices.values.all?(Array)
+# D-098: the Mac's one shared pair. Only the Mac's administrators (the Mac management agent and the owner)
+# create or delete it, so a declaration of the shared pair is checked and never created here.
+shared_pair = [
+  {"family" => "iphone", "name" => "Shared iPhone 17 Pro",
+   "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+   "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0"},
+  {"family" => "ipad", "name" => "Shared iPad Pro 13-inch (M5)",
+   "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
+   "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0"}
+]
+shared = declared.any? { |device| shared_pair.any? { |entry| entry["name"] == device["name"] } }
+if shared && declared.sort_by { |device| device["family"] == "iphone" ? 0 : 1 } != shared_pair
+  blocked("Simulator declaration must declare both shared Simulators exactly as D-098 defines them, or neither")
+end
 
 declared.sort_by { |device| device["family"] == "iphone" ? 0 : 1 }.each do |device|
   name = device.fetch("name")
@@ -86,6 +101,9 @@ declared.sort_by { |device| device["family"] == "iphone" ? 0 : 1 }.each do |devi
       blocked("a Simulator named '#{name}' does not match the declared Device Type and Runtime or is unavailable; fix it manually")
     end
     puts ["present", name, type, runtime].join("\t")
+  elsif shared
+    blocked("shared Simulator '#{name}' is missing. This tool never creates a shared Simulator; " \
+            "ask the Mac's administrator (the Mac management agent or the owner) to create it (D-098)")
   else
     blocked("declared Runtime #{runtime} is not installed and available") unless runtimes.any? { |entry|
       entry.is_a?(Hash) && entry["identifier"] == runtime && entry["isAvailable"] == true

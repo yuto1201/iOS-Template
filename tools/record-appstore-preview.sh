@@ -278,10 +278,11 @@ case "$language:$apple_locale" in
   *) echo "unsupported App Store preview system language: $language/$apple_locale" >&2; exit 1 ;;
 esac
 
+# The manager waits its default: 60 seconds for a dedicated device, 1800 in arrival order for a shared one (D-098).
 allocation_output=$(run_simulator_resource allocate ${resource_test_flags[@]+"${resource_test_flags[@]}"} \
   --session "$simulator_session_id" --repository "$repository_root" --issue "$issue" --head "$source_sha" \
   --batch "$batch_id" --attempt "$attempt_id" --case "$case_id" --runtime "$runtime" \
-  --device-type "$device_identifier" --owner-pid "$$" --wait-seconds 60 \
+  --device-type "$device_identifier" --owner-pid "$$" \
   --receipt-dir "$allocation_receipt_dir")
 bind_allocation || { echo 'Simulator allocation receipt is invalid' >&2; exit 1; }
 
