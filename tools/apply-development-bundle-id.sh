@@ -12,7 +12,8 @@ set -euo pipefail
 #
 # Before any change it stops (exit 3) when the app shares data or identity through its Bundle ID, because a
 # development build needs a separate decision there:
-#   - entitlements with iCloud (CloudKit, iCloud Drive, key-value storage), App Groups, or shared Keychain groups;
+#   - entitlements with iCloud (CloudKit, iCloud Drive, key-value storage), App Groups, or shared Keychain groups,
+#     whether the project sets CODE_SIGN_ENTITLEMENTS or a configuration file (.xcconfig) it uses does;
 #   - an embedded target (a Widget or other extension) whose Bundle ID starts with the app's Bundle ID.
 # Any other project shape it cannot read safely stops with exit 1. Nothing is written in either case.
 
@@ -154,10 +155,58 @@ end
 release_bundles = setting_lines.call(release, "PRODUCT_BUNDLE_IDENTIFIER").map { |value| pbx_value(value) }
 refuse("the Release Bundle ID is not #{bundle_id} from Config/app-identity.json") unless release_bundles == [bundle_id]
 
+# Build settings can also come from configuration files (baseConfigurationReference) and their includes.
+# Every .xcconfig in the repository is read, so an inherited CODE_SIGN_ENTITLEMENTS is checked too; a
+# configuration file the tool cannot find or follow inside the repository stops before any change.
+skipped_directories = %w[DerivedData build Pods Carthage].freeze
+xcconfigs = []
+pending = []
+Dir.glob("**/*.xcconfig", base: ROOT).sort.each do |relative|
+  components = relative.split("/")
+  next if components[0...-1].any? { |name| name.start_with?(".") || skipped_directories.include?(name) }
+  pending << relative
+end
+until pending.empty?
+  relative = pending.shift
+  next if xcconfigs.include?(relative)
+  path = regular_file!(relative)
+  xcconfigs << relative
+  File.read(path, encoding: "UTF-8").each_line do |line|
+    directive = line.match(/\A\s*#include(\?)?\s*(.*?)\s*\z/)
+    next unless directive
+    target = directive[2][/\A"([^"]+)"\z/, 1]
+    refuse("#{relative} has an include the tool cannot follow; check its entitlements by hand") unless target && !target.start_with?("/")
+    resolved = File.expand_path(target, File.join(ROOT, File.dirname(relative)))
+    refuse("#{relative} includes a file outside the app repository; check its entitlements by hand") unless resolved.start_with?("#{ROOT}/")
+    included = resolved.delete_prefix("#{ROOT}/")
+    if File.exist?(resolved) || File.symlink?(resolved)
+      pending << included
+    elsif directive[1].nil?
+      refuse("#{relative} includes #{included}, which is missing")
+    end
+  end
+end
+content.scan(/^\t\t#{object} \/\* [^\n]*? \*\/ = \{isa = PBXFileReference;[^\n]*\};\n/).each do |reference|
+  path = reference[/ path = ("(?:[^"\\]|\\.)*"|[^;]+);/, 1]
+  next unless path && pbx_value(path).end_with?(".xcconfig")
+  path = pbx_value(path)
+  tree = reference[/ sourceTree = ("[^"]*"|[^;]+);/, 1].to_s.delete("\"")
+  unless %w[<group> SOURCE_ROOT].include?(tree) && !path.start_with?("/") && !path.split("/").include?("..") &&
+         xcconfigs.any? { |relative| relative == path || relative.end_with?("/#{path}") }
+    refuse("the project uses the configuration file #{path}, which the tool cannot find inside the app repository; check its entitlements by hand")
+  end
+end
+xcconfig_entitlements = xcconfigs.flat_map do |relative|
+  File.read(File.join(ROOT, relative), encoding: "UTF-8").each_line.map do |line|
+    setting = line.sub(%r{\s*//.*\z}m, "").match(/\A\s*CODE_SIGN_ENTITLEMENTS(?:\[[^\]]*\])?\s*=\s*(.*?)\s*;?\s*\z/)
+    setting && setting[1].delete_prefix("\"").delete_suffix("\"")
+  end.compact
+end
+
 # Entitlements of every target in the project: a development Bundle ID changes what they share.
-entitlement_paths = content.scan(/^\t\t\t\t"?CODE_SIGN_ENTITLEMENTS(?:\[[^\]\n]*\])?"? = ([^\n]*);\n/).flatten.map do |raw|
-  pbx_value(raw).sub(%r{\A\$[({](?:SRCROOT|PROJECT_DIR)[)}]/}, "")
-end.uniq.sort
+entitlement_paths = (content.scan(/^\t\t\t\t"?CODE_SIGN_ENTITLEMENTS(?:\[[^\]\n]*\])?"? = ([^\n]*);\n/).flatten.map do |raw|
+  pbx_value(raw)
+end + xcconfig_entitlements).map { |value| value.sub(%r{\A\$[({](?:SRCROOT|PROJECT_DIR)[)}]/}, "") }.uniq.sort
 shared = entitlement_paths.flat_map do |relative|
   refuse("the entitlements path #{relative} uses a build setting; check it by hand") if relative.include?("$")
   values = plist(relative)

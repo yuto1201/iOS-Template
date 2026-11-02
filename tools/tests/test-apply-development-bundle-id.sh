@@ -138,6 +138,35 @@ new_app missing-entitlements
 edit_project 'content.sub("\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;\n", "\t\t\t\tCODE_SIGN_ENTITLEMENTS = SampleNotes/Missing.entitlements;\n\t\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes;\n")'
 expect_refusal 'missing entitlements file' 1 'SampleNotes/Missing.entitlements is missing'
 
+# Entitlements set through a configuration file, directly or through an include, are checked the same way.
+new_app xcconfig-shared
+mkdir -p "$app/SampleNotes"
+cp "$fixture/entitlements/icloud.entitlements" "$app/SampleNotes/SampleNotes.entitlements"
+printf '%s\n' 'CODE_SIGN_ENTITLEMENTS = $(SRCROOT)/SampleNotes/SampleNotes.entitlements // shared' >"$app/Config/Local.xcconfig"
+expect_refusal 'iCloud entitlements from an included xcconfig' 3 'SampleNotes/SampleNotes.entitlements: com.apple.developer.icloud-container-identifiers'
+new_app xcconfig-direct
+mkdir -p "$app/SampleNotes"
+cp "$fixture/entitlements/app-groups.entitlements" "$app/SampleNotes/SampleNotes.entitlements"
+printf '%s\n' 'CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*] = SampleNotes/SampleNotes.entitlements' >"$app/Config/Public.xcconfig"
+expect_refusal 'App Group entitlements from the base xcconfig' 3 'SampleNotes/SampleNotes.entitlements: com.apple.security.application-groups'
+new_app xcconfig-push
+mkdir -p "$app/SampleNotes"
+cp "$fixture/entitlements/push.entitlements" "$app/SampleNotes/SampleNotes.entitlements"
+printf '%s\n' 'CODE_SIGN_ENTITLEMENTS = SampleNotes/SampleNotes.entitlements' >"$app/Config/Local.xcconfig"
+"$tool" --root "$app" | grep -Fq '"status":"applied"' || fail 'push entitlements from an xcconfig were refused'
+new_app xcconfig-variable
+printf '%s\n' 'CODE_SIGN_ENTITLEMENTS = $(TARGET_NAME)/App.entitlements' >"$app/Config/Local.xcconfig"
+expect_refusal 'entitlements path with a build setting in an xcconfig' 1 'uses a build setting; check it by hand'
+new_app xcconfig-missing-include
+printf '%s\n' '#include "Shared.xcconfig"' >"$app/Config/Public.xcconfig"
+expect_refusal 'missing required include' 1 'Config/Public.xcconfig includes Config/Shared.xcconfig, which is missing'
+new_app xcconfig-outside
+printf '%s\n' '#include "../../outside.xcconfig"' >"$app/Config/Public.xcconfig"
+expect_refusal 'include outside the repository' 1 'includes a file outside the app repository'
+new_app xcconfig-unreadable-reference
+rm "$app/Config/Public.xcconfig"
+expect_refusal 'project configuration file missing' 1 'the project uses the configuration file Public.xcconfig'
+
 # An embedded target whose Bundle ID starts with the app's stops as well.
 new_app embedded
 edit_project 'content.gsub("PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotesUITests;", "PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes.Widget;")'
