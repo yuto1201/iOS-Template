@@ -567,7 +567,7 @@ Bootstrap例外は自動化tool自体がまだ使用できない場合に限り�
 
 ### 9.2 開発版（Debug）のBundle ID
 
-Xcodeでビルドした開発版（Debug）と、App Storeから入れた版（Release）を、同じiPhoneに別のアプリとして並べます。iOSは同じBundle IDを同じアプリとして扱うので、Bundle IDが同じだと開発版を入れたときにApp Store版が置き換わり、入れ直しでApp Store版のデータが消えます。
+Xcodeでビルドした開発版（Debug）と、App Storeから入れた版（Release）を、同じiPhoneに別のアプリとして並べます（D-100）。iOSは同じBundle IDを同じアプリとして扱うので、Bundle IDが同じだと開発版を入れたときにApp Store版が置き換わり、入れ直しでApp Store版のデータが消えます。
 
 - Debug：Bundle IDは`<本番のBundle ID>.dev`、ホーム画面の名前（`CFBundleDisplayName`）は`<表示名> Dev`です。アイコンは本番と同じです。
 - Release：Bundle IDと表示名は本番のままです。App Storeへ出すビルドはReleaseです。

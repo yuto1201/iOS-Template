@@ -1231,3 +1231,18 @@
   - アプリ独自の星の画面や、評価と引き換えの見返りは作らない（App Store審査ガイドライン5.6.1）。
 - Consequence: テンプレートのアプリは、設定画面がないためルート画面にボタンを置き（各アプリは設定画面のサポート欄へ移す）、`appStoreId`が空のため、登録するまでボタンは出ない。新しいアプリの作成と機能の計画の手順（skill）には、#513で書く。すでにある派生アプリへは、各アプリのIssueで入れる。
 - Related Issue: #478（文面は、ユーザーが2026-11-02に承認した：https://github.com/yuto1201/iOS-Template/issues/478#issuecomment-6569594990）、#513
+
+## D-100: 開発版（Debug）のBundle IDを`<本番のBundle ID>.dev`に分け、App Store版と同じiPhoneに並べる
+
+- Date: 2026-11-01
+- Status: 確定
+- Supersedes: なし
+- Context: DebugとReleaseのBundle IDが同じで、Xcodeで入れた開発版とApp Store版が同じiPhoneで互いに上書きし合い、入れ直しでApp Store版のローカルのデータが消えることがあった。
+- Decision:
+  - アプリのtargetのDebugは、Bundle IDを`<本番のBundle ID>.dev`、ホーム画面の名前（`CFBundleDisplayName`）を`<表示名> Dev`にする。アイコンは本番と同じ。Releaseは本番のBundle IDと表示名のまま。App Storeへ出すビルドはRelease。
+  - テンプレートのアプリは、Debugが`com.yuto.TemplateApp.dev`と`TemplateApp Dev`、Releaseが`com.yuto.TemplateApp`。Identity bootstrap（`tools/bootstrap-app.swift`）は新しいアプリのDebugとReleaseを同じ形にする。
+  - すでにある派生アプリへは、取り込みで`tools/apply-development-bundle-id.sh`を届け、そのアプリの1つのIssueで実行する。toolはDebugだけを変え、Releaseを変えない。2回目は何も変えない。iCloud（CloudKit）、App Group、共有のKeychainのentitlements、またはアプリのBundle IDで始まる埋め込みtargetがあれば、変更の前に止まる。その扱いは別のIssueで決める。
+  - AIの検証はDebugをビルドするので、Verificationの`bundleIdentifier`には`.dev`のBundle IDを書く。runnerはビルドしたアプリのBundle IDとの一致を確かめる。リリースの検証の証拠（App Storeの準備と提出）は、本番のBundle IDかその`.dev`を検証したものだけを受け付ける。App Storeの準備でXcode projectを確かめるとき、Debugだけは`.dev`と`Dev`を本番と同じものとして扱う。
+  - 自分の実機へのビルド（D-086）はDebugなので、実機には`.dev`の開発版が入る。開発版のprovisioning profileは、Xcodeの自動署名で最初の1回だけユーザーが用意する。
+- Consequence: 開発版とApp Store版が同じiPhoneに並び、開発版を入れてもApp Store版とそのデータは残る。既に本番のBundle IDで実機に入っている開発版のデータは移さない。iCloud、App Group、共有のKeychainを使うアプリの開発用のcontainerやgroupは別に決める。Debugでは、アプリの中で表示名を使う文言（レビューの依頼など）に`Dev`が付く。`AGENTS.md`は変えない。
+- Related Issue: #476, #505, #512（文面は、ユーザーが2026-11-01に承認した：https://github.com/yuto1201/iOS-Template/issues/476#issuecomment-6559321824）
