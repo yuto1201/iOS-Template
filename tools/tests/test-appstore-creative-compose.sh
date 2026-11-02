@@ -373,7 +373,7 @@ EOF
 compose "$work/app/single.json" "$work/single" >/dev/null || fail 'the single-tile compose failed'
 mkdir -p "$work/raw/ja/iphone-6.3" "$work/sheet"
 cp "$work/app/capture.png" "$work/raw/ja/iphone-6.3/01-home.png"
-RAW="$work/raw" SHEET="$work/sheet" ruby -rjson -rdigest -e '
+RAW="$work/raw" SHEET="$work/sheet" TILE="$work/single/tile-1.png" ruby -rjson -rdigest -e '
   sha = ->(path) { "sha256:#{Digest::SHA256.file(path).hexdigest}" }
   raw = ENV.fetch("RAW")
   File.write(File.join(raw, "manifest.json"), JSON.generate({"schemaVersion" => 1, "sourceSha" => "a" * 40, "buildDigest" => "sha256:#{"b" * 64}",
@@ -384,7 +384,7 @@ RAW="$work/raw" SHEET="$work/sheet" ruby -rjson -rdigest -e '
   sheet = ENV.fetch("SHEET")
   File.write(File.join(sheet, "sheet.html"), "<!doctype html><title>proposal</title>\n")
   File.write(File.join(sheet, "sheet.json"), JSON.generate({"schemaVersion" => 1, "kind" => "proposal",
-    "sheetSha256" => sha.(File.join(sheet, "sheet.html")), "patterns" => [{"id" => "A"}]}))
+    "sheetSha256" => sha.(File.join(sheet, "sheet.html")), "patterns" => [{"id" => "A", "tiles" => [{"slot" => 1, "kind" => "screen", "device" => "iphone", "locale" => "ja", "sourceSha256" => sha.(ENV.fetch("TILE"))}]}]}))
   File.write(File.join(sheet, "selection.json"), JSON.generate({"schemaVersion" => 1, "revision" => "r1",
     "sheetSha256" => sha.(File.join(sheet, "sheet.html")), "selection" => {"type" => "pattern", "patternId" => "A"},
     "decision" => "user-explicit", "recordedAt" => "2026-11-02T00:00:00Z"}))

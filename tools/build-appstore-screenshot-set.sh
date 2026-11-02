@@ -258,7 +258,10 @@ if composed
   composition_case_keys=%w[locale family state order path rawPath rawDigest declarationDigest renderRecordDigest assetDigests width height digest]
   records={}
   load_record=lambda do |digest,label|
-    next nil unless digest.is_a?(String) && digest.match?(digest_pattern)
+    # A missing or malformed reference is an error: every face needs its validated render record.
+    unless digest.is_a?(String) && digest.match?(digest_pattern)
+      add.call(label,"record-digest-invalid"); next nil
+    end
     next records[digest] if records.key?(digest)
     path=File.join(composed_root,"records","#{digest.sub(":","-")}.json")
     value=begin

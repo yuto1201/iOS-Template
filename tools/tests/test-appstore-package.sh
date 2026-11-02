@@ -252,7 +252,10 @@ def base(root, source_sha, build_digest, runtime, requirements)
     "order" => {%w[ja iphone-6.3] => %w[settings primary]},
     "structure" => {%w[ja iphone-6.3] => %w[primary]},
     "nocapture" => {},
-    "unadopted" => {}
+    "unadopted" => {},
+    "combination" => {},
+    "otherpattern" => {},
+    "badcombination" => {}
   }
   variants.each do |name, faces|
     variant(File.join(root, name), seed_root, name, faces)
@@ -270,13 +273,7 @@ def variant(root, seed_root, name, faces)
   write(File.join(root, "assets", "provenance.json"), {"schemaVersion" => 1, "images" => [
     {"file" => "leaf.png", "sha256" => sha(leaf), "materialReview" => {"decision" => "adopted"}},
     {"file" => "stray.png", "sha256" => sha(stray), "materialReview" => {"decision" => "rejected"}}]})
-  sheet = File.join(root, "sheet")
-  FileUtils.mkdir_p(sheet)
-  File.binwrite(File.join(sheet, "sheet.html"), "<!doctype html><title>proposal</title>\n")
-  write(File.join(sheet, "sheet.json"), {"schemaVersion" => 1, "revision" => "r1", "kind" => "proposal",
-    "sheetSha256" => sha(File.join(sheet, "sheet.html")), "patterns" => [{"id" => "A"}, {"id" => "B"}]})
-  write(File.join(sheet, "selection.json"), {"schemaVersion" => 1, "revision" => "r1", "sheetSha256" => sha(File.join(sheet, "sheet.html")),
-    "selection" => {"type" => "pattern", "patternId" => "B"}, "decision" => "user-explicit", "recordedAt" => "2026-10-15T00:00:00Z"})
+  rendered = {}
   records = SETS.map do |locale, family|
     folder = File.join(root, "renders", "#{locale}-#{family}")
     states = faces.fetch([locale, family], STATES)
@@ -304,9 +301,29 @@ def variant(root, seed_root, name, faces)
       "fonts" => [], "captures" => shown.uniq, "backgrounds" => [], "decorations" => [],
       "layers" => [{"scene" => states.first, "src" => material, "sha256" => sha(material), "z" => "front", "tiles" => [1]}],
       "popouts" => [], "tiles" => tiles, "marks" => [], "files" => files})
+    rendered[[locale, family]] = files.map { |file| file["sha256"] }
     record
   end
   File.binwrite(File.join(root, "records.txt"), records.join(","))
+  # The proposal sheet showed the Japanese iPhone tiles of pattern B (the rendered faces) and of pattern A
+  # (other images); the user chose B, a combination of B's tiles, or (to be refused) A or a slot of A.
+  sheet = File.join(root, "sheet")
+  FileUtils.mkdir_p(sheet)
+  File.binwrite(File.join(sheet, "sheet.html"), "<!doctype html><title>proposal</title>\n")
+  shown = ->(digests) { digests.each_with_index.map { |digest, index| {"slot" => index + 1, "kind" => "screen", "device" => "iphone", "locale" => "ja", "sourceSha256" => digest} } }
+  write(File.join(sheet, "sheet.json"), {"schemaVersion" => 1, "revision" => "r1", "kind" => "proposal",
+    "sheetSha256" => sha(File.join(sheet, "sheet.html")), "patterns" => [
+      {"id" => "A", "tiles" => shown.(rendered.fetch(["en-US", "iphone-6.3"]))},
+      {"id" => "B", "tiles" => shown.(rendered.fetch(["ja", "iphone-6.3"]))}]})
+  choice = case name
+           when "otherpattern" then {"type" => "pattern", "patternId" => "A"}
+           when "combination", "badcombination"
+             {"type" => "combination", "tiles" => [{"slot" => 1, "patternId" => name == "combination" ? "B" : "A", "sourceSlot" => 1, "kind" => "screen"},
+                                                   {"slot" => 2, "patternId" => "B", "sourceSlot" => 2, "kind" => "screen"}]}
+           else {"type" => "pattern", "patternId" => "B"}
+           end
+  write(File.join(sheet, "selection.json"), {"schemaVersion" => 1, "revision" => "r1", "sheetSha256" => sha(File.join(sheet, "sheet.html")),
+    "selection" => choice, "decision" => "user-explicit", "recordedAt" => "2026-10-15T00:00:00Z"})
 end
 
 # The visual review of a composed set covers both the raw capture (truthfulness) and the composed face.
@@ -343,6 +360,37 @@ def mutate(root, scenario, value = nil)
   case scenario
   when "raw-digest" then target["rawDigest"] = "sha256:#{'1' * 64}"
   when "declaration" then target["declarationDigest"] = "sha256:#{'2' * 64}"
+  # A missing or malformed render record reference cannot skip the checks it carries.
+  when "record-null"
+    target["renderRecordDigest"] = nil
+    target["declarationDigest"] = "sha256:#{'2' * 64}"
+  when "record-malformed"
+    target["renderRecordDigest"] = "sha256:xyz"
+    target["declarationDigest"] = "sha256:#{'2' * 64}"
+  # The English iPhone faces in the other order, kept consistent with their render record, against the
+  # Japanese order; or one English face left out.
+  when "reorder"
+    first, second = composition.fetch("cases").select { |entry| entry.values_at("locale", "family") == ["en-US", "iphone-6.3"] }.sort_by { |entry| entry["order"] }
+    swap = {1 => 2, 2 => 1}
+    old = first["renderRecordDigest"]
+    fresh = rebind_record(root, old) do |record|
+      record["files"].reverse!
+      record["tiles"].reverse!
+      record["layers"].each { |layer| layer["tiles"] = layer["tiles"].map { |number| swap.fetch(number, number) } }
+    end
+    composition.fetch("cases").each { |entry| entry["renderRecordDigest"] = fresh if entry["renderRecordDigest"] == old }
+    [first, second].each do |entry|
+      old_path = entry["path"]
+      entry["order"] = swap.fetch(entry["order"])
+      entry["path"] = format("%s/%s/%02d-%s.png", entry["locale"], entry["family"], entry["order"], entry["state"])
+      File.rename(File.join(root, "composed", old_path), File.join(root, "composed", entry["path"]))
+      review.fetch("cases").find { |row| row["path"] == old_path }["path"] = entry["path"]
+    end
+  when "drop"
+    dropped = composition.fetch("cases").find { |entry| entry.values_at("locale", "family", "order") == ["en-US", "iphone-6.3", 2] }
+    composition.fetch("cases").delete(dropped)
+    review.fetch("cases").reject! { |row| row["path"] == dropped["path"] }
+    File.delete(File.join(root, "composed", dropped["path"]))
   when "raw-missing"
     path = File.join(root, "raw", "manifest.json")
     raw = read(path)
@@ -404,7 +452,7 @@ build_composed() { # root output
     --source-sha "$composed_sha" --runtime "$composed_runtime" --build-digest "$composed_build" \
     --composition "$1/composed/composition.json" --composed-root "$1/composed"
 }
-for variant in valid order structure; do
+for variant in valid combination; do
   finalize "$variant" >/dev/null || { echo "finalize refused the $variant composed fixture" >&2; exit 1; }
   ruby "$fixture" review "$composed/$variant" "$composed_sha" "$composed_build"
 done
@@ -459,6 +507,16 @@ expect_finalize_refused() { # variant message
 }
 expect_finalize_refused nocapture 'shows no real capture; every App Store face must contain its raw capture (guideline 2.3.3)'
 expect_finalize_refused unadopted 'uses a material that provenance.json does not record as adopted'
+# AC-3: the faces are the tiles the user chose. Renders of an unchosen pattern or of a combination slot the
+# user did not choose are refused, and so are other locales or devices that render other scenes.
+expect_finalize_refused otherpattern 'no Japanese iPhone render record shows the tiles chosen on the proposal sheet'
+expect_finalize_refused badcombination 'no Japanese iPhone render record shows the tiles chosen on the proposal sheet'
+expect_finalize_refused order 'does not render the chosen tiles: its scenes or style differ'
+expect_finalize_refused structure 'does not render the chosen tiles: its scenes or style differ'
+COMPOSED="$composed/combination" ruby -rjson -e '
+  adoption = JSON.parse(File.binread(File.join(ENV.fetch("COMPOSED"), "composed", "composition.json"))).fetch("adoption")
+  abort "combination adoption #{adoption}" unless adoption["conceptId"] == "combination"
+' || { echo 'finalize did not record the chosen combination' >&2; exit 1; }
 
 # AC-4: the composed set is ready, and its manifest keeps the composition digest and each face's rawDigest.
 ready=$(build_composed "$composed/valid" "$composed/valid/out")
@@ -502,8 +560,10 @@ refuse_mutation alpha 'ja/iphone-6.3/01-primary.png:alpha-not-allowed' ja/iphone
 refuse_mutation size 'ja/iphone-6.3/01-primary.png:dimensions-not-allowed' ja/iphone-6.3/01-primary.png
 refuse_mutation digest 'en-US/iphone-6.3/01-primary.png:digest-mismatch'
 refuse_mutation symlink 'en-US/iphone-6.3/01-primary.png:unsafe-file'
-assert_composed_refused 'Japanese order differs from English' "$composed/order" 'screenshots/iphone-6.3:locale-structure-mismatch'
-assert_composed_refused 'Japanese faces differ from English' "$composed/structure" 'screenshots/iphone-6.3:locale-structure-mismatch'
+refuse_mutation reorder 'screenshots/iphone-6.3:locale-structure-mismatch'
+refuse_mutation drop 'screenshots/iphone-6.3:locale-structure-mismatch'
+refuse_mutation record-null 'en-US/iphone-6.3/01-primary.png:render-record:record-digest-invalid'
+refuse_mutation record-malformed 'en-US/iphone-6.3/01-primary.png:render-record:record-digest-invalid'
 refuse_mutation review-composed 'en-US/iphone-6.3/01-primary.png:review-digest-mismatch'
 refuse_mutation review-raw '.rawDigest:missing'
 for field in sourceSha buildDigest runtime requirementsDigest; do

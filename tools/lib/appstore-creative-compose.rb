@@ -707,7 +707,7 @@ module AppStoreCreativeCompose
     fail!("raw capture manifest schemaVersion must be 1") unless raw["schemaVersion"] == 1 && raw["cases"].is_a?(Array)
     raw_cases = raw["cases"].map { |entry| raw_case!(entry, raw_root) }
 
-    adoption = adoption_record(options.fetch("--selection") { fail!("--selection is required: selection.json of the proposal sheet") }, approval)
+    adoption, selected = adoption_record(options.fetch("--selection") { fail!("--selection is required: selection.json of the proposal sheet") }, approval)
     provenance_path = options["--provenance"] && regular_file(options["--provenance"], "provenance record")
     adopted = provenance_path ? adopted_materials(provenance_path).values : []
     paths = options.fetch("--render-records") { fail!("--render-records is required: a comma-separated list of render records") }.split(",")
@@ -769,6 +769,20 @@ module AppStoreCreativeCompose
          "rawPath" => source["path"], "rawDigest" => source["digest"], "declarationDigest" => record["specSha256"],
          "renderRecordDigest" => digest(record_path), "assetDigests" => assets, "width" => size[0], "height" => size[1],
          "digest" => file["sha256"], "source" => file["path"]}
+      end
+    end
+
+    # The faces are the tiles the user adopted: a Japanese iPhone render shows the chosen tiles byte for
+    # byte, and every other record renders the same scenes in the same order with the same style.
+    anchor = records.map(&:last).find do |record|
+      record["locale"] == "ja" && record["device"].start_with?("iphone") && record["files"].map { |file| file["sha256"] } == selected
+    end
+    fail!("no Japanese iPhone render record shows the tiles chosen on the proposal sheet; finalize the renders of the chosen pattern or combination") unless anchor
+    scenes = ->(record) { record["tiles"].map { |tile| tile.is_a?(Hash) ? tile["id"] : nil } }
+    records.each do |record_path, record|
+      next if record.equal?(anchor)
+      unless scenes.call(record) == scenes.call(anchor) && record["style"] == anchor["style"]
+        fail!("render record #{File.basename(record_path)} does not render the chosen tiles: its scenes or style differ from the Japanese iPhone render of the choice")
       end
     end
 
@@ -835,18 +849,38 @@ module AppStoreCreativeCompose
     unless record.is_a?(Hash) && record["kind"] == "proposal" && record["sheetSha256"] == selection["sheetSha256"]
       fail!("selection #{path} is not a choice on a proposal sheet")
     end
-    concept = case selection.dig("selection", "type")
-              when "pattern"
-                id = selection.dig("selection", "patternId")
-                unless id.is_a?(String) && id.match?(CONCEPT_PATTERN) && (record["patterns"] || []).any? { |pattern| pattern.is_a?(Hash) && pattern["id"] == id }
-                  fail!("the chosen pattern is not on the proposal sheet")
-                end
-                id
-              when "combination" then "combination"
-              else fail!("selection #{path} chooses neither a pattern nor a combination")
-              end
-    {"proposalSheetDigest" => selection["sheetSha256"], "selectionDigest" => digest(selection_path), "conceptId" => concept,
-     "decision" => "user-explicit", "approvalReference" => approval, "recordedAt" => selection["recordedAt"]}
+    patterns = (record["patterns"] || []).select { |pattern| pattern.is_a?(Hash) }
+    # The Japanese iPhone tiles of a pattern, by slot: the images the user saw on the sheet.
+    shown = lambda do |id|
+      pattern = patterns.find { |item| item["id"] == id } or fail!("the chosen pattern #{id} is not on the proposal sheet")
+      (pattern["tiles"] || []).select { |tile| tile.is_a?(Hash) && tile["device"] == "iphone" && tile["locale"] == "ja" }
+    end
+    choice = selection["selection"]
+    concept, selected = case choice["type"]
+                        when "pattern"
+                          id = choice["patternId"]
+                          fail!("the chosen pattern is not on the proposal sheet") unless id.is_a?(String) && id.match?(CONCEPT_PATTERN)
+                          tiles = shown.call(id)
+                          fail!("the chosen pattern #{id} has no Japanese iPhone tiles in slots 1..n") unless tiles.map { |tile| tile["slot"] } == (1..tiles.size).to_a && !tiles.empty?
+                          [id, tiles.map { |tile| tile["sourceSha256"] }]
+                        when "combination"
+                          slots = choice["tiles"]
+                          unless slots.is_a?(Array) && !slots.empty? && slots.all? { |slot| slot.is_a?(Hash) } &&
+                                 slots.map { |slot| slot["slot"] } == (1..slots.size).to_a
+                            fail!("the chosen combination must name every slot from 1 in order")
+                          end
+                          ["combination", slots.map do |slot|
+                            tile = shown.call(slot["patternId"]).find { |item| item["slot"] == slot["sourceSlot"] } or
+                              fail!("the combination names tile #{slot['sourceSlot']} of pattern #{slot['patternId']}, which the proposal sheet does not show")
+                            tile["sourceSha256"]
+                          end]
+                        else fail!("selection #{path} chooses neither a pattern nor a combination")
+                        end
+    unless selected.all? { |value| value.is_a?(String) && value.match?(DIGEST_PATTERN) }
+      fail!("the proposal sheet record does not name the image of every chosen tile")
+    end
+    [{"proposalSheetDigest" => selection["sheetSha256"], "selectionDigest" => digest(selection_path), "conceptId" => concept,
+      "decision" => "user-explicit", "approvalReference" => approval, "recordedAt" => selection["recordedAt"]}, selected]
   end
 
   # Every generated input of one tile: its background image and the layers that touch it.

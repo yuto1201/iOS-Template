@@ -74,6 +74,12 @@ tools/appstore-creative-compose.sh finalize --raw-root <raw capture root with ma
   --capture-batch <batch ID of the capture> --out <new folder>
 ```
 
+The faces must be the tiles the user chose on the proposal sheet. A Japanese iPhone render record
+must show the chosen tiles (the pattern, or the slots of the combination) byte for byte, and every
+other record must render the same scenes in the same order with the same style; renders of another
+pattern, of an unchosen slot, or of other scenes are refused. For a combination, compose the chosen
+tiles into one declaration first, so its Japanese iPhone render is the tiles the user saw.
+
 Each face must show exactly one raw capture of its locale and family (guideline 2.3.3), each
 capture at most once, and only materials that `provenance.json` records as adopted (2.3.9). The
 declaration, the faces and the captures must still have the bytes the records name. The folder gets
