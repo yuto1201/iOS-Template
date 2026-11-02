@@ -68,6 +68,7 @@ final class ReviewPromptUITests: XCTestCase {
         XCTAssertTrue(rate.waitForExistence(timeout: 10), "An App Store ID should show the button.")
         XCTAssertEqual(rate.label, "このアプリを評価する")
         XCTAssertTrue(rate.isHittable)
-        XCTAssertGreaterThanOrEqual(rate.frame.height, 44, "The button should be at least 44pt tall")
+        // The frame comes back as 43.99999… for an exact 44pt label, as in LegalLinksUITests.
+        XCTAssertGreaterThanOrEqual(rate.frame.height + 0.01, 44, "The button should be at least 44pt tall")
     }
 }
