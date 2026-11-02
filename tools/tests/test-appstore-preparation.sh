@@ -2224,6 +2224,100 @@ stdout, _, status = Open3.capture3(entrypoint, "--project-root", project)
 abort "restored complete evidence failed to prepare" unless status.success? && JSON.parse(stdout)["status"] == "prepared"
 puts "PASS: distribution and adopted screenshot bytes, identity, review and requirements invalidate only affected preparation without capture or release claims"
 
+# #486 (D-101): a screenshot set composed by the D-093 renderer and assembled with
+# tools/build-appstore-screenshot-set.sh --composition carries compositionDigest, each case's rawDigest,
+# the review's rawDigest and screenshots/composition.json. The evidence binds them exactly; the raw-capture
+# route keeps its exact keys.
+composition_relative = "App Store/screenshots/composition.json"
+fake_digest = ->(number) { "sha256:#{format('%064x', number)}" }
+composed_reasons = %w[screenshot-adoption-evidence-missing invalid-screenshot-manifest screenshot-composition-mismatch
+                      screenshot-review-unconfirmed screenshot-identity-mismatch invalid-screenshot-path invalid-screenshot-dimensions
+                      invalid-screenshot-image screenshot-image-digest-mismatch invalid-screenshot-evidence unsafe-asset-evidence]
+write_composed = lambda do |edit = nil, after = nil|
+  manifest = JSON.parse(asset_originals[manifest_relative])
+  review = JSON.parse(asset_originals[review_relative])
+  manifest["cases"].each_with_index { |entry, index| entry["rawDigest"] = fake_digest.call(1000 + index) }
+  review["cases"].each { |check| check["rawDigest"] = manifest["cases"].find { |entry| entry["path"] == check["path"] }["rawDigest"] }
+  composition = {"schemaVersion" => 1, "rawManifestDigest" => fake_digest.call(1), "captureBatchId" => "486-r1",
+                 "sourceSha" => manifest["sourceSha"], "buildDigest" => manifest["buildDigest"], "runtime" => manifest["runtime"],
+                 "requirementsDigest" => manifest["requirementsDigest"], "rendererDigest" => fake_digest.call(2),
+                 "adoption" => {"proposalSheetDigest" => fake_digest.call(3), "selectionDigest" => fake_digest.call(4), "conceptId" => "B",
+                                "decision" => "user-explicit", "approvalReference" => "#486", "recordedAt" => "2026-11-02T00:00:00Z",
+                                "provenanceDigest" => fake_digest.call(5)},
+                 "cases" => manifest["cases"].map do |entry|
+                   entry.select { |key, _| %w[locale family state order path rawDigest width height digest].include?(key) }.merge(
+                     "rawPath" => entry["path"], "declarationDigest" => fake_digest.call(6), "renderRecordDigest" => fake_digest.call(7), "assetDigests" => [])
+                 end}
+  edit&.call(manifest, review, composition)
+  File.write(File.join(project, review_relative), JSON.generate(review))
+  File.write(File.join(project, composition_relative), JSON.generate(composition))
+  manifest["compositionDigest"] = source_descriptor.call(composition_relative)["digest"] unless manifest.key?("compositionDigest")
+  File.write(File.join(project, manifest_relative), JSON.generate(manifest))
+  refresh_asset_references.call
+  after&.call
+end
+composed_row = lambda do |label|
+  stdout, stderr, status = Open3.capture3(entrypoint, "--project-root", project)
+  abort "#{label}: composed asset validation lost the partial report" unless [0, 1].include?(status.exitstatus) && stderr.empty?
+  report = JSON.parse(stdout)
+  abort "#{label}: composed asset inspection became a release or mutation" unless report["releaseReady"] == false && report["remoteMutations"] == [] && report["liveRemoteInspection"] == false
+  report["fields"].select { |entry| entry["fieldId"] == "screenshots.iphone" }
+end
+restore_assets = lambda do
+  asset_originals.each { |relative, bytes| File.binwrite(File.join(project, relative), bytes) }
+  File.unlink(File.join(project, composition_relative)) if File.exist?(File.join(project, composition_relative))
+end
+composed_case = lambda do |label, expected_reason, edit = nil, after = nil|
+  write_composed.call(edit, after)
+  rows = composed_row.call(label)
+  abort "#{label}: missing #{expected_reason}: #{rows.map { |row| row['reasons'] }}" unless rows.any? { |row| row["state"] == "draft" && row["reasons"].include?(expected_reason) }
+  restore_assets.call
+end
+# A correctly bound composed set raises no asset reason and names the composition record as a source.
+write_composed.call
+rows = composed_row.call("bound composed set")
+asset_reasons = rows.flat_map { |row| row["reasons"] } & composed_reasons
+abort "a bound composed set was refused: #{asset_reasons}" unless rows.length == 2 && asset_reasons.empty?
+restore_assets.call
+composed_case.call("composition record differs from compositionDigest", "screenshot-composition-mismatch", nil,
+  -> { File.write(File.join(project, composition_relative), File.binread(File.join(project, composition_relative)) + "\n") })
+composed_case.call("composition record is missing", "screenshot-composition-mismatch", nil,
+  -> { File.unlink(File.join(project, composition_relative)) })
+composed_case.call("manifest rawDigest differs from the composition", "screenshot-composition-mismatch",
+  ->(manifest, review, _) { manifest["cases"][0]["rawDigest"] = fake_digest.call(2000); review["cases"].find { |check| check["path"] == manifest["cases"][0]["path"] }["rawDigest"] = fake_digest.call(2000) })
+composed_case.call("composed digest differs from the composition", "screenshot-composition-mismatch",
+  ->(_, _, composition) { composition["cases"][0]["digest"] = fake_digest.call(2001) })
+composed_case.call("composition misses a face", "screenshot-composition-mismatch", ->(_, _, composition) { composition["cases"].pop })
+composed_case.call("composition capture identity differs", "screenshot-composition-mismatch", ->(_, _, composition) { composition["sourceSha"] = "f" * 40 })
+composed_case.call("composition without an explicit adoption", "screenshot-composition-mismatch", ->(_, _, composition) { composition["adoption"]["decision"] = "agent" })
+composed_case.call("rawDigest equal to the composed digest", "screenshot-composition-mismatch",
+  ->(manifest, review, composition) do
+    first = manifest["cases"][0]
+    [first, review["cases"].find { |check| check["path"] == first["path"] }, composition["cases"].find { |row| row["path"] == first["path"] }].each { |row| row["rawDigest"] = first["digest"] }
+  end)
+composed_case.call("review without the raw digest", "invalid-screenshot-manifest", ->(_, review, _) { review["cases"][0].delete("rawDigest") })
+composed_case.call("review with another raw digest", "screenshot-review-unconfirmed", ->(_, review, _) { review["cases"][0]["rawDigest"] = fake_digest.call(2002) })
+composed_case.call("composed case without rawDigest", "invalid-screenshot-manifest", ->(manifest, _, _) { manifest["cases"][0].delete("rawDigest") })
+# The raw-capture route keeps today's exact keys: a rawDigest or a stray key without compositionDigest is refused.
+composed_case.call("raw manifest case with a stray rawDigest", "invalid-screenshot-manifest",
+  ->(_, review, _) { review["cases"].each { |check| check.delete("rawDigest") } },
+  lambda do
+    manifest = JSON.parse(File.binread(File.join(project, manifest_relative)))
+    manifest.delete("compositionDigest")
+    File.write(File.join(project, manifest_relative), JSON.generate(manifest))
+    refresh_asset_references.call
+  end)
+composed_case.call("raw manifest with an unknown key", "screenshot-adoption-evidence-missing", nil,
+  lambda do
+    manifest = JSON.parse(asset_originals[manifest_relative])
+    manifest["compositionRecord"] = "composition.json"
+    File.write(File.join(project, manifest_relative), JSON.generate(manifest))
+    refresh_asset_references.call
+  end)
+stdout, _, status = Open3.capture3(entrypoint, "--project-root", project)
+abort "restored raw-capture evidence failed to prepare after the composed cases" unless status.success? && JSON.parse(stdout)["status"] == "prepared"
+puts "PASS: a composed screenshot set is bound to its composition record, raw digests and review, and the raw-capture route keeps its exact keys"
+
 # Planning declarations are not approvals. Exercise the real public entrypoint
 # using fresh, separately written proof files; original evidence is preserved.
 planned_report = lambda do

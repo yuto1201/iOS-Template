@@ -12,6 +12,14 @@ module IOSTemplate
       CASE_KEYS = %w[locale family state order path sourceSha buildDigest runtime deviceType width height digest].freeze
       REVIEW_KEYS = %w[schemaVersion sourceSha buildDigest visualReviewStatus releaseAuditor cases].freeze
       REVIEW_CASE_KEYS = %w[locale family state path digest safeArea textClipping truthfulRepresentation localeParity].freeze
+      # #486 (D-101): a set composed by the D-093 renderer and assembled with
+      # tools/build-appstore-screenshot-set.sh --composition adds compositionDigest, each case's rawDigest and
+      # the review's rawDigest, and carries the composition record that the manifest names by SHA-256.
+      COMPOSITION_PATH = "App Store/screenshots/composition.json"
+      COMPOSITION_KEYS = %w[schemaVersion rawManifestDigest captureBatchId sourceSha buildDigest runtime requirementsDigest rendererDigest adoption cases].freeze
+      COMPOSITION_ADOPTION_KEYS = %w[proposalSheetDigest selectionDigest conceptId decision approvalReference recordedAt provenanceDigest].freeze
+      COMPOSITION_CASE_KEYS = %w[locale family state order path rawPath rawDigest declarationDigest renderRecordDigest assetDigests width height digest].freeze
+      SHA256_DIGEST = /\Asha256:[0-9a-f]{64}\z/
 
       def initialize(sources, values, now, code_inventory)
         @sources, @values, @now, @code_inventory = sources, values, now, code_inventory
@@ -157,7 +165,13 @@ module IOSTemplate
         manifest = json_reference(value["manifest"], %r{\AApp Store/screenshots/manifest\.json\z})
         review = json_reference(value["review"], %r{\A\.artifacts/appstore-preparation/proofs/[a-z0-9-]+\.json\z})
         requirements = json_reference(value["requirements"], %r{\AApp Store/submission/requirements\.json\z})
-        return result(["screenshot-adoption-evidence-missing"]) unless exact?(manifest, MANIFEST_KEYS) && exact?(review, REVIEW_KEYS) && requirements.is_a?(Hash)
+        composed = manifest.is_a?(Hash) && manifest.key?("compositionDigest")
+        manifest_keys, case_keys, review_case_keys = if composed
+                                                       [MANIFEST_KEYS + %w[compositionDigest], CASE_KEYS + %w[rawDigest], REVIEW_CASE_KEYS + %w[rawDigest]]
+                                                     else
+                                                       [MANIFEST_KEYS, CASE_KEYS, REVIEW_CASE_KEYS]
+                                                     end
+        return result(["screenshot-adoption-evidence-missing"]) unless exact?(manifest, manifest_keys) && exact?(review, REVIEW_KEYS) && requirements.is_a?(Hash)
         return result(["invalid-screenshot-requirements"]) unless exact?(requirements, %w[schemaVersion retrievedAt maxAgeDays sources fields screenshots]) && requirements["sources"].is_a?(Array) && !requirements["sources"].empty? && requirements["sources"].uniq == requirements["sources"] && requirements["sources"].all? { |url| url.is_a?(String) && url.match?(%r{\Ahttps://developer\.apple\.com/(?:help|documentation)/[a-z0-9/-]+\z}) } && requirements["fields"].is_a?(Hash)
         return result(["screenshot-identity-mismatch"]) unless manifest["schemaVersion"] == 1 && review["schemaVersion"] == 1 && [manifest, review].all? { |record| record["sourceSha"] == @sources.revision && record["buildDigest"] == @build_digest } && manifest["requirementsDigest"] == value["requirements"]["digest"] && manifest["reviewDigest"] == value["review"]["digest"] && manifest["runtime"].is_a?(String) && manifest["runtime"].match?(/\Acom\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+\z/)
         return result(["screenshot-review-unconfirmed"]) unless review["visualReviewStatus"] == "passed" && exact?(review["releaseAuditor"], %w[status model]) && review["releaseAuditor"]["status"] == "approved" && review["releaseAuditor"]["model"].is_a?(String) && !review["releaseAuditor"]["model"].strip.empty?
@@ -171,10 +185,16 @@ module IOSTemplate
         families = limits["requiredFamilies"].select { |family| family.is_a?(Hash) && family["platform"] == id.split(".").last }
         return result(["invalid-screenshot-requirements"]) if families.empty? || families.map { |family| family["id"] }.uniq.length != families.length
         cases, reviews = manifest["cases"], review["cases"]
-        return result(["invalid-screenshot-manifest"]) unless cases.is_a?(Array) && cases.length.between?(1, 80) && cases.all? { |entry| exact?(entry, CASE_KEYS) } && reviews.is_a?(Array) && reviews.length == cases.length && reviews.all? { |entry| exact?(entry, REVIEW_CASE_KEYS) }
+        return result(["invalid-screenshot-manifest"]) unless cases.is_a?(Array) && cases.length.between?(1, 80) && cases.all? { |entry| exact?(entry, case_keys) } && reviews.is_a?(Array) && reviews.length == cases.length && reviews.all? { |entry| exact?(entry, review_case_keys) }
         return result(["invalid-screenshot-manifest"]) unless cases.all? { |entry| %w[en-US ja].include?(entry["locale"]) && limits["requiredFamilies"].any? { |family| family["id"] == entry["family"] } }
         return result(["duplicate-screenshot-evidence"]) unless cases.map { |entry| entry.values_at("locale", "family", "state") }.uniq.length == cases.length && cases.map { |entry| entry["digest"] }.uniq.length == cases.length
         sources = build_result["sources"] + %w[manifest review requirements].map { |key| value[key] }
+        if composed
+          composition = @sources.document(COMPOSITION_PATH)
+          composition_source = @sources.binary_descriptor(COMPOSITION_PATH)
+          return result(["screenshot-composition-mismatch"]) unless composition_bound?(composition, composition_source, manifest, cases)
+          sources << composition_source
+        end
         families.each do |family|
           entries = cases.select { |entry| entry["locale"] == locale && entry["family"] == family["id"] }
           return result(["screenshot-family-incomplete"]) unless entries.length.between?(limits["minimumPerFamily"], limits["maximumPerFamily"]) && entries.map { |entry| entry["order"] }.sort == (1..entries.length).to_a
@@ -190,12 +210,30 @@ module IOSTemplate
             return result(["screenshot-image-digest-mismatch"]) unless source["digest"] == entry["digest"]
             matches = reviews.select { |check| check.values_at("locale", "family", "state") == entry.values_at("locale", "family", "state") }
             return result(["screenshot-review-unconfirmed"]) unless matches.length == 1 && matches[0]["path"] == entry["path"] && matches[0]["digest"] == source["digest"] && %w[safeArea textClipping truthfulRepresentation localeParity].all? { |key| matches[0][key] == "passed" }
+            # A composed face is reviewed together with the raw capture it shows (guidelines 2.3.3 and 2.3.9).
+            return result(["screenshot-review-unconfirmed"]) if composed && matches[0]["rawDigest"] != entry["rawDigest"]
             sources << source
           end
         end
         result([], sources, build_result["origins"])
       rescue ArgumentError, TypeError
         result(["invalid-screenshot-evidence"])
+      end
+
+      # The composition record must be the exact bytes the manifest names, carry the same capture identity,
+      # an explicit user adoption, and exactly the manifest's faces with the same raw and composed digests.
+      def composition_bound?(composition, source, manifest, cases)
+        return false unless source.is_a?(Hash) && source["digest"].is_a?(String) && source["digest"] == manifest["compositionDigest"]
+        return false unless exact?(composition, COMPOSITION_KEYS) && composition["schemaVersion"] == 1 &&
+                            %w[sourceSha buildDigest runtime requirementsDigest].all? { |key| composition[key] == manifest[key] } &&
+                            exact?(composition["adoption"], COMPOSITION_ADOPTION_KEYS) && composition["adoption"]["decision"] == "user-explicit"
+        rows = composition["cases"]
+        return false unless rows.is_a?(Array) && rows.length == cases.length && rows.all? { |row| exact?(row, COMPOSITION_CASE_KEYS) }
+        cases.all? do |entry|
+          matches = rows.select { |row| row["path"] == entry["path"] }
+          entry["rawDigest"].is_a?(String) && entry["rawDigest"].match?(SHA256_DIGEST) && entry["rawDigest"] != entry["digest"] &&
+            matches.length == 1 && %w[locale family state order width height digest rawDigest].all? { |key| matches[0][key] == entry[key] }
+        end
       end
 
       def check(id, locale, value)
