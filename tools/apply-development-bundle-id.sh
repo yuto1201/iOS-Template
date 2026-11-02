@@ -253,8 +253,11 @@ end
 # The Debug Info.plist must come from the build settings this tool changes.
 generated = setting_lines.call(debug, "GENERATE_INFOPLIST_FILE").map { |value| pbx_value(value) }
 refuse("the Debug configuration does not generate its Info.plist; change it by hand") unless generated == ["YES"]
-info_files = setting_lines.call(debug, "INFOPLIST_FILE").map { |value| pbx_value(value).sub(%r{\A\$[({](?:SRCROOT|PROJECT_DIR)[)}]/}, "") }
-refuse("the Debug configuration has more than one INFOPLIST_FILE") if info_files.length > 1
+refuse("the Debug configuration has more than one INFOPLIST_FILE") if setting_lines.call(debug, "INFOPLIST_FILE").length > 1
+# An Info.plist can also come from the project configuration, a configuration file, or a setting with
+# conditions, so every INFOPLIST_FILE in the project and the configuration files is checked.
+info_files = (project_values.call(content, "INFOPLIST_FILE") + xcconfig_values.call("INFOPLIST_FILE"))
+  .map { |value| value.sub(%r{\A\$[({](?:SRCROOT|PROJECT_DIR)[)}]/}, "") }.uniq.sort
 info_files.each do |relative|
   refuse("the Debug INFOPLIST_FILE uses a build setting; check it by hand") if relative.include?("$")
   info = plist(relative)

@@ -227,6 +227,18 @@ mkdir -p "$app/SampleNotes"
 /usr/bin/plutil -insert CFBundleDisplayName -string 'Sample Notes' "$app/SampleNotes/Info.plist"
 edit_project 'content.sub("\t\t\t\tGENERATE_INFOPLIST_FILE = YES;\n", "\t\t\t\tGENERATE_INFOPLIST_FILE = YES;\n\t\t\t\tINFOPLIST_FILE = SampleNotes/Info.plist;\n")'
 expect_refusal 'Info.plist display name' 1 'SampleNotes/Info.plist sets CFBundleDisplayName itself'
+new_app info-plist-xcconfig
+mkdir -p "$app/SampleNotes"
+/usr/bin/plutil -create xml1 "$app/SampleNotes/Info.plist"
+/usr/bin/plutil -insert CFBundleIdentifier -string 'com.example.SampleNotes' "$app/SampleNotes/Info.plist"
+printf '%s\n' 'INFOPLIST_FILE = SampleNotes/Info.plist' >"$app/Config/Local.xcconfig"
+expect_refusal 'Info.plist from a configuration file' 1 'SampleNotes/Info.plist sets CFBundleIdentifier itself'
+new_app info-plist-conditional
+mkdir -p "$app/SampleNotes"
+/usr/bin/plutil -create xml1 "$app/SampleNotes/Info.plist"
+/usr/bin/plutil -insert CFBundleDisplayName -string 'Sample Notes' "$app/SampleNotes/Info.plist"
+edit_project 'content.sub("\t\t\t\tGENERATE_INFOPLIST_FILE = YES;\n", "\t\t\t\tGENERATE_INFOPLIST_FILE = YES;\n\t\t\t\t\"INFOPLIST_FILE[sdk=iphonesimulator*]\" = SampleNotes/Info.plist;\n")'
+expect_refusal 'Info.plist with a condition' 1 'SampleNotes/Info.plist sets CFBundleDisplayName itself'
 new_app no-identity
 rm "$app/Config/app-identity.json"
 expect_refusal 'missing Identity' 1 'Config/app-identity.json is missing'
