@@ -166,7 +166,7 @@
     },
     {
       "domain": "foundation",
-      "paths": ["docs/review-prompt.md", "tools/tests/test-adopted-app-imported-tests.sh", "tools/tests/test-foundation.sh", "tools/tests/test-tracked-credential-scan.sh"],
+      "paths": ["docs/onboarding.md", "docs/review-prompt.md", "tools/tests/test-adopted-app-imported-tests.sh", "tools/tests/test-foundation.sh", "tools/tests/test-tracked-credential-scan.sh"],
       "prefixes": ["Config/template-base."]
     },
     {

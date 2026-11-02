@@ -392,6 +392,392 @@
         }
       }
     },
+    "onboarding.back" : {
+      "comment" : "Onboarding: goes to the previous page.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "戻る"
+          }
+        }
+      }
+    },
+    "onboarding.back.accessibility" : {
+      "comment" : "Onboarding: VoiceOver label of Back.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Go back to the previous page"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "前のページへ戻る"
+          }
+        }
+      }
+    },
+    "onboarding.next" : {
+      "comment" : "Onboarding: goes to the next page.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Next"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次へ"
+          }
+        }
+      }
+    },
+    "onboarding.permission.allow" : {
+      "comment" : "Onboarding: asks the system for notification permission.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow Notifications"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知を許可する"
+          }
+        }
+      }
+    },
+    "onboarding.permission.denied" : {
+      "comment" : "Onboarding: shown after the person declined notifications.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications stay off. You can change this anytime in the Settings app."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知はオフのままです。設定アプリからいつでも変えられます。"
+          }
+        }
+      }
+    },
+    "onboarding.permission.later" : {
+      "comment" : "Onboarding: moves on without asking for notification permission.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not Now"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "今はしない"
+          }
+        }
+      }
+    },
+    "onboarding.position %lld %lld" : {
+      "comment" : "Onboarding: VoiceOver reading of the page dots, the current page and the number of pages.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Page %1$lld of %2$lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lldページ中%1$lldページ目"
+          }
+        }
+      }
+    },
+    "onboarding.sample.done.message" : {
+      "comment" : "Onboarding sample, last page text (OnboardingConfig.json).",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Let's get started."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "さっそく始めましょう。"
+          }
+        }
+      }
+    },
+    "onboarding.sample.done.title" : {
+      "comment" : "Onboarding sample, last page heading (OnboardingConfig.json).",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You're all set"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "準備ができました"
+          }
+        }
+      }
+    },
+    "onboarding.sample.purpose-line.build" : {
+      "comment" : "Root screen line for the sample answer \"Build a new app\".",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start with your first screen."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最初の画面から作り始めましょう。"
+          }
+        }
+      }
+    },
+    "onboarding.sample.purpose-line.explore" : {
+      "comment" : "Root screen line for the sample answer \"Try the components\".",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try whichever component you like."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "気になる部品から試してみましょう。"
+          }
+        }
+      }
+    },
+    "onboarding.sample.purpose-line.learn" : {
+      "comment" : "Root screen line for the sample answer \"Learn how it works\".",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start by reading the docs folder."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "docsフォルダから読んでみましょう。"
+          }
+        }
+      }
+    },
+    "onboarding.sample.purpose.build" : {
+      "comment" : "Onboarding sample answer (OnboardingConfig.json).",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Build a new app"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新しいアプリを作る"
+          }
+        }
+      }
+    },
+    "onboarding.sample.purpose.explore" : {
+      "comment" : "Onboarding sample answer (OnboardingConfig.json).",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Try the components"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部品を試す"
+          }
+        }
+      }
+    },
+    "onboarding.sample.purpose.learn" : {
+      "comment" : "Onboarding sample answer (OnboardingConfig.json).",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Learn how it works"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仕組みを知る"
+          }
+        }
+      }
+    },
+    "onboarding.sample.purpose.message" : {
+      "comment" : "Onboarding sample question text (OnboardingConfig.json).",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your answer changes one line on the first screen."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "答えに合わせて、最初の画面の一言を変えます。"
+          }
+        }
+      }
+    },
+    "onboarding.sample.purpose.title" : {
+      "comment" : "Onboarding sample question (OnboardingConfig.json).",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What will you do first?"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "まず何をしますか？"
+          }
+        }
+      }
+    },
+    "onboarding.sample.welcome.message" : {
+      "comment" : "Onboarding sample, page 1 text (OnboardingConfig.json).",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feedback, review requests, legal links and other parts every app needs are already in place."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "フィードバック、評価の依頼、法務のリンクなど、どのアプリにも要る部品が入っています。"
+          }
+        }
+      }
+    },
+    "onboarding.sample.welcome.title" : {
+      "comment" : "Onboarding sample, page 1 heading (OnboardingConfig.json).",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Everything to start an app"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アプリの土台がそろっています"
+          }
+        }
+      }
+    },
+    "onboarding.skip" : {
+      "comment" : "Onboarding: leaves the onboarding from any page but the last.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skip"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "スキップ"
+          }
+        }
+      }
+    },
+    "onboarding.skip.accessibility" : {
+      "comment" : "Onboarding: VoiceOver label of Skip.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skip onboarding"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "オンボーディングをスキップ"
+          }
+        }
+      }
+    },
+    "onboarding.start" : {
+      "comment" : "Onboarding: the main button of the last page; opens the app.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Get Started"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "はじめる"
+          }
+        }
+      }
+    },
     "review-prompt.close" : {
       "comment" : "Closes the review prompt's follow-up.",
       "localizations" : {

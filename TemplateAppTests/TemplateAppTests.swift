@@ -466,3 +466,519 @@ struct ReviewPromptPolicyTests {
         }
     }
 }
+
+/// Keeps the onboarding's record in memory for the tests, with an app's earlier completion flags.
+final class MemoryOnboardingStore: OnboardingStore {
+    var record = OnboardingRecord()
+    var flags: [String: Bool] = [:]
+    var saves = 0
+    func load() -> OnboardingRecord { record }
+    func save(_ record: OnboardingRecord) {
+        self.record = record
+        saves += 1
+    }
+    func flag(_ key: String) -> Bool { flags[key] ?? false }
+    func clear() { record = OnboardingRecord() }
+}
+
+/// Stands in for the system's notification request and counts the requests.
+final class NotificationRequestStub {
+    var requests = 0
+    var grants = false
+
+    func request() async -> Bool {
+        requests += 1
+        return grants
+    }
+}
+
+/// The first-launch onboarding (#483): the declaration rules, when it shows, the answers, the permission
+/// primer, the review prompt, the launch arguments, the wording, and the guidelines. The runner runs one
+/// Unit Test, so the first test calls the others.
+@MainActor
+struct OnboardingPolicyTests {
+    private typealias Page = OnboardingConfig.Page
+    private let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test("Onboarding declarations are checked, shown once, answered on the device, and keep the review prompt quiet")
+    func configValidationAndCompletion() async throws {
+        declarationsBreakingTheRulesTurnItOff()
+        shownOnceAndNotAfterCompletionSkipOrAnEarlierOnboarding()
+        try answersAreOptionIDsOnly()
+        await permissionPrimerNeverBlocksAndSkipNeverAsks()
+        reviewPromptIsQuietWhileShown()
+        launchArgumentsForTheCaptureAndDebug()
+        try bundledDeclarationAndWordingInBothLanguages()
+        try guidelinesAndIdentifiersHold()
+        recordStaysInUserDefaults()
+    }
+
+    // MARK: Declarations
+
+    private func page(
+        _ id: String,
+        _ kind: OnboardingConfig.PageKind,
+        options: [String] = ["one", "two"],
+        selection: OnboardingConfig.Selection = .single,
+        usedFor: String? = "The home screen's example text."
+    ) -> Page {
+        var page = Page(id: id, kind: kind, titleKey: "\(id).title", messageKey: "\(id).message")
+        switch kind {
+        case .choice:
+            page.selection = selection
+            page.options = options.map { OnboardingConfig.Option(id: $0, titleKey: "\(id).\($0)") }
+            page.usedFor = usedFor
+        case .permissionPrimer:
+            page.permission = .notifications
+        case .value, .completion:
+            break
+        }
+        return page
+    }
+
+    /// Value, a single-choice question, a notification primer and the completion.
+    private var sample: OnboardingConfig {
+        OnboardingConfig(pages: [
+            page("welcome", .value),
+            page("purpose", .choice, options: ["build", "explore", "learn"]),
+            page("notify", .permissionPrimer),
+            page("done", .completion)
+        ])
+    }
+
+    private func problems(_ pages: [Page]) -> [OnboardingConfig.Problem] {
+        OnboardingConfig(pages: pages).problems(availablePermissions: [.notifications], hasKey: { _ in true })
+    }
+
+    func declarationsBreakingTheRulesTurnItOff() {
+        #expect(sample.problems(availablePermissions: [.notifications], hasKey: { _ in true }).isEmpty)
+        // A notification primer needs the app's own request (the template does not use notifications, D-068).
+        #expect(sample.problems(hasKey: { _ in true }) == [.permissionUnavailable("notify")])
+        let welcome = page("welcome", .value)
+        let done = page("done", .completion)
+
+        // 3 to 5 pages.
+        #expect(problems([welcome, done]) == [.pageCount(2)])
+        let six = (1...5).map { page("value-\($0)", .value) } + [done]
+        #expect(problems(six) == [.pageCount(6)])
+        // At most two questions.
+        let questions = [page("q-one", .choice), page("q-two", .choice), page("q-three", .choice)]
+        #expect(problems([welcome] + questions + [done]) == [.tooManyChoices(3)])
+        // The completion is last, and there is exactly one.
+        #expect(problems([welcome, done, page("more", .value)]) == [.lastPageIsNotCompletion])
+        #expect(problems([welcome, page("early", .completion), done]) == [.completionCount(2)])
+        #expect(problems([welcome, page("more", .value), page("again", .value)])
+            == [.lastPageIsNotCompletion, .completionCount(0)])
+        // Ids are stable lower-case and do not repeat.
+        #expect(problems([welcome, page("welcome", .value), done]) == [.duplicateID("welcome")])
+        #expect(problems([page("Welcome", .value), page("next", .value), done]) == [.invalidID("Welcome")])
+        // A question says where its answer is used, offers 2 to 6 options and says single or multiple.
+        #expect(problems([welcome, page("purpose", .choice, usedFor: "  "), done]) == [.emptyUsedFor("purpose")])
+        #expect(problems([welcome, page("purpose", .choice, usedFor: nil), done]) == [.emptyUsedFor("purpose")])
+        #expect(problems([welcome, page("purpose", .choice, options: ["only"]), done]) == [.optionCount("purpose", 1)])
+        var noSelection = page("purpose", .choice)
+        noSelection.selection = nil
+        #expect(problems([welcome, noSelection, done]) == [.missingSelection("purpose")])
+        var noPermission = page("notify", .permissionPrimer)
+        noPermission.permission = nil
+        #expect(problems([welcome, noPermission, done]) == [.missingPermission("notify")])
+        // Every wording key is in the string catalog.
+        #expect(sample.problems(availablePermissions: [.notifications], hasKey: { $0 != "purpose.explore" })
+            == [.missingKey("purpose.explore")])
+
+        // A broken or out-of-range file turns the onboarding off instead of stopping the app.
+        let decode = { (json: String) in
+            OnboardingConfig.decode(Data(json.utf8), availablePermissions: [.notifications], hasKey: { _ in true })
+        }
+        #expect(decode("not json") == .failure(OnboardingConfig.Invalid(problems: [.unreadable])))
+        #expect(decode(#"{"enabled": true, "pages": [{"id": "a", "kind": "story", "titleKey": "t", "messageKey": "m"}]}"#)
+            == .failure(OnboardingConfig.Invalid(problems: [.unreadable])))
+        #expect(decode(#"{"enabled": true, "pages": []}"#)
+            == .failure(OnboardingConfig.Invalid(problems: [.pageCount(0), .lastPageIsNotCompletion, .completionCount(0)])))
+        #expect(decode(#"{"enabled": false, "pages": []}"#) == .success(.disabled))
+        let valid = #"""
+        {"enabled": true, "version": 2, "legacyCompletionKeys": ["hasCompletedOnboarding"], "pages": [
+          {"id": "welcome", "kind": "value", "titleKey": "a", "messageKey": "b"},
+          {"id": "notify", "kind": "permissionPrimer", "permission": "notifications", "titleKey": "c", "messageKey": "d"},
+          {"id": "done", "kind": "completion", "titleKey": "e", "messageKey": "f"}]}
+        """#
+        let decoded = try? decode(valid).get()
+        #expect(decoded?.version == 2 && decoded?.pages.map(\.id) == ["welcome", "notify", "done"])
+        #expect(decoded?.legacyCompletionKeys == ["hasCompletedOnboarding"])
+        #expect(OnboardingConfig.decode(Data(valid.utf8), hasKey: { _ in true })
+            == .failure(OnboardingConfig.Invalid(problems: [.permissionUnavailable("notify")])))
+
+        var reports: [String] = []
+        let missing = OnboardingConfig.load(bundle: Bundle(for: MemoryOnboardingStore.self), report: { reports.append($0) })
+        #expect(missing == .disabled && reports.count == 1)
+        #expect(!OnboardingCenter(config: .disabled, store: MemoryOnboardingStore()).shouldPresent)
+    }
+
+    // MARK: When it shows
+
+    func shownOnceAndNotAfterCompletionSkipOrAnEarlierOnboarding() {
+        // Shown at the first launch, and recorded once finished.
+        let store = MemoryOnboardingStore()
+        let center = OnboardingCenter(config: sample, store: store, now: { self.start })
+        #expect(center.shouldPresent)
+        center.start(reviewPrompt: nil)
+        #expect(center.isPresented && center.currentIndex == 0 && center.showsSkip && !center.showsBack)
+        center.skip()
+        #expect(!center.isPresented && store.record.completedAt == start && store.record.configVersion == 1)
+        #expect(!center.shouldPresent && !OnboardingCenter(config: sample, store: store).shouldPresent)
+        let later = OnboardingCenter(config: sample, store: store)
+        later.start(reviewPrompt: nil)
+        #expect(!later.isPresented)
+
+        // "Get Started" also finishes it; the last page has Back but no Skip.
+        let finished = MemoryOnboardingStore()
+        let flow = OnboardingCenter(config: sample, store: finished, now: { self.start })
+        flow.start(reviewPrompt: nil)
+        flow.next()
+        flow.select("build", on: "purpose")
+        flow.next()
+        flow.declinePermission()
+        #expect(flow.currentPage?.kind == .completion && !flow.showsSkip && flow.showsBack)
+        flow.next()
+        #expect(!flow.isPresented && finished.record.completedAt == start)
+        #expect(!OnboardingCenter(config: sample, store: finished).shouldPresent)
+
+        // An app's earlier onboarding counts as finished.
+        var adopted = sample
+        adopted.legacyCompletionKeys = ["hasCompletedOnboarding", "onboarding.hintsShown"]
+        let legacy = MemoryOnboardingStore()
+        #expect(OnboardingCenter(config: adopted, store: legacy).shouldPresent)
+        legacy.flags["onboarding.hintsShown"] = true
+        #expect(!OnboardingCenter(config: adopted, store: legacy).shouldPresent)
+
+        // Turned off: never shown.
+        var off = sample
+        off.enabled = false
+        #expect(!OnboardingCenter(config: off, store: MemoryOnboardingStore()).shouldPresent)
+
+        // reset() (Debug and tests) shows it again; -OnboardingForceShow shows it even when finished.
+        center.reset()
+        #expect(center.shouldPresent && store.record == OnboardingRecord() && center.answers(for: "purpose").isEmpty)
+        let forced = OnboardingCenter(config: sample, store: finished, launch: OnboardingLaunchArguments(mode: .forceShow))
+        #expect(forced.shouldPresent)
+    }
+
+    // MARK: Answers
+
+    func answersAreOptionIDsOnly() throws {
+        var pages = sample.pages
+        pages[2] = page("topics", .choice, options: ["daily", "weekly", "monthly"], selection: .multiple)
+        let config = OnboardingConfig(pages: pages)
+        #expect(config.problems(hasKey: { _ in true }).isEmpty)
+
+        let store = MemoryOnboardingStore()
+        let center = OnboardingCenter(config: config, store: store, now: { self.start })
+        var received: [OnboardingAnswers] = []
+        center.onCompleted = { received.append($0) }
+        center.start(reviewPrompt: nil)
+        center.next()
+        // "Next" waits for an answer.
+        #expect(!center.canAdvance && center.showsSkip)
+        center.next()
+        #expect(center.currentIndex == 1)
+        // A question stops the forward swipe; Back and the swipe back still work.
+        #expect(center.swipeLimit == 1)
+        center.go(to: 2)
+        #expect(center.currentIndex == 1)
+        center.select("explore", on: "purpose")
+        center.select("learn", on: "purpose")
+        center.select("unknown", on: "purpose")
+        #expect(center.isSelected("learn", on: "purpose") && !center.isSelected("explore", on: "purpose"))
+        #expect(center.canAdvance)
+        center.go(to: 2)
+        #expect(center.currentIndex == 1)
+        center.next()
+        center.select("weekly", on: "topics")
+        center.select("daily", on: "topics")
+        center.select("monthly", on: "topics")
+        center.select("weekly", on: "topics")
+        center.next()
+        center.next()
+
+        let expected = OnboardingAnswers(selections: ["purpose": ["learn"], "topics": ["daily", "monthly"]], skipped: false)
+        #expect(received == [expected])
+        #expect(store.record.answers == expected.selections)
+        #expect(center.answers(for: "purpose") == ["learn"] && center.answers(for: "topics") == ["daily", "monthly"])
+        #expect(center.answers(for: "welcome").isEmpty)
+        #expect(OnboardingCenter(config: config, store: store).answers(for: "topics") == ["daily", "monthly"])
+
+        // After Skip, only the questions answered with "Next" are handed over.
+        let skipStore = MemoryOnboardingStore()
+        let skipping = OnboardingCenter(config: config, store: skipStore)
+        skipping.onCompleted = { received.append($0) }
+        skipping.start(reviewPrompt: nil)
+        skipping.next()
+        skipping.select("build", on: "purpose")
+        skipping.next()
+        skipping.select("daily", on: "topics")
+        skipping.skip()
+        #expect(received.last == OnboardingAnswers(selections: ["purpose": ["build"]], skipped: true))
+        #expect(skipStore.record.answers == ["purpose": ["build"]] && skipStore.record.completedAt != nil)
+
+        // Skip on the first page: nothing answered.
+        let early = OnboardingCenter(config: config, store: MemoryOnboardingStore())
+        early.onCompleted = { received.append($0) }
+        early.start(reviewPrompt: nil)
+        early.skip()
+        #expect(received.last == OnboardingAnswers(selections: [:], skipped: true))
+
+        // The record holds the time, the version and option ids, and nothing else.
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(store.record)) as? [String: Any]
+        #expect(Set(json?.keys.map { $0 } ?? []) == ["completedAt", "configVersion", "answers"])
+    }
+
+    // MARK: Permission primer
+
+    func permissionPrimerNeverBlocksAndSkipNeverAsks() async {
+        let stub = NotificationRequestStub()
+        func makeCenter() -> OnboardingCenter {
+            let center = OnboardingCenter(config: sample, store: MemoryOnboardingStore(), requestNotificationAuthorization: stub.request)
+            center.start(reviewPrompt: nil)
+            center.next()
+            center.select("build", on: "purpose")
+            center.next()
+            return center
+        }
+
+        // "Not Now" moves on without the system's dialog.
+        let later = makeCenter()
+        #expect(later.currentPage?.kind == .permissionPrimer)
+        later.declinePermission()
+        #expect(later.currentIndex == 3 && stub.requests == 0)
+
+        // A no to the system's request keeps the page with its note, and "Next" moves on.
+        let denied = makeCenter()
+        stub.grants = false
+        await denied.allowPermission()
+        #expect(stub.requests == 1 && denied.currentIndex == 2 && denied.isPermissionDenied(on: "notify"))
+        #expect(denied.canAdvance)
+        denied.next()
+        #expect(denied.currentIndex == 3)
+
+        // A yes moves on by itself.
+        let allowed = makeCenter()
+        stub.grants = true
+        await allowed.allowPermission()
+        #expect(stub.requests == 2 && allowed.currentIndex == 3 && !allowed.isPermissionDenied(on: "notify"))
+
+        // Skip, on the primer or anywhere else, never asks.
+        let skipped = makeCenter()
+        skipped.skip()
+        let first = OnboardingCenter(config: sample, store: MemoryOnboardingStore(), requestNotificationAuthorization: stub.request)
+        first.start(reviewPrompt: nil)
+        first.skip()
+        #expect(stub.requests == 2 && !skipped.isPresented && !first.isPresented)
+    }
+
+    // MARK: Review prompt
+
+    func reviewPromptIsQuietWhileShown() {
+        let review = ReviewPromptCenter(
+            config: ReviewPromptConfig(), store: MemoryReviewPromptStore(), appName: "Sample", appVersion: "1.0"
+        )
+        let center = OnboardingCenter(config: sample, store: MemoryOnboardingStore())
+        center.start(reviewPrompt: review)
+        #expect(center.isPresented && review.isSuppressed && review.blockingReason == .suppressed)
+        center.skip()
+        #expect(!review.isSuppressed)
+
+        // Another reason the app gave stays in place.
+        review.suppress("purchase")
+        let again = OnboardingCenter(config: sample, store: MemoryOnboardingStore())
+        again.start(reviewPrompt: review)
+        finishFromCurrentPage(again)
+        #expect(!again.isPresented && review.isSuppressed)
+        review.resume("purchase")
+
+        // Not shown: the review prompt is not touched.
+        let finished = MemoryOnboardingStore()
+        finished.record.completedAt = start
+        OnboardingCenter(config: sample, store: finished).start(reviewPrompt: review)
+        #expect(!review.isSuppressed)
+    }
+
+    private func finishFromCurrentPage(_ center: OnboardingCenter) {
+        center.next()
+        center.select("explore", on: "purpose")
+        center.next()
+        center.declinePermission()
+        center.next()
+    }
+
+    // MARK: Launch arguments
+
+    func launchArgumentsForTheCaptureAndDebug() {
+        typealias Arguments = OnboardingLaunchArguments
+        // The capture's arguments work in every build configuration.
+        for debug in [true, false] {
+            #expect(Arguments(arguments: ["App", "--appstore-screenshot", "--fixture", "primary"], allowsDebugArguments: debug).mode
+                == .appStoreScreenshot(pageID: nil))
+            #expect(Arguments(arguments: ["App", "--appstore-screenshot", "--onboarding-page", "purpose"], allowsDebugArguments: debug).mode
+                == .appStoreScreenshot(pageID: "purpose"))
+            #expect(Arguments(arguments: ["App", "--appstore-screenshot", "-OnboardingForceShow"], allowsDebugArguments: debug).mode
+                == .appStoreScreenshot(pageID: nil))
+        }
+        // -OnboardingSkip and -OnboardingForceShow only in Debug builds.
+        #expect(Arguments(arguments: ["App", "-OnboardingSkip"], allowsDebugArguments: true).mode == .skip)
+        #expect(Arguments(arguments: ["App", "-OnboardingForceShow"], allowsDebugArguments: true).mode == .forceShow)
+        #expect(Arguments(arguments: ["App", "-OnboardingSkip"], allowsDebugArguments: false).mode == .normal)
+        #expect(Arguments(arguments: ["App", "-OnboardingForceShow"], allowsDebugArguments: false).mode == .normal)
+        #expect(Arguments(arguments: ["App", "--onboarding-page", "purpose"]).mode == .normal)
+        #expect(Arguments(arguments: ["App"]).mode == .normal)
+        #if DEBUG
+        #expect(Arguments.allowsDebugArguments)
+        #else
+        #expect(!Arguments.allowsDebugArguments)
+        #endif
+
+        // The capture: not shown and nothing recorded.
+        let store = MemoryOnboardingStore()
+        let capture = OnboardingCenter(config: sample, store: store, launch: Arguments(mode: .appStoreScreenshot(pageID: nil)))
+        #expect(!capture.shouldPresent)
+        capture.start(reviewPrompt: nil)
+        #expect(!capture.isPresented && store.saves == 0)
+
+        // The capture of a page: that page, and still nothing recorded.
+        var handed: OnboardingAnswers?
+        let page = OnboardingCenter(config: sample, store: store, launch: Arguments(mode: .appStoreScreenshot(pageID: "purpose")))
+        page.onCompleted = { handed = $0 }
+        page.start(reviewPrompt: nil)
+        #expect(page.isPresented && page.currentIndex == 1)
+        page.select("learn", on: "purpose")
+        page.next()
+        page.declinePermission()
+        page.next()
+        #expect(!page.isPresented && store.saves == 0 && store.record == OnboardingRecord())
+        #expect(handed?.optionIDs(for: "purpose") == ["learn"])
+        #expect(!OnboardingCenter(config: sample, store: store, launch: Arguments(mode: .appStoreScreenshot(pageID: "missing"))).shouldPresent)
+
+        // -OnboardingSkip: treated as finished, nothing recorded.
+        let skipping = OnboardingCenter(config: sample, store: store, launch: Arguments(mode: .skip))
+        skipping.start(reviewPrompt: nil)
+        #expect(!skipping.isPresented && store.saves == 0)
+    }
+
+    // MARK: Wording
+
+    private func localized(_ key: String, _ language: String) -> String? {
+        guard let url = Bundle.main.url(forResource: language, withExtension: "lproj"),
+              let bundle = Bundle(url: url) else { return nil }
+        let value = bundle.localizedString(forKey: key, value: nil, table: nil)
+        return value == key ? nil : value
+    }
+
+    func bundledDeclarationAndWordingInBothLanguages() throws {
+        // The template's sample: welcome, one single-choice question used on the root screen, done.
+        var reports: [String] = []
+        let bundled = OnboardingConfig.load(report: { reports.append($0) })
+        #expect(reports.isEmpty)
+        #expect(bundled.enabled && bundled.version == 1 && bundled.legacyCompletionKeys.isEmpty)
+        #expect(bundled.pages.map(\.id) == ["welcome", "purpose", "done"])
+        #expect(bundled.pages.map(\.kind) == [.value, .choice, .completion])
+        let purpose = try #require(bundled.pages.first { $0.id == "purpose" })
+        #expect(purpose.selection == .single && purpose.options?.map(\.id) == ["build", "explore", "learn"])
+        #expect(!(purpose.usedFor ?? "").isEmpty)
+        for option in purpose.options ?? [] {
+            #expect(ContentView.purposeLine(option.id) != nil, "\(option.id)")
+        }
+
+        // Every key of the declaration, the controls and VoiceOver, in English and Japanese.
+        var keys = bundled.pages.flatMap { [$0.titleKey, $0.messageKey] + ($0.options ?? []).map(\.titleKey) }
+        keys += purpose.options?.map { "onboarding.sample.purpose-line.\($0.id)" } ?? []
+        let expected: [String: (en: String, ja: String)] = [
+            "onboarding.skip": ("Skip", "スキップ"),
+            "onboarding.skip.accessibility": ("Skip onboarding", "オンボーディングをスキップ"),
+            "onboarding.back": ("Back", "戻る"),
+            "onboarding.back.accessibility": ("Go back to the previous page", "前のページへ戻る"),
+            "onboarding.next": ("Next", "次へ"),
+            "onboarding.start": ("Get Started", "はじめる"),
+            "onboarding.permission.allow": ("Allow Notifications", "通知を許可する"),
+            "onboarding.permission.later": ("Not Now", "今はしない"),
+            "onboarding.sample.purpose.title": ("What will you do first?", "まず何をしますか？"),
+            "onboarding.sample.done.title": ("You're all set", "準備ができました")
+        ]
+        for key in keys + Array(expected.keys) + ["onboarding.permission.denied"] {
+            let english = try #require(localized(key, "en"), "\(key) en")
+            let japanese = try #require(localized(key, "ja"), "\(key) ja")
+            if let value = expected[key] {
+                #expect(english == value.en && japanese == value.ja, "\(key)")
+            }
+        }
+        // VoiceOver reads the page position as text.
+        let position = "onboarding.position %lld %lld"
+        let english = try #require(localized(position, "en"))
+        let japanese = try #require(localized(position, "ja"))
+        #expect(String(format: english, 2, 4) == "Page 2 of 4")
+        #expect(String(format: japanese, 2, 4) == "4ページ中2ページ目")
+    }
+
+    // MARK: Guidelines and identifiers
+
+    func guidelinesAndIdentifiersHold() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        // App Review Guidelines 5.1.1(iii), (iv), (vi) and 4.5.4 apply to the permission primer and the answers.
+        let map = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: root.appending(path: ".agents/skills/app-review-guidelines/guidelines.json"))
+        ) as? [String: Any]
+        let guidelines = try #require(map?["guidelines"] as? [[String: Any]])
+        for id in ["5.1.1(iii)", "5.1.1(iv)", "5.1.1(vi)", "4.5.4"] {
+            #expect(guidelines.contains { $0["id"] as? String == id }, "\(id)")
+        }
+
+        // The component asks only for notifications, sends nothing anywhere, and names no template identifier,
+        // so Identity bootstrap needs nothing in its files.
+        let module = String(reflecting: OnboardingCenter.self).split(separator: ".")[0]
+        let feature = root.appending(path: "\(module)/Features/Onboarding")
+        let sources = try FileManager.default.contentsOfDirectory(at: feature, includingPropertiesForKeys: nil)
+        #expect(Set(sources.map(\.lastPathComponent)) == [
+            "OnboardingCenter.swift", "OnboardingConfig.json", "OnboardingConfig.swift", "OnboardingLaunchArguments.swift",
+            "OnboardingStore.swift", "OnboardingView.swift"
+        ])
+        var swift = ""
+        for file in sources + [root.appending(path: "\(module)UITests/OnboardingUITests.swift")] {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            #expect(!text.contains(module), "\(file.lastPathComponent)")
+            #expect(!text.contains("template."), "\(file.lastPathComponent)")
+            if file.pathExtension == "swift" { swift += text }
+        }
+        // Notifications stay out of the template (D-068); a primer asks only through the app's own request.
+        #expect(!swift.contains("import UserNotifications"))
+        #expect(swift.contains("await requestNotificationAuthorization?()"))
+        for other in ["URLSession", "URLRequest", "http://", "https://", "CLLocationManager", "AVCaptureDevice",
+                      "PHPhotoLibrary", "CNContactStore", "ATTrackingManager", "EKEventStore"] {
+            #expect(!swift.contains(other), "\(other)")
+        }
+
+        // Derived apps find the guide, and the repository tests own it.
+        let guide = try String(contentsOf: root.appending(path: "docs/onboarding.md"), encoding: .utf8)
+        #expect(guide.contains("OnboardingConfig.json") && guide.contains("legacyCompletionKeys") && guide.contains("usedFor"))
+        let manifest = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: root.appending(path: "Config/repository-tests.json"))
+        ) as? [String: Any]
+        let rules = try #require(manifest?["domainRules"] as? [[String: Any]])
+        #expect(rules.contains { ($0["paths"] as? [String])?.contains("docs/onboarding.md") == true })
+    }
+
+    // MARK: Store
+
+    func recordStaysInUserDefaults() {
+        let suite = "onboarding-policy-tests"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = UserDefaultsOnboardingStore(defaults: defaults)
+        #expect(store.load() == OnboardingRecord())
+        let record = OnboardingRecord(completedAt: start, configVersion: 3, answers: ["purpose": ["build"]])
+        store.save(record)
+        #expect(UserDefaultsOnboardingStore(defaults: defaults).load() == record)
+        defaults.set(true, forKey: "hasCompletedOnboarding")
+        #expect(store.flag("hasCompletedOnboarding") && !store.flag("onboarding.hintsShown"))
+        store.clear()
+        #expect(store.load() == OnboardingRecord())
+    }
+}
