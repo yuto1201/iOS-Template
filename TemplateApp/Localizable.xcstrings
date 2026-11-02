@@ -880,6 +880,23 @@
         }
       }
     },
+    "review-prompt.rate-app" : {
+      "comment" : "Shown on the button that opens the App Store's Write a Review page for this app.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rate This App"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このアプリを評価する"
+          }
+        }
+      }
+    },
     "review-prompt.support" : {
       "comment" : "Opens the app's support page from the review prompt's follow-up.",
       "localizations" : {

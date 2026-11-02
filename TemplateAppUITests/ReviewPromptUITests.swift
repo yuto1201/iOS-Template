@@ -48,4 +48,27 @@ final class ReviewPromptUITests: XCTestCase {
         sendFeedback.tap()
         XCTAssertTrue(app.buttons["feedback.send"].waitForExistence(timeout: 5))
     }
+
+    /// "Rate This App" (D-103) on a Japanese iPhone: hidden without an App Store ID, shown with one.
+    @MainActor
+    func testJapaneseRateAppButtonAppearsWithAppStoreId() {
+        let app = XCUIApplication()
+        let japanese = ["-AppleLanguages", "(ja)", "-AppleLocale", "ja_JP", "-OnboardingSkip"]
+
+        // The template has no App Store ID yet, so the button stays hidden.
+        app.launchArguments = japanese
+        app.launch()
+        XCTAssertTrue(app.staticTexts["template.welcome-title"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["review-prompt.rate-app"].exists, "No App Store ID, no button.")
+        app.terminate()
+
+        app.launchArguments = japanese + ["-ReviewPromptAppStoreID", "1234567890"]
+        app.launch()
+        let rate = app.buttons["review-prompt.rate-app"]
+        XCTAssertTrue(rate.waitForExistence(timeout: 10), "An App Store ID should show the button.")
+        XCTAssertEqual(rate.label, "このアプリを評価する")
+        XCTAssertTrue(rate.isHittable)
+        // The frame comes back as 43.99999… for an exact 44pt label, as in LegalLinksUITests.
+        XCTAssertGreaterThanOrEqual(rate.frame.height + 0.01, 44, "The button should be at least 44pt tall")
+    }
 }

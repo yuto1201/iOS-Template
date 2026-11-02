@@ -37,6 +37,8 @@ struct ContentView: View {
 
             FeedbackEntryButton()
 
+            RateAppButton()
+
             LegalLinksView()
         }
         .padding()
