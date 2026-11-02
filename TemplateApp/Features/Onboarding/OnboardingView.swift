@@ -14,6 +14,7 @@ struct OnboardingModifier: ViewModifier {
     @State private var handledLaunch = false
 
     func body(content: Content) -> some View {
+        let isPresented = center.isPresented
         content
             .onAppear {
                 guard !handledLaunch else { return }
@@ -25,7 +26,8 @@ struct OnboardingModifier: ViewModifier {
                     center.start(reviewPrompt: reviewPrompt)
                 }
             }
-            .fullScreenCover(isPresented: Binding(get: { center.isPresented }, set: { _ in })) {
+            // Only the onboarding closes itself; there is no interactive dismissal of a full-screen cover.
+            .fullScreenCover(isPresented: Binding(get: { isPresented }, set: { _ in })) {
                 OnboardingView(center: center)
             }
     }
@@ -33,11 +35,14 @@ struct OnboardingModifier: ViewModifier {
 
 /// The page-turn onboarding (OB-A, D-102, `specs/product.md` §4.6): full-screen pages of the same shape in
 /// a row. Back and Skip at the top, a picture, a heading and a short text in the middle, the page dots and
-/// the main button at the bottom. Pages move by swipe and by the buttons, except that a question stops
-/// the forward swipe until "Next".
+/// the main button at the bottom. Pages move by a horizontal swipe and by the buttons, except that a
+/// question stops the forward swipe until "Next". One page is on screen at a time, so what VoiceOver and
+/// UI tests find is always the current page.
 struct OnboardingView: View {
     let center: OnboardingCenter
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The direction of the last move, for the page transition.
+    @State private var forward = true
 
     /// Wide enough for a phone; on iPad the same order sits in a narrower centered column.
     private static let maximumColumnWidth: CGFloat = 560
@@ -45,13 +50,17 @@ struct OnboardingView: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-            TabView(selection: Binding(get: { center.currentIndex }, set: { center.go(to: $0) })) {
-                ForEach(Array(center.pages.prefix(center.swipeLimit + 1).enumerated()), id: \.element.id) { index, page in
+            ZStack {
+                if let page = center.currentPage {
                     OnboardingPageContent(center: center, page: page)
-                        .tag(index)
+                        .id(page.id)
+                        .transition(pageTransition)
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .contentShape(.rect)
+            .simultaneousGesture(swipe)
             bottomBar
         }
         .frame(maxWidth: Self.maximumColumnWidth)
@@ -59,8 +68,31 @@ struct OnboardingView: View {
         .background(Color(.systemBackground))
     }
 
-    private func move(_ change: () -> Void) {
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3), change)
+    private func move(forward: Bool = true, _ change: () -> Void) {
+        self.forward = forward
+        withAnimation(.easeInOut(duration: reduceMotion ? 0.2 : 0.3), change)
+    }
+
+    /// Pages slide in from the side they come from; with Reduce Motion they only cross-fade, without moving.
+    private var pageTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .asymmetric(
+            insertion: .move(edge: forward ? .trailing : .leading),
+            removal: .move(edge: forward ? .leading : .trailing)
+        )
+    }
+
+    /// A clearly horizontal swipe: to the left goes on (not past a question), to the right goes back.
+    private var swipe: some Gesture {
+        DragGesture(minimumDistance: 24).onEnded { value in
+            let width = value.translation.width
+            guard abs(width) > 60, abs(width) > abs(value.translation.height) * 1.5 else { return }
+            if width < 0 {
+                move { center.go(to: center.currentIndex + 1) }
+            } else {
+                move(forward: false) { center.go(to: center.currentIndex - 1) }
+            }
+        }
     }
 
     // MARK: Top: Back and Skip
@@ -68,7 +100,7 @@ struct OnboardingView: View {
     private var topBar: some View {
         HStack {
             if center.showsBack {
-                Button { move(center.back) } label: {
+                Button { move(forward: false, center.back) } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.backward")
                             .fontWeight(.semibold)
