@@ -77,6 +77,18 @@
 
 公開済みのアプリへ入れる、または作りを大きく変えるときは、D-099どおりそのアプリの対象releaseのPhase 1とPhase 2をユーザーに再承認してもらいます。
 
+## 既存の派生アプリへの入れ方
+
+テンプレートの取り込み（`ios-template-sync`）では、この部品は自動では入りません（`TemplateApp/`はアプリの持ち物です）。既存の派生アプリへは、そのアプリのIssueで入れます。
+
+1. まず、そのアプリにオンボーディングがあるかを確かめます。
+   - **すでにある場合**（例：CafLog、SubLog、Flower、SimplePomo）：今の画面の見た目と流れを変えずに部品だけを入れ替えるなら、UI方向は**confirmed-direction reuse**で扱えます（D-099）。今の画面の確定した仕様をSpec anchorsに置きます。見た目や流れを変える、ページを増やす、質問を足すときは、次の「ない場合」と同じ扱いです。
+   - **ない場合、または作りを大きく変える場合**：必須のオンボーディングを足すことは、[`specs/development-stages.md` §1.5.3](../specs/development-stages.md#153-アジャイル修正と部分再gate)のmajor changeです。そのアプリの対象releaseのPhase 1（MVP範囲。伝える価値、質問と答えの使い道、許可の前置きの有無）とPhase 2（UI方向）をユーザーに再承認してもらい、依存するPhase 3の実装だけを戻します。テンプレートの既定の形（ページ送り型、D-102）を使うかもPhase 2で決めます。
+2. 完了の鍵を引き継ぎます。今のオンボーディングが`UserDefaults`に書いている完了の鍵（例：CafLogとSubLogの`hasCompletedOnboarding`、Flowerの`onboarding.hintsShown`）を`legacyCompletionKeys`へ入れます。既存の利用者にはもう一度出ません。古い画面と古い完了の鍵を書く処理は、同じIssueで外します。
+3. 今の画面にある質問の答えを使い続けるときは、その答えを`choice`のページへ移し、`usedFor`に使う場所を書きます。古い保存先の答えを移すかは、そのアプリのIssueで決めます（部品は古い答えを読みません）。
+4. [派生アプリでの組み込み](#派生アプリでの組み込み)の手順で組み込み、起動直後のルート画面を前提にした既存のUI Testに`-OnboardingSkip`を足します。
+5. `PrivacyInfo.xcprivacy`に`UserDefaults`の理由（`NSPrivacyAccessedAPICategoryUserDefaults`、`CA92.1`）があることを確かめます（#508）。
+
 ## 起動引数
 
 | 引数 | 効くビルド | 動き |

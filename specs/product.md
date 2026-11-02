@@ -54,7 +54,8 @@ ClaudeとCodexは一般の仕様化、実装、検証、レビュー、設定済
 6. Identity Bootstrapに依存するApp Icon IssueとSystem Experiences Planning Issueを作成する。両Issueはwrite-setが独立すれば並行できる。前者は同じ確定briefから画像生成したシンプルな2案を提示し、ユーザーが明示選択した1案だけをAppIconへ組み込む。
 7. System Experiences Planning IssueでWidget、Live Activities、Dynamic Island、Controls、Siri／App Intentsの5面を個別評価し、各面を`adopt-now`、`defer`、`not-applicable`、`blocked:user`へ分類する。主要Feature Issueの計画・Claim前に結果を確定し、採用面のfoundation／surface実装依存を作る。
 8. 変換済みIdentity、選択済みアプリアイコン、確定したsystem-experience計画を基準にアプリ固有仕様を確定し、続くnative UIごとに[条件付きUI Direction Gate](development-stages.md#11-適用判定)の明示指示と通常triggerを評価する。Identity bootstrap、アプリアイコン選択、system-experience計画自体は画面階層、navigationまたは主要flowを決めない。
-9. 最初のUI IssueはApp Icon Issueの完了後に進める。採用するsystem UIはSystem Experiences Planning Issueへ、UI Direction Gateに依存するUI Issueは選択結果を記録した仕様変更へ依存する。依存しない非UI Issueは並行して進められる。
+9. [初回起動のオンボーディング](#46-初回起動のオンボーディング)（[D-099](decisions.md#d-099-初回起動のオンボーディングを全アプリ必須の標準機能にする)）の中身（伝える価値、質問と答えの使い道、許可の前置きの有無）をPhase 1のrelease briefで決め、その画面の方向をPhase 2のUI方向で決める。テンプレートの部品の既定の形はページ送り型（[D-102](decisions.md#d-102-初回起動のオンボーディングのui方向をページ送り型ob-aにする)）とする。オンボーディングのIssueは、質問の答えを使う機能のIssueより先に置く。
+10. 最初のUI IssueはApp Icon Issueの完了後に進める。採用するsystem UIはSystem Experiences Planning Issueへ、UI Direction Gateに依存するUI Issueは選択結果を記録した仕様変更へ依存する。依存しない非UI Issueは並行して進められる。
 
 アプリ固有の`specs/product.md`と`specs/acceptance.md`がともに**確定**するまでは、Feature Issueを実行に移さない。両仕様のいずれかが未作成、提案、未決、またはIssueの受け入れ条件と矛盾する場合、選択された実行モデルはIssueを`blocked:user`にし、Branch/worktree作成と実装を始めずにユーザーの確定を求める。
 
