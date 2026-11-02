@@ -5,7 +5,8 @@ Goldie 0.3.1 lacks (D-077, D-079, D-085). It loads the pinned runtime's publishe
 changes them only inside its own process; the installed runtime is never written to.
 
 Since D-093 App Store tiles are drawn with the [compose renderer](compose.md). This extension
-remains for Goldie drafts, the `pair` and `panorama` kinds, and the product page header.
+remains for Goldie drafts, the `pair` and `panorama` kinds, the product page header, and the
+search results and universal images.
 
 ```sh
 tools/appstore-creative-render.sh render --config goldie/ja/goldie.config.ts --device iphone-6.3 --locale ja
@@ -209,6 +210,89 @@ only when the user asks for it.
 
 Show two or more options on a header sheet and record the user's choice of one, or of no
 header (see [proposal](proposal.md#header-sheet)).
+
+## Search results and universal images (D-101)
+
+Since 2026-10-05 the App Store also shows creative assets in search results on iOS 27 and
+iPadOS 27 (see [Creative assets specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/creative-assets-specifications/)
+and [App Store Asset Best Practices and Resources](https://developer.apple.com/app-store/asset-best-practices/),
+both checked 2026-11-02). Make them only when the user asks; "don't make one" is always a
+valid answer. Without a search results image, the app's In-App Events, preview videos and
+screenshots show in search results instead.
+
+- **Search results image:** 3:2, any size from 1920×1280 to 3840×2560, `.png` or `.jpg`
+  without transparency; `render-search` writes PNG at 3840×2560 unless the spec names a
+  smaller 3:2 `size`. People search for something specific, so the image makes the app's
+  purpose obvious at a glance and shows the real experience: its interface or content.
+  (A search results video, 5 to 30 seconds and muted, is not made by this tool.)
+- **Universal image:** one 16:9 5244×2950 `.png` without transparency, used as both the
+  product page header and the search results image, so the brand reads the same in both
+  places.
+- **Safe areas:** measured from the `Art Safe Area` layer of Apple's official Photoshop
+  templates on the page above, checked 2026-11-02:
+  - search results, 3840×2560: x 836–3004, y 765–1795 (2168×1030), from
+    `creative_assets-search_results_template-static.psd`
+    (https://devimages-cdn.apple.com/design/resources/download/app-store/creative_assets-search_results_template-static.psd).
+    A smaller 3:2 image scales it, rounded inward.
+  - universal, 5244×2950: x 1921–3323, y 660–1622 (1402×962), from
+    `creative_assets-universal_asset_template-static.psd`
+    (https://devimages-cdn.apple.com/design/resources/download/app-store/creative_assets-universal_asset_template-static.psd).
+- **Universal crops:** Apple gives no crop numbers, so the tool derives the two it checks
+  from the formats: the header crop is the centered full-width band of the header's own
+  3840:1646 (21:9) framing, x 0–5244, y 352–2598 (5244×2246), and the search crop is the
+  centered full-height 3:2 band, x 410–4834, y 0–2950 (4424×2950), both rounded inward.
+  The header crop keeps its top corners clear for the back and share buttons, with the
+  header's margins. Recheck the templates before a real submission, and look at every crop
+  in App Store Connect's **Preview tool** before publishing.
+
+### Stills — `render-search` and `render-universal`
+
+```sh
+tools/appstore-creative-render.sh render-search --spec search.json --out goldie/search/search.png
+tools/appstore-creative-render.sh render-universal --spec universal.json --out goldie/universal/universal.png
+tools/appstore-creative-render.sh describe-search
+tools/appstore-creative-render.sh describe-universal
+```
+
+The spec has the shape of the [header still](#header-still--render-header): `background`,
+`layers` and `texts` placed by fractions of the image, and an optional `safeArea` override
+in the template's pixels that must name its `source` (the official template, its Apple
+URL and the date it was checked), or nothing is written. A search results spec may add
+`"size": {"width": 1920, "height": 1280}`; any other 3:2 size in the range works. Every text,
+and every layer whose `role` is `headline`, `logo`, `focal`, `app-name`, `claim`,
+`key-number` or `face`, must lie inside the safe area (after rotation); on the universal
+image it must also lie inside both crops and outside the header crop's top corners.
+Decoration layers may run to the edges. The output is an opaque RGB PNG with a record
+beside it (`<image>.png.json`: kind, safe area and its source, the universal crops, each
+input image's SHA-256, the texts); neither replaces an existing file. Generated images
+are material like any other: show them on a material sheet before use.
+
+### Choosing a search results image — `search-sheet`
+
+```sh
+tools/appstore-creative-preview.sh search-sheet --spec search-sheet.json \
+  --root .artifacts/store-creative/search --revision s1
+tools/appstore-creative-preview.sh search-select --sheet .artifacts/store-creative/search/s1 --option A
+```
+
+```json
+{
+  "schemaVersion": 1, "kind": "search", "app": "花島", "title": "検索結果の画像の提案",
+  "options": [
+    {"id": "A", "title": "雨の日の画面", "hypothesis": "…", "tradeoffs": "…", "image": "../../goldie/search/a.png"},
+    {"id": "B", "title": "共用の画像", "hypothesis": "…", "tradeoffs": "…", "image": "../../goldie/universal/universal.png"}
+  ]
+}
+```
+
+The sheet shows two to six options, each at about the size a search results list shows it
+(370×247 pt, the width of an iPhone 17 Pro list less its margins; Apple gives no number)
+on a light and a dark ground, and always offers `none`. An option is a `render-search`
+image or a `render-universal` image (shown through its 3:2 search crop) whose record
+matches its bytes. Show the sheet as in the [proposal flow](../SKILL.md#the-flow-d-077-d-085),
+then record the user's choice of one option, or `--option none`, in `selection.json` once.
+A universal image chosen here is also the header: show it on its header crop too and check
+it in the Preview tool.
 
 ## iPad 13-inch
 

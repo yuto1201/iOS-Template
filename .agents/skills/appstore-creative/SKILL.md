@@ -30,6 +30,9 @@ or updating. This is a local asset workflow, not App Store Connect submission.
   synthetic demo content.
 - **Preview video:** only when asked; see [Preview video](#preview-video-d-077) below.
   Screenshot requests do not imply videos.
+- **Product page header, search results image or universal image:** only when asked; see
+  [Product page header](#product-page-header-d-085) and
+  [Search results and universal images](#search-results-and-universal-images-d-101) below.
 
 Respect a user's named platform and previously selected scope. Infer App Store
 for a native iOS-only project. Ask about platforms only if genuinely unresolved.
@@ -143,6 +146,11 @@ device. `pair` and `panorama` are still drawn with Goldie and the
 - Generated images carry no text and are shared by Japanese and English. Both
   locales use the same tile kinds in the same order; iPhone and iPad use the same
   pattern with device-specific placement.
+- Every screenshot, search results image and header follows the
+  [image rules](references/patterns.md#image-rules-d-101) (D-101): one feature per
+  screenshot, the strongest first, the focal point in the safe area, and no prices, URLs,
+  copyright symbols, unverifiable awards, other companies' names or images, or Apple
+  recognitions.
 
 ## Product page header (D-085)
 
@@ -153,6 +161,23 @@ focal point inside the safe area from Apple's official template), make the loop 
 `tools/appstore-creative-preview.sh encode-header`, compare options on a `header` sheet
 and record the choice, and check every crop in App Store Connect's Preview tool before
 publishing. Details: [product page header](references/extension.md#product-page-header-d-085).
+
+## Search results and universal images (D-101)
+
+Only when the user asks; "don't make one" is a valid answer. Without a search results
+image, the app's In-App Events, preview videos and screenshots show in search results
+instead. The search results image is 3:2, 1920×1280 to 3840×2560 (3840×2560 by default),
+and must make the app's purpose obvious at a glance by showing the real experience (its
+UI). The universal image is one 16:9 5244×2950 PNG that serves as both the product page
+header and the search results image, so both carry the same brand. Neither may be
+transparent. Render them with `tools/appstore-creative-render.sh render-search` and
+`render-universal` (text, logos and the focal point inside the safe area from Apple's
+official template; on the universal image also inside both its 21:9 header crop and its
+3:2 search crop), compare two or more options at search-list size on light and dark
+grounds with `tools/appstore-creative-preview.sh search-sheet`, record the user's choice of
+one, or of none, with `tools/appstore-creative-preview.sh search-select`, and check every
+crop in App Store Connect's Preview tool before publishing. Details:
+[search results and universal images](references/extension.md#search-results-and-universal-images-d-101).
 
 ## Preview video (D-077)
 
@@ -187,6 +212,12 @@ specification table (Apple's pages and the day they were read) and stops when th
 is older than its `maxAgeDays`: then read Apple's current pages, update the table, and
 check again. Always read Apple's current requirements and App Review Guidelines before a
 real submission; see [the table](references/preview-video.md#check-every-asset-against-apples-current-specifications-d-085).
+
+Before submitting a header, search results image or universal image, check its content
+against App Review Guideline 2.3.14 (creative assets): it pertains to the app's content and
+functionality or its brand, follows the standard metadata guidelines, suits all audiences,
+and contains no references to other apps meant to mislead, no unverifiable claims and no
+specific or discounted prices (see the [image rules](references/patterns.md#image-rules-d-101)).
 
 ## Phase 6 boundary and Simulator ownership
 

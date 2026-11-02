@@ -125,6 +125,43 @@ Recipes with the [render extension](extension.md#layers-popouts-frames-and-stori
 
 Keep one cross-tile moment per five tiles, and check every tile alone at thumbnail size.
 
+## Image rules (D-101)
+
+From D-101 and Apple's
+[App Store Asset Best Practices and Resources](https://developer.apple.com/app-store/asset-best-practices/)
+and [Creative assets specifications](https://developer.apple.com/help/app-store-connect/reference/app-information/creative-assets-specifications/),
+both checked 2026-11-02. Read both pages again before a real submission.
+
+Screenshots:
+
+- One feature per screenshot. The headline is one short line that adds to what the picture
+  shows, translated into Japanese and English.
+- Lead with the strongest feature, so the first three (the ones search results can show)
+  say what the app is, and order the rest as one story of how the app is used.
+- Keep the focal point in the central safe area and check it in App Store Connect's Preview
+  tool. Show the real screens (never edit a raw capture).
+- No prices or discounts, URLs, copyright symbols, unverifiable awards, other companies'
+  names, logos or images, or Apple recognitions such as "Editor's Choice" or "App of the
+  Day".
+- Japanese and English use the same composition in the same order.
+
+Search results image (see [extension](extension.md#search-results-and-universal-images-d-101)):
+
+- The app's purpose is obvious at a glance: people search for something specific.
+- It shows the real experience: the app's interface or content.
+
+Product page header (see [extension](extension.md#product-page-header-d-085)):
+
+- One clear idea; a dense or cluttered image dilutes it.
+- Made for someone who has never seen the app.
+
+Before submission, check every creative asset (header, search results image, universal
+image) against App Review Guideline 2.3.14: it pertains to the app's content and
+functionality or its brand, follows the standard metadata guidelines, suits all audiences,
+and contains no references to other apps meant to mislead, no unverifiable claims and no
+specific or discounted prices. Creative assets are reviewed on their own, apart from the
+screenshots.
+
 ## Quality bar
 
 Adapted from ParthJadhav/app-store-screenshots (MIT, see [upstream](upstream.md)) to the
