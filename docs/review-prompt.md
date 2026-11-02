@@ -23,6 +23,8 @@
 - 機能の計画で、利用者が目的を果たした「成功の瞬間」を1つ以上決め、その直後を評価をお願いするタイミングにします。そこで`recordSignificantEvent()`を呼び、`minimumSignificantEvents`を1以上にします。
 - App Store Connectにアプリを登録したら、`appStoreId`を入れます。
 
+この決まりは、機能の計画の手順（`plan-issue-batch`）とbootstrapの後の手順（`app-bootstrap`）にも書いてあります。
+
 ## 設定（`ReviewPromptConfig.json`）
 
 各アプリが値を変えられます。欠けた値は既定値を使い、負の数や型の違う値、壊れたファイルは機能を無効にします。
