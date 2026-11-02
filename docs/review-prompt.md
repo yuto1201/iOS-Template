@@ -8,6 +8,21 @@
 
 部品はアプリのフォルダの`Features/ReviewPrompt/`にあり、テンプレートでは`ContentView`の`.reviewPrompt(_:)`で組み込んでいます。
 
+## 自分で評価するボタン（「このアプリを評価する」）
+
+利用者がいつでも自分で評価できるボタン`RateAppButton`です（D-103）。押すとApp Storeアプリの「レビューを書く」ページ（`https://apps.apple.com/app/id<App ID>?action=write-review`）を開きます。Appleの評価ポップアップ（`requestReview`）は1年に3回ほどしか出ず、出たかどうかもアプリには分からないため、ボタンには使いません。アプリ独自の星の画面も作りません。
+
+- App StoreのApp ID（数字）は`ReviewPromptConfig.json`の`appStoreId`に置きます。App Store Connectにアプリを登録したら入れます。空、または数字でない値のビルドでは、ボタンを出しません。テンプレートはまだApp Storeにないため空です。
+- 文言は日本語「このアプリを評価する」、英語「Rate This App」です。大きさは44pt以上です。
+- テンプレートのアプリには設定画面がないため、フィードバックの入口と同じくルート画面に置いています。各アプリは自分の設定画面のサポート欄へ移します。
+
+## 全アプリの標準の機能（D-103）
+
+すべてのアプリが、たまに評価をお願いするポップアップと、自分で評価するボタンの両方を持ちます。外すのは、ユーザーが明示した場合だけです。
+
+- 機能の計画で、利用者が目的を果たした「成功の瞬間」を1つ以上決め、その直後を評価をお願いするタイミングにします。そこで`recordSignificantEvent()`を呼び、`minimumSignificantEvents`を1以上にします。
+- App Store Connectにアプリを登録したら、`appStoreId`を入れます。
+
 ## 設定（`ReviewPromptConfig.json`）
 
 各アプリが値を変えられます。欠けた値は既定値を使い、負の数や型の違う値、壊れたファイルは機能を無効にします。
@@ -22,6 +37,7 @@
 | `maximumDismissals` | 2 | 答えずに閉じた回数がこれに達したら、以後は聞かない |
 | `oncePerVersion` | `true` | 同じversionでは1回まで |
 | `presentationDelaySeconds` | 1.5 | 聞くまでの短い間 |
+| `appStoreId` | `""` | App StoreのApp ID（数字）。空、または数字でない値では「このアプリを評価する」ボタンを出さない。ポップアップには使わない |
 
 「良い」を選んだ後と、フィードバックを送った後は、以後は聞きません。記録（起動回数、初回起動日、成功の瞬間の回数、最後に聞いた日とversion、閉じた回数、答え）は端末の`UserDefaults`だけに置き、外部へ送りません。アプリのデータや個人の情報は記録しません。
 
@@ -29,7 +45,8 @@
 
 1. ルート画面に`@State private var reviewPrompt = ReviewPromptCenter.live()`を置き、`.reviewPrompt(reviewPrompt)`を付けます。起動回数を数え、条件を満たせば聞きます。
 2. 利用者が目的を果たした「成功の瞬間」（記録を保存した、タスクを完了した、など）で`reviewPrompt.recordSignificantEvent()`を呼び、続けて邪魔にならない時機に`await reviewPrompt.presentIfEligible()`を呼びます。成功の瞬間を使うなら、`minimumSignificantEvents`を1以上にします。
-3. 次の間は`reviewPrompt.suppress("理由")`で止め、終わったら`reviewPrompt.resume("理由")`で戻します：onboarding、購入の途中、全画面の広告、エラーの表示、別のsheetやalertの表示。
+3. 設定画面のサポート欄に`RateAppButton()`を置き、App Store Connectに登録したら`appStoreId`を入れます。
+4. 次の間は`reviewPrompt.suppress("理由")`で止め、終わったら`reviewPrompt.resume("理由")`で戻します：onboarding、購入の途中、全画面の広告、エラーの表示、別のsheetやalertの表示。
 
 ## 気をつけること
 
@@ -37,3 +54,4 @@
 - 満足した人だけを評価へ送る形（review gating）は、Appleの方針上グレーになり得ます。質問は中立な言い方のままにし、評価や見返りを約束する言葉を足さず、「いまいち」の側にも必ずフィードバックの経路を残します。報酬と引き換えに評価を求めません（[App Review Guidelines 5.6.1](https://developer.apple.com/app-store/review/guidelines/#developer-information)）。
 - Xcodeから実行したDebug buildでは、システムの評価ポップアップは毎回出ますが送信されません。TestFlightでは出ません。App Storeの配信版だけが本来の制限で動きます。
 - Debug buildでは起動引数`-ReviewPromptForceShow`で、条件に関係なく起動時に質問を出せます（UI Testとスクリーンショット用）。
+- Debug buildでは起動引数`-ReviewPromptAppStoreID <数字>`で、`appStoreId`の代わりのApp IDを渡し、「このアプリを評価する」ボタンを出せます（UI Test用）。

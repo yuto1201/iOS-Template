@@ -19,6 +19,9 @@ nonisolated struct ReviewPromptConfig: Equatable, Sendable {
     var oncePerVersion = true
     /// The pause between the moment of success and the question.
     var presentationDelaySeconds = 1.5
+    /// The app's App Store ID (digits) from App Store Connect, for "Rate This App" (D-103); empty until the app
+    /// is registered, and the button stays hidden while it is.
+    var appStoreId = ""
 
     static let disabled = ReviewPromptConfig(enabled: false)
 
@@ -31,6 +34,7 @@ nonisolated struct ReviewPromptConfig: Equatable, Sendable {
         let maximumDismissals: Int?
         let oncePerVersion: Bool?
         let presentationDelaySeconds: Double?
+        let appStoreId: String?
     }
 
     static func load(bundle: Bundle = .main) -> ReviewPromptConfig {
@@ -50,6 +54,7 @@ nonisolated struct ReviewPromptConfig: Equatable, Sendable {
         config.maximumDismissals = settings.maximumDismissals ?? config.maximumDismissals
         config.oncePerVersion = settings.oncePerVersion ?? config.oncePerVersion
         config.presentationDelaySeconds = settings.presentationDelaySeconds ?? config.presentationDelaySeconds
+        config.appStoreId = settings.appStoreId ?? config.appStoreId
         let counts = [config.minimumLaunchCount, config.minimumDaysSinceFirstLaunch, config.minimumSignificantEvents,
                       config.cooldownDays, config.maximumDismissals]
         guard counts.allSatisfy({ $0 >= 0 }), config.presentationDelaySeconds.isFinite,

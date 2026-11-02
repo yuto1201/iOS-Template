@@ -278,6 +278,44 @@ struct ReviewPromptPolicyTests {
         try await LegalLinksTests().legalLinksFollowTheAppSlug()
     }
 
+    @Test("Rate This App opens only the App Store's Write a Review page, and only with an App Store ID")
+    func rateAppButtonOpensTheWriteReviewPage() async throws {
+        let page = try #require(URL(string: "https://apps.apple.com/app/id1234567890?action=write-review"))
+        #expect(RateAppButton.writeReviewURL(appStoreId: "1234567890") == page)
+        // Empty, or anything but ASCII digits: no button.
+        for invalid in ["", " 123", "123 ", "12a3", "id123", "１２３", "-1", "1.5"] {
+            #expect(RateAppButton.writeReviewURL(appStoreId: invalid) == nil, "\(invalid)")
+        }
+
+        // The ID comes from `appStoreId` in the bundled file; a missing value is empty, a wrong type turns
+        // the whole file off.
+        #expect(ReviewPromptConfig.decode(Data(#"{"appStoreId": "1234567890"}"#.utf8)).appStoreId == "1234567890")
+        #expect(ReviewPromptConfig.decode(Data("{}".utf8)).appStoreId.isEmpty)
+        #expect(ReviewPromptConfig.decode(Data(#"{"appStoreId": 1234567890}"#.utf8)) == .disabled)
+        #expect(RateAppButton.bundledWriteReviewURL(config: ReviewPromptConfig(appStoreId: "1234567890"), arguments: []) == page)
+        #expect(RateAppButton.bundledWriteReviewURL(config: ReviewPromptConfig(), arguments: []) == nil)
+        #expect(RateAppButton.bundledWriteReviewURL(config: .disabled, arguments: []) == nil)
+        // The template is not on the App Store yet, so its own file has no ID and shows no button.
+        #expect(ReviewPromptConfig.load().appStoreId.isEmpty)
+        #expect(RateAppButton.bundledWriteReviewURL(arguments: []) == nil)
+        // Debug builds: the launch argument stands in for an ID (UI Tests).
+        #expect(RateAppButton.bundledWriteReviewURL(
+            config: ReviewPromptConfig(), arguments: ["-ReviewPromptAppStoreID", "1234567890"]
+        ) == page)
+
+        // The action opens the page and nothing else: no `requestReview`, no rating of its own.
+        var opened: [URL] = []
+        RateAppButton.open(page, with: { opened.append($0) })
+        #expect(opened == [page])
+
+        // The wording in both languages.
+        #expect(localized("review-prompt.rate-app", "ja") == "このアプリを評価する")
+        #expect(localized("review-prompt.rate-app", "en") == "Rate This App")
+
+        // The review prompt's own rules still hold (the runner runs this one test).
+        try await promptRespectsThresholdsAndCooldowns()
+    }
+
     private func reason(
         _ record: ReviewPromptRecord,
         config: ReviewPromptConfig = ReviewPromptConfig(),
@@ -468,21 +506,31 @@ struct ReviewPromptPolicyTests {
         #expect(rule["class"] as? String == "triggered")
         #expect((rule["features"] as? [String])?.contains("review-prompts") == true)
 
-        // The prompt asks through `requestReview` and draws no rating of its own; and the new files name no
+        // The prompt asks through `requestReview` and draws no rating of its own; "Rate This App" (D-103) only
+        // opens the App Store's Write a Review page and never calls `requestReview`; and the new files name no
         // template identifier, so Identity bootstrap needs nothing in them.
         let module = String(reflecting: ReviewPromptCenter.self).split(separator: ".")[0]
         let feature = root.appending(path: "\(module)/Features/ReviewPrompt")
         let sources = try FileManager.default.contentsOfDirectory(at: feature, includingPropertiesForKeys: nil)
-        #expect(sources.count == 4)
+        #expect(sources.count == 5)
         var swift = ""
+        var rateButton = ""
         for file in sources + [root.appending(path: "\(module)UITests/ReviewPromptUITests.swift")] {
             let text = try String(contentsOf: file, encoding: .utf8)
             #expect(!text.contains(module), "\(file.lastPathComponent)")
-            if file.pathExtension == "swift" { swift += text }
+            if file.lastPathComponent == "RateAppButton.swift" {
+                rateButton = text
+            } else if file.pathExtension == "swift" {
+                swift += text
+            }
         }
         #expect(swift.contains("requestReview()"))
+        #expect(rateButton.contains("action=write-review") && !rateButton.contains("requestReview()"))
         for custom in ["star.fill", "systemName: \"star", "write-review", "itms-apps"] {
             #expect(!swift.contains(custom), "\(custom)")
+        }
+        for custom in ["star.fill", "systemName: \"star", "itms-apps", "StoreKit"] {
+            #expect(!rateButton.contains(custom), "\(custom)")
         }
     }
 }

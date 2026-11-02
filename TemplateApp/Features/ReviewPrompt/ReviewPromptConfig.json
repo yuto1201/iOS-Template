@@ -6,5 +6,6 @@
   "cooldownDays": 120,
   "maximumDismissals": 2,
   "oncePerVersion": true,
-  "presentationDelaySeconds": 1.5
+  "presentationDelaySeconds": 1.5,
+  "appStoreId": ""
 }
