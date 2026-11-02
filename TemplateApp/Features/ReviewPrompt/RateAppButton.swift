@@ -10,10 +10,14 @@ struct RateAppButton: View {
 
     var body: some View {
         if let destination {
-            Button("review-prompt.rate-app", systemImage: "square.and.pencil") {
+            // The 44pt height is on the label, so the tappable area and the accessibility frame both get it.
+            Button {
                 Self.open(destination, with: openURL.callAsFunction)
+            } label: {
+                Label("review-prompt.rate-app", systemImage: "square.and.pencil")
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
             }
-            .frame(minHeight: 44)
             .accessibilityIdentifier("review-prompt.rate-app")
         }
     }
