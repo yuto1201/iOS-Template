@@ -184,6 +184,12 @@ expect_refusal 'entitlements setting the tool cannot read' 1 'Config/Local.xccon
 new_app embedded
 edit_project 'content.gsub("PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotesUITests;", "PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes.Widget;")'
 expect_refusal 'embedded target' 3 'embedded target com.example.SampleNotes.Widget'
+new_app development-id-taken
+edit_project 'content.gsub("PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotesUITests;", "PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes.dev;")'
+expect_refusal 'another target already uses the development Bundle ID' 3 'another target com.example.SampleNotes.dev'
+new_app development-id-taken-xcconfig
+printf '%s\n' 'PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes.dev' >"$app/Config/Local.xcconfig"
+expect_refusal 'development Bundle ID taken in an xcconfig' 3 'another target com.example.SampleNotes.dev'
 new_app embedded-xcconfig
 printf '%s\n' 'PRODUCT_BUNDLE_IDENTIFIER = com.example.SampleNotes.Widget' >"$app/Config/Local.xcconfig"
 expect_refusal 'embedded target from an xcconfig' 3 'embedded target com.example.SampleNotes.Widget'

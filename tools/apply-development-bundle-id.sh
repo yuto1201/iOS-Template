@@ -234,11 +234,18 @@ embedded = project_values.call(other_targets, "PRODUCT_BUNDLE_IDENTIFIER") + xcc
 embedded.each do |value|
   refuse("a target sets PRODUCT_BUNDLE_IDENTIFIER = #{value} with a build setting; check embedded targets by hand") if value.include?("$")
 end
-embedded = embedded.select { |value| value.start_with?("#{bundle_id}.") && value != development_bundle_id }.uniq.sort
+# Another target that already uses the development Bundle ID would collide with the Debug app, so it stops too.
+embedded = embedded.select { |value| value.start_with?("#{bundle_id}.") }.uniq.sort
 unless shared.empty? && embedded.empty?
   lines = ["the app shares data or identity through its Bundle ID, so nothing was changed. Decide in a separate Issue how the development build handles:"]
   shared.each { |relative, key| lines << "  - #{relative}: #{key} (#{SHARED_ENTITLEMENTS.fetch(key)}). 開発版が本番と同じものを使うか、開発用を別に用意するか。" }
-  embedded.each { |value| lines << "  - embedded target #{value}: 埋め込むtarget（Widgetなど）のBundle IDは親のBundle IDで始まる必要がある。開発版でのBundle IDをどうするか。" }
+  embedded.each do |value|
+    if value == development_bundle_id
+      lines << "  - another target #{value}: 開発版のアプリと同じBundle IDを、別のtargetがすでに使っている。開発版でのBundle IDをどうするか。"
+    else
+      lines << "  - embedded target #{value}: 埋め込むtarget（Widgetなど）のBundle IDは親のBundle IDで始まる必要がある。開発版でのBundle IDをどうするか。"
+    end
+  end
   refuse(lines.join("\n"), 3)
 end
 
