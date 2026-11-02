@@ -499,6 +499,125 @@ header_spec corner '{"safeArea":{"x":0,"y":0,"width":3840,"height":1646,"source"
 expect_header_failure header-corner 'header text 1 sits in a top corner under the buttons' corner
 [[ -z "$(find "$hdir" -maxdepth 1 -name ".render-header-*")" ]] || fail "render-header left a work directory behind"
 
+# 10. D-101 (#487): the search results image (3:2, 1920x1280 to 3840x2560) and the universal image shared by
+# the header and search results (16:9, 5244x2950). Both are opaque RGB PNGs; their safe areas come from the
+# Art Safe Area layers of Apple's official templates, with their source; text and protected layers must stay
+# inside, and on the universal image also inside both its 21:9 header crop and its 3:2 search crop.
+pixel_at() { # png x y -> "r,g,b"
+  ffmpeg -loglevel error -i "$1" -vf "crop=1:1:$2:$3,format=rgb24" -f rawvideo - | ruby -e 'print $stdin.binmode.read.unpack("C3").join(",")'
+}
+"$tool" describe-search >"$workspace/search-describe.json"
+"$tool" describe-universal >"$workspace/universal-describe.json"
+ruby -rjson -e 'search = JSON.parse(File.read(ARGV[0])); universal = JSON.parse(File.read(ARGV[1]))
+  abort "search size: #{search}" unless search.fetch("search").values_at("width", "height", "minWidth", "minHeight") == [3840, 2560, 1920, 1280]
+  abort "search safe area: #{search}" unless search.fetch("safeArea").values_at("x", "y", "width", "height") == [836, 765, 2168, 1030]
+  abort "universal size: #{universal}" unless universal.fetch("universal") == {"width" => 5244, "height" => 2950}
+  abort "universal safe area: #{universal}" unless universal.fetch("safeArea").values_at("x", "y", "width", "height") == [1921, 660, 1402, 962]
+  crops = universal.fetch("crops")
+  abort "universal crops: #{crops}" unless crops.fetch("header") == {"ratio" => "21:9", "x" => 0, "y" => 352, "width" => 5244, "height" => 2246} &&
+    crops.fetch("search") == {"ratio" => "3:2", "x" => 410, "y" => 0, "width" => 4424, "height" => 2950}
+  { "search_results_template" => search, "universal_asset_template" => universal }.each do |template, value|
+    source = value.dig("safeArea", "source")
+    abort "safe area source: #{source}" unless source.fetch("template").include?("#{template}-static.psd (layer Art Safe Area)") &&
+      source.fetch("url") == "https://devimages-cdn.apple.com/design/resources/download/app-store/creative_assets-#{template}-static.psd" &&
+      source.fetch("checkedOn") == "2026-11-02"
+    abort "protected roles: #{value}" unless value.fetch("protectedRoles") == %w[headline logo focal app-name claim key-number face]
+  end' "$workspace/search-describe.json" "$workspace/universal-describe.json"
+sdir="$workspace/stills"; mkdir -p "$sdir"
+cp "$workspace/app/goldie/assets/magenta.png" "$workspace/app/goldie/assets/cyan.png" "$sdir/"
+still_spec() { # kind name extra-json
+  ruby -rjson -e 'search = ARGV[0] == "search"
+    value = {"schemaVersion" => 1, "background" => "#E9EFF5",
+      "layers" => [{"src" => "magenta.png", "x" => search ? 0.45 : 0.47, "y" => search ? 0.4 : 0.35, "width" => search ? 0.1 : 0.05, "role" => "focal"},
+                   {"src" => "cyan.png", "x" => 0.02, "y" => 0.02, "width" => 0.1, "role" => "decoration"}],
+      "texts" => [{"text" => "雨の日も、花が教えてくれる", "x" => 0.5, "y" => search ? 0.32 : 0.25, "size" => search ? 0.05 : 0.03, "align" => "center", "color" => "#111111"}]}
+    value.merge!(JSON.parse(ARGV[3])) unless ARGV[3].to_s.empty?
+    File.write(File.join(ARGV[1], "#{ARGV[2]}.json"), JSON.generate(value))' "$1" "$sdir" "$2" "${3:-}"
+}
+expect_still_failure() { # kind label message spec
+  if "$tool" "render-$1" --runtime "$runtime" --spec "$sdir/$4.json" --out "$sdir/$4.png" >"$workspace/$2.out" 2>"$workspace/$2.err"; then fail "render-$1 accepted $2"; fi
+  grep -Fq -- "$3" "$workspace/$2.err" || { cat "$workspace/$2.err" >&2; fail "unexpected failure for $2"; }
+  [ ! -e "$sdir/$4.png" ] && [ ! -e "$sdir/$4.png.json" ] || fail "a refused $1 image was written: $2"
+}
+# AC-3: render-search writes 3840x2560 by default and any 3:2 size down to 1920x1280; render-universal
+# writes 5244x2950; every image is RGB without an alpha channel, with a record beside it.
+still_spec search search-good
+"$tool" render-search --runtime "$runtime" --spec "$sdir/search-good.json" --out "$sdir/search-good.png" >/dev/null
+[ "$(png_info "$sdir/search-good.png")" = "3840x2560 color2" ] || fail "search image has the wrong size or an alpha channel: $(png_info "$sdir/search-good.png")"
+[ "$(pixel_at "$sdir/search-good.png" 1920 1216)" = "255,0,255" ] || fail 'search image lost its focal layer'
+[ "$(pixel_at "$sdir/search-good.png" 1900 2400)" = "233,239,245" ] || fail 'search image lost its background'
+still_spec search search-small '{"size":{"width":1920,"height":1280}}'
+"$tool" render-search --runtime "$runtime" --spec "$sdir/search-small.json" --out "$sdir/search-small.png" >/dev/null
+[ "$(png_info "$sdir/search-small.png")" = "1920x1280 color2" ] || fail "small search image has the wrong size or an alpha channel: $(png_info "$sdir/search-small.png")"
+still_spec search search-mid '{"size":{"width":2880,"height":1920}}'
+"$tool" render-search --runtime "$runtime" --spec "$sdir/search-mid.json" --out "$sdir/search-mid.png" >/dev/null
+[ "$(png_info "$sdir/search-mid.png")" = "2880x1920 color2" ] || fail "2880x1920 search image has the wrong size or an alpha channel"
+still_spec universal universal-good
+"$tool" render-universal --runtime "$runtime" --spec "$sdir/universal-good.json" --out "$sdir/universal-good.png" >/dev/null
+[ "$(png_info "$sdir/universal-good.png")" = "5244x2950 color2" ] || fail "universal image has the wrong size or an alpha channel: $(png_info "$sdir/universal-good.png")"
+[ "$(pixel_at "$sdir/universal-good.png" 2596 1163)" = "255,0,255" ] || fail 'universal image lost its focal layer'
+ruby -rjson -rdigest -e 'dir = ARGV[0]
+  record = ->(name) { JSON.parse(File.read(File.join(dir, "#{name}.png.json"))) }
+  { "search-good" => "search-results", "search-small" => "search-results", "universal-good" => "universal" }.each do |name, kind|
+    value = record.(name)
+    abort "#{name} record: #{value}" unless value.fetch("kind") == kind && value.fetch("sha256") == "sha256:#{Digest::SHA256.file(File.join(dir, "#{name}.png")).hexdigest}" &&
+      value.fetch("layers").map { |layer| [layer.fetch("role"), layer.fetch("sha256")] } ==
+        [["focal", "sha256:#{Digest::SHA256.file(File.join(dir, "magenta.png")).hexdigest}"], ["decoration", "sha256:#{Digest::SHA256.file(File.join(dir, "cyan.png")).hexdigest}"]] &&
+      value.fetch("texts").map { |text| text.fetch("text") } == ["雨の日も、花が教えてくれる"] && value.fetch("background") == {"color" => "#E9EFF5"}
+  end
+  # A smaller search image scales the template safe area, rounded inward, and keeps the measured one.
+  abort "default search safe area" unless record.("search-good").fetch("safeArea").values_at("x", "y", "width", "height") == [836, 765, 2168, 1030] &&
+    !record.("search-good").key?("templateSafeArea")
+  small = record.("search-small")
+  abort "scaled search safe area: #{small}" unless small.fetch("safeArea").values_at("x", "y", "width", "height") == [418, 383, 1084, 514] &&
+    small.fetch("templateSafeArea").values_at("x", "y", "width", "height") == [836, 765, 2168, 1030] &&
+    small.dig("safeArea", "source", "template").include?("search_results_template")
+  universal = record.("universal-good")
+  abort "universal record crops: #{universal}" unless universal.dig("crops", "header", "height") == 2246 && universal.dig("crops", "search", "width") == 4424 &&
+    universal.dig("safeArea", "source", "template").include?("universal_asset_template")' "$sdir"
+still_spec search search-wide '{"size":{"width":2000,"height":1280}}'
+expect_still_failure search search-not-3-2 'search size must be 3:2 from 1920x1280 to 3840x2560; found 2000x1280' search-wide
+still_spec search search-large '{"size":{"width":4800,"height":3200}}'
+expect_still_failure search search-too-large 'search size must be 3:2 from 1920x1280 to 3840x2560; found 4800x3200' search-large
+still_spec search search-tiny '{"size":{"width":1500,"height":1000}}'
+expect_still_failure search search-too-small 'search size must be 3:2 from 1920x1280 to 3840x2560; found 1500x1000' search-tiny
+still_spec universal universal-sized '{"size":{"width":3840,"height":2160}}'
+expect_still_failure universal universal-size 'unknown universal spec field: size' universal-sized
+if "$tool" render-search --runtime "$runtime" --spec "$sdir/search-good.json" --out "$sdir/search-good.png" >/dev/null 2>"$workspace/search-overwrite.err"; then
+  fail 'render-search replaced an existing image'
+fi
+grep -Fq 'search output already exists and is never replaced' "$workspace/search-overwrite.err" || fail 'unexpected search overwrite failure'
+# AC-4: a safe area override must name its official template, URL and checked date.
+still_spec search search-no-source '{"safeArea":{"x":0,"y":0,"width":3840,"height":2560}}'
+expect_still_failure search search-safe-area-source 'safeArea needs source: the official template, its URL and the date it was checked' search-no-source
+still_spec universal universal-no-source '{"safeArea":{"x":0,"y":0,"width":5244,"height":2950,"source":{"template":"t.psd","url":"https://developer.apple.com/t"}}}'
+expect_still_failure universal universal-safe-area-source 'safeArea needs source: the official template, its URL and the date it was checked' universal-no-source
+still_spec search search-foreign-source '{"safeArea":{"x":0,"y":0,"width":3840,"height":2560,"source":{"template":"t.psd","url":"https://example.com/t.psd","checkedOn":"2026-11-02"}}}'
+expect_still_failure search search-foreign-url 'safeArea source url must be an Apple developer URL' search-foreign-source
+still_spec universal universal-big-area '{"safeArea":{"x":0,"y":0,"width":5245,"height":2950,"source":{"template":"t.psd","url":"https://developer.apple.com/t","checkedOn":"2026-11-02"}}}'
+expect_still_failure universal universal-area-outside 'safeArea must lie inside the 5244x2950 universal' universal-big-area
+# AC-5: text and protected roles outside the safe area are refused; decoration may run to the edges (the
+# cyan layer above sits in the top-left corner). On the universal image both crops are checked too.
+still_spec search search-text-out '{"texts":[{"text":"はみ出す見出し","x":0.05,"y":0.32,"size":0.05}]}'
+expect_still_failure search search-text-outside 'search text 1 runs outside the safe area' search-text-out
+still_spec search search-logo-out '{"layers":[{"src":"magenta.png","x":0.8,"y":0.5,"width":0.1,"role":"logo"}]}'
+expect_still_failure search search-logo-outside 'search layer 1 is marked logo and runs outside the safe area' search-logo-out
+still_spec search search-small-out '{"size":{"width":1920,"height":1280},"layers":[{"src":"magenta.png","x":0.2,"y":0.4,"width":0.1,"role":"headline"}]}'
+expect_still_failure search search-scaled-outside 'search layer 1 is marked headline and runs outside the safe area' search-small-out
+still_spec universal universal-face-out '{"layers":[{"src":"magenta.png","x":0.3,"y":0.35,"width":0.05,"role":"face"}]}'
+expect_still_failure universal universal-face-outside 'universal layer 1 is marked face and runs outside the safe area' universal-face-out
+whole='"safeArea":{"x":0,"y":0,"width":5244,"height":2950,"source":{"template":"t.psd","url":"https://developer.apple.com/t","checkedOn":"2026-11-02"}}'
+still_spec universal universal-header-crop "{$whole,\"texts\":[{\"text\":\"上の見出し\",\"x\":0.5,\"y\":0.02,\"size\":0.03,\"align\":\"center\"}]}"
+expect_still_failure universal universal-header-crop 'universal text 1 runs outside the 21:9 header crop' universal-header-crop
+still_spec universal universal-search-crop "{$whole,\"layers\":[{\"src\":\"magenta.png\",\"x\":0.02,\"y\":0.45,\"width\":0.05,\"role\":\"focal\"}]}"
+expect_still_failure universal universal-search-crop 'universal layer 1 is marked focal and runs outside the 3:2 search crop' universal-search-crop
+still_spec universal universal-corner "{$whole,\"texts\":[{\"text\":\"角\",\"x\":0.08,\"y\":0.13,\"size\":0.03}],\"layers\":[]}"
+expect_still_failure universal universal-corner 'universal text 1 sits in a top corner of the header crop under the buttons' universal-corner
+# Inside both crops and outside the corners, the same override renders.
+still_spec universal universal-whole "{$whole,\"layers\":[{\"src\":\"magenta.png\",\"x\":0.1,\"y\":0.45,\"width\":0.05,\"role\":\"focal\"}]}"
+"$tool" render-universal --runtime "$runtime" --spec "$sdir/universal-whole.json" --out "$sdir/universal-whole.png" >/dev/null
+[ -z "$(find "$sdir" -maxdepth 1 -name ".render-*")" ] || fail "a still render left a work directory behind"
+
 # 6. The installed runtime is never written to.
 [[ "$(runtime_digest)" == "$before_runtime" ]] || fail 'render changed the installed Goldie runtime'
 
