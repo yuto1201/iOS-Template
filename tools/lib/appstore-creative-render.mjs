@@ -571,7 +571,7 @@ function parse(argv) {
   return { command, options };
 }
 
-// --- D-085 (#391) product page header ----------------------------------------------------------------
+// --- D-085 (#391) product page header, D-101 (#487) search results and the shared image ---------------
 
 // App Store product page header: 21:9, 3840x1646, opaque (Creative assets specifications). The art safe
 // area was measured from the "Art Safe Area" layer of Apple's official Photoshop template; text, logos and
@@ -591,11 +591,63 @@ export const HEADER_SAFE_AREA = {
 export const HEADER_CLEAR_CORNERS = { width: 0.12, height: 0.2 };
 export const HEADER_PROTECTED_ROLES = ["headline", "logo", "focal", "app-name", "claim", "key-number", "face"];
 
-function headerSafeArea(value) {
-  if (value === undefined) return HEADER_SAFE_AREA;
+// D-101 (#487): the search results image is 3:2, from 1920x1280 to 3840x2560 (PNG or JPEG, no
+// transparency); this tool writes PNG at 3840x2560 unless the spec names a smaller 3:2 size. Its safe area
+// was measured from the "Art Safe Area" layer of Apple's official search results template (3840x2560) and
+// is scaled, rounded inward, for a smaller size.
+export const SEARCH = { width: 3840, height: 2560, minWidth: 1920, minHeight: 1280 };
+export const SEARCH_SAFE_AREA = {
+  x: 836, y: 765, width: 2168, height: 1030,
+  source: {
+    template: "creative_assets-search_results_template-static.psd (layer Art Safe Area)",
+    url: "https://devimages-cdn.apple.com/design/resources/download/app-store/creative_assets-search_results_template-static.psd",
+    checkedOn: "2026-11-02"
+  }
+};
+// D-101 (#487): the universal (shared) image is 16:9, 5244x2950 PNG, used both as the product page header
+// and in search results. Its safe area comes from the "Art Safe Area" layer of Apple's official universal
+// template. Apple's specification gives no crop numbers, so the tool derives the two crops it checks
+// protected roles against: the header crop is the centered full-width band of the header's own
+// 3840:1646 (21:9) framing, and the search crop is the centered full-height 3:2 band, both rounded inward.
+export const UNIVERSAL = { width: 5244, height: 2950 };
+export const UNIVERSAL_SAFE_AREA = {
+  x: 1921, y: 660, width: 1402, height: 962,
+  source: {
+    template: "creative_assets-universal_asset_template-static.psd (layer Art Safe Area)",
+    url: "https://devimages-cdn.apple.com/design/resources/download/app-store/creative_assets-universal_asset_template-static.psd",
+    checkedOn: "2026-11-02"
+  }
+};
+function centeredBand(width, height, ratioWidth, ratioHeight) {
+  if (width * ratioHeight >= height * ratioWidth) {
+    const band = (height * ratioWidth) / ratioHeight;
+    const left = Math.ceil((width - band) / 2);
+    return { x: left, y: 0, width: Math.floor((width + band) / 2) - left, height };
+  }
+  const band = (width * ratioHeight) / ratioWidth;
+  const top = Math.ceil((height - band) / 2);
+  return { x: 0, y: top, width, height: Math.floor((height + band) / 2) - top };
+}
+export const UNIVERSAL_CROPS = {
+  header: { ratio: "21:9", ...centeredBand(UNIVERSAL.width, UNIVERSAL.height, HEADER.width, HEADER.height) },
+  search: { ratio: "3:2", ...centeredBand(UNIVERSAL.width, UNIVERSAL.height, 3, 2) }
+};
+// Text and these roles are protected on every creative asset.
+export const CREATIVE_PROTECTED_ROLES = HEADER_PROTECTED_ROLES;
+
+const STILLS = {
+  header: { label: "header", kind: "product-page-header", name: "header", template: HEADER, safeArea: HEADER_SAFE_AREA },
+  search: { label: "search", kind: "search-results", name: "search", template: SEARCH, safeArea: SEARCH_SAFE_AREA },
+  universal: { label: "universal", kind: "universal", name: "universal", template: UNIVERSAL, safeArea: UNIVERSAL_SAFE_AREA }
+};
+
+// A safe area is in the pixels of the official template (3840x1646, 3840x2560 or 5244x2950).
+function stillSafeArea(still, value) {
+  if (value === undefined) return still.safeArea;
+  const { template, label } = still;
   if (!value || typeof value !== "object") fail("safeArea must be an object");
   for (const key of ["x", "y", "width", "height"]) {
-    if (!Number.isInteger(value[key]) || value[key] < 0) fail(`safeArea ${key} must be a non-negative integer in header pixels`);
+    if (!Number.isInteger(value[key]) || value[key] < 0) fail(`safeArea ${key} must be a non-negative integer in ${label} pixels`);
   }
   // A safe area is only as good as where it was measured: it must name the official template it came from.
   const source = value.source;
@@ -604,10 +656,32 @@ function headerSafeArea(value) {
   }
   if (!/^https:\/\/(devimages-cdn\.apple\.com|developer\.apple\.com)\//.test(source.url)) fail("safeArea source url must be an Apple developer URL");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(source.checkedOn)) fail("safeArea source checkedOn must be a YYYY-MM-DD date");
-  if (value.x + value.width > HEADER.width || value.y + value.height > HEADER.height || value.width === 0 || value.height === 0) {
-    fail("safeArea must lie inside the 3840x1646 header");
+  if (value.x + value.width > template.width || value.y + value.height > template.height || value.width === 0 || value.height === 0) {
+    fail(`safeArea must lie inside the ${template.width}x${template.height} ${label}`);
   }
   return { x: value.x, y: value.y, width: value.width, height: value.height, source: { ...source } };
+}
+
+// The search results image may be any 3:2 size from 1920x1280 to 3840x2560.
+function stillSize(still, value) {
+  if (still.name !== "search") return { width: still.template.width, height: still.template.height };
+  if (value === undefined) return { width: SEARCH.width, height: SEARCH.height };
+  if (!value || typeof value !== "object" || !Number.isInteger(value.width) || !Number.isInteger(value.height) ||
+      Object.keys(value).some((key) => !["width", "height"].includes(key))) {
+    fail("search size must be { width, height } in pixels");
+  }
+  if (value.width * 2 !== value.height * 3 || value.width < SEARCH.minWidth || value.width > SEARCH.width) {
+    fail(`search size must be 3:2 from ${SEARCH.minWidth}x${SEARCH.minHeight} to ${SEARCH.width}x${SEARCH.height}; found ${value.width}x${value.height}`);
+  }
+  return { width: value.width, height: value.height };
+}
+
+// Scales a template-pixel area to the output, rounded inward so the scaled area never grows.
+function scaleArea(area, factor) {
+  if (factor === 1) return { x: area.x, y: area.y, width: area.width, height: area.height };
+  const left = Math.ceil(area.x * factor);
+  const top = Math.ceil(area.y * factor);
+  return { x: left, y: top, width: Math.floor((area.x + area.width) * factor) - left, height: Math.floor((area.y + area.height) * factor) - top };
 }
 
 function inside(box, area) {
@@ -623,75 +697,97 @@ function rotatedBox(left, top, width, height, rotate) {
   return { left: cx - w / 2, right: cx + w / 2, top: cy - h / 2, bottom: cy + h / 2 };
 }
 
-// Renders a header still from a header spec: a background (#RRGGBB or an image that covers the header),
-// image layers and text, all placed by fractions of the header. Text and every layer with a protected
-// role must lie inside the safe area and outside the clear corners, or nothing is written.
-export async function renderHeader({ runtime, spec: specPath, out }) {
+// The places a protected box must stay inside or out of. A header keeps its top corners clear; the
+// universal image must also read inside both of its crops, and its header crop keeps its top corners clear.
+function protectedChecks(still, size, area) {
+  const cornersOf = (frame) => [
+    { left: frame.x, top: frame.y, right: frame.x + HEADER_CLEAR_CORNERS.width * frame.width, bottom: frame.y + HEADER_CLEAR_CORNERS.height * frame.height },
+    { left: frame.x + (1 - HEADER_CLEAR_CORNERS.width) * frame.width, top: frame.y, right: frame.x + frame.width, bottom: frame.y + HEADER_CLEAR_CORNERS.height * frame.height }
+  ];
+  const checks = [{ test: (box) => inside(box, area), problem: "runs outside the safe area" }];
+  let corners = [];
+  let cornerProblem = "sits in a top corner under the buttons";
+  if (still.name === "header") corners = cornersOf({ x: 0, y: 0, ...size });
+  if (still.name === "universal") {
+    const { header, search } = UNIVERSAL_CROPS;
+    checks.push({ test: (box) => inside(box, header), problem: "runs outside the 21:9 header crop" });
+    checks.push({ test: (box) => inside(box, search), problem: "runs outside the 3:2 search crop" });
+    corners = cornersOf(header);
+    cornerProblem = "sits in a top corner of the header crop under the buttons";
+  }
+  const overlaps = (box) => corners.some((corner) => box.left < corner.right && box.right > corner.left && box.top < corner.bottom && box.bottom > corner.top);
+  if (corners.length) checks.push({ test: (box) => !overlaps(box), problem: cornerProblem });
+  return checks;
+}
+
+// Renders a creative asset still from a spec: a background (#RRGGBB or an image that covers the canvas),
+// image layers and text, all placed by fractions of the canvas. Text and every layer with a protected
+// role must pass every check of the asset (safe area, corners, crops), or nothing is written.
+async function renderStill(still, { runtime, spec: specPath, out }) {
   const { root } = await loadGoldie(runtime);
   const { createCanvas, loadImage } = createRequire(join(root, "package.json"))("@napi-rs/canvas");
+  const { label } = still;
   const specFile = resolve(specPath);
   const spec = JSON.parse(readFileSync(specFile, "utf8"));
-  if (!spec || spec.schemaVersion !== 1) fail("header spec schemaVersion must be 1");
-  const unknown = Object.keys(spec).filter((key) => !["schemaVersion", "background", "layers", "texts", "safeArea"].includes(key));
-  if (unknown.length) fail(`unknown header spec field: ${unknown[0]}`);
+  if (!spec || spec.schemaVersion !== 1) fail(`${label} spec schemaVersion must be 1`);
+  const fields = ["schemaVersion", "background", "layers", "texts", "safeArea", ...(still.name === "search" ? ["size"] : [])];
+  const unknown = Object.keys(spec).filter((key) => !fields.includes(key));
+  if (unknown.length) fail(`unknown ${label} spec field: ${unknown[0]}`);
   const base = dirname(specFile);
-  const area = headerSafeArea(spec.safeArea);
-  const corners = [
-    { left: 0, top: 0, right: HEADER_CLEAR_CORNERS.width * HEADER.width, bottom: HEADER_CLEAR_CORNERS.height * HEADER.height },
-    { left: (1 - HEADER_CLEAR_CORNERS.width) * HEADER.width, top: 0, right: HEADER.width, bottom: HEADER_CLEAR_CORNERS.height * HEADER.height }
-  ];
-  const overlapsCorner = (box) => corners.some((corner) => box.left < corner.right && box.right > corner.left && box.top < corner.bottom && box.bottom > corner.top);
+  const size = stillSize(still, spec.size);
+  const measured = stillSafeArea(still, spec.safeArea);
+  const area = { ...scaleArea(measured, size.width / still.template.width), source: measured.source };
+  const checks = protectedChecks(still, size, area);
   const output = resolve(out);
   const recordPath = `${output}.json`;
   // Neither the image nor its record replaces anything, and symlinks count as existing.
   const present = (path) => { try { lstatSync(path); return true; } catch { return false; } };
-  if (present(output)) fail(`header output already exists and is never replaced: ${output}`);
-  if (present(recordPath)) fail(`header record already exists and is never replaced: ${recordPath}`);
-  const canvas = createCanvas(HEADER.width, HEADER.height);
+  if (present(output)) fail(`${label} output already exists and is never replaced: ${output}`);
+  if (present(recordPath)) fail(`${label} record already exists and is never replaced: ${recordPath}`);
+  const canvas = createCanvas(size.width, size.height);
   const ctx = canvas.getContext("2d");
   let background;
   if (typeof spec.background === "string") {
-    if (!HEX.test(spec.background)) fail("header background must be #RRGGBB or { image }");
+    if (!HEX.test(spec.background)) fail(`${label} background must be #RRGGBB or { image }`);
     ctx.fillStyle = spec.background;
-    ctx.fillRect(0, 0, HEADER.width, HEADER.height);
+    ctx.fillRect(0, 0, size.width, size.height);
     background = { color: spec.background.toUpperCase() };
   } else if (spec.background && typeof spec.background.image === "string") {
     const src = resolve(base, spec.background.image);
-    if (!existsSync(src)) fail(`header background image not found: ${src}`);
+    if (!existsSync(src)) fail(`${label} background image not found: ${src}`);
     const image = await loadImage(src);
-    const scale = Math.max(HEADER.width / image.width, HEADER.height / image.height);
-    const sw = HEADER.width / scale;
-    const sh = HEADER.height / scale;
-    ctx.drawImage(image, (image.width - sw) / 2, (image.height - sh) / 2, sw, sh, 0, 0, HEADER.width, HEADER.height);
+    const scale = Math.max(size.width / image.width, size.height / image.height);
+    const sw = size.width / scale;
+    const sh = size.height / scale;
+    ctx.drawImage(image, (image.width - sw) / 2, (image.height - sh) / 2, sw, sh, 0, 0, size.width, size.height);
     background = { image: src, sha256: sha256(src) };
   } else {
-    fail("header background must be #RRGGBB or { image }");
+    fail(`${label} background must be #RRGGBB or { image }`);
   }
   const layers = [];
   for (const [index, layer] of (spec.layers ?? []).entries()) {
-    const label = `header layer ${index + 1}`;
-    if (!layer || typeof layer.src !== "string") fail(`${label} needs src`);
+    const name = `${label} layer ${index + 1}`;
+    if (!layer || typeof layer.src !== "string") fail(`${name} needs src`);
     const src = resolve(base, layer.src);
-    if (!existsSync(src)) fail(`${label} image not found: ${src}`);
-    const size = pngSize(src);
-    const place = placement(layer, label, {});
-    const rotate = layer.rotate === undefined ? 0 : number(layer.rotate, `${label} rotate`, { min: -180, max: 180 });
+    if (!existsSync(src)) fail(`${name} image not found: ${src}`);
+    const imageSize = pngSize(src);
+    const place = placement(layer, name, {});
+    const rotate = layer.rotate === undefined ? 0 : number(layer.rotate, `${name} rotate`, { min: -180, max: 180 });
     const role = layer.role ?? "decoration";
-    const width = place.width * HEADER.width;
-    const height = width * size.height / size.width;
-    const left = place.x * HEADER.width;
-    const top = place.y * HEADER.height;
+    const width = place.width * size.width;
+    const height = width * imageSize.height / imageSize.width;
+    const left = place.x * size.width;
+    const top = place.y * size.height;
     const box = rotatedBox(left, top, width, height, rotate);
-    if (HEADER_PROTECTED_ROLES.includes(role)) {
-      if (!inside(box, area)) fail(`${label} is marked ${role} and runs outside the safe area`);
-      if (overlapsCorner(box)) fail(`${label} is marked ${role} and sits in a top corner under the buttons`);
+    if (CREATIVE_PROTECTED_ROLES.includes(role)) {
+      for (const check of checks) if (!check.test(box)) fail(`${name} is marked ${role} and ${check.problem}`);
     }
     const image = await loadImage(src);
     ctx.save();
     if (layer.shadow) {
       ctx.shadowColor = "rgba(0, 0, 0, 0.28)";
-      ctx.shadowBlur = Math.round(HEADER.height * 0.02);
-      ctx.shadowOffsetY = Math.round(HEADER.height * 0.008);
+      ctx.shadowBlur = Math.round(size.height * 0.02);
+      ctx.shadowOffsetY = Math.round(size.height * 0.008);
     }
     ctx.translate(left + width / 2, top + height / 2);
     if (rotate) ctx.rotate((rotate * Math.PI) / 180);
@@ -701,66 +797,82 @@ export async function renderHeader({ runtime, spec: specPath, out }) {
   }
   const texts = [];
   for (const [index, entry] of (spec.texts ?? []).entries()) {
-    const label = `header text ${index + 1}`;
-    if (!entry || typeof entry.text !== "string" || !entry.text.trim()) fail(`${label} needs text`);
-    const place = placement({ width: 1, ...entry }, label, {});
-    const size = number(entry.size ?? 0.08, `${label} size`, { min: 0.01, max: 0.5 }) * HEADER.height;
+    const name = `${label} text ${index + 1}`;
+    if (!entry || typeof entry.text !== "string" || !entry.text.trim()) fail(`${name} needs text`);
+    const place = placement({ width: 1, ...entry }, name, {});
+    const fontSize = number(entry.size ?? 0.08, `${name} size`, { min: 0.01, max: 0.5 }) * size.height;
     const color = entry.color ?? "#111111";
-    if (!HEX.test(color)) fail(`${label} color must be #RRGGBB`);
+    if (!HEX.test(color)) fail(`${name} color must be #RRGGBB`);
     const font = entry.font ?? "Hiragino Sans";
-    if (typeof font !== "string" || !/^[A-Za-z0-9 .'-]{1,64}$/.test(font)) fail(`${label} font must be a family name`);
+    if (typeof font !== "string" || !/^[A-Za-z0-9 .'-]{1,64}$/.test(font)) fail(`${name} font must be a family name`);
     const weight = entry.weight ?? 700;
     const align = entry.align ?? "left";
-    if (!["left", "center", "right"].includes(align)) fail(`${label} align must be left, center or right`);
+    if (!["left", "center", "right"].includes(align)) fail(`${name} align must be left, center or right`);
     ctx.save();
-    ctx.font = `${weight} ${Math.round(size)}px "${font}"`;
+    ctx.font = `${weight} ${Math.round(fontSize)}px "${font}"`;
     ctx.fillStyle = color;
     ctx.textBaseline = "top";
     ctx.textAlign = align;
     const lines = entry.text.split("\n");
     const width = Math.max(...lines.map((line) => ctx.measureText(line).width));
-    const height = lines.length * size * 1.2;
-    const x = place.x * HEADER.width;
+    const height = lines.length * fontSize * 1.2;
+    const x = place.x * size.width;
     const left = align === "left" ? x : align === "center" ? x - width / 2 : x - width;
-    const box = { left, right: left + width, top: place.y * HEADER.height, bottom: place.y * HEADER.height + height };
+    const box = { left, right: left + width, top: place.y * size.height, bottom: place.y * size.height + height };
     // Text is always protected: it must read on every device crop.
-    if (!inside(box, area)) fail(`${label} runs outside the safe area`);
-    if (overlapsCorner(box)) fail(`${label} sits in a top corner under the buttons`);
-    lines.forEach((line, row) => ctx.fillText(line, x, box.top + row * size * 1.2));
+    for (const check of checks) if (!check.test(box)) fail(`${name} ${check.problem}`);
+    lines.forEach((line, row) => ctx.fillText(line, x, box.top + row * fontSize * 1.2));
     ctx.restore();
     texts.push({ index: index + 1, text: entry.text, box });
   }
   // Work files live in a directory this run creates; the results are published with link(), which
   // refuses an existing destination, and the directory is removed afterwards.
-  const work = mkdtempSync(join(dirname(output), ".render-header-"));
+  const work = mkdtempSync(join(dirname(output), `.render-${still.name}-`));
   try {
-    const rgba = join(work, "header.rgba.png");
-    const rgb = join(work, "header.png");
+    const rgba = join(work, `${still.name}.rgba.png`);
+    const rgb = join(work, `${still.name}.png`);
     writeFileSync(rgba, await canvas.encode("png"));
     execFileSync("ffmpeg", ["-loglevel", "error", "-i", rgba, "-vf", "format=rgb24", "-frames:v", "1", rgb], { stdio: ["ignore", "ignore", "inherit"] });
-    const size = pngSize(rgb);
-    if (size.width !== HEADER.width || size.height !== HEADER.height || size.colorType !== 2) fail(`${output} is not an opaque 3840x1646 header`);
-    const record = { schemaVersion: 1, kind: "product-page-header", output, sha256: sha256(rgb), width: size.width, height: size.height,
-      safeArea: area, clearCorners: HEADER_CLEAR_CORNERS, background, layers, texts };
-    const recordFile = join(work, "header.json");
+    const written = pngSize(rgb);
+    if (written.width !== size.width || written.height !== size.height || written.colorType !== 2) {
+      fail(`${output} is not an opaque ${size.width}x${size.height} ${label}`);
+    }
+    const record = { schemaVersion: 1, kind: still.kind, output, sha256: sha256(rgb), width: written.width, height: written.height, safeArea: area };
+    if (still.name === "header") record.clearCorners = HEADER_CLEAR_CORNERS;
+    if (still.name === "search" && size.width !== still.template.width) record.templateSafeArea = measured;
+    if (still.name === "universal") record.crops = UNIVERSAL_CROPS;
+    Object.assign(record, { background, layers, texts });
+    const recordFile = join(work, `${still.name}.json`);
     writeFileSync(recordFile, `${JSON.stringify(record, null, 2)}\n`);
     try {
       linkSync(rgb, output);
     } catch (error) {
-      if (error.code === "EEXIST") fail(`header output already exists and is never replaced: ${output}`);
+      if (error.code === "EEXIST") fail(`${label} output already exists and is never replaced: ${output}`);
       throw error;
     }
     try {
       linkSync(recordFile, recordPath);
     } catch (error) {
       unlinkSync(output); // the image this run just published, never anything else
-      if (error.code === "EEXIST") fail(`header record already exists and is never replaced: ${recordPath}`);
+      if (error.code === "EEXIST") fail(`${label} record already exists and is never replaced: ${recordPath}`);
       throw error;
     }
     return record;
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
+}
+
+export function renderHeader(options) {
+  return renderStill(STILLS.header, options);
+}
+
+export function renderSearch(options) {
+  return renderStill(STILLS.search, options);
+}
+
+export function renderUniversal(options) {
+  return renderStill(STILLS.universal, options);
 }
 
 async function main(argv) {
@@ -777,16 +889,23 @@ async function main(argv) {
     if (unknown.length) fail(`unknown option: --${unknown[0]}`);
     return render({ runtime, config: options.config, device: options.device, locale: options.locale });
   }
-  if (command === "render-header") {
+  const stills = { "render-header": renderHeader, "render-search": renderSearch, "render-universal": renderUniversal };
+  if (command in stills) {
     for (const name of ["spec", "out"]) if (!options[name]) fail(`missing option: --${name}`);
     const unknown = Object.keys(options).filter((name) => !["spec", "out", "runtime"].includes(name));
     if (unknown.length) fail(`unknown option: --${unknown[0]}`);
-    return renderHeader({ runtime, spec: options.spec, out: options.out });
+    return stills[command]({ runtime, spec: options.spec, out: options.out });
   }
   if (command === "describe-header") {
     return { header: HEADER, safeArea: HEADER_SAFE_AREA, clearCorners: HEADER_CLEAR_CORNERS, protectedRoles: HEADER_PROTECTED_ROLES };
   }
-  fail("command is required: render, render-header, describe or describe-header");
+  if (command === "describe-search") {
+    return { search: SEARCH, safeArea: SEARCH_SAFE_AREA, protectedRoles: CREATIVE_PROTECTED_ROLES };
+  }
+  if (command === "describe-universal") {
+    return { universal: UNIVERSAL, safeArea: UNIVERSAL_SAFE_AREA, crops: UNIVERSAL_CROPS, clearCorners: HEADER_CLEAR_CORNERS, protectedRoles: CREATIVE_PROTECTED_ROLES };
+  }
+  fail("command is required: render, render-header, render-search, render-universal, describe, describe-header, describe-search or describe-universal");
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

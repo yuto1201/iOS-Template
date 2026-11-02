@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "base64"
+require "cgi"
 require "date"
 require "digest"
 require "fileutils"
@@ -14,7 +16,8 @@ require_relative "appstore-preview-quality"
 # recorder, or the user's own screen recordings), passes each through the quality gate, feeds them to
 # Goldie's preview encoder through the render extension, and checks the result against the preview
 # format and the quality gate. `decide` records the user's explicit choice in preview-decision.json:
-# adopt that exact video, or ship no video.
+# adopt that exact video, or ship no video. D-101 (#487): `search-sheet` compares search results images at
+# search-list size on light and dark grounds, and `search-select` records the user's choice of one or none.
 module AppStoreCreativePreview
   SCHEMA_VERSION = 1
   # The render extension's devices (D-079): iphone-6.3 takes the dedicated iPhone 17 Pro's 1206x2622
@@ -76,13 +79,27 @@ module AppStoreCreativePreview
   }.freeze
   # Apple shows the frame at 5 seconds of an App Preview until another poster frame is chosen.
   DEFAULT_POSTER_SECONDS = 5.0
+  # D-101 (#487): a search sheet compares two to six search results images (3:2, made with the render
+  # extension's render-search, or universal images through their 3:2 search crop) at about the size a search results list shows them, on a light and a dark
+  # ground; "none" (no search results image) is always a valid choice. Apple gives no on-screen size, so
+  # the thumbnail is the tool's estimate: the width of an iPhone 17 Pro list (402 pt) less 16 pt margins on
+  # each side, at 3:2, drawn from a 3x image.
+  SEARCH_KIND = "search"
+  SEARCH_OPTIONS = (2..6).freeze
+  SEARCH_THUMBNAIL_POINTS = {"width" => 370, "height" => 247}.freeze
+  SEARCH_THUMBNAIL_PIXELS = {"width" => 1110, "height" => 740}.freeze
+  SEARCH_GROUNDS = {"light" => "#FFFFFF", "dark" => "#000000"}.freeze
+  NO_SEARCH = "none"
+  SHEET_ID_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9-]{0,31}\z/
+  SHEET_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'none'; " \
+    "connect-src 'none'; font-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'"
 
   class Failure < StandardError; end
 
   module_function
 
   def run(argv)
-    command = argv.shift or fail!("command is required: encode, decide, encode-header or verify-header")
+    command = argv.shift or fail!("command is required: encode, decide, encode-header, verify-header, search-sheet or search-select")
     options = parse_options(argv)
     value = case command
             when "encode" then encode(options)
@@ -92,6 +109,8 @@ module AppStoreCreativePreview
             when "describe-specs" then ASSET_SPECS
             when "check-assets" then check_assets(options)
             when "poster-frames" then poster_frames(options)
+            when "search-sheet" then search_sheet(options)
+            when "search-select" then search_select(options)
             else fail!("unknown command: #{command}")
             end
     puts JSON.generate(value)
@@ -586,6 +605,218 @@ module AppStoreCreativePreview
     ensure
       FileUtils.rm_rf(work) if work
     end
+  end
+
+  # --- search results sheet (D-101, #487) ----------------------------------------------------------
+
+  def sheet_text!(value, label, required:)
+    if value.nil?
+      fail!("#{label} is required") if required
+      return
+    end
+    fail!("#{label} must be text") unless value.is_a?(String) && !value.strip.empty? && value.length <= 400
+    fail!("#{label} must not contain markup or a link") if value.match?(%r{[<>]|https?://}i)
+  end
+
+  def png_facts(path)
+    head = File.binread(path, 33).to_s
+    return nil unless head.bytesize == 33 && head.start_with?("\x89PNG\r\n\x1A\n".b)
+    {"width" => head[16, 4].unpack1("N"), "height" => head[20, 4].unpack1("N"), "colorType" => head.getbyte(25)}
+  end
+
+  # Each option is a search results image made with render-search (an opaque 3:2 RGB PNG from 1920x1280 to
+  # 3840x2560) or a universal image made with render-universal (5244x2950, shown through its 3:2 search
+  # crop), with its render record beside it for exactly these bytes.
+  def search_option(option, base)
+    fail!("search option must be an object") unless option.is_a?(Hash)
+    unknown = option.keys - %w[id title hypothesis tradeoffs image]
+    fail!("search option has unknown field #{unknown.first}") unless unknown.empty?
+    id = option["id"]
+    fail!("search option id is invalid: #{id.inspect}") unless id.is_a?(String) && id.match?(SHEET_ID_PATTERN)
+    fail!("search option id #{NO_SEARCH} is reserved for no search results image") if id.downcase == NO_SEARCH
+    %w[title hypothesis tradeoffs].each { |key| sheet_text!(option[key], "#{id}.#{key}", required: true) }
+    fail!("search option #{id} needs image") unless option["image"].is_a?(String) && !option["image"].empty?
+    image = regular!(File.expand_path(option["image"], base), "search option #{id} image")
+    facts = png_facts(image) or fail!("search option #{id} image is not a PNG")
+    spec = ASSET_SPECS.fetch("kinds").fetch("search-image")
+    width, height = facts.values_at("width", "height")
+    universal = [width, height] == ASSET_SPECS.dig("kinds", "universal-image", "sizes").first
+    unless universal || (width * 2 == height * 3 && width.between?(spec["minSize"][0], spec["maxSize"][0]))
+      fail!("search option #{id} image is #{width}x#{height}; a search results image is 3:2 from 1920x1280 to 3840x2560, or a 5244x2950 universal image")
+    end
+    fail!("search option #{id} image has an alpha channel or is not RGB") unless facts["colorType"] == 2
+    record_path = regular!("#{image}.json", "search option #{id} render record")
+    record = JSON.parse(File.binread(record_path))
+    digest = sha256(image)
+    kind = universal ? "universal" : "search-results"
+    unless record.is_a?(Hash) && record["kind"] == kind && record["sha256"] == digest && record.dig("safeArea", "source", "url").is_a?(String)
+      fail!("search option #{id} image has no #{universal ? 'render-universal' : 'render-search'} record for these bytes: #{record_path}")
+    end
+    crop = nil
+    if universal
+      crop = record.dig("crops", "search")
+      unless crop.is_a?(Hash) && %w[x y width height].all? { |key| crop[key].is_a?(Integer) && crop[key] >= 0 } &&
+             crop["x"] + crop["width"] <= width && crop["y"] + crop["height"] <= height
+        fail!("search option #{id} universal record has no 3:2 search crop")
+      end
+      crop = crop.slice("x", "y", "width", "height")
+    end
+    option.merge("image" => image, "sha256" => digest, "kind" => kind, "renderRecord" => record_path, "renderRecordSha256" => sha256(record_path),
+                 "size" => {"width" => width, "height" => height}, "searchCrop" => crop)
+  end
+
+  def search_thumbnail(option, work)
+    image = option.fetch("image")
+    output = File.join(work, ".thumb-#{Digest::SHA256.hexdigest(image)}.png")
+    size = SEARCH_THUMBNAIL_PIXELS
+    crop = option["searchCrop"] ? "crop=#{option['searchCrop'].values_at('width', 'height', 'x', 'y').join(':')}," : ""
+    capture!("ffmpeg", "-loglevel", "error", "-i", image, "-vf", "#{crop}scale=#{size['width']}:#{size['height']}:flags=lanczos,format=rgb24",
+             "-frames:v", "1", output)
+    data = File.binread(output)
+    File.unlink(output)
+    "data:image/png;base64,#{Base64.strict_encode64(data)}"
+  end
+
+  def search_sheet_html(spec, revision, options, thumbnails)
+    h = ->(text) { CGI.escapeHTML(text.to_s) }
+    points = SEARCH_THUMBNAIL_POINTS
+    grounds = ->(option) do
+      SEARCH_GROUNDS.map do |name, color|
+        <<~GROUND.chomp
+          <figure class="ground #{name}" style="background:#{color}"><figcaption>#{name == 'light' ? 'ライト' : 'ダーク'}の地</figcaption>
+          <img class="search-thumb" src="#{thumbnails.fetch(option.fetch('image'))}" width="#{points['width']}" height="#{points['height']}" alt="#{h.(option.fetch('id'))}（#{name}）">
+          <p class="name">#{h.(spec.fetch('app'))}</p></figure>
+        GROUND
+      end.join("\n")
+    end
+    sections = options.map do |option|
+      <<~SECTION
+        <section class="pattern" data-option="#{h.(option.fetch('id'))}"><h2><span class="badge">#{h.(option.fetch('id'))}</span> #{h.(option.fetch('title'))}</h2>
+        <dl><dt>狙い</dt><dd>#{h.(option.fetch('hypothesis'))}</dd><dt>弱点</dt><dd>#{h.(option.fetch('tradeoffs'))}</dd></dl>
+        <div class="grounds">
+        #{grounds.(option)}
+        </div>
+        <p class="meta">#{option['searchCrop'] ? '共用（universal）の画像の3:2の切り抜き ・ ' : ''}#{option.dig('size', 'width')}×#{option.dig('size', 'height')} ・ #{h.(option.fetch('sha256')[0, 19])}…</p>
+        </section>
+      SECTION
+    end.join
+    brief = spec["brief"] ? %(<p class="brief">#{h.(spec['brief'])}</p>) : ""
+    <<~HTML
+      <!doctype html>
+      <html lang="ja">
+      <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta http-equiv="Content-Security-Policy" content="#{SHEET_CONTENT_SECURITY_POLICY}">
+      <title>#{h.(spec.fetch('title'))}</title>
+      <style>
+      :root { color-scheme: light dark; --bg: #f6f5f2; --fg: #1d1d1f; --muted: #5b5b60; --card: #ffffff; --line: #d9d7d2; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #161618; --fg: #f2f2f4; --muted: #a8a8ae; --card: #212124; --line: #3a3a3e; } }
+      body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg); font: 15px/1.6 -apple-system, "Hiragino Sans", sans-serif; }
+      header, section { max-width: 1200px; margin: 0 auto 24px; }
+      .meta { color: var(--muted); font-size: 13px; }
+      .brief, .pattern { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+      .badge { display: inline-block; min-width: 2em; text-align: center; border-radius: 8px; background: var(--fg); color: var(--bg); padding: 0 8px; }
+      dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; } dt { color: var(--muted); }
+      .grounds { display: flex; flex-wrap: wrap; gap: 16px; }
+      .ground { margin: 0; padding: 16px; border-radius: 12px; border: 1px solid var(--line); max-width: 100%; box-sizing: border-box; }
+      .ground.light { color: #1d1d1f; } .ground.dark { color: #f2f2f4; }
+      .ground figcaption, .ground .name { font-size: 13px; margin: 0 0 8px; } .ground .name { margin: 8px 0 0; font-weight: 600; }
+      .search-thumb { display: block; width: #{points['width']}px; max-width: 100%; height: auto; border-radius: 12px; }
+      </style>
+      </head>
+      <body>
+      <header>
+      <h1>#{h.(spec.fetch('title'))}</h1>
+      <p class="meta">#{h.(spec.fetch('app'))} ・ 検索結果の画像（search） ・ revision #{h.(revision)}</p>
+      #{brief}
+      <p class="meta">検索結果の一覧での大きさ（およそ#{points['width']}×#{points['height']}ポイント）で、ライトとダークの地に並べています。案IDを1つ選ぶか、「検索結果の画像なし」（none）を選んでください。作らない場合は、In-App Events、プレビュー動画、スクリーンショットが検索結果に出ます。公開前にApp Store ConnectのPreview toolで確かめます。</p>
+      </header>
+      #{sections}
+      <section class="pattern" data-option="none"><h2><span class="badge">none</span> 検索結果の画像なし</h2><p class="meta">検索結果の画像を使いません。</p></section>
+      </body>
+      </html>
+    HTML
+  end
+
+  # Builds a new revision of the search sheet: sheet.html (the page the user sees) and sheet.json (what it
+  # shows, by SHA-256). A revision is never replaced.
+  def search_sheet(options)
+    %w[spec root revision].each { |name| fail!("missing option: --#{name}") unless options.key?(name) }
+    unknown = options.keys - %w[spec root revision]
+    fail!("unknown option: --#{unknown.first}") unless unknown.empty?
+    revision = options.fetch("revision")
+    fail!("revision must be lowercase letters, digits, and hyphens") unless revision.match?(REVISION_PATTERN)
+    spec_path = regular!(File.expand_path(options.fetch("spec")), "search sheet definition")
+    spec_bytes = File.binread(spec_path)
+    spec = JSON.parse(spec_bytes)
+    fail!("search sheet definition must be an object") unless spec.is_a?(Hash)
+    unknown = spec.keys - %w[schemaVersion kind app title brief options]
+    fail!("search sheet definition has unknown field #{unknown.first}") unless unknown.empty?
+    fail!("search sheet definition schemaVersion must be #{SCHEMA_VERSION}") unless spec["schemaVersion"] == SCHEMA_VERSION
+    fail!("search sheet definition kind must be #{SEARCH_KIND}") unless spec["kind"] == SEARCH_KIND
+    %w[app title].each { |key| sheet_text!(spec[key], key, required: true) }
+    sheet_text!(spec["brief"], "brief", required: false)
+    listed = spec["options"]
+    unless listed.is_a?(Array) && SEARCH_OPTIONS.cover?(listed.length)
+      fail!("a search sheet compares two to six search results images; found #{listed.is_a?(Array) ? listed.length : 0}")
+    end
+    base = File.dirname(spec_path)
+    choices = listed.map { |option| search_option(option, base) }
+    ids = choices.map { |option| option.fetch("id") }
+    fail!("search option ids must be unique") unless ids.uniq.length == ids.length
+    root = File.expand_path(options.fetch("root"))
+    FileUtils.mkdir_p(root, mode: 0o700)
+    destination = File.join(root, revision)
+    fail!("revision already exists and is never replaced: #{revision}") if File.exist?(destination) || File.symlink?(destination)
+    staging = Dir.mktmpdir(".#{revision}.", root)
+    begin
+      thumbnails = {}
+      choices.each { |option| thumbnails[option.fetch("image")] ||= search_thumbnail(option, staging) }
+      html = search_sheet_html(spec, revision, choices, thumbnails)
+      File.binwrite(File.join(staging, "sheet.html"), html)
+      record = {
+        "schemaVersion" => SCHEMA_VERSION, "revision" => revision, "kind" => SEARCH_KIND,
+        "sheetSha256" => "sha256:#{Digest::SHA256.hexdigest(html)}", "definitionSha256" => "sha256:#{Digest::SHA256.hexdigest(spec_bytes)}",
+        "builtAt" => Time.now.utc.iso8601, "thumbnail" => {"points" => SEARCH_THUMBNAIL_POINTS, "pixels" => SEARCH_THUMBNAIL_PIXELS},
+        "grounds" => SEARCH_GROUNDS,
+        "options" => choices.map { |option| option.slice("id", "kind", "image", "sha256", "size", "searchCrop", "renderRecord", "renderRecordSha256") }
+      }
+      File.binwrite(File.join(staging, "sheet.json"), "#{JSON.pretty_generate(record)}\n")
+      File.rename(staging, destination)
+      staging = nil
+      {"status" => "built", "revision" => revision, "sheet" => File.join(destination, "sheet.html"), "sheetSha256" => record.fetch("sheetSha256")}
+    ensure
+      FileUtils.rm_rf(staging) if staging
+    end
+  end
+
+  # The user chooses one search results image or none; the choice is checked against the page the user
+  # saw and the image bytes it showed, and recorded once.
+  def search_select(options)
+    %w[sheet option].each { |name| fail!("missing option: --#{name}") unless options.key?(name) }
+    unknown = options.keys - %w[sheet option]
+    fail!("unknown option: --#{unknown.first}") unless unknown.empty?
+    directory = File.expand_path(options.fetch("sheet"))
+    record = JSON.parse(File.binread(regular!(File.join(directory, "sheet.json"), "search sheet record")))
+    fail!("not a search sheet: #{directory}") unless record.is_a?(Hash) && record["kind"] == SEARCH_KIND
+    html = regular!(File.join(directory, "sheet.html"), "search sheet")
+    fail!("sheet.html differs from its record") unless sha256(html) == record["sheetSha256"]
+    target = File.join(directory, "selection.json")
+    fail!("a selection is already recorded for this sheet and is never replaced") if File.exist?(target) || File.symlink?(target)
+    choice = options.fetch("option")
+    selection = if choice == NO_SEARCH
+                  {"type" => "no-search-image"}
+                else
+                  option = record.fetch("options").find { |item| item["id"] == choice } or fail!("unknown search option id: #{choice}")
+                  image = regular!(option.fetch("image"), "search option #{choice} image")
+                  fail!("search option #{choice} image changed after the sheet was built") unless sha256(image) == option.fetch("sha256")
+                  {"type" => "search-image", "optionId" => choice, "kind" => option.fetch("kind"), "image" => image, "sha256" => option.fetch("sha256")}
+                end
+    value = {"schemaVersion" => SCHEMA_VERSION, "revision" => record.fetch("revision"), "sheetSha256" => record.fetch("sheetSha256"),
+             "selection" => selection, "decision" => "user-explicit", "recordedAt" => Time.now.utc.iso8601}
+    File.open(target, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |file| file.write("#{JSON.pretty_generate(value)}\n") }
+    {"status" => "selected", "selection" => target, "type" => selection.fetch("type")}
   end
 
   # --- decide --------------------------------------------------------------------------------------
