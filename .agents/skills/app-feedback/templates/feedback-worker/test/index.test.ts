@@ -34,7 +34,7 @@ function environment(quotaStatus = 200) {
         },
       }),
     },
-    GITHUB_REPOSITORY: "example-owner/GardenNotes-feedback",
+    GITHUB_REPOSITORY: "example-owner/Feedback-GardenNotes",
   };
   return { env, calls };
 }
@@ -65,7 +65,7 @@ describe("worker entry", () => {
     assert.deepEqual(calls.limiterEntries, ["198.51.100.4"]);
     assert.deepEqual(calls.quotaNames, ["global"]);
     assert.match(calls.quotaBodies[0], /^\{"day":"\d{4}-\d{2}-\d{2}"\}$/);
-    assert.deepEqual(sent, ["https://api.github.com/repos/example-owner/GardenNotes-feedback/issues"]);
+    assert.deepEqual(sent, ["https://api.github.com/repos/example-owner/Feedback-GardenNotes/issues"]);
   });
 
   test("answers 503 when the quota object fails", async () => {

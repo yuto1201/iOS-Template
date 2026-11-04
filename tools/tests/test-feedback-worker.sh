@@ -77,11 +77,23 @@ write_worker() {
   ' "$skill" "$destination" "$worker_name" "$repository" "$namespace"
 }
 
-[[ "$(write_worker "$work/garden-notes" garden-notes-feedback example-owner/GardenNotes-feedback 4242)" == true ]]
+[[ "$(write_worker "$work/garden-notes" garden-notes-feedback example-owner/Feedback-GardenNotes 4242)" == true ]] ||
+  { echo 'the sample values do not fit the placeholder contract' >&2; exit 1; }
 run_worker_tests "$work/garden-notes" rendered
 
+# D-104: the repository is Feedback-<moduleName>; the D-076 name <moduleName>-feedback no longer fits,
+# in the contract or in the Worker's own config test. The Worker keeps <appSlug>-feedback.
+[[ "$(write_worker "$work/old-repository" garden-notes-feedback example-owner/GardenNotes-feedback 4242)" == false ]] ||
+  { echo 'the placeholder contract accepted the D-076 repository name' >&2; exit 1; }
+if (cd "$work/old-repository" && node test/all.ts) >"$work/old-repository.log" 2>&1; then
+  echo 'the Worker config test accepted the D-076 repository name' >&2
+  exit 1
+fi
+grep -Fq 'GITHUB_REPOSITORY has an invalid value' "$work/old-repository.log" || { echo 'unexpected failure for the D-076 repository name' >&2; tail -20 "$work/old-repository.log" >&2; exit 1; }
+
 # A value outside the contract makes the Worker's own config test fail.
-[[ "$(write_worker "$work/bad-name" Bad_Name example-owner/GardenNotes-feedback 4242)" == false ]]
+[[ "$(write_worker "$work/bad-name" Bad_Name example-owner/Feedback-GardenNotes 4242)" == false ]] ||
+  { echo 'the placeholder contract accepted an invalid Worker name' >&2; exit 1; }
 if (cd "$work/bad-name" && node test/all.ts) >"$work/bad-name.log" 2>&1; then
   echo 'the Worker config test accepted an invalid Worker name' >&2
   exit 1

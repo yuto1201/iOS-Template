@@ -88,6 +88,8 @@ when ["POST", "user/repos"]
 else
   match = path.to_s.match(%r{\Arepos/([^/]+/[^/?]+)(/[^?]*)?(\?.*)?\z}) or abort "unexpected gh path #{path}"
   name, rest = match[1], match[2].to_s
+  # GitHub keeps answering for a renamed repository's old name with the repository it now names.
+  name = s.fetch("renamed", {})[name] if !s["repos"].key?(name) && s.fetch("renamed", {}).key?(name)
   repository = s["repos"][name] or not_found.call
   case [method, rest]
   when ["GET", ""]
@@ -399,7 +401,7 @@ digest=$(plan_digest)
 ruby -rjson -e '
   value = JSON.parse(File.read(ARGV[0]))
   plan = value.fetch("plan")
-  abort "plan values differ: #{plan}" unless plan["repository"] == "example-owner/GardenNotes-feedback" &&
+  abort "plan values differ: #{plan}" unless plan["repository"] == "example-owner/Feedback-GardenNotes" &&
     plan["workerName"] == "garden-notes-feedback" && plan["visibility"] == "private" &&
     plan["labels"] == %w[feedback bug request other] && plan["rateLimitNamespaceId"].match?(/\A[1-9][0-9]{0,8}\z/)
   abort "plan state differs: #{value["current"]}" unless value["current"]["repository"] == "to-create" &&
@@ -413,8 +415,8 @@ no_changes 'digest differs' "$state"
 
 provision "$app" "$state" apply --plan-digest "$digest"
 [[ $status == 3 ]] || fail "apply must wait for the installation, got $status: $(cat "$work/err")"
-grep -Fq 'install the shared GitHub App on example-owner/GardenNotes-feedback' "$work/err" || fail 'installation steps are missing'
-[[ "$(count "$state" 'repo-create example-owner/GardenNotes-feedback')" == 1 ]] || fail 'the repository was not created once'
+grep -Fq 'install the shared GitHub App on example-owner/Feedback-GardenNotes' "$work/err" || fail 'installation steps are missing'
+[[ "$(count "$state" 'repo-create example-owner/Feedback-GardenNotes')" == 1 ]] || fail 'the repository was not created once'
 for label in feedback request other; do
   [[ "$(count "$state" "label-create $label")" == 1 ]] || fail "label $label was not created once"
 done
@@ -428,10 +430,10 @@ grep -Fq '"name": "garden-notes-feedback"' "$app/Services/feedback-worker/wrangl
 
 # --- Installed: deploy, secrets, host and record; a rerun creates nothing ------------------------
 
-set_state "$state" 's["installedRepositories"] << "example-owner/GardenNotes-feedback"'
+set_state "$state" 's["installedRepositories"] << "example-owner/Feedback-GardenNotes"'
 provision "$app" "$state" apply --plan-digest "$digest"
 [[ $status == 0 ]] || fail "apply failed after the installation: $(cat "$work/err")"
-[[ "$(count "$state" 'repo-create example-owner/GardenNotes-feedback')" == 1 ]] || fail 'the repository was created twice'
+[[ "$(count "$state" 'repo-create example-owner/Feedback-GardenNotes')" == 1 ]] || fail 'the repository was created twice'
 [[ "$(count "$state" 'deploy garden-notes-feedback')" == 1 ]] || fail 'the Worker was not deployed once'
 for secret in GITHUB_APP_ID GITHUB_APP_INSTALLATION_ID GITHUB_APP_SIGNING_PKCS8; do
   [[ "$(count "$state" "secret-put $secret")" == 1 ]] || fail "secret $secret was not registered once"
@@ -441,7 +443,7 @@ ruby -rjson -rdigest -e '
   secrets = worker.fetch("secrets")
   abort "secret values differ" unless secrets["GITHUB_APP_ID"] == Digest::SHA256.hexdigest(ARGV[1]) &&
     secrets["GITHUB_APP_INSTALLATION_ID"] == Digest::SHA256.hexdigest(ARGV[2]) && secrets["GITHUB_APP_SIGNING_PKCS8"] == "pkcs8-ok"
-  abort "the deployed Worker differs" unless worker["repository"] == "example-owner/GardenNotes-feedback"
+  abort "the deployed Worker differs" unless worker["repository"] == "example-owner/Feedback-GardenNotes"
 ' "$state/state.json" "$APP_ID" "$INSTALLATION_ID"
 grep -Fxq '  "host": "garden-notes-feedback.example-sub.workers.dev"' "$app/GardenNotes/Features/Feedback/FeedbackEndpoint.json" ||
   fail 'the host was not set'
@@ -496,14 +498,14 @@ app2="$work/app2"
 state2="$work/state2"
 make_app "$app2"
 reset_state "$state2"
-set_state "$state2" 's["deployFails"] = true; s["repos"]["example-owner/GardenNotes-feedback"] = {"labels" => %w[bug], "issues" => []}; s["installedRepositories"] << "example-owner/GardenNotes-feedback"'
+set_state "$state2" 's["deployFails"] = true; s["repos"]["example-owner/Feedback-GardenNotes"] = {"labels" => %w[bug], "issues" => []}; s["installedRepositories"] << "example-owner/Feedback-GardenNotes"'
 provision "$app2" "$state2" plan
 [[ $status == 0 ]] || fail "plan failed for the second app: $(cat "$work/err")"
 digest2=$(plan_digest)
 [[ "$digest2" == "$digest" ]] || fail 'the same app values must give the same plan digest'
 provision "$app2" "$state2" apply --plan-digest "$digest2"
 expect_refused 'deploy failure' 'the Worker deploy failed'
-[[ "$(count "$state2" 'repo-create example-owner/GardenNotes-feedback')" == 0 ]] || fail 'an existing repository was created again'
+[[ "$(count "$state2" 'repo-create example-owner/Feedback-GardenNotes')" == 0 ]] || fail 'an existing repository was created again'
 ! grep -q '^secret-put' "$state2/events.log" || fail 'secrets were registered after a failed deploy'
 grep -Fxq '  "host": ""' "$app2/GardenNotes/Features/Feedback/FeedbackEndpoint.json" || fail 'the host was set after a failed deploy'
 [[ ! -e "$app2/Config/app-feedback.json" ]] || fail 'the record was written after a failed deploy'
@@ -515,11 +517,137 @@ grep -Fxq '  "host": "garden-notes-feedback.example-sub.workers.dev"' "$app2/Gar
 
 # A public repository with the planned name is refused.
 reset_state "$state2"
-set_state "$state2" 's["repos"]["example-owner/GardenNotes-feedback"] = {"labels" => [], "issues" => [], "private" => false}'
+set_state "$state2" 's["repos"]["example-owner/Feedback-GardenNotes"] = {"labels" => [], "issues" => [], "private" => false}'
 rm -f "$app2/Config/app-feedback.json"
 printf '{\n  "host": ""\n}\n' > "$app2/GardenNotes/Features/Feedback/FeedbackEndpoint.json"
 provision "$app2" "$state2" apply --plan-digest "$digest2"
 expect_refused 'public repository' 'exists but is not private'
+
+# --- D-104: the D-076 repository name, and an app provisioned with it -----------------------------
+
+legacy="example-owner/GardenNotes-feedback"
+renamed="example-owner/Feedback-GardenNotes"
+worker_files=(wrangler.jsonc README.md test/config.test.ts test/github.test.ts test/github-app-auth.test.ts test/index.test.ts)
+
+# to_legacy FILE: the D-076 bytes of a Worker file that D-104 changed.
+to_legacy() {
+  sed -e 's/Feedback-GardenNotes/GardenNotes-feedback/g' -e 's/Feedback-OtherApp/OtherApp-feedback/g' \
+    -e 's/repositoryName(repository).startsWith("Feedback-")/repositoryName(repository).endsWith("-feedback")/' \
+    -e 's#`<GitHub login>/Feedback-<moduleName>` (private, D-104)#`<GitHub login>/<moduleName>-feedback` (private)#' "$1"
+}
+
+# A new app whose D-076 repository still exists under that name stops before anything is made, so a
+# repository that holds feedback is not left behind next to a new, empty one.
+app3="$work/app3"
+state3="$work/state3"
+make_app "$app3"
+reset_state "$state3"
+set_state "$state3" "s[\"repos\"][\"$legacy\"] = {\"labels\" => %w[feedback bug request other], \"issues\" => []}; s[\"installedRepositories\"] << \"$legacy\""
+provision "$app3" "$state3" plan
+expect_refused 'D-076 name, plan' "$legacy still has the D-076 name; rename it to $renamed on GitHub first"
+grep -Fq 'Settings > Repository name' "$work/err" || fail 'the rename steps are missing'
+provision "$app3" "$state3" apply --plan-digest "$digest"
+expect_refused 'D-076 name, apply' "$legacy still has the D-076 name"
+no_changes 'D-076 name' "$state3"
+[[ ! -e "$app3/Services" && ! -e "$app3/Config/app-feedback.json" ]] || fail 'a refusal for the D-076 name wrote files'
+
+# The app as the D-076 tool left it: the Worker and the record name GardenNotes-feedback, and the
+# deployed Worker sends there. The plan digest of that tool covered its own Worker template.
+reset_state "$state3"
+set_state "$state3" "s[\"repos\"][\"$renamed\"] = {\"labels\" => %w[feedback bug request other], \"issues\" => []}; s[\"installedRepositories\"] << \"$renamed\""
+provision "$app3" "$state3" plan
+[[ $status == 0 ]] || fail "plan failed for the migration sample: $(cat "$work/err")"
+cp "$work/out" "$work/plan3.json"
+digest3=$(plan_digest)
+provision "$app3" "$state3" apply --plan-digest "$digest3"
+[[ $status == 0 ]] || fail "apply failed for the migration sample: $(cat "$work/err")"
+for file in "${worker_files[@]}"; do
+  to_legacy "$app3/Services/feedback-worker/$file" > "$work/legacy-file"
+  mv "$work/legacy-file" "$app3/Services/feedback-worker/$file"
+done
+grep -Fq "\"GITHUB_REPOSITORY\": \"$legacy\"" "$app3/Services/feedback-worker/wrangler.jsonc" || fail 'the D-076 Worker was not made'
+# The record keeps the D-076 plan digest: the plan with the old repository and the old template.
+ruby -rjson -rdigest -e '
+  app, template, plan_output, legacy, *changed = ARGV
+  canonical = ->(value) { value.is_a?(Hash) ? value.keys.sort.map { |key| [key, canonical.(value[key])] }.to_h : value }
+  digest = ->(value) { "sha256:#{Digest::SHA256.hexdigest(JSON.generate(canonical.(value)))}" }
+  files = Dir.glob("**/*", File::FNM_DOTMATCH, base: template).sort.select { |relative| File.file?(File.join(template, relative)) }
+  old_template = files.map do |relative|
+    source = changed.include?(relative) ? File.join(app, "Services/feedback-worker", relative) : File.join(template, relative)
+    [relative, Digest::SHA256.file(source).hexdigest]
+  end.to_h
+  plan = JSON.parse(File.read(plan_output)).fetch("plan")
+  abort "the sample plan does not cover this template" unless plan["workerTemplateDigest"] != digest.(old_template)
+  plan["repository"] = legacy
+  plan["workerTemplateDigest"] = digest.(old_template)
+  path = File.join(app, "Config/app-feedback.json")
+  record = JSON.parse(File.read(path))
+  record["repository"] = legacy
+  record["planDigest"] = digest.(plan)
+  File.write(path, JSON.pretty_generate(record) + "\n")
+' "$app3" "$repo_root/.agents/skills/app-feedback/templates/feedback-worker" "$work/plan3.json" "$legacy" "${worker_files[@]:1}"
+set_state "$state3" "s[\"workers\"][\"garden-notes-feedback\"][\"repository\"] = \"$legacy\""
+
+# Before the rename, the migration stops too and changes nothing.
+set_state "$state3" "s[\"repos\"][\"$legacy\"] = s[\"repos\"].delete(\"$renamed\"); s[\"installedRepositories\"] = [\"$legacy\"]"
+: > "$state3/events.log"
+provision "$app3" "$state3" plan
+expect_refused 'migration before the rename' "$legacy still has the D-076 name"
+no_changes 'migration before the rename' "$state3"
+grep -Fq "\"GITHUB_REPOSITORY\": \"$legacy\"" "$app3/Services/feedback-worker/wrangler.jsonc" || fail 'a refusal changed the Worker'
+
+# With neither name on GitHub, the migration stops instead of creating a new repository.
+set_state "$state3" "s[\"repos\"].delete(\"$legacy\")"
+provision "$app3" "$state3" apply --plan-digest "$digest3"
+expect_refused 'migration without a repository' "$renamed does not exist; rename $legacy to $renamed on GitHub first"
+no_changes 'migration without a repository' "$state3"
+
+# After the rename (the App installation follows the repository), plan shows the migration, and
+# apply rewrites the Worker, deploys the same Worker again and records the new name. The host, the
+# app's endpoint, the labels and the secrets stay as they were.
+set_state "$state3" "s[\"repos\"][\"$renamed\"] = {\"labels\" => %w[feedback bug request other], \"issues\" => []}; s[\"renamed\"] = {\"$legacy\" => \"$renamed\"}; s[\"installedRepositories\"] = [\"$renamed\"]"
+cp "$app3/GardenNotes/Features/Feedback/FeedbackEndpoint.json" "$work/endpoint3.json"
+provision "$app3" "$state3" plan
+[[ $status == 0 ]] || fail "plan failed after the rename: $(cat "$work/err")"
+[[ "$(plan_digest)" == "$digest3" ]] || fail 'the migration changed the plan digest'
+ruby -rjson -e '
+  current = JSON.parse(File.read(ARGV[0])).fetch("current")
+  abort "migration plan differs: #{current}" unless current["repository"] == "exists" && current["workerDirectory"] == "to-migrate" &&
+    current["migrateFrom"] == ARGV[1] && current["installedOnRepository"] == true && current["missingLabels"] == []
+' "$work/out" "$legacy"
+no_changes 'migration plan' "$state3"
+provision "$app3" "$state3" apply --plan-digest "$digest3"
+[[ $status == 0 ]] || fail "the migration failed: $(cat "$work/err")"
+for file in "${worker_files[@]}"; do
+  cmp -s "$app3/Services/feedback-worker/$file" "$app/Services/feedback-worker/$file" || fail "the migration did not rewrite $file"
+done
+! grep -q '^repo-create\|^label-create\|^secret-put' "$state3/events.log" || fail "the migration created something: $(cat "$state3/events.log")"
+[[ "$(count "$state3" 'deploy garden-notes-feedback')" == 1 ]] || fail 'the migration did not deploy the same Worker once'
+ruby -rjson -e '
+  s = JSON.parse(File.read(ARGV[0]))
+  abort "the deployed Worker still sends to the old name" unless s["workers"]["garden-notes-feedback"]["repository"] == ARGV[2]
+  record = JSON.parse(File.read(ARGV[1]))
+  abort "record differs after the migration: #{record}" unless record["repository"] == ARGV[2] && record["planDigest"] == ARGV[3] &&
+    record["host"] == "garden-notes-feedback.example-sub.workers.dev"
+' "$state3/state.json" "$app3/Config/app-feedback.json" "$renamed" "$digest3"
+cmp -s "$app3/GardenNotes/Features/Feedback/FeedbackEndpoint.json" "$work/endpoint3.json" || fail 'the migration changed the app endpoint'
+provision "$app3" "$state3" check-delivery --plan-digest "$digest3"
+[[ $status == 0 ]] || fail "delivery failed after the migration: $(cat "$work/err")"
+ruby -rjson -e 'value = JSON.parse(File.read(ARGV[0])); abort "delivery differs: #{value}" unless value["status"] == "delivered" && value["repository"] == ARGV[1]' "$work/out" "$renamed"
+provision "$app3" "$state3" plan
+ruby -rjson -e 'current = JSON.parse(File.read(ARGV[0])).fetch("current"); abort "the migration repeats: #{current}" unless current["workerDirectory"] == "written" && current["migrateFrom"].nil?' "$work/out"
+
+# Only the D-076 Worker of the previous template migrates; any other change still stops.
+for file in "${worker_files[@]}"; do
+  to_legacy "$app3/Services/feedback-worker/$file" > "$work/legacy-file"
+  mv "$work/legacy-file" "$app3/Services/feedback-worker/$file"
+done
+printf '\n' >> "$app3/Services/feedback-worker/src/index.ts"
+: > "$state3/events.log"
+provision "$app3" "$state3" apply --plan-digest "$digest3"
+expect_refused 'changed D-076 Worker' 'Services/feedback-worker already exists and differs from the planned Worker'
+no_changes 'changed D-076 Worker' "$state3"
+grep -Fq "\"GITHUB_REPOSITORY\": \"$legacy\"" "$app3/Services/feedback-worker/wrangler.jsonc" || fail 'a refusal rewrote the Worker'
 
 # --- Production mode and secrets -----------------------------------------------------------------
 
@@ -531,7 +659,7 @@ expect_refused 'production overrides' 'test overrides are not allowed in product
 
 # No secret value in what the tool printed, in any child's argv, or in the app's files.
 for secret in "$APP_ID" "$INSTALLATION_ID" "$pem_line" "$pkcs8_line"; do
-  ! grep -rqF -- "$secret" "$work/all-output" "$state/calls.log" "$state2/calls.log" "$app" "$app2" ||
+  ! grep -rqF -- "$secret" "$work/all-output" "$state/calls.log" "$state2/calls.log" "$state3/calls.log" "$app" "$app2" "$app3" ||
     fail 'a secret value appeared in the output, a command line, or the app'
 done
 ! grep -qF 'person@example.invalid' "$work/all-output" || fail 'the Cloudflare account email was printed'

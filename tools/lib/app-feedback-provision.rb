@@ -5,7 +5,9 @@
 # feedback repository and its labels, the app's Cloudflare Worker with its secrets, and the host the
 # app sends to. `plan` only reads; `apply` changes nothing unless the user approved the same plan;
 # `check-delivery` runs apply for the approved plan and then sends one real submission. Secrets go to
-# child processes on stdin only.
+# child processes on stdin only. The repository is `<login>/Feedback-<moduleName>` (D-104); an app
+# provisioned with the D-076 name `<login>/<moduleName>-feedback` moves to it once the user has
+# renamed the repository on GitHub.
 
 require "base64"
 require "digest"
@@ -47,6 +49,15 @@ module IOSTemplate
       IOS_TEMPLATE_TEST_CURL_BIN IOS_TEMPLATE_TEST_NODE_BIN
     ].freeze
     EXIT_WAITING = 3
+    # SHA-256 of the D-076 Worker template files that D-104 changed. An app's Worker written from that
+    # template, for the D-076 repository name, is rewritten in place instead of refused.
+    LEGACY_WORKER_FILES = {
+      "README.md" => "7daed1432cbf17371ff0eaf5d2fb9ca7616f88bd97cc44b923b72ca6cb707b07",
+      "test/config.test.ts" => "b836a4003de56ac43f3157fa71e4ff58ebb5239652edce1636eb8bc48d308503",
+      "test/github-app-auth.test.ts" => "248a31527c4622165aba1332195691aaa7d676f0e04aafed0ccc809c685c69c8",
+      "test/github.test.ts" => "103356987e83991166c753b6425a0873496fc0ef9da7bc238c17ea2705a35b4a",
+      "test/index.test.ts" => "423575c49a95d57695c7a5d72142e0bbb69bf3cfb6720b0b7aad884d708d8815"
+    }.freeze
 
     module_function
 
@@ -162,7 +173,8 @@ module IOSTemplate
         contract = json_object("#{SKILL}/worker-values.json", read_regular("#{SKILL}/worker-values.json") || refuse("#{SKILL}/worker-values.json is missing"))
         patterns = contract.fetch("placeholders").map { |name, rule| [name, Regexp.new(rule.fetch("pattern"))] }.to_h
         worker = "#{slug}-feedback"
-        repository = "#{login}/#{module_name}-feedback"
+        repository = "#{login}/Feedback-#{module_name}"
+        legacy_repository = "#{login}/#{module_name}-feedback"
         namespace = (Digest::SHA256.hexdigest("#{account}/#{worker}")[0, 15].to_i(16) % 999_999_999 + 1).to_s
         refuse("Worker name #{worker} does not fit the Worker template") unless worker.match?(patterns.fetch("WORKER_NAME"))
         refuse("repository #{repository} does not fit the Worker template") unless repository.match?(patterns.fetch("GITHUB_REPOSITORY"))
@@ -175,7 +187,7 @@ module IOSTemplate
         refuse("#{endpoint} is missing; the app does not have the feedback feature") if read_regular(endpoint, 4096).nil?
         {
           "displayName" => display_name, "moduleName" => module_name, "appSlug" => slug, "login" => login,
-          "repository" => repository, "workerName" => worker, "accountId" => account,
+          "repository" => repository, "legacyRepository" => legacy_repository, "workerName" => worker, "accountId" => account,
           "rateLimitNamespaceId" => namespace, "endpointFile" => endpoint,
           "secretNamespace" => "github-#{login.downcase}"
         }
@@ -199,14 +211,19 @@ module IOSTemplate
           files[relative] = File.binread(full)
         end
         refuse("#{TEMPLATE} has no wrangler.jsonc") unless files.key?("wrangler.jsonc")
+        refuse("#{TEMPLATE} no longer has the files D-104 changed") unless (LEGACY_WORKER_FILES.keys - files.keys).empty?
         files
       end
     end
 
-    def rendered_worker
+    def template_digests
+      template_files.map { |relative, bytes| [relative, Digest::SHA256.hexdigest(bytes)] }.to_h
+    end
+
+    def rendered_worker(repository = values.fetch("repository"))
       replacements = {
         "WORKER_NAME" => values.fetch("workerName"),
-        "GITHUB_REPOSITORY" => values.fetch("repository"),
+        "GITHUB_REPOSITORY" => repository,
         "RATE_LIMIT_NAMESPACE_ID" => values.fetch("rateLimitNamespaceId")
       }
       template_files.map do |relative, bytes|
@@ -229,12 +246,18 @@ module IOSTemplate
         "cloudflareAccountId" => values.fetch("accountId"),
         "rateLimitNamespaceId" => values.fetch("rateLimitNamespaceId"),
         "workerDirectory" => WORKER_DIRECTORY,
-        "workerTemplateDigest" => digest(template_files.map { |relative, bytes| [relative, Digest::SHA256.hexdigest(bytes)] }.to_h),
+        "workerTemplateDigest" => digest(template_digests),
         "endpointFile" => values.fetch("endpointFile"),
         "record" => RECORD,
         "secretNamespace" => values.fetch("secretNamespace"),
         "wranglerVersion" => WRANGLER_VERSION
       }
+    end
+
+    # The plan the D-076 tool made for this app: the old repository name and the old Worker template.
+    def legacy_plan
+      plan.merge("repository" => values.fetch("legacyRepository"),
+                 "workerTemplateDigest" => digest(template_digests.merge(LEGACY_WORKER_FILES)))
     end
 
     # --- Child processes -----------------------------------------------------------------------
@@ -353,6 +376,40 @@ module IOSTemplate
         gh("label-create", "--method", "POST", "repos/#{values.fetch("repository")}/labels", "-f", "name=#{label["name"]}",
            "-f", "color=#{label["color"]}", "-f", "description=#{label["description"]}")
       end
+    end
+
+    # D-104: the D-076 repository must have been renamed on GitHub before anything is made, so the
+    # feedback it holds is not left behind next to a new, empty repository. After a rename GitHub
+    # answers for the old name with the repository it now names.
+    def check_legacy_repository!
+      legacy = values.fetch("legacyRepository")
+      found = gh("legacy-repository-read", "repos/#{legacy}", allow_not_found: true)
+      return if found == :not_found
+      refuse("GitHub repository response is unreadable") unless found.is_a?(Hash)
+      return if found["full_name"] == values.fetch("repository")
+      if found["full_name"] == legacy
+        refuse("#{legacy} still has the D-076 name; rename it to #{values.fetch("repository")} on GitHub first: #{rename_steps}")
+      end
+      refuse("#{legacy} resolves to another repository, #{found["full_name"]}")
+    end
+
+    def rename_steps
+      "GitHub > #{values.fetch("legacyRepository")} > Settings > Repository name > " \
+        "#{values.fetch("repository").split("/", 2).last} > Rename; then run plan again"
+    end
+
+    # An app provisioned with the D-076 name: its Worker or its record still names that repository.
+    def migrate_from
+      saved = record
+      legacy = values.fetch("legacyRepository")
+      worker_state == :legacy || (saved && saved["repository"] == legacy) ? legacy : nil
+    end
+
+    def check_migration_target!
+      return unless migrate_from && !repository_state["exists"]
+
+      refuse("#{values.fetch("repository")} does not exist; rename #{values.fetch("legacyRepository")} to " \
+             "#{values.fetch("repository")} on GitHub first: #{rename_steps}")
     end
 
     # --- The shared GitHub App -----------------------------------------------------------------
@@ -515,11 +572,11 @@ module IOSTemplate
       path(WORKER_DIRECTORY)
     end
 
-    # nil: absent; true: the same bytes as the plan; refuses when anything else is there.
+    # nil: absent; :current: the same bytes as the plan; :legacy: the D-076 template written for the
+    # D-076 repository name (D-104); refuses when anything else is there.
     def worker_state
       directory = directory_inside!(WORKER_DIRECTORY)
       return nil unless File.exist?(directory)
-      expected = rendered_worker
       present = {}
       Dir.glob("**/*", File::FNM_DOTMATCH, base: directory).sort.each do |relative|
         parts = relative.split("/")
@@ -531,13 +588,34 @@ module IOSTemplate
         next if stat.directory?
         present[relative] = File.binread(full)
       end
-      return true if present == expected
+      return :current if present == rendered_worker
+      return :legacy if legacy_worker?(present)
 
       refuse("#{WORKER_DIRECTORY} already exists and differs from the planned Worker; resolve it by hand")
     end
 
+    def legacy_worker?(present)
+      legacy = rendered_worker(values.fetch("legacyRepository"))
+      present.keys.sort == legacy.keys.sort && present.all? do |relative, bytes|
+        old = LEGACY_WORKER_FILES[relative]
+        old ? Digest::SHA256.hexdigest(bytes) == old : bytes == legacy.fetch(relative)
+      end
+    end
+
+    # Rewrites only the files D-104 changed, each through a temporary sibling and a rename.
+    def migrate_worker!
+      progress("moving #{WORKER_DIRECTORY} to #{values.fetch("repository")}")
+      rendered_worker.each do |relative, bytes|
+        file = "#{WORKER_DIRECTORY}/#{relative}"
+        write_atomically(file, bytes) unless read_regular(file, 1_048_576) == bytes
+      end
+      refuse("#{WORKER_DIRECTORY} differs from the planned Worker after the migration") unless worker_state == :current
+    end
+
     def write_worker!
-      return if worker_state
+      state = worker_state
+      return if state == :current
+      return migrate_worker! if state == :legacy
 
       progress("writing #{WORKER_DIRECTORY} from the Worker template")
       parent = directory_inside!(File.dirname(WORKER_DIRECTORY))
@@ -624,10 +702,15 @@ module IOSTemplate
       }
     end
 
+    # The record the D-076 tool wrote for this app.
+    def legacy_record(host)
+      expected_record(host).merge("repository" => values.fetch("legacyRepository"), "planDigest" => digest(legacy_plan))
+    end
+
     def check_local_settings!
       current = endpoint_host
       saved = record
-      if saved && saved != expected_record(saved["host"])
+      if saved && saved != expected_record(saved["host"]) && saved != legacy_record(saved["host"])
         refuse("#{RECORD} differs from the plan; resolve it by hand")
       end
       if !current.empty? && (saved.nil? || saved["host"] != current)
@@ -652,6 +735,8 @@ module IOSTemplate
       check_local_settings!
       worker_state
       check_github_account!
+      check_legacy_repository!
+      check_migration_target!
       check_cloudflare_account!
       credentials
       check_github_app!
@@ -669,7 +754,8 @@ module IOSTemplate
           "repository" => repository["exists"] ? "exists" : "to-create",
           "missingLabels" => repository["exists"] ? repository["missingLabels"] : LABELS.map { |label| label["name"] },
           "installedOnRepository" => installed,
-          "workerDirectory" => worker_state ? "written" : "to-write",
+          "workerDirectory" => {current: "written", legacy: "to-migrate"}.fetch(worker_state, "to-write"),
+          "migrateFrom" => migrate_from,
           "host" => saved ? saved["host"] : nil
         }
       }

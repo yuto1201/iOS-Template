@@ -36,7 +36,7 @@ node test/all.ts
 | Setting | Where | Value |
 | --- | --- | --- |
 | Worker name | `wrangler.jsonc` `name` | `<appSlug>-feedback` |
-| Feedback repository | `wrangler.jsonc` `vars.GITHUB_REPOSITORY` | `<GitHub login>/<moduleName>-feedback` (private); the installation token and User-Agent follow its name |
+| Feedback repository | `wrangler.jsonc` `vars.GITHUB_REPOSITORY` | `<GitHub login>/Feedback-<moduleName>` (private, D-104); the installation token and User-Agent follow its name |
 | Rate-limit namespace | `wrangler.jsonc` `ratelimits[0].namespace_id` | A positive integer unique in the Cloudflare account, so apps never share per-sender counts |
 | Daily limit | `wrangler.jsonc` `vars.DAILY_ISSUE_LIMIT` | `100` |
 | GitHub App | Worker secrets `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_SIGNING_PKCS8` | The shared App (Issues: Read and write only, no webhook), installed on the feedback repository |

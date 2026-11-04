@@ -11,7 +11,7 @@ const pkcs8 = await crypto.subtle.exportKey("pkcs8", keys.privateKey);
 const pem = `-----BEGIN ${pkcs8PemLabel}-----\n${Buffer.from(pkcs8).toString("base64").match(/.{1,64}/g)!.join("\n")}\n-----END ${pkcs8PemLabel}-----`;
 const start = Date.parse("2026-09-28T00:00:00Z");
 
-function environment(repository = "example-owner/GardenNotes-feedback"): WorkerEnv {
+function environment(repository = "example-owner/Feedback-GardenNotes"): WorkerEnv {
   return {
     GITHUB_REPOSITORY: repository,
     GITHUB_APP_ID: "12345",
@@ -41,14 +41,14 @@ describe("githubAppAuth", () => {
     assert.equal(calls[0].input, "https://api.github.com/app/installations/67890/access_tokens");
     assert.equal(calls[0].init.method, "POST");
     assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
-      permissions: { issues: "write" }, repositories: ["GardenNotes-feedback"],
+      permissions: { issues: "write" }, repositories: ["Feedback-GardenNotes"],
     });
     assert.ok(calls[0].init.signal instanceof AbortSignal);
     const headers = calls[0].init.headers as Record<string, string>;
     assert.equal(headers.Accept, "application/vnd.github+json");
     assert.equal(headers["Content-Type"], "application/json");
     assert.equal(headers["X-GitHub-Api-Version"], "2022-11-28");
-    assert.equal(headers["User-Agent"], "GardenNotes-feedback-worker");
+    assert.equal(headers["User-Agent"], "Feedback-GardenNotes-worker");
 
     const [encodedHeader, encodedClaims, encodedSignature] = headers.Authorization.replace(/^Bearer /, "").split(".");
     assert.deepEqual(JSON.parse(Buffer.from(decodeBase64url(encodedHeader)).toString()), { alg: "RS256", typ: "JWT" });
@@ -65,13 +65,13 @@ describe("githubAppAuth", () => {
 
   test("scopes the token and User-Agent to the configured repository, not a fixed app", async () => {
     const calls: { input: string; init: RequestInit }[] = [];
-    const auth = githubAppAuth(environment("acme/OtherApp-feedback"), async (input, init) => {
+    const auth = githubAppAuth(environment("acme/Feedback-OtherApp"), async (input, init) => {
       calls.push({ input, init });
       return response("other-token", start + 60 * 60_000);
     }, () => new Date(start));
     await auth.requestHeaders();
-    assert.deepEqual(JSON.parse(String(calls[0].init.body)).repositories, ["OtherApp-feedback"]);
-    assert.equal((calls[0].init.headers as Record<string, string>)["User-Agent"], "OtherApp-feedback-worker");
+    assert.deepEqual(JSON.parse(String(calls[0].init.body)).repositories, ["Feedback-OtherApp"]);
+    assert.equal((calls[0].init.headers as Record<string, string>)["User-Agent"], "Feedback-OtherApp-worker");
   });
 
   test("does not contact GitHub while the repository is still the template placeholder", async () => {

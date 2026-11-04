@@ -1246,3 +1246,18 @@
   - 自分の実機へのビルド（D-086）はDebugなので、実機には`.dev`の開発版が入る。開発版のprovisioning profileは、Xcodeの自動署名で最初の1回だけユーザーが用意する。
 - Consequence: 開発版とApp Store版が同じiPhoneに並び、開発版を入れてもApp Store版とそのデータは残る。既に本番のBundle IDで実機に入っている開発版のデータは移さない。iCloud、App Group、共有のKeychainを使うアプリの開発用のcontainerやgroupは別に決める。Debugでは、アプリの中で表示名を使う文言（レビューの依頼など）に`Dev`が付く。`AGENTS.md`は変えない。
 - Related Issue: #476, #505, #512（文面は、ユーザーが2026-11-01に承認した：https://github.com/yuto1201/iOS-Template/issues/476#issuecomment-6559321824）
+
+## D-104: アプリ内フィードバックの非公開リポジトリを`Feedback-<moduleName>`にし、Worker名`<appSlug>-feedback`は変えない
+
+- Date: 2026-11-05
+- Status: 確定
+- Supersedes: D-076のうち、非公開リポジトリの名前`<GitHubのlogin>/<moduleName>-feedback`だけを置き換える。Worker名、host、送る内容、回数制限、GitHub App、準備の手順は変えない。
+- Context: ユーザーはGitHubのリポジトリを、先頭の語で種類が分かるように整理している（`iOS-<アプリ>`など）。D-076の名前は末尾に`-feedback`が付くため、一覧でフィードバック用のリポジトリだとすぐに分からない。2026-11-05、ユーザーはリポジトリの名前を逆にし、Fを大文字にすると決めた。
+- Decision:
+  - 非公開リポジトリは`<GitHubのlogin>/Feedback-<moduleName>`とする（例：`yuto1201/Feedback-CafLog`）。準備tool（`tools/provision-app-feedback.sh`）はこの名前で作り、Workerの`GITHUB_REPOSITORY`にこの名前を書く。
+  - Cloudflare Workerの名前は`<appSlug>-feedback`のまま変えない。Workerの名前を変えると`workers.dev`のhostが変わり、アプリの送信先の設定（`FeedbackEndpoint.json`）が変わって、アプリの更新が要るため。リポジトリとWorkerで名前の向きが逆になるのは、リポジトリは一覧での見分けやすさ、Workerはアプリの送信先を変えないことを優先するためである。
+  - D-076の名前のリポジトリがその名前のまま残っている間は、準備toolは新しいリポジトリを作らずに止まり、GitHubで改名する手順を示す。フィードバックのたまったリポジトリの横に、空のリポジトリを作らないため。
+  - D-076の名前で準備したアプリは、ユーザーがGitHubの画面（Settings > Repository name）でリポジトリを改名した後、準備toolの`plan`と`apply`で移す。toolは、一つ前のWorkerのひな形をD-076の名前で書き出したままの`Services/feedback-worker/`だけを新しい名前に書き換え、同じWorker名でdeployし直し、`Config/app-feedback.json`を新しい名前で記録する。hostとアプリの設定は変わらない。ほかの食い違いは、これまでどおり止まる。共通GitHub Appのinstallは、改名してもそのリポジトリに残る。
+  - リポジトリの改名は、AIが行える外部操作に加えない。ユーザーが行う。
+- Consequence: Workerは、installation tokenをリポジトリの名前で絞って求めるため、改名してから配備し直すまでの間は、そのアプリのフィードバックが届かない（アプリには送信の失敗が出る）。そのため、改名と配備し直しは、アプリごとに続けて行う。アプリの更新は要らない。D-076の名前で準備した`yuto1201/CafLog-feedback`、`Flower-feedback`、`SimplePomo-feedback`、`PayCycle-feedback`は、各アプリのIssueで移す。フィードバックをまだ準備していないアプリは、テンプレートを取り込んだ後の準備で、最初から新しい名前になる。
+- Related Issue: #525

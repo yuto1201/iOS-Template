@@ -81,7 +81,7 @@ preflight証拠には秘密値を含めず、Issue、executor、provider、accou
 
 Linear／Vercelのmutation operationは、必要なworkflowとschemaを別Issueで追加するまでallowlistへ含めません。利用可能なconnectorが存在することだけではmutation権限になりません。
 
-`github.create_repository`は、アプリ内フィードバック（D-076）の準備tool `tools/provision-app-feedback.sh`が、設定済みGitHub loginの下に非公開の`<GitHub login>/<moduleName>-feedback`とそのlabelを作る場合だけに使います。strictのprofileを要し、宣言は`Approval required: yes`とし、ユーザーが承認した計画のdigestでだけ実行します。ほかのリポジトリの作成、公開リポジトリ、既存リポジトリの設定変更には使いません。
+`github.create_repository`は、アプリ内フィードバック（D-076）の準備tool `tools/provision-app-feedback.sh`が、設定済みGitHub loginの下に非公開の`<GitHub login>/Feedback-<moduleName>`（D-104）とそのlabelを作る場合だけに使います。D-076の名前`<GitHub login>/<moduleName>-feedback`からの改名はユーザーがGitHubの画面で行い、AIは行いません。strictのprofileを要し、宣言は`Approval required: yes`とし、ユーザーが承認した計画のdigestでだけ実行します。ほかのリポジトリの作成、公開リポジトリ、既存リポジトリの設定変更には使いません。
 
 App Store Connectの公開APIで扱える操作は、[D-059](../specs/decisions.md#d-059-app-store-connect-api操作を固定版ascのguarded-adapterへ集約する)の固定版`asc` guarded runnerだけで行います。`appstore.distribute_testflight`の宣言には他のlive `appstore.*`と同じ`release` stage、`full` scope、`strict`、Issue contractとExecutorの一致を要します。production preflightは宣言済みoperationごとに読取専用照会と証拠発行を行い、そのoperation自体は実行しません。live操作には設定済みownership、同一Headの検証・レビュー、必要なユーザー承認を別途要します。App Privacy申告だけは既存のauthenticated browser sectionで行います。
 
