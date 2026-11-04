@@ -6,7 +6,7 @@ const content = { title: "[Bug] Crash", body: "## Feedback", labels: ["feedback"
 
 function client(status: number, calls: { input: string; init: RequestInit }[]): GitHubClient {
   return {
-    repository: "example-owner/GardenNotes-feedback",
+    repository: "example-owner/Feedback-GardenNotes",
     auth: { requestHeaders: async () => ({ "X-Test-Credential": "installation-123" }) },
     send: async (input, init) => {
       calls.push({ input, init });
@@ -20,13 +20,13 @@ describe("createIssue", () => {
     const calls: { input: string; init: RequestInit }[] = [];
     await createIssue(content, client(201, calls));
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].input, "https://api.github.com/repos/example-owner/GardenNotes-feedback/issues");
+    assert.equal(calls[0].input, "https://api.github.com/repos/example-owner/Feedback-GardenNotes/issues");
     assert.equal(calls[0].init.method, "POST");
     assert.deepEqual(calls[0].init.headers, {
       "X-Test-Credential": "installation-123",
       Accept: "application/vnd.github+json",
       "Content-Type": "application/json",
-      "User-Agent": "GardenNotes-feedback-worker",
+      "User-Agent": "Feedback-GardenNotes-worker",
       "X-GitHub-Api-Version": "2022-11-28",
     });
     assert.deepEqual(JSON.parse(String(calls[0].init.body)), content);

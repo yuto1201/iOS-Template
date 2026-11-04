@@ -3,8 +3,8 @@
   "template": "templates/feedback-worker",
   "placeholders": {
     "GITHUB_REPOSITORY": {
-      "value": "<GitHub login>/<moduleName>-feedback",
-      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,91}-feedback$"
+      "value": "<GitHub login>/Feedback-<moduleName>",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/Feedback-[A-Za-z0-9._-]{1,91}$"
     },
     "RATE_LIMIT_NAMESPACE_ID": {
       "value": "a positive integer unique in the Cloudflare account",

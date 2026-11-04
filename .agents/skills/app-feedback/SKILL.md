@@ -1,11 +1,13 @@
 ---
 name: app-feedback
-description: Use when porting, testing, or provisioning the standard anonymous in-app feedback (D-076) — the per-app Cloudflare Worker template that files issues in the app's private feedback repository through the shared GitHub App, and the tool that prepares a new app's repository, Worker and host.
+description: Use when porting, testing, or provisioning the standard anonymous in-app feedback (D-076, D-104) — the per-app Cloudflare Worker template that files issues in the app's private feedback repository through the shared GitHub App, the tool that prepares a new app's repository, Worker and host, and moving an app from the D-076 repository name to `Feedback-<moduleName>`.
 ---
 
 # App Feedback
 
-Every app ships anonymous in-app feedback ([product §4.5](../../../specs/product.md#45-アプリ内フィードバック), [architecture §7.4](../../../specs/architecture.md#74-アプリ内フィードバック境界), D-076). The app sends a submission to its own Cloudflare Worker; the Worker files an issue in the app's private repository `<GitHub login>/<moduleName>-feedback` through one GitHub App shared by all apps. The app holds no secret.
+Every app ships anonymous in-app feedback ([product §4.5](../../../specs/product.md#45-アプリ内フィードバック), [architecture §7.4](../../../specs/architecture.md#74-アプリ内フィードバック境界), D-076). The app sends a submission to its own Cloudflare Worker; the Worker files an issue in the app's private repository `<GitHub login>/Feedback-<moduleName>` through one GitHub App shared by all apps. The app holds no secret.
+
+The two names point opposite ways on purpose (D-104): the repository starts with `Feedback-` so it stands out in the GitHub repository list, and the Worker keeps `<appSlug>-feedback`, because its name sets the `workers.dev` host the app sends to.
 
 ## Worker template
 
@@ -16,7 +18,7 @@ The template is not deployable as is. `wrangler.jsonc` holds the placeholders li
 | Placeholder | Value |
 | --- | --- |
 | `{{WORKER_NAME}}` | `<appSlug>-feedback` |
-| `{{GITHUB_REPOSITORY}}` | `<GitHub login>/<moduleName>-feedback`; the token scope and User-Agent follow its name |
+| `{{GITHUB_REPOSITORY}}` | `<GitHub login>/Feedback-<moduleName>`; the token scope and User-Agent follow its name |
 | `{{RATE_LIMIT_NAMESPACE_ID}}` | A positive integer unique in the Cloudflare account, so apps never share per-sender counts |
 
 A Worker whose `GITHUB_REPOSITORY` is still a placeholder or malformed refuses before any GitHub call.
@@ -44,7 +46,8 @@ macOS may ask once whether `security` can read these items; the user answers.
 
 Run in the app's repository after Identity bootstrap ([product §3.1](../../../specs/product.md#31-新しいアプリの開始順序), step 5), in an Issue of that app. `tools/provision-app-feedback.sh` works on the repository it belongs to:
 
-- It reads `Config/app-identity.json` and `Config/ownership.yml`: the repository `<login>/<moduleName>-feedback`, the Worker `<appSlug>-feedback`, and a rate-limit namespace derived from the Cloudflare account ID and the Worker name. `cloudflare.target` must already be the Worker name.
+- It reads `Config/app-identity.json` and `Config/ownership.yml`: the repository `<login>/Feedback-<moduleName>`, the Worker `<appSlug>-feedback`, and a rate-limit namespace derived from the Cloudflare account ID and the Worker name. `cloudflare.target` must already be the Worker name.
+- It stops before anything changes while the D-076 repository `<login>/<moduleName>-feedback` still exists under that name, and shows how to rename it, so feedback already filed there is not left behind next to a new, empty repository.
 - Before anything changes, it checks that `gh` is signed in as `github.login`, that `wrangler` (pinned version, run with `npx`) can use `cloudflare.accountId`, that the shared App credentials are stored as above, and that the App and its installation have only Issues: Read and write and only selected repositories.
 
 | Command | What it does |
@@ -65,9 +68,21 @@ Who does what:
 
 The user signs in `gh` and `wrangler` (`npx wrangler@<pinned version> login`); the AI never signs in or switches accounts.
 
+## Moving an app to the D-104 repository name
+
+An app provisioned with the D-076 name `<login>/<moduleName>-feedback` moves to `<login>/Feedback-<moduleName>` in one Issue of that app, after it has taken this template version (D-074). The app's code, its endpoint file and its host do not change, so no app update is needed.
+
+1. The AI runs `plan`. It stops with the rename steps while the old name still exists.
+2. The user renames the repository on GitHub: the repository > Settings > Repository name > `Feedback-<moduleName>` > Rename. The shared App's installation stays with the repository. From now until step 4, the Worker cannot file issues, because it asks for a token by the old name, so do steps 3 and 4 right away.
+3. The AI runs `plan` again. `current.migrateFrom` names the old repository and `current.workerDirectory` is `to-migrate`. The user approves the digest, as for provisioning.
+4. The AI runs `apply`. It rewrites in `Services/feedback-worker/` only the files this change touched, and only when the directory is still the previous template written for the old name; any other difference stops it. It runs the Worker tests, deploys the same Worker again, keeps the host, and records the new name in `Config/app-feedback.json`. Then, with the user's approval, it runs `check-delivery`.
+5. The AI commits `Services/feedback-worker/` and `Config/app-feedback.json` in the Issue's PR. The Issue declares `cloudflare.deploy` (`Approval required: yes`); it creates no repository, so it does not declare `github.create_repository`.
+
+An app whose Worker or record the tool did not write (provisioned by hand, or from an older template) stops at `plan`; move it by hand in its Issue: rename, change `vars.GITHUB_REPOSITORY` in `Services/feedback-worker/wrangler.jsonc`, deploy the same Worker, and send one test submission.
+
 ## Tests
 
-The Worker tests use Node 24 or later with `node:test` and no packages: run `node test/all.ts` inside the Worker directory. In this repository, `tools/tests/test-feedback-worker.sh` runs them on the template and on a copy written with sample values, and checks the placeholder contract and that no app-specific value remains. `tools/tests/test-app-feedback-provision.sh` runs the provisioning tool in a sample app with fake `gh`, `wrangler`, `security` and `curl`.
+The Worker tests use Node 24 or later with `node:test` and no packages: run `node test/all.ts` inside the Worker directory. In this repository, `tools/tests/test-feedback-worker.sh` runs them on the template and on a copy written with sample values, and checks the placeholder contract and that no app-specific value remains. `tools/tests/test-app-feedback-provision.sh` runs the provisioning tool in a sample app with fake `gh`, `wrangler`, `security` and `curl`, including the stop while the D-076 name remains and the move of an app provisioned with it.
 
 ## Boundaries
 

@@ -31,7 +31,7 @@ test("the Workers config matches the bindings the code uses", () => {
   assert.deepEqual(Object.keys(config.vars).sort(), ["DAILY_ISSUE_LIMIT", "GITHUB_REPOSITORY"]);
   assert.equal(config.vars.DAILY_ISSUE_LIMIT, "100");
   appValue(config.vars.GITHUB_REPOSITORY, "GITHUB_REPOSITORY",
-    (repository) => repositoryName(repository).endsWith("-feedback"));
+    (repository) => repositoryName(repository).startsWith("Feedback-"));
   // Invocation logs would keep request details, including the sender address (D-076).
   assert.deepEqual(config.observability, { enabled: true, logs: { invocation_logs: false } });
   assert.equal(typeof entry.DailyQuota, "function");
