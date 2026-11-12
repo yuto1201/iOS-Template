@@ -453,6 +453,14 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   check(added != security_text && documented_allowlist.call(added) != implemented_allowlist, 'a subcommand documented but not implemented was not detected')
   implementation_only = implemented_allowlist.merge('appstore.inspect_app' => (implemented_allowlist.fetch('appstore.inspect_app') + ['review submit']).sort)
   check(documented_allowlist.call(security_text) != implementation_only, 'a subcommand implemented but not documented was not detected')
+  # #532: the App Store consumers, the provider preflight and the submission documents cite only the pinned asc.
+  pinned_version = JSON.parse(File.read(File.join(root, 'Config/asc-cli.json'))).fetch('version')
+  %w[tools/lib/appstore-build.rb tools/lib/appstore-metadata-save.rb tools/lib/appstore-release-sections.rb
+     tools/provider-preflight.sh docs/agent-contracts/appstore-submission.md
+     .agents/skills/submit-appstore-release/SKILL.md specs/architecture.md].each do |relative|
+    cited = File.read(File.join(root, relative), encoding: 'UTF-8').scan(/(?<![A-Za-z])asc`? ([0-9]+\.[0-9]+\.[0-9]+)(?![0-9.])/).flatten.uniq
+    check(cited == [pinned_version], "#{relative} cites asc #{cited.inspect}, not only the pinned #{pinned_version}")
+  end
   puts "PASS: asc installer/runner #{count} cases (fake binary, offline only)"
 end
 RUBY
