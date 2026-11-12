@@ -17,21 +17,25 @@ module AscCLI
   PIN_KEYS = %w[asset checksumsAsset checksumsSha256 checksumsUrl platform repository reviewedAt schemaVersion sha256 url version].freeze
   TEST_KEYS = %w[IOS_TEMPLATE_TEST_ASC_PIN IOS_TEMPLATE_TEST_ASC_INSTALL_ROOT IOS_TEMPLATE_TEST_ASC_RELEASE_DIR IOS_TEMPLATE_TEST_ASC_TIMEOUT IOS_TEMPLATE_TEST_SECURITY_BIN].freeze
   SECRET_KEYS = %w[ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY_PATH].freeze
-  # Deliberately a subset of 5.4.0's public command flags. No URL pagination,
-  # profile/config, debug, report-file, or credential flags.
-  # Sources at https://github.com/rorkai/App-Store-Connect-CLI/tree/5.4.0:
+  # Deliberately a subset of 6.6.1's public command flags. No URL pagination,
+  # profile/config, debug, report-file, or credential flags, and none of the
+  # selectors or modes 6.6.1 added (--latest, --wait, --build-number on attach
+  # and submit, --clear-*, --asset-library, --set-id, --include on builds).
+  # #530 compared every allowlisted command's --help and output in 5.4.0 and
+  # 6.6.1; the flags used here are unchanged.
+  # Sources at https://github.com/rorkai/App-Store-Connect-CLI/tree/6.6.1:
   # internal/cli/{apps/apps.go,apps/app_info.go,versions/versions.go,bundleids/bundle_ids.go}
   # Metadata source: internal/cli/localizations/{localizations.go,update.go}.
   # update.go defines --name, --subtitle, --description, --keywords,
   # --promotional-text, --whats-new and the --app/--version/--type/--locale
-  # selectors. Empty field flags are ignored by asc 5.4.0; refuse them here.
-  # Build source at 5.4.0: internal/cli/builds/builds_commands.go defines
+  # selectors. Empty field flags are ignored by asc 6.6.1; refuse them here.
+  # Build source at 6.6.1: internal/cli/builds/builds_commands.go defines
   # BuildsUploadCommand (--app, --ipa), BuildsListCommand (--app, --version,
   # --build-number, --platform, --processing-state, --paginate), and
   # BuildsInfoCommand (the four exact app-scoped selectors). The list version
   # is CFBundleShortVersionString; BuildAttributes.version is CFBundleVersion
   # (internal/asc/client_builds.go). Info adds a preReleaseVersion include.
-  # Release sections source at 5.4.0:
+  # Release sections source at 6.6.1:
   # internal/cli/versions/versions.go: update --version-id/--copyright,
   # attach-build --version-id/--build-id;
   # internal/cli/shared/categories_command.go: set --app/--primary;
@@ -41,7 +45,7 @@ module AscCLI
   # --version-localization/--path/--device-type (no --replace);
   # internal/cli/reviews/{review_submit.go,review_overview.go}:
   # submit --app/--version-id/--build-id/--confirm and status --app/--version-id.
-  # TestFlight 5.4.0 source: internal/cli/builds/builds.go add-groups uses
+  # TestFlight 6.6.1 source: internal/cli/builds/builds.go add-groups uses
   # app/build-number/version/platform/group; internal/cli/testflight/beta_groups.go
   # groups list supports app/paginate or build-id/app (the latter paginates
   # internally); internal/cli/testflight/testflight_review.go exposes review
@@ -50,7 +54,9 @@ module AscCLI
   # internal/asc/output_beta.go emits appId/buildId/complete/groupCount/groups[id,type,membership]; empty failures is omitted.
   # internal/cli/builds/build_test_notes.go: list accepts --build-id/--locale/--paginate,
   # view accepts --build-id/--locale, and create accepts --build-id/--locale/--whats-new.
-  # create calls UpsertBetaBuildLocalization and trims --whats-new with strings.TrimSpace.
+  # create calls UpsertBetaBuildLocalization and trims --whats-new with strings.TrimSpace;
+  # in 6.6.1 it first creates a locale-only TestFlight app localization when the
+  # locale has none (internal/cli/shared/test_notes.go ensureBetaAppLocalization).
   OPERATIONS = {
     'appstore.inspect_app' => {
       %w[apps list] => {'--bundle-id'=>:identifier, '--name'=>:text, '--limit'=>:limit, '--paginate'=>:boolean},
@@ -307,6 +313,10 @@ module AscCLI
         next
       end
       value = remaining.shift
+      # asc 6.6.1 expands @env:NAME, @file:PATH and a leading @@ in every value
+      # flag (cmd/flag_indirection.go, internal/cli/shared/flag_indirection.go).
+      # The child environment holds the credentials, so no value may start with @.
+      refuse('flag value is invalid') if value.is_a?(String) && value.start_with?('@')
       localization_text = LOCALIZATION_TEXT_LIMITS.key?(type)
       if type == :ipa
         valid = valid_ipa?(value)
@@ -323,6 +333,7 @@ module AscCLI
         valid = characters >= minimum && units >= minimum &&
           (!character_maximum || characters <= character_maximum && units <= character_maximum) &&
           (!byte_maximum || value.bytesize <= byte_maximum)
+        valid &&= test_notes_unchanged?(value) if command == %w[builds test-notes create]
       else
         refuse('flag value is invalid') unless value && !value.empty? && value.bytesize <= (type == :https_url ? 2048 : 256) && !value.start_with?('-') && !value.match?(/[\x00-\x1f\x7f]/) && !value.include?('$') && !value.include?('`')
         valid = case type
@@ -410,6 +421,17 @@ module AscCLI
       refuse('exact submission selectors required') unless %w[--app --version-id --build-id --confirm].all? { |flag| seen.include?(flag) }
     end
     forwarded + ['--output', 'json']
+  end
+
+  # asc 6.6.1 internal/cli/shared/test_notes.go NormalizeTestNotes NFC-composes
+  # What to Test notes, removes "<", and drops these generic combining marks
+  # before it writes. Refuse such text so the CLI never sends altered notes.
+  # Characters asc refuses itself (emoji, variation selectors) fail before any
+  # network call and need no check here.
+  TEST_NOTES_REMOVED_MARKS = /[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]/.freeze
+
+  def test_notes_unchanged?(value)
+    !value.include?('<') && value.unicode_normalize(:nfc) == value && !value.match?(TEST_NOTES_REMOVED_MARKS)
   end
 
   def valid_ipa?(value)
@@ -517,7 +539,7 @@ module AscCLI
     secret_pattern = Regexp.union(secrets.sort_by { |s| -s.bytesize }.map(&:b))
     redact = lambda { |text| text.b.gsub(secret_pattern, '[REDACTED]') }
     Dir.mktmpdir('ios-template-asc-home.', '/private/tmp') do |isolated_home|
-      environment = {'PATH'=>'/usr/bin:/bin', 'HOME'=>isolated_home, 'ASC_TELEMETRY_DISABLED'=>'1', 'DO_NOT_TRACK'=>'1', 'ASC_BYPASS_KEYCHAIN'=>'1', 'ASC_CONFIG_PATH'=>File.join(isolated_home, 'unused-config.json'), 'ASC_DEFAULT_OUTPUT'=>'json', 'ASC_KEY_TYPE'=>'team'}
+      environment = {'PATH'=>'/usr/bin:/bin', 'HOME'=>isolated_home, 'ASC_TELEMETRY_DISABLED'=>'1', 'DO_NOT_TRACK'=>'1', 'ASC_BYPASS_KEYCHAIN'=>'1', 'ASC_CONFIG_PATH'=>File.join(isolated_home, 'unused-config.json'), 'ASC_DEFAULT_OUTPUT'=>'json', 'ASC_KEY_TYPE'=>'team', 'ASC_UPLOAD_LOCK'=>'0'}
       SECRET_KEYS.each { |key| environment[key] = ENV.fetch(key) }
       output, _, status = Open3.capture3(environment, config.fetch(:binary), '--version', unsetenv_others: true, chdir: isolated_home)
       return status.exitstatus || 1 unless status.success?

@@ -511,7 +511,12 @@ Dir.mktmpdir('asc-testflight-test.') do |scratch|
    'oversized-source'=>[note_option,{'en-US'=>'A'*4001}],
    'utf16-oversized-source'=>[note_option,{'en-US'=>'🌸'*2001}],
    'empty-source'=>[note_option,{'en-US'=>"\n"}],
-   'double-lf-source'=>[note_option,{'en-US'=>"text\n\n"}]}.each do |name,(args,sources)|
+   'double-lf-source'=>[note_option,{'en-US'=>"text\n\n"}],
+   # #530: asc 6.6.1 would rewrite these before sending, and @ starts flag-value indirection.
+   'angle-source'=>[note_option,{'en-US'=>'Open the <Settings> tab'}],
+   'non-nfc-source'=>[note_option,{'en-US'=>"Check the café"}],
+   'combining-mark-source'=>[note_option,{'en-US'=>"a̶strike"}],
+   'indirection-source'=>[note_option,{'en-US'=>'@env:ASC_KEY_ID'}]}.each do |name,(args,sources)|
     project,env,remote,* = make_fixture.call(name,note_sources:sources)
     result, = invoke.call(project,env,args,success:false)
     check(result['status']=='blocked' && JSON.parse(File.binread(remote))['calls'].empty?,
