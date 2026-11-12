@@ -91,6 +91,26 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   invoke.call(installer)
   # The real pin is validated without downloading or executing its binary.
   AscCLI.validate_pin(File.join(root, 'Config/asc-cli.json'))
+  # #530: the official asc_6.6.1_checksums.txt published with the 6.6.1 release, byte for byte.
+  # The production pin must name this file's SHA-256 and its exact macOS arm64 row.
+  official_checksums = <<~CHECKSUMS
+    b8e9a39362151551f0c9c5def7c6ee8676048afb19f423c9a4bf08d4880bfc21  asc_6.6.1_linux_amd64
+    766bb3288d1f2c3e443adeba3dbff7ba4a4d14e71eee01afe9d6967ed8b9f6a6  asc_6.6.1_linux_arm64
+    7430c11ecb5d6ef1b8f660c8ebe846f1719fe6c1d1aeaea393445797a4ce3ae4  asc_6.6.1_macOS_amd64
+    63cf0cb8f16ce3976d844b135befc4906fe8a4c702ada4beda80a9b6a566d16e  asc_6.6.1_macOS_arm64
+    5b16cc211328860056694d0f0bf32eeb2f508508cc9ecd19c3d0ed75e694c47f  asc_6.6.1_windows_amd64.exe
+  CHECKSUMS
+  production_pin = JSON.parse(File.binread(File.join(root, 'Config/asc-cli.json')))
+  check(official_checksums.bytesize == 446 && official_checksums.end_with?("windows_amd64.exe\n"), 'official checksum bytes are complete')
+  check(production_pin.fetch('version') == '6.6.1' && production_pin.fetch('checksumsAsset') == 'asc_6.6.1_checksums.txt',
+    'production pin names the reviewed 6.6.1 checksum file')
+  check(Digest::SHA256.hexdigest(official_checksums) == production_pin.fetch('checksumsSha256'),
+    'production checksumsSha256 equals the official checksum file digest')
+  official_rows = official_checksums.lines.map { |line| line.chomp.split('  ', 2) }
+  check(official_rows.all? { |row| row.length == 2 && row[0].match?(/\A[0-9a-f]{64}\z/) }, 'official checksum file format')
+  arm64 = official_rows.select { |_, name| name == production_pin.fetch('asset') }
+  check(arm64.length == 1 && arm64.first[0] == production_pin.fetch('sha256'),
+    'production sha256 equals the exact official asc_6.6.1_macOS_arm64 row')
   check(File.stat(binary).mode & 0777 == 0755, 'binary mode')
   check(File.stat(File.dirname(binary)).mode & 0777 == 0700, 'parent mode')
   inode = File.stat(binary).ino
