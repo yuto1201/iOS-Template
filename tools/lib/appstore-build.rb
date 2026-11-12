@@ -627,13 +627,14 @@ module IOSTemplate
         end
         append_event(context,'upload-intent','ipaDigest'=>ipa_hash)
         response, code = asc(runner_path,'builds','upload','--app',app_id_value,'--ipa',ipa)
-        # asc 5.4.0 internal/cli/builds/builds_commands.go prints
+        # asc 6.6.1 internal/cli/builds/builds_commands.go prints
         # internal/asc/output_builds.go BuildUploadResult, not a JSON:API resource.
         accepted = code.zero? && response.is_a?(Hash) && response['uploaded'] == true &&
           response['uploadId'].is_a?(String) && response['uploadId'].match?(/\A[A-Za-z0-9_-]{1,128}\z/) &&
           response['fileId'].is_a?(String) && response['fileId'].match?(/\A[A-Za-z0-9_-]{1,128}\z/)
-        rejected = !accepted && response.is_a?(Hash) && response['errors'].is_a?(Array) && !response['errors'].empty? &&
-          response['errors'].all? { |entry| entry.is_a?(Hash) && entry['status'] == '422' }
+        # asc 6.6.1 prints errors only to stderr (cmd/run.go, internal/cli/shared/errfmt)
+        # and exits 32 for HTTP 422 (cmd/exit_codes.go HTTPStatusToExitCode), with no stdout.
+        rejected = !accepted && code == AscCLI::HTTP_UNPROCESSABLE_EXIT && response.nil?
         outcome = accepted ? 'accepted' : rejected ? 'failed' : 'unknown'
         result_fields = {'status'=>outcome,'ipaDigest'=>ipa_hash}
         result_fields.merge!('uploadId'=>response['uploadId'],'fileId'=>response['fileId']) if accepted

@@ -27,6 +27,18 @@ module IOSTemplate
     APP_KEYS = %w[schemaVersion bundleId version primaryLocale platforms category copyright supportURL privacyPolicyURL reviewContactReference accountsSupported].freeze
     RESULT_KEYS = %w[schemaVersion status primaryModel teamId bundleId version buildId sourceSha buildDigest packageDigest sections lastCompletedSection updatedAt].freeze
     ID = /\A[A-Za-z0-9_-]{1,128}\z/
+    # app.yml keeps App Store Connect's English category name. asc 6.6.1
+    # internal/asc/categories.go AppCategoryAttributes has only platforms, so the
+    # name is mapped to Apple's appCategories id here and the id is matched (#532).
+    CATEGORY_IDS = {
+      'Books'=>'BOOKS', 'Business'=>'BUSINESS', 'Developer Tools'=>'DEVELOPER_TOOLS', 'Education'=>'EDUCATION',
+      'Entertainment'=>'ENTERTAINMENT', 'Finance'=>'FINANCE', 'Food & Drink'=>'FOOD_AND_DRINK', 'Games'=>'GAMES',
+      'Graphics & Design'=>'GRAPHICS_AND_DESIGN', 'Health & Fitness'=>'HEALTH_AND_FITNESS', 'Lifestyle'=>'LIFESTYLE',
+      'Magazines & Newspapers'=>'MAGAZINES_AND_NEWSPAPERS', 'Medical'=>'MEDICAL', 'Music'=>'MUSIC',
+      'Navigation'=>'NAVIGATION', 'News'=>'NEWS', 'Photo & Video'=>'PHOTO_AND_VIDEO', 'Productivity'=>'PRODUCTIVITY',
+      'Reference'=>'REFERENCE', 'Shopping'=>'SHOPPING', 'Social Networking'=>'SOCIAL_NETWORKING', 'Sports'=>'SPORTS',
+      'Stickers'=>'STICKERS', 'Travel'=>'TRAVEL', 'Utilities'=>'UTILITIES', 'Weather'=>'WEATHER'
+    }.freeze
     DIGEST = /\Asha256:[0-9a-f]{64}\z/
     SHA = /\A[0-9a-f]{40}\z/
     VERSION = /\A[0-9]+(?:\.[0-9]+){1,2}\z/
@@ -386,8 +398,10 @@ module IOSTemplate
       categories, code = asc(context,'categories','list','--paginate')
       refuse('category-list-unavailable') unless code.zero? && categories.is_a?(Hash) && categories['data'].is_a?(Array) &&
         categories.dig('links','next').nil?
-      rows = categories['data'].select { |row| row.is_a?(Hash) && row['type'] == 'appCategories' &&
-        row.dig('attributes','name') == context[:app]['category'] }
+      wanted = CATEGORY_IDS[context[:app]['category']]
+      refuse('category-name-ambiguous-or-unsupported') unless wanted
+      rows = categories['data'].select { |row| row.is_a?(Hash) && row['type'] == 'appCategories' && row['id'] == wanted &&
+        row.dig('attributes','platforms').is_a?(Array) && row.dig('attributes','platforms').include?('IOS') }
       refuse('category-name-ambiguous-or-unsupported') unless rows.length == 1 && rows.first['id'].to_s.match?(ID)
       rows.first['id']
     end
@@ -443,7 +457,7 @@ module IOSTemplate
         row.merge('absolutePath'=>path,'fileName'=>File.basename(path),'fileSize'=>bytes.bytesize,
                   'sourceFileChecksum'=>Digest::MD5.hexdigest(bytes),
                   # D-079: iphone-6.3 (Dynamic Island, medium display) goes to APP_IPHONE_61.
-                  # asc 5.4.0 internal/screenshotcatalog/catalog.go accepts APP_IPHONE_61 for
+                  # asc 6.6.1 internal/screenshotcatalog/catalog.go accepts APP_IPHONE_61 for
                   # 1206x2622 and 1179x2556 without an API alias. The mapping is pending
                   # confirmation until the first real save is read back from App Store Connect.
                   'displayType'=>row['family'] == 'iphone-6.3' ? 'APP_IPHONE_61' : 'APP_IPAD_PRO_3GEN_129')
@@ -513,9 +527,21 @@ module IOSTemplate
       after
     end
 
+    # asc 6.6.1 versions list returns relationships.build.data only with --include build
+    # (internal/cli/versions/include_helpers.go); without it Apple sends links only.
+    # A missing data key is unreadable, never "no build attached" (#532).
     def build_projection(context)
-      relation = context[:version_resource].dig('relationships','build','data')
-      refuse('build-attachment-ambiguous') if relation && (!relation.is_a?(Hash) || relation['type'] != 'builds')
+      response, code = asc(context,'versions','list','--app',context[:app_id],'--version',context[:version],
+        '--platform','IOS','--include','build')
+      refuse('build-readback-unavailable') unless code.zero?
+      version = one(response,'appStoreVersions')
+      refuse('build-readback-version-mismatch') unless version['id'] == context[:version_id] &&
+        version.dig('attributes','versionString') == context[:version] && version.dig('attributes','platform') == 'IOS'
+      relationship = version.dig('relationships','build')
+      refuse('build-attachment-unreadable') unless relationship.is_a?(Hash) && relationship.key?('data')
+      relation = relationship['data']
+      refuse('build-attachment-ambiguous') if relation && (!relation.is_a?(Hash) || relation['type'] != 'builds' ||
+        !relation['id'].to_s.match?(ID))
       {'buildId'=>relation && relation['id'],'version'=>context[:version],'buildNumber'=>context[:build_number],
        'processingState'=>'VALID'}
     end

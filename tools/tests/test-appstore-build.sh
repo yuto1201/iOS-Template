@@ -257,15 +257,25 @@ fake_runner = write(scratch,'fake-asc-runner',<<~'FAKE'.gsub('__REMOTE__',remote
     abort 'invalid upload args' unless args.length == 8 && args[2] == '--app' && args[4] == '--ipa' && args[6..] == ['--output','json']
     path = args[5]
     abort 'invalid ipa' unless path.start_with?('/') && File.file?(path) && File.binread(path) == 'synthetic ipa bytes'
-    state['build'] = 'PROCESSING' unless state['scenario'] == 'upload-reject'
+    state['build'] = 'PROCESSING' unless %w[upload-reject upload-reject-stdout upload-bad-request].include?(state['scenario'])
     response = {'uploadId'=>'UPLOAD1','fileId'=>'FILE1','fileName'=>'GardenNotes.ipa','fileSize'=>19,'uploaded'=>true}
   else
     abort "unallowlisted #{action}"
   end
   File.binwrite(state_path,JSON.generate(state))
+  # asc 6.6.1 prints errors only to stderr (cmd/run.go errfmt.FormatStderr) and maps
+  # HTTP 422 to exit status 32 and HTTP 400 to 10 (cmd/exit_codes.go); stdout stays empty.
   if action == 'builds upload' && state['scenario'] == 'upload-reject'
+    warn 'Error: builds upload: The bundle version must be higher than the previously uploaded version.'
+    exit 32
+  end
+  if action == 'builds upload' && state['scenario'] == 'upload-bad-request'
+    warn 'Error: builds upload: bad request'
+    exit 10
+  end
+  if action == 'builds upload' && state['scenario'] == 'upload-reject-stdout'
     puts JSON.generate({'errors'=>[{'status'=>'422'}]})
-    exit 9
+    exit 32
   end
   exit 10 if action == 'builds upload' && state['scenario'] == 'upload-ambiguous'
   if action == 'builds list' && state['scenario'] == 'duplicate'
@@ -435,6 +445,16 @@ check(events.call(blocked.fetch('attempt')).any? { |event| event['eventType'] ==
 reset.call('upload-reject')
 failed, remote = invoke.call(1,base_args)
 check(failed['status'] == 'failed' && remote['calls'].count('builds upload') == 1,'upload rejection')
+check(events.call(failed['attempt']).any? { |event| event['eventType'] == 'upload-result' && event['status'] == 'failed' },
+  '422 exit status recorded as failed')
+# #532: only the 422 exit status with an empty stdout is a refusal; stdout errors are not read.
+%w[upload-bad-request upload-reject-stdout].each do |scenario_name|
+  reset.call(scenario_name)
+  unknown, remote = invoke.call(1,base_args)
+  check(unknown['status'] == 'unknown' && remote['calls'].count('builds upload') == 1 &&
+    events.call(unknown['attempt']).any? { |event| event['eventType'] == 'upload-result' && event['status'] == 'unknown' },
+    "#{scenario_name} recorded as unknown")
+end
 reset.call('processing-failed')
 failed, remote = invoke.call(1,base_args)
 check(failed['status'] == 'failed' && remote['calls'].count('builds upload') == 1 &&

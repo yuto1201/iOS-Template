@@ -17,6 +17,9 @@ module AscCLI
   PIN_KEYS = %w[asset checksumsAsset checksumsSha256 checksumsUrl platform repository reviewedAt schemaVersion sha256 url version].freeze
   TEST_KEYS = %w[IOS_TEMPLATE_TEST_ASC_PIN IOS_TEMPLATE_TEST_ASC_INSTALL_ROOT IOS_TEMPLATE_TEST_ASC_RELEASE_DIR IOS_TEMPLATE_TEST_ASC_TIMEOUT IOS_TEMPLATE_TEST_SECURITY_BIN].freeze
   SECRET_KEYS = %w[ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY_PATH].freeze
+  # asc 6.6.1 cmd/exit_codes.go HTTPStatusToExitCode maps HTTP 422 to exit status 32;
+  # errors go to stderr only (cmd/run.go), so stdout is empty on that exit (#532).
+  HTTP_UNPROCESSABLE_EXIT = 32
   # Deliberately a subset of 6.6.1's public command flags. No URL pagination,
   # profile/config, debug, report-file, or credential flags, and none of the
   # selectors or modes 6.6.1 added (--latest, --wait, --build-number on attach
@@ -37,7 +40,9 @@ module AscCLI
   # (internal/asc/client_builds.go). Info adds a preReleaseVersion include.
   # Release sections source at 6.6.1:
   # internal/cli/versions/versions.go: update --version-id/--copyright,
-  # attach-build --version-id/--build-id;
+  # attach-build --version-id/--build-id; versions list returns relationships.build.data
+  # only with --include build (include_helpers.go, internal/asc/types/resources.go
+  # passes Apple's relationships through), so submit_review allows exactly that one include (#532);
   # internal/cli/shared/categories_command.go: set --app/--primary;
   # internal/cli/apps/app_info.go: view --app/--include;
   # internal/cli/localizations/update.go: --privacy-policy-url/--support-url;
@@ -94,7 +99,7 @@ module AscCLI
     'appstore.submit_review' => {
       %w[apps list] => {'--bundle-id'=>:identifier},
       %w[bundle-ids list] => {'--identifier'=>:identifier},
-      %w[versions list] => {'--app'=>:id, '--version'=>:version, '--platform'=>:platform},
+      %w[versions list] => {'--app'=>:id, '--version'=>:version, '--platform'=>:platform, '--include'=>:version_include},
       %w[builds list] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform, '--paginate'=>:boolean},
       %w[builds info] => {'--app'=>:id, '--version'=>:version, '--build-number'=>:build_number, '--platform'=>:platform},
       %w[versions attach-build] => {'--version-id'=>:resource_id, '--build-id'=>:resource_id},
@@ -352,6 +357,8 @@ module AscCLI
               when :copyright then value.length.between?(1, 200)
               when :category then value.match?(/\A[A-Z][A-Z0-9_]{1,63}\z/)
               when :app_info_include then value == 'primaryCategory'
+              # #532: only the attached build. appStoreReviewDetail and the other includes stay refused.
+              when :version_include then value == 'build'
               # D-079: iPhone screenshots use APP_IPHONE_61 (Dynamic Island, medium display), pending
               # confirmation until the first real save is read back from App Store Connect.
               when :screenshot_type then %w[APP_IPHONE_61 APP_IPAD_PRO_3GEN_129].include?(value)

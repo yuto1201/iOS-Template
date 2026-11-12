@@ -281,6 +281,22 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
       # Refused before any process invocation.
     end
   end
+  # #532: submit_review reads the attached build with versions list --include build. No other include
+  # value (appStoreReviewDetail carries review secrets) and no include in another operation is allowed.
+  submit_versions = ['--operation','appstore.submit_review','--','versions','list','--app','123','--version','1.0','--platform','IOS']
+  check(AscCLI.command_arguments(submit_versions + ['--include','build']).each_cons(2).include?(['--include','build']),
+    'submit_review forwards versions list --include build')
+  [submit_versions + ['--include','appStoreReviewDetail'], submit_versions + ['--include','build,appStoreReviewDetail'],
+   submit_versions + ['--include','build', '--include','build'],
+   ['--operation','appstore.inspect_app','--','versions','list','--app','123','--version','1.0','--platform','IOS','--include','build'],
+   ['--operation','appstore.update_metadata','--','versions','list','--app','123','--version','1.0','--platform','IOS','--include','build']].each do |args|
+    begin
+      AscCLI.command_arguments(args)
+      abort "a versions list include outside #532 was accepted: #{args.inspect}"
+    rescue AscCLI::Refused
+      # Refused before any process invocation.
+    end
+  end
   # D-079: iphone-6.3 images upload as APP_IPHONE_61 and ipad-13 images as APP_IPAD_PRO_3GEN_129. The former
   # APP_IPHONE_67 slot and iphone-6.9 folder are refused before asc runs.
   screenshot_root = File.join(repo, 'App Store/screenshots')

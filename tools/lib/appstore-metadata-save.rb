@@ -231,9 +231,11 @@ module IOSTemplate
       reference = "asc://apps/#{identity.fetch('appId')}/#{section['type']}/#{item.fetch('id')}"
       refuse('remote-form-reference-mismatch') if form.key?('remoteReference') && reference != form.fetch('remoteReference')
       attrs = item.fetch('attributes')
-      expected = section['values'] + ['locale']
-      refuse('remote-form-incomplete') unless attrs.keys.sort == expected.sort && attrs['locale'] == form['locale'] &&
-        section['values'].all? { |field| attrs[field].nil? || attrs[field].is_a?(String) }
+      # asc 6.6.1 internal/asc/api_attributes.go replays Apple's attribute object,
+      # null fields and attributes it does not model included. Require every form
+      # field and locale; other keys never reach the projection or the PATCH (#532).
+      refuse('remote-form-incomplete') unless attrs['locale'] == form['locale'] &&
+        section['values'].all? { |field| attrs.key?(field) && (attrs[field].nil? || attrs[field].is_a?(String)) }
       projection = {'section'=>form['section'],'locale'=>form['locale'],'remoteReference'=>reference,
                     'values'=>section['values'].to_h { |key| [key, attrs.fetch(key)] }}
       [projection, digest(projection)]
@@ -288,7 +290,7 @@ module IOSTemplate
                 document.is_a?(Hash) ? document[anchor] : nil
               end
       refuse('field-value-invalid') unless value.is_a?(String) && !value.empty?
-      # Keep Apple limits and the asc 5.4.0 flag parser on the same path before
+      # Keep Apple limits and the asc 6.6.1 flag parser on the same path before
       # any remote call. The runner checks them again at dispatch.
       section = FIELD_SECTIONS.fetch(field)
       selector = section == 'version-localization' ? ['--version','V1','--type','version'] : ['--app','123','--type','app-info']
@@ -536,8 +538,10 @@ module IOSTemplate
           outcome = nil
           reason = nil
           if !code.zero?
-            outcome = response.is_a?(Hash) && response['errors'].is_a?(Array) && !response['errors'].empty? &&
-              response['errors'].all? { |error| error.is_a?(Hash) && error['status'] == '422' } ? 'failed' : 'unknown'
+            # asc 6.6.1 exits 32 for HTTP 422 and prints the error only to stderr.
+            # localizations update sends one PATCH (internal/cli/localizations/update.go),
+            # so a 422 is a refusal only while the readback still equals the baseline (#532).
+            outcome = code == AscCLI::HTTP_UNPROCESSABLE_EXIT && response.nil? && readback_digest == baseline_digest ? 'failed' : 'unknown'
             reason = outcome == 'failed' ? 'remote-validation' : 'ambiguous-response'
           elsif readback_digest == expected_digest
             outcome = 'remote-saved'

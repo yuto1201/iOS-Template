@@ -185,10 +185,10 @@ run_app_store_inspection() {
 require "json"
 require "open3"
 
-# asc 5.4.0 source: internal/cli/{bundleids/bundle_ids.go,apps/apps.go,
+# asc 6.6.1 source: internal/cli/{bundleids/bundle_ids.go,apps/apps.go,
 # versions/versions.go} pass API responses to internal/cli/shared/shared.go
-# PrintOutput/printOutput, whose JSON branch uses internal/asc/output_core.go
-# PrintJSON to encode the response object.
+# PrintOutput/printOutput, whose JSON branch (printJSONOutput) uses
+# internal/asc/output_core.go PrintJSON to encode the response object.
 # internal/asc/types/resources.go defines data[], resource id/attributes,
 # links.next and meta.paging.total. internal/asc/{signing.go,client_apps.go,
 # client_versions.go} define attributes.identifier/seedId, bundleId,

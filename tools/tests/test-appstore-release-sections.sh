@@ -220,7 +220,8 @@ fake=put(scratch,'fake-asc',<<~'FAKE')
     key,value=args.shift.split('=',2)
     flags[key]=value || (args.empty? || args.first.start_with?('--') ? true : args.shift)
   end
-  state['calls'] << "#{operation}:#{command}"
+  state['calls'] << "#{operation}:#{command}#{flags['--include'] ? "+include=#{flags['--include']}" : ''}"
+  api='https://api.appstoreconnect.apple.com/v1'
   result=case command
   when 'bundle-ids list'
     {'data'=>[{'type'=>'bundleIds','id'=>'BUNDLE1','attributes'=>{'identifier'=>state['bundle'],
@@ -228,10 +229,32 @@ fake=put(scratch,'fake-asc',<<~'FAKE')
   when 'apps list'
     {'data'=>[{'type'=>'apps','id'=>state['appId'],'attributes'=>{'bundleId'=>state['bundle'],'primaryLocale'=>'en-US'}}]}
   when 'versions list'
-    attached=state['attached'] && {'type'=>'builds','id'=>state['scenario']=='build-readback' ? 'OTHERBUILD' : state['buildId']}
-    {'data'=>[{'type'=>'appStoreVersions','id'=>'VERSION1','attributes'=>{'versionString'=>state['version'],
-      'platform'=>'IOS','appStoreState'=>'PREPARE_FOR_SUBMISSION','copyright'=>state['copyright']},
-      'relationships'=>{'build'=>{'data'=>attached}}}]}
+    # asc 6.6.1 passes Apple's relationships through (internal/asc/types/resources.go).
+    # Apple sends relationship data only for an included relationship, so without
+    # --include build the build relationship carries links only.
+    attached_id=if state['scenario']=='other-build-attached' then 'OTHERBUILD'
+                elsif state['attached'] then state['scenario']=='build-readback' ? 'OTHERBUILD' : state['buildId']
+                end
+    build_relation={'links'=>{'self'=>"#{api}/appStoreVersions/VERSION1/relationships/build",
+      'related'=>"#{api}/appStoreVersions/VERSION1/build"}}
+    version={'type'=>'appStoreVersions','id'=>'VERSION1','attributes'=>{'platform'=>'IOS','appStoreState'=>'PREPARE_FOR_SUBMISSION',
+      'appVersionState'=>'PREPARE_FOR_SUBMISSION','copyright'=>state['copyright'],'reviewType'=>'APP_STORE',
+      'releaseType'=>'MANUAL','earliestReleaseDate'=>nil,'usesIdfa'=>nil,'downloadable'=>true,
+      'createdDate'=>'2026-11-01T00:00:00-08:00','versionString'=>state['version']},
+      'relationships'=>{'app'=>{'links'=>{'self'=>"#{api}/appStoreVersions/VERSION1/relationships/app",
+        'related'=>"#{api}/appStoreVersions/VERSION1/app"}},'build'=>build_relation},
+      'links'=>{'self'=>"#{api}/appStoreVersions/VERSION1"}}
+    response={'data'=>[version],'links'=>{'self'=>"#{api}/apps/#{state['appId']}/appStoreVersions"},
+      'meta'=>{'paging'=>{'total'=>1,'limit'=>50}}}
+    if flags.key?('--include')
+      abort "unexpected include #{flags['--include']}" unless flags['--include']=='build'
+      unless state['scenario']=='build-include-ignored'
+        build_relation['data']=attached_id && {'type'=>'builds','id'=>attached_id}
+        response['included']=[{'type'=>'builds','id'=>attached_id,'attributes'=>{'version'=>state['buildNumber'],
+          'processingState'=>'VALID'},'links'=>{'self'=>"#{api}/builds/#{attached_id}"}}] if attached_id
+      end
+    end
+    response
   when 'builds list'
     {'data'=>[{'type'=>'builds','id'=>state['buildId'],'attributes'=>{'version'=>state['buildNumber']}}]}
   when 'builds info'
@@ -239,7 +262,12 @@ fake=put(scratch,'fake-asc',<<~'FAKE')
       'processingState'=>'VALID'},'relationships'=>{'preReleaseVersion'=>{'data'=>{'type'=>'preReleaseVersions','id'=>'PR1'}}}},
       'included'=>[{'type'=>'preReleaseVersions','id'=>'PR1','attributes'=>{'version'=>state['version'],'platform'=>'IOS'}}]}
   when 'categories list'
-    {'data'=>[{'type'=>'appCategories','id'=>'UTILITIES','attributes'=>{'name'=>'Utilities'}}],'links'=>{}}
+    # asc 6.6.1 internal/asc/categories.go AppCategoryAttributes has only platforms.
+    utilities=state['scenario']=='category-not-ios' ? %w[MAC_OS] : %w[IOS MAC_OS TV_OS VISION_OS]
+    {'data'=>[{'type'=>'appCategories','id'=>'GAMES','attributes'=>{'platforms'=>%w[IOS MAC_OS TV_OS VISION_OS]}},
+      {'type'=>'appCategories','id'=>'UTILITIES','attributes'=>{'platforms'=>utilities}},
+      {'type'=>'appCategories','id'=>'STICKERS','attributes'=>{'platforms'=>%w[IOS]}}],
+     'links'=>{'self'=>"#{api}/appCategories?limit=200"}}
   when 'categories set'
     state['category']=flags.fetch('--primary')
     {'data'=>{'type'=>'appInfos','id'=>'INFO1'}}
@@ -400,8 +428,25 @@ invoke.call('app-information',1)
 File.binwrite(app_path,app_bytes)
 scenario.call('identity-team'); invoke.call('app-information',1); scenario.call('normal')
 scenario.call('app-information-readback'); invoke.call('app-information',1); scenario.call('normal')
+# #532: categories carry only platforms; the app.yml name maps to an appCategories id with IOS.
+scenario.call('category-not-ios')
+_out,error=invoke.call('app-information',1)
+check(error=='category-name-ambiguous-or-unsupported',"category without IOS refused: #{error}")
+scenario.call('normal')
+release_sections=IOSTemplate::AppStoreReleaseSections
+%w[Utility utilities UTILITIES].each do |name|
+  begin
+    release_sections.category_id({section:'app-information',runner:fake,package:package,app:{'category'=>name}})
+    check(false,"unmapped category name #{name} was accepted")
+  rescue release_sections::Refused => failure
+    check(failure.message=='category-name-ambiguous-or-unsupported',"unmapped category #{name}: #{failure.message}")
+  end
+end
+check(release_sections.category_id({section:'app-information',runner:fake,package:package,app:{'category'=>'Games'}})=='GAMES',
+  'Games maps to GAMES')
 first,_=invoke.call('app-information')
 first=JSON.parse(first)
+check(JSON.parse(File.binread(state_path))['category']=='UTILITIES','Utilities is set as the UTILITIES category id')
 check(first['schemaVersion']==2 && first['sections'].first['readBackSource']=='app-store-connect-api',
   'schema 2 API result')
 
@@ -498,8 +543,22 @@ other_contract_journal=File.join(project,'.artifacts/appstore-builds/77/a9999999
 rewrite_journal.call(other_contract_journal,77,dig('other-contract'))
 _out,error=invoke.call('build',1,build_approval,other_contract_journal)
 check(error=='build-journal-contract-mismatch','other contract journal refused before section work')
+# #532: the attached build is read with versions list --include build. A relationship
+# without data is unreadable, not "no build", and a different attached build stops.
+scenario.call('other-build-attached')
+_out,error=invoke.call('build',1,build_approval)
+check(error=='different-build-attached',"different attached build refused: #{error}")
+scenario.call('build-include-ignored')
+_out,error=invoke.call('build',1,build_approval)
+check(error=='build-attachment-unreadable',"build relationship without data refused: #{error}")
+check(!JSON.parse(File.binread(state_path))['attached'],'nothing attached while the build relationship is unreadable')
+scenario.call('normal')
 scenario.call('build-readback'); invoke.call('build',1,build_approval); scenario.call('normal')
 invoke.call('build',0,build_approval)
+calls=JSON.parse(File.binread(state_path))['calls']
+check(calls.include?('appstore.submit_review:versions list+include=build'),'attached build read with --include build')
+check(calls.none? { |call| call.match?(/\Aappstore\.(?:inspect_app|update_metadata):versions list\+/) },
+  'only submit_review passes an include to versions list')
 invoke.call('review-information')
 
 _out,error=invoke.call('submission',1)

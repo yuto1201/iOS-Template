@@ -283,17 +283,33 @@ File.binwrite(fake_runner, <<~'FAKE'.gsub('__STATE_PATH__', state_path.dump))
     if state['scenario'] == 'drift-before-save' && locale == 'en-US' && state['listCounts'][locale] == 2
       state.fetch('forms').fetch(locale)['keywords'] = 'another,editor'
     end
+    # asc 6.6.1 internal/asc/api_attributes.go replays Apple's attribute object:
+    # null fields stay, and attributes asc does not model are passed through.
+    attributes = (options['--type'] == 'app-info' ? state.fetch('appInfo') : state.fetch('forms')).fetch(locale).merge('locale'=>locale)
+    attributes['futureAttribute'] = nil if state['scenario'] == 'extra-attribute'
+    attributes.delete('marketingUrl') if state['scenario'] == 'missing-attribute'
+    attributes['keywords'] = 5 if state['scenario'] == 'non-string-attribute'
+    attributes['locale'] = 'fr-FR' if state['scenario'] == 'other-locale'
     if options['--type'] == 'app-info'
-      {'data'=>[{'type'=>'appInfoLocalizations','id'=>"APPLOC-#{locale}",'attributes'=>state.fetch('appInfo').fetch(locale).merge('locale'=>locale)}]}
+      {'data'=>[{'type'=>'appInfoLocalizations','id'=>"APPLOC-#{locale}",'attributes'=>attributes}],'links'=>{'self'=>'https://api.appstoreconnect.apple.com/v1/appInfos/INFO1/appInfoLocalizations'}}
     else
-      {'data'=>[{'type'=>'appStoreVersionLocalizations','id'=>"LOC-#{locale}",'attributes'=>state.fetch('forms').fetch(locale).merge('locale'=>locale)}]}
+      {'data'=>[{'type'=>'appStoreVersionLocalizations','id'=>"LOC-#{locale}",'attributes'=>attributes}],'links'=>{'self'=>'https://api.appstoreconnect.apple.com/v1/appStoreVersions/V1/appStoreVersionLocalizations'}}
     end
   when ['localizations','update']
     locale = options.fetch('--locale')
-    if state['scenario'] == 'fail-en' && locale == 'en-US'
+    # asc 6.6.1 prints errors only to stderr (cmd/run.go) and exits 32 for HTTP 422,
+    # 10 for HTTP 400 (cmd/exit_codes.go); stdout stays empty.
+    if %w[fail-en fail-en-stdout fail-en-bad-request].include?(state['scenario']) && locale == 'en-US'
       File.binwrite(state_path, JSON.generate(state))
-      puts JSON.generate({'errors'=>[{'status'=>'422'}]})
-      exit 17
+      puts JSON.generate({'errors'=>[{'status'=>'422'}]}) if state['scenario'] == 'fail-en-stdout'
+      warn 'Error: localizations update: update version localization "en-US" via PATCH /v1/appStoreVersionLocalizations/LOC-en-US (fields: description): The description is invalid.'
+      exit state['scenario'] == 'fail-en-bad-request' ? 10 : 32
+    end
+    if state['scenario'] == 'fail-en-changed' && locale == 'en-US'
+      state.fetch('forms').fetch(locale)['description'] = 'Changed by another request'
+      File.binwrite(state_path, JSON.generate(state))
+      warn 'Error: localizations update: unprocessable'
+      exit 32
     end
     if options['--type'] == 'app-info'
       {'--name'=>'name','--subtitle'=>'subtitle'}.each do |flag, field|
@@ -398,6 +414,22 @@ File.binwrite(File.join(project,preflight_path),preflight_original)
 
 result, remote = invoke.call(request, scenario: 'fail-en', expected: 1)
 check(result['status'] == 'partial' && remote['forms']['ja']['description'] == '確認済みの庭日記です。' && remote['forms']['en-US']['description'] == 'Old en-US text', 'partial save')
+check(events.call(result.fetch('attempt')).any? { |e| e['locale'] == 'en-US' && e['outcome'] == 'failed' && e['reason'] == 'remote-validation' },
+  '422 exit status with an unchanged readback recorded as failed')
+# #532: a 422 counts only with an empty stdout and an unchanged readback; stdout errors are not read.
+%w[fail-en-stdout fail-en-bad-request fail-en-changed].each do |scenario_name|
+  result, remote = invoke.call(request, scenario: scenario_name, expected: 1)
+  en_outcomes = events.call(result.fetch('attempt')).select { |e| e['eventType'] == 'outcome' && e['locale'] == 'en-US' }
+  check(en_outcomes.map { |e| e['outcome'] } == ['unknown'], "#{scenario_name} recorded as unknown: #{en_outcomes.map { |e| e['outcome'] }}")
+end
+# #532: Apple attributes asc does not model are ignored; every form field must be present.
+result, remote = invoke.call(request, scenario: 'extra-attribute')
+check(result['status'] == 'remote-saved', 'an unmodeled Apple attribute does not block the save')
+%w[missing-attribute non-string-attribute other-locale].each do |scenario_name|
+  result, remote = invoke.call(request, scenario: scenario_name, expected: 1)
+  check(remote['calls'].none? { |call| call[0] == ['localizations','update'] } &&
+    events.call(result.fetch('attempt')).any? { |e| e['reason'] == 'remote-form-incomplete' }, "#{scenario_name} refused before save")
+end
 result, remote = invoke.call(request, scenario: 'ambiguous-en', expected: 1)
 check(result['status'] == 'partial' && events.call(result.fetch('attempt')).any? { |e| e['outcome'] == 'unknown' }, 'ambiguous outcome')
 prior = result.fetch('attempt')
