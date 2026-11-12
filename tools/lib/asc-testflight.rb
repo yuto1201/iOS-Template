@@ -74,6 +74,14 @@ module IOSTemplate
         refuse('invalid-what-to-test-text') if text.empty? || text.length > 4000 ||
           text.encode(Encoding::UTF_16BE).bytesize / 2 > 4000 || text != text.strip ||
           text.each_codepoint.any? { |point| (point < 0x20 && point != 0x0a) || (0x7f..0x9f).cover?(point) }
+        # #530: the guarded runner refuses text that asc 6.6.1 would rewrite or expand.
+        # Check it here, before any asc call or journal intent, with the exact create arguments.
+        begin
+          AscCLI.command_arguments(['--operation',OPERATION,'--','builds','test-notes','create',
+            '--build-id','build-check','--locale',locale,'--whats-new',text])
+        rescue AscCLI::Refused
+          refuse('invalid-what-to-test-text')
+        end
         {locale:locale,text:text,digest:"sha256:#{Digest::SHA256.hexdigest(text)}"}
       end
     end

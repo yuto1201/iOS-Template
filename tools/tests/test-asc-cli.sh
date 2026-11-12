@@ -165,6 +165,27 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   out, = invoke.call(runner,note_args)
   check(JSON.parse(out).fetch('argv').include?('--whats-new=-Try this flow'),
     'What to Test leading hyphen remains one --whats-new=value argument')
+  # #530: asc 6.6.1 NormalizeTestNotes removes "<", NFC-composes, and drops generic combining marks before it
+  # writes. Text it would change is refused before asc runs; text it keeps as is still passes.
+  notes = lambda { |text| testflight_op + ['builds','test-notes','create','--build-id','build-1','--locale','ja','--whats-new',text] }
+  ["日本語のメモ。é と ñ を確認する。", "Check the café"].each_with_index do |text, index|
+    if index.zero?
+      out, = invoke.call(runner, notes.call(text))
+      check(JSON.parse(out).fetch('argv').include?("--whats-new=#{text}"), 'NFC What to Test text passes unchanged')
+    else
+      invoke.call(runner, notes.call(text), {}, :failure)
+    end
+  end
+  ["Open the <Settings> tab", "Check the café", "a̶strike", "x⃗", "half︠mark", "mark᪰", "mark᷀"].each do |text|
+    begin
+      AscCLI.command_arguments(notes.call(text))
+      abort "What to Test text that asc 6.6.1 rewrites was accepted: #{text.inspect}"
+    rescue AscCLI::Refused
+      # Refused before any process invocation.
+    end
+  end
+  # Script-specific marks such as Devanagari vowel signs are kept by asc 6.6.1, so they pass.
+  AscCLI.command_arguments(notes.call("हिन्दी"))
   invoke.call(runner, read_args+['--output','json'])
   forbidden = [%w[web apps list], %w[auth login], %w[auth logout], %w[apps wall], %w[install-skills], %w[signing sync], %w[workflow run release], %w[telemetry enable], %w[apps update], %w[apps list --deep], %w[apps list --profile evil], %w[apps list --output table], %w[apps list --output=json], %w[apps list --debug], %w[apps list --next https://evil.example], %w[apps list --limit 0], %w[apps list --limit 201], %w[apps list --limit 2 --limit 3], %w[apps list extra], %w[apps list --bundle-id --deep]]
   forbidden.each { |args| invoke.call(runner, ['--operation','appstore.inspect_app','--']+args, {}, :failure) }
@@ -198,6 +219,47 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
     abort 'NUL localization value was accepted'
   rescue AscCLI::Refused
     # Refused before any process invocation.
+  end
+  # #530: asc 6.6.1 expands @env:NAME, @file:PATH and @@ in every value flag, and the child holds the secrets,
+  # so a value that starts with @ is refused for every value type before asc runs.
+  [update + ['--description', '@env:ASC_ISSUER_ID'], update + ['--keywords', '@file:/etc/hosts'],
+   update + ['--whats-new', '@@literal'], update + ['--promotional-text', '@mention'],
+   ['--operation', 'appstore.update_metadata', '--', 'localizations', 'update', '--app', '123', '--type', 'app-info', '--locale', 'ja', '--name', '@env:ASC_KEY_ID'],
+   ['--operation', 'appstore.update_metadata', '--', 'versions', 'update', '--version-id', 'V1', '--copyright', '@env:ASC_PRIVATE_KEY_PATH'],
+   ['--operation', 'appstore.inspect_app', '--', 'apps', 'list', '--name', '@env:ASC_ISSUER_ID'],
+   ['--operation', 'appstore.inspect_app', '--', 'apps', 'list', '--bundle-id', '@env:ASC_KEY_ID'],
+   ['--operation', 'appstore.inspect_app', '--', 'versions', 'list', '--app', '123', '--version', '@file:/etc/hosts'],
+   testflight_op + ['builds','test-notes','create','--build-id','build-1','--locale','en-US','--whats-new','@file:/etc/hosts'],
+   testflight_op + ['builds','test-notes','view','--build-id','@env:ASC_KEY_ID','--locale','ja']].each do |args|
+    begin
+      AscCLI.command_arguments(args)
+      abort "a value starting with @ was accepted: #{args.inspect}"
+    rescue AscCLI::Refused
+      # Refused before any process invocation.
+    end
+  end
+  _, err = invoke.call(runner, update + ['--description', '@env:ASC_ISSUER_ID'], {}, :failure)
+  check(err.include?('flag value is invalid'), "@env: value was not refused by the adapter: #{err}")
+  # A @ that is not the first character stays ordinary text.
+  out, = invoke.call(runner, update + ['--description', 'Mail support@example.com'])
+  check(JSON.parse(out).fetch('argv').include?('--description=Mail support@example.com'), 'an inner @ is forwarded unchanged')
+  # Flags that asc 6.6.1 added stay outside the allowlist.
+  [['--operation','appstore.submit_review','--','versions','attach-build','--version-id','V1','--latest'],
+   ['--operation','appstore.submit_review','--','versions','attach-build','--app','123','--version','1.0','--build-number','7'],
+   ['--operation','appstore.submit_review','--','review','submit','--app','123','--version-id','V1','--build-id','B1','--confirm','--wait'],
+   ['--operation','appstore.submit_review','--','review','submit','--app','123','--version','1.0','--build-number','7','--confirm'],
+   ['--operation','appstore.update_metadata','--','localizations','update','--app','123','--type','app-info','--locale','ja','--clear-subtitle','--confirm'],
+   update + ['--description', 'Text', '--platform', 'IOS'],
+   ['--operation','appstore.update_metadata','--','screenshots','list','--set-id','SET1'],
+   ['--operation','appstore.update_metadata','--','screenshots','upload','--version-localization','LOC1','--path','x.png','--device-type','APP_IPHONE_61','--asset-library'],
+   ['--operation','appstore.update_metadata','--','versions','update','--version-id','V1','--copyright','2026 Example','--review-type','APP_STORE'],
+   ['--operation','appstore.upload_build','--','builds','info','--app','123','--version','1.0','--build-number','7','--platform','IOS','--include','buildBetaDetail']].each do |args|
+    begin
+      AscCLI.command_arguments(args)
+      abort "a flag added in asc 6.6.1 was accepted: #{args.inspect}"
+    rescue AscCLI::Refused
+      # Refused before any process invocation.
+    end
   end
   # D-079: iphone-6.3 images upload as APP_IPHONE_61 and ipad-13 images as APP_IPAD_PRO_3GEN_129. The former
   # APP_IPHONE_67 slot and iphone-6.9 folder are refused before asc runs.
@@ -320,7 +382,7 @@ Dir.mktmpdir('asc-cli-test.') do |temporary|
   check(File.binread(binary) == original_bytes, 'concurrent publication has exact bytes')
   check(Dir.children(File.dirname(binary)) == ['asc'], 'no partial publication remains')
   # A digest-valid fake with a different reported version must still be refused.
-  wrong_version = original_bytes.sub('5.4.0 (commit:', '5.4.1 (commit:')
+  wrong_version = original_bytes.sub('6.6.1 (commit:', '6.6.2 (commit:')
   File.binwrite(binary, wrong_version)
   File.chmod(0755, binary)
   File.binwrite(pin_path, JSON.generate(original_pin.merge('sha256'=>Digest::SHA256.hexdigest(wrong_version)).sort.to_h))
