@@ -371,6 +371,41 @@ cat >"$work/app/single.json" <<'EOF'
    "layers":[{"src":"goldie/assets/leaf.png","x":1000,"y":1600,"width":300,"z":"front"}]}]}
 EOF
 compose "$work/app/single.json" "$work/single" >/dev/null || fail 'the single-tile compose failed'
+
+# #529: Chrome 157 sometimes finishes its work and then hangs while shutting down; it prints
+# "Teardown watchdog expired" and exits 2 (RESULT_CODE_HUNG). Fake Chromiums run the real one and then
+# change only the exit status and stderr, so the tile and its record must stay what the real run made.
+fake_chrome() {
+  local name=$1 body=$2
+  printf '#!/bin/bash\n%s\n' "$body" >"$work/$name"
+  chmod +x "$work/$name"
+}
+watchdog='echo "Teardown watchdog expired; recording dump and terminating." >&2'
+fake_chrome chrome-watchdog "\"$chrome\" \"\$@\" || exit \$?
+$watchdog
+exit 2"
+fake_chrome chrome-exit2 "\"$chrome\" \"\$@\" || exit \$?
+exit 2"
+fake_chrome chrome-exit1 "\"$chrome\" \"\$@\" || exit \$?
+exit 1"
+fake_chrome chrome-no-dom "$watchdog
+exit 2"
+fake_chrome chrome-no-image "case \" \$* \" in *' --screenshot='*) $watchdog; exit 2 ;; esac
+exec \"$chrome\" \"\$@\""
+APPSTORE_CREATIVE_CHROME="$work/chrome-watchdog" compose "$work/app/single.json" "$work/single-watchdog" >/dev/null ||
+  fail 'a Chromium that only timed out while shutting down was refused'
+RECORD="$work/single-watchdog/creative-render-iphone-6.3-ja.json" TILE="$work/single-watchdog/tile-1.png" ruby -rjson -rdigest -e '
+  files = JSON.parse(File.read(ENV.fetch("RECORD"))).fetch("files")
+  tile = File.realpath(ENV.fetch("TILE"))
+  abort "files #{files}" unless files.size == 1 && File.realpath(files[0]["path"]) == tile &&
+    files[0]["sha256"] == "sha256:#{Digest::SHA256.file(tile).hexdigest}" && [files[0]["width"], files[0]["height"]] == [1206, 2622]
+' || fail 'the watchdog tile does not match its render record'
+[[ "$(px size "$work/single-watchdog/tile-1.png")" == 1206x2622 ]] || fail 'the watchdog tile is not 1206x2622'
+APPSTORE_CREATIVE_CHROME="$work/chrome-exit2" expect_refused chrome-exit2 'headless Chromium failed (2)' compose "$work/app/single.json" "$work/single-exit2"
+APPSTORE_CREATIVE_CHROME="$work/chrome-exit1" expect_refused chrome-exit1 'headless Chromium failed (1)' compose "$work/app/single.json" "$work/single-exit1"
+APPSTORE_CREATIVE_CHROME="$work/chrome-no-dom" expect_refused chrome-no-dom 'did not report its layout' compose "$work/app/single.json" "$work/single-no-dom"
+APPSTORE_CREATIVE_CHROME="$work/chrome-no-image" expect_refused chrome-no-image 'wrote no image' compose "$work/app/single.json" "$work/single-no-image"
+
 mkdir -p "$work/raw/ja/iphone-6.3" "$work/sheet"
 cp "$work/app/capture.png" "$work/raw/ja/iphone-6.3/01-home.png"
 RAW="$work/raw" SHEET="$work/sheet" TILE="$work/single/tile-1.png" ruby -rjson -rdigest -e '
