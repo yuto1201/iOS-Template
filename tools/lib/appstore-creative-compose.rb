@@ -44,6 +44,7 @@ module AppStoreCreativeCompose
   FONT_ROOTS = ["/System/Library/Fonts", "/Library/Fonts", File.join(Dir.home, "Library/Fonts")].freeze
   CHROME_DEFAULT = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
   CHROME_TIMEOUT = 120
+  CHROME_TEARDOWN_HUNG = 2
 
   class Error < StandardError; end
 
@@ -452,6 +453,7 @@ module AppStoreCreativeCompose
                  "--metrics-recording-only", "--allow-file-access-from-files", "--host-resolver-rules=MAP * ~NOTFOUND",
                  "--force-device-scale-factor=1", "--user-data-dir=#{profile}", *arguments, file_url(html_path)]
       output = +""
+      errors = +""
       status = nil
       Open3.popen3(*command, pgroup: true) do |stdin, stdout, stderr, wait|
         stdin.close
@@ -463,11 +465,18 @@ module AppStoreCreativeCompose
         end
         status = wait.value
         output = reader.value.force_encoding(Encoding::UTF_8)
-        drain.join
+        errors = drain.value.force_encoding(Encoding::BINARY)
       end
-      fail!("headless Chromium failed (#{status.exitstatus})") unless status.success?
+      fail!("headless Chromium failed (#{status.exitstatus})") unless status.success? || teardown_hang?(status, errors)
       output
     end
+  end
+
+  # #529: Chrome 157 sometimes finishes its work and then hangs while shutting down. Its teardown
+  # watchdog then exits with RESULT_CODE_HUNG (2). The callers still check what Chromium made (the
+  # layout metrics in the DOM, the screenshot and its size), so only that exact exit is accepted.
+  def teardown_hang?(status, errors)
+    status.exitstatus == CHROME_TEARDOWN_HUNG && errors.include?("Teardown watchdog expired".b)
   end
 
   def measure(chrome, html_path, plan)
