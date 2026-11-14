@@ -3,7 +3,7 @@ set -euo pipefail
 
 unset CDPATH
 tool_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && /bin/pwd -P)
-# D-105 (#537): takes in a delivery from the App Store creative workspace and writes the folder that
+# D-106 (#537): takes in a delivery from the App Store creative workspace and writes the folder that
 # tools/build-appstore-screenshot-set.sh --composition reads. It reads local files and the local
 # workspace Git repository only; it never writes into `App Store/`, never opens the network, App Store
 # Connect, a credential store, or shell startup files.

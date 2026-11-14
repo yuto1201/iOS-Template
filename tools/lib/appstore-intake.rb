@@ -1,7 +1,7 @@
 # encoding: UTF-8
 # frozen_string_literal: true
 
-# D-105 (#537): takes in a delivery from the App Store creative workspace. It checks delivery.json
+# D-106 (#537): takes in a delivery from the App Store creative workspace. It checks delivery.json
 # (schema 1) and every delivered file, binds each composed face to the app's own raw capture manifest,
 # to the render record that drew it and to adopted materials only, checks that the user's choice is
 # recorded in the workspace commit with the delivered SHA-256, runs the store-copy check on delivered

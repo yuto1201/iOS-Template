@@ -1,11 +1,11 @@
 ---
 name: appstore-intake
-description: Take App Store screenshots, store copy or other store creative made in the App Store creative workspace into this app — check the delivery, bind it to the app's own raw captures and the user's recorded choice, then hand it to the app's assembly, review, seal and save gates (D-105). Use when the workspace session says a delivery is ready, or the user asks to put adopted App Store images or copy into the app. Not for making, proposing or restyling images or copy (that happens in the workspace with the shared `appstore-creative` skill), and not for App Store Connect upload or submission (use `submit-appstore-release`).
+description: Take App Store screenshots, store copy or other store creative made in the App Store creative workspace into this app — check the delivery, bind it to the app's own raw captures and the user's recorded choice, then hand it to the app's assembly, review, seal and save gates (D-106). Use when the workspace session says a delivery is ready, or the user asks to put adopted App Store images or copy into the app. Not for making, proposing or restyling images or copy (that happens in the workspace with the shared `appstore-creative` skill), and not for App Store Connect upload or submission (use `submit-appstore-release`).
 ---
 
 # App Store intake
 
-D-105 splits the App Store work by one rule: **what to show and how to say it is decided and made
+D-106 splits the App Store work by one rule: **what to show and how to say it is decided and made
 in the App Store creative workspace; whether it is true and may ship is decided here, in the app.**
 The workspace and its shared skill `appstore-creative` research, propose, let the user choose, draw
 the faces and draft the copy. The app owns the facts (confirmed specs, `App Store/privacy/`,
@@ -28,7 +28,7 @@ delivery from the workspace.
 
 ## Take a delivery in
 
-The workspace session gives you a folder with `delivery.json` (schema 1, D-105) and `files/`. Run the
+The workspace session gives you a folder with `delivery.json` (schema 1, D-106) and `files/`. Run the
 intake from the app's issue worktree, with a local clone of the workspace repository that contains the
 delivered commit:
 

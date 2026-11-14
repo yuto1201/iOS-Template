@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# D-105 (#537): tools/intake-appstore-delivery.sh takes in a delivery from the App Store creative
+# D-106 (#537): tools/intake-appstore-delivery.sh takes in a delivery from the App Store creative
 # workspace. Every capture, face, render record, material, choice and copy is made here from small
 # generated files and a throwaway Git repository; nothing is committed and nothing reaches the network.
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
