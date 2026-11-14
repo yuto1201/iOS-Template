@@ -73,12 +73,20 @@
         "tools/validate-appstore-package.sh"
       ],
       "prefixes": [
+        ".agents/skills/appstore-creative/",
         ".agents/skills/appstore-intake/",
         ".agents/skills/prepare-appstore-assets/templates/",
+        ".claude/skills/appstore-creative",
         "App Store/",
+        "docs/appstore-creative.md",
+        "docs/store-copy-aso.md",
+        "tools/appstore-creative-compose.sh",
+        "tools/appstore-creative-sheet.sh",
         "tools/lib/appstore-",
         "tools/tests/fixtures/appstore/",
-        "tools/tests/fixtures/store-sources/"
+        "tools/tests/fixtures/store-sources/",
+        "tools/tests/test-appstore-creative-compose.sh",
+        "tools/tests/test-appstore-creative-sheet.sh"
       ]
     },
     {
