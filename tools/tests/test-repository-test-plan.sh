@@ -141,6 +141,15 @@ end
   scope, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
   abort "#{changed_path} did not select #{expected_test}" unless scope == "targeted" && tests.include?(expected_test)
 end
+# #540: the adopted-app groups that rerun an App Store test inside a disposable app belong to template-sync
+# only, so an App Store change selects the App Store test once and a template-sync change still selects both.
+adopted_appstore_tests = %w[tools/tests/test-adopted-app-own-project-creative.sh
+  tools/tests/test-adopted-app-own-project-preparation.sh]
+_, _, tests = runner.resolve(source_manifest, "targeted", [".agents/skills/prepare-appstore-assets/SKILL.md"])
+abort "an App Store change reran an App Store test inside an adopted app" unless
+  (tests & adopted_appstore_tests).empty? && tests.include?("tools/tests/test-appstore-preparation.sh")
+_, _, tests = runner.resolve(source_manifest, "targeted", ["tools/lib/template-sync.rb"])
+abort "a template-sync change did not select the adopted-app App Store groups" unless (adopted_appstore_tests - tests).empty?
 %w[docs/verification.md tools/bootstrap-app.sh tools/tests/test-appstore-preparation.sh].each do |changed_path|
   _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
   abort "source manifest omitted credential scan for #{changed_path}" unless tests.include?(scan_test)
