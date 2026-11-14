@@ -22,6 +22,7 @@ bundle_id=com.example.TemplateApp
 
 fixture="$tmp/fixture.rb"
 cat >"$fixture" <<'RUBY'
+# encoding: UTF-8
 require "json"
 require "digest"
 require "fileutils"
