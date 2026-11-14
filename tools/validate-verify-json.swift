@@ -2706,7 +2706,7 @@ func validateWorkflowPath(_ path: String) throws {
         "tools/tests/test-appstore-creative-render.sh",
         "tools/tests/test-appstore-creative-sheet.sh",
         "tools/tests/test-appstore-preview-record.sh",
-        // D-105 (#534): the intake that takes a delivery from the App Store creative workspace into the
+        // D-105 (#537): the intake that takes a delivery from the App Store creative workspace into the
         // app, its adapter skill and that skill's Claude link, and its direct test.
         ".agents/skills/appstore-intake/SKILL.md",
         ".claude/skills/appstore-intake",
