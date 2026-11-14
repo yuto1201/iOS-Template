@@ -225,9 +225,9 @@ struct LegalLinksTests {
     func legalLinksFollowTheAppSlug() async throws {
         // D-072 pages from a slug in the same form as Config/app-identity.json.
         let links = try #require(LegalLinks(appSlug: "garden-notes"))
-        #expect(links.privacyPolicy == URL(string: "https://app.yutodev.com/apps/garden-notes/privacy/"))
-        #expect(links.termsOfUse == URL(string: "https://app.yutodev.com/apps/garden-notes/terms/"))
-        #expect(links.support == URL(string: "https://app.yutodev.com/apps/garden-notes/support/"))
+        #expect(links.privacyPolicy == URL(string: "https://yutodev.com/apps/garden-notes/privacy/"))
+        #expect(links.termsOfUse == URL(string: "https://yutodev.com/apps/garden-notes/terms/"))
+        #expect(links.support == URL(string: "https://yutodev.com/apps/garden-notes/support/"))
         for slug in [nil, "", "Garden", "garden_notes", "-garden", "garden-", "garden--notes", "garden/notes", "a b"] {
             #expect(LegalLinks(appSlug: slug) == nil, "\(String(describing: slug))")
         }
@@ -440,7 +440,7 @@ struct ReviewPromptPolicyTests {
         center.answerNegative()
         #expect(center.phase == .followUp && store.record.lastAnswer == .negative)
         #expect(center.followUpActions == [.close])
-        let support = URL(string: "https://app.yutodev.com/apps/sample/support/")!
+        let support = URL(string: "https://yutodev.com/apps/sample/support/")!
         center.supportURL = support
         #expect(center.followUpActions == [.openSupport(support), .close])
         center.feedbackAvailable = true

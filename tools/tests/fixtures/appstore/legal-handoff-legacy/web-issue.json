@@ -1,0 +1,20 @@
+{
+  "handoffId": "pay-cycle-v1",
+  "prompt": {
+    "digest": "sha256:8d1d40ad0726fbed186b18e2876d8b886ffa6681d5872f96539afb5f9d8214c6",
+    "path": "App Store/legal/handoff-prompt.md"
+  },
+  "recordedAt": "2026-09-16T00:00:00Z",
+  "request": {
+    "digest": "sha256:fc2ea8af519fe25d92106b5243bedd0ce0d58a306a73ee2e6d4978a7587c1fb1",
+    "path": "App Store/legal/handoff-request.json"
+  },
+  "schemaVersion": 1,
+  "status": "awaiting-user-handoff",
+  "webIssue": {
+    "number": 34,
+    "repository": "yuto1201/Web-AppLibrary",
+    "state": "OPEN",
+    "url": "https://github.com/yuto1201/Web-AppLibrary/issues/34"
+  }
+}

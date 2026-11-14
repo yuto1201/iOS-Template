@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// Where the app's legal and support pages live (D-072): `https://app.yutodev.com/apps/<appSlug>/...`.
+/// Where the app's legal and support pages live (D-072, D-105): `https://yutodev.com/apps/<appSlug>/...`.
 /// The slug comes from `LegalLinks.json`, which the app bundles. The template ships it empty, so the
 /// links stay hidden until the app's pages are published and the slug from `Config/app-identity.json`
 /// is written there. App Review asks for an in-app link to the privacy policy (guideline 5.1.1(i)) and
 /// an easy way to contact the developer (1.5); see D-081.
 nonisolated struct LegalLinks: Equatable {
     static let resourceName = "LegalLinks"
-    static let host = "app.yutodev.com"
+    static let host = "yutodev.com"
 
     let privacyPolicy: URL
     let termsOfUse: URL

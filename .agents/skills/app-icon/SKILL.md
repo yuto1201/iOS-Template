@@ -64,7 +64,7 @@ For a reference-image edit, replace the generator with `builtin-imagegen-referen
 
 ## Replace an accepted icon
 
-Replace an accepted icon for a later release only through its own replacement Issue, separate from the initial App Icon Issue. Updating an icon published elsewhere, such as a Web-AppLibrary listing or App Store Connect, is a separate handoff Issue.
+Replace an accepted icon for a later release only through its own replacement Issue, separate from the initial App Icon Issue. Updating an icon published elsewhere, such as the yutodev.com app list (`yuto1201/Web-yutodev`) or App Store Connect, is a separate handoff Issue.
 
 1. Generate candidates for a new immutable revision under `.artifacts/app-icon/<revision>/` as described in Generate and select. Never reuse a revision that produced the current or any earlier accepted icon.
 2. After the user explicitly selects one stable concept ID, write `selection.json` beside those candidates. List each shown candidate with the SHA-256 of its local bytes:

@@ -243,13 +243,13 @@ AIは形、部品の数、テクスチャの写実さ、動きから経路を提
 
 ### 6.1 AppLibraryでの法務ページ公開方針
 
-- `app.yutodev.com` はAppLibraryのアプリ一覧の入口とする。開発したアプリを一覧へ掲載し、そこから各アプリのWebサイトへ案内する。そのアプリサイト内にプライバシーポリシーと利用規約を用意し、必要なサポート情報も案内する。
-- Webページの公開・デプロイ管理はVercelへ統一する。Cloudflareはドメイン・DNS管理に使用し、Cloudflare Pagesは使わない。AppLibraryのVercel移行は別作業であり、この方針の記録を移行完了の証拠にしない。
+- `https://yutodev.com/apps/` はAppLibraryのアプリ一覧の入口とする（2026-11-14 までは `app.yutodev.com`、今は転送だけ。D-105）。開発したアプリを一覧へ掲載し、そこから各アプリのWebサイトへ案内する。そのアプリサイト内にプライバシーポリシーと利用規約を用意し、必要なサポート情報も案内する。
+- Webページは`yuto1201/Web-yutodev`をCloudflare Pagesで公開し、ドメインとDNSもCloudflareで管理する（D-105）。
 - 各アプリの `App Store/` は申請情報・法務原稿の正本として維持する。申請準備でプライバシーポリシーや利用規約の作成・更新が必要になったら、この方針に従い、実装とデータ利用実態に合う原稿をアプリサイトの公開版へ反映する。必要文書とEULAの扱いは、その時点のApple要件とアプリの機能・課金方式を確認して判断する。
-- 法務ページの公開URLは、プライバシーポリシーを`https://app.yutodev.com/apps/<appSlug>/privacy/`、利用規約を`/apps/<appSlug>/terms/`、サポートを`/apps/<appSlug>/support/`とする。`<appSlug>`は`Config/app-identity.json`の`appSlug`（例：`sublog`）で、日本語と英語は同じページ内で切り替え、言語ごとに別のURLを作らない（[D-072](decisions.md#d-072-法務ページをappyutodevcomappsappslugの下に置く)）。Web-AppLibrary内のファイル配置、Vercel project、ルーティングの実装はWeb側で決める。
+- 法務ページの公開URLは、プライバシーポリシーを`https://yutodev.com/apps/<appSlug>/privacy/`、利用規約を`/apps/<appSlug>/terms/`、サポートを`/apps/<appSlug>/support/`とする。`<appSlug>`は`Config/app-identity.json`の`appSlug`（例：`sublog`）で、日本語と英語は同じページ内で切り替え、言語ごとに別のURLを作らない（[D-072](decisions.md#d-072-法務ページをappyutodevcomappsappslugの下に置く)、hostと依頼先は[D-105](decisions.md#d-105-法務ページの公開先をyutodevcomappsappslugとyuto1201web-yutodevに改める)）。Web-yutodev内のファイル配置、Cloudflare Pagesの設定、ルーティングの実装はWeb側で決める。
 - 公開前でも、独立した通常のアプリ開発、データ利用の棚卸し、法務原稿の下書きは継続できる。仮URL、一覧トップURL、ローカルファイルを正式な法務ページURLとして登録しない。
 - 公開・申請前に、ユーザーが指定した各ページの公開URL、ログイン不要での到達性、公開本文と確認済み原稿・プライバシー申告の一致、アプリ内リンクと申請情報の整合を確認する。初回の法務内容に対するユーザー承認は引き続き必須で、この公開方針への合意を法務本文への承認として扱わない。
-- 原稿が確定したら、アプリrepositoryから`yuto1201/Web-AppLibrary`向けに、掲載する内容を記載した作成依頼Issueとして、source Issue／Head、英語・日本語のsupport／privacy／terms原稿とdigest、実装・データ利用・広告・課金の事実、承認済みroute、期待する返却値を含むcopy-ready Issue本文を生成する。作成前にopen／closed Issueを重複確認し、許可されたaccount／target／operationで一度だけ作成してtitle／body／URL／stateをreadbackする。ユーザーがWeb実装AIへのprompt転送と法務本文・公開の最終承認を行う。
+- 原稿が確定したら、アプリrepositoryから`yuto1201/Web-yutodev`向けに、掲載する内容を記載した作成依頼Issueとして、source Issue／Head、英語・日本語のsupport／privacy／terms原稿とdigest、実装・データ利用・広告・課金の事実、承認済みroute、期待する返却値を含むcopy-ready Issue本文を生成する。作成前にopen／closed Issueを重複確認し、許可されたaccount／target／operationで一度だけ作成してtitle／body／URL／stateをreadbackする。ユーザーがWeb実装AIへのprompt転送と法務本文・公開の最終承認を行う。
 - Web実装からの返却はdeployment reference、Web Issue、ユーザー操作参照、公開URLとsource digestを固定し、公開host／route、ログイン不要のHTTP 200、確認済み本文、locale、同一言語内のsupport／privacy／terms相互linkをlive検証する。fixture検証はtool regressionに限定し、App Store証拠にしない。live検証済みの結果だけを申請準備・提出へ引き継ぐ。
 - この方針はAppLibraryの編集・移行・デプロイ、DNS変更、App Store提出を単独で認可しない。実操作は対象リポジトリの規則、確定した配置、設定済み個人アカウント／target、Issue contractと必要な承認に従う。既存のoperation allowlistや検証gateは変更しない。
 
