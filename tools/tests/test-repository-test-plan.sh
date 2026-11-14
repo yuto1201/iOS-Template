@@ -571,3 +571,21 @@ manifest = JSON.parse(File.read(File.join(ENV.fetch("SOURCE_REPO"), "Config/repo
 rule = manifest.fetch("domainRules").find { |entry| entry.fetch("domain") == "repository-testing" }
 abort "repository-testing keeps retired coverage prefixes" unless rule && rule.fetch("prefixes").empty?'
 echo "PASS: no retired X post material reference or coverage prefix remains"
+
+# #540: an appstore-only change must not select the adopted-app tests that re-run the heavy appstore tests
+# inside a synced app (they exceed the targeted 300 s limit); a template-sync change still selects them.
+SOURCE_REPO="$source_repo" ruby -I"$source_repo/tools/lib" -rrepository-test-plan -rjson -e '
+manifest = JSON.parse(File.read(File.join(ENV.fetch("SOURCE_REPO"), "Config/repository-tests.json")))
+runner = IOSTemplate::RepositoryTestPlan
+adopted = %w[tools/tests/test-adopted-app-own-project-preparation.sh tools/tests/test-adopted-app-own-project-creative.sh]
+manifest.fetch("tests").select { |entry| adopted.include?(entry.fetch("path")) }.each do |entry|
+  abort "#{entry.fetch("path")} domains are not exactly template-sync" unless entry.fetch("domains") == ["template-sync"]
+end
+scope, _, tests = runner.resolve(manifest, "targeted", [".agents/skills/prepare-appstore-assets/SKILL.md"])
+abort "appstore-only change did not stay targeted" unless scope == "targeted"
+abort "appstore-only change selected an adopted-app test" unless (tests & adopted).empty?
+abort "appstore-only change did not select test-appstore-preparation.sh" unless tests.include?("tools/tests/test-appstore-preparation.sh")
+scope, _, tests = runner.resolve(manifest, "targeted", ["docs/template-sync.md"])
+abort "template-sync change did not stay targeted" unless scope == "targeted"
+abort "template-sync change did not select both adopted-app tests" unless (adopted - tests).empty?'
+echo "PASS: appstore-only changes skip the adopted-app tests and template-sync changes still select them"
