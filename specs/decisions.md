@@ -1275,3 +1275,19 @@
   - 2026-11-14より前に`app.yutodev.com`と`Web-AppLibrary`で描いて記録したhandoffは、どのcommandもそのままでは受け付けず、`migrate-legacy-handoff`で一度だけ書き換える。Web側のIssueは作り直さず、同じ番号を新しいリポジトリ名で読み返し、本文が旧い依頼文と1バイトも違わないことを確かめる。新しい記録は`migratedFrom`に旧いdigestと旧いIssueのURLを残す。手で書き換えることはしない。
 - Consequence: 公開済みのアプリのApp Store Connectの登録URLとアプリ内のリンクは、転送で動き続けるので、急いで書き換えない。派生アプリはテンプレートの取り込み（D-074、D-078）でこの変更を入れ、記録済みのhandoffを`migrate-legacy-handoff`で移す。Web側の実装、deploy、DNSは、これまでどおりこのrepositoryから行わない。
 - Related Issue: #536, #538
+
+## D-106: App Storeの画像と文言は、ワークスペースで考えて作り、アプリは納品物を取り込んで確かめる
+
+- Date: 2026-11-14
+- Status: 確定
+- Supersedes: D-077、D-085、D-093、D-101のうち、App Storeの面の提案、選択、描画、文言の案と選択をアプリのリポジトリの中で行うことと、採用をアプリの提案シートの選択（`tools/appstore-creative-compose.sh finalize`の、提案シートの日本語iPhoneのタイルとのバイトの一致）で確かめること。守るルール（実際のアプリにない機能や体験を見せない、評価・受賞・順位を書かない、生成画像にアプリの画面・UI・文字・ロゴ・Apple製品・誰か分かる顔を描かない、撮影の原画を加工しない、日英で面の構成と順番を同じにする、提出用の原画と録画はアプリが宣言したSimulatorで撮る、`truthfulRepresentation`の最終の確認はアプリのgateで行う）と、D-101の封印（`composition.json`の鍵と、組み立て、review、release-auditor、seal）は変えない。
+- Context: App Storeでダウンロードしてもらうための工夫（見せ方、文言、ヘッダー、イベントなど）は、アプリをまたいで共通する部分が多い。ユーザーは2026-11-12に、App Storeの画像と動画の仕上げをワークスペース`Tool-AppStore-Creative`（場所は対応表`~/.agents/skills/.workspaces/registry.md`）へ移す計画を承認し、2026-11-13に「ワークスペースは考えて作るまで、採用した素材はiOS開発のリポジトリにも置く」と方針を広げた。2026-11-14、yuto1201/iOS-CafLog#260で、ワークスペースが描いた面を納品物として取り込み、今の`tools/build-appstore-screenshot-set.sh --composition`がcompositionの確かめをすべて通すことを確かめた。今の`finalize`は、選んだ後に仕上げた面や撮り直した原画から描いた面を受け付けない。
+- Decision:
+  - 分担の基準は、「なにを、どう見せるか・どう書くか」はワークスペース、「それが事実か、出してよいか」はアプリとする。
+  - ワークスペース（と共通スキル`appstore-creative`）が持つもの：参考の調査、アプリの個性（`brand.json`）の正本、パターンの提案、提案シートと選択、面の宣言と描画と検査、文言（名前、サブタイトル、キーワード、プロモーション用テキスト、説明、What's New）の案と検査と選択、ヘッダーと検索結果の画像、アプリをまたいだ知恵と結果の記録。
+  - アプリが持つもの：事実（確定した仕様、プライバシー、法務、審査メモ、`App Store/submission/requirements.json`）、提出用の原画の撮影と録画、納品物の取り込みと検証、採用したものの写し、組み立て、review、封印、App Store Connectへの保存、upload、提出。
+  - 2つは納品物でつなぐ。ワークスペースは、採用したものを`delivery.json`（schema 1）と各ファイルで渡す。`delivery.json`は、`schemaVersion`、`workspace`（repository、commit、案件ID）、`app`（Bundle ID）、`kinds`、`inputs`（原画の撮影のbatch、`manifest.json`のSHA-256、`sourceSha`、`buildDigest`、`runtime`、提出の要件のSHA-256、個性（`brand.json`）のSHA-256、事実を読んだアプリのcommit）、`renderer`（描画器のpathとSHA-256）、`adoption`（`user-explicit`、日時、場所、承認の参照、選んだパターンか案、選んだシートのSHA-256、ワークスペースのcommitにある選択の記録のpathとSHA-256）、`faces`（各面のlocale、family、順番、状態、原画と面と描画の記録と宣言のSHA-256、path）、`files`（各ファイルのpath、SHA-256、大きさ、役割）、`checks`を持つ。
+  - アプリは`tools/intake-appstore-delivery.sh`と`appstore-intake`スキルで取り込む。取り込みは、各ファイルのSHA-256、原画の記録と提出の要件との一致、各面と描画の記録と原画と採用済みの素材の結び付き、選択の記録がワークスペースのcommitにそのSHA-256であること、文言の検査を確かめ、`finalize`と同じ鍵の`composition.json`と取り込みの記録`intake.json`を書く。`composition.adoption`の`proposalSheetDigest`は選んだシートのSHA-256、`selectionDigest`はワークスペースの選択の記録のSHA-256と読む。
+  - 組み立て前のフォルダ（描画の記録を含む）は、D-101と同じくGitの外に置き、組み立てたセットだけを`App Store/screenshots/`へ入れる。
+- Consequence: #534で取り込みの道具とadapterを足す。後続のIssueで、`appstore-creative`スキル、合成の道具（`compose`、`sheet`）、`docs/appstore-creative.md`、`docs/store-copy-aso.md`をテンプレートから消し、`AGENTS.md`を直す。プレビュー動画の道具と、それが使う描画の拡張層（`tools/appstore-creative-render.sh`）は、動画の受け渡しを決めるまでテンプレートに残す。派生アプリは、テンプレートの取り込みで道具が変わり、制作の材料（`goldie/`など）はワークスペースへ写したうえで、新しい経路で採用し直した後に消す。
+- Related Issue: #534（ユーザーの方針：2026-11-13の計画第3版、2026-11-14「段階5に進む」）

@@ -87,7 +87,9 @@ Each locale/family condition leases its platform's dedicated Simulator, which is
 
 ## Composed screenshot sets (D-101)
 
-A set drawn by the D-093 renderer is sealed through the same package, audit and seal as raw captures, bound to the capture that each face shows:
+A set drawn by the D-093 renderer is sealed through the same package, audit and seal as raw captures, bound to the capture that each face shows.
+
+A set made in the App Store creative workspace (D-105) arrives as a delivery. Take it in with [`appstore-intake`](../appstore-intake/SKILL.md) (`tools/intake-appstore-delivery.sh`) instead of steps 1 and 2: the intake checks the delivery against this app's raw capture manifest and the user's choice recorded in the workspace commit, and writes the same `$COMPOSED_ROOT` (faces, `records/`, `composition.json`) plus `intake.json`. Then continue with step 3. A set rendered inside the app still uses steps 1 and 2:
 
 1. Render every locale and family with `tools/appstore-creative-compose.sh compose` from the raw captures of one capture batch, and record the user's choice on the proposal sheet with `tools/appstore-creative-sheet.sh select`.
 2. Bind the adopted faces. `finalize` refuses a face without a raw capture of its locale and family, a capture shown twice, a material that `goldie/assets/provenance.json` does not record as adopted, renders that are not the tiles chosen on the proposal sheet (another pattern, an unchosen slot, or other scenes in another locale or device), and any declaration, face or capture whose bytes changed after rendering:
