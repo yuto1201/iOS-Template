@@ -8,7 +8,7 @@ repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 tool="$repo_root/tools/appstore-creative-render.sh"
 runtime="${GOLDIE_RUNTIME:-${XDG_CACHE_HOME:-$HOME/.cache}/codex-goldie/0.3.1}"
 pinned_goldie="$runtime/node_modules/goldie"
-[[ -f "$pinned_goldie/package.json" ]] || { echo "pinned Goldie runtime is missing: $runtime (see .agents/skills/appstore-creative/references/config.md)" >&2; exit 1; }
+[[ -f "$pinned_goldie/package.json" ]] || { echo "pinned Goldie runtime is missing: $runtime (install the pinned Goldie as the App Store creative workspace's setup guide says, D-105)" >&2; exit 1; }
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-creative-render.XXXXXX")
 trap 'rm -rf -- "$workspace"' EXIT
 fail() { echo "$*" >&2; exit 1; }
@@ -347,9 +347,8 @@ ruby -rjson -e 'marks = JSON.parse(File.read(ARGV[0])).fetch("marks")
   abort "layer marks: #{marks}" unless marks == ["tile 1 has 6 visual layers; the guide is 4"]' "$record63"
 
 # 8. D-085 (#401): the render record lists every image input of every tile (background, layers and
-# Goldie image decorations) and says so, and the proposal sheet reads it: a tile drawn from a
-# rejected, unreviewed or changed material is refused end to end.
-sheet_tool="$repo_root/tools/appstore-creative-sheet.sh"
+# Goldie image decorations) and says so. The proposal sheet that reads it lives in the App Store creative
+# workspace since D-105, with its end-to-end refusals.
 two_scene_manifest
 ffmpeg -loglevel error -f lavfi -i "color=c=0x2A5599:s=1206x2622,format=rgb24" -frames:v 1 "$workspace/app/goldie/assets/sky.png"
 inventory_config() { # layer-image
@@ -365,70 +364,6 @@ ruby -rjson -rdigest -e 'record = JSON.parse(File.read(ARGV[0])); assets = File.
   decoration = record.fetch("decorations").first
   abort "decoration record: #{decoration}" unless decoration.values_at("scene", "src", "tiles") == ["home", File.join(assets, "cyan.png"), [1]] &&
     decoration.fetch("sha256") == "sha256:#{Digest::SHA256.file(File.join(assets, "cyan.png")).hexdigest}"' "$record63" "$workspace/app/goldie/assets"
-cp "$record63" "$workspace/render-good.json"
-proposal_dir="$workspace/proposal"; mkdir -p "$proposal_dir"
-ruby -rjson -e '
-  dir, assets, captures = ARGV
-  File.write(File.join(dir, "brand.json"), JSON.generate({"schemaVersion" => 1, "app" => "Render", "strengths" => [
-      {"id" => "sway", "claim" => "天気で花が揺れる", "feature" => "花の動き", "screens" => ["home"]}],
-    "audience" => [{"who" => "通勤する人", "scene" => "朝"}], "world" => "雨上がりの庭", "story" => ["花が教える"],
-    "colors" => {"accent" => "#3A7BD5", "icon" => ["#F2C94C"], "palette" => [{"name" => "paper", "hex" => "#F6F2EA", "use" => "背景"}]},
-    "fonts" => [{"role" => "headline", "family" => "Noto Sans JP", "source" => "Google Fonts", "license" => "SIL Open Font License 1.1", "paid" => false}],
-    "voice" => ["やさしい"], "motifs" => ["雨粒"], "avoid" => ["光の玉"]}))
-  File.write(File.join(dir, "research.json"), JSON.generate({"schemaVersion" => 1, "category" => "天気", "checkedOn" => "2026-10-22",
-    "references" => %w[a b c].map { |id| {"id" => id, "app" => "App #{id}", "site" => "before.click", "url" => "https://before.click/#{id}", "techniques" => ["off-screen-world"]} }}))
-  %w[A B C].each do |id|
-    File.write(File.join(dir, "style-#{id}.json"), JSON.generate({"schemaVersion" => 1, "id" => id, "name" => "Style #{id}", "signature" => "決め手#{id}",
-      "tokens" => [{"name" => "bg", "hex" => "#F6F2EA", "use" => "背景"}, {"name" => "accent", "hex" => "#3A7BD5", "use" => "強調"}],
-      "fonts" => {"headline" => "Noto Sans JP"}, "typesetting" => "左寄せ", "decorationLimit" => 2, "crossScreen" => "なし",
-      "voice" => ["やさしい"], "failures" => ["3行"]}))
-  end
-  File.write(File.join(dir, "materials.json"), JSON.generate({"schemaVersion" => 1, "kind" => "material", "app" => "Render", "title" => "素材",
-    "materials" => [["sky", "background", "sky.png"], ["magenta", "object", "magenta.png"], ["cyan", "object", "cyan.png"]].map { |id, role, file|
-      {"id" => id, "pattern" => "A", "role" => role, "image" => File.join(assets, file), "prompt" => "#{id}、文字なし"} }}))
-' "$proposal_dir" "$workspace/app/goldie/assets" "$workspace/app/goldie/ja/out/raw/iphone-6.3/manifest.json"
-"$sheet_tool" build --spec "$proposal_dir/materials.json" --root "$proposal_dir/sheets" --revision m-reject >/dev/null
-"$sheet_tool" review --sheet "$proposal_dir/sheets/m-reject" --adopt sky,magenta --reject cyan >/dev/null
-"$sheet_tool" build --spec "$proposal_dir/materials.json" --root "$proposal_dir/sheets" --revision m-adopt >/dev/null
-"$sheet_tool" review --sheet "$proposal_dir/sheets/m-adopt" --adopt sky,magenta,cyan >/dev/null
-proposal_spec() { # name review render-record
-  ruby -rjson -e 'dir, name, review, render, tile, captures = ARGV
-    patterns = [%w[A classic image], %w[B hero solid], %w[C offset gradient]].map { |id, layout, background|
-      {"id" => id, "title" => "案#{id}", "hypothesis" => "動きで伝える。", "tradeoffs" => "素材に左右される。", "recommended" => id == "A",
-       "style" => "style-#{id}.json", "techniques" => ["off-screen-world"],
-       "tiles" => [{"slot" => 1, "kind" => "device", "device" => "iphone", "locale" => "ja", "image" => tile, "highlight" => "sway",
-         "layout" => layout, "background" => background, "headlines" => {"ja" => ["雨の日も", "花が揺れる"], "en-US" => ["Rain or shine", "Flowers sway"]}}]}.
-      tap { |pattern| pattern["recommendation"] = "世界が伝わる。" if id == "A" } }
-    File.write(File.join(dir, "#{name}.json"), JSON.generate({"schemaVersion" => 1, "kind" => "proposal", "app" => "Render", "title" => "提案",
-      "brand" => "brand.json", "research" => "research.json", "captures" => captures, "materialReviews" => ["sheets/#{review}"],
-      "renders" => [render], "patterns" => patterns}))' "$proposal_dir" "$1" "$2" "$3" "$tile1" "$workspace/app/goldie/ja/out/raw/iphone-6.3/manifest.json"
-}
-expect_sheet_failure() { # label message spec
-  if "$sheet_tool" build --spec "$3" --root "$proposal_dir/sheets" --revision p-refused >"$workspace/$1.out" 2>"$workspace/$1.err"; then fail "proposal accepted $1"; fi
-  grep -Fq -- "$2" "$workspace/$1.err" || { cat "$workspace/$1.err" >&2; fail "unexpected failure for $1"; }
-}
-proposal_spec rejected m-reject "$workspace/render-good.json"
-expect_sheet_failure e2e-rejected-decoration 'tile 1 of A uses cyan.png, which the user rejected' "$proposal_dir/rejected.json"
-proposal_spec adopted m-adopt "$workspace/render-good.json"
-"$sheet_tool" build --spec "$proposal_dir/adopted.json" --root "$proposal_dir/sheets" --revision p-ok >/dev/null
-ruby -rjson -e 'pattern = JSON.parse(File.read(ARGV[0])).fetch("patterns").first
-  abort "adopted inputs: #{pattern["materials"]}" unless pattern.fetch("materials").length == 3' "$proposal_dir/sheets/p-ok/sheet.json"
-# A layer that was never on a material sheet.
-inventory_config blue.png
-render63 >/dev/null
-cp "$record63" "$workspace/render-unseen.json"
-proposal_spec unseen m-adopt "$workspace/render-unseen.json"
-expect_sheet_failure e2e-unseen-layer 'tile 1 of A uses blue.png, which the user has not adopted on a material sheet' "$proposal_dir/unseen.json"
-# A background that changed after the review.
-inventory_config magenta.png
-cp "$workspace/app/goldie/assets/sky.png" "$workspace/sky.original.png"
-ffmpeg -y -loglevel error -f lavfi -i "color=c=0x2A5598:s=1206x2622,format=rgb24" -frames:v 1 "$workspace/app/goldie/assets/sky.png"
-render63 >/dev/null
-cp "$record63" "$workspace/render-changed.json"
-proposal_spec changed m-adopt "$workspace/render-changed.json"
-expect_sheet_failure e2e-changed-background 'tile 1 of A uses sky.png, which changed after the user reviewed it' "$proposal_dir/changed.json"
-cp "$workspace/sky.original.png" "$workspace/app/goldie/assets/sky.png"
-[[ ! -e "$proposal_dir/sheets/p-refused" ]] || fail 'a refused end-to-end proposal left a revision behind'
 
 # 9. D-085 (#391): the product page header still. 3840x1646 without alpha; the safe area comes from the
 # Art Safe Area layer of Apple's official template, with its source; text and protected layers must stay

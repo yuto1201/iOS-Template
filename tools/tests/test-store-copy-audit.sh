@@ -281,63 +281,20 @@ def require_all(label, text, values)
   fail!("#{label} lacks #{missing.inspect}") unless missing.empty?
 end
 
-# AC-3: the guide has every section, separates Apple's statements from practitioner knowledge, cites a source with
-# a check date in each section, and says that the keyword unit and the en-US handling in Japan are not settled.
-guide = File.read(File.join(repo_root, 'docs/store-copy-aso.md'), encoding: 'UTF-8')
-# Headings inside fenced examples are not sections of the guide.
-outline = guide.gsub(/^```.*?^```\n/m, '')
-sections = ['アプリ名', 'サブタイトル', 'キーワード', 'プロモーション用テキスト', '説明', "What's New", 'スクリーンショットの見出し', '計測と改善']
-sections.each do |title|
-  body = outline[/^## #{Regexp.escape(title)}\n(.*?)(?=^## |\z)/m, 1] or fail!("guide lacks the section #{title}")
-  fail!("guide section #{title} has no check date") unless body.include?('確認日：2026-10-21')
-  official = body[/^### Apple公式\n(.*?)(?=^### |\z)/m, 1] or fail!("guide section #{title} lacks Apple's statements")
-  practice = body[/^### 実務の知見\n(.*?)(?=^### |\z)/m, 1] or fail!("guide section #{title} lacks practitioner knowledge")
-  fail!("guide section #{title} cites no Apple page") unless official.include?('https://developer.apple.com/')
-  { 'Apple' => official, 'practitioner' => practice }.each do |kind, text|
-    claims = text.lines.select { |line| line.start_with?('- ') }
-    fail!("guide section #{title} has no #{kind} entry") if claims.empty?
-    uncited = claims.reject { |line| line.include?('https://') || line.include?('実務の出典はありません') }
-    fail!("guide section #{title} has #{kind} claims without a source: #{uncited.inspect}") unless uncited.empty?
-  end
-  fail!("guide section #{title} mixes practitioner sources into Apple's statements") if official.match?(%r{https://(?!developer\.apple\.com/)})
-  %w[何を書くか 避けること 検査toolが確かめるか].each do |part|
-    fail!("guide section #{title} lacks #{part}") unless body.include?(part)
-  end
+# D-105: the ASO guide moved to the App Store creative workspace with the creative skill; the template keeps
+# the checker, and the preparation skill takes delivered copy in through appstore-intake.
+%w[docs/store-copy-aso.md .agents/skills/appstore-creative].each do |retired|
+  fail!("retired App Store creative path remains (D-105): #{retired}") if File.exist?(File.join(repo_root, retired))
 end
-require_all('guide', guide, [
-  '### Apple公式', '### 実務の知見', '確認日：2026-10-21',
-  'https://developer.apple.com/app-store/search/',
-  'https://developer.apple.com/app-store/product-page/',
-  'https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information',
-  'https://developer.apple.com/app-store/review/guidelines/',
-  'https://developer.apple.com/help/app-store-connect/reference/app-information/app-store-localizations/',
-  'https://developer.apple.com/app-store/product-page-optimization/',
-  'https://developer.apple.com/app-store/custom-product-pages/',
-  'https://www.apptweak.com/en/aso-blog/how-to-optimize-your-ios-keyword-field',
-  'https://appfigures.com/resources/guides/app-store-algorithm-update-2025',
-  'https://www.consultmyapp.com/blog/-is-apple-now-indexing-screenshot-titles-on-the-app-store',
-  '100バイト', '100 characters', 'tools/check-store-copy.sh', 'App Store/metadata/aso.json', 'aso-decisions.md',
-  '2.3.3', '2.3.7', '2.3.12', '2.3.14', '5.6.1'
-])
-unsettled = outline[/^## 決まっていないこと\n(.*?)(?=^## |\z)/m, 1] or fail!('guide lacks the unsettled section')
-require_all('guide unsettled section', unsettled, ['100バイト', '100 characters', '英語（米国）', 'Appleは明記して', 'バイト数'])
-%w[error warning].each { |severity| fail!("guide does not explain #{severity}") unless guide.include?("`#{severity}`") }
-codes = library.scan(/finding\("(?:error|warning)", [^,]+, [^,]+, "([a-z-]+)"/).flatten.uniq + %w[competitor-name trademark]
-fail!('no finding codes were found in the checker') if codes.length < 15
-undocumented = codes.reject { |code| guide.include?("`#{code}`") }
-fail!("guide does not explain the codes #{undocumented.inspect}") unless undocumented.empty?
 
 # AC-6: the preparation skill drafts two or three candidates, runs the checker, records the user's choice and its
-# reasons, and keeps the existing no-invention rule and the save boundary. The creative skill points at the guide.
+# reasons, and keeps the existing no-invention rule and the save boundary.
 prepare = File.read(File.join(repo_root, '.agents/skills/prepare-appstore-assets/SKILL.md'), encoding: 'UTF-8')
 require_all('prepare skill', prepare, [
-  'docs/store-copy-aso.md', 'tools/check-store-copy.sh', 'two or three', '--localizations', 'aso-decisions.md',
+  'ASO guide (D-105)', 'appstore-intake', 'tools/check-store-copy.sh', 'two or three', '--localizations', 'aso-decisions.md',
   'explicit choice', 'target', 'avoided', 'Do not invent marketing, privacy, account-deletion, or legal claims.',
   'save-appstore-metadata', 'not approval'
 ])
-creative = File.read(File.join(repo_root, '.agents/skills/appstore-creative/SKILL.md'), encoding: 'UTF-8')
-fail!('creative skill does not point at the screenshot section of the guide') unless creative.scan('docs/store-copy-aso.md#スクリーンショットの見出し').length >= 2
-fail!('creative skill still waits for the guide') if creative.include?('when it exists') || creative.include?('until the App Store copy guide (ASO) exists')
 
-puts "App Store ASO checker passed (#{cases.size} copy cases, keyword-limit, locale, refusal, read-only and guide checks)"
+puts "App Store ASO checker passed (#{cases.size} copy cases, keyword-limit, locale, refusal, read-only and preparation-skill checks)"
 RUBY

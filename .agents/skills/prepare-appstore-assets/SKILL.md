@@ -25,7 +25,7 @@ Independent text preparation can continue before complete release inputs exist. 
 
 ## Draft the store copy (ASO)
 
-Write the name, subtitle, keywords, promotional text, description and release notes (What's New) by the [ASO guide](../../../docs/store-copy-aso.md), from the same confirmed facts. The guide adds no exception to step 1 of [Prepare the source package](#prepare-the-source-package): never invent features, rankings, awards or ratings to rank better.
+The name, subtitle, keywords, promotional text, description and release notes (What's New) are thought out in the App Store creative workspace with the Mac-wide `appstore-creative` skill and its ASO guide (D-105), from the same confirmed facts, and arrive as the `copy` files of a delivery that [`appstore-intake`](../appstore-intake/SKILL.md) takes in. The steps below check, choose and record the copy in this app, whether it came from a delivery or was drafted here by the same guide. The guide adds no exception to step 1 of [Prepare the source package](#prepare-the-source-package): never invent features, rankings, awards or ratings to rank better.
 
 1. Draft two or three candidate sets for each locale (`ja` and `en-US`) that differ in the target terms they put in the name, subtitle and keyword field. Keep them outside the canonical sources, as `.artifacts/appstore-draft/<candidate>/localizations/<locale>.yml` with the keys of `App Store/metadata/localizations/`, and the release notes beside them.
 2. Run the read-only checker on every candidate:
@@ -58,11 +58,11 @@ The following preconditions apply only when continuing from source preparation i
 
 ## Phase 6 screenshot routing
 
-Use [`appstore-creative`](../appstore-creative/SKILL.md) (Goldie-based, D-077) as the standard Phase 6 presentation workflow for iPhone 6.3-inch (family `iphone-6.3`, 1206×2622, D-079) and iPad 13-inch App Store images; iPad tiles are rendered through its render extension (`tools/appstore-creative-render.sh render --config <iPad config> --device ipad-13 --locale <locale>`). Keep `goldie/ja/` and `goldie/en-US/` as separate configs, raw inputs, flows, and disposable outputs. Existing real screenshots that need only headline, background, frame, font, layout, or order changes are imported and rendered without recapture.
+Phase 6 App Store images, the preview video and the store copy are researched, proposed and made in the App Store creative workspace with the Mac-wide `appstore-creative` skill (D-105; find the workspace in the Mac's skill registry), and delivered after the user chooses, with `ja` and `en-US` kept apart. This app captures the raw images, takes the delivery in with [`appstore-intake`](../appstore-intake/SKILL.md), and keeps what was adopted. The workspace draws iPhone 6.3-inch (family `iphone-6.3`, 1206×2622, D-079) and iPad 13-inch faces only from this app's captures. Existing real screenshots that need only headline, background, frame, font, layout, or order changes are drawn again there without recapture. An app that still keeps adopted declarations in `goldie/ja/` and `goldie/en-US/` keeps them apart by locale until they move to the workspace.
 
-For new raw capture, acquire one inherited session through `tools/with-ios-simulator-lock.sh` and run the repository capture tool. It leases only the dedicated iPhone and iPad Simulators declared in `Config/dedicated-simulators.json` through `tools/lib/ios-simulator-resource.rb` and never creates, clones, renames, or deletes a device. Since D-079 the dedicated iPhone 17 Pro captures the required iPhone with Dynamic Island (medium display) size, 1206×2622 (family `iphone-6.3`), and the dedicated iPad Pro 13-inch (M5) captures iPad 13-inch, so captures are used at their native size without cropping or compositing. Import the iPhone raw images into Goldie. Do not run Goldie's own `capture`: Goldie 0.3.1 selects a device by name and cannot reach a dedicated Simulator. Save screenshots and diagnostics outside the device, then require the released lease receipts before continuing.
+For new raw capture, acquire one inherited session through `tools/with-ios-simulator-lock.sh` and run the repository capture tool. It leases only the dedicated iPhone and iPad Simulators declared in `Config/dedicated-simulators.json` through `tools/lib/ios-simulator-resource.rb` and never creates, clones, renames, or deletes a device. Since D-079 the dedicated iPhone 17 Pro captures the required iPhone with Dynamic Island (medium display) size, 1206×2622 (family `iphone-6.3`), and the dedicated iPad Pro 13-inch (M5) captures iPad 13-inch, so captures are used at their native size without cropping or compositing. Hand the raw root and its `manifest.json` to the workspace; the workspace never captures, because only this app reaches its dedicated Simulators. Save screenshots and diagnostics outside the device, then require the released lease receipts before continuing.
 
-Goldie 0.3.1 has no iPad device, so iPad tiles come from iPad captures through the render extension. Route iPad capture through `tools/capture-appstore-screenshots.sh`; never stretch an iPhone export. The repository capture is invoked under the shared lock and captures all required locale/family conditions sequentially:
+iPad faces come from iPad captures. Route iPad capture through `tools/capture-appstore-screenshots.sh`; never stretch an iPhone export. The repository capture is invoked under the shared lock and captures all required locale/family conditions sequentially:
 
 ```sh
 tools/with-ios-simulator-lock.sh --timeout 0 -- \
@@ -75,34 +75,49 @@ tools/with-ios-simulator-lock.sh --timeout 0 -- \
 
 Each locale/family condition leases its platform's dedicated Simulator, which is erased before the lease and shut down on release, and the conditions run one after another. The tool records the Apple model name of each display family and the actual image size, and refuses a dedicated device or Runtime that does not match the requirements before any Simulator changes. Failure, timeout, or interruption must release the exact lease; a cleanup failure is reported and remains blocked for durable recovery. Never boot, erase, install into, or delete a user or other-owner device.
 
+## Preview video recording
+
+Only when the user asks for a preview video, record its footage in this app, as with the screenshots; the workspace plans the storyboard and finishes the video (D-105). `tools/record-appstore-preview.sh` runs under `tools/with-ios-simulator-lock.sh`, leases the dedicated device of one family the same way as the screenshot capture, and records one storyboard per family and locale:
+
+```sh
+tools/with-ios-simulator-lock.sh --timeout 0 -- tools/record-appstore-preview.sh record \
+  --requirements "App Store/submission/requirements.json" --states "App Store/screenshots/states.json" \
+  --storyboard storyboard.json --app-path "$APP_PATH" --bundle-id "$BUNDLE_ID" \
+  --source-sha "$HEAD_SHA" --build-digest "$BUILD_DIGEST" --runtime "$RUNTIME_ID" \
+  --family iphone-6.3 --locale ja --output-root "$RECORD_ROOT" --issue "$ISSUE" --batch-id "$BATCH_ID"
+```
+
+`--family` is `iphone-6.3` (the dedicated iPhone 17 Pro, 1206×2622, D-079) or `ipad-13` (the dedicated iPad Pro 13-inch (M5), 2064×2752). The storyboard lists segments `{id, state, seconds, allowStill}`; `state` is an entry of `states.json`, `seconds` is 1–30 and the whole storyboard is at most 30 seconds. Every failure, timeout or interruption stops the recorder and releases the lease. Check every trial clip before recording the full storyboard:
+
+```sh
+tools/record-appstore-preview.sh check --clip 01-open.mp4 --family iphone --seconds 5 --output quality.json
+```
+
+It passes only at the dedicated device's screen size, at least 30 fps on average, within 0.5 s of the planned length, with no frame gap over 100 ms (or more than 2% of the clip in gaps), no freeze of 0.5 s or more, and no black frames of 0.1 s or more; a segment marked `allowStill` may hold still. Exit status 3 means the clip failed, and a failed trial is the moment for the user to choose "no video" instead of a weak preview.
+
 ## Prepare the source package
 
 1. Derive `metadata/`, localized English and Japanese copy, `privacy/data-use.yml`, review notes, and release notes from observable app behavior and confirmed specifications. Do not invent marketing, privacy, account-deletion, or legal claims. Draft and choose the store copy as in [Draft the store copy (ASO)](#draft-the-store-copy-aso).
 2. Draft privacy policy, terms, and support text from the same facts. For a first publication, stop until the user confirms the legal documents and an approval receipt is available. Mark their exact `Status: Confirmed`; an AI or release auditor cannot supply this approval. If public pages are required, complete the legal-page handoff above and bind the live verification record before treating their URLs as ready.
-3. Follow the Phase 6 screenshot routing above. Use `appstore-creative` for reviewed iPhone and iPad presentation, with every raw capture taken through the repository capture path. Preserve exact source/build provenance across imported and rendered images. When the adopted faces are drawn by the D-093 renderer (`tools/appstore-creative-compose.sh compose`), bind them with `finalize` (D-101) before review; see [Composed screenshot sets](#composed-screenshot-sets-d-101).
+3. Follow the Phase 6 screenshot routing above. Take the iPhone and iPad presentation in from the workspace delivery with `appstore-intake`, with every raw capture taken through the repository capture path. Preserve exact source/build provenance across the captures and the composed faces; see [Composed screenshot sets](#composed-screenshot-sets-d-101).
 4. Audit every App Store Review Guideline for this exact version and build in `App Store/review/guidelines-audit.json`, following the pre-submission audit of [`app-review-guidelines`](../app-review-guidelines/SKILL.md) (D-081). Recheck Apple's page date first, get the user's Issue-comment confirmation for every `user-judgment` guideline, and require `tools/check-review-guidelines.sh --project-root "$PWD" --bundle-id "$BUNDLE_ID" --version "$VERSION" --build "$BUILD"` to pass before the release-auditor review. A failing or stale audit stops preparation; never seal around it.
 5. Have the visual evaluator inspect every raw image for safe area, clipping, truthfulness, ordering, and English/Japanese parity. For a composed set, also inspect every composed face for safe area, text clipping and English/Japanese parity, and check that it shows its raw capture unedited (guidelines 2.3.3 and 2.3.9); each `review.json` case then carries both the composed face's `digest` and its raw capture's `rawDigest`. Then obtain `release-auditor` approval for the exact source SHA, build digest, package digest, privacy/legal declarations, screenshots, and the passing guideline audit.
-6. Assemble final screenshots with `tools/build-appstore-screenshot-set.sh`. Never stretch or silently transform them. A raw-capture set takes the raw root as it always has; a composed set adds `--composition FILE --composed-root DIR` from `finalize`.
+6. Assemble final screenshots with `tools/build-appstore-screenshot-set.sh`. Never stretch or silently transform them. A raw-capture set takes the raw root as it always has; a composed set adds `--composition FILE --composed-root DIR` from the intake.
 7. Validate the complete package with `tools/validate-appstore-package.sh --require-fresh`.
 
 ## Composed screenshot sets (D-101)
 
-A set drawn by the D-093 renderer is sealed through the same package, audit and seal as raw captures, bound to the capture that each face shows.
+A set drawn by the workspace renderer (D-093, D-105) is sealed through the same package, audit and seal as raw captures, bound to the capture that each face shows.
 
-A set made in the App Store creative workspace (D-106) arrives as a delivery. Take it in with [`appstore-intake`](../appstore-intake/SKILL.md) (`tools/intake-appstore-delivery.sh`) instead of steps 1 and 2: the intake checks the delivery against this app's raw capture manifest and the user's choice recorded in the workspace commit, and writes the same `$COMPOSED_ROOT` (faces, `records/`, `composition.json`) plus `intake.json`. Then continue with step 3. A set rendered inside the app still uses steps 1 and 2:
-
-1. Render every locale and family with `tools/appstore-creative-compose.sh compose` from the raw captures of one capture batch, and record the user's choice on the proposal sheet with `tools/appstore-creative-sheet.sh select`.
-2. Bind the adopted faces. `finalize` refuses a face without a raw capture of its locale and family, a capture shown twice, a material that `goldie/assets/provenance.json` does not record as adopted, renders that are not the tiles chosen on the proposal sheet (another pattern, an unchosen slot, or other scenes in another locale or device), and any declaration, face or capture whose bytes changed after rendering:
+1. Take the delivery in with [`appstore-intake`](../appstore-intake/SKILL.md) (`tools/intake-appstore-delivery.sh`). The intake checks the delivery against this app's raw capture manifest and the user's choice recorded in the workspace commit. It refuses a face without a raw capture of its locale and family, a capture shown twice, a material that the delivered `provenance.json` does not record as adopted, faces that are not the tiles the user chose, and any declaration, face, record or capture whose bytes differ from the delivery:
 
    ```sh
-   tools/appstore-creative-compose.sh finalize --raw-root "$RAW_ROOT" \
-     --render-records "$JA_IPHONE_RECORD,$EN_IPHONE_RECORD,$JA_IPAD_RECORD,$EN_IPAD_RECORD" \
-     --selection .artifacts/store-creative/<revision>/selection.json \
-     --provenance goldie/assets/provenance.json --approval "$ISSUE_COMMENT_URL" \
-     --capture-batch "$BATCH_ID" --out "$COMPOSED_ROOT"
+   tools/intake-appstore-delivery.sh --delivery "$DELIVERY" --raw-root "$RAW_ROOT" \
+     --requirements "App Store/submission/requirements.json" --bundle-id "$BUNDLE_ID" \
+     --workspace-repo "$WORKSPACE_CLONE" --project-root "$PWD" --out "$COMPOSED_ROOT"
    ```
 
-   `$COMPOSED_ROOT` receives `<locale>/<family>/NN-<state>.png`, byte copies of the render records and provenance under `records/`, and `composition.json` (schemaVersion 1): the raw manifest's SHA-256, the capture batch, source SHA, build digest, runtime and requirements digest, the renderer's SHA-256, the adoption (proposal sheet and selection SHA-256, concept ID, `user-explicit`, approval reference, recorded time, provenance SHA-256), and for each face its locale, family, state, order, path, raw path and SHA-256, declaration, render record and material SHA-256, size and SHA-256. It holds no absolute path. Keep `$COMPOSED_ROOT` with the other working output outside Git: its record copies name local paths, and only the assembled set enters `App Store/screenshots/`.
+2. `$COMPOSED_ROOT` receives `<locale>/<family>/NN-<state>.png`, byte copies of the render records and provenance under `records/`, `intake.json`, and `composition.json` (schemaVersion 1): the raw manifest's SHA-256, the capture batch, source SHA, build digest, runtime and requirements digest, the renderer's SHA-256, the adoption (proposal sheet and selection SHA-256, concept ID, `user-explicit`, approval reference, recorded time, provenance SHA-256), and for each face its locale, family, state, order, path, raw path and SHA-256, declaration, render record and material SHA-256, size and SHA-256. It holds no absolute path. Keep `$COMPOSED_ROOT` with the other working output outside Git: its record copies name local paths, and only the assembled set enters `App Store/screenshots/`.
 3. Review both the raw captures and the composed faces (step 5) and assemble the set with the composition:
 
    ```sh
@@ -113,7 +128,7 @@ A set made in the App Store creative workspace (D-106) arrives as a delivery. Ta
 
    The raw manifest keeps every existing check (source SHA, build digest, runtime, requirements digest, device type, naming and digests). Each composed face must match exactly one raw case by locale, family and state with the same raw digest; its render record must name that capture and the declaration digest and use only adopted materials; and it must be a real, non-linked RGB PNG without an alpha channel, at a size the family allows, with the recorded SHA-256. English and Japanese must show the same states in the same order. The output adds `screenshots/composition.json`, `compositionDigest` and each case's `rawDigest` to the manifest; the package digest that the release auditor approves and the seal records covers the composition record, so replacing one face or changing the record makes the seal stale. Without `--composition` the raw-capture route and its output are unchanged.
 
-Moving from an exception `App Store/screenshots/adopted.json` (CafLog A-086, PayCycle A-057): its `capture` block (`batchId`, `sourceSha`, `buildDigest`, `runtime`, `requirementsDigest`) becomes `--capture-batch` and the raw `manifest.json` that `finalize` reads; `decision`, `issue` and `pattern` become the proposal sheet's `selection.json`, `--approval` and `conceptId`; each tile's `raw` and `image` become a case's `rawDigest` and `digest`. Faces drawn by an app's own script (`script`, `scriptSha256`) have no render record: draw them again with `tools/appstore-creative-compose.sh compose` from the same captures, then finalize, review, assemble, validate and seal as above, and close the exception in the app's own Issue.
+Moving from an exception `App Store/screenshots/adopted.json` (CafLog A-086, PayCycle A-057): its `capture` block (`batchId`, `sourceSha`, `buildDigest`, `runtime`, `requirementsDigest`) becomes the delivery's capture batch and the raw `manifest.json` that the intake reads; `decision`, `issue` and `pattern` become the user's choice recorded in the workspace and its approval reference and pattern; each tile's `raw` and `image` become a case's `rawDigest` and `digest`. Faces drawn by an app's own script (`script`, `scriptSha256`) have no render record: have the workspace draw them again from the same captures, then take the delivery in, review, assemble, validate and seal as above, and close the exception in the app's own Issue.
 
 ## Seal the exact candidate
 

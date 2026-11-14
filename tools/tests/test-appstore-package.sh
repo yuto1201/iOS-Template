@@ -170,12 +170,13 @@ printf '%s\n' "Password: $secret_fixture" >> "$package_root/review/review-notes.
 assert_invalid 'secret-like review credential' 'review/review-notes.md.credentials' "$secret_fixture"
 
 
-# #486 (D-101): a composed screenshot set. tools/appstore-creative-compose.sh finalize binds the adopted
-# faces to the raw capture manifest, tools/build-appstore-screenshot-set.sh --composition assembles them,
-# and the package with the composition record passes the package check and the seal. Every image and
-# record is made here from small generated PNGs; nothing is committed and nothing reaches the network.
+# #486 (D-101), D-105: a composed screenshot set. The App Store creative workspace delivers the adopted
+# faces, tools/intake-appstore-delivery.sh binds them to the raw capture manifest and the user's recorded
+# choice, tools/build-appstore-screenshot-set.sh --composition assembles them, and the package with the
+# composition record passes the package check and the seal. Every image and record is made here from small
+# generated PNGs and a throwaway Git repository; nothing is committed and nothing reaches the network.
 builder="$repo_root/tools/build-appstore-screenshot-set.sh"
-compose_tool="$repo_root/tools/appstore-creative-compose.sh"
+intake_tool="$repo_root/tools/intake-appstore-delivery.sh"
 seal="$repo_root/.agents/skills/prepare-appstore-assets/scripts/seal-package.sh"
 record_section="$repo_root/.agents/skills/submit-appstore-release/scripts/record-section.sh"
 composed_bundle=com.example.TemplateApp
@@ -193,6 +194,7 @@ cat >"$fixture" <<'RUBY'
 require "json"
 require "digest"
 require "fileutils"
+require "open3"
 require "zlib"
 
 SIZES = {"iphone-6.3" => [1206, 2622], "ipad-13" => [2064, 2752]}.freeze
@@ -225,105 +227,115 @@ def png(path, width, height, seed, color_type = 2)
   File.binwrite(path, bytes)
 end
 
-# Every variant shares the raw captures; `faces` lists the states shown, in order, for each set.
-def base(root, source_sha, build_digest, runtime, requirements)
-  seed_root = File.join(root, "seed")
+def git(repo, *arguments)
+  output, status = Open3.capture2e("git", "-C", repo, *arguments)
+  abort "git #{arguments.join(' ')} failed: #{output}" unless status.success?
+  output.strip
+end
+
+# The app's raw captures and the workspace's renders, materials and committed choice, then the delivery.
+def base(root, source_sha, build_digest, runtime, requirements, bundle_id)
+  raw_root = File.join(root, "raw")
   cases = []
   SETS.each_with_index do |(locale, family), set|
     STATES.each_with_index do |state, index|
       relative = "#{locale}/#{family}/#{format('%02d', index + 1)}-#{state}.png"
-      png(File.join(seed_root, "raw", relative), *SIZES.fetch(family), 10 + set * 2 + index)
+      png(File.join(raw_root, relative), *SIZES.fetch(family), 10 + set * 2 + index)
       cases << {"locale" => locale, "family" => family, "state" => state, "order" => index + 1, "path" => relative,
                 "sourceSha" => source_sha, "buildDigest" => build_digest, "runtime" => runtime, "deviceType" => DEVICES.fetch(family),
-                "width" => SIZES.fetch(family)[0], "height" => SIZES.fetch(family)[1], "digest" => sha(File.join(seed_root, "raw", relative))}
+                "width" => SIZES.fetch(family)[0], "height" => SIZES.fetch(family)[1], "digest" => sha(File.join(raw_root, relative))}
     end
   end
-  write(File.join(seed_root, "raw", "manifest.json"), {"schemaVersion" => 1, "sourceSha" => source_sha, "buildDigest" => build_digest,
+  write(File.join(raw_root, "manifest.json"), {"schemaVersion" => 1, "sourceSha" => source_sha, "buildDigest" => build_digest,
     "runtime" => runtime, "requirementsDigest" => sha(requirements), "cases" => cases})
-  SETS.each_with_index do |(locale, family), set|
-    STATES.each_with_index do |state, index|
-      png(File.join(seed_root, "faces", "#{locale}-#{family}-#{state}.png"), *SIZES.fetch(family), 120 + set * 2 + index)
-    end
-  end
-  png(File.join(seed_root, "assets", "leaf.png"), 64, 64, 200)
-  png(File.join(seed_root, "assets", "stray.png"), 64, 64, 201)
-  variants = {
-    "valid" => {},
-    "order" => {%w[ja iphone-6.3] => %w[settings primary]},
-    "structure" => {%w[ja iphone-6.3] => %w[primary]},
-    "nocapture" => {},
-    "unadopted" => {},
-    "combination" => {},
-    "otherpattern" => {},
-    "badcombination" => {}
-  }
-  variants.each do |name, faces|
-    variant(File.join(root, name), seed_root, name, faces)
-  end
-end
-
-def variant(root, seed_root, name, faces)
-  FileUtils.mkdir_p(root)
-  FileUtils.cp_r(File.join(seed_root, "raw"), File.join(root, "raw"))
-  FileUtils.cp_r(File.join(seed_root, "assets"), File.join(root, "assets"))
-  raw_root = File.join(root, "raw")
-  raw = read(File.join(raw_root, "manifest.json"))
+  png(File.join(root, "assets", "leaf.png"), 64, 64, 200)
+  png(File.join(root, "assets", "stray.png"), 64, 64, 201)
   leaf = File.join(root, "assets", "leaf.png")
   stray = File.join(root, "assets", "stray.png")
   write(File.join(root, "assets", "provenance.json"), {"schemaVersion" => 1, "images" => [
     {"file" => "leaf.png", "sha256" => sha(leaf), "materialReview" => {"decision" => "adopted"}},
     {"file" => "stray.png", "sha256" => sha(stray), "materialReview" => {"decision" => "rejected"}}]})
-  rendered = {}
-  records = SETS.map do |locale, family|
+  write(File.join(root, "assets", "brand.json"), {"schemaVersion" => 1, "name" => "Template"})
+  renders = SETS.each_with_index.map do |(locale, family), set|
     folder = File.join(root, "renders", "#{locale}-#{family}")
-    states = faces.fetch([locale, family], STATES)
     spec = File.join(folder, "tiles.json")
     write(spec, {"schemaVersion" => 1, "device" => family, "locale" => locale, "style" => "editorial", "decorationLimit" => 2,
-                 "tiles" => states.map { |state| {"id" => state} }})
-    shown = states.map do |state|
-      relative = raw.fetch("cases").find { |entry| entry.values_at("locale", "family", "state") == [locale, family, state] }.fetch("path")
+                 "tiles" => STATES.map { |state| {"id" => state} }})
+    shown = STATES.map do |state|
+      relative = cases.find { |entry| entry.values_at("locale", "family", "state") == [locale, family, state] }.fetch("path")
       {"path" => File.join(raw_root, relative), "sha256" => sha(File.join(raw_root, relative))}
     end
-    files = states.each_with_index.map do |state, index|
+    files = STATES.each_with_index.map do |state, index|
       tile = File.join(folder, "tile-#{index + 1}.png")
-      FileUtils.cp(File.join(seed_root, "faces", "#{locale}-#{family}-#{state}.png"), tile)
+      png(tile, *SIZES.fetch(family), 120 + set * 2 + index)
       {"path" => tile, "sha256" => sha(tile), "width" => SIZES.fetch(family)[0], "height" => SIZES.fetch(family)[1]}
     end
-    material = name == "unadopted" && locale == "ja" && family == "iphone-6.3" ? stray : leaf
-    tiles = states.each_with_index.map do |state, index|
-      capture = name == "nocapture" && locale == "ja" && family == "iphone-6.3" && index == 0 ? nil : shown[index]
+    tiles = STATES.each_with_index.map do |state, index|
       {"tile" => index + 1, "id" => state, "html" => File.join(folder, "tile-#{index + 1}.html"), "htmlSha256" => "sha256:#{'0' * 64}",
-       "metrics" => {}, "marks" => [], "capture" => capture}
+       "metrics" => {}, "marks" => [], "capture" => shown[index]}
     end
     record = File.join(folder, "creative-render-#{family}-#{locale}.json")
     write(record, {"schemaVersion" => 1, "renderer" => "appstore-creative-compose", "device" => family, "locale" => locale,
       "spec" => spec, "specSha256" => sha(spec), "style" => "editorial", "decorationLimit" => 2, "inputInventory" => "complete-v1",
-      "fonts" => [], "captures" => shown.uniq, "backgrounds" => [], "decorations" => [],
-      "layers" => [{"scene" => states.first, "src" => material, "sha256" => sha(material), "z" => "front", "tiles" => [1]}],
+      "fonts" => [], "captures" => shown, "backgrounds" => [], "decorations" => [],
+      "layers" => [{"scene" => STATES.first, "src" => leaf, "sha256" => sha(leaf), "z" => "front", "tiles" => [1]}],
       "popouts" => [], "tiles" => tiles, "marks" => [], "files" => files})
-    rendered[[locale, family]] = files.map { |file| file["sha256"] }
-    record
+    [locale, family, spec, record, files]
   end
-  File.binwrite(File.join(root, "records.txt"), records.join(","))
-  # The proposal sheet showed the Japanese iPhone tiles of pattern B (the rendered faces) and of pattern A
-  # (other images); the user chose B, a combination of B's tiles, or (to be refused) A or a slot of A.
-  sheet = File.join(root, "sheet")
-  FileUtils.mkdir_p(sheet)
-  File.binwrite(File.join(sheet, "sheet.html"), "<!doctype html><title>proposal</title>\n")
-  shown = ->(digests) { digests.each_with_index.map { |digest, index| {"slot" => index + 1, "kind" => "screen", "device" => "iphone", "locale" => "ja", "sourceSha256" => digest} } }
-  write(File.join(sheet, "sheet.json"), {"schemaVersion" => 1, "revision" => "r1", "kind" => "proposal",
-    "sheetSha256" => sha(File.join(sheet, "sheet.html")), "patterns" => [
-      {"id" => "A", "tiles" => shown.(rendered.fetch(["en-US", "iphone-6.3"]))},
-      {"id" => "B", "tiles" => shown.(rendered.fetch(["ja", "iphone-6.3"]))}]})
-  choice = case name
-           when "otherpattern" then {"type" => "pattern", "patternId" => "A"}
-           when "combination", "badcombination"
-             {"type" => "combination", "tiles" => [{"slot" => 1, "patternId" => name == "combination" ? "B" : "A", "sourceSlot" => 1, "kind" => "screen"},
-                                                   {"slot" => 2, "patternId" => "B", "sourceSlot" => 2, "kind" => "screen"}]}
-           else {"type" => "pattern", "patternId" => "B"}
-           end
-  write(File.join(sheet, "selection.json"), {"schemaVersion" => 1, "revision" => "r1", "sheetSha256" => sha(File.join(sheet, "sheet.html")),
-    "selection" => choice, "decision" => "user-explicit", "recordedAt" => "2026-10-15T00:00:00Z"})
+  # The user chose pattern B on the workspace's sheet; the choice is committed in the workspace.
+  workspace = File.join(root, "workspace")
+  FileUtils.mkdir_p(File.join(workspace, "projects", "app", "case-1"))
+  File.binwrite(File.join(root, "sheet.html"), "<!doctype html><title>proposal</title>\n")
+  selection = File.join(workspace, "projects", "app", "case-1", "selection.json")
+  write(selection, {"schemaVersion" => 1, "revision" => "r1", "sheetSha256" => sha(File.join(root, "sheet.html")),
+    "selection" => {"type" => "pattern", "patternId" => "B"}, "decision" => "user-explicit", "recordedAt" => "2026-10-15T00:00:00Z"})
+  git(workspace, "init", "-q")
+  git(workspace, "add", "projects")
+  git(workspace, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-q", "-m", "choice")
+  commit = git(workspace, "rev-parse", "HEAD")
+
+  delivery = File.join(root, "delivery")
+  listed = []
+  put = lambda do |source, relative, role|
+    target = File.join(delivery, "files", relative)
+    FileUtils.mkdir_p(File.dirname(target))
+    FileUtils.cp(source, target)
+    listed << {"path" => relative, "sha256" => sha(target), "bytes" => File.size(target), "role" => role}
+  end
+  faces = []
+  renders.each do |locale, family, spec, record, files|
+    put.(spec, "screenshots/declarations/#{sha(spec).sub(':', '-')}.json", "declaration")
+    put.(record, "screenshots/records/#{sha(record).sub(':', '-')}.json", "render-record")
+    files.each_with_index do |file, index|
+      state = STATES[index]
+      relative = format("screenshots/faces/%s/%s/%02d-%s.png", locale, family, index + 1, state)
+      put.(file["path"], relative, "face")
+      raw_case = cases.find { |entry| entry.values_at("locale", "family", "state") == [locale, family, state] }
+      faces << {"locale" => locale, "family" => family, "order" => index + 1, "state" => state, "rawDigest" => raw_case["digest"],
+                "sha256" => file["sha256"], "renderRecord" => sha(record), "declaration" => sha(spec), "path" => relative}
+    end
+  end
+  put.(File.join(root, "assets", "provenance.json"), "screenshots/provenance.json", "provenance")
+  put.(File.join(root, "assets", "brand.json"), "screenshots/brand.json", "brand")
+  write(File.join(delivery, "delivery.json"), {
+    "schemaVersion" => 1,
+    "workspace" => {"repository" => "example/Tool-AppStore-Creative", "commit" => commit, "caseId" => "case-1"},
+    "app" => {"bundleId" => bundle_id},
+    "kinds" => %w[screenshots],
+    "inputs" => {"captureBatch" => "486-store-r1", "rawManifestSha256" => sha(File.join(raw_root, "manifest.json")),
+                 "sourceSha" => source_sha, "buildDigest" => build_digest, "runtime" => runtime,
+                 "requirementsSha256" => sha(requirements), "brandSha256" => sha(File.join(root, "assets", "brand.json")), "appCommit" => source_sha},
+    "renderer" => {"path" => "workspace/tools/renderer.rb", "sha256" => "sha256:#{'c' * 64}"},
+    "adoption" => {"decision" => "user-explicit", "at" => "2026-10-15T00:00:00Z", "where" => "chat",
+                   "approvalReference" => "https://github.com/yuto1201/iOS-Example/issues/7#issuecomment-123", "choice" => "B",
+                   "sheetKind" => "proposal", "sheetSha256" => sha(File.join(root, "sheet.html")),
+                   "record" => {"path" => "projects/app/case-1/selection.json", "sha256" => sha(selection)}},
+    "faces" => faces,
+    "files" => listed.sort_by { |file| file["path"] },
+    "checks" => []
+  })
+  FileUtils.mkdir_p(File.join(root, "project", "App Store", "submission"))
+  FileUtils.cp(requirements, File.join(root, "project", "App Store", "submission", "requirements.json"))
 end
 
 # The visual review of a composed set covers both the raw capture (truthfulness) and the composed face.
@@ -439,29 +451,26 @@ when "mutate" then mutate(*arguments)
 else abort "unknown command #{command}"
 end
 RUBY
-ruby "$fixture" base "$composed" "$composed_sha" "$composed_build" "$composed_runtime" "$requirements"
+mkdir -p "$composed/valid"
+ruby "$fixture" base "$composed/valid" "$composed_sha" "$composed_build" "$composed_runtime" "$requirements" "$composed_bundle"
 
-finalize() { # variant
-  "$compose_tool" finalize --raw-root "$composed/$1/raw" --render-records "$(cat "$composed/$1/records.txt")" \
-    --selection "$composed/$1/sheet/selection.json" --provenance "$composed/$1/assets/provenance.json" \
-    --approval 'https://github.com/yuto1201/iOS-Example/issues/7#issuecomment-123' --capture-batch 486-store-r1 \
-    --out "$composed/$1/composed"
+take_in() { # root
+  "$intake_tool" --delivery "$1/delivery" --raw-root "$1/raw" --requirements "$requirements" --bundle-id "$composed_bundle" \
+    --workspace-repo "$1/workspace" --project-root "$1/project" --out "$1/composed"
 }
 build_composed() { # root output
   "$builder" --raw-root "$1/raw" --output-root "$2" --requirements "$requirements" --review "$1/review.json" \
     --source-sha "$composed_sha" --runtime "$composed_runtime" --build-digest "$composed_build" \
     --composition "$1/composed/composition.json" --composed-root "$1/composed"
 }
-for variant in valid combination; do
-  finalize "$variant" >/dev/null || { echo "finalize refused the $variant composed fixture" >&2; exit 1; }
-  ruby "$fixture" review "$composed/$variant" "$composed_sha" "$composed_build"
-done
+take_in "$composed/valid" >/dev/null || { echo 'the intake refused the composed fixture' >&2; exit 1; }
+ruby "$fixture" review "$composed/valid" "$composed_sha" "$composed_build"
 
-# AC-3: finalize writes composition.json (schemaVersion 1) from the adopted render records and the raw
-# capture manifest, with the fields of the exception adopted.json (capture batch, source, build, runtime,
+# AC-6 (#535): the intake writes composition.json (schemaVersion 1) from the delivery and the raw capture
+# manifest, with the fields of the exception adopted.json (capture batch, source, build, runtime,
 # requirements, raw and composed digest of each face) and the adoption and provenance of the faces.
 COMPOSED="$composed/valid" REQUIREMENTS="$requirements" SOURCE_SHA="$composed_sha" BUILD="$composed_build" RUNTIME="$composed_runtime" \
-RENDERER="$repo_root/tools/lib/appstore-creative-compose.rb" ruby -rjson -rdigest -e '
+ruby -rjson -rdigest -e '
   root = ENV.fetch("COMPOSED")
   sha = ->(path) { "sha256:#{Digest::SHA256.file(path).hexdigest}" }
   value = JSON.parse(File.binread(File.join(root, "composed", "composition.json")))
@@ -470,9 +479,10 @@ RENDERER="$repo_root/tools/lib/appstore-creative-compose.rb" ruby -rjson -rdiges
   abort "composition identity" unless value["schemaVersion"] == 1 && value["captureBatchId"] == "486-store-r1" &&
     value["sourceSha"] == ENV.fetch("SOURCE_SHA") && value["buildDigest"] == ENV.fetch("BUILD") && value["runtime"] == ENV.fetch("RUNTIME") &&
     value["requirementsDigest"] == sha.(ENV.fetch("REQUIREMENTS")) && value["rawManifestDigest"] == sha.(File.join(root, "raw", "manifest.json")) &&
-    value["rendererDigest"] == sha.(ENV.fetch("RENDERER"))
+    value["rendererDigest"] == "sha256:#{"c" * 64}"
   adoption = value.fetch("adoption")
-  expected = {"proposalSheetDigest" => sha.(File.join(root, "sheet", "sheet.html")), "selectionDigest" => sha.(File.join(root, "sheet", "selection.json")),
+  expected = {"proposalSheetDigest" => sha.(File.join(root, "sheet.html")),
+              "selectionDigest" => sha.(File.join(root, "workspace", "projects", "app", "case-1", "selection.json")),
               "conceptId" => "B", "decision" => "user-explicit", "approvalReference" => "https://github.com/yuto1201/iOS-Example/issues/7#issuecomment-123",
               "recordedAt" => "2026-10-15T00:00:00Z", "provenanceDigest" => sha.(File.join(root, "assets", "provenance.json"))}
   abort "adoption #{adoption}" unless adoption == expected
@@ -498,25 +508,7 @@ RENDERER="$repo_root/tools/lib/appstore-creative-compose.rb" ruby -rjson -rdiges
     abort "size #{entry["path"]}" unless [entry["width"], entry["height"]] == (entry["family"] == "iphone-6.3" ? [1206, 2622] : [2064, 2752])
   end
   abort "composition holds an absolute path" if File.binread(File.join(root, "composed", "composition.json")).include?(root)
-' || { echo 'finalize did not write the expected composition record' >&2; exit 1; }
-
-# AC-3 / AC-9 (2.3.3, 2.3.9): finalize refuses a face without its raw capture and a material the user did not adopt.
-expect_finalize_refused() { # variant message
-  set +e; output=$(finalize "$1" 2>&1); status=$?; set -e
-  [[ "$status" -ne 0 && "$output" == *"$2"* && ! -e "$composed/$1/composed" ]] || { echo "finalize accepted $1: $output" >&2; exit 1; }
-}
-expect_finalize_refused nocapture 'shows no real capture; every App Store face must contain its raw capture (guideline 2.3.3)'
-expect_finalize_refused unadopted 'uses a material that provenance.json does not record as adopted'
-# AC-3: the faces are the tiles the user chose. Renders of an unchosen pattern or of a combination slot the
-# user did not choose are refused, and so are other locales or devices that render other scenes.
-expect_finalize_refused otherpattern 'no Japanese iPhone render record shows the tiles chosen on the proposal sheet'
-expect_finalize_refused badcombination 'no Japanese iPhone render record shows the tiles chosen on the proposal sheet'
-expect_finalize_refused order 'does not render the chosen tiles: its scenes or style differ'
-expect_finalize_refused structure 'does not render the chosen tiles: its scenes or style differ'
-COMPOSED="$composed/combination" ruby -rjson -e '
-  adoption = JSON.parse(File.binread(File.join(ENV.fetch("COMPOSED"), "composed", "composition.json"))).fetch("adoption")
-  abort "combination adoption #{adoption}" unless adoption["conceptId"] == "combination"
-' || { echo 'finalize did not record the chosen combination' >&2; exit 1; }
+' || { echo 'the intake did not write the expected composition record' >&2; exit 1; }
 
 # AC-4: the composed set is ready, and its manifest keeps the composition digest and each face's rawDigest.
 ready=$(build_composed "$composed/valid" "$composed/valid/out")

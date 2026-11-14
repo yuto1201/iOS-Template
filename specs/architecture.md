@@ -303,7 +303,7 @@ supabase/
 
 App Store用スクリーンショットも、通常検証と同じrepository専用の2台（D-063）だけで撮影します。2台はApp Storeの必須画像サイズ（iPhone with Dynamic Island (medium display)の1206×2622、iPad 13-inchの2064×2752）の機種なので（D-070、[D-079](decisions.md#d-079-専用iphoneをapp-storeの必須画像サイズになったiphone-17-proにする)）、撮影画像はそのまま必須サイズを満たし、合成や切り抜きを必要としません。必須サイズに合わない画像は、撮影toolが保存前に拒否し、upload前の画像判定でも受け入れません。
 
-撮影した画像から提出用の画像とプレビュー動画を作るときは、`appstore-creative`スキルを使います（D-077）。面は宣言からHTMLとCSSで組み、headless Chromiumで描きます（`tools/appstore-creative-compose.sh`、D-093）。Goldie（固定版）は撮影画像の読み込みと下書きに使い、2画面と2枚にまたがる面、Product page header、プレビュー動画はテンプレートの拡張層で扱います。まず3〜4パターンを縮小版で示してユーザーが選び、選んだパターンだけを日英とiPhone・iPadで作り込みます。生成画像は背景や風景などの素材として使い、アプリの画面は必ず撮影した本物を使います。プレビュー動画は、試し録りの機械確認とユーザーの判断で「動画なし」を選べます。各アプリは、採用した面の宣言を`goldie/<locale>/`、採用した生成画像とその由来を`goldie/assets/`に置いてcommitし、提案シートと不採用の画像はcommitしません。
+撮影した画像から提出用の画像、プレビュー動画、ストアの文言を考えて作るのは、App Storeのワークスペースです（[D-105](decisions.md#d-105-app-storeの画像と文言はワークスペースで考えて作りアプリは納品物を取り込んで確かめる)）。このMacの共通スキル`appstore-creative`がパターンを提案し、ユーザーの選択を経て、面を宣言からHTMLとCSSで組んでheadless Chromiumで描き（D-093）、`ja`と`en-US`を分けて納品します。生成画像は背景や風景などの素材として使い、アプリの画面は必ず撮影した本物を使います。アプリは撮影した画像をワークスペースへ渡し、納品物を`appstore-intake`スキル（`tools/intake-appstore-delivery.sh`）で取り込んで確かめ、組み立てたセットを`App Store/screenshots/`に保管して、review、封印、保存、提出の関門を持ちます。提案シート、不採用の画像、組み立て前のフォルダはアプリにcommitしません。プレビュー動画の録画と書き出しの道具（`tools/appstore-creative-preview.sh`と、それが使う描画の拡張層`tools/appstore-creative-render.sh`）は、動画の受け渡しを決めるまでテンプレートに残し、試し録りの機械確認とユーザーの判断で「動画なし」を選べます。
 
 ### 9.1 原稿の正本と登録準備
 

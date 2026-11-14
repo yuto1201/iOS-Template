@@ -172,3 +172,23 @@ D-075に従い、`AGENTS.md`を書き換えるときは、変更する文面を�
 -AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリは表示名を前置した同じ機種とする。どちらもApp Storeの必須画像サイズで撮影できる機種である。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。ただしTemplateのリポジトリだけは、`Config/development-device.json`が名前で宣言するユーザーの開発用の実機1台へ、開発用の署名でビルドしてinstallできる。起動・test・eraseはせず、AIの検証の証拠にしない（D-086）。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063、D-070とD-079。
 +AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリは表示名を前置した同じ機種とする。ただし専用の2台を持たないアプリは、Macの管理者が用意する共有の2台（`Shared iPhone 17 Pro`と`Shared iPad Pro 13-inch (M5)`）を宣言して使え、ほかのleaseが使用中のときは来た順に待つ（D-098）。どちらもApp Storeの必須画像サイズで撮影できる機種である。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。ただしTemplateのリポジトリだけは、`Config/development-device.json`が名前で宣言するユーザーの開発用の実機1台へ、開発用の署名でビルドしてinstallできる。起動・test・eraseはせず、AIの検証の証拠にしない（D-086）。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063、D-070とD-079。
 ```
+
+## #535（2026-11-14）
+
+- Issue: #535
+- 承認を記録したIssueコメント: https://github.com/yuto1201/iOS-Template/issues/535#issuecomment-6874042580（2026-11-14T07:46:14Z）
+- 承認: ユーザーが2026-11-14に会話の中で、53行目と61行目の変更前と変更後の文面を示した確認に「この文面でよい」と回答した。
+- 承認後の`AGENTS.md`（1行目を除く）のSHA-256: `sha256:d39ee72494e3f63a7ed910a726c15c170b7e58c7d38f0cbeed877a44098fcc2b`
+
+承認した変更の文面:
+
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -53 +53 @@
+-Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの主要機能と軽量検証、Phase 4は英語／iPadの対象拡張、Phase 5は完全品質、Phase 6は同一candidateに対する証拠適用判断と公開準備を担当する。Phase 6のApp Store用画像とプレビュー動画は、`appstore-creative`スキル（D-077、D-093。面はHTMLとCSSで組み、headless Chromiumで描く）でパターンを提案し、ユーザーの選択を経て作り、`ja`／`en-US`を分離する。iPhone・iPadとも撮影と録画は検証済み既存撮影経路の専用deviceを使い、共通Simulator資源管理、全画像監査、package／upload／submitの独立gateを維持する。
++Release PhaseはDelivery stageとは別に扱う。Phase 3は日本語iPhoneの主要機能と軽量検証、Phase 4は英語／iPadの対象拡張、Phase 5は完全品質、Phase 6は同一candidateに対する証拠適用判断と公開準備を担当する。Phase 6のApp Storeの画像、動画、文言は、このMacの共通スキル`appstore-creative`とApp Storeのワークスペース（D-105。場所は対応表）で考えて作り、ユーザーの選択を経て`ja`／`en-US`を分離して納品する。アプリは納品物を`appstore-intake`スキルで取り込んで確かめ、採用したものを保管する。iPhone・iPadとも撮影と録画は検証済み既存撮影経路の専用deviceを使い、共通Simulator資源管理、全画像監査、package／upload／submitの独立gateを維持する。
+@@ -61 +61 @@
+-workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression test、D-059に従い後続Issueがexact列挙するasc adapterのtool／helper／fixture／直接regression test、D-077に従い後続Issueがexact列挙する非認証creative producer（スキル、拡張層、提案シート、録画と品質確認）のtool／helper／fixture／直接regression test、D-079に従い後続Issueがexact列挙する提出の要件（`App Store/submission/requirements.json`）とそのfixture／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
++workflow-onlyで扱えるApp Store関連変更は、exact allowlistのlocal guidance、非認証capture producer、非認証legal-page handoff producer、非認証のread-only source-preparation producerとそのexactなversioned-format guidance／enumerated helpers／直接regression test、D-059に従い後続Issueがexact列挙するasc adapterのtool／helper／fixture／直接regression test、D-077とD-105に従い後続Issueがexact列挙する非認証creative producer（拡張層、録画と品質確認）と納品物の取り込み（`appstore-intake`）のtool／helper／fixture／直接regression test、D-079に従い後続Issueがexact列挙する提出の要件（`App Store/submission/requirements.json`）とそのfixture／直接regression testだけです。実アプリmetadata内容、採用画像asset、signing、provider実装、TestFlight、external operationはrelease経路から移しません。
+```
