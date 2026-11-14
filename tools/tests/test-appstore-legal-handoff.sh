@@ -9,8 +9,9 @@ entrypoint="$repo_root/tools/prepare-appstore-legal-handoff.sh"
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-legal-handoff.XXXXXX")
 trap 'rm -rf -- "$workspace"' EXIT
 
-# D-072: https://app.yutodev.com/apps/<appSlug>/<kind>/, with Japanese and English on the same page.
-web_base='https://app.yutodev.com/apps/pay-cycle'
+# D-105 (updates D-072): https://yutodev.com/apps/<appSlug>/<kind>/, with Japanese and English on the same page.
+web_base='https://yutodev.com/apps/pay-cycle'
+legacy_fixture="$repo_root/tools/tests/fixtures/appstore/legal-handoff-legacy"
 
 expect_failure() {
   local label=$1 message=$2
@@ -68,7 +69,7 @@ REQUEST="$request" ROOT="$workspace" ruby -rjson -rdigest -e '
     "handoffId" => "pay-cycle-v1",
     "source" => {"repository" => "yuto1201/iOS-PayCycle", "issue" => 54, "headSha" => "a" * 40},
     "app" => {"name" => "PayCycle", "bundleId" => "com.yuto1201.paycycle", "platforms" => ["iOS", "iPadOS"]},
-    "webHost" => "app.yutodev.com",
+    "webHost" => "yutodev.com",
     "locales" => ["en-US", "ja"],
     "facts" => {
       "features" => ["Shows the next scheduled payday."],
@@ -89,7 +90,8 @@ rendered=$(
 )
 [[ "$(jq -r .title <<<"$rendered")" == '[Legal pages]: PayCycle privacy, terms, and support' ]]
 [[ "$(jq -r .promptDigest <<<"$rendered")" =~ ^sha256:[0-9a-f]{64}$ ]]
-rg -q 'yuto1201/Web-AppLibrary' "$prompt"
+rg -q 'yuto1201/Web-yutodev' "$prompt"
+! rg -q 'Web-AppLibrary|app\.yutodev\.com' "$prompt"
 rg -q '1 Issue = 1 Branch = 1 PR' "$prompt"
 rg -Fq 'App slug: `pay-cycle`' "$prompt"
 for kind in support privacy terms; do
@@ -102,7 +104,7 @@ rg -q 'PayCycle does not collect personal data' "$prompt"
 rg -q 'PayCycleは個人データを収集しません' "$prompt"
 rg -q 'User-controlled handoff and approval' "$prompt"
 rg -Fq 'the three exact public URLs with the source digests of both languages' "$prompt"
-! rg -q 'app\.yutodev\.com/apps/pay-cycle/(en-US|ja)/' "$prompt"
+! rg -q 'yutodev\.com/apps/pay-cycle/(en-US|ja)/' "$prompt"
 
 expect_failure existing-output 'already exists' \
   "$entrypoint" render --repo-root "$workspace" --request "$request" --output "$prompt"
@@ -115,7 +117,9 @@ reject_request() {
     "$entrypoint" render --repo-root "$workspace" --request "$workspace/$label-request.json" --output "$workspace/$label.md"
   [[ ! -e "$workspace/$label.md" ]] || { echo "rejected request rendered output: $label" >&2; exit 1; }
 }
-reject_request other-host 'request.webHost must be app.yutodev.com' '.webHost="app.example.com"'
+reject_request other-host 'request.webHost must be yutodev.com' '.webHost="app.example.com"'
+# A request written for the pre-2026-11-14 host is not silently accepted: it points at the migration.
+reject_request legacy-host 'migrate-legacy-handoff' '.webHost="app.yutodev.com"'
 reject_request locale-route 'request.routes[1].path must be /apps/pay-cycle/privacy/' '.routes[1].path="/apps/pay-cycle/ja/privacy/"'
 reject_request other-slug 'request.routes[2].path must be /apps/pay-cycle/terms/' '.routes[2].path="/apps/other-app/terms/"'
 reject_request missing-trailing-slash 'request.routes[0].path must be /apps/pay-cycle/support/' '.routes[0].path="/apps/pay-cycle/support"'
@@ -144,7 +148,7 @@ PROMPT="$prompt" READBACK="$readback" ruby -rjson -rdigest -e '
   body = File.binread(ENV.fetch("PROMPT")).force_encoding(Encoding::UTF_8)
   value = {
     "number" => 34,
-    "url" => "https://github.com/yuto1201/Web-AppLibrary/issues/34",
+    "url" => "https://github.com/yuto1201/Web-yutodev/issues/34",
     "title" => "[Legal pages]: PayCycle privacy, terms, and support",
     "body" => body,
     "state" => "OPEN"
@@ -158,13 +162,18 @@ recorded=$(
     --readback "$readback" --output "$issue_record" --now 2026-09-16T00:00:00Z
 )
 [[ "$(jq -r .status <<<"$recorded")" == awaiting-user-handoff ]]
-[[ "$(jq -r .webIssue.url <<<"$recorded")" == https://github.com/yuto1201/Web-AppLibrary/issues/34 ]]
+[[ "$(jq -r .webIssue.url <<<"$recorded")" == https://github.com/yuto1201/Web-yutodev/issues/34 ]]
+[[ "$(jq -r .webIssue.repository <<<"$recorded")" == yuto1201/Web-yutodev ]]
 [[ "$(jq -r .prompt.digest <<<"$recorded")" == "$prompt_digest" ]]
 
 jq '.url="https://github.com/yuto1201/Other/issues/34"' "$readback" > "$workspace/bad-readback.json"
-expect_failure bad-readback 'Web-AppLibrary' \
+expect_failure bad-readback 'Web-yutodev' \
   "$entrypoint" record-issue --repo-root "$workspace" --request "$request" --prompt "$prompt" \
     --readback "$workspace/bad-readback.json" --output "$workspace/bad-issue.json" --now 2026-09-16T00:00:00Z
+jq '.url="https://github.com/yuto1201/Web-AppLibrary/issues/34"' "$readback" > "$workspace/legacy-readback.json"
+expect_failure legacy-readback 'issue readback must target yuto1201/Web-yutodev' \
+  "$entrypoint" record-issue --repo-root "$workspace" --request "$request" --prompt "$prompt" \
+    --readback "$workspace/legacy-readback.json" --output "$workspace/legacy-issue.json" --now 2026-09-16T00:00:00Z
 
 tampered_prompt="$workspace/tampered-prompt.md"
 cp "$prompt" "$tampered_prompt"
@@ -182,14 +191,14 @@ REQUEST="$request" ROOT="$workspace" PUBLICATION="$publication" RESPONSES="$resp
   pages = request.fetch("routes").map do |route|
     kind = route.fetch("kind")
     digests = %w[en-US ja].to_h { |locale| [locale, documents.find { |item| item.values_at("locale", "kind") == [locale, kind] }.fetch("digest")] }
-    {"kind" => kind, "url" => "https://app.yutodev.com#{route.fetch("path")}", "sourceDigests" => digests}
+    {"kind" => kind, "url" => "https://yutodev.com#{route.fetch("path")}", "sourceDigests" => digests}
   end
   publication = {
     "schemaVersion" => 2, "handoffId" => request.fetch("handoffId"),
     "requestDigest" => "sha256:#{Digest::SHA256.file(ENV.fetch("REQUEST")).hexdigest}",
     "promptDigest" => ENV.fetch("PROMPT_DIGEST"),
-    "webIssueURL" => "https://github.com/yuto1201/Web-AppLibrary/issues/34",
-    "deploymentReference" => "https://github.com/yuto1201/Web-AppLibrary/pull/35",
+    "webIssueURL" => "https://github.com/yuto1201/Web-yutodev/issues/34",
+    "deploymentReference" => "https://github.com/yuto1201/Web-yutodev/pull/35",
     "userActions" => {
       "promptForwarded" => {"actor" => "user", "reference" => "https://github.com/yuto1201/iOS-PayCycle/issues/54#issuecomment-3", "at" => "2026-09-16T00:01:00Z"},
       "publicationApproved" => {"actor" => "user", "reference" => "https://github.com/yuto1201/iOS-PayCycle/issues/54#issuecomment-4", "at" => "2026-09-16T00:02:00Z"}
@@ -246,29 +255,116 @@ reject_response missing-japanese "approved source text: $web_base/privacy/ (ja)"
 reject_response missing-english "approved source text: $web_base/terms/ (en-US)" '.responses[2].body |= sub("<section lang=\"en-US\">.*?</section>"; ""; "p")'
 reject_response inline-text-differs "approved source text: $web_base/support/ (ja)" "$inline_filter"' | .responses[0].body |= sub("連絡できます"; "連結できます")'
 reject_response redirected-host 'public URL must use HTTPS and the approved host' '.responses[0].finalURL="https://app.example.com/apps/pay-cycle/support/"'
+reject_response legacy-host-response 'public URL must use HTTPS and the approved host' '.responses[0].finalURL="https://app.yutodev.com/apps/pay-cycle/support/"'
 
 reject_publication() {
   local label=$1 message=$2 filter=$3
   jq "$filter" "$publication" > "$workspace/$label-publication.json"
   expect_failure "$label" "$message" verify "$workspace/$label.json" "$workspace/$label-publication.json" "$responses"
 }
-reject_publication per-locale-url 'publication return.pages[0].url differs from the D-072 route' \
-  ".pages[0].url=\"https://app.yutodev.com/apps/pay-cycle/ja/support/\""
+reject_publication per-locale-url 'publication return.pages[0].url differs from the D-105 route' \
+  ".pages[0].url=\"https://yutodev.com/apps/pay-cycle/ja/support/\""
 reject_publication one-language-digest 'publication return.pages[1].sourceDigests keys differ' '.pages[1].sourceDigests |= del(.ja)'
 reject_publication superseded-publication 'publication return schemaVersion must be 2' '.schemaVersion=1'
+reject_publication legacy-page-url 'publication return.pages[0].url differs from the D-105 route' \
+  ".pages[0].url=\"https://app.yutodev.com/apps/pay-cycle/support/\""
+
+# A record made before 2026-11-14 is never accepted as is: verify-publication points at the migration.
+legacy_record="$workspace/App Store/legal/legacy-web-issue-in-place.json"
+jq '.webIssue.repository="yuto1201/Web-AppLibrary" | .webIssue.url="https://github.com/yuto1201/Web-AppLibrary/issues/34"' "$issue_record" > "$legacy_record"
+expect_failure legacy-record 'migrate-legacy-handoff' \
+  "$entrypoint" verify-publication --repo-root "$workspace" --request "$request" --prompt "$prompt" \
+    --issue-record "$legacy_record" --publication "$publication" --response-fixture "$responses" \
+    --output "$workspace/legacy-record.json" --now 2026-09-16T00:03:00Z
+
+# Migration of a handoff recorded before 2026-11-14 (D-105). The fixtures are the exact bytes the unchanged
+# tool wrote for the same app and sources: request with webHost app.yutodev.com, its prompt, and its record.
+legacy_dir="$workspace/App Store/legal/legacy"
+mkdir -p "$legacy_dir"
+cp "$legacy_fixture/handoff-request.json" "$legacy_fixture/handoff-prompt.md" "$legacy_fixture/web-issue.json" "$legacy_dir/"
+legacy_readback="$workspace/legacy-web-issue-readback.json"
+# The existing Web Issue, read back under the renamed repository: same number, body is the legacy prompt.
+LEGACY_PROMPT="$legacy_dir/handoff-prompt.md" READBACK="$legacy_readback" ruby -rjson -e '
+  body = File.binread(ENV.fetch("LEGACY_PROMPT")).force_encoding(Encoding::UTF_8)
+  File.binwrite(ENV.fetch("READBACK"), JSON.generate({"number" => 34, "url" => "https://github.com/yuto1201/Web-yutodev/issues/34",
+    "title" => "[Legal pages]: PayCycle privacy, terms, and support", "body" => body, "state" => "CLOSED"}))
+'
+migrate() {
+  local label=$1 readback_file=$2 prompt_file=${3:-"$legacy_dir/handoff-prompt.md"} record_file=${4:-"$legacy_dir/web-issue.json"}
+  "$entrypoint" migrate-legacy-handoff --repo-root "$workspace" --request "$legacy_dir/handoff-request.json" \
+    --prompt "$prompt_file" --issue-record "$record_file" --readback "$readback_file" \
+    --request-output "$workspace/App Store/legal/$label-request.json" --prompt-output "$workspace/App Store/legal/$label-prompt.md" \
+    --issue-record-output "$workspace/App Store/legal/$label-web-issue.json" --now 2026-11-15T00:00:00Z
+}
+reject_migration() {
+  local label=$1 message=$2
+  shift 2
+  expect_failure "$label" "$message" migrate "$label" "$@"
+  for suffix in request.json prompt.md web-issue.json; do
+    [[ ! -e "$workspace/App Store/legal/$label-$suffix" ]] || { echo "rejected migration wrote output: $label-$suffix" >&2; exit 1; }
+  done
+}
+jq '.body += "changed"' "$legacy_readback" > "$workspace/m-body.json"
+reject_migration migration-body-differs 'legacy prompt' "$workspace/m-body.json"
+jq '.url="https://github.com/yuto1201/Web-AppLibrary/issues/34"' "$legacy_readback" > "$workspace/m-url.json"
+reject_migration migration-old-url 'issue readback must target yuto1201/Web-yutodev' "$workspace/m-url.json"
+jq '.number=35 | .url="https://github.com/yuto1201/Web-yutodev/issues/35"' "$legacy_readback" > "$workspace/m-number.json"
+reject_migration migration-other-issue 'issue number differs' "$workspace/m-number.json"
+cp "$legacy_dir/handoff-prompt.md" "$workspace/m-tampered-prompt.md"
+printf '\nUnapproved addition.\n' >> "$workspace/m-tampered-prompt.md"
+reject_migration migration-tampered-prompt 'legacy rendering' "$legacy_readback" "$workspace/m-tampered-prompt.md"
+jq '.request.digest="sha256:0000000000000000000000000000000000000000000000000000000000000000"' "$legacy_dir/web-issue.json" > "$workspace/m-record.json"
+reject_migration migration-record-digest 'issue record request digest differs' "$legacy_readback" "$legacy_dir/handoff-prompt.md" "$workspace/m-record.json"
+
+migrated=$(migrate migrated "$legacy_readback")
+migrated_request="$workspace/App Store/legal/migrated-request.json"
+migrated_prompt="$workspace/App Store/legal/migrated-prompt.md"
+migrated_record="$workspace/App Store/legal/migrated-web-issue.json"
+[[ "$(jq -r .status <<<"$migrated")" == migrated ]]
+[[ "$(jq -r .webHost "$migrated_request")" == yutodev.com ]]
+[[ "$(jq -c 'del(.webHost)' "$migrated_request")" == "$(jq -c 'del(.webHost)' "$legacy_dir/handoff-request.json")" ]]
+rg -q 'yuto1201/Web-yutodev' "$migrated_prompt"
+! rg -q 'Web-AppLibrary|app\.yutodev\.com' "$migrated_prompt"
+for kind in support privacy terms; do rg -Fq "URL: \`$web_base/$kind/\`" "$migrated_prompt"; done
+jq -e '.webIssue == {"number":34,"repository":"yuto1201/Web-yutodev","state":"OPEN","url":"https://github.com/yuto1201/Web-yutodev/issues/34"}
+  and .migratedFrom.webIssueURL == "https://github.com/yuto1201/Web-AppLibrary/issues/34"
+  and .migratedFrom.readbackState == "CLOSED"
+  and (.migratedFrom.requestDigest | startswith("sha256:"))
+  and (.migratedFrom.promptDigest | startswith("sha256:"))
+  and (.migratedFrom.issueRecordDigest | startswith("sha256:"))' "$migrated_record" >/dev/null
+expect_failure migration-existing-output 'already exists' migrate migrated "$legacy_readback"
+# A request that already uses the current host is not a legacy handoff.
+cp "$request" "$legacy_dir/current-request.json"
+expect_failure migration-current-request 'already uses yutodev.com' \
+  "$entrypoint" migrate-legacy-handoff --repo-root "$workspace" --request "$legacy_dir/current-request.json" \
+    --prompt "$prompt" --issue-record "$issue_record" --readback "$legacy_readback" \
+    --request-output "$workspace/App Store/legal/cur-request.json" --prompt-output "$workspace/App Store/legal/cur-prompt.md" \
+    --issue-record-output "$workspace/App Store/legal/cur-web-issue.json" --now 2026-11-15T00:00:00Z
+
+# The migrated handoff verifies against the current host without a new Web Issue.
+jq --arg request_digest "sha256:$(shasum -a 256 "$migrated_request" | cut -c1-64)" \
+   --arg prompt_digest "sha256:$(shasum -a 256 "$migrated_prompt" | cut -c1-64)" \
+   '.requestDigest=$request_digest | .promptDigest=$prompt_digest' "$publication" > "$workspace/migrated-publication.json"
+migrated_verified=$("$entrypoint" verify-publication --repo-root "$workspace" --request "$migrated_request" --prompt "$migrated_prompt" \
+  --issue-record "$migrated_record" --publication "$workspace/migrated-publication.json" --response-fixture "$responses" \
+  --output "$workspace/migrated-verification.json" --now 2026-11-15T00:01:00Z)
+[[ "$(jq -r .webIssueURL <<<"$migrated_verified")" == https://github.com/yuto1201/Web-yutodev/issues/34 ]]
+jq -e '.pages | all(.contentMatched == true and (.url | startswith("https://yutodev.com/apps/pay-cycle/")))' <<<"$migrated_verified" >/dev/null
 
 for path in \
   "$repo_root/.agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md" \
   "$repo_root/App Store/legal/README.md"; do
   [[ -f "$path" ]] || { echo "legal handoff guidance is missing: $path" >&2; exit 1; }
-  rg -Fq 'https://app.yutodev.com/apps/<appSlug>/' "$path" || { echo "legal handoff guidance lacks the D-072 URL: $path" >&2; exit 1; }
+  rg -Fq 'https://yutodev.com/apps/<appSlug>/' "$path" || { echo "legal handoff guidance lacks the D-105 URL: $path" >&2; exit 1; }
+  ! rg -q 'https://app\.yutodev\.com/apps/<appSlug>/' "$path" || { echo "legal handoff guidance still names the pre-D-105 URL: $path" >&2; exit 1; }
 done
 rg -q 'prepare-appstore-legal-handoff\.sh' "$repo_root/.agents/skills/prepare-appstore-assets/SKILL.md"
-rg -Fq 'https://app.yutodev.com/apps/<appSlug>/' "$repo_root/.agents/skills/prepare-appstore-assets/SKILL.md"
-rg -Fq 'https://app.yutodev.com/apps/<appSlug>/' "$repo_root/docs/agent-contracts/appstore-submission.md"
+rg -Fq 'https://yutodev.com/apps/<appSlug>/' "$repo_root/.agents/skills/prepare-appstore-assets/SKILL.md"
+rg -Fq 'https://yutodev.com/apps/<appSlug>/' "$repo_root/docs/agent-contracts/appstore-submission.md"
 rg -q 'fixture-validated.*not.*App Store|fixture-validated.*App Store.*not' "$repo_root/.agents/skills/prepare-appstore-assets/SKILL.md"
 rg -q 'publication-verification' "$repo_root/.agents/skills/submit-appstore-release/SKILL.md"
-rg -q 'yuto1201/Web-AppLibrary' "$repo_root/.agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md"
+rg -q 'yuto1201/Web-yutodev' "$repo_root/.agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md"
+rg -q 'migrate-legacy-handoff' "$repo_root/App Store/legal/README.md"
 ! rg -q 'user-approved public routes|user-approved route' \
   "$repo_root/.agents/skills/prepare-appstore-assets/templates/legal-page-handoff.md" "$repo_root/App Store/legal/README.md"
 

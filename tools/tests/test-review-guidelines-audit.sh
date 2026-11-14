@@ -28,7 +28,7 @@ def valid_audit(map, map_bytes, comment)
   items = map['guidelines'].map do |entry|
     case entry['class']
     when 'always'
-      { 'id' => entry['id'], 'status' => 'satisfied', 'evidence' => ['App Store/legal/privacy-policy.md', 'https://app.yutodev.com/apps/example/support/'] }
+      { 'id' => entry['id'], 'status' => 'satisfied', 'evidence' => ['App Store/legal/privacy-policy.md', 'https://yutodev.com/apps/example/support/'] }
     when 'triggered'
       if entry['id'] == '5.1.1(v)'
         { 'id' => entry['id'], 'status' => 'satisfied', 'evidence' => ['ExampleApp/Settings/AccountDeletionView.swift:12'], 'note' => 'アプリ内で削除できる。' }

@@ -11,10 +11,18 @@ require "time"
 require "uri"
 
 module AppStoreLegalHandoff
-  TARGET_REPOSITORY = "yuto1201/Web-AppLibrary"
-  # D-072: every app's legal pages live at https://app.yutodev.com/apps/<appSlug>/<kind>/, and one page
-  # carries both its Japanese and English text. The slug comes from the bootstrapped app identity.
-  WEB_HOST = "app.yutodev.com"
+  # D-105 (updates D-072): every app's legal pages live at https://yutodev.com/apps/<appSlug>/<kind>/, and one
+  # page carries both its Japanese and English text. The slug comes from the bootstrapped app identity. The site
+  # repository was renamed from Web-AppLibrary on 2026-11-14 and app.yutodev.com now only 301-redirects.
+  TARGET_REPOSITORY = "yuto1201/Web-yutodev"
+  WEB_HOST = "yutodev.com"
+  # A handoff rendered and recorded before 2026-11-14 used these values. It is never accepted as is: it is
+  # rewritten to the current host and repository by migrate-legacy-handoff (see App Store/legal/README.md).
+  LEGACY_TARGET_REPOSITORY = "yuto1201/Web-AppLibrary"
+  LEGACY_WEB_HOST = "app.yutodev.com"
+  CURRENT = {repository: TARGET_REPOSITORY, host: WEB_HOST, web_name: "Web-yutodev"}.freeze
+  LEGACY = {repository: LEGACY_TARGET_REPOSITORY, host: LEGACY_WEB_HOST, web_name: "Web-AppLibrary"}.freeze
+  MIGRATION_HINT = "a handoff from before 2026-11-14 must be rewritten with migrate-legacy-handoff (D-105, App Store/legal/README.md)"
   APP_IDENTITY_PATH = "Config/app-identity.json"
   APP_IDENTITY_KEYS = %w[appSlug bundleId displayName moduleName schemaVersion sourceIdentityVersion].freeze
   APP_SLUG_PATTERN = /\A[a-z0-9]+(?:-[a-z0-9]+)*\z/
@@ -32,12 +40,13 @@ module AppStoreLegalHandoff
   module_function
 
   def run(argv)
-    command = argv.shift or fail!("command is required: render, record-issue, or verify-publication")
+    command = argv.shift or fail!("command is required: render, record-issue, verify-publication, or migrate-legacy-handoff")
     options = parse_options(argv)
     value = case command
             when "render" then render(options)
             when "record-issue" then record_issue(options)
             when "verify-publication" then verify_publication(options)
+            when "migrate-legacy-handoff" then migrate_legacy_handoff(options)
             else fail!("unknown command: #{command}")
             end
     puts JSON.generate(value)
@@ -193,7 +202,82 @@ module AppStoreLegalHandoff
     result
   end
 
-  def validate_request(root, request)
+  # Rewrites a handoff rendered and recorded for app.yutodev.com and Web-AppLibrary to the current host and
+  # repository. The Web Issue is not recreated: the same number, read back under the renamed repository, must
+  # still carry the legacy prompt byte for byte. The new record keeps the digests of everything it replaced.
+  def migrate_legacy_handoff(options)
+    require_options!(options, %w[repo-root request prompt issue-record readback request-output prompt-output issue-record-output now])
+    root = canonical_root(options.fetch("repo-root"))
+    request_path = safe_input(root, options.fetch("request"), "request")
+    prompt_path = safe_input(root, options.fetch("prompt"), "prompt")
+    record_path = safe_input(root, options.fetch("issue-record"), "issue record")
+    readback_path = safe_input(root, options.fetch("readback"), "issue readback")
+    request_bytes = File.binread(request_path)
+    prompt_bytes = File.binread(prompt_path)
+    record_bytes = File.binread(record_path)
+    request = parse_object(request_bytes, "request")
+    if request["webHost"] == WEB_HOST
+      fail!("request already uses #{WEB_HOST}; migrate-legacy-handoff only rewrites handoffs recorded for #{LEGACY_WEB_HOST}")
+    end
+    context = validate_request(root, request, LEGACY)
+    fail!("prompt differs from the legacy rendering of the request") unless prompt_bytes == render_prompt(request, context, LEGACY).b
+    record = parse_object(record_bytes, "issue record")
+    validate_issue_record!(record, request, request_bytes, prompt_bytes, LEGACY)
+    legacy_issue = record.fetch("webIssue")
+    readback = parse_object(File.binread(readback_path), "issue readback")
+    exact_keys!(readback, %w[number url title body state], "issue readback")
+    number = integer!(readback.fetch("number"), "issue readback.number", minimum: 1)
+    fail!("issue readback issue number differs from the recorded legacy Web Issue") unless number == legacy_issue.fetch("number")
+    expected_url = "https://github.com/#{TARGET_REPOSITORY}/issues/#{number}"
+    fail!("issue readback must target #{TARGET_REPOSITORY}") unless readback.fetch("url") == expected_url
+    fail!("issue readback title differs from rendered title") unless readback.fetch("title") == issue_title(request)
+    fail!("issue readback body differs from the legacy prompt") unless readback.fetch("body").b == prompt_bytes
+    readback_state = readback.fetch("state")
+    fail!("issue readback state must be OPEN or CLOSED") unless %w[OPEN CLOSED].include?(readback_state)
+
+    new_request = request.merge("webHost" => WEB_HOST)
+    new_context = validate_request(root, new_request, CURRENT)
+    new_request_bytes = JSON.pretty_generate(new_request) + "\n"
+    new_prompt = render_prompt(new_request, new_context, CURRENT)
+    outputs = {
+      request: safe_new_output(root, options.fetch("request-output"), "request output"),
+      prompt: safe_new_output(root, options.fetch("prompt-output"), "prompt output"),
+      record: safe_new_output(root, options.fetch("issue-record-output"), "issue record output")
+    }
+    fail!("migration outputs must be three different files") unless outputs.values.uniq.length == 3
+    now = utc_time!(options.fetch("now"), "now")
+    new_record = {
+      "schemaVersion" => 1,
+      "handoffId" => request.fetch("handoffId"),
+      "status" => "awaiting-user-handoff",
+      "request" => {"path" => relative(root, outputs.fetch(:request)), "digest" => digest(new_request_bytes)},
+      "prompt" => {"path" => relative(root, outputs.fetch(:prompt)), "digest" => digest(new_prompt)},
+      "webIssue" => {"repository" => TARGET_REPOSITORY, "number" => number, "url" => expected_url, "state" => legacy_issue.fetch("state")},
+      "recordedAt" => now,
+      "migratedFrom" => {
+        "requestDigest" => digest(request_bytes),
+        "promptDigest" => digest(prompt_bytes),
+        "issueRecordDigest" => digest(record_bytes),
+        "webIssueURL" => legacy_issue.fetch("url"),
+        "readbackState" => readback_state
+      }
+    }
+    write_new(outputs.fetch(:request), new_request_bytes)
+    write_new(outputs.fetch(:prompt), new_prompt)
+    write_new(outputs.fetch(:record), canonical_json(new_record))
+    {
+      "schemaVersion" => 1,
+      "status" => "migrated",
+      "handoffId" => request.fetch("handoffId"),
+      "webIssueURL" => expected_url,
+      "request" => new_record.fetch("request"),
+      "prompt" => new_record.fetch("prompt"),
+      "issueRecord" => relative(root, outputs.fetch(:record)),
+      "migratedFrom" => new_record.fetch("migratedFrom")
+    }
+  end
+
+  def validate_request(root, request, profile = CURRENT)
     exact_keys!(request, %w[schemaVersion handoffId source app webHost locales facts documents routes expectedReturn], "request")
     unless request.fetch("schemaVersion") == REQUEST_SCHEMA_VERSION
       fail!("request schemaVersion must be #{REQUEST_SCHEMA_VERSION}: D-072 places Japanese and English on one route per page")
@@ -212,7 +296,10 @@ module AppStoreLegalHandoff
     fail!("request.app.bundleId differs from #{APP_IDENTITY_PATH}") unless app.fetch("bundleId") == identity.fetch("bundleId")
     platforms = string_array!(app.fetch("platforms"), "request.app.platforms")
     fail!("request.app.platforms must contain only iOS and iPadOS") unless (platforms - %w[iOS iPadOS]).empty?
-    fail!("request.webHost must be #{WEB_HOST} (D-072)") unless request.fetch("webHost") == WEB_HOST
+    if profile.equal?(CURRENT) && request.fetch("webHost") == LEGACY_WEB_HOST
+      fail!("request.webHost #{LEGACY_WEB_HOST} is the host before 2026-11-14; #{MIGRATION_HINT}")
+    end
+    fail!("request.webHost must be #{profile.fetch(:host)} (D-105)") unless request.fetch("webHost") == profile.fetch(:host)
     locales = string_array!(request.fetch("locales"), "request.locales")
     fail!("request.locales must be exactly en-US and ja") unless locales == LOCALES
     validate_facts!(request.fetch("facts"))
@@ -265,8 +352,10 @@ module AppStoreLegalHandoff
     fail!("request.facts contains secret-like text") if JSON.generate(facts).match?(SECRET_PATTERN)
   end
 
-  def validate_issue_record!(record, request, request_bytes, prompt_bytes)
-    exact_keys!(record, %w[schemaVersion handoffId status request prompt webIssue recordedAt], "issue record")
+  def validate_issue_record!(record, request, request_bytes, prompt_bytes, profile = CURRENT)
+    keys = %w[schemaVersion handoffId status request prompt webIssue recordedAt]
+    keys += ["migratedFrom"] if profile.equal?(CURRENT) && record.is_a?(Hash) && record.key?("migratedFrom")
+    exact_keys!(record, keys, "issue record")
     fail!("issue record schemaVersion must be 1") unless record.fetch("schemaVersion") == 1
     fail!("issue record handoffId differs") unless record.fetch("handoffId") == request.fetch("handoffId")
     fail!("issue record status is invalid") unless record.fetch("status") == "awaiting-user-handoff"
@@ -278,12 +367,28 @@ module AppStoreLegalHandoff
     fail!("issue record prompt digest differs") unless prompt_reference.fetch("digest") == digest(prompt_bytes)
     issue = object!(record.fetch("webIssue"), "issue record.webIssue")
     exact_keys!(issue, %w[repository number url state], "issue record.webIssue")
-    fail!("issue record must target #{TARGET_REPOSITORY}") unless issue.fetch("repository") == TARGET_REPOSITORY
+    if profile.equal?(CURRENT) && issue.fetch("repository") == LEGACY_TARGET_REPOSITORY
+      fail!("issue record targets #{LEGACY_TARGET_REPOSITORY}; #{MIGRATION_HINT}")
+    end
+    repository = profile.fetch(:repository)
+    fail!("issue record must target #{repository}") unless issue.fetch("repository") == repository
     integer!(issue.fetch("number"), "issue record.webIssue.number", minimum: 1)
-    expected = "https://github.com/#{TARGET_REPOSITORY}/issues/#{issue.fetch("number")}"
+    expected = "https://github.com/#{repository}/issues/#{issue.fetch("number")}"
     fail!("issue record URL differs") unless issue.fetch("url") == expected
     fail!("issue record state must be OPEN") unless issue.fetch("state") == "OPEN"
     utc_time!(record.fetch("recordedAt"), "issue record.recordedAt")
+    validate_migration_reference!(record.fetch("migratedFrom")) if keys.include?("migratedFrom")
+  end
+
+  def validate_migration_reference!(value)
+    exact_keys!(value, %w[requestDigest promptDigest issueRecordDigest webIssueURL readbackState], "issue record.migratedFrom")
+    %w[requestDigest promptDigest issueRecordDigest].each do |name|
+      fail!("issue record.migratedFrom.#{name} is invalid") unless string!(value.fetch(name), "issue record.migratedFrom.#{name}").match?(DIGEST_PATTERN)
+    end
+    unless string!(value.fetch("webIssueURL"), "issue record.migratedFrom.webIssueURL").match?(%r{\Ahttps://github\.com/#{Regexp.escape(LEGACY_TARGET_REPOSITORY)}/issues/[1-9][0-9]*\z})
+      fail!("issue record.migratedFrom.webIssueURL must be a #{LEGACY_TARGET_REPOSITORY} Issue")
+    end
+    fail!("issue record.migratedFrom.readbackState is invalid") unless %w[OPEN CLOSED].include?(value.fetch("readbackState"))
   end
 
   def validate_publication!(publication, request, request_bytes, prompt_bytes, issue_record)
@@ -294,7 +399,7 @@ module AppStoreLegalHandoff
     fail!("publication return handoffId differs") unless publication.fetch("handoffId") == request.fetch("handoffId")
     fail!("publication return requestDigest differs") unless publication.fetch("requestDigest") == digest(request_bytes)
     fail!("publication return promptDigest differs") unless publication.fetch("promptDigest") == digest(prompt_bytes)
-    fail!("publication return Web-AppLibrary Issue differs") unless publication.fetch("webIssueURL") == issue_record.fetch("webIssue").fetch("url")
+    fail!("publication return Web Issue differs") unless publication.fetch("webIssueURL") == issue_record.fetch("webIssue").fetch("url")
     github_reference!(publication.fetch("deploymentReference"), "publication return.deploymentReference")
     actions = object!(publication.fetch("userActions"), "publication return.userActions")
     exact_keys!(actions, %w[promptForwarded publicationApproved], "publication return.userActions")
@@ -312,7 +417,7 @@ module AppStoreLegalHandoff
       path = "publication return.pages[#{index}]"
       exact_keys!(page, %w[kind url sourceDigests], path)
       page_expected = expected.fetch(page.fetch("kind"))
-      fail!("#{path}.url differs from the D-072 route") unless page.fetch("url") == page_expected.fetch(:url)
+      fail!("#{path}.url differs from the D-105 route") unless page.fetch("url") == page_expected.fetch(:url)
       digests = object!(page.fetch("sourceDigests"), "#{path}.sourceDigests")
       exact_keys!(digests, LOCALES, "#{path}.sourceDigests")
       fail!("#{path}.sourceDigests differ from approved sources") unless digests == page_expected.fetch(:digests)
@@ -358,11 +463,11 @@ module AppStoreLegalHandoff
     kinds.sort_by { |kind| KINDS.index(kind) }
   end
 
-  def render_prompt(request, context)
+  def render_prompt(request, context, profile = CURRENT)
     lines = []
     lines << "# #{issue_title(request)}"
     lines << ""
-    lines << "Target repository: `#{TARGET_REPOSITORY}`"
+    lines << "Target repository: `#{profile.fetch(:repository)}`"
     lines << "Source: `#{request.dig("source", "repository")}##{request.dig("source", "issue")}` at `#{request.dig("source", "headSha")}`"
     lines << "Handoff ID: `#{request.fetch("handoffId")}`"
     lines << ""
@@ -392,7 +497,7 @@ module AppStoreLegalHandoff
       kind = route.fetch("kind")
       lines << "### #{kind}"
       lines << ""
-      lines << "- URL: `https://#{WEB_HOST}#{route.fetch("path")}`"
+      lines << "- URL: `https://#{profile.fetch(:host)}#{route.fetch("path")}`"
       lines << "- Languages on this page: #{LOCALES.join(", ")}"
       lines << ""
       LOCALES.each do |locale|
@@ -415,11 +520,11 @@ module AppStoreLegalHandoff
     lines << "- Every URL returns HTTP 200 without authentication or an account, at exactly the URL above with no redirect."
     lines << "- Each page contains both its approved Japanese and English source text, with a language switch on the same page."
     lines << "- Each of the support, privacy, and terms pages links to the other two pages."
-    lines << "- Read the created Issue back from exactly `#{TARGET_REPOSITORY}` before implementation starts."
+    lines << "- Read the created Issue back from exactly `#{profile.fetch(:repository)}` before implementation starts."
     lines << ""
     lines << "## Expected return contract"
     lines << ""
-    lines << "Return the deployment reference, the three exact public URLs with the source digests of both languages for each page, the Web-AppLibrary Issue URL, and the user's prompt-forward/publication approval references. Do not return credentials or authenticated transcripts."
+    lines << "Return the deployment reference, the three exact public URLs with the source digests of both languages for each page, the #{profile.fetch(:web_name)} Issue URL, and the user's prompt-forward/publication approval references. Do not return credentials or authenticated transcripts."
     lines << ""
     lines.join("\n")
   end

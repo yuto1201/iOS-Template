@@ -236,7 +236,7 @@ App Store Connect API adapterは[構成 §7.2](architecture.md#72-app-store-conn
 
 AppLibrary法務ページへの引き継ぎは、次を満たす。
 
-- confirmedな英語／日本語のsupport・privacy・terms原稿、source path／digest／approval、source Issue／Head、app identity、実装・データ利用・広告・課金の事実、D-072で固定した`https://app.yutodev.com/apps/<appSlug>/privacy/`、`/terms/`、`/support/`（`appSlug`は`Config/app-identity.json`、日本語と英語は同じページ）、返却契約から、exact target `yuto1201/Web-AppLibrary`向けのcopy-ready Markdownを決定的に生成する。別のhost、言語別のroute、`appSlug`と合わないrouteも拒否する。不足、未知field、symlink／path escape、digest不一致、秘密らしい値を拒否する。
+- confirmedな英語／日本語のsupport・privacy・terms原稿、source path／digest／approval、source Issue／Head、app identity、実装・データ利用・広告・課金の事実、D-072とD-105で固定した`https://yutodev.com/apps/<appSlug>/privacy/`、`/terms/`、`/support/`（`appSlug`は`Config/app-identity.json`、日本語と英語は同じページ）、返却契約から、exact target `yuto1201/Web-yutodev`向けのcopy-ready Markdownを決定的に生成する。別のhost、言語別のroute、`appSlug`と合わないrouteも拒否する。2026-11-14より前の`app.yutodev.com`／`Web-AppLibrary`のhandoffはそのまま受け付けず、`migrate-legacy-handoff`で書き換える。不足、未知field、symlink／path escape、digest不一致、秘密らしい値を拒否する。
 - Web Issue作成はsource Issueの`github.create_issue`、executor、設定済みaccount／targetに従い、open／closed重複検索、直前preflight、一度だけの作成、title／body／URL／stateのexact readbackを必須とする。曖昧な応答後は検索・readbackで照合し、盲目的に再作成しない。
 - promptのWeb実装AIへの転送と法務本文・公開の承認はユーザー操作として別々に参照を残す。Issue作成、AI review、PR、deploymentから承認を推測しない。
 - 公開返却はrequest／prompt／Web Issue／deployment／user actions／source digests／URLsを結び、D-072のHTTPS URL、redirectなし、ログイン不要HTTP 200、同じページ上の日本語と英語のapproved source本文、3ページの相互linkを検証する。live `verified`だけをApp Store用URLへ引き継ぎ、`fixture-validated`は`appStoreEligible: false`としてrelease証拠にしない。

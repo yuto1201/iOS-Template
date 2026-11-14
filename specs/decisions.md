@@ -1261,3 +1261,17 @@
   - リポジトリの改名は、AIが行える外部操作に加えない。ユーザーが行う。
 - Consequence: Workerは、installation tokenをリポジトリの名前で絞って求めるため、改名してから配備し直すまでの間は、そのアプリのフィードバックが届かない（アプリには送信の失敗が出る）。そのため、改名と配備し直しは、アプリごとに続けて行う。アプリの更新は要らない。D-076の名前で準備した`yuto1201/CafLog-feedback`、`Flower-feedback`、`SimplePomo-feedback`、`PayCycle-feedback`は、各アプリのIssueで移す。フィードバックをまだ準備していないアプリは、テンプレートを取り込んだ後の準備で、最初から新しい名前になる。
 - Related Issue: #525
+
+## D-105: 法務ページの公開先を`yutodev.com/apps/<appSlug>/`と`yuto1201/Web-yutodev`に改める
+
+- Date: 2026-11-15
+- Status: 確定
+- Supersedes: D-072のうち、host（`app.yutodev.com`）と作成依頼Issueの宛先（`yuto1201/Web-AppLibrary`）だけを置き換える。パス`/apps/<appSlug>/{privacy,terms,support}/`、`appSlug`の決め方、日本語と英語を同じページに置くこと、D-055の作成依頼と公開後の検証、初回の法務本文へのユーザー承認は変えない。product.md 6.1節の「公開はVercel、Cloudflare Pagesは使わない」も、今の配信（Cloudflare Pages）に合わせて改める。
+- Context: 2026-11-14、ユーザーはyutodev.comを個人のサイトとし、アプリの一覧を`https://yutodev.com/apps/`へ移した（yuto1201/Web-yutodev#146）。同じ日に、サイトのリポジトリ名を`yuto1201/Web-AppLibrary`から`yuto1201/Web-yutodev`に改めた。`app.yutodev.com`は、`/`を`https://yutodev.com/apps/`へ、ほかのパスを`https://yutodev.com`の同じパスへ301で転送するだけになった。D-072の値のままでは、法務handoff toolの公開の確認が「転送なしで200」を満たせず必ず失敗し、作成依頼Issueの読み返しも新しいリポジトリ名と合わない。
+- Decision:
+  - プライバシーポリシーは`https://yutodev.com/apps/<appSlug>/privacy/`、利用規約は`/apps/<appSlug>/terms/`、サポートは`/apps/<appSlug>/support/`に置く。アプリ内のリンク（`LegalLinks`）もこのhostにする。
+  - 作成依頼Issueは`yuto1201/Web-yutodev`へ起票する。公開の確認は`yutodev.com`で、転送なしのHTTP 200を求める。`app.yutodev.com`のURLは、転送で着くとしても、承認済みの公開URLとして受け付けない。
+  - アプリの一覧の入口（`https://yutodev.com/`、`https://yutodev.com/apps/`、転送元の`https://app.yutodev.com/`）は、個々のアプリの公開URLとして受け付けない。
+  - 2026-11-14より前に`app.yutodev.com`と`Web-AppLibrary`で描いて記録したhandoffは、どのcommandもそのままでは受け付けず、`migrate-legacy-handoff`で一度だけ書き換える。Web側のIssueは作り直さず、同じ番号を新しいリポジトリ名で読み返し、本文が旧い依頼文と1バイトも違わないことを確かめる。新しい記録は`migratedFrom`に旧いdigestと旧いIssueのURLを残す。手で書き換えることはしない。
+- Consequence: 公開済みのアプリのApp Store Connectの登録URLとアプリ内のリンクは、転送で動き続けるので、急いで書き換えない。派生アプリはテンプレートの取り込み（D-074、D-078）でこの変更を入れ、記録済みのhandoffを`migrate-legacy-handoff`で移す。Web側の実装、deploy、DNSは、これまでどおりこのrepositoryから行わない。
+- Related Issue: #536

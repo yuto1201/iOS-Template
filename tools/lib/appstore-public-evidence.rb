@@ -6,6 +6,10 @@ require "ipaddr"
 module IOSTemplate
   module AppStorePreparation
     class PublicEvidence
+      CATALOG_TOP_PATHS = {
+        "yutodev.com" => ["", "/", "/apps", "/apps/"],
+        "app.yutodev.com" => ["", "/", "/apps", "/apps/"]
+      }.freeze
       OBSERVATION_KEYS = %w[schemaVersion recordType source observedAt url finalURL httpStatus authenticationRequired credentialsUsed contentType bodyTextSource].freeze
 
       def initialize(sources, values, now, validator)
@@ -29,7 +33,9 @@ module IOSTemplate
         rescue IPAddr::InvalidAddressError
           # A hostname is required; this offline evaluator never resolves DNS.
         end
-        return "catalog-top-public-url" if host == "app.yutodev.com" && ["", "/"].include?(uri.path)
+        # D-105: the app catalog is https://yutodev.com/apps/ (yutodev.com/ is its entry page), and
+        # app.yutodev.com/ 301-redirects there. None of them is one app's own page.
+        return "catalog-top-public-url" if CATALOG_TOP_PATHS.fetch(host, []).include?(uri.path)
         return "invalid-public-url" if uri.path.match?(/%(?:00|0a|0d|2e|2f|5c)/i) || uri.path.include?("\\") || uri.path.split("/").include?("..")
         nil
       rescue URI::InvalidURIError, ArgumentError
