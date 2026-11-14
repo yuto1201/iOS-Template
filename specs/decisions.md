@@ -1274,4 +1274,4 @@
   - アプリの一覧の入口（`https://yutodev.com/`、`https://yutodev.com/apps/`、転送元の`https://app.yutodev.com/`）は、個々のアプリの公開URLとして受け付けない。
   - 2026-11-14より前に`app.yutodev.com`と`Web-AppLibrary`で描いて記録したhandoffは、どのcommandもそのままでは受け付けず、`migrate-legacy-handoff`で一度だけ書き換える。Web側のIssueは作り直さず、同じ番号を新しいリポジトリ名で読み返し、本文が旧い依頼文と1バイトも違わないことを確かめる。新しい記録は`migratedFrom`に旧いdigestと旧いIssueのURLを残す。手で書き換えることはしない。
 - Consequence: 公開済みのアプリのApp Store Connectの登録URLとアプリ内のリンクは、転送で動き続けるので、急いで書き換えない。派生アプリはテンプレートの取り込み（D-074、D-078）でこの変更を入れ、記録済みのhandoffを`migrate-legacy-handoff`で移す。Web側の実装、deploy、DNSは、これまでどおりこのrepositoryから行わない。
-- Related Issue: #536
+- Related Issue: #536, #538
