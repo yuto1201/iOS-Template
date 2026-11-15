@@ -466,7 +466,7 @@ build_composed() { # root output
 take_in "$composed/valid" >/dev/null || { echo 'the intake refused the composed fixture' >&2; exit 1; }
 ruby "$fixture" review "$composed/valid" "$composed_sha" "$composed_build"
 
-# AC-6 (#535): the intake writes composition.json (schemaVersion 1) from the delivery and the raw capture
+# AC-6 (#549): the intake writes composition.json (schemaVersion 1) from the delivery and the raw capture
 # manifest, with the fields of the exception adopted.json (capture batch, source, build, runtime,
 # requirements, raw and composed digest of each face) and the adoption and provenance of the faces.
 COMPOSED="$composed/valid" REQUIREMENTS="$requirements" SOURCE_SHA="$composed_sha" BUILD="$composed_build" RUNTIME="$composed_runtime" \

@@ -173,11 +173,11 @@ D-075に従い、`AGENTS.md`を書き換えるときは、変更する文面を�
 +AI検証とApp Store撮影は、repository専用の上記2台だけを使う。Templateは`iOS-Template iPhone 17 Pro`と`iOS-Template iPad Pro 13-inch (M5)`、派生アプリは表示名を前置した同じ機種とする。ただし専用の2台を持たないアプリは、Macの管理者が用意する共有の2台（`Shared iPhone 17 Pro`と`Shared iPad Pro 13-inch (M5)`）を宣言して使え、ほかのleaseが使用中のときは来た順に待つ（D-098）。どちらもApp Storeの必須画像サイズで撮影できる機種である。deviceを作成、clone、rename、削除せず、専用device以外を起動・erase・install・test対象にしない。ただしTemplateのリポジトリだけは、`Config/development-device.json`が名前で宣言するユーザーの開発用の実機1台へ、開発用の署名でビルドしてinstallできる。起動・test・eraseはせず、AIの検証の証拠にしない（D-086）。各caseの前に専用deviceをeraseし、testは`-parallel-testing-enabled NO`で実行する。詳細はD-063、D-070とD-079。
 ```
 
-## #535（2026-11-15）
+## #549（2026-11-15）
 
-- Issue: #535
-- 承認を記録したIssueコメント: https://github.com/yuto1201/iOS-Template/issues/535#issuecomment-6882327855（2026-11-14T18:35:54Z）
-- 承認: ユーザーが2026-11-14に会話の中で、53行目と61行目の変更前と変更後の文面を示した確認に「この文面でよい」と回答した（https://github.com/yuto1201/iOS-Template/issues/535#issuecomment-6874042580）。決定の番号をD-105からD-106に付け替えたため、2026-11-15に、番号だけを直した文面を示した確認に「D-106で承認」と回答した。
+- Issue: #549
+- 承認を記録したIssueコメント: https://github.com/yuto1201/iOS-Template/issues/549#issuecomment-6895082217（2026-11-15T13:33:01Z）
+- 承認: ユーザーが2026-11-14に会話の中で、53行目と61行目の変更前と変更後の文面を示した確認に「この文面でよい」と回答した（https://github.com/yuto1201/iOS-Template/issues/535#issuecomment-6874042580）。決定の番号をD-105からD-106に付け替えたため、2026-11-15に、番号だけを直した文面を示した確認に「D-106で承認」と回答した（https://github.com/yuto1201/iOS-Template/issues/535#issuecomment-6882327855）。#535はClaim時に封印したtest範囲を変えられないため、同じ日にユーザーが「head-all で流す」と指示し、文面を変えずに#549へ置き換えた。
 - 承認後の`AGENTS.md`（1行目を除く）のSHA-256: `sha256:11038ac7daedb4da71a101f764e64d15444fe0d53f665554388042a3c42a0efd`
 
 承認した変更の文面:
