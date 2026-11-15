@@ -224,13 +224,13 @@ expect_finding('invalid YAML', run_checker(checker, project(tmp, requirements_by
 extra = run_checker(checker, project(tmp, requirements_bytes, copy_locales.merge('fr' => VALID['en-US'])))
 fail!('an extra locale is not checked') unless summary_of('extra locale', extra)['locales'] == %w[en-US fr ja]
 
-# Draft candidates outside App Store/ are checked with --localizations; the app's requirements and config still apply.
-draft_root = project(tmp, requirements_bytes, {})
-draft = File.join(draft_root, '.artifacts/appstore-draft/candidate-a/localizations')
-FileUtils.mkdir_p(draft)
-VALID.each { |locale, fields| File.write(File.join(draft, "#{locale}.yml"), yaml_for(fields)) }
-drafted = run_checker(checker, draft_root, ['--localizations', '.artifacts/appstore-draft/candidate-a/localizations'])
-fail!("draft candidate did not pass: #{drafted.inspect}") unless drafted[0] == 0 && summary_of('draft', drafted)['warnings'].empty?
+# Delivered copy outside App Store/ is checked with --localizations; the app's requirements and config still apply.
+delivered_root = project(tmp, requirements_bytes, {})
+delivery_copy = File.join(delivered_root, '.artifacts/appstore-delivery/copy/localizations')
+FileUtils.mkdir_p(delivery_copy)
+VALID.each { |locale, fields| File.write(File.join(delivery_copy, "#{locale}.yml"), yaml_for(fields)) }
+delivered = run_checker(checker, delivered_root, ['--localizations', '.artifacts/appstore-delivery/copy/localizations'])
+fail!("delivered copy did not pass: #{delivered.inspect}") unless delivered[0] == 0 && summary_of('delivered', delivered)['warnings'].empty?
 
 # Refusals: exit 2 with a short message and no traceback.
 expect_refusal('relative project root', run_checker(checker, 'relative/root'), /absolute directory/)
@@ -287,14 +287,19 @@ end
   fail!("retired App Store creative path remains (D-106): #{retired}") if File.exist?(File.join(repo_root, retired))
 end
 
-# AC-6: the preparation skill drafts two or three candidates, runs the checker, records the user's choice and its
-# reasons, and keeps the existing no-invention rule and the save boundary.
+# D-106: the workspace drafts and chooses the copy; the preparation skill takes the delivered copy in through
+# appstore-intake, runs the checker on it, copies the delivered decision record, and keeps the existing
+# no-invention rule and the save boundary. It no longer drafts candidates or asks for a choice in the app.
 prepare = File.read(File.join(repo_root, '.agents/skills/prepare-appstore-assets/SKILL.md'), encoding: 'UTF-8')
 require_all('prepare skill', prepare, [
-  'ASO guide (D-106)', 'appstore-intake', 'tools/check-store-copy.sh', 'two or three', '--localizations', 'aso-decisions.md',
-  'explicit choice', 'target', 'avoided', 'Do not invent marketing, privacy, account-deletion, or legal claims.',
-  'save-appstore-metadata', 'not approval'
+  'ASO guide (D-106)', 'appstore-intake', 'tools/check-store-copy.sh', '--localizations', '$DELIVERY/copy/localizations',
+  'aso-decisions.md', 'does not draft candidates or choose between them', 'new delivery', 'explicit choice', 'target',
+  'avoided', 'Do not invent marketing, privacy, account-deletion, or legal claims.', 'save-appstore-metadata', 'not approval'
 ])
+['two or three', '.artifacts/appstore-draft', 'Draft the store copy', 'Draft and choose the store copy',
+ 'ask for an explicit choice of one candidate'].each do |retired|
+  fail!("prepare skill still drafts or chooses store copy in the app: #{retired}") if prepare.include?(retired)
+end
 
 puts "App Store ASO checker passed (#{cases.size} copy cases, keyword-limit, locale, refusal, read-only and preparation-skill checks)"
 RUBY

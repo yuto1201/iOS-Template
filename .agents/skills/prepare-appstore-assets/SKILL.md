@@ -23,22 +23,21 @@ Use `dispositions` only for explicit user decisions; do not infer optionality fr
 
 Independent text preparation can continue before complete release inputs exist. If screenshots are explicitly deferred or their scope remains for the user to decide, stop before capture; do not execute the screenshot steps below or seal a complete package. Continue the complete preparation sequence only when its prerequisites and screenshot scope are established. This does not waive any release gate or authorize partial remote saves.
 
-## Draft the store copy (ASO)
+## Take the store copy in (ASO)
 
-The name, subtitle, keywords, promotional text, description and release notes (What's New) are thought out in the App Store creative workspace with the Mac-wide `appstore-creative` skill and its ASO guide (D-106), from the same confirmed facts, and arrive as the `copy` files of a delivery that [`appstore-intake`](../appstore-intake/SKILL.md) takes in. The steps below check, choose and record the copy in this app, whether it came from a delivery or was drafted here by the same guide. The guide adds no exception to step 1 of [Prepare the source package](#prepare-the-source-package): never invent features, rankings, awards or ratings to rank better.
+The name, subtitle, keywords, promotional text, description and release notes (What's New) are drafted, checked and chosen in the App Store creative workspace with the Mac-wide `appstore-creative` skill and its ASO guide (D-106), from this app's confirmed facts, and arrive as the `copy` files of a delivery. This app does not draft candidates or choose between them: when the copy has to change, ask the workspace for a new delivery. The guide adds no exception to step 1 of [Prepare the source package](#prepare-the-source-package): never invent features, rankings, awards or ratings to rank better.
 
-1. Draft two or three candidate sets for each locale (`ja` and `en-US`) that differ in the target terms they put in the name, subtitle and keyword field. Keep them outside the canonical sources, as `.artifacts/appstore-draft/<candidate>/localizations/<locale>.yml` with the keys of `App Store/metadata/localizations/`, and the release notes beside them.
-2. Run the read-only checker on every candidate:
+1. Take the delivery in with [`appstore-intake`](../appstore-intake/SKILL.md). The intake refuses copy that fails this app's checker and a delivery whose choice is not the user's explicit choice recorded in the workspace commit.
+2. Check the delivered copy against this app's confirmed facts, and run the read-only checker on it from the app checkout:
 
    ```sh
    tools/check-store-copy.sh --project-root "$PWD" \
-     --localizations .artifacts/appstore-draft/<candidate>/localizations
+     --localizations "$DELIVERY/copy/localizations"
    ```
 
-   Fix every `error`; keep a `warning` only with a written reason. The checker reports the keyword length in bytes and characters and stops on bytes unless the app's `App Store/metadata/aso.json` sets `keywordLimit` to `characters`; list competitors and trademarks there. It never writes or opens the network. A passing check is not approval, release readiness or an App Review prediction.
-3. Show the candidates, their checker results and the checks the guide leaves to the eye (spelling, confusion with existing apps, Japanese terms in the en-US keyword field) to the user, and ask for an explicit choice of one candidate per locale. Do not choose for the user; a vague answer is not a choice.
-4. Record the choice in `App Store/metadata/aso-decisions.md` next to the copy, in the guide's format: the candidates, the user's explicit choice and where it was given, the target terms, the avoided terms and why, whether the en-US field carries Japanese terms and why, and every kept warning with its reason. Then write only the chosen text into `App Store/metadata/localizations/` and `App Store/release-notes/`.
-5. Drafting never saves to App Store Connect. Saving stays with `save-appstore-metadata` in `submit-appstore-release` `save` mode, under its own approvals and gates; neither the checker nor the record authorizes a save.
+   Do not fix the copy in the app. An `error`, or a claim that the confirmed specifications do not support, goes back to the workspace for a new delivery. A `warning` stays only with the reason the delivered decision record gives. The checker reports the keyword length in bytes and characters and stops on bytes unless the app's `App Store/metadata/aso.json` sets `keywordLimit` to `characters`; list competitors and trademarks there. It never writes or opens the network. A passing check is not approval, release readiness or an App Review prediction.
+3. In an app Issue, write the delivered `copy/localizations/<locale>.yml` into `App Store/metadata/localizations/` and the release notes into `App Store/release-notes/`, and copy the delivered decision record into `App Store/metadata/aso-decisions.md`: the candidates, the user's explicit choice and where it was given, the target terms, the avoided terms and why, whether the en-US field carries Japanese terms and why, and every kept warning with its reason. Record the workspace repository, commit and case ID from `intake.json`.
+4. Taking the copy in never saves to App Store Connect. Saving stays with `save-appstore-metadata` in `submit-appstore-release` `save` mode, under its own approvals and gates; neither the checker, the intake nor the record authorizes a save.
 
 ## Legal-page handoff
 
@@ -97,7 +96,7 @@ It passes only at the dedicated device's screen size, at least 30 fps on average
 
 ## Prepare the source package
 
-1. Derive `metadata/`, localized English and Japanese copy, `privacy/data-use.yml`, review notes, and release notes from observable app behavior and confirmed specifications. Do not invent marketing, privacy, account-deletion, or legal claims. Draft and choose the store copy as in [Draft the store copy (ASO)](#draft-the-store-copy-aso).
+1. Derive `metadata/`, `privacy/data-use.yml` and review notes from observable app behavior and confirmed specifications. Do not invent marketing, privacy, account-deletion, or legal claims. Take the localized English and Japanese store copy and the release notes in from the workspace as in [Take the store copy in (ASO)](#take-the-store-copy-in-aso).
 2. Draft privacy policy, terms, and support text from the same facts. For a first publication, stop until the user confirms the legal documents and an approval receipt is available. Mark their exact `Status: Confirmed`; an AI or release auditor cannot supply this approval. If public pages are required, complete the legal-page handoff above and bind the live verification record before treating their URLs as ready.
 3. Follow the Phase 6 screenshot routing above. Take the iPhone and iPad presentation in from the workspace delivery with `appstore-intake`, with every raw capture taken through the repository capture path. Preserve exact source/build provenance across the captures and the composed faces; see [Composed screenshot sets](#composed-screenshot-sets-d-101).
 4. Audit every App Store Review Guideline for this exact version and build in `App Store/review/guidelines-audit.json`, following the pre-submission audit of [`app-review-guidelines`](../app-review-guidelines/SKILL.md) (D-081). Recheck Apple's page date first, get the user's Issue-comment confirmation for every `user-judgment` guideline, and require `tools/check-review-guidelines.sh --project-root "$PWD" --bundle-id "$BUNDLE_ID" --version "$VERSION" --build "$BUILD"` to pass before the release-auditor review. A failing or stale audit stops preparation; never seal around it.
