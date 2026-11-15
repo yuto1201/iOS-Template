@@ -40,6 +40,8 @@ tools/intake-appstore-delivery.sh --delivery "$DELIVERY" --raw-root "$RAW_ROOT" 
 
 It refuses the whole delivery, and writes nothing, when any of these fails:
 
+- `$COMPOSED_ROOT` is a new folder outside the app's project, or under its `.artifacts/` working
+  folder; it is never inside `App Store/` or the app's source, even through a link;
 - `delivery.json` has the schema-1 keys and names this app's Bundle ID; every listed file has its
   SHA-256 and size, and no unlisted file is present;
 - the raw capture `manifest.json` in `$RAW_ROOT` is the one the delivery was made from, matches its

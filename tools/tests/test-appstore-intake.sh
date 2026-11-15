@@ -323,6 +323,23 @@ if run_intake "$root/delivery" "$tmp/existing" >"$tmp/existing.log" 2>&1; then
 fi
 grep -q 'must be a new folder' "$tmp/existing.log" || { cat "$tmp/existing.log" >&2; exit 1; }
 
+# AC-6: --out may not land in the app's project (its App Store folder, its source), not even through a
+# link to an ancestor; only the project's .artifacts working folder is allowed inside it.
+mkdir -p "$root/project/App Store/screenshots" "$root/project/TemplateApp"
+ln -s "$root/project" "$tmp/project-link"
+expect_out_refused() { # name out
+  local log="$tmp/out-refused-$1.log"
+  if run_intake "$root/delivery" "$2" >"$log" 2>&1; then
+    echo "intake wrote its output into the project ($1)" >&2; exit 1
+  fi
+  grep -q -- 'must be outside the app' "$log" || { cat "$log" >&2; echo "intake refused --out ($1) for another reason" >&2; exit 1; }
+  [[ ! -e "$2" ]] || { echo "intake left output at --out ($1)" >&2; exit 1; }
+}
+expect_out_refused app-store "$root/project/App Store/intake-new"
+expect_out_refused source "$root/project/TemplateApp/intake-new"
+expect_out_refused through-link "$tmp/project-link/App Store/screenshots/intake-new"
+[[ -z "$(find "$root/project" -name composition.json -print -quit)" ]] || { echo 'intake wrote composition.json into the project' >&2; exit 1; }
+
 # AC-6: the intake changes nothing in the app's project, the raw captures or the workspace, and its code
 # loads no network library and writes only under --out.
 [[ "$(snapshot)" == "$before" ]] || { echo 'intake changed the project, the captures or the workspace' >&2; exit 1; }
@@ -334,4 +351,10 @@ done
 grep -q '/usr/bin/env -i PATH=/usr/bin:/bin' "$intake" || { echo 'intake wrapper must clear the environment' >&2; exit 1; }
 grep -q 'bounded-command.rb' "$intake" || { echo 'intake wrapper must bound the run' >&2; exit 1; }
 
-echo "App Store intake passed (1 delivery accepted and assembled, 13 refusals, no writes outside --out)"
+# The project's .artifacts working folder is the one place inside the project that --out may use.
+mkdir -p "$root/project/.artifacts"
+run_intake "$root/delivery" "$root/project/.artifacts/intake-ok" >"$tmp/artifacts.json" ||
+  { echo 'intake refused --out under the project .artifacts folder' >&2; exit 1; }
+[[ -f "$root/project/.artifacts/intake-ok/composition.json" ]] || { echo 'intake wrote no composition under .artifacts' >&2; exit 1; }
+
+echo "App Store intake passed (2 deliveries accepted, 1 assembled, 16 refusals, no writes outside --out)"

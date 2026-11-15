@@ -76,6 +76,22 @@ module AppStoreIntake
     refuse!("#{label} is missing")
   end
 
+  # The physical --out (its parent already resolved through every link) stays out of the app's project,
+  # so the intake can never write into the App Store folder or the app's source. The project's .artifacts
+  # working folder, which Git ignores, is the one place inside the project it may use. Paths are compared
+  # without case, as APFS is case-insensitive.
+  def outside_project!(target, project_root)
+    project = File.realpath(project_root)
+    inside = ->(path, root) { path.downcase == root.downcase || path.downcase.start_with?("#{root.downcase}/") }
+    return unless inside.(target, project)
+    artifacts = File.join(project, ".artifacts")
+    return if inside.(target, artifacts) && target.downcase != artifacts.downcase
+
+    refuse!("--out must be outside the app's project or under its .artifacts folder: #{target}")
+  rescue Errno::ENOENT, Errno::ENOTDIR, Errno::EACCES
+    refuse!("--project-root is missing")
+  end
+
   def json!(path, label)
     JSON.parse(File.binread(regular!(path, label)))
   rescue JSON::ParserError
@@ -100,6 +116,7 @@ module AppStoreIntake
     out = options.fetch(:out)
     refuse!("--out must be a new folder: #{out} exists") if File.exist?(out) || File.symlink?(out)
     parent = folder!(File.dirname(File.expand_path(out)), "the parent of --out")
+    outside_project!(File.join(parent, File.basename(out)), options.fetch(:project_root))
 
     delivery_path = File.join(delivery_root, "delivery.json")
     delivery = exact!(json!(delivery_path, "delivery.json"), DELIVERY_KEYS, "delivery.json")
