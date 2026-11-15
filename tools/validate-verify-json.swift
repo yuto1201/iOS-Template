@@ -2706,6 +2706,13 @@ func validateWorkflowPath(_ path: String) throws {
         "tools/tests/test-appstore-creative-render.sh",
         "tools/tests/test-appstore-creative-sheet.sh",
         "tools/tests/test-appstore-preview-record.sh",
+        // D-106 (#537): the intake that takes a delivery from the App Store creative workspace into the
+        // app, its adapter skill and that skill's Claude link, and its direct test.
+        ".agents/skills/appstore-intake/SKILL.md",
+        ".claude/skills/appstore-intake",
+        "tools/intake-appstore-delivery.sh",
+        "tools/lib/appstore-intake.rb",
+        "tools/tests/test-appstore-intake.sh",
         // D-079: the non-secret submission requirements that capture, image checks and the package check
         // read, their direct test fixture, the package check's direct test that names the iPhone family
         // folders, and the capture helper that the #279 fix (#295) adds to rewrite a capture as an opaque
