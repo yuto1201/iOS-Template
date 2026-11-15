@@ -1291,3 +1291,24 @@
   - 組み立て前のフォルダ（描画の記録を含む）は、D-101と同じくGitの外に置き、組み立てたセットだけを`App Store/screenshots/`へ入れる。
 - Consequence: #537（#534を置き換え）で取り込みの道具とadapterを足す。後続のIssueで、`appstore-creative`スキル、合成の道具（`compose`、`sheet`）、`docs/appstore-creative.md`、`docs/store-copy-aso.md`をテンプレートから消し、`AGENTS.md`を直す。プレビュー動画の道具と、それが使う描画の拡張層（`tools/appstore-creative-render.sh`）は、動画の受け渡しを決めるまでテンプレートに残す。派生アプリは、テンプレートの取り込みで道具が変わり、制作の材料（`goldie/`など）はワークスペースへ写したうえで、新しい経路で採用し直した後に消す。
 - Related Issue: #537（#534を置き換え。ユーザーの方針：2026-11-13の計画第3版、2026-11-14「段階5に進む」「targetedに戻す」）
+
+## D-107: AI検証のcaseで、専用のSimulatorの使わない背景のserviceをSimSlimで止める
+
+- Date: 2026-11-16
+- Status: 確定
+- Context: このMacでは、複数のセッションのSimulatorとSpotlightで負荷が100を超えることがあり、repository testが300秒の上限で止まる、Simulatorの起動に失敗する、ということが続いている。ユーザーは2026-11-15に、Simulatorの使わない背景のserviceを止めるSimSlim（`MobAI-App/simslim`、MIT）を「導入したい」と指示した。#546で、テンプレートの専用のiPhoneとiPadだけを使い、リポジトリのSimulatorのlock（`tools/with-ios-simulator-lock.sh`）の下で測った（2026-11-15T16:38Z〜16:58Z。ホストの1分の負荷は約4〜57で、ほかのセッションのSimulatorも動いていた）。
+- Decision:
+  - 入れる。このMacにSimSlim 0.14.0を、Homebrewの`mobai-app/tap/simslim`（ビルド済みのbottle）で入れた。実行ファイルは`/opt/homebrew/Cellar/simslim/0.14.0/bin/simslim`（`/opt/homebrew/bin/simslim`から参照）、SHA-256は`18e07ddd27d0692ee92a0a94c417c889a1b4c28b66345bf5a4bdebc67d9b2119`。版を上げるときは、測り直してこの決定を更新する。
+  - 測った数字（`simslim measure`のphys_footprintとprocessの数。起動または`simslim on`の120秒後）：
+    - 専用のiPhone（iOS 27.0のiPhone 17 Pro）：stockは304 process、2.96 GB。slimは73 process、567 MB（約5分の1）。
+    - 専用のiPad（iOS 27.0のiPad Pro 13-inch (M5)）：stockは274 process、2.82 GB。slimは66 process、539 MB（約5分の1）。
+    - `simslim on`は173の背景のserviceを止め、Simulatorを止めた状態で設定してから起動し直す。iPhoneで約8秒、iPadで約6秒かかった。`simslim off`は約12秒。
+  - 止めた状態（既定の全16分類、残す分類なし）の専用のiPhoneで、日本語（`-testLanguage ja -testRegion JP`、`-parallel-testing-enabled NO`）のテンプレートのUnit Test 8件とUI Test 9件がすべて通った。stockでも同じ件数が通った。テンプレートのレビューの依頼（`TemplateApp/Features/ReviewPrompt/`）を含むUI Testも通った。
+  - `simslim doctor --requires storekit,push`は、止めた状態ではStoreKit（`com.apple.storekitd`など7つ）と通知（`com.apple.apsd`）を壊れていると報告する。テンプレートのtestはこれらを要らないので、既定では分類を残さない。StoreKitの購入（`store`）、通知（`store`）、Widget・Live Activities（`widgets`）、Siri・App Intents（`siri`）などをtestするアプリのcaseは、その分類を`--except`で残す。どの分類が必要かは、そのcaseを作るIssueで`simslim doctor`と実際のtestで確かめる。
+  - 使う場面：AI検証のcase（Build、Unit Test、UI Test、Smoke Test）の専用のSimulator。使わない場面：App Storeの撮影と録画（D-063、D-079、D-106の原画）。止めた状態で撮った原画がstockと同じ見た目になることは確かめていないため、撮影と録画の前は`simslim status`が`stock`であることを確かめる。
+  - eraseとの関係：`xcrun simctl erase`は止める設定を消さない（専用のiPhoneとiPadで、止めた後にeraseして起動しても`slim`のままだった）。SimSlimのREADMEの「eraseで消える」はSimSlim自身のeraseのことで、`xcrun simctl erase`には当たらない。止めた状態はeraseをまたいで残るため、検証の道具は、各caseの前のeraseの後に`simslim status`で状態を確かめ、要る状態へ`simslim on`（くり返し実行してよい）または`simslim off`で合わせる。
+  - 元に戻す方法：`simslim off <UDID>`。専用のiPhoneとiPadで、`off`の後は`stock`（止めたservice 173件が0件）になり、その後eraseして起動しても`stock`のままだった。測った後、2台ともstockに戻し、eraseして止めた。
+  - 使わないcommand：`clone`、`repair-clone`、`rename`、`delete`、`erase`、`disk-clean`、`watch`。deviceの作成、clone、rename、削除をしないルール（D-063、D-070）と、eraseをSimulatorの資源管理が行うこと、`watch`がこのMacのすべてのSimulator（ほかのアプリのdeviceを含む）を止めることによる。このMacの共通のSimulator guard（`~/.claude/hooks/simulator-guard.rb`、リポジトリの外）が、これらのcommandと、専用の2台以外のUDIDを名指すSimSlimの呼び出しを拒む。
+  - 未確認：英語、iPadでのtest、4条件、`--except`で分類を残した場合、派生アプリのtest、長時間の連続した検証、共有の2台（D-098）での効果。
+- Consequence: 検証の道具（`tools/lib/ios-simulator-resource.rb`など）への組み込み、`docs/verification.md`の更新、撮影の前のstockの確かめは、後続のIssueで行う。それまでは、専用のSimulatorはstockのまま使う。派生アプリへはテンプレートの取り込みで広げる。
+- Related Issue: #546（ユーザーの指示：2026-11-15「これを導入したい」）
