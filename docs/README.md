@@ -292,9 +292,7 @@ tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
 
 `blocked:*` または `paused` は失敗の隠蔽ではなく、直前状態を `resumeState` としてmarkerへ残す停止状態です。原因を直した後は担当者を変えず、まず `issue-state.sh get` が返すexact `resumeState`へ `issue-state.sh transition --from <current> --to <resumeState>` で明示的に復帰し、その後 `resume-issue.sh` でlocal stateを再構築して同じstateを再dispatchします。`resume-issue.sh` 自体はGitHub labelを変えません。成功が不明な外部操作は別コマンドへ進まず同じコマンドを再実行します。Headを変更した場合は `approved-for-merge`、`changes-requested`、または `verify-passed` から `in-progress` へ戻し、新しいHeadのVerifyとreviewを両方作り直します。
 
-## appstore-creativeスキルでストア用スクショを作る
+## App Storeの画像と文言を取り込む
 
-CodexやClaudeに「appstore-creativeでストア用スクショを作って」と依頼できます。面はHTMLとCSSで組み、headless Chromiumで描きます（D-077、D-093）。
-[使い方](./appstore-creative.md)と[スキル](../.agents/skills/appstore-creative/SKILL.md)を参照してください。
-日本語・英語の原稿と実際のアプリ画像を使い、背景・見出し・端末枠を調整します。
-導入のみ、既存画像の装飾、撮影、動画を依頼に合わせて実行します。
+App Storeの画像、動画、文言は、このMacの共通スキル`appstore-creative`とApp Storeのワークスペースで考えて作ります（D-106）。アプリは撮影した画像をワークスペースへ渡し、納品物を[`appstore-intake`スキル](../.agents/skills/appstore-intake/SKILL.md)で取り込んで確かめ、採用したものを保管します。
+CodexやClaudeに「納品物を取り込んで」と依頼できます。撮影、組み立て、package、提出の手順は[`prepare-appstore-assets`スキル](../.agents/skills/prepare-appstore-assets/SKILL.md)を参照してください。

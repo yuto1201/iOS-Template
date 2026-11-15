@@ -31,7 +31,7 @@ if check_adoption_paths "$mutated_adoption" 2>/dev/null; then
 fi
 prepare_skill="$repo_root/.agents/skills/prepare-appstore-assets"
 submit_skill="$repo_root/.agents/skills/submit-appstore-release"
-creative_skill="$repo_root/.agents/skills/appstore-creative"
+intake_skill="$repo_root/.agents/skills/appstore-intake"
 seal="$prepare_skill/scripts/seal-package.sh"
 record="$submit_skill/scripts/record-section.sh"
 requirements_source="$repo_root/tools/tests/fixtures/appstore/requirements.json"
@@ -43,10 +43,16 @@ version=1.0
 [[ -f "$prepare_skill/SKILL.md" && -x "$seal" && -f "$submit_skill/SKILL.md" && -x "$record" ]] || {
   echo 'App Store skill scripts are incomplete' >&2; exit 1
 }
-[[ -f "$creative_skill/SKILL.md" ]] || { echo 'appstore-creative skill is unavailable' >&2; exit 1; }
-rg -q '^name: appstore-creative$' "$creative_skill/SKILL.md" || { echo 'appstore-creative skill name is invalid' >&2; exit 1; }
-[[ -L "$repo_root/.claude/skills/appstore-creative" && "$(readlink "$repo_root/.claude/skills/appstore-creative")" == ../../.agents/skills/appstore-creative ]] || {
-  echo 'appstore-creative skill symlink is invalid' >&2; exit 1
+# D-106: the creative skill and its tools live in the App Store creative workspace; the template keeps
+# the intake adapter that takes a delivery in.
+for retired in .agents/skills/appstore-creative .claude/skills/appstore-creative docs/appstore-creative.md docs/store-copy-aso.md \
+  tools/appstore-creative-compose.sh tools/appstore-creative-sheet.sh; do
+  [[ ! -e "$repo_root/$retired" && ! -L "$repo_root/$retired" ]] || { echo "retired App Store creative path remains (D-106): $retired" >&2; exit 1; }
+done
+[[ -f "$intake_skill/SKILL.md" ]] || { echo 'appstore-intake skill is unavailable' >&2; exit 1; }
+rg -q '^name: appstore-intake$' "$intake_skill/SKILL.md" || { echo 'appstore-intake skill name is invalid' >&2; exit 1; }
+[[ -L "$repo_root/.claude/skills/appstore-intake" && "$(readlink "$repo_root/.claude/skills/appstore-intake")" == ../../.agents/skills/appstore-intake ]] || {
+  echo 'appstore-intake skill symlink is invalid' >&2; exit 1
 }
 # D-077 renamed the goldie skill. Only the decision history, the AGENTS.md approval ledger, Goldie itself
 # (the npm package, goldie/<locale>/ configs, goldie.config.ts) may still say goldie.
@@ -66,128 +72,12 @@ done
 printf '%s\n' 'Keep goldie/ja/goldie.config.ts and run node_modules/goldie/dist/cli.js.' >"$stale_probe/README.md"
 git -C "$stale_probe" add README.md
 [[ -z "$(stale_goldie_references "$stale_probe")" ]] || { echo 'stale goldie check rejected a Goldie tool reference' >&2; exit 1; }
-# D-077: the skill proposes patterns before building, keeps the tile rules, and generates images through Codex.
-creative_refs="$creative_skill/references"
-for creative_file in "$creative_refs/patterns.md" "$creative_refs/proposal.md" "$creative_refs/imagegen.md"; do
-  [[ -f "$creative_file" ]] || { echo "appstore-creative reference is missing: $creative_file" >&2; exit 1; }
-done
 require_text() { # file pattern message
   rg -q -- "$2" "$1" || { echo "$3" >&2; exit 1; }
 }
-require_text "$creative_skill/SKILL.md" 'appstore-creative-sheet\.sh build' 'skill does not build a proposal sheet'
-require_text "$creative_skill/SKILL.md" 'appstore-creative-sheet\.sh select' 'skill does not record the choice'
-require_text "$creative_skill/SKILL.md" 'three to six whole-set patterns' 'skill does not compare patterns first'
-# D-085: identity first, research every time without copying, one style spec per pattern against the
-# quality bar, exactly one recommendation, provisional headlines, and a stop before anything paid.
-require_text "$creative_skill/SKILL.md" 'appstore-creative-sheet\.sh check --brand goldie/brand\.json' 'skill does not check the identity record'
-require_text "$creative_skill/SKILL.md" 'Never copy' 'skill does not forbid copying reference apps'
-require_text "$creative_skill/SKILL.md" 'Mark exactly one as' 'skill does not recommend one pattern'
-require_text "$creative_skill/SKILL.md" 'stop and ask the user' 'skill does not stop before paid fonts or tools'
-require_text "$creative_skill/SKILL.md" 'Headlines' 'skill does not mark headlines provisional'
-require_text "$creative_refs/proposal.md" '^## Identity \(`brand\.json`\)' 'proposal guide lacks the identity record'
-require_text "$creative_refs/proposal.md" '^## Style spec' 'proposal guide lacks the style spec'
-require_text "$creative_refs/proposal.md" '^## Research record' 'proposal guide lacks the research record'
-require_text "$creative_refs/proposal.md" 'never copy a design, illustration, headline or' 'proposal guide does not forbid copying'
-require_text "$creative_refs/patterns.md" '^## Quality bar' 'patterns guide lacks the quality bar'
-require_text "$creative_refs/patterns.md" 'Generic AI look' 'quality bar does not reject generic AI images'
-require_text "$creative_refs/upstream.md" 'ParthJadhav/app-store-screenshots' 'upstream guide does not credit the style spec source'
-require_text "$creative_refs/upstream.md" 'Copyright \(c\) 2026 Parth Jadhav' 'upstream guide lacks the MIT notice'
-# D-085 (#393): unlimited generation, one style per pattern, cut-outs, the generic-AI filter, and the
-# user's adoption of every material before use.
-require_text "$creative_refs/imagegen.md" 'There is no limit on how many you make' 'image guide still limits generation'
-require_text "$creative_refs/imagegen.md" '^## Keep one style across a pattern' 'image guide does not keep one style per pattern'
-require_text "$creative_refs/imagegen.md" 'appstore-creative-sheet\.sh cutout --image' 'image guide does not check cut-outs'
-require_text "$creative_refs/imagegen.md" '^## Reject generic AI images before showing them' 'image guide does not reject generic AI images'
-require_text "$creative_refs/imagegen.md" 'appstore-creative-sheet\.sh review --sheet' 'image guide does not record the material review'
-require_text "$creative_refs/imagegen.md" 'stop and ask the user before every use' 'image guide does not stop before paid generators'
-require_text "$creative_refs/imagegen.md" 'Do nothing else\." < /dev/null' 'image guide lets codex exec wait on standard input'
-require_text "$creative_refs/imagegen.md" 'appstore-creative-sheet\.sh provenance --file' 'image guide does not check provenance'
-require_text "$creative_refs/proposal.md" '^## Material sheet' 'proposal guide lacks the material sheet'
-require_text "$creative_skill/SKILL.md" 'Use only what the user explicitly adopted' 'skill does not use only adopted materials'
-# D-085 (#391): the product page header — format, the official safe area, loop and mute, iOS 27, the
-# Preview tool, Apple's URLs, and the header sheet with "no header".
-require_text "$creative_skill/SKILL.md" '^## Product page header \(D-085\)' 'skill lacks the product page header'
-require_text "$creative_refs/extension.md" '^## Product page header \(D-085\)' 'extension guide lacks the product page header'
-require_text "$creative_refs/extension.md" 'x 1097–2743, y 493–1154' 'header guide lacks the official safe area'
-require_text "$creative_refs/extension.md" 'creative_assets-product_page_header_template-static\.psd' 'header guide does not name the official template'
-require_text "$creative_refs/extension.md" 'always loops and is' 'header guide does not say the video loops'
-require_text "$creative_refs/extension.md" 'muted by default' 'header guide does not say the video is muted'
-require_text "$creative_refs/extension.md" 'iOS 27 and iPadOS 27' 'header guide does not say where the header shows'
-require_text "$creative_refs/extension.md" 'Preview tool' 'header guide does not send the user to the Preview tool'
-require_text "$creative_refs/extension.md" 'creative-assets-specifications' 'header guide does not link Apple'"'"'s specifications'
-require_text "$creative_refs/extension.md" 'appstore-creative-preview\.sh encode-header' 'header guide does not encode the loop'
-require_text "$creative_refs/proposal.md" '^## Header sheet' 'proposal guide lacks the header sheet'
-require_text "$creative_refs/proposal.md" 'select --pattern none' 'header sheet does not offer no header'
-# D-101 (#487): search results and universal images — only when asked, "don't make one" and what shows
-# instead, the official safe areas with their templates, the commands and the search sheet; the image rules
-# with Apple's two pages and the day they were checked; App Review Guideline 2.3.14 before submission.
-require_text "$creative_skill/SKILL.md" '^## Search results and universal images \(D-101\)' 'skill lacks the search results flow'
-require_text "$creative_skill/SKILL.md" "Only when the user asks; \"don't make one\" is a valid answer" 'skill does not make search images only on request'
-require_text "$creative_skill/SKILL.md" 'In-App Events, preview videos and' 'skill does not say what shows without a search image'
-require_text "$creative_skill/SKILL.md" 'appstore-creative-render\.sh render-search' 'skill does not render search images'
-require_text "$creative_skill/SKILL.md" 'appstore-creative-preview\.sh search-sheet' 'skill does not compare search images on a sheet'
-require_text "$creative_skill/SKILL.md" 'App Review Guideline 2\.3\.14' 'skill does not check creative assets against guideline 2.3.14'
-require_text "$creative_refs/extension.md" '^## Search results and universal images \(D-101\)' 'extension guide lacks the search results flow'
-require_text "$creative_refs/extension.md" '"don.t make one" is always a' 'extension guide does not accept no search image'
-require_text "$creative_refs/extension.md" 'In-App Events, preview videos and' 'extension guide does not say what shows without a search image'
-require_text "$creative_refs/extension.md" 'x 836–3004, y 765–1795 \(2168×1030\)' 'search guide lacks the official safe area'
-require_text "$creative_refs/extension.md" 'creative_assets-search_results_template-static\.psd' 'search guide does not name the official template'
-require_text "$creative_refs/extension.md" 'x 1921–3323, y 660–1622 \(1402×962\)' 'universal guide lacks the official safe area'
-require_text "$creative_refs/extension.md" 'creative_assets-universal_asset_template-static\.psd' 'universal guide does not name the official template'
-require_text "$creative_refs/extension.md" 'appstore-creative-render\.sh render-universal' 'extension guide does not render the universal image'
-require_text "$creative_refs/extension.md" 'appstore-creative-preview\.sh search-select' 'extension guide does not record the search choice'
-require_text "$creative_refs/patterns.md" '^## Image rules \(D-101\)' 'patterns guide lacks the image rules'
-require_text "$creative_refs/patterns.md" 'https://developer\.apple\.com/app-store/asset-best-practices/' 'image rules do not cite Apple'"'"'s asset best practices'
-require_text "$creative_refs/patterns.md" 'https://developer\.apple\.com/help/app-store-connect/reference/app-information/creative-assets-specifications/' 'image rules do not cite Apple'"'"'s creative assets specifications'
-require_text "$creative_refs/patterns.md" 'both checked 2026-11-02' 'image rules do not give the day Apple'"'"'s pages were checked'
-require_text "$creative_refs/patterns.md" 'One feature per screenshot' 'image rules lack one feature per screenshot'
-require_text "$creative_refs/patterns.md" 'the first three' 'image rules do not lead with the first three screenshots'
-require_text "$creative_refs/patterns.md" 'copyright symbols, unverifiable awards' 'image rules do not forbid prices, URLs and awards'
-require_text "$creative_refs/patterns.md" 'Japanese and English use the same composition' 'image rules do not keep the locales alike'
-require_text "$creative_refs/patterns.md" 'purpose is obvious at a glance' 'image rules lack the search results rule'
-require_text "$creative_refs/patterns.md" 'One clear idea' 'image rules lack the header rule'
-require_text "$creative_refs/patterns.md" 'App Review Guideline 2\.3\.14' 'image rules do not check creative assets against guideline 2.3.14'
-# D-085 (#392): the poster frame and the check against Apple's current specifications.
-require_text "$creative_skill/SKILL.md" '\*\*Poster frame\.\*\*' 'skill does not choose a poster frame'
-require_text "$creative_skill/SKILL.md" '^## Check against Apple'"'"'s current specifications \(D-085\)' 'skill does not check assets against Apple'"'"'s specifications'
-require_text "$creative_skill/SKILL.md" 'appstore-creative-preview\.sh check-assets --kind' 'skill does not run the asset check'
-require_text "$creative_refs/preview-video.md" '^## 5\. Poster frame \(D-085\)' 'preview guide lacks the poster frame'
-require_text "$creative_refs/preview-video.md" 'Apple uses the frame at 5 seconds' 'preview guide does not give the default poster frame'
-require_text "$creative_refs/preview-video.md" 'app-preview-specifications' 'preview guide does not link the App preview specifications'
-require_text "$creative_refs/preview-video.md" 'creative-assets-specifications' 'preview guide does not link the creative assets specifications'
-require_text "$creative_refs/preview-video.md" 'screenshot-specifications' 'preview guide does not link the screenshot specifications'
-require_text "$creative_refs/preview-video.md" 'read Apple'"'"'s pages again' 'preview guide does not ask to reread Apple'"'"'s pages'
-require_text "$creative_skill/SKILL.md" 'private Artifact' 'skill does not publish the sheet for Claude'
-require_text "$creative_skill/SKILL.md" 'Codex opens the local file' 'skill does not show the sheet in Codex'
-require_text "$creative_skill/SKILL.md" 'first three tiles show the app in use' 'skill drops the first-three-tiles rule'
-require_text "$creative_skill/SKILL.md" 'At most two `concept` tiles' 'skill drops the concept limit'
-require_text "$creative_skill/SKILL.md" 'never contain app screens or UI, text, logos' 'skill drops the generated-image limits'
-require_text "$creative_skill/SKILL.md" 'goldie/assets/provenance\.json' 'skill does not record adopted image provenance'
-for tile_kind in device pair panorama continuous callout scene concept; do
-  require_text "$creative_refs/patterns.md" "^## \`$tile_kind\`" "patterns guide lacks the $tile_kind tile"
-done
-require_text "$creative_refs/imagegen.md" 'codex exec --skip-git-repo-check' 'image guide lacks the Claude-to-Codex handoff'
-require_text "$creative_refs/imagegen.md" 'only when the user explicitly asks' 'image guide does not limit the API-key fallback'
-require_text "$creative_refs/imagegen.md" 'two failures with the same cause' 'image guide does not stop after repeated failures'
-require_text "$creative_refs/imagegen.md" 'hold the rights' 'image guide does not check reference rights'
-require_text "$creative_refs/proposal.md" 'user-explicit' 'proposal guide does not record an explicit choice'
-# The render extension adds concept tiles, background images under the copy, and iPad.
-[[ -f "$creative_refs/extension.md" && -f "$creative_skill/assets/ipad.config.ts" ]] || { echo 'render extension guide is missing' >&2; exit 1; }
-require_text "$creative_skill/SKILL.md" 'appstore-creative-render\.sh' 'skill does not route full-tile images and iPad through the extension'
-require_text "$creative_refs/extension.md" 'Goldie 0\.3\.1' 'extension guide does not pin Goldie'
-require_text "$creative_refs/extension.md" 'backgroundImage' 'extension guide lacks background images'
-require_text "$creative_refs/extension.md" 'layout: "concept"' 'extension guide lacks the concept layout'
-require_text "$creative_refs/extension.md" '--device ipad-13' 'extension guide lacks iPad rendering'
-require_text "$creative_refs/patterns.md" 'strip: N, index: i' 'patterns guide lacks the continuous strip recipe'
-# D-079: App Store iPhone tiles are iPhone 6.3-inch (1206x2622) from the dedicated iPhone 17 Pro. Only the
-# extension guide may name Goldie's own iphone-6.9, to say its output stays pixel-identical to Goldie.
-require_text "$creative_refs/extension.md" '--device iphone-6\.3' 'extension guide lacks iPhone 6.3-inch rendering'
-require_text "$creative_skill/assets/goldie.config.ts" 'devices: \["iphone-6\.3"\]' 'iPhone starter config does not use iphone-6.3'
-require_text "$creative_refs/patterns.md" 'The iPhone tile is 1206×2622' 'patterns guide does not give the 1206x2622 iPhone tile'
-old_iphone_size=$(rg -n '1320|2868|17 Pro Max|6\.9-inch|6\.9インチ|iphone-6\.9' "$creative_skill" "$prepare_skill/SKILL.md" "$repo_root/docs/appstore-creative.md" \
-  "$repo_root/App Store/screenshots/README.md" |
-  rg -v "^$creative_refs/extension\.md:[0-9]+:uses none of them on Goldie's own \`iphone-6\.9\`" || true)
-[[ -z "$old_iphone_size" ]] || { echo "the creative skill still names the old App Store iPhone size:" >&2; printf '%s\n' "$old_iphone_size" >&2; exit 1; }
+old_iphone_size=$(rg -n '1320|2868|17 Pro Max|6\.9-inch|6\.9インチ|iphone-6\.9' "$prepare_skill/SKILL.md" "$intake_skill/SKILL.md" \
+  "$repo_root/App Store/screenshots/README.md" || true)
+[[ -z "$old_iphone_size" ]] || { echo "App Store guidance still names the old App Store iPhone size:" >&2; printf '%s\n' "$old_iphone_size" >&2; exit 1; }
 # D-079: capture guidance names the dedicated iPhone 17 Pro at 1206x2622 in family iphone-6.3.
 require_text "$prepare_skill/SKILL.md" 'dedicated iPhone 17 Pro captures .*1206×2622 \(family `iphone-6\.3`\)' 'prepare skill does not capture the D-079 iPhone size'
 require_text "$repo_root/App Store/screenshots/README.md" 'dedicated iPhone 17 Pro produces .*1206×2622 \(family `iphone-6\.3`\)' 'screenshot README does not name the D-079 iPhone size'
@@ -196,7 +86,7 @@ ruby -e '
   abort "verification guide does not name the D-079 iPhone size" unless section.include?("専用iPhone 17 Pro") && section.include?("1206×2622（family `iphone-6.3`")
   abort "verification guide still names the old App Store iPhone size" if section.match?(/1320|2868|17 Pro Max|6\.9-inch|iphone-6\.9/)
 ' "$repo_root/docs/verification.md"
-require_text "$prepare_skill/SKILL.md" 'appstore-creative-render\.sh render .*--device ipad-13' 'prepare skill does not render iPad through the extension'
+require_text "$prepare_skill/SKILL.md" 'appstore-intake' 'prepare skill does not take deliveries in through appstore-intake'
 [[ -L "$repo_root/.claude/skills/prepare-appstore-assets" && "$(readlink "$repo_root/.claude/skills/prepare-appstore-assets")" == ../../.agents/skills/prepare-appstore-assets ]] || {
   echo 'prepare skill symlink is invalid' >&2; exit 1
 }
@@ -206,7 +96,7 @@ require_text "$prepare_skill/SKILL.md" 'appstore-creative-render\.sh render .*--
 ! rg -q 'TODO|\[TODO' "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md"
 rg -q 'Codex and Claude may perform' "$submit_skill/SKILL.md" && ! rg -q 'Claude.*delegate|Claude.*委託' "$submit_skill/SKILL.md"
 rg -q 'first.publication|first publication|初回公開' "$prepare_skill/SKILL.md"
-for phase_skill in "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md" "$creative_skill/SKILL.md"; do
+for phase_skill in "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md"; do
   rg -q 'Phase 6' "$phase_skill" || { echo "Phase 6 routing is missing: $phase_skill" >&2; exit 1; }
 done
 rg -q 'goldie/ja/' "$prepare_skill/SKILL.md" && rg -q 'goldie/en-US/' "$prepare_skill/SKILL.md" || {
@@ -215,11 +105,11 @@ rg -q 'goldie/ja/' "$prepare_skill/SKILL.md" && rg -q 'goldie/en-US/' "$prepare_
 rg -q 'iPad.*capture-appstore-screenshots|capture-appstore-screenshots.*iPad' "$prepare_skill/SKILL.md" || {
   echo 'prepare skill does not route iPad outside Goldie' >&2; exit 1
 }
-rg -q 'with-ios-simulator-lock\.sh' "$prepare_skill/SKILL.md" "$creative_skill/SKILL.md" || {
+rg -q 'with-ios-simulator-lock\.sh' "$prepare_skill/SKILL.md" || {
   echo 'App Store capture skills do not require the shared Simulator session' >&2; exit 1
 }
-rg -q 'ios-simulator-resource\.rb' "$creative_skill/SKILL.md" || {
-  echo 'appstore-creative capture does not use the Mac-wide Simulator resource manager' >&2; exit 1
+rg -q 'ios-simulator-resource\.rb' "$prepare_skill/SKILL.md" || {
+  echo 'App Store capture does not use the Mac-wide Simulator resource manager' >&2; exit 1
 }
 rg -q 'evidence-applicability\.json' "$prepare_skill/SKILL.md" "$submit_skill/SKILL.md" || {
   echo 'Phase 6 evidence applicability is not preserved through preparation and submission' >&2; exit 1

@@ -175,7 +175,7 @@ def base(root, source_sha, build_digest, runtime, requirements, bundle_id)
     "inputs" => {"captureBatch" => "534-store-r1", "rawManifestSha256" => sha(File.join(raw_root, "manifest.json")),
                  "sourceSha" => source_sha, "buildDigest" => build_digest, "runtime" => runtime,
                  "requirementsSha256" => sha(requirements), "brandSha256" => sha(File.join(work, "brand.json")), "appCommit" => source_sha},
-    "renderer" => {"path" => "tools/lib/appstore-creative-compose.rb", "sha256" => "sha256:#{'c' * 64}"},
+    "renderer" => {"path" => "workspace/tools/renderer.rb", "sha256" => "sha256:#{'c' * 64}"},
     "adoption" => {"decision" => "user-explicit", "at" => "2026-11-14T00:00:00Z", "where" => "chat",
                    "approvalReference" => "https://github.com/yuto1201/iOS-Example/issues/7#issuecomment-123", "choice" => "B",
                    "sheetKind" => "preview", "sheetSha256" => sha(sheet_html),
