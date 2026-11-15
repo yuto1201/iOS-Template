@@ -1,11 +1,11 @@
 ---
 name: ios-design-2d-asset
-description: Use when an approved Issue requires creating or structurally changing a 2D animation, motion graphic, or bundled video inside the iOS app (SwiftUI choreography, a Remotion-rendered clip, a Rive file, or an ElevenLabs video); this repository adapter keeps the gates and defers the authoring procedures to the shared Mac skill design-2d-asset (D-090). Not for App Store screenshots or preview videos (made in the App Store creative workspace with the Mac-wide appstore-creative skill and taken in with appstore-intake, D-105), websites, still images (use ios-design-image-asset), or 3D (use ios-design-3d-asset).
+description: Use when an approved Issue requires creating or structurally changing a 2D animation, motion graphic, or bundled video inside the iOS app (SwiftUI choreography, a Remotion-rendered clip, a Rive file, or an ElevenLabs video); this repository adapter keeps the gates and defers the authoring procedures to the shared Mac skill design-2d-asset (D-090). Not for App Store screenshots or preview videos (made in the App Store creative workspace with the Mac-wide appstore-creative skill and taken in with appstore-intake, D-106), websites, still images (use ios-design-image-asset), or 3D (use ios-design-3d-asset).
 ---
 
 # iOS 2D Assets
 
-Use this skill when an approved Issue requires creating or structurally changing a 2D animation, a motion graphic, or a video bundled in the app. Do not invoke it for App Store screenshots or preview videos (the App Store creative workspace makes them with the Mac-wide `appstore-creative` skill and the app takes them in with `appstore-intake`, D-105), for website motion, for still images (use `ios-design-image-asset`), or for 3D models and 3D animation (use `ios-design-3d-asset`).
+Use this skill when an approved Issue requires creating or structurally changing a 2D animation, a motion graphic, or a video bundled in the app. Do not invoke it for App Store screenshots or preview videos (the App Store creative workspace makes them with the Mac-wide `appstore-creative` skill and the app takes them in with `appstore-intake`, D-106), for website motion, for still images (use `ios-design-image-asset`), or for 3D models and 3D animation (use `ios-design-3d-asset`).
 
 ## Shared authoring skill
 

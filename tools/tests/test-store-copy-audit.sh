@@ -281,17 +281,17 @@ def require_all(label, text, values)
   fail!("#{label} lacks #{missing.inspect}") unless missing.empty?
 end
 
-# D-105: the ASO guide moved to the App Store creative workspace with the creative skill; the template keeps
+# D-106: the ASO guide moved to the App Store creative workspace with the creative skill; the template keeps
 # the checker, and the preparation skill takes delivered copy in through appstore-intake.
 %w[docs/store-copy-aso.md .agents/skills/appstore-creative].each do |retired|
-  fail!("retired App Store creative path remains (D-105): #{retired}") if File.exist?(File.join(repo_root, retired))
+  fail!("retired App Store creative path remains (D-106): #{retired}") if File.exist?(File.join(repo_root, retired))
 end
 
 # AC-6: the preparation skill drafts two or three candidates, runs the checker, records the user's choice and its
 # reasons, and keeps the existing no-invention rule and the save boundary.
 prepare = File.read(File.join(repo_root, '.agents/skills/prepare-appstore-assets/SKILL.md'), encoding: 'UTF-8')
 require_all('prepare skill', prepare, [
-  'ASO guide (D-105)', 'appstore-intake', 'tools/check-store-copy.sh', 'two or three', '--localizations', 'aso-decisions.md',
+  'ASO guide (D-106)', 'appstore-intake', 'tools/check-store-copy.sh', 'two or three', '--localizations', 'aso-decisions.md',
   'explicit choice', 'target', 'avoided', 'Do not invent marketing, privacy, account-deletion, or legal claims.',
   'save-appstore-metadata', 'not approval'
 ])

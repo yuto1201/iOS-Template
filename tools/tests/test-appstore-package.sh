@@ -170,7 +170,7 @@ printf '%s\n' "Password: $secret_fixture" >> "$package_root/review/review-notes.
 assert_invalid 'secret-like review credential' 'review/review-notes.md.credentials' "$secret_fixture"
 
 
-# #486 (D-101), D-105: a composed screenshot set. The App Store creative workspace delivers the adopted
+# #486 (D-101), D-106: a composed screenshot set. The App Store creative workspace delivers the adopted
 # faces, tools/intake-appstore-delivery.sh binds them to the raw capture manifest and the user's recorded
 # choice, tools/build-appstore-screenshot-set.sh --composition assembles them, and the package with the
 # composition record passes the package check and the seal. Every image and record is made here from small

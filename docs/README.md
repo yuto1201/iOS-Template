@@ -294,5 +294,5 @@ tools/issue-state.sh transition --repo "$REPO" --issue "$ISSUE" \
 
 ## App Storeの画像と文言を取り込む
 
-App Storeの画像、動画、文言は、このMacの共通スキル`appstore-creative`とApp Storeのワークスペースで考えて作ります（D-105）。アプリは撮影した画像をワークスペースへ渡し、納品物を[`appstore-intake`スキル](../.agents/skills/appstore-intake/SKILL.md)で取り込んで確かめ、採用したものを保管します。
+App Storeの画像、動画、文言は、このMacの共通スキル`appstore-creative`とApp Storeのワークスペースで考えて作ります（D-106）。アプリは撮影した画像をワークスペースへ渡し、納品物を[`appstore-intake`スキル](../.agents/skills/appstore-intake/SKILL.md)で取り込んで確かめ、採用したものを保管します。
 CodexやClaudeに「納品物を取り込んで」と依頼できます。撮影、組み立て、package、提出の手順は[`prepare-appstore-assets`スキル](../.agents/skills/prepare-appstore-assets/SKILL.md)を参照してください。

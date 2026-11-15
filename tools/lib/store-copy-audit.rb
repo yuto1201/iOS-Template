@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# #385: checks App Store localization sources against the parts of the ASO guide (App Store creative workspace, D-105) that a
+# #385: checks App Store localization sources against the parts of the ASO guide (App Store creative workspace, D-106) that a
 # machine can check. It reads local files only: it never opens the network, App Store Connect, a credential
 # store, or a public page, and it never writes. Errors are fixed before submission; a warning may stay when the
 # reason is recorded next to the copy. A passing check is not approval, release readiness, or an App Review

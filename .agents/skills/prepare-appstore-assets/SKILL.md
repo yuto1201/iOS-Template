@@ -25,7 +25,7 @@ Independent text preparation can continue before complete release inputs exist. 
 
 ## Draft the store copy (ASO)
 
-The name, subtitle, keywords, promotional text, description and release notes (What's New) are thought out in the App Store creative workspace with the Mac-wide `appstore-creative` skill and its ASO guide (D-105), from the same confirmed facts, and arrive as the `copy` files of a delivery that [`appstore-intake`](../appstore-intake/SKILL.md) takes in. The steps below check, choose and record the copy in this app, whether it came from a delivery or was drafted here by the same guide. The guide adds no exception to step 1 of [Prepare the source package](#prepare-the-source-package): never invent features, rankings, awards or ratings to rank better.
+The name, subtitle, keywords, promotional text, description and release notes (What's New) are thought out in the App Store creative workspace with the Mac-wide `appstore-creative` skill and its ASO guide (D-106), from the same confirmed facts, and arrive as the `copy` files of a delivery that [`appstore-intake`](../appstore-intake/SKILL.md) takes in. The steps below check, choose and record the copy in this app, whether it came from a delivery or was drafted here by the same guide. The guide adds no exception to step 1 of [Prepare the source package](#prepare-the-source-package): never invent features, rankings, awards or ratings to rank better.
 
 1. Draft two or three candidate sets for each locale (`ja` and `en-US`) that differ in the target terms they put in the name, subtitle and keyword field. Keep them outside the canonical sources, as `.artifacts/appstore-draft/<candidate>/localizations/<locale>.yml` with the keys of `App Store/metadata/localizations/`, and the release notes beside them.
 2. Run the read-only checker on every candidate:
@@ -58,7 +58,7 @@ The following preconditions apply only when continuing from source preparation i
 
 ## Phase 6 screenshot routing
 
-Phase 6 App Store images, the preview video and the store copy are researched, proposed and made in the App Store creative workspace with the Mac-wide `appstore-creative` skill (D-105; find the workspace in the Mac's skill registry), and delivered after the user chooses, with `ja` and `en-US` kept apart. This app captures the raw images, takes the delivery in with [`appstore-intake`](../appstore-intake/SKILL.md), and keeps what was adopted. The workspace draws iPhone 6.3-inch (family `iphone-6.3`, 1206×2622, D-079) and iPad 13-inch faces only from this app's captures. Existing real screenshots that need only headline, background, frame, font, layout, or order changes are drawn again there without recapture. An app that still keeps adopted declarations in `goldie/ja/` and `goldie/en-US/` keeps them apart by locale until they move to the workspace.
+Phase 6 App Store images, the preview video and the store copy are researched, proposed and made in the App Store creative workspace with the Mac-wide `appstore-creative` skill (D-106; find the workspace in the Mac's skill registry), and delivered after the user chooses, with `ja` and `en-US` kept apart. This app captures the raw images, takes the delivery in with [`appstore-intake`](../appstore-intake/SKILL.md), and keeps what was adopted. The workspace draws iPhone 6.3-inch (family `iphone-6.3`, 1206×2622, D-079) and iPad 13-inch faces only from this app's captures. Existing real screenshots that need only headline, background, frame, font, layout, or order changes are drawn again there without recapture. An app that still keeps adopted declarations in `goldie/ja/` and `goldie/en-US/` keeps them apart by locale until they move to the workspace.
 
 For new raw capture, acquire one inherited session through `tools/with-ios-simulator-lock.sh` and run the repository capture tool. It leases only the dedicated iPhone and iPad Simulators declared in `Config/dedicated-simulators.json` through `tools/lib/ios-simulator-resource.rb` and never creates, clones, renames, or deletes a device. Since D-079 the dedicated iPhone 17 Pro captures the required iPhone with Dynamic Island (medium display) size, 1206×2622 (family `iphone-6.3`), and the dedicated iPad Pro 13-inch (M5) captures iPad 13-inch, so captures are used at their native size without cropping or compositing. Hand the raw root and its `manifest.json` to the workspace; the workspace never captures, because only this app reaches its dedicated Simulators. Save screenshots and diagnostics outside the device, then require the released lease receipts before continuing.
 
@@ -77,7 +77,7 @@ Each locale/family condition leases its platform's dedicated Simulator, which is
 
 ## Preview video recording
 
-Only when the user asks for a preview video, record its footage in this app, as with the screenshots; the workspace plans the storyboard and finishes the video (D-105). `tools/record-appstore-preview.sh` runs under `tools/with-ios-simulator-lock.sh`, leases the dedicated device of one family the same way as the screenshot capture, and records one storyboard per family and locale:
+Only when the user asks for a preview video, record its footage in this app, as with the screenshots; the workspace plans the storyboard and finishes the video (D-106). `tools/record-appstore-preview.sh` runs under `tools/with-ios-simulator-lock.sh`, leases the dedicated device of one family the same way as the screenshot capture, and records one storyboard per family and locale:
 
 ```sh
 tools/with-ios-simulator-lock.sh --timeout 0 -- tools/record-appstore-preview.sh record \
@@ -107,7 +107,7 @@ It passes only at the dedicated device's screen size, at least 30 fps on average
 
 ## Composed screenshot sets (D-101)
 
-A set drawn by the workspace renderer (D-093, D-105) is sealed through the same package, audit and seal as raw captures, bound to the capture that each face shows.
+A set drawn by the workspace renderer (D-093, D-106) is sealed through the same package, audit and seal as raw captures, bound to the capture that each face shows.
 
 1. Take the delivery in with [`appstore-intake`](../appstore-intake/SKILL.md) (`tools/intake-appstore-delivery.sh`). The intake checks the delivery against this app's raw capture manifest and the user's choice recorded in the workspace commit. It refuses a face without a raw capture of its locale and family, a capture shown twice, a material that the delivered `provenance.json` does not record as adopted, faces that are not the tiles the user chose, and any declaration, face, record or capture whose bytes differ from the delivery:
 

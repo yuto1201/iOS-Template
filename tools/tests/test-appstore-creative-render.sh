@@ -8,7 +8,7 @@ repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 tool="$repo_root/tools/appstore-creative-render.sh"
 runtime="${GOLDIE_RUNTIME:-${XDG_CACHE_HOME:-$HOME/.cache}/codex-goldie/0.3.1}"
 pinned_goldie="$runtime/node_modules/goldie"
-[[ -f "$pinned_goldie/package.json" ]] || { echo "pinned Goldie runtime is missing: $runtime (install the pinned Goldie as the App Store creative workspace's setup guide says, D-105)" >&2; exit 1; }
+[[ -f "$pinned_goldie/package.json" ]] || { echo "pinned Goldie runtime is missing: $runtime (install the pinned Goldie as the App Store creative workspace's setup guide says, D-106)" >&2; exit 1; }
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/ios-template-creative-render.XXXXXX")
 trap 'rm -rf -- "$workspace"' EXIT
 fail() { echo "$*" >&2; exit 1; }
@@ -348,7 +348,7 @@ ruby -rjson -e 'marks = JSON.parse(File.read(ARGV[0])).fetch("marks")
 
 # 8. D-085 (#401): the render record lists every image input of every tile (background, layers and
 # Goldie image decorations) and says so. The proposal sheet that reads it lives in the App Store creative
-# workspace since D-105, with its end-to-end refusals.
+# workspace since D-106, with its end-to-end refusals.
 two_scene_manifest
 ffmpeg -loglevel error -f lavfi -i "color=c=0x2A5599:s=1206x2622,format=rgb24" -frames:v 1 "$workspace/app/goldie/assets/sky.png"
 inventory_config() { # layer-image

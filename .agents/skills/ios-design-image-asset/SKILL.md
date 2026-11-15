@@ -1,11 +1,11 @@
 ---
 name: ios-design-image-asset
-description: Use when an approved Issue requires a still image to enter the iOS app (an illustration, background, texture, sprite, or decorative image); this repository adapter keeps the contract, validation, and evidence and defers the authoring procedures to the shared Mac skill design-image-asset (D-090). Not for the required new-app icon (use app-icon), App Store screenshots (made in the App Store creative workspace with the Mac-wide appstore-creative skill and taken in with appstore-intake, D-105), 2D animation (use ios-design-2d-asset), or 3D (use ios-design-3d-asset).
+description: Use when an approved Issue requires a still image to enter the iOS app (an illustration, background, texture, sprite, or decorative image); this repository adapter keeps the contract, validation, and evidence and defers the authoring procedures to the shared Mac skill design-image-asset (D-090). Not for the required new-app icon (use app-icon), App Store screenshots (made in the App Store creative workspace with the Mac-wide appstore-creative skill and taken in with appstore-intake, D-106), 2D animation (use ios-design-2d-asset), or 3D (use ios-design-3d-asset).
 ---
 
 # iOS Image Assets
 
-Use this skill when an approved Issue requires a still image to enter the app. Do not route the required new-app icon through this skill; use [`app-icon`](../app-icon/SKILL.md). App Store screenshots are made in the App Store creative workspace with the Mac-wide `appstore-creative` skill and taken in with `appstore-intake` (D-105), 2D animation uses `ios-design-2d-asset`, and 3D uses `ios-design-3d-asset`.
+Use this skill when an approved Issue requires a still image to enter the app. Do not route the required new-app icon through this skill; use [`app-icon`](../app-icon/SKILL.md). App Store screenshots are made in the App Store creative workspace with the Mac-wide `appstore-creative` skill and taken in with `appstore-intake` (D-106), 2D animation uses `ios-design-2d-asset`, and 3D uses `ios-design-3d-asset`.
 
 ## Shared authoring skill
 

@@ -430,7 +430,7 @@ if grep -n 'resource_test_flags\[@\]\|launch_arguments\[@\]' "$tool" | grep -v '
 fi
 [[ "$(grep -c '\${resource_test_flags\[@\]+"\${resource_test_flags\[@\]}"}' "$tool")" -eq 2 ]] || fail 'recording must pass the guarded resource_test_flags to allocate and release'
 
-# The preparation skill documents the locked command and the gate's thresholds (D-105).
+# The preparation skill documents the locked command and the gate's thresholds (D-106).
 flows="$repo_root/.agents/skills/prepare-appstore-assets/SKILL.md"
 rg -q 'tools/with-ios-simulator-lock\.sh --timeout 0 -- tools/record-appstore-preview\.sh record' "$flows" || fail 'preparation skill does not run the recorder under the shared lock'
 rg -q -- '--family iphone-6\.3' "$flows" && rg -q '1206×2622' "$flows" && rg -q '2064×2752' "$flows" || fail 'preparation skill does not give the D-079 recording sizes'

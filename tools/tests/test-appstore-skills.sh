@@ -43,11 +43,11 @@ version=1.0
 [[ -f "$prepare_skill/SKILL.md" && -x "$seal" && -f "$submit_skill/SKILL.md" && -x "$record" ]] || {
   echo 'App Store skill scripts are incomplete' >&2; exit 1
 }
-# D-105: the creative skill and its tools live in the App Store creative workspace; the template keeps
+# D-106: the creative skill and its tools live in the App Store creative workspace; the template keeps
 # the intake adapter that takes a delivery in.
 for retired in .agents/skills/appstore-creative .claude/skills/appstore-creative docs/appstore-creative.md docs/store-copy-aso.md \
   tools/appstore-creative-compose.sh tools/appstore-creative-sheet.sh; do
-  [[ ! -e "$repo_root/$retired" && ! -L "$repo_root/$retired" ]] || { echo "retired App Store creative path remains (D-105): $retired" >&2; exit 1; }
+  [[ ! -e "$repo_root/$retired" && ! -L "$repo_root/$retired" ]] || { echo "retired App Store creative path remains (D-106): $retired" >&2; exit 1; }
 done
 [[ -f "$intake_skill/SKILL.md" ]] || { echo 'appstore-intake skill is unavailable' >&2; exit 1; }
 rg -q '^name: appstore-intake$' "$intake_skill/SKILL.md" || { echo 'appstore-intake skill name is invalid' >&2; exit 1; }
