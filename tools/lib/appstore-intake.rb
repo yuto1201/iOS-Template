@@ -361,8 +361,10 @@ module AppStoreIntake
     refuse!("adoption.record.path is unsafe") unless record["path"].is_a?(String) && record["path"].match?(RELATIVE)
     refuse!("adoption.record.sha256 is invalid") unless record["sha256"].is_a?(String) && record["sha256"].match?(DIGEST)
     repository = folder!(workspace_repo, "--workspace-repo")
-    environment = {"PATH" => "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM" => "1", "GIT_TERMINAL_PROMPT" => "0"}
-    git = ["/usr/bin/git", "-C", repository, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+    # Both reads stay offline: a partial (promisor) clone that lacks the object must not fetch it, and no
+    # Git transport may run, so an object that is not already local is refused.
+    environment = {"PATH" => "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM" => "1", "GIT_TERMINAL_PROMPT" => "0", "GIT_NO_LAZY_FETCH" => "1"}
+    git = ["/usr/bin/git", "-C", repository, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "protocol.allow=never"]
     _, status = Open3.capture2e(environment, *git, "cat-file", "-e", "#{commit}^{commit}")
     refuse!("the workspace repository has no commit #{commit}") unless status.success?
     blob, status = Open3.capture2(environment, *git, "show", "#{commit}:#{record['path']}", binmode: true)

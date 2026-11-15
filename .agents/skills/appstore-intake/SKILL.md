@@ -51,7 +51,8 @@ It refuses the whole delivery, and writes nothing, when any of these fails:
   family and state, comes with its declaration, uses only materials `provenance.json` records as
   adopted, and is an RGB PNG of the family's size; every tile of every record is delivered;
 - the user's choice exists in the workspace commit at the delivered path with the delivered SHA-256,
-  is `user-explicit`, and matches the delivered sheet, time and pattern;
+  is `user-explicit`, and matches the delivered sheet, time and pattern; the intake reads the clone
+  offline, so a partial clone that lacks the choice is refused rather than fetched (use a full clone);
 - delivered copy passes this app's `tools/check-store-copy.sh`.
 
 On success `$COMPOSED_ROOT` holds the faces as `<locale>/<family>/NN-<state>.png`, byte copies of the

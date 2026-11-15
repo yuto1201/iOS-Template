@@ -351,10 +351,33 @@ done
 grep -q '/usr/bin/env -i PATH=/usr/bin:/bin' "$intake" || { echo 'intake wrapper must clear the environment' >&2; exit 1; }
 grep -q 'bounded-command.rb' "$intake" || { echo 'intake wrapper must bound the run' >&2; exit 1; }
 
+# AC-6: a partial (promisor) clone of the workspace that lacks the choice blob is refused offline; Git
+# never runs its transport to fetch the blob and the clone gains no object.
+git clone -q --bare "$root/workspace" "$tmp/upstream.git"
+git -C "$tmp/upstream.git" config uploadpack.allowFilter true
+git clone -q --bare --filter=blob:none "file://$tmp/upstream.git" "$tmp/partial.git"
+cat >"$tmp/sentinel-upload-pack.sh" <<SENTINEL
+#!/bin/bash
+: >"$tmp/transport-ran"
+exec /usr/bin/git upload-pack "\$@"
+SENTINEL
+chmod +x "$tmp/sentinel-upload-pack.sh"
+git -C "$tmp/partial.git" config remote.origin.uploadpack "$tmp/sentinel-upload-pack.sh"
+partial_objects() { find "$tmp/partial.git/objects" -type f | LC_ALL=C sort | shasum -a 256; }
+partial_before=$(partial_objects)
+if "$intake" --delivery "$root/delivery" --raw-root "$root/raw" --requirements "$requirements" --bundle-id "$bundle_id" \
+  --workspace-repo "$tmp/partial.git" --project-root "$root/project" --out "$tmp/out-partial" >"$tmp/partial.log" 2>&1; then
+  echo 'intake fetched the missing choice blob from the promisor remote' >&2; exit 1
+fi
+grep -q 'is not in the workspace commit' "$tmp/partial.log" || { cat "$tmp/partial.log" >&2; echo 'intake refused the partial clone for another reason' >&2; exit 1; }
+[[ ! -e "$tmp/transport-ran" ]] || { echo 'intake ran a Git transport' >&2; exit 1; }
+[[ "$(partial_objects)" == "$partial_before" ]] || { echo 'intake changed the workspace clone' >&2; exit 1; }
+[[ ! -e "$tmp/out-partial" ]] || { echo 'intake wrote output for the partial clone' >&2; exit 1; }
+
 # The project's .artifacts working folder is the one place inside the project that --out may use.
 mkdir -p "$root/project/.artifacts"
 run_intake "$root/delivery" "$root/project/.artifacts/intake-ok" >"$tmp/artifacts.json" ||
   { echo 'intake refused --out under the project .artifacts folder' >&2; exit 1; }
 [[ -f "$root/project/.artifacts/intake-ok/composition.json" ]] || { echo 'intake wrote no composition under .artifacts' >&2; exit 1; }
 
-echo "App Store intake passed (2 deliveries accepted, 1 assembled, 16 refusals, no writes outside --out)"
+echo "App Store intake passed (2 deliveries accepted, 1 assembled, 17 refusals, no writes outside --out, no Git transport)"
