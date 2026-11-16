@@ -403,7 +403,10 @@ edit_simctl 'state["simslimMode"] = "status-partial"'
 expect_denied 'a stock check that is not stock' 'is not stock' allocate_services svc-partial stock
 edit_simctl 'state["simslimMode"] = ""; devices.find { |d| d["udid"] == args[0] }["slim"] = false' "$iphone_udid"
 
-# A Mac without SimSlim cannot have slimmed a device: the lease records it and stays stock without calling it.
+# Without SimSlim the overrides that an earlier slim lease left survive the erase and cannot be checked. A slim
+# request still gets the device and records that SimSlim was unavailable; a stock request (App Store captures and
+# recordings, and callers that ask for nothing) stops instead of receiving a device that may still be slim.
+edit_simctl 'devices.find { |d| d["udid"] == args[0] }["slim"] = true' "$iphone_udid"
 reset_simslim_calls
 missing_lease="$(allocate_services svc-missing slim "$scratch/no-simslim")"
 IFS=$'\t' read -r missing_id _ _ <<<"$missing_lease"
@@ -411,6 +414,14 @@ IFS=$'\t' read -r missing_id _ _ <<<"$missing_lease"
 [[ "$(services_event "$missing_id")" == '{"requested":"slim","result":"unavailable","simslimVersion":null}' ]] ||
   fail "a missing SimSlim recorded: $(services_event "$missing_id")"
 release_lease svc-missing "$missing_id" >/dev/null
+for profile in stock ""; do
+  expect_denied "a ${profile:-default} lease without SimSlim" 'cannot be confirmed stock' \
+    allocate_services "svc-missing-${profile:-default}" "$profile" "$scratch/no-simslim"
+  [[ "$(inventory | jq -r --arg s "svc-missing-${profile:-default}" '[.allocations[] | select(.sessionId == $s) | .status + ":" + .cleanup.reason] | join(",")')" == "released:prepare-failure" ]] ||
+    fail "a ${profile:-default} lease without SimSlim did not release its lease"
+done
+[[ "$(simslim_calls)" == "" && "$(iphone_field state)" == Shutdown ]] || fail "a refused stock lease without SimSlim used the device"
+edit_simctl 'devices.find { |d| d["udid"] == args[0] }["slim"] = false' "$iphone_udid"
 
 # Test mode never reaches the Mac's real SimSlim unless a fake is named.
 reset_simslim_calls

@@ -738,6 +738,13 @@ module IOSTemplate
     # Sets the leased, erased, shut-down device to the requested services, checks it booted, and shuts it down.
     def apply_service_profile!(record, requested)
       unless @simslim && File.file?(@simslim) && File.executable?(@simslim)
+        # An erase keeps slim overrides that SimSlim set before it went missing, so stock cannot be confirmed:
+        # App Store captures and recordings stop instead of using a device that may still be slim. A slim
+        # request may proceed, because AI verification cases work on a stock or a slim device. Test mode
+        # without a named SimSlim skips the step.
+        if requested == "stock" && @simslim
+          raise SimulatorResourceError, "SimSlim (#{@simslim}) is not available, so the dedicated Simulator cannot be confirmed stock"
+        end
         return {"requested" => requested, "result" => "unavailable", "simslimVersion" => nil}
       end
       udid = record.fetch("udid")
