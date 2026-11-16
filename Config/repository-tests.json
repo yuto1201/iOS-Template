@@ -581,6 +581,7 @@
     {"path": "tools/tests/test-swift-tool-cache.sh", "domains": ["swift-tool-cache"]},
     {"path": "tools/tests/test-template-release-identity.sh", "domains": ["bootstrap-fixture", "development-bundle-id"]},
     {"path": "tools/tests/test-template-sync-apply.sh", "domains": ["template-sync"]},
+    {"path": "tools/tests/test-template-sync-derived-bootstrapped.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-template-sync-derived.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-template-sync.sh", "domains": ["template-sync"]},
     {"path": "tools/tests/test-tracked-credential-scan.sh", "domains": ["credential-scan"]},

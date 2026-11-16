@@ -255,7 +255,9 @@ removed="$(ruby -r"$app/tools/lib/template-sync.rb" -e '
     puts path if TemplateSync.classify(ownership, path)&.dig(:category) == "template-only"
   end
 ' "$app")"
-grep -Fxq 'tools/tests/test-template-sync-derived.sh' <<<"$removed" || fail 'test-template-sync-derived.sh is not template-only'
+for derived_test in tools/tests/test-template-sync-derived.sh tools/tests/test-template-sync-derived-bootstrapped.sh; do
+  grep -Fxq "$derived_test" <<<"$removed" || fail "$derived_test is not template-only"
+done
 # This regression loads the template-only sync library, so an adopted app must not receive it either.
 grep -Fxq 'tools/tests/test-adopted-app-imported-tests.sh' <<<"$removed" || fail 'this regression is not template-only'
 for entrypoint in tools/tests/test-adopted-app-bootstrap-fixture.sh tools/tests/test-adopted-app-bootstrap-fixture-compatibility.sh \

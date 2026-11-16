@@ -45,6 +45,7 @@ module IOSTemplate
       tools/tests/test-adopted-app-own-project.sh
       tools/tests/test-build-for-device.sh
       tools/tests/test-template-sync-apply.sh
+      tools/tests/test-template-sync-derived-bootstrapped.sh
       tools/tests/test-template-sync-derived.sh
       tools/tests/test-template-sync.sh
     ].freeze
