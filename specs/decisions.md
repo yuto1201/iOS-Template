@@ -1312,3 +1312,16 @@
   - 未確認：英語、iPadでのtest、4条件、`--except`で分類を残した場合、派生アプリのtest、長時間の連続した検証、共有の2台（D-098）での効果。
 - Consequence: 検証の道具（`tools/lib/ios-simulator-resource.rb`など）への組み込み、`docs/verification.md`の更新、撮影の前のstockの確かめは、後続のIssueで行う。それまでは、専用のSimulatorはstockのまま使う。派生アプリへはテンプレートの取り込みで広げる。
 - Related Issue: #546（ユーザーの指示：2026-11-15「これを導入したい」）
+
+## D-108: 導入したアプリでApp Storeの準備のtestを流し直す回帰は、リリース前の全件で流す
+
+- Date: 2026-11-16
+- Status: 確定
+- Context: `tools/tests/test-adopted-app-own-project-preparation.sh`は、自分のprojectを持つ使い捨ての導入したアプリで`tools/tests/test-appstore-preparation.sh`（2,849行）だけを流す回帰（#433、#540）である。2026-11-16、#564のtargeted suiteで、このtestが静かなホスト（1分の負荷3.6）でも単独で300秒の上限を超えた。準備のtestは準備の道具を454回呼び（1回の中央値0.29秒、合計227秒）、後の場面が前の場面で作った状態を使うため、途中で単純に分けられない。このtestは`template-sync`のdomainに属し、テンプレートの取り込みの道具を変えるIssueのtargeted suiteがこのtimeoutで止まる。ユーザーは2026-11-16、分ける方法として、リリース前の全件だけで流す層を選んだ（「Release-only tier」）。重いtestを最後にまとめて流す方針（ユーザーの2026-11-14の指示）に合う。
+- Decision:
+  - この回帰を専用のdomain`adopted-app-preparation-replay`へ移す。そのdomainのruleは、このtest自身のpathだけを覆う。`tools/tests/test-ios-evidence.sh`（`ios-evidence-exhaustive`）と同じ方法で、manifestのschemaと計画の選び方は変えない。
+  - targeted suiteは、このtest自身を変えたときだけこれを選ぶ。テンプレートの取り込みの道具、App Storeの準備のtestと道具を変えても選ばない。`head-all`と`base-and-head`は、これまでどおり含む。
+  - テンプレート自身の`tools/tests/test-appstore-preparation.sh`は`appstore`のdomainのまま、準備の道具とtestを変えるIssueのtargeted suiteで選ばれ続ける。導入したアプリの別の群（`own-project`、`own-project-creative`、`imported`ほか）も、これまでどおり`template-sync`で選ばれる。
+  - そのruleは、このtest自身のpathをprefixとして覆う（`paths`は空）。導入したアプリではこのtestはtemplate-onlyで存在せず、計画はtemplate-onlyのruleのpathを外すため、pathで覆うとruleが空になり計画が止まる（#565で確かめた）。prefixは外されないので、導入したアプリでもruleは空にならず、新しいdomainはtestのないdomainとして扱われる。
+- Consequence: 導入したアプリでの準備のtestの再実行は、テンプレートの取り込みのIssueごとには確かめず、リリース前の全件で確かめる。その間に壊れた場合は、全件で見つかり、その時点で直す。ほかのtestを同じ方法で移すときは、そのIssueで測った時間と理由を記録して、この決定に足す。
+- Related Issue: #565（ユーザーの選択：2026-11-16「Release-only tier」）、#564

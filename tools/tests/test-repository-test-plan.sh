@@ -148,8 +148,47 @@ adopted_appstore_tests = %w[tools/tests/test-adopted-app-own-project-creative.sh
 _, _, tests = runner.resolve(source_manifest, "targeted", [".agents/skills/prepare-appstore-assets/SKILL.md"])
 abort "an App Store change reran an App Store test inside an adopted app" unless
   (tests & adopted_appstore_tests).empty? && tests.include?("tools/tests/test-appstore-preparation.sh")
+# #565 (D-108): the adopted-app rerun of the App Store preparation test exceeds the targeted per-test limit on
+# its own, so it has its own domain. A template-sync or App Store preparation change selects the other
+# adopted-app groups but not it; a change to the test itself selects it, and head-all and base-and-head run it.
+preparation_replay = "tools/tests/test-adopted-app-own-project-preparation.sh"
 _, _, tests = runner.resolve(source_manifest, "targeted", ["tools/lib/template-sync.rb"])
-abort "a template-sync change did not select the adopted-app App Store groups" unless (adopted_appstore_tests - tests).empty?
+abort "a template-sync change did not select the adopted-app App Store creative group" unless
+  tests.include?("tools/tests/test-adopted-app-own-project-creative.sh")
+%w[tools/lib/template-sync.rb tools/tests/test-appstore-preparation.sh .agents/skills/prepare-appstore-assets/SKILL.md].each do |changed_path|
+  _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
+  abort "#{changed_path} selected the release-only adopted-app preparation rerun" if tests.include?(preparation_replay)
+end
+scope, _, tests = runner.resolve(source_manifest, "targeted", [preparation_replay])
+abort "a change to the adopted-app preparation rerun did not select it" unless scope == "targeted" && tests.include?(preparation_replay)
+%w[head-all base-and-head].each do |requested|
+  _, _, tests = runner.resolve(source_manifest, requested, ["tools/lib/template-sync.rb"])
+  abort "#{requested} left out the adopted-app preparation rerun" unless tests.include?(preparation_replay)
+end
+# In an app that adopted the template, the template-only tests and rule paths are absent; the plan still accepts
+# the manifest, and the new domain is a domain without tests there. Its rule covers the test by prefix, which the
+# adopted plan keeps, so the rule is not left empty.
+adopted_tracked = source_tests - runner::TEMPLATE_ONLY_TESTS + ["Config/template-base.json"] +
+  source_manifest.fetch("domainRules").flat_map { |rule| rule.fetch("paths") }.reject { |path| runner::TEMPLATE_ONLY_PATHS.include?(path) }
+adopted, testless = runner.adopted_manifest(source_manifest, adopted_tracked)
+abort "the adopted app keeps the release-only domain's tests: #{testless}" unless testless.include?("adopted-app-preparation-replay")
+abort "the adopted app still lists the preparation rerun" if adopted.fetch("tests").any? { |entry| entry.fetch("path") == preparation_replay }
+runner.validate_manifest!(adopted, adopted.fetch("tests").map { |entry| entry.fetch("path") }, tracked_paths: adopted_tracked,
+  testless_domains: testless)
+# The plan's template-only lists used above are exactly what the ownership manifest makes template-only, so the
+# simulated adopted app matches a real one. The ownership manifest is itself template-only, so an adopted app
+# skips this comparison; the template runs it.
+ownership_path = File.join(ENV.fetch("SOURCE_REPO"), "tools/template-sync/ownership.json")
+if File.exist?(ownership_path)
+  require File.join(ENV.fetch("SOURCE_REPO"), "tools/lib/template-sync.rb")
+  ownership = TemplateSync.load_ownership(File.read(ownership_path))
+  template_only = ->(path) { TemplateSync.classify(ownership, path)&.dig(:category) == "template-only" }
+  owned_tests = source_manifest.fetch("tests").map { |entry| entry.fetch("path") }.select(&template_only).sort
+  owned_paths = source_manifest.fetch("domainRules").flat_map { |rule| rule.fetch("paths") }.select(&template_only).uniq.sort
+  abort "template-only manifest tests differ from the plan: #{owned_tests}" unless owned_tests == runner::TEMPLATE_ONLY_TESTS.sort
+  abort "template-only manifest paths differ from the plan: #{owned_paths}" unless owned_paths == runner::TEMPLATE_ONLY_PATHS.sort
+  abort "the preparation rerun is not template-only" unless template_only.(preparation_replay)
+end
 %w[docs/verification.md tools/bootstrap-app.sh tools/tests/test-appstore-preparation.sh].each do |changed_path|
   _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
   abort "source manifest omitted credential scan for #{changed_path}" unless tests.include?(scan_test)
