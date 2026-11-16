@@ -391,7 +391,9 @@ allocate_owned_simulator() {
     [[ "${case_ids[$index]}" == "$case_id" ]] || continue
     type_identifier="$(config_value "cases.$index.deviceType.identifier")" || return 1
     # The manager waits its default: 60 seconds for a dedicated device, 1800 in arrival order for a shared one (D-098).
+    # AI verification cases run on a Simulator whose unused background services SimSlim stopped (D-107).
     output="$(run_simulator_resource allocate ${simulator_resource_test_flags[@]+"${simulator_resource_test_flags[@]}"} \
+      --service-profile slim \
       --session "$simulator_session_id" --repository "$repository_root" --issue "$issue" --head "$head_sha" \
       --batch "$(config_value batchId)" --attempt "$attempt_id" --case "$case_id" \
       --runtime "$(config_value runtime.identifier)" --device-type "$type_identifier" \
