@@ -430,6 +430,24 @@ IFS=$'\t' read -r unnamed_id _ _ <<<"$unnamed_lease"
 [[ "$(jq -r '.result' <<<"$(services_event "$unnamed_id")")" == unavailable ]] || fail "test mode used a SimSlim that was not named"
 release_lease svc-unnamed "$unnamed_id" >/dev/null
 
+# The same active operation may get its lease again only with the services it was prepared with: a slim lease is
+# never handed back for an explicit or default stock request, and a stock lease never for a slim request.
+reuse_lease="$(allocate_services svc-reuse slim)"
+IFS=$'\t' read -r reuse_id _ _ <<<"$reuse_lease"
+reset_simslim_calls
+erase_before="$(calls_of erase)"
+expect_denied 'reuse of a slim lease for stock' 'prepared with slim background services, not stock' allocate_services svc-reuse stock
+expect_denied 'reuse of a slim lease for the default' 'prepared with slim background services, not stock' allocate_services svc-reuse ""
+again="$(allocate_services svc-reuse slim)"
+[[ "$(cut -f1 <<<"$again")" == "$reuse_id" ]] || fail "a matching slim request did not reuse its active lease"
+[[ "$(simslim_calls)" == "" && "$(calls_of erase)" == "$erase_before" ]] || fail "lease reuse erased the device or called SimSlim"
+release_lease svc-reuse "$reuse_id" >/dev/null
+stock_reuse="$(allocate_services svc-reuse-stock stock)"
+IFS=$'\t' read -r stock_reuse_id _ _ <<<"$stock_reuse"
+expect_denied 'reuse of a stock lease for slim' 'prepared with stock background services, not slim' allocate_services svc-reuse-stock slim
+[[ "$(cut -f1 <<<"$(allocate_services svc-reuse-stock "")")" == "$stock_reuse_id" ]] || fail "a default request did not reuse its stock lease"
+release_lease svc-reuse-stock "$stock_reuse_id" >/dev/null
+
 erase_before="$(calls_of erase)"
 expect_denied 'an unknown service profile' 'service profile must be slim or stock' allocate_services svc-invalid fast
 [[ "$(calls_of erase)" == "$erase_before" ]] || fail "an unknown service profile erased the device"

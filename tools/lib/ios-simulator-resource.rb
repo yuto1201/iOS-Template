@@ -121,6 +121,7 @@ module IOSTemplate
             end
             if existing
               if existing["status"] == "active" && process_active?(existing)
+                ensure_reusable_services!(existing, service_profile)
                 write_receipt(existing)
                 print_receipt(existing)
                 return
@@ -769,6 +770,24 @@ module IOSTemplate
         raise SimulatorResourceError, "dedicated Simulator disappeared while its services were set"
       end
       {"requested" => requested, "result" => requested, "simslimVersion" => version}
+    end
+
+    # An active lease goes back to its own operation only when a new lease would have accepted its prepared
+    # services: slim (or SimSlim unavailable) for slim, and stock for stock. Without SimSlim stock is proven only
+    # where this manager cannot check either (test mode that names no SimSlim). A lease from a manager that
+    # predates D-107 has no services event and counts as unavailable.
+    def ensure_reusable_services!(record, requested)
+      event = record.fetch("events").reverse.find { |entry| entry.is_a?(Hash) && entry["type"] == "services" }
+      result = event&.dig("details", "result") || "unavailable"
+      reusable = if requested == "slim"
+        %w[slim unavailable].include?(result)
+      else
+        result == "stock" || (result == "unavailable" && @simslim.nil?)
+      end
+      return if reusable
+      prepared = result == "unavailable" ? "unconfirmed" : result
+      raise SimulatorResourceError,
+            "blocked:environment: the active lease was prepared with #{prepared} background services, not #{requested}"
     end
 
     # `on` and `off` leave a device that already matches as it was, which after an erase is shut down.
