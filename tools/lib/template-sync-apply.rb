@@ -295,9 +295,13 @@ module TemplateSync
   def check_simulators!(app_root, plan)
     entry = read_working(app_root, SIMULATORS_PATH)
     fail!("#{SIMULATORS_PATH} is missing after the apply") if entry.nil?
-    names = JSON.parse(entry.bytes.dup.force_encoding(Encoding::UTF_8)).fetch("devices").map { |device| device["name"] }
+    devices = JSON.parse(entry.bytes.dup.force_encoding(Encoding::UTF_8)).fetch("devices")
+    names = devices.map { |device| device["name"] }
     prefix = "#{plan.dig("app", "identity", "displayName")} "
-    unless names.length == 2 && names.all? { |name| name.start_with?(prefix) } && names.none? { |name| name.start_with?(TEMPLATE_DEVICE_PREFIX) }
+    # D-098 (#558): like the report, accept the app's own pair or exactly the Mac's shared pair.
+    own = names.all? { |name| name.start_with?(prefix) }
+    shared = devices == SHARED_SIMULATORS
+    unless names.length == 2 && (own || shared) && names.none? { |name| name.start_with?(TEMPLATE_DEVICE_PREFIX) }
       fail!("#{SIMULATORS_PATH} no longer declares the app's two dedicated Simulators")
     end
     names
