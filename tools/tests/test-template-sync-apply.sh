@@ -360,6 +360,57 @@ report "$devices" "$work/plan-devices"
 expect_untouched apply-template-devices 'テンプレート用の端末' "$devices" \
   "$sync" apply --plan "$work/plan-devices/plan.json" --approval "$work/approval-devices.json" --app-root "$devices" --work-dir "$work/cache"
 
+# --- #558: an app that declares the Mac's shared pair (D-098) finishes the apply ---------------
+# The report already accepts the shared pair; the apply's last check must agree, keep the declaration
+# and write the base record.
+shared="$work/app-shared"
+make_app "$shared"
+ruby -rjson -e '
+  shared = [
+    {"family" => "iphone", "name" => "Shared iPhone 17 Pro",
+     "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+     "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0"},
+    {"family" => "ipad", "name" => "Shared iPad Pro 13-inch (M5)",
+     "deviceTypeIdentifier" => "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
+     "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0"}
+  ]
+  path = ARGV[0]
+  value = JSON.parse(File.read(path))
+  value["devices"] = shared
+  File.write(path, JSON.pretty_generate(value) + "\n")
+' "$shared/Config/dedicated-simulators.json"
+commit_all "$shared" shared-devices
+git -C "$shared" checkout -q -b template-sync/14
+before_shared=$(shasum -a 256 "$shared/Config/dedicated-simulators.json")
+report "$shared" "$work/plan-shared"
+"$sync" approve --plan "$work/plan-shared/plan.json" --approver user --reference "$comment_url" --output "$work/approval-shared.json" >/dev/null
+"$sync" apply --plan "$work/plan-shared/plan.json" --approval "$work/approval-shared.json" --app-root "$shared" --work-dir "$work/cache" \
+  --now 2026-11-16T03:00:00Z >"$work/apply-shared.json" || { echo 'the apply stopped for an app that declares the shared pair' >&2; exit 1; }
+(cd "$work" && printf '%s\n' "$before_shared" | shasum -a 256 -c --status) || { echo 'the apply changed the shared declaration' >&2; exit 1; }
+APPLY="$work/apply-shared.json" APP="$shared" NEW="$new" ruby -rjson -e '
+  result = JSON.parse(File.read(ENV.fetch("APPLY")))
+  abort "apply status: #{result}" unless result["status"] == "applied"
+  abort "simulators: #{result["simulators"]}" unless result["simulators"] == ["Shared iPhone 17 Pro", "Shared iPad Pro 13-inch (M5)"]
+  base = JSON.parse(File.read(File.join(ENV.fetch("APP"), "Config/template-base.json")))
+  abort "base record: #{base}" unless base["baseCommit"] == ENV.fetch("NEW") && base["recordedAt"] == "2026-11-16T03:00:00Z" && result["baseRecord"] == base
+'
+
+# --- a declaration that mixes a shared name with the app's own device still stops ----------------
+mixed="$work/app-mixed"
+make_app "$mixed"
+ruby -rjson -e '
+  path = ARGV[0]
+  value = JSON.parse(File.read(path))
+  value["devices"].find { |device| device["family"] == "iphone" }["name"] = "Shared iPhone 17 Pro"
+  File.write(path, JSON.pretty_generate(value) + "\n")
+' "$mixed/Config/dedicated-simulators.json"
+commit_all "$mixed" mixed-devices
+git -C "$mixed" checkout -q -b template-sync/15
+report "$mixed" "$work/plan-mixed"
+"$sync" approve --plan "$work/plan-mixed/plan.json" --approver user --reference "$comment_url" --output "$work/approval-mixed.json" >/dev/null
+expect_untouched apply-mixed-devices 'D-098の2台' "$mixed" \
+  "$sync" apply --plan "$work/plan-mixed/plan.json" --approval "$work/approval-mixed.json" --app-root "$mixed" --work-dir "$work/cache"
+
 # --- an ignored file where the plan adds one is not overwritten; a target that moved stops ---
 ignored="$work/app-ignored"
 make_app "$ignored"
