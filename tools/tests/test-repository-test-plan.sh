@@ -148,8 +148,23 @@ adopted_appstore_tests = %w[tools/tests/test-adopted-app-own-project-creative.sh
 _, _, tests = runner.resolve(source_manifest, "targeted", [".agents/skills/prepare-appstore-assets/SKILL.md"])
 abort "an App Store change reran an App Store test inside an adopted app" unless
   (tests & adopted_appstore_tests).empty? && tests.include?("tools/tests/test-appstore-preparation.sh")
+# #565 (D-108): the adopted-app rerun of the App Store preparation test exceeds the targeted per-test limit on
+# its own, so it has its own domain. A template-sync or App Store preparation change selects the other
+# adopted-app groups but not it; a change to the test itself selects it, and head-all and base-and-head run it.
+preparation_replay = "tools/tests/test-adopted-app-own-project-preparation.sh"
 _, _, tests = runner.resolve(source_manifest, "targeted", ["tools/lib/template-sync.rb"])
-abort "a template-sync change did not select the adopted-app App Store groups" unless (adopted_appstore_tests - tests).empty?
+abort "a template-sync change did not select the adopted-app App Store creative group" unless
+  tests.include?("tools/tests/test-adopted-app-own-project-creative.sh")
+%w[tools/lib/template-sync.rb tools/tests/test-appstore-preparation.sh .agents/skills/prepare-appstore-assets/SKILL.md].each do |changed_path|
+  _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
+  abort "#{changed_path} selected the release-only adopted-app preparation rerun" if tests.include?(preparation_replay)
+end
+scope, _, tests = runner.resolve(source_manifest, "targeted", [preparation_replay])
+abort "a change to the adopted-app preparation rerun did not select it" unless scope == "targeted" && tests.include?(preparation_replay)
+%w[head-all base-and-head].each do |requested|
+  _, _, tests = runner.resolve(source_manifest, requested, ["tools/lib/template-sync.rb"])
+  abort "#{requested} left out the adopted-app preparation rerun" unless tests.include?(preparation_replay)
+end
 %w[docs/verification.md tools/bootstrap-app.sh tools/tests/test-appstore-preparation.sh].each do |changed_path|
   _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
   abort "source manifest omitted credential scan for #{changed_path}" unless tests.include?(scan_test)

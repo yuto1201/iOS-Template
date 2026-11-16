@@ -53,6 +53,7 @@ module IOSTemplate
       tools/template-sync-codex-review.sh
       tools/template-sync.sh
       tools/tests/test-adopted-app-imported-tests.sh
+      tools/tests/test-adopted-app-own-project-preparation.sh
     ].freeze
     # #327: a revision with every companion group entrypoint is split and runs `core` in BOOTSTRAP_CORE_TEST;
     # a revision without them runs that test's `all`.
