@@ -5,9 +5,21 @@ set -euo pipefail
 # its template base (D-073, before Identity bootstrap), then runs Identity bootstrap; in both states the
 # report and apply regressions must pass, without changing the repository that runs this test. Their
 # disposable repositories must be gone afterwards, whether they pass or fail.
+# #564: so that each entrypoint stays well inside the targeted per-test limit, the state before Identity
+# bootstrap is the `before-bootstrap` group (the default) and the state after it, with the broken ownership
+# manifest case, is the `after-bootstrap` group, run by tools/tests/test-template-sync-derived-bootstrapped.sh.
 
 source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby swiftc tar shasum cc python3
+
+group="${1:-before-bootstrap}"
+case "$group" in
+  before-bootstrap|after-bootstrap) ;;
+  *)
+    echo "usage: $0 [before-bootstrap|after-bootstrap]" >&2
+    exit 64
+    ;;
+esac
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd -P)
 source "$repo_root/tools/tests/fixtures/template-sync/template-sample.sh"
@@ -66,7 +78,12 @@ commit_all "$app" template
   }) + "\n")
 ')
 commit_all "$app" base-record
-run_sync_regressions 'before Identity bootstrap'
+if [[ "$group" == before-bootstrap ]]; then
+  run_sync_regressions 'before Identity bootstrap'
+  [[ "$(repository_state)" == "$before" ]] || { echo 'the derived-app regression changed the running repository' >&2; exit 1; }
+  echo "template sync derived-app before-bootstrap tests passed"
+  exit 0
+fi
 
 # Identity bootstrap runs on a working branch, away from the recorded default branch.
 git -C "$app" update-ref refs/remotes/origin/main "$(git -C "$app" rev-parse HEAD)"
@@ -91,4 +108,4 @@ done
 git -C "$app" checkout -q -- tools/template-sync/ownership.json
 
 [[ "$(repository_state)" == "$before" ]] || { echo 'the derived-app regression changed the running repository' >&2; exit 1; }
-echo "template sync derived-app tests passed"
+echo "template sync derived-app after-bootstrap tests passed"

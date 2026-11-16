@@ -5,14 +5,15 @@ source "${BASH_SOURCE[0]%${BASH_SOURCE[0]##*/}}lib/prerequisites.sh"
 require_test_commands "$0" git ruby bash python3 swift /usr/bin/xcrun
 
 # #327: each group runs in its own temporary tree and stays well inside the targeted per-test limit. With no
-# argument this test checks the frozen fixture and its compatibility with the template; each derived-* group
+# argument this test checks the frozen fixture; the compatibility group checks the fixture against the template
+# transform through tools/tests/test-bootstrap-fixture-compatibility.sh (#563); each derived-* group
 # rebuilds the same derived repository and runs one app-bootstrap group there through its own
 # tools/tests/test-bootstrap-fixture-derived-*.sh entrypoint.
 group="${1:-fixture}"
 case "$group" in
-  fixture|derived-core|derived-transform|derived-safety-rejection|derived-safety-rerun) ;;
+  fixture|compatibility|derived-core|derived-transform|derived-safety-rejection|derived-safety-rerun) ;;
   *)
-    echo "usage: $0 [fixture|derived-core|derived-transform|derived-safety-rejection|derived-safety-rerun]" >&2
+    echo "usage: $0 [fixture|compatibility|derived-core|derived-transform|derived-safety-rejection|derived-safety-rerun]" >&2
     exit 64
     ;;
 esac
@@ -278,20 +279,6 @@ begin
     assert(BootstrapFixture.safe_relative!("docs/README.md".encode(Encoding::US_ASCII)) == "docs/README.md",
       "a safe path read under the C locale was refused")
 
-    # #333: a transform failure without a missing anchor shows the transform output and no refresh instruction.
-    failing = File.join(temp, "failing-transform")
-    FileUtils.mkdir_p(File.join(failing, "tools/tests"))
-    File.binwrite(File.join(failing, "tools/tests/test-app-bootstrap.sh"),
-      "echo 'Foundation failed after disposable bootstrap: invalid byte sequence in US-ASCII' >&2\nexit 1\n")
-    failure = begin
-      check_compatibility(failing, instruction)
-      nil
-    rescue RuntimeError => error
-      error.message
-    end
-    assert(!failure.nil? && failure.include?("invalid byte sequence in US-ASCII") && !failure.include?(instruction),
-      "a transform failure without a missing anchor was not shown alone: #{failure.inspect}")
-
     ok, = command("ruby", helper, "create", root, seed)
     assert(!ok && File.file?(File.join(seed, "TemplateApp/TemplateAppApp.swift")),
       "existing destination was accepted or damaged")
@@ -326,8 +313,25 @@ begin
     prose = prose_repository(root, temp)
     ok, output = command("ruby", File.join(prose, "tools/tests/lib/bootstrap-fixture.rb"), "check", prose)
     assert(ok, "prose edit incorrectly required refresh: #{output}")
+  elsif group == "compatibility"
+    # #563: the compatibility check runs the whole app-bootstrap transform group, so it has its own entrypoint
+    # (tools/tests/test-bootstrap-fixture-compatibility.sh) and the fixture group stays well inside the
+    # per-test limit.
+    # #333: a transform failure without a missing anchor shows the transform output and no refresh instruction.
+    failing = File.join(temp, "failing-transform")
+    FileUtils.mkdir_p(File.join(failing, "tools/tests"))
+    File.binwrite(File.join(failing, "tools/tests/test-app-bootstrap.sh"),
+      "echo 'Foundation failed after disposable bootstrap: invalid byte sequence in US-ASCII' >&2\nexit 1\n")
+    failure = begin
+      check_compatibility(failing, instruction)
+      nil
+    rescue RuntimeError => error
+      error.message
+    end
+    assert(!failure.nil? && failure.include?("invalid byte sequence in US-ASCII") && !failure.include?(instruction),
+      "a transform failure without a missing anchor was not shown alone: #{failure.inspect}")
 
-    check_compatibility(prose, instruction)
+    check_compatibility(prose_repository(root, temp), instruction)
 
     stale = File.join(temp, "stale")
     BootstrapFixture.create(root, stale)
@@ -395,7 +399,8 @@ if group == "fixture"
   require File.join(root, "tools/lib/repository-test-plan")
   manifest = JSON.parse(File.read(File.join(root, "Config/repository-tests.json")))
   identity = JSON.parse(File.read(File.join(root, "Config/template-identity.json")))
-  fixture_tests = %w[tools/tests/test-bootstrap-fixture.sh tools/tests/test-bootstrap-fixture-derived-core.sh
+  fixture_tests = %w[tools/tests/test-bootstrap-fixture.sh tools/tests/test-bootstrap-fixture-compatibility.sh
+    tools/tests/test-bootstrap-fixture-derived-core.sh
     tools/tests/test-bootstrap-fixture-derived-safety-rejection.sh tools/tests/test-bootstrap-fixture-derived-safety-rerun.sh
     tools/tests/test-bootstrap-fixture-derived-transform.sh]
   identity.fetch("renamePaths").map { |path| path.split("/").first }.uniq.each do |directory|

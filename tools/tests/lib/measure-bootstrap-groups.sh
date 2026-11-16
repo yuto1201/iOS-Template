@@ -61,13 +61,15 @@ entrypoints=(
   "tools/tests/test-app-bootstrap-safety-rejection.sh|"
   "tools/tests/test-app-bootstrap-safety-rerun.sh|"
   "tools/tests/test-bootstrap-fixture.sh|"
+  "tools/tests/test-bootstrap-fixture-compatibility.sh|"
   "tools/tests/test-bootstrap-fixture-derived-core.sh|"
   "tools/tests/test-bootstrap-fixture-derived-transform.sh|"
   "tools/tests/test-bootstrap-fixture-derived-safety-rejection.sh|"
   "tools/tests/test-bootstrap-fixture-derived-safety-rerun.sh|"
 )
 
-for context in template-clone bootstrapped-clone; do
+contexts=(template-clone bootstrapped-clone)
+for context in "${contexts[@]}"; do
   repo=$work/$context
   for entry in "${entrypoints[@]}"; do
     path=${entry%%|*}
@@ -92,8 +94,8 @@ done
 
 umask 077
 ruby -rjson - "$results" "$output" "$head_sha" "$measured_at" "$load_at_start" "$script_sha" \
-  "$template_head" "$bootstrapped_head" "$bootstrapped_files" "$timeout_seconds" <<'RUBY'
-results, output, head_sha, measured_at, load, script_sha, template_head, bootstrapped_head, files, timeout = ARGV
+  "$template_head" "$bootstrapped_head" "$bootstrapped_files" "$timeout_seconds" "$(( ${#entrypoints[@]} * ${#contexts[@]} ))" <<'RUBY'
+results, output, head_sha, measured_at, load, script_sha, template_head, bootstrapped_head, files, timeout, expected = ARGV
 def canonical(value)
   case value
   when Hash then value.keys.sort.each_with_object({}) { |key, result| result[key] = canonical(value[key]) }
@@ -122,7 +124,7 @@ document = {
   "schemaVersion" => 1, "headSha" => head_sha, "measuredAt" => measured_at,
   "hostLoadAtStart" => load, "measurementScriptSha256" => script_sha, "timeoutSeconds" => Integer(timeout),
   "contexts" => contexts, "maxElapsedSeconds" => all.map { |entry| entry["elapsedSeconds"] }.max,
-  "allWithin150Seconds" => all.length == 18 && all.all? { |entry| entry["exitStatus"].zero? && entry["elapsedSeconds"] <= 150 }
+  "allWithin150Seconds" => all.length == Integer(expected) && all.all? { |entry| entry["exitStatus"].zero? && entry["elapsedSeconds"] <= 150 }
 }
 File.open(output, File::WRONLY | File::CREAT | File::TRUNC, 0o600) { |file| file.write(JSON.generate(canonical(document))) }
 File.chmod(0o600, output)
