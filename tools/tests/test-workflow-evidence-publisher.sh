@@ -542,21 +542,16 @@ printf '%s\n' '# unknown local helper' >"$repo/tools/lib/appstore-unknown.rb"
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 expect_rejection unknown-appstore-helper 'workflow-only diff contains a release or App Store path: tools/lib/appstore-unknown.rb'
 
-# D-077: only the enumerated appstore-creative skill files and creative producers qualify.
+# D-077: only the enumerated creative producers that stay in the template qualify (the renderer, the preview
+# video tools and their direct tests). D-106 (#549) moved the appstore-creative skill and its proposal sheet
+# and compose renderer to the App Store creative workspace, so those paths take the release route again.
 prepare_fixture appstore-creative-exact-paths
 creative_paths=(
-  .agents/skills/appstore-creative/LICENSE .agents/skills/appstore-creative/SKILL.md
-  .agents/skills/appstore-creative/agents/openai.yaml .agents/skills/appstore-creative/assets/goldie.config.ts
-  .agents/skills/appstore-creative/assets/ipad.config.ts .agents/skills/appstore-creative/references/config.md
-  .agents/skills/appstore-creative/references/extension.md .agents/skills/appstore-creative/references/flows.md
-  .agents/skills/appstore-creative/references/imagegen.md .agents/skills/appstore-creative/references/patterns.md
-  .agents/skills/appstore-creative/references/preview-video.md .agents/skills/appstore-creative/references/proposal.md
-  .agents/skills/appstore-creative/references/upstream.md docs/appstore-creative.md
-  tools/appstore-creative-preview.sh tools/appstore-creative-render.sh tools/appstore-creative-sheet.sh
-  tools/lib/appstore-creative-preview.rb tools/lib/appstore-creative-render.mjs tools/lib/appstore-creative-sheet.rb
+  tools/appstore-creative-preview.sh tools/appstore-creative-render.sh
+  tools/lib/appstore-creative-preview.rb tools/lib/appstore-creative-render.mjs
   tools/lib/appstore-preview-quality.rb tools/record-appstore-preview.sh
   tools/tests/test-appstore-creative-preview.sh tools/tests/test-appstore-creative-render.sh
-  tools/tests/test-appstore-creative-sheet.sh tools/tests/test-appstore-preview-record.sh
+  tools/tests/test-appstore-preview-record.sh
 )
 for creative_path in "${creative_paths[@]}"; do
   /bin/mkdir -p "$(/usr/bin/dirname "$repo/$creative_path")"
@@ -565,15 +560,32 @@ for creative_path in "${creative_paths[@]}"; do
     *) printf '%s\n' '# local creative producer' >"$repo/$creative_path" ;;
   esac
 done
-/bin/mkdir -p "$repo/.claude/skills"
-/bin/ln -s ../../.agents/skills/appstore-creative "$repo/.claude/skills/appstore-creative"
 previous_head="$head_sha"
-/usr/bin/git -C "$repo" add -- "${creative_paths[@]}" .claude/skills/appstore-creative
+/usr/bin/git -C "$repo" add -- "${creative_paths[@]}"
 /usr/bin/git -C "$repo" commit -q --amend --no-edit
 head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 rebind_head_artifacts "$previous_head"
 published="$(run_publisher)"
 [[ "$published" == ".artifacts/issues/42/$head_sha/verify.json" ]]
+
+# D-106 (#549): the removed skill, its Claude link, its guide and the proposal sheet and compose renderer no
+# longer qualify, so bringing one back is not workflow-only.
+for retired_path in .agents/skills/appstore-creative/SKILL.md .claude/skills/appstore-creative \
+    docs/appstore-creative.md tools/appstore-creative-sheet.sh tools/lib/appstore-creative-compose.rb \
+    tools/tests/test-appstore-creative-compose.sh; do
+  prepare_fixture "retired-creative-$(/usr/bin/basename "$retired_path")"
+  /bin/mkdir -p "$(/usr/bin/dirname "$repo/$retired_path")"
+  case "$retired_path" in
+    .claude/skills/*) /bin/ln -s ../../.agents/skills/appstore-creative "$repo/$retired_path" ;;
+    *.sh) printf '%s\n' '#!/bin/bash' 'exit 0' >"$repo/$retired_path"; /bin/chmod +x "$repo/$retired_path" ;;
+    *) printf '%s\n' '# retired creative path' >"$repo/$retired_path" ;;
+  esac
+  /usr/bin/git -C "$repo" add -- "$retired_path"
+  /usr/bin/git -C "$repo" commit -q --amend --no-edit
+  head_sha="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+  expect_rejection "retired-creative-$(/usr/bin/basename "$retired_path")" \
+    "workflow-only diff contains a release or App Store path: $retired_path"
+done
 
 prepare_fixture unknown-appstore-creative-tool
 /bin/mkdir -p "$repo/tools"
