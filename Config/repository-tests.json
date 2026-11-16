@@ -19,8 +19,8 @@
     },
     {
       "domain": "adopted-app-preparation-replay",
-      "paths": ["tools/tests/test-adopted-app-own-project-preparation.sh"],
-      "prefixes": []
+      "paths": [],
+      "prefixes": ["tools/tests/test-adopted-app-own-project-preparation.sh"]
     },
     {
       "domain": "app-feedback",

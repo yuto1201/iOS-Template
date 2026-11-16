@@ -165,6 +165,16 @@ abort "a change to the adopted-app preparation rerun did not select it" unless s
   _, _, tests = runner.resolve(source_manifest, requested, ["tools/lib/template-sync.rb"])
   abort "#{requested} left out the adopted-app preparation rerun" unless tests.include?(preparation_replay)
 end
+# In an app that adopted the template, the template-only tests and rule paths are absent; the plan still accepts
+# the manifest, and the new domain is a domain without tests there. Its rule covers the test by prefix, which the
+# adopted plan keeps, so the rule is not left empty.
+adopted_tracked = source_tests - runner::TEMPLATE_ONLY_TESTS + ["Config/template-base.json"] +
+  source_manifest.fetch("domainRules").flat_map { |rule| rule.fetch("paths") }.reject { |path| runner::TEMPLATE_ONLY_PATHS.include?(path) }
+adopted, testless = runner.adopted_manifest(source_manifest, adopted_tracked)
+abort "the adopted app keeps the release-only domain's tests: #{testless}" unless testless.include?("adopted-app-preparation-replay")
+abort "the adopted app still lists the preparation rerun" if adopted.fetch("tests").any? { |entry| entry.fetch("path") == preparation_replay }
+runner.validate_manifest!(adopted, adopted.fetch("tests").map { |entry| entry.fetch("path") }, tracked_paths: adopted_tracked,
+  testless_domains: testless)
 %w[docs/verification.md tools/bootstrap-app.sh tools/tests/test-appstore-preparation.sh].each do |changed_path|
   _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
   abort "source manifest omitted credential scan for #{changed_path}" unless tests.include?(scan_test)
