@@ -232,7 +232,7 @@ runnerは、互いに独立したtestを複数のworkerで同時に実行しま�
 
 `2026-09-13T13:03:38Z`以後にClaimするworkflow-only `harden + strict` Issueは、一つのAC本文先頭へexact `Repository-test scope: targeted|head-all|base-and-head; Reason: <nonempty>`を置きます。Issue contractは要求scopeと理由だけを封印します。exact test pathは実装後、current Headのproducerがimmutable Base／Head／contract bytes、Headの`Config/repository-tests.json`、sorted Base..Head changed pathsから解決し、`.artifacts/issues/${ISSUE}/${HEAD_SHA}/repository-test-plan.json`へno-replaceで保存します。
 
-- `targeted`: changed pathが解決する既知の単一または複数domainに属するtestのsorted unionを選ぶ。changed testはmanifest上の自身のdomainへ解決する。
+- `targeted`: changed pathが解決する既知の単一または複数domainに属するtestのsorted unionを選ぶ。changed testはmanifest上の自身のdomainへ解決する。導入したアプリでApp Storeの準備のtestを流し直す回帰（`tools/tests/test-adopted-app-own-project-preparation.sh`）は、単独で上限を超えるため専用のdomain`adopted-app-preparation-replay`に置き、そのtest自身の変更だけで選ぶ。ほかの変更では選ばず、リリース前の`head-all`で流す（D-108）。
 - 未知path: 全件へ昇格せずplan生成を拒否し、manifest coverageまたはIssue scopeを修正する。
 - `head-all`: release、nightly相当の明示実行、またはユーザーがIssue contractで明示要求した場合だけHeadの全inventoryを選ぶ。manifest／runner／`tools/tests/`変更から自動選択しない。
 - `base-and-head`: baseline／regression比較をACが明示するときだけ、BaseとHeadそれぞれの全inventoryを実行する。
