@@ -2670,41 +2670,18 @@ func validateWorkflowPath(_ path: String) throws {
         "tools/tests/test-appstore-release-sections.sh",
         "tools/tests/test-appstore-screenshots.sh",
         "tools/tests/test-appstore-skills.sh",
-        // D-077: the appstore-creative skill and its unauthenticated creative producers. #282 lists the
-        // renamed skill and the exact files that its follow-up Issues create (#283 proposal sheet,
-        // #284 render extension, #285 preview recording and quality check, #286 preview encoding).
-        // #461 (D-093) adds the HTML and CSS compose renderer, its guides and its direct test.
-        ".agents/skills/appstore-creative/LICENSE",
-        ".agents/skills/appstore-creative/SKILL.md",
-        ".agents/skills/appstore-creative/agents/openai.yaml",
-        ".agents/skills/appstore-creative/assets/goldie.config.ts",
-        ".agents/skills/appstore-creative/assets/ipad.config.ts",
-        ".agents/skills/appstore-creative/references/compose.md",
-        ".agents/skills/appstore-creative/references/config.md",
-        ".agents/skills/appstore-creative/references/extension.md",
-        ".agents/skills/appstore-creative/references/flows.md",
-        ".agents/skills/appstore-creative/references/imagegen.md",
-        ".agents/skills/appstore-creative/references/patterns.md",
-        ".agents/skills/appstore-creative/references/preview-video.md",
-        ".agents/skills/appstore-creative/references/proposal.md",
-        ".agents/skills/appstore-creative/references/research.md",
-        ".agents/skills/appstore-creative/references/upstream.md",
-        ".claude/skills/appstore-creative",
-        "docs/appstore-creative.md",
-        "tools/appstore-creative-compose.sh",
+        // D-077: the unauthenticated creative producers that remain in the template. D-106 (#549, #556)
+        // moved the skill, the proposal sheet and the HTML and CSS compose renderer to the App Store
+        // creative workspace and removed their paths from this list. The render extension, the preview
+        // recording and quality check, and their direct tests stay.
         "tools/appstore-creative-preview.sh",
         "tools/appstore-creative-render.sh",
-        "tools/appstore-creative-sheet.sh",
-        "tools/lib/appstore-creative-compose.rb",
         "tools/lib/appstore-creative-preview.rb",
         "tools/lib/appstore-creative-render.mjs",
-        "tools/lib/appstore-creative-sheet.rb",
         "tools/lib/appstore-preview-quality.rb",
         "tools/record-appstore-preview.sh",
-        "tools/tests/test-appstore-creative-compose.sh",
         "tools/tests/test-appstore-creative-preview.sh",
         "tools/tests/test-appstore-creative-render.sh",
-        "tools/tests/test-appstore-creative-sheet.sh",
         "tools/tests/test-appstore-preview-record.sh",
         // D-106 (#537): the intake that takes a delivery from the App Store creative workspace into the
         // app, its adapter skill and that skill's Claude link, and its direct test.
