@@ -175,6 +175,20 @@ abort "the adopted app keeps the release-only domain's tests: #{testless}" unles
 abort "the adopted app still lists the preparation rerun" if adopted.fetch("tests").any? { |entry| entry.fetch("path") == preparation_replay }
 runner.validate_manifest!(adopted, adopted.fetch("tests").map { |entry| entry.fetch("path") }, tracked_paths: adopted_tracked,
   testless_domains: testless)
+# The plan's template-only lists used above are exactly what the ownership manifest makes template-only, so the
+# simulated adopted app matches a real one. The ownership manifest is itself template-only, so an adopted app
+# skips this comparison; the template runs it.
+ownership_path = File.join(ENV.fetch("SOURCE_REPO"), "tools/template-sync/ownership.json")
+if File.exist?(ownership_path)
+  require File.join(ENV.fetch("SOURCE_REPO"), "tools/lib/template-sync.rb")
+  ownership = TemplateSync.load_ownership(File.read(ownership_path))
+  template_only = ->(path) { TemplateSync.classify(ownership, path)&.dig(:category) == "template-only" }
+  owned_tests = source_manifest.fetch("tests").map { |entry| entry.fetch("path") }.select(&template_only).sort
+  owned_paths = source_manifest.fetch("domainRules").flat_map { |rule| rule.fetch("paths") }.select(&template_only).uniq.sort
+  abort "template-only manifest tests differ from the plan: #{owned_tests}" unless owned_tests == runner::TEMPLATE_ONLY_TESTS.sort
+  abort "template-only manifest paths differ from the plan: #{owned_paths}" unless owned_paths == runner::TEMPLATE_ONLY_PATHS.sort
+  abort "the preparation rerun is not template-only" unless template_only.(preparation_replay)
+end
 %w[docs/verification.md tools/bootstrap-app.sh tools/tests/test-appstore-preparation.sh].each do |changed_path|
   _, _, tests = runner.resolve(source_manifest, "targeted", [changed_path])
   abort "source manifest omitted credential scan for #{changed_path}" unless tests.include?(scan_test)
