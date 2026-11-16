@@ -85,6 +85,13 @@ begin
       target["state"] = "Shutdown"
     end
     File.write(path, JSON.generate(state))
+  when "boot"
+    target = find.call(ARGV.fetch(0))
+    abort "boot requires a shut-down device" unless target["state"] == "Shutdown"
+    target["state"] = "Booted"
+    File.write(path, JSON.generate(state))
+  when "bootstatus"
+    abort "bootstatus requires a booted device" unless find.call(ARGV.fetch(0))["state"] == "Booted"
   when "create", "clone", "delete", "rename"
     abort "forbidden simctl #{command}"
   else
@@ -96,6 +103,58 @@ ensure
 end
 RUBY
 chmod +x "$fake_xcrun"
+
+# A fake SimSlim (D-107) that shares the fake simctl state: `on` and `off` reboot a device whose state
+# changes, and leave an already matching device as it was; `verify` and `status` need a booted device.
+fake_simslim="$scratch/simslim"
+cat >"$fake_simslim" <<'RUBY'
+#!/usr/bin/ruby --disable-gems
+require "json"
+
+path = File.join(__dir__, "simctl-state.json")
+lock = File.open(path + ".lock", File::RDWR | File::CREAT, 0o600)
+lock.flock(File::LOCK_EX)
+begin
+  state = JSON.parse(File.read(path))
+  command = ARGV.shift
+  (state["simslimCalls"] ||= []) << {"command" => command, "args" => ARGV.dup}
+  File.write(path, JSON.generate(state))
+  devices = state.fetch("devices").values.flatten
+  find = ->(udid) { devices.find { |entry| entry["udid"] == udid } or abort "missing #{command} target" }
+  case command
+  when "version"
+    puts "simslim 0.14.0"
+  when "on", "off"
+    abort "configured #{command} failure" if state["simslimMode"] == "#{command}-fail"
+    abort "unexpected #{command} arguments" unless ARGV.length == 1
+    device = find.call(ARGV.fetch(0))
+    wanted = command == "on"
+    if device.fetch("slim", false) == wanted
+      puts "Nothing to change."
+    else
+      device["slim"] = wanted
+      device["state"] = "Booted"
+      File.write(path, JSON.generate(state))
+    end
+  when "verify"
+    device = find.call(ARGV.fetch(0))
+    abort "verify requires a booted device" unless device["state"] == "Booted"
+    exit 1 if state["simslimMode"] == "verify-fail" || !device.fetch("slim", false)
+  when "status"
+    device = find.call(ARGV.fetch(0))
+    abort "status requires a booted device" unless device["state"] == "Booted" && ARGV[1] == "--json"
+    verdict = state["simslimMode"] == "status-partial" ? "partial" : (device.fetch("slim", false) ? "slim" : "stock")
+    puts JSON.generate("managedDisabled" => verdict == "stock" ? 0 : 173, "managedTotal" => 173, "booted" => true,
+                       "persistent" => true, "verdict" => verdict)
+  else
+    abort "unexpected simslim command #{command}"
+  end
+ensure
+  lock.flock(File::LOCK_UN)
+  lock.close
+end
+RUBY
+chmod +x "$fake_simslim"
 
 manager=(ruby tools/lib/ios-simulator-resource.rb)
 common=(--test-mode --state-root "$state_root" --xcrun "$fake_xcrun" --minimum-free-bytes 0 --command-timeout 10)
@@ -257,6 +316,151 @@ if "${manager[@]}" allocate --test-mode --state-root "$state_root" --xcrun "$fak
 fi
 grep -Fq 'insufficient free space' "$scratch/space.err" || fail "space denial reported: $(<"$scratch/space.err")"
 [[ "$(calls_of erase)" == "$erase_before" ]] || fail "a denied lease erased the device"
+
+# D-107: after the erase a lease sets the background services with SimSlim (slim for AI verification cases,
+# stock by default and for App Store captures and recordings), checks them on the booted device, and returns
+# the device shut down. The lease receipt keeps its shape; the result is a lease event.
+allocate_services() {
+  local session="$1" profile="$2" simslim="${3-$fake_simslim}" profile_args=() simslim_args=()
+  [[ -n "$profile" ]] && profile_args=(--service-profile "$profile")
+  [[ -n "$simslim" ]] && simslim_args=(--simslim "$simslim")
+  "${manager[@]}" allocate "${common[@]}" ${simslim_args[@]+"${simslim_args[@]}"} \
+    ${profile_args[@]+"${profile_args[@]}"} \
+    --session "$session" --repository "$repo_root" --issue 554 --head "$head_sha" \
+    --batch resource-test --attempt "$session" --case iphone-ja \
+    --runtime "$runtime" --device-type "$iphone_type" \
+    --owner-pid "$owner_pid" --wait-seconds 0 --receipt-dir "$receipts"
+}
+
+services_event() {
+  jq -c --arg id "$1" '[.leases[] | select(.allocationId == $id) | .events[] | select(.type == "services") | .details] | first' \
+    "$state_root/dedicated-v1.json"
+}
+
+simslim_calls() {
+  jq -r '[(.simslimCalls // [])[] | .command] | join(",")' "$simctl_state"
+}
+
+reset_simslim_calls() {
+  edit_simctl 'state["simslimCalls"] = []'
+}
+
+iphone_field() {
+  jq -r --arg u "$iphone_udid" --arg f "$1" '.devices[] | .[] | select(.udid == $u) | .[$f] | tostring' "$simctl_state"
+}
+
+reset_simslim_calls
+slim_lease="$(allocate_services svc-slim slim)"
+IFS=$'\t' read -r slim_id slim_udid slim_receipt <<<"$slim_lease"
+[[ "$slim_udid" == "$iphone_udid" ]] || fail "the slim lease did not use the dedicated iPhone"
+[[ "$(simslim_calls)" == "version,on,verify" ]] || fail "the slim lease called SimSlim as: $(simslim_calls)"
+[[ "$(iphone_field slim)|$(iphone_field state)" == "true|Shutdown" ]] || fail "the slim lease did not return a slim, shut-down device"
+[[ "$(services_event "$slim_id")" == '{"requested":"slim","result":"slim","simslimVersion":"simslim 0.14.0"}' ]] ||
+  fail "the slim lease recorded: $(services_event "$slim_id")"
+[[ "$(jq -r '.preparation | keys | join(",")' "$slim_receipt")" == "erased,observedAt,status" ]] ||
+  fail "the slim lease changed the receipt preparation shape"
+release_lease svc-slim "$slim_id" >/dev/null
+
+# An erase keeps the overrides, so a device that is already slim stays shut down after `on`; the manager boots
+# it to verify and shuts it down again.
+reset_simslim_calls
+boots_before="$(calls_of boot)"
+again_lease="$(allocate_services svc-again slim)"
+IFS=$'\t' read -r again_id _ _ <<<"$again_lease"
+[[ "$(simslim_calls)" == "version,on,verify" && "$(calls_of boot)" == "$((boots_before + 1))" ]] ||
+  fail "an already slim device was not booted for the check (SimSlim: $(simslim_calls))"
+[[ "$(iphone_field state)" == Shutdown ]] || fail "an already slim device was left booted"
+release_lease svc-again "$again_id" >/dev/null
+
+# Stock: `off` restores the device and the booted status must report stock.
+reset_simslim_calls
+stock_lease="$(allocate_services svc-stock stock)"
+IFS=$'\t' read -r stock_id _ _ <<<"$stock_lease"
+[[ "$(simslim_calls)" == "version,off,status" ]] || fail "the stock lease called SimSlim as: $(simslim_calls)"
+[[ "$(iphone_field slim)|$(iphone_field state)" == "false|Shutdown" ]] || fail "the stock lease did not return a stock, shut-down device"
+[[ "$(services_event "$stock_id")" == '{"requested":"stock","result":"stock","simslimVersion":"simslim 0.14.0"}' ]] ||
+  fail "the stock lease recorded: $(services_event "$stock_id")"
+release_lease svc-stock "$stock_id" >/dev/null
+
+# Without --service-profile a lease is stock (App Store captures and recordings, and older callers).
+edit_simctl 'devices.find { |d| d["udid"] == args[0] }["slim"] = true' "$iphone_udid"
+reset_simslim_calls
+default_lease="$(allocate_services svc-default "")"
+IFS=$'\t' read -r default_id _ _ <<<"$default_lease"
+[[ "$(simslim_calls)" == "version,off,status" && "$(iphone_field slim)" == false ]] ||
+  fail "a lease without a service profile was not restored to stock (SimSlim: $(simslim_calls))"
+release_lease svc-default "$default_id" >/dev/null
+
+# A failed check returns the lease and leaves the device shut down.
+for mode in verify-fail on-fail; do
+  edit_simctl 'state["simslimMode"] = args[0]' "$mode"
+  expect_denied "SimSlim $mode" 'dedicated Simulator preparation failed' allocate_services "svc-$mode" slim
+  [[ "$(inventory | jq -r --arg s "svc-$mode" '[.allocations[] | select(.sessionId == $s) | .status + ":" + .cleanup.reason] | join(",")')" == "released:prepare-failure" ]] ||
+    fail "SimSlim $mode did not release its lease"
+  [[ "$(iphone_field state)" == Shutdown ]] || fail "SimSlim $mode left the device booted"
+done
+edit_simctl 'state["simslimMode"] = "status-partial"'
+expect_denied 'a stock check that is not stock' 'is not stock' allocate_services svc-partial stock
+edit_simctl 'state["simslimMode"] = ""; devices.find { |d| d["udid"] == args[0] }["slim"] = false' "$iphone_udid"
+
+# Without SimSlim the overrides that an earlier slim lease left survive the erase and cannot be checked. A slim
+# request still gets the device and records that SimSlim was unavailable; a stock request (App Store captures and
+# recordings, and callers that ask for nothing) stops instead of receiving a device that may still be slim.
+edit_simctl 'devices.find { |d| d["udid"] == args[0] }["slim"] = true' "$iphone_udid"
+reset_simslim_calls
+missing_lease="$(allocate_services svc-missing slim "$scratch/no-simslim")"
+IFS=$'\t' read -r missing_id _ _ <<<"$missing_lease"
+[[ "$(simslim_calls)" == "" ]] || fail "a missing SimSlim was called"
+[[ "$(services_event "$missing_id")" == '{"requested":"slim","result":"unavailable","simslimVersion":null}' ]] ||
+  fail "a missing SimSlim recorded: $(services_event "$missing_id")"
+release_lease svc-missing "$missing_id" >/dev/null
+for profile in stock ""; do
+  expect_denied "a ${profile:-default} lease without SimSlim" 'cannot be confirmed stock' \
+    allocate_services "svc-missing-${profile:-default}" "$profile" "$scratch/no-simslim"
+  [[ "$(inventory | jq -r --arg s "svc-missing-${profile:-default}" '[.allocations[] | select(.sessionId == $s) | .status + ":" + .cleanup.reason] | join(",")')" == "released:prepare-failure" ]] ||
+    fail "a ${profile:-default} lease without SimSlim did not release its lease"
+done
+[[ "$(simslim_calls)" == "" && "$(iphone_field state)" == Shutdown ]] || fail "a refused stock lease without SimSlim used the device"
+edit_simctl 'devices.find { |d| d["udid"] == args[0] }["slim"] = false' "$iphone_udid"
+
+# Test mode never reaches the Mac's real SimSlim unless a fake is named.
+reset_simslim_calls
+unnamed_lease="$(allocate_services svc-unnamed slim "")"
+IFS=$'\t' read -r unnamed_id _ _ <<<"$unnamed_lease"
+[[ "$(jq -r '.result' <<<"$(services_event "$unnamed_id")")" == unavailable ]] || fail "test mode used a SimSlim that was not named"
+release_lease svc-unnamed "$unnamed_id" >/dev/null
+
+# The same active operation may get its lease again only with the services it was prepared with: a slim lease is
+# never handed back for an explicit or default stock request, and a stock lease never for a slim request.
+reuse_lease="$(allocate_services svc-reuse slim)"
+IFS=$'\t' read -r reuse_id _ _ <<<"$reuse_lease"
+reset_simslim_calls
+erase_before="$(calls_of erase)"
+expect_denied 'reuse of a slim lease for stock' 'prepared with slim background services, not stock' allocate_services svc-reuse stock
+expect_denied 'reuse of a slim lease for the default' 'prepared with slim background services, not stock' allocate_services svc-reuse ""
+again="$(allocate_services svc-reuse slim)"
+[[ "$(cut -f1 <<<"$again")" == "$reuse_id" ]] || fail "a matching slim request did not reuse its active lease"
+[[ "$(simslim_calls)" == "" && "$(calls_of erase)" == "$erase_before" ]] || fail "lease reuse erased the device or called SimSlim"
+release_lease svc-reuse "$reuse_id" >/dev/null
+stock_reuse="$(allocate_services svc-reuse-stock stock)"
+IFS=$'\t' read -r stock_reuse_id _ _ <<<"$stock_reuse"
+expect_denied 'reuse of a stock lease for slim' 'prepared with stock background services, not slim' allocate_services svc-reuse-stock slim
+[[ "$(cut -f1 <<<"$(allocate_services svc-reuse-stock "")")" == "$stock_reuse_id" ]] || fail "a default request did not reuse its stock lease"
+release_lease svc-reuse-stock "$stock_reuse_id" >/dev/null
+
+erase_before="$(calls_of erase)"
+expect_denied 'an unknown service profile' 'service profile must be slim or stock' allocate_services svc-invalid fast
+[[ "$(calls_of erase)" == "$erase_before" ]] || fail "an unknown service profile erased the device"
+
+# Only on, off, verify, status and version are ever called; never clone, repair-clone, rename, delete,
+# erase, disk-clean or watch.
+[[ "$(jq -r '[(.simslimCalls // [])[] | .command | select(IN("version", "on", "off", "verify", "status") | not)] | length' "$simctl_state")" == 0 ]] ||
+  fail "a forbidden SimSlim command was called"
+grep -Eq -- '--service-profile slim' tools/verify-ios-issue.sh || fail "AI verification cases do not request slim Simulators"
+if grep -q -- '--service-profile' tools/capture-appstore-screenshots.sh tools/record-appstore-preview.sh; then
+  fail "App Store captures and recordings must keep the default stock Simulators"
+fi
+assert_no_forbidden_calls
 
 # A cancelled wait for a busy device changes nothing.
 set +e

@@ -56,6 +56,12 @@ module IOSTemplate
       }
     ].freeze
     SHARED_DEVICE_NAMES = SHARED_DEVICES.map { |device| device.fetch("name") }.freeze
+    # D-107: after the erase a lease sets the device's background services with SimSlim. AI verification
+    # cases ask for slim; App Store captures and recordings, and callers that ask for nothing, get stock.
+    # An erase keeps SimSlim's overrides, so every lease sets the state it needs and checks it.
+    SIMSLIM_PATH = "/opt/homebrew/bin/simslim"
+    SERVICE_PROFILES = %w[slim stock].freeze
+    SIMSLIM_COMMANDS = %w[version on off verify status].freeze
     DEFAULT_WAIT_SECONDS = 60
     SHARED_DEFAULT_WAIT_SECONDS = 1800
     QUEUE_SCHEMA_VERSION = 1
@@ -77,12 +83,19 @@ module IOSTemplate
       end
       @developer_dir = options["--developer-dir"]
       @ps = @test_mode && options["--ps"] ? File.realpath(options["--ps"]) : "/bin/ps"
+      # D-107: test mode reaches only a SimSlim it names, never the Mac's own.
+      @simslim = @test_mode ? options["--simslim"] : SIMSLIM_PATH
       @command_timeout = positive_integer(options.fetch("--command-timeout", "180"), "command timeout")
+      @services_timeout = positive_integer(options.fetch("--services-timeout", "600"), "services timeout")
       @root = resolve_root(options["--state-root"])
       ensure_secure_root
     end
 
     def allocate
+      service_profile = @options.fetch("--service-profile", "stock")
+      unless SERVICE_PROFILES.include?(service_profile)
+        raise SimulatorResourceError, "service profile must be slim or stock"
+      end
       identity = allocation_identity
       default_wait = SHARED_DEVICE_NAMES.include?(identity.fetch("deviceName")) ? SHARED_DEFAULT_WAIT_SECONDS : DEFAULT_WAIT_SECONDS
       wait_seconds = nonnegative_integer(@options.fetch("--wait-seconds", default_wait.to_s), "wait seconds")
@@ -108,6 +121,7 @@ module IOSTemplate
             end
             if existing
               if existing["status"] == "active" && process_active?(existing)
+                ensure_reusable_services!(existing, service_profile)
                 write_receipt(existing)
                 print_receipt(existing)
                 return
@@ -183,6 +197,7 @@ module IOSTemplate
 
       begin
         run_simctl("erase", reservation.fetch("udid"))
+        services = apply_service_profile!(reservation, service_profile)
         record = nil
         with_state do |_legacy_active, state|
           current = find_record!(state, reservation.fetch("allocationId"))
@@ -194,6 +209,7 @@ module IOSTemplate
           current["status"] = "active"
           current["preparedAt"] = observed
           current["preparation"] = {"status" => "passed", "erased" => true, "observedAt" => observed}
+          add_event(current, "services", services)
           add_event(current, "prepared", "udid" => current.fetch("udid"))
           record = snapshot_record(current)
         end
@@ -705,9 +721,83 @@ module IOSTemplate
       if %w[create clone rename delete].include?(arguments.first)
         raise SimulatorResourceError, "simctl #{arguments.first} is forbidden for dedicated Simulators"
       end
-      command = [@xcrun, "simctl", *arguments]
       environment = {"PATH" => "/usr/bin:/bin", "LANG" => "en_US.UTF-8", "LC_ALL" => "en_US.UTF-8"}
       environment["DEVELOPER_DIR"] = @developer_dir if @developer_dir
+      run_bounded([@xcrun, "simctl", *arguments], environment, @command_timeout, "simctl #{arguments.first}", "simctl command")
+    end
+
+    # Runs one allowed SimSlim command on the leased device (D-107); the guard list keeps clone, repair-clone,
+    # rename, delete, erase, disk-clean and watch out of reach.
+    def run_simslim(*arguments)
+      raise SimulatorResourceError, "simslim #{arguments.first} is not used by the resource manager" unless SIMSLIM_COMMANDS.include?(arguments.first)
+      environment = {"PATH" => "/usr/bin:/bin:/usr/sbin:/sbin", "LANG" => "en_US.UTF-8", "LC_ALL" => "en_US.UTF-8"}
+      environment["HOME"] = ENV["HOME"] if ENV["HOME"]
+      environment["DEVELOPER_DIR"] = @developer_dir if @developer_dir
+      run_bounded([@simslim, *arguments], environment, @services_timeout, "simslim #{arguments.first}", "simslim #{arguments.first}")
+    end
+
+    # Sets the leased, erased, shut-down device to the requested services, checks it booted, and shuts it down.
+    def apply_service_profile!(record, requested)
+      unless @simslim && File.file?(@simslim) && File.executable?(@simslim)
+        # An erase keeps slim overrides that SimSlim set before it went missing, so stock cannot be confirmed:
+        # App Store captures and recordings stop instead of using a device that may still be slim. A slim
+        # request may proceed, because AI verification cases work on a stock or a slim device. Test mode
+        # without a named SimSlim skips the step.
+        if requested == "stock" && @simslim
+          raise SimulatorResourceError, "SimSlim (#{@simslim}) is not available, so the dedicated Simulator cannot be confirmed stock"
+        end
+        return {"requested" => requested, "result" => "unavailable", "simslimVersion" => nil}
+      end
+      udid = record.fetch("udid")
+      version = run_simslim("version").encode("UTF-8", invalid: :replace, undef: :replace).lines.first.to_s.strip[0, 64]
+      if requested == "slim"
+        run_simslim("on", udid)
+        boot_for_service_check!(record)
+        run_simslim("verify", udid)
+      else
+        run_simslim("off", udid)
+        boot_for_service_check!(record)
+        status = begin
+          JSON.parse(run_simslim("status", udid, "--json"))
+        rescue JSON::ParserError
+          nil
+        end
+        unless status.is_a?(Hash) && status["verdict"] == "stock"
+          raise SimulatorResourceError, "SimSlim reports the dedicated Simulator is not stock"
+        end
+      end
+      unless observed_shutdown_state!(record) == "Shutdown"
+        raise SimulatorResourceError, "dedicated Simulator disappeared while its services were set"
+      end
+      {"requested" => requested, "result" => requested, "simslimVersion" => version}
+    end
+
+    # An active lease goes back to its own operation only when a new lease would have accepted its prepared
+    # services: slim (or SimSlim unavailable) for slim, and stock for stock. Without SimSlim stock is proven only
+    # where this manager cannot check either (test mode that names no SimSlim). A lease from a manager that
+    # predates D-107 has no services event and counts as unavailable.
+    def ensure_reusable_services!(record, requested)
+      event = record.fetch("events").reverse.find { |entry| entry.is_a?(Hash) && entry["type"] == "services" }
+      result = event&.dig("details", "result") || "unavailable"
+      reusable = if requested == "slim"
+        %w[slim unavailable].include?(result)
+      else
+        result == "stock" || (result == "unavailable" && @simslim.nil?)
+      end
+      return if reusable
+      prepared = result == "unavailable" ? "unconfirmed" : result
+      raise SimulatorResourceError,
+            "blocked:environment: the active lease was prepared with #{prepared} background services, not #{requested}"
+    end
+
+    # `on` and `off` leave a device that already matches as it was, which after an erase is shut down.
+    def boot_for_service_check!(record)
+      udid = record.fetch("udid")
+      run_simctl("boot", udid) if unique_live_device!(record)["state"] == "Shutdown"
+      run_simctl("bootstatus", udid, "-b")
+    end
+
+    def run_bounded(command, environment, timeout, failure_label, timeout_label)
       output_path = File.join(@root, ".command-#{SecureRandom.uuid}.out")
       error_path = File.join(@root, ".command-#{SecureRandom.uuid}.err")
       output = ""
@@ -717,13 +807,13 @@ module IOSTemplate
         File.open(error_path, File::WRONLY | File::CREAT | File::EXCL | File::NOFOLLOW, 0o600) do |stderr|
           pid = Process.spawn(environment, *command, in: File::NULL, out: stdout, err: stderr, pgroup: true)
           begin
-            Timeout.timeout(@command_timeout) { _, status = Process.wait2(pid) }
+            Timeout.timeout(timeout) { _, status = Process.wait2(pid) }
           rescue Timeout::Error
             Process.kill("TERM", -pid) rescue Errno::ESRCH
             sleep 0.1
             Process.kill("KILL", -pid) rescue Errno::ESRCH
             Process.wait(pid) rescue Errno::ECHILD
-            raise SimulatorResourceError, "simctl command timed out"
+            raise SimulatorResourceError, "#{timeout_label} timed out"
           end
         end
       end
@@ -731,7 +821,7 @@ module IOSTemplate
       error = File.binread(error_path, 1024 * 1024)
       unless status&.success?
         diagnostic = error.encode("UTF-8", invalid: :replace, undef: :replace).lines.first.to_s.strip
-        raise SimulatorResourceError, "simctl #{arguments.first} failed#{diagnostic.empty? ? "" : ": #{diagnostic}"}"
+        raise SimulatorResourceError, "#{failure_label} failed#{diagnostic.empty? ? "" : ": #{diagnostic}"}"
       end
       output
     ensure
