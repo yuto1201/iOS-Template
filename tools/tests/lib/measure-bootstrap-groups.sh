@@ -61,6 +61,7 @@ entrypoints=(
   "tools/tests/test-app-bootstrap-safety-rejection.sh|"
   "tools/tests/test-app-bootstrap-safety-rerun.sh|"
   "tools/tests/test-bootstrap-fixture.sh|"
+  "tools/tests/test-bootstrap-fixture-compatibility.sh|"
   "tools/tests/test-bootstrap-fixture-derived-core.sh|"
   "tools/tests/test-bootstrap-fixture-derived-transform.sh|"
   "tools/tests/test-bootstrap-fixture-derived-safety-rejection.sh|"

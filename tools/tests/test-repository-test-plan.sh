@@ -119,7 +119,7 @@ bootstrap_paths = live_content.reject { |path| path.start_with?("TemplateApp") }
 # every fixture group.
 bootstrap_tests = %w[tools/tests/test-app-bootstrap-safety-rejection.sh tools/tests/test-app-bootstrap-safety-rerun.sh
   tools/tests/test-app-bootstrap-transform.sh tools/tests/test-app-bootstrap.sh]
-fixture_tests = %w[tools/tests/test-bootstrap-fixture-derived-core.sh tools/tests/test-bootstrap-fixture-derived-safety-rejection.sh
+fixture_tests = %w[tools/tests/test-bootstrap-fixture-compatibility.sh tools/tests/test-bootstrap-fixture-derived-core.sh tools/tests/test-bootstrap-fixture-derived-safety-rejection.sh
   tools/tests/test-bootstrap-fixture-derived-safety-rerun.sh tools/tests/test-bootstrap-fixture-derived-transform.sh
   tools/tests/test-bootstrap-fixture.sh]
 abort "bootstrap groups differ from the manifest" unless
